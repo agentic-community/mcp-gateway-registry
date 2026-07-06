@@ -31,11 +31,12 @@ _SERVER_PATH_RE = re.compile(r"^[A-Za-z0-9._\-/]+$")
 # A bare GUID (optionally in ``api://<guid>`` form) as an obo_exchange target is
 # ambiguous: it could be an internal server's app id OR a Microsoft first-party
 # resource (Graph 00000003-..., ARM 797f4846-..., Key Vault cfa8b339-..., Storage,
-# SQL, ...). The first-party set cannot be enumerated safely, so any GUID-shaped
-# target is treated as potentially-first-party and is only permitted when it is in
-# the operator allowlist (EGRESS_OBO_ALLOWED_AUDIENCES). Non-GUID bare client-ids
-# (e.g. a Keycloak client name) and ``api://<name>`` App ID URIs remain allowed by
-# the shape rule.
+# SQL, ...). A BARE GUID is how those first-party resources are directly
+# addressable, and the set cannot be enumerated safely, so a bare-GUID target is
+# only permitted via the operator allowlist (EGRESS_OBO_ALLOWED_AUDIENCES). An
+# ``api://<guid>`` App ID URI is the OPPOSITE: it is the standard auto-generated
+# identifier for a custom (tenant-local) app and can never address a first-party
+# resource, so it is accepted by shape like any other ``api://`` App ID URI.
 _GUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
 # The authority of an accepted ``api://<authority>`` target, and the accepted bare
@@ -136,16 +137,24 @@ def _is_disallowed_obo_audience(target_audience: str) -> bool:
     1. If the operator set ``EGRESS_OBO_ALLOWED_AUDIENCES``, the target must be in
        that exact set (authoritative). Anything else is disallowed.
     2. Otherwise a shape allowlist: ONLY two shapes are accepted, everything else
-       (unknown schemes, host URLs, GUIDs in any spelling, braced/urn forms,
-       garbage) is disallowed:
-         a. ``api://<authority>`` where the authority is a non-GUID token
-            (Entra App ID URI for an internal server -- e.g. ``api://outlook-mcp``).
+       (unknown schemes, host URLs, bare GUIDs, braced/urn forms, garbage) is
+       disallowed:
+         a. ``api://<authority>`` where the authority is a well-formed token --
+            an Entra App ID URI for an internal server. This is the standard form,
+            INCLUDING the auto-generated ``api://<app-guid>`` (e.g.
+            ``api://aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee``): Entra only resolves an
+            ``api://`` string to a custom app registration that advertises it as an
+            identifierUri, and no Microsoft first-party resource (Graph/ARM/Key
+            Vault) does -- their identifiers are ``https://<host>`` URLs and BARE
+            GUIDs. So ``api://<anything>`` can only ever address a tenant-local
+            app, i.e. the internal-server audience this control intends to allow.
+            No per-server allowlist entry is required for the normal case.
          b. a bare, schemeless non-GUID client-id token (Keycloak -- e.g.
             ``outlook-mcp-client``).
-       A GUID (bare or ``api://<guid>``) is NOT accepted by shape -- it could be
-       any Microsoft first-party resource (Graph/ARM/Key Vault/..., not safely
-       enumerable) -- so a genuinely-GUID internal audience must be pinned via the
-       operator allowlist in (1). ``http(s)://`` hosts (all shared first-party
+       A BARE GUID is NOT accepted by shape -- that IS how first-party resources
+       are directly addressable (Graph 00000003-..., ARM 797f4846-..., ...), and
+       the set is not safely enumerable -- so a bare-GUID target must be pinned via
+       the operator allowlist in (1). ``http(s)://`` hosts (all shared first-party
        APIs) and every unrecognized form fail the allowlist and are dropped.
     """
     target = target_audience.strip().lower().rstrip("/")
@@ -161,13 +170,14 @@ def _is_disallowed_obo_audience(target_audience: str) -> bool:
     # target matches one of exactly two accepted shapes.
     if target.startswith("api://"):
         authority = target[len("api://") :]
-        # Accept a well-formed non-GUID api:// authority; reject a GUID authority
-        # (ambiguous first-party resource) or a malformed one.
-        if _GUID_RE.match(authority):
-            return True
+        # Any well-formed api:// authority is a custom-app App ID URI (including
+        # the auto-generated api://<guid> form) -- Entra never resolves an api://
+        # string to a first-party resource, so this cannot reach Graph/ARM/etc.
+        # Reject only a malformed/empty authority.
         return not bool(_OBO_API_AUTHORITY_RE.match(authority))
-    # No scheme: accept only a bare non-GUID client-id token; reject a GUID or any
-    # value carrying a scheme marker / disallowed characters.
+    # No scheme: accept only a bare non-GUID client-id token; reject a BARE GUID
+    # (directly addresses a first-party resource) or any value carrying a scheme
+    # marker / disallowed characters.
     if "://" in target or ":" in target:
         return True
     if _GUID_RE.match(target):
@@ -744,13 +754,13 @@ class ServerInfo(BaseModel):
         if _is_disallowed_obo_audience(target):
             raise ValueError(
                 f"egress_oauth.target_audience {target!r} is not an allowed obo_exchange "
-                "target. It must be an internal MCP server's own IdP audience (an "
-                "'api://...' Entra App ID URI or a bare non-GUID client-id), never an "
-                "'https://' host URL or a GUID (which could be a shared first-party API "
-                "such as Microsoft Graph, ARM, or Key Vault). A delegated token for such "
-                "a resource would be exfiltrated to the server's upstream (confused "
-                "deputy). Pin GUID/first-party audiences explicitly via "
-                "EGRESS_OBO_ALLOWED_AUDIENCES."
+                "target. It must be an internal MCP server's own IdP audience: an "
+                "'api://...' Entra App ID URI (including the 'api://<app-guid>' form) or "
+                "a bare non-GUID client-id. It must NEVER be an 'https://' host URL or a "
+                "bare GUID, which is how a shared first-party API (Microsoft Graph, ARM, "
+                "Key Vault) is directly addressable -- a delegated token for such a "
+                "resource would be exfiltrated to the server's upstream (confused deputy). "
+                "Pin a bare-GUID audience explicitly via EGRESS_OBO_ALLOWED_AUDIENCES."
             )
         # Bind scopes to the target. The exchange engine sends egress_oauth.scopes
         # verbatim (ignoring target_audience) when present, so an unvalidated scope

@@ -170,7 +170,6 @@ class TestDisallowedOboAudience:
             "https://vault.azure.cn",  # China Key Vault
             "http://graph.microsoft.com",  # http scheme
             "00000003-0000-0000-c000-000000000000",  # Graph app id GUID (bare)
-            "api://00000003-0000-0000-c000-000000000000",  # Graph GUID in api:// form
         ],
     )
     def test_disallowed_audiences_rejected(self, aud):
@@ -182,6 +181,10 @@ class TestDisallowedOboAudience:
             "api://outlook-mcp-server",
             "api://obo-echo-mcp-server",
             "api://host.example:8000",  # api:// authority may carry a host:port
+            # The auto-generated Entra App ID URI form: api://<app-guid>. This is a
+            # custom-app identifier (never a first-party resource), so it is accepted
+            # by shape with no per-server allowlist entry required.
+            "api://aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
             "my-keycloak-client",  # a bare non-GUID client id
         ],
     )
@@ -202,29 +205,30 @@ class TestDisallowedOboAudience:
         ],
     )
     def test_unknown_or_malformed_shapes_fail_closed(self, aud):
-        # The shape rule is an allowlist: anything that is not api://<non-guid> or
-        # a bare non-GUID client-id is dropped, so unknown schemes / GUID spellings
-        # / malformed values never slip through.
+        # The shape rule is an allowlist: anything that is not api://<authority> or
+        # a bare non-GUID client-id is dropped, so unknown schemes / bare-GUID
+        # spellings / malformed values never slip through.
         assert schemas._is_disallowed_obo_audience(aud) is True
 
     @pytest.mark.parametrize(
         "aud",
         [
-            "797f4846-ba00-4fd7-ba43-dac1f8f63013",  # Azure Resource Manager
-            "cfa8b339-82a2-471a-a3c9-0fc0be7a4093",  # Azure Key Vault
+            "797f4846-ba00-4fd7-ba43-dac1f8f63013",  # Azure Resource Manager (bare)
+            "cfa8b339-82a2-471a-a3c9-0fc0be7a4093",  # Azure Key Vault (bare)
             "00000003-0000-0000-c000-000000000000",  # Microsoft Graph (bare)
-            "api://00000003-0000-0000-c000-000000000000",  # Graph GUID via api://
         ],
     )
-    def test_guid_targets_rejected_by_shape_rule(self, aud):
-        # A GUID could be any first-party resource (the set isn't enumerable), so
-        # under the shape rule (no operator allowlist) every GUID target is rejected.
+    def test_bare_guid_targets_rejected_by_shape_rule(self, aud):
+        # A BARE GUID is how first-party resources are directly addressable (the set
+        # isn't enumerable), so under the shape rule (no operator allowlist) every
+        # bare-GUID target is rejected. The api://<guid> form is NOT rejected -- it
+        # is a custom-app App ID URI (see test_internal_app_audiences_allowed).
         assert schemas._is_disallowed_obo_audience(aud) is True
 
-    def test_guid_target_allowed_only_via_allowlist(self, monkeypatch):
+    def test_bare_guid_target_allowed_only_via_allowlist(self, monkeypatch):
         from registry.core.config import settings
 
-        # An internal server whose audience genuinely IS a GUID must be pinned.
+        # A server whose audience genuinely IS a bare GUID must be pinned explicitly.
         monkeypatch.setattr(
             settings,
             "egress_obo_allowed_audiences",
