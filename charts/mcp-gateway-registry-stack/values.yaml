@@ -8,7 +8,7 @@ global:
   image:
     # Container registry (host + optional namespace), e.g. "public.ecr.aws/p3v1o3c6"
     registry: public.ecr.aws/p3v1o3c6
-    tag: 1.25.0
+    tag: 1.26.0
     pullPolicy: IfNotPresent
   # When installing chart from repository, add --set global.chartVersion=$(git rev-parse HEAD) to add the git hash to a configmap for debugging
   chartVersion:
@@ -76,7 +76,6 @@ global:
     # KEYCLOAK_EXTERNAL_URL.
     paths:
       registry: /registry
-
 openbao:
   enabled: false # This is temporarily set to false as the actual usage is prepared in a different PR
   # NOTE: deliberately NO fullnameOverride here. The subchart's server-binding is
@@ -169,7 +168,6 @@ openbao:
       - name: openbao-keys
         mountPath: /openbao/keys
         readOnly: true
-
 mongodb-kubernetes:
   operator:
     enableClusterMongoDBRoles: false

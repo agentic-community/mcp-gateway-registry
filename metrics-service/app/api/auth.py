@@ -10,14 +10,25 @@ security = HTTPBearer()
 
 
 async def verify_api_key(request: Request) -> str:
-    """Verify API key from X-API-Key header and check rate limits."""
+    """Verify API key from X-API-Key header and check rate limits.
+
+    Fails closed: a missing/invalid/inactive key, a rate-limit breach, or a
+    server-side hashing error (e.g. the deployment pepper is not configured)
+    all result in denial rather than acceptance.
+    """
     api_key = request.headers.get("X-API-Key")
 
     if not api_key:
         raise HTTPException(status_code=401, detail="API key required in X-API-Key header")
 
-    # Hash the provided API key
-    key_hash = hash_api_key(api_key)
+    # Hash the provided API key. If the deployment pepper is missing/weak this
+    # raises; treat any hashing failure as a server misconfiguration and deny
+    # (never fall back to an unpeppered/predictable hash).
+    try:
+        key_hash = hash_api_key(api_key)
+    except ValueError:
+        logger.error("API key hashing is misconfigured (METRICS_KEY_PEPPER)")
+        raise HTTPException(status_code=503, detail="Service temporarily unavailable")
 
     # Verify against database
     storage = MetricsStorage()
@@ -58,14 +69,26 @@ async def verify_api_key(request: Request) -> str:
 
 
 async def get_rate_limit_status(api_key: str) -> dict:
-    """Get current rate limit status for an API key."""
-    key_hash = hash_api_key(api_key)
+    """Get current rate limit status for an API key.
+
+    Fails closed on a hashing misconfiguration (missing/weak pepper) and on an
+    unknown key, exactly like :func:`verify_api_key`, so callers cannot use this
+    path to distinguish those states from a normal auth failure.
+    """
+    try:
+        key_hash = hash_api_key(api_key)
+    except ValueError:
+        logger.error("API key hashing is misconfigured (METRICS_KEY_PEPPER)")
+        raise HTTPException(status_code=503, detail="Service temporarily unavailable")
 
     # Get key info from database
     storage = MetricsStorage()
     key_info = await storage.get_api_key(key_hash)
 
-    if not key_info:
+    # Return the SAME 401 for both an unknown key and a known-but-inactive key,
+    # mirroring verify_api_key. Distinguishing "no such key" from "exists but
+    # inactive" would leak that a given key hash is present in the database.
+    if not key_info or not key_info["is_active"]:
         raise HTTPException(status_code=401, detail="Invalid API key")
 
     rate_limit = key_info.get("rate_limit", 1000)

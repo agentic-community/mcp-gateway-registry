@@ -4,8 +4,8 @@ from typing import Annotated, Any
 from fastapi import Cookie, Depends, Header, HTTPException, Request, status
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
+from ..common.log_redaction import redact_headers, redact_mapping
 from ..core.config import settings
-from ..utils.request_utils import redact_sensitive_headers
 from .access_resolver import (
     get_user_accessible_tools,  # noqa: F401 - re-exported for external callers
     resolve_scope_access,
@@ -545,7 +545,7 @@ async def _resolve_context_from_groups(
     they were authenticated (guards #933).
     """
     scopes = await map_cognito_groups_to_scopes(groups)
-    logger.info(f"User {username} with groups {groups} mapped to scopes: {scopes}")
+    logger.info(f"User {username} with {len(groups)} groups mapped to {len(scopes)} scopes")
     if not groups:
         logger.warning(
             f"User {username} has no groups! This user may not have proper group assignments."
@@ -630,7 +630,9 @@ async def enhanced_auth(
     groups = session_data.get("groups", [])
     auth_method = session_data.get("auth_method", "oauth2")
 
-    logger.info(f"Enhanced auth debug for {username}: groups={groups}, auth_method={auth_method}")
+    logger.info(
+        f"Enhanced auth debug for {username}: {len(groups)} groups, auth_method={auth_method}"
+    )
 
     user_context = await _resolve_context_from_groups(
         username=username,
@@ -643,7 +645,7 @@ async def enhanced_auth(
     # Set user context on request state for audit logging middleware
     request.state.user_context = user_context
 
-    logger.debug(f"Enhanced auth context for {username}: {user_context}")
+    logger.debug(f"Enhanced auth context for {username}: {redact_mapping(user_context)}")
     return user_context
 
 
@@ -691,15 +693,16 @@ async def nginx_proxied_auth(
     )
     logger.debug(f"[NGINX_AUTH_DEBUG] Session cookie present: {session is not None}")
     logger.debug(
-        f"[NGINX_AUTH_DEBUG] Authorization header: {request.headers.get('authorization', 'NOT PRESENT')[:50] if request.headers.get('authorization') else 'NOT PRESENT'}"
+        "[NGINX_AUTH_DEBUG] Authorization header present: "
+        f"{request.headers.get('authorization') is not None}"
     )
 
     # Log ALL headers for complete diagnostic, with sensitive values redacted.
     # cookie/authorization carry the session and bearer token, and other headers
     # (e.g. X-Auth-Credential, X-Api-Key) can carry credentials; even at DEBUG we
-    # don't want any of them in logs.
-    all_headers = redact_sensitive_headers(request.headers)
-    logger.debug(f"[NGINX_AUTH_DEBUG] ALL REQUEST HEADERS: {all_headers}")
+    # never emit any of them (not even a prefix). Uses the shared redaction
+    # helper, which redacts by exact name and by credential substring.
+    logger.debug(f"[NGINX_AUTH_DEBUG] ALL REQUEST HEADERS: {redact_headers(request.headers)}")
 
     # Signed-token path. The auth_server's /validate mints an HS256 token
     # (X-Internal-Token-Registry) bound to the validated identity; nginx forwards
@@ -736,9 +739,9 @@ async def nginx_proxied_auth(
     # mode where FastAPI authenticates the cookie/bearer itself). The inbound identity
     # headers are ignored in every case.
     logger.info("[NGINX_AUTH_FALLBACK] No internal token; falling back to session cookie auth")
-    logger.info(
-        f"[NGINX_AUTH_FALLBACK] Session cookie value: {session[:20] if session else 'None'}..."
-    )
+    # The session cookie is a signed credential: log only its presence, never
+    # any part of its value (a prefix is still credential material).
+    logger.info(f"[NGINX_AUTH_FALLBACK] Session cookie present: {session is not None}")
     logger.info(f"[NGINX_AUTH_FALLBACK] Request path: {request.url.path}")
     try:
         return await enhanced_auth(request, session)

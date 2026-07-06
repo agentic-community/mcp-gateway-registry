@@ -1485,7 +1485,18 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
         proxy_http_version 1.1;
         proxy_ssl_server_name on;
         proxy_set_header Host {safe_upstream_host};
-        proxy_set_header Authorization $http_authorization;
+        # SECURITY: this location proxies directly to a registrant-controlled
+        # (not fully trusted) MCP backend. Never relay the caller's registry
+        # credential here -- clearing Authorization AND Cookie prevents a
+        # malicious registered upstream from capturing and replaying the
+        # caller's gateway bearer token or registry session cookie against the
+        # registry API. This location is reached via a Lua subrequest that
+        # inherits the parent request's headers, so Cookie must be explicitly
+        # cleared or the user's session cookie would be forwarded verbatim.
+        # The gateway authenticates the upstream via its own mechanism, not by
+        # forwarding the caller's credential.
+        proxy_set_header Authorization "";
+        proxy_set_header Cookie "";
         proxy_buffering off;
         proxy_set_header Accept "application/json, text/event-stream";
         proxy_set_header Content-Type $content_type;

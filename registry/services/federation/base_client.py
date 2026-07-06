@@ -10,6 +10,8 @@ from typing import Any
 
 import httpx
 
+from ...utils.url_guard import FEDERATION_PROFILE, guarded_client
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s,p%(process)s,{%(filename)s:%(lineno)d},%(levelname)s,%(message)s",
@@ -33,7 +35,17 @@ class BaseFederationClient(ABC):
         self.endpoint = endpoint.rstrip("/")
         self.timeout_seconds = timeout_seconds
         self.retry_attempts = retry_attempts
-        self.client = httpx.Client(timeout=timeout_seconds)
+        # SSRF-safe client: every request (and redirect hop) is resolved,
+        # validated, and pinned to a public IP inside the transport, so there is
+        # no DNS-rebinding window between validation and connect. The FEDERATION
+        # profile grants NO allowlist bypass, matching the write-time endpoint
+        # guard's empty allowlist. Federation requests carry a bearer credential,
+        # so this atomic guard — not a bypassable pre-check — is what keeps the
+        # token from ever reaching a private/loopback/metadata address.
+        self.client = guarded_client(
+            profile=FEDERATION_PROFILE,
+            timeout=timeout_seconds,
+        )
 
     def __del__(self):
         """Clean up HTTP client."""
@@ -89,6 +101,24 @@ class BaseFederationClient(ABC):
         Returns:
             Response JSON or None if request fails
         """
+        # Fail-closed SSRF pre-check at the egress chokepoint, using the same
+        # FEDERATION profile (no allowlist bypass) as the pinned transport below,
+        # so an early rejection is logged with a clear message. This is a
+        # convenience gate only: the authoritative, rebinding-safe block happens
+        # inside the guarded transport, which re-resolves, validates, and pins
+        # every request (and redirect hop) to a public IP at connect time — there
+        # is no TOCTOU window it can miss. Federation requests carry a bearer
+        # credential in ``headers``, so the token can never reach a
+        # private/loopback/link-local/metadata address.
+        from ...exceptions import UrlValidationError
+        from ...utils.url_guard import FEDERATION_PROFILE, validate_url
+
+        try:
+            validate_url(url, profile=FEDERATION_PROFILE)
+        except UrlValidationError as exc:
+            logger.error(f"Refusing federation request to unsafe URL {url!r}: {exc}")
+            return None
+
         for attempt in range(self.retry_attempts):
             try:
                 logger.debug(

@@ -500,6 +500,7 @@ export class RegistryServiceStack extends cdk.Stack {
       httpsListener: alb.httpsListener,
       appSecretsKmsKey: this.appSecretsKmsKey,
       metricsApiKeySecret: secretsBundle.metricsApiKey,
+      metricsKeyPepperSecret: secretsBundle.metricsKeyPepper,
       otlpExporterHeadersSecret: secretsBundle.otlpExporterHeaders,
       grafanaAdminPasswordSecret: secretsBundle.grafanaAdminPassword,
       secretsAccessStatements,

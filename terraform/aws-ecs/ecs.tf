@@ -2,8 +2,8 @@ data "aws_region" "current" {}
 data "aws_partition" "current" {}
 
 # ECS Cluster using terraform-aws-modules/ecs/aws//modules/cluster
-#checkov:skip=CKV_TF_1:Module version is pinned via version constraint
 module "ecs_cluster" {
+  #checkov:skip=CKV_TF_1:Module version is pinned via version constraint
   source  = "terraform-aws-modules/ecs/aws//modules/cluster"
   version = "~> 6.0"
 

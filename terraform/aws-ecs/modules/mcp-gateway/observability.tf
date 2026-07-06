@@ -126,8 +126,8 @@ locals {
 # METRICS-SERVICE ECS SERVICE
 # =============================================================================
 
-#checkov:skip=CKV_TF_1:Module version is pinned via version constraint
 module "ecs_service_metrics" {
+  #checkov:skip=CKV_TF_1:Module version is pinned via version constraint
   # metrics-service is optional: the core services (registry/auth/mcpgw) emit OTel
   # straight to their own ADOT sidecars, so the standalone metrics-service is only
   # created when an image is explicitly provided. Avoids requiring a build for a
@@ -267,6 +267,11 @@ module "ecs_service_metrics" {
           {
             name      = "METRICS_API_KEY_MCPGW"
             valueFrom = aws_secretsmanager_secret.metrics_api_key[0].arn
+          },
+          {
+            # Required: metrics-service refuses to start without a strong pepper.
+            name      = "METRICS_KEY_PEPPER"
+            valueFrom = aws_secretsmanager_secret.metrics_key_pepper[0].arn
           }
         ],
         var.otel_otlp_endpoint != "" ? [
@@ -412,8 +417,8 @@ resource "aws_iam_policy" "grafana_amp_query" {
 }
 
 # ALB target group for Grafana
-#checkov:skip=CKV_AWS_378:HTTP backend protocol is intentional - TLS terminates at ALB
 resource "aws_lb_target_group" "grafana" {
+  #checkov:skip=CKV_AWS_378:HTTP backend protocol is intentional - TLS terminates at ALB
   count       = var.enable_observability ? 1 : 0
   name_prefix = "graf-"
   port        = 3000
@@ -477,8 +482,8 @@ resource "aws_lb_listener_rule" "grafana_https" {
   tags = local.common_tags
 }
 
-#checkov:skip=CKV_TF_1:Module version is pinned via version constraint
 module "ecs_service_grafana" {
+  #checkov:skip=CKV_TF_1:Module version is pinned via version constraint
   count   = var.enable_observability ? 1 : 0
   source  = "terraform-aws-modules/ecs/aws//modules/service"
   version = "~> 6.0"

@@ -36,7 +36,7 @@ Standard mapping:
 | Where | Source |
 |---|---|
 | Keycloak admin | SSM `/keycloak/admin_password` (= `CDK_KEYCLOAK_ADMIN_PASSWORD`) |
-| Registry users (`admin`, `testuser`, `lob1-user`, `lob2-user`) | Created by `keycloak/setup/init-keycloak.sh`. `testuser`/`testpass123`; LOB users use `lob1pass`/`lob2pass`; admin = `CDK_KEYCLOAK_ADMIN_PASSWORD` |
+| Registry users (`admin`, `lob1-user`, `lob2-user`) | Created by `keycloak/setup/init-keycloak.sh`. All passwords are required env vars (no defaults) and are set temporary (reset forced on first login): admin = `INITIAL_ADMIN_PASSWORD`, LOB users = `LOB1_USER_PASSWORD`/`LOB2_USER_PASSWORD` |
 | Grafana admin | env `CDK_GRAFANA_ADMIN_PASSWORD` (default `admin`) |
 | DocumentDB | Secrets Manager `mcp-gateway/documentdb/credentials` |
 | Aurora MySQL | Secrets Manager `keycloak/database` |

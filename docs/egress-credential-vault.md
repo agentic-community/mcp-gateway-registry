@@ -144,7 +144,7 @@ sequenceDiagram
     participant TP as Third-party provider
 
     Note over C,K: First call — no stored connection yet
-    C->>N: MCP request to /<server>
+    C->>N: MCP request to /[server]
     N->>A: auth_request /validate (+ X-Validate-Source-Secret marker)
     A-->>N: mints mcp-proxy token (upstream_url, canonical auth_method)
     N->>P: forward with X-Internal-Token
@@ -158,7 +158,7 @@ sequenceDiagram
 
     Note over C,TP: User consents (browser)
     C->>B: open connect_url
-    B->>F: GET /oauth2/egress/connect?server=<path>
+    B->>F: GET /oauth2/egress/connect?server=[path]
     alt no gateway session
         F-->>B: 302 /oauth2/login/keycloak (then back)
     end

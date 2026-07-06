@@ -20,8 +20,8 @@ data "aws_vpc" "existing" {
   id = var.existing_vpc_id
 }
 
-#checkov:skip=CKV_TF_1:Module version is pinned via version constraint
 module "vpc" {
+  #checkov:skip=CKV_TF_1:Module version is pinned via version constraint
   source  = "terraform-aws-modules/vpc/aws"
   version = "~> 6.0"
 
@@ -113,6 +113,7 @@ resource "aws_vpc_endpoint" "s3" {
 
 # Security group for VPC endpoints
 resource "aws_security_group" "vpc_endpoints" {
+  #checkov:skip=CKV2_AWS_5:Attached to the STS interface VPC endpoint via security_group_ids; Checkov does not trace the count-indexed reference
   count = var.create_vpc_endpoints ? 1 : 0
 
   name        = "${var.name}-vpc-endpoints"

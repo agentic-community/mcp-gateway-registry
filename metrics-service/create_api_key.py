@@ -5,6 +5,7 @@ Run this script to generate API keys for different services.
 """
 
 import asyncio
+import os
 import sys
 from pathlib import Path
 
@@ -34,9 +35,14 @@ async def create_api_key_for_service(service_name: str):
         print(f"API Key (masked): {masked_key}")
         print(f"Hash: {key_hash}")
 
-        # Write full key to a file so it is not logged in plain text
+        # Write full key to a file so it is not logged in plain text.
+        # Create the file with owner-only permissions (0600) atomically so the
+        # secret is never briefly world/group-readable between create and chmod.
         key_file = Path(f".api_key_{service_name}.txt")
-        key_file.write_text(f"METRICS_API_KEY={api_key}\n")
+        fd = os.open(str(key_file), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(f"METRICS_API_KEY={api_key}\n")
+        os.chmod(key_file, 0o600)  # enforce 0600 even if the file pre-existed
         print(f"\nFull API key written to: {key_file}")
         print("Store the key securely and delete the file after use.")
         return api_key

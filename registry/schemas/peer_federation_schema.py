@@ -318,6 +318,76 @@ class PeerRegistryConfig(BaseModel):
         return self
 
 
+class PeerRegistryConfigResponse(BaseModel):
+    """
+    Read-only view of a peer registry configuration for API responses.
+
+    This is the model returned by GET/list/create/update peer endpoints. It is a
+    deliberate subset of :class:`PeerRegistryConfig` that OMITS the secret
+    ``federation_token`` so the peer's bearer credential is never serialized to a
+    caller. Whether a token is configured is surfaced via the non-sensitive
+    ``has_federation_token`` boolean instead of the value itself.
+
+    Tokens are write-only: they are set via POST/PUT/PATCH and used internally for
+    sync, but never read back. This mirrors the write-only credential handling used
+    elsewhere in the registry.
+    """
+
+    peer_id: str
+    name: str
+    endpoint: str
+    enabled: bool = True
+    sync_mode: Literal["all", "whitelist", "tag_filter"] = "all"
+    whitelist_servers: list[str] = Field(default_factory=list)
+    whitelist_agents: list[str] = Field(default_factory=list)
+    tag_filters: list[str] = Field(default_factory=list)
+    sync_local_servers: bool = False
+    sync_interval_minutes: int = DEFAULT_SYNC_INTERVAL_MINUTES
+    has_federation_token: bool = Field(
+        default=False,
+        description="Whether a federation static token is configured (the token "
+        "value itself is never returned).",
+    )
+    expected_client_id: str | None = None
+    expected_issuer: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    @classmethod
+    def from_config(
+        cls,
+        config: "PeerRegistryConfig",
+    ) -> "PeerRegistryConfigResponse":
+        """Build a token-redacted response view from a full peer config.
+
+        Args:
+            config: The internal peer configuration (may hold a plaintext token).
+
+        Returns:
+            A response model with ``federation_token`` removed and
+            ``has_federation_token`` set from its presence.
+        """
+        return cls(
+            peer_id=config.peer_id,
+            name=config.name,
+            endpoint=config.endpoint,
+            enabled=config.enabled,
+            sync_mode=config.sync_mode,
+            whitelist_servers=config.whitelist_servers,
+            whitelist_agents=config.whitelist_agents,
+            tag_filters=config.tag_filters,
+            sync_local_servers=config.sync_local_servers,
+            sync_interval_minutes=config.sync_interval_minutes,
+            has_federation_token=config.federation_token is not None,
+            expected_client_id=config.expected_client_id,
+            expected_issuer=config.expected_issuer,
+            created_at=config.created_at,
+            updated_at=config.updated_at,
+        )
+
+
 class SyncHistoryEntry(BaseModel):
     """
     Record of a single sync operation.

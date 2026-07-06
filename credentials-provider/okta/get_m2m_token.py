@@ -123,13 +123,16 @@ def _request_m2m_token(
             timeout=30,
         )
 
-        # Log response details for debugging
+        # Log only the standard OAuth error code, not the full body: a
+        # token-endpoint error response can echo the client_id or partial
+        # credential context in error_description.
         if response.status_code != 200:
             try:
                 error_data = response.json()
-                logger.error(f"Okta error response: {json.dumps(error_data, indent=2)}")
+                _err = error_data.get("error", "unknown") if isinstance(error_data, dict) else "unknown"
+                logger.error(f"Okta token error (status {response.status_code}): error={_err}")
             except Exception:
-                logger.error(f"Okta error response (non-JSON): {response.text}")
+                logger.error(f"Okta token error (status {response.status_code}): non-JSON body omitted")
 
         response.raise_for_status()
 
@@ -174,7 +177,10 @@ def _display_decoded_token(claims: dict[str, str]) -> None:
     print("\n" + "=" * 60)
     print("DECODED JWT TOKEN CLAIMS")
     print("=" * 60)
-    print(json.dumps(claims, indent=2))
+    # Print claim NAMES only, not the full value dump: a token may carry custom
+    # or sensitive claims, and this stdout is the log sink in container/CI runs.
+    # The curated KEY INFORMATION section below shows specific structural fields.
+    print("Claims present: " + ", ".join(sorted(claims.keys())))
     print("\n" + "=" * 60)
     print("KEY INFORMATION")
     print("=" * 60)

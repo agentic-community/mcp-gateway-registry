@@ -633,6 +633,30 @@ class TestListAgents:
             assert data["has_next"] is False
 
     @pytest.mark.asyncio
+    async def test_list_agents_does_not_log_authorization_header(
+        self, test_app_admin, mock_admin_context, sample_agent_card, caplog
+    ):
+        """The entry diagnostics must never emit the Authorization header value."""
+        secret_bearer = "Bearer super-secret-jwt.header.payload.signature-value"
+        with patch("registry.api.agent_routes.agent_service") as mock_agent_service:
+            mock_agent_service.get_agents_paginated = AsyncMock(
+                return_value=([sample_agent_card], 1)
+            )
+            mock_agent_service.is_agent_enabled = AsyncMock(return_value=True)
+
+            with caplog.at_level(logging.DEBUG, logger="registry.api.agent_routes"):
+                response = test_app_admin.get(
+                    "/agents",
+                    headers={"Authorization": secret_bearer},
+                )
+
+        assert response.status_code == status.HTTP_200_OK
+        combined = "\n".join(record.getMessage() for record in caplog.records)
+        # Neither the full header nor the raw token may appear at any level.
+        assert secret_bearer not in combined
+        assert "super-secret-jwt" not in combined
+
+    @pytest.mark.asyncio
     async def test_list_agents_enabled_only_filter(self, test_app, mock_user_context):
         """Test listing only enabled agents."""
         # Arrange

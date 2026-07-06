@@ -33,7 +33,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Helm
-        uses: azure/setup-helm@dda3372f752e03dde6b3237bc9431cdc2f7a02a2
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310
         with:
           version: '3.20.2'
 
@@ -78,7 +78,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Helm
-        uses: azure/setup-helm@dda3372f752e03dde6b3237bc9431cdc2f7a02a2
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310
         with:
           version: '3.20.2'
 
@@ -108,7 +108,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Helm
-        uses: azure/setup-helm@dda3372f752e03dde6b3237bc9431cdc2f7a02a2
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310
         with:
           version: '3.20.2'
 
@@ -138,7 +138,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Helm
-        uses: azure/setup-helm@dda3372f752e03dde6b3237bc9431cdc2f7a02a2
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310
         with:
           version: '3.20.2'
 
@@ -165,7 +165,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Helm
-        uses: azure/setup-helm@dda3372f752e03dde6b3237bc9431cdc2f7a02a2
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310
         with:
           version: '3.20.2'
 
@@ -215,7 +215,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Helm
-        uses: azure/setup-helm@dda3372f752e03dde6b3237bc9431cdc2f7a02a2
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310
         with:
           version: '3.20.2'
 

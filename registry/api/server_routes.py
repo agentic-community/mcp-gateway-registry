@@ -31,6 +31,7 @@ from ..auth.csrf import (
 from ..auth.dependencies import enhanced_auth, nginx_proxied_auth
 from ..auth.internal import validate_internal_auth
 from ..auth.tool_filter import filter_tools_for_user
+from ..common.log_redaction import redact_mapping
 from ..constants import VALID_AUTH_SCHEMES, DeploymentType, HealthStatus
 from ..core.config import DeploymentMode, settings
 from ..core.schemas import AuthCredentialUpdateRequest
@@ -50,6 +51,10 @@ from ..services.lifecycle_events import (
 from ..services.registration_gate_service import check_registration_gate
 from ..services.security_scanner import security_scanner_service
 from ..services.server_service import server_service
+from ..services.visibility import (
+    redact_server_backend_fields,
+    should_redact_backend_urls,
+)
 from ..services.webhook_service import send_registration_webhook
 from ..utils.credential_encryption import (
     encrypt_credential_in_server_dict,
@@ -566,6 +571,10 @@ async def read_root(
                     "mcp_endpoint": server_info.get("mcp_endpoint"),
                 }
             )
+            # Keep internal backend URLs out of the non-admin render context in
+            # with-gateway mode, matching the JSON read endpoints.
+            if should_redact_backend_urls(user_context):
+                redact_server_backend_fields(service_data[-1])
 
     return templates.TemplateResponse(
         request,
@@ -629,9 +638,9 @@ async def get_servers_json(
     # Set audit action for server list
     set_audit_action(request, "list", "server", description="List all servers")
 
-    # CRITICAL DIAGNOSTIC: Log user_context received by endpoint
-    logger.debug(f"[GET_SERVERS_DEBUG] Received user_context: {user_context}")
-    logger.debug(f"[GET_SERVERS_DEBUG] user_context type: {type(user_context)}")
+    # Diagnostics: user_context can carry credential material, so redact before
+    # logging even at DEBUG.
+    logger.debug(f"[GET_SERVERS_DEBUG] user_context (redacted): {redact_mapping(user_context)}")
     if user_context:
         logger.debug(f"[GET_SERVERS_DEBUG] Username: {user_context.get('username', 'NOT PRESENT')}")
         logger.debug(f"[GET_SERVERS_DEBUG] Scopes: {user_context.get('scopes', 'NOT PRESENT')}")
@@ -660,6 +669,9 @@ async def get_servers_json(
     accessible_servers_list = user_context.get("accessible_servers", []) if user_context else []
     accessible_services = user_context.get("accessible_services", []) if user_context else []
     is_unrestricted = is_admin or "all" in accessible_servers_list or "all" in accessible_services
+    # Redaction decision is per-request (admin + deployment mode), so compute
+    # it once rather than per server row.
+    redact_backend = should_redact_backend_urls(user_context)
     # A status filter is a field filter: force the fallback path so it applies
     # uniformly for both restricted and unrestricted users (Issue #1330).
     has_field_filters = bool(query) or status_filter is not None
@@ -830,6 +842,10 @@ async def get_servers_json(
                     "registered_by": server_info.get("registered_by"),
                 }
             )
+            # Strip internal backend URLs (top-level and per-version) for
+            # non-admins in with-gateway mode, matching GET /servers/{path}.
+            if redact_backend:
+                redact_server_backend_fields(service_data[-1])
 
     # Compute pagination metadata
     if is_unrestricted and not has_field_filters:
@@ -2631,10 +2647,16 @@ async def get_server_details(
     if service_path == "/all":
         if user_context["is_admin"]:
             return await server_service.get_all_servers()
-        else:
-            return await server_service.get_all_servers_with_permissions(
-                user_context["accessible_servers"]
-            )
+        all_accessible = await server_service.get_all_servers_with_permissions(
+            user_context["accessible_servers"]
+        )
+        # Strip internal backend URLs per server for non-admins in with-gateway
+        # mode (this branch is non-admin only; admins returned above).
+        if should_redact_backend_urls(user_context):
+            for server_entry in all_accessible.values():
+                if isinstance(server_entry, dict):
+                    redact_server_backend_fields(server_entry)
+        return all_accessible
 
     # Regular case: return details for a specific server
     server_info = await server_service.get_server_info(service_path)
@@ -2654,10 +2676,16 @@ async def get_server_details(
                 detail="You do not have access to this server",
             )
 
+    # Redaction decision is per-request; compute once so both the local
+    # early-return and the multi-version return path apply it.
+    redact_backend = should_redact_backend_urls(user_context)
+
     # Local (stdio) servers don't support multi-version routing — early-return
     # avoids guarding the synthesis block below. _build_versions_list() also
     # handles this (returns []), but skipping it here saves the work.
     if server_info.get("deployment") == DeploymentType.LOCAL:
+        if redact_backend:
+            redact_server_backend_fields(server_info)
         return server_info
 
     current_version = server_info.get("version", "v1.0.0")
@@ -2668,6 +2696,11 @@ async def get_server_details(
     if len(versions) > 1 or server_info.get("version_group"):
         server_info["versions"] = versions
         server_info["default_version"] = current_version
+
+    # Strip internal backend URLs (top-level and per-version) for non-admins in
+    # with-gateway mode, matching GET /servers/{path} and the versions endpoint.
+    if redact_backend:
+        redact_server_backend_fields(server_info)
 
     return server_info
 
@@ -2992,7 +3025,8 @@ async def refresh_service(service_path: str, user_context: Annotated[dict, Depen
         logger.error(f"ERROR during manual refresh check for {service_path}: {e}")
         # Still broadcast the error state
         await health_service.broadcast_health_update(service_path)
-        raise HTTPException(status_code=500, detail=f"Refresh check failed: {e}")
+        # Generic detail: the exception is logged above.
+        raise HTTPException(status_code=500, detail="Refresh check failed")
 
     # Update DocumentDB search index
     try:
@@ -5030,6 +5064,11 @@ async def list_groups_api(
       -H "Authorization: Bearer $JWT_TOKEN"
     ```
     """
+    # The response exposes the full access-control model (server_access,
+    # group_mappings, ui_permissions), including which groups confer admin, so
+    # it is admin-only — matching every write sibling and /internal/list-groups.
+    _require_admin(user_context)
+
     logger.info(
         f"API list groups request from user '{user_context.get('username') if user_context else 'unknown'}'"
     )
@@ -5071,6 +5110,11 @@ async def get_group_api(
     ```
     """
     from ..services.scope_service import get_group
+
+    # The response exposes the full group definition (server_access,
+    # group_mappings, ui_permissions), so it is admin-only — matching the
+    # list-groups sibling and every group write endpoint.
+    _require_admin(user_context)
 
     logger.info(
         f"API get group request from user '{user_context.get('username') if user_context else 'unknown'}' "
@@ -5732,14 +5776,47 @@ async def get_server_versions(
 
     Returns:
         Version information
+
+    Non-admin callers must have access to the server (403 otherwise) and never
+    receive the internal backend URLs in with-gateway mode — mirroring the
+    authorization and redaction that ``GET /servers/{path}`` already enforces.
     """
     decoded_path = "/" + service_path if not service_path.startswith("/") else service_path
 
-    try:
-        return await server_service.get_server_versions(decoded_path)
+    # Resolve the server first, then authorize — mirroring GET /servers/{path}:
+    # 404 for an unknown path, 403 for a real-but-inaccessible server. (The
+    # 403-vs-404 split is the established contract across the native server read
+    # endpoints; see FOLLOWUPS for the shared existence-oracle note.)
+    server_info = await server_service.get_server_info(decoded_path)
+    if not server_info:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Server not found: {decoded_path}",
+        )
 
+    # Access control — admins bypass; non-admins must be able to reach the server.
+    if not (user_context and user_context.get("is_admin")):
+        accessible_servers = user_context.get("accessible_servers", []) if user_context else []
+        has_access = await server_service.user_can_access_server_path(
+            decoded_path, accessible_servers
+        )
+        if not has_access:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have access to this server",
+            )
+
+    try:
+        versions_response = await server_service.get_server_versions(decoded_path)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+    # Strip internal backend URLs (including per-version proxy_pass_url) for
+    # non-admins in with-gateway mode, matching the sibling read endpoints.
+    if should_redact_backend_urls(user_context):
+        redact_server_backend_fields(versions_response)
+
+    return versions_response
 
 
 @router.get("/servers/{service_path:path}/connect-config")
@@ -6234,11 +6311,10 @@ async def get_server(
                 detail="You do not have access to this server",
             )
 
-    # Strip proxy_pass_url for non-admin users in with-gateway mode.
+    # Strip internal backend URLs for non-admin users in with-gateway mode.
     # In registry-only mode, users need the URL to connect directly.
-    if not user_context.get("is_admin"):
-        if settings.deployment_mode != DeploymentMode.REGISTRY_ONLY:
-            server_info.pop("proxy_pass_url", None)
+    if should_redact_backend_urls(user_context):
+        redact_server_backend_fields(server_info)
 
     # Normalize visibility for servers stored before the write-side fix
     # always persisted the field (#1181). Matches the default-on-read

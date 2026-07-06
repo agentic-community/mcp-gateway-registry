@@ -52,7 +52,6 @@ SKILLS_MODE_ALLOWED_PREFIXES = (
 MCP_SERVERS_MODE_ALLOWED_PREFIXES = (
     "/api/servers",
     "/api/search/semantic",
-    "/.well-known/mcp-servers",
 )
 
 # API endpoints allowed in agents-only mode
@@ -87,7 +86,7 @@ def _is_path_allowed(path: str, mode: RegistryMode) -> bool:
         for prefix in SKILLS_MODE_ALLOWED_PREFIXES:
             if path.startswith(prefix):
                 return True
-        # Allow well-known but it will return empty list
+        # Allow well-known discovery endpoints (OAuth metadata, ARD catalog, registry card)
         if path.startswith("/.well-known/"):
             return True
         # Block all other /api/* endpoints

@@ -8,6 +8,7 @@ misconfigured deployment fails fast.
 """
 
 import logging
+import os
 
 from ..core.config import settings
 from .interfaces import SecretStoreBase
@@ -22,9 +23,22 @@ def _build_secrets_manager() -> SecretStoreBase:
 
     from .secrets_manager.store import SecretsManagerStore
 
-    region = settings.aws_secrets_region or None
+    # Prefer the explicit AWS_SECRETS_REGION, but fall back to the standard AWS
+    # region env vars (AWS_REGION / AWS_DEFAULT_REGION) that are always present on
+    # ECS/EKS and in the AWS SDK's own resolution. This means an operator does not
+    # have to set a dedicated AWS_SECRETS_REGION just to use the secrets-manager
+    # backend when the task already runs in a known region.
+    region = (
+        settings.aws_secrets_region
+        or os.getenv("AWS_REGION")
+        or os.getenv("AWS_DEFAULT_REGION")
+        or None
+    )
     if not region:
-        raise ValueError("SECRET_STORE_BACKEND=secrets-manager requires AWS_SECRETS_REGION.")
+        raise ValueError(
+            "SECRET_STORE_BACKEND=secrets-manager requires a region: set "
+            "AWS_SECRETS_REGION (or AWS_REGION / AWS_DEFAULT_REGION)."
+        )
     client = boto3.client("secretsmanager", region_name=region)
     return SecretsManagerStore(
         client=client,

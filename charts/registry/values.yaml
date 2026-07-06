@@ -3,7 +3,7 @@ global:
   image:
     # Container registry (host + optional namespace). Shared default across subcharts.
     registry: public.ecr.aws/p3v1o3c6
-    tag: 1.25.0
+    tag: 1.26.0
     pullPolicy: IfNotPresent
   cloud:
     # AWS region for cloud detection in telemetry. Set this when deploying
@@ -42,9 +42,8 @@ image:
 # bring your own.
 serviceAccount:
   create: true
-  name: ""  # defaults to app.name ("registry") when empty
+  name: "" # defaults to app.name ("registry") when empty
   annotations: {}
-
 app:
   name: registry
   replicas: 2
@@ -363,9 +362,8 @@ cognito:
   userPoolId: "" # Cognito User Pool ID
   clientId: ""
   clientSecret: ""
-  domain: ""  # Optional: custom Cognito domain
-  region: "us-east-1"  # AWS region for the User Pool
-
+  domain: "" # Optional: custom Cognito domain
+  region: "us-east-1" # AWS region for the User Pool
 # Per-user egress credential vault (third-party OBO support).
 # When enabled, the registry renders a discrete `registry-egress-config`
 # ConfigMap (non-secret vars) consumed via envFrom; the nginx marker secret is
@@ -389,18 +387,17 @@ egressAuth:
   # standalone subchart secret.
   markerSecret: ""
   secretsManager:
-    kmsKeyId: ""  # Optional CMK; empty uses the AWS-managed key.
+    kmsKeyId: "" # Optional CMK; empty uses the AWS-managed key.
     pathPrefix: "mcp/egress"
   openbao:
-    addr: ""  # e.g. http://openbao.default.svc:8200
-    namespace: ""  # Enterprise namespaces only.
+    addr: "" # e.g. http://openbao.default.svc:8200
+    namespace: "" # Enterprise namespaces only.
     kvMount: "secret"
-    authMethod: "token"  # token | kubernetes
+    authMethod: "token" # token | kubernetes
     # OpenBao kubernetes-auth role, bound to the registry ServiceAccount by the
     # stack's openbao-init Job. Named "registry" (not egress-specific) so more
     # policies can attach to the same role/SA over time.
     role: "registry"
-
 # PingFederate integration (used when authProvider.type = "pingfederate")
 pingfederate:
   enabled: false

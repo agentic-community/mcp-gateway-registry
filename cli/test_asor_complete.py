@@ -58,7 +58,7 @@ def get_token():
             print(f"✅ Token obtained: {masked_token}")
             return access_token
         else:
-            print(f"❌ Token exchange failed: {response.status_code} - {response.text}")
+            print(f"❌ Token exchange failed: HTTP {response.status_code} (body omitted)")
             return None
     except Exception as e:
         print(f"❌ Error: {e}")

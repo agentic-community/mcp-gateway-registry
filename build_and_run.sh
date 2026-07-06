@@ -342,11 +342,11 @@ fi
 if ! grep -q "SECRET_KEY=" .env || grep -q "SECRET_KEY=$" .env || grep -q "SECRET_KEY=\"\"" .env; then
     log "Generating SECRET_KEY..."
     SECRET_KEY=$(python3 -c 'import secrets; print(secrets.token_hex(32))') || handle_error "Failed to generate SECRET_KEY"
-    
+
     # Remove any existing empty SECRET_KEY line
     sed -i '/^SECRET_KEY=$/d' .env 2>/dev/null || true
     sed -i '/^SECRET_KEY=""$/d' .env 2>/dev/null || true
-    
+
     # Add new SECRET_KEY
     echo "SECRET_KEY=$SECRET_KEY" >> .env
     log "SECRET_KEY added to .env"
@@ -371,6 +371,73 @@ if ! grep -q "AUTH_SERVER_NGINX_MARKER_SECRET=" .env || grep -q "AUTH_SERVER_NGI
     log "AUTH_SERVER_NGINX_MARKER_SECRET added to .env"
 else
     log "AUTH_SERVER_NGINX_MARKER_SECRET already exists in .env"
+fi
+
+# Generate a strong DOCUMENTDB_PASSWORD if not already set. The local MongoDB
+# container runs with --auth and creates its root user from this value on first
+# boot, so it must never be a weak default like "admin". We only generate when
+# the value is missing/empty; an operator-provided password is left untouched.
+# NOTE: this only helps a first-time install. If MongoDB was already initialized
+# with a different password (existing data volume), set DOCUMENTDB_PASSWORD to
+# that value or recreate the mongodb-data volume.
+if ! grep -q "^DOCUMENTDB_PASSWORD=" .env || grep -q "^DOCUMENTDB_PASSWORD=$" .env || grep -q "^DOCUMENTDB_PASSWORD=\"\"$" .env; then
+    log "Generating DOCUMENTDB_PASSWORD..."
+    DOCUMENTDB_PASSWORD=$(python3 -c 'import secrets; print(secrets.token_hex(24))') || handle_error "Failed to generate DOCUMENTDB_PASSWORD"
+
+    # Remove any existing empty DOCUMENTDB_PASSWORD line
+    sed -i '/^DOCUMENTDB_PASSWORD=$/d' .env 2>/dev/null || true
+    sed -i '/^DOCUMENTDB_PASSWORD=""$/d' .env 2>/dev/null || true
+
+    # Add new DOCUMENTDB_PASSWORD
+    echo "DOCUMENTDB_PASSWORD=$DOCUMENTDB_PASSWORD" >> .env
+    log "DOCUMENTDB_PASSWORD added to .env"
+else
+    log "DOCUMENTDB_PASSWORD already exists in .env"
+fi
+
+# Generate a strong METRICS_KEY_PEPPER if not already set. The metrics-service
+# peppers stored API-key hashes with this value and refuses to start unless it
+# is present and high-entropy (>= 32 chars, not a known placeholder). Generated
+# unconditionally so it is available whenever the metrics-service is built from
+# source; the --prebuilt path has no metrics-service and simply ignores it.
+# NOTE: rotating this value invalidates all existing API-key hashes -- re-issue
+# metrics API keys after changing it. We only generate when missing/empty; an
+# operator-provided pepper is left untouched.
+if ! grep -q "^METRICS_KEY_PEPPER=" .env || grep -q "^METRICS_KEY_PEPPER=$" .env || grep -q "^METRICS_KEY_PEPPER=\"\"$" .env; then
+    log "Generating METRICS_KEY_PEPPER..."
+    METRICS_KEY_PEPPER=$(python3 -c 'import secrets; print(secrets.token_hex(32))') || handle_error "Failed to generate METRICS_KEY_PEPPER"
+
+    # Remove any existing empty METRICS_KEY_PEPPER line
+    sed -i '/^METRICS_KEY_PEPPER=$/d' .env 2>/dev/null || true
+    sed -i '/^METRICS_KEY_PEPPER=""$/d' .env 2>/dev/null || true
+
+    # Add new METRICS_KEY_PEPPER
+    echo "METRICS_KEY_PEPPER=$METRICS_KEY_PEPPER" >> .env
+    log "METRICS_KEY_PEPPER added to .env"
+else
+    log "METRICS_KEY_PEPPER already exists in .env"
+fi
+
+# Generate a strong OPENBAO_TOKEN if not already set. The dev OpenBao container
+# is auto-unsealed with this root token and the registry authenticates to it
+# with the same value, so the compose stack requires it (${OPENBAO_TOKEN:?}) and
+# refuses to start without one -- reaching :8200 with a known token grants root
+# access to every stored egress credential. Generate a strong value rather than
+# ship the old guessable "dev-root-token" default. We only generate when the
+# value is missing/empty; an operator-provided token is left untouched.
+if ! grep -q "^OPENBAO_TOKEN=" .env || grep -q "^OPENBAO_TOKEN=$" .env || grep -q "^OPENBAO_TOKEN=\"\"$" .env; then
+    log "Generating OPENBAO_TOKEN..."
+    OPENBAO_TOKEN=$(python3 -c 'import secrets; print(secrets.token_hex(32))') || handle_error "Failed to generate OPENBAO_TOKEN"
+
+    # Remove any existing empty OPENBAO_TOKEN line
+    sed -i '/^OPENBAO_TOKEN=$/d' .env 2>/dev/null || true
+    sed -i '/^OPENBAO_TOKEN=""$/d' .env 2>/dev/null || true
+
+    # Add new OPENBAO_TOKEN
+    echo "OPENBAO_TOKEN=$OPENBAO_TOKEN" >> .env
+    log "OPENBAO_TOKEN added to .env"
+else
+    log "OPENBAO_TOKEN already exists in .env"
 fi
 
 # Validate required environment variables
@@ -436,6 +503,73 @@ else
     log "WARNING: scripts/prepare-log-dirs.sh not found or not executable; skipping log-directory prep"
 fi
 
+# Return the lowercased value of the named variable (indirect expansion) so the
+# weak-value comparisons below are case-insensitive -- a placeholder mutated only
+# by case (e.g. "Change-Password-...") must not slip past the denylist.
+_lc_var() {
+    local name="$1"
+    printf '%s' "${!name:-}" | tr '[:upper:]' '[:lower:]'
+}
+
+# Reject known-weak default values for secrets that could reach a deployment.
+# Compose fails fast on unset required secrets via ${VAR:?...}, but a value
+# explicitly set to a historical default (e.g. DOCUMENTDB_PASSWORD=admin,
+# OPENBAO_TOKEN=dev-root-token) or to a shipped .env.example placeholder would
+# pass that presence check while still being a guessable credential. Fail closed
+# here before starting anything. Comparisons are case-insensitive.
+_validate_secret_defaults() {
+    local failed=0
+
+    if [ "$(_lc_var DOCUMENTDB_PASSWORD)" = "admin" ]; then
+        log "ERROR: DOCUMENTDB_PASSWORD is set to the known-weak default 'admin'."
+        log "       Set a strong random value in .env (e.g. openssl rand -hex 24)."
+        failed=1
+    fi
+
+    if [ "$(_lc_var OPENBAO_TOKEN)" = "dev-root-token" ]; then
+        log "ERROR: OPENBAO_TOKEN is set to the known-weak default 'dev-root-token'."
+        log "       Reaching the vault with this token grants root over every stored"
+        log "       egress credential. Set a strong random value in .env (openssl rand -hex 32)."
+        failed=1
+    fi
+
+    case "$(_lc_var KEYCLOAK_DB_PASSWORD)" in
+        keycloak|your-secure-db-password)
+            log "ERROR: KEYCLOAK_DB_PASSWORD is set to a known-weak/placeholder value."
+            log "       Set a strong random value in .env (it backs the Keycloak realm DB)."
+            failed=1
+            ;;
+    esac
+
+    case "$(_lc_var KEYCLOAK_ADMIN_PASSWORD)" in
+        your-secure-keycloak-admin-password|admin)
+            log "ERROR: KEYCLOAK_ADMIN_PASSWORD is set to a known-weak/placeholder value."
+            log "       This bootstraps the Keycloak master-realm admin (full IdP takeover"
+            log "       if guessed); set a strong value in .env."
+            failed=1
+            ;;
+    esac
+
+    case "$(_lc_var GRAFANA_ADMIN_PASSWORD)" in
+        change-me-set-strong-password|admin)
+            log "ERROR: GRAFANA_ADMIN_PASSWORD is set to a known-weak/placeholder value."
+            log "       Set a strong value in .env (Grafana admin console credential)."
+            failed=1
+            ;;
+    esac
+
+    case "$(_lc_var PF_ADMIN_PASS)" in
+        2federatem0re|change-password-to-some-secret-password)
+            log "ERROR: PF_ADMIN_PASS is set to the PingFederate vendor default or placeholder."
+            log "       The registry drives the PF admin API with this credential; set a"
+            log "       strong value in .env when the pingfederate profile is enabled."
+            failed=1
+            ;;
+    esac
+
+    return $failed
+}
+
 # Preflight validation for extra_env files (Issue #1000).
 # Source scripts/validate-extra-env.sh so the same collision logic is shared
 # with CI and pre-commit hooks.
@@ -448,6 +582,7 @@ validate_predeployment() {
     source "$script_dir/scripts/validate-extra-env.sh"
 
     validate_extra_env_all || exit 1
+    _validate_secret_defaults || exit 1
 
     log "Predeployment validations passed."
 }
