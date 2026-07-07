@@ -899,6 +899,11 @@ def _mask_sensitive_dict(
 # Matching is fail-closed: any header whose name contains one of these markers
 # has its value masked, so a new credential header (e.g. ``X-Auth-Credential``,
 # ``X-Api-Key``) forwarded on the auth subrequest is never logged in plaintext.
+#
+# KEEP IN SYNC with ``registry.common.log_redaction.SENSITIVE_HEADER_SUBSTRINGS``
+# -- this is a duplicate because the auth server is a separate deployable and
+# cannot import the registry package. ``test_header_substrings_match_shared_redactor``
+# (tests/auth_server/unit/test_server.py) fails if the two lists drift apart.
 _SENSITIVE_HEADER_SUBSTRINGS: tuple[str, ...] = (
     "authorization",
     "cookie",

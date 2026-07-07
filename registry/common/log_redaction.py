@@ -49,6 +49,13 @@ SENSITIVE_HEADER_NAMES: frozenset[str] = frozenset(
 # hyphens, so this list is hyphen-oriented. Substring matching keeps the helper
 # fail-closed: a variant credential header (e.g. ``X-Custom-Auth-Token``) is
 # redacted by default rather than leaking because it was not listed.
+#
+# KEEP IN SYNC with ``auth_server.server._SENSITIVE_HEADER_SUBSTRINGS`` -- the
+# auth server is a separate deployable and cannot import this module, so the
+# set is duplicated there. ``test_header_substrings_match_shared_redactor``
+# (tests/auth_server/unit/test_server.py) fails if the two drift. This differs
+# from the audit query-param list (registry.audit.models) on purpose: header
+# names carry ``cookie``/``jwt``/``bearer``/``session``, query keys do not.
 SENSITIVE_HEADER_SUBSTRINGS: tuple[str, ...] = (
     "authorization",
     "cookie",

@@ -98,6 +98,25 @@ class TestMaskingFunctions:
         assert masked["Accept"] == "application/json"
         assert "super-secret-token" not in str(masked)
 
+    def test_header_substrings_match_shared_redactor(self):
+        """auth-server and registry header-substring sets must stay identical.
+
+        The credential-bearing substring list is duplicated across two
+        deployables (the auth server and the registry cannot import each
+        other), so nothing at runtime catches the two drifting apart. If one
+        gains a marker the other lacks, a credential header masked in one
+        service would leak in the other. Pin them equal here so any edit to
+        one copy without the other fails this test.
+        """
+        from auth_server.server import _SENSITIVE_HEADER_SUBSTRINGS
+        from registry.common.log_redaction import SENSITIVE_HEADER_SUBSTRINGS
+
+        assert set(_SENSITIVE_HEADER_SUBSTRINGS) == set(SENSITIVE_HEADER_SUBSTRINGS), (
+            "auth_server._SENSITIVE_HEADER_SUBSTRINGS has drifted from "
+            "registry.common.log_redaction.SENSITIVE_HEADER_SUBSTRINGS; keep them "
+            "identical so a credential header is masked consistently in both services"
+        )
+
     def test_anonymize_ip_ipv4(self):
         """Test IPv4 anonymization."""
         from auth_server.server import anonymize_ip

@@ -64,6 +64,15 @@ SENSITIVE_QUERY_PARAMS = frozenset(
 # insensitive), mark its value as sensitive and force masking. This is the
 # fail-closed layer: any current or future parameter whose name contains one of
 # these tokens is masked without needing an exact-match entry above.
+#
+# This list is query-parameter oriented and intentionally DIFFERS from the
+# header substring lists (registry.common.log_redaction.SENSITIVE_HEADER_SUBSTRINGS
+# and auth_server._SENSITIVE_HEADER_SUBSTRINGS): header-only markers like
+# ``cookie``/``jwt``/``bearer``/``session`` appear in header names, not query
+# keys, so they are omitted here. ``key`` is deliberately broad -- it also masks
+# benign params such as ``sort_key`` or ``partition_key``. That over-redaction
+# is intentional (fail closed): do NOT narrow or remove ``key`` to un-mask a
+# benign param, or a future ``*_key`` credential would leak in plaintext.
 SENSITIVE_QUERY_PARAM_SUBSTRINGS: tuple[str, ...] = (
     "token",
     "password",
