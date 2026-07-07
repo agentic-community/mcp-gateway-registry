@@ -236,9 +236,38 @@ class TestDisallowedOboAudience:
     )
     def test_known_first_party_guids_rejected_even_in_api_form(self, aud):
         # Defense-in-depth: although a generic api://<guid> is accepted (custom app),
-        # the KNOWN first-party app-id GUIDs are rejected in the api:// form too, in
+        # the known first-party app-id GUIDs are rejected in the api:// form too, in
         # case Entra scheme-normalizes api://<appId> to a bare-GUID SPN match. Their
         # bare form is already rejected by the shape rule.
+        assert schemas._is_disallowed_obo_audience(aud) is True
+
+    @pytest.mark.parametrize(
+        "aud",
+        [
+            "https://graph.microsoft.com",
+            "00000003-0000-0000-c000-000000000000",
+            "api://00000003-0000-0000-c000-000000000000",
+            "https://management.azure.com",
+            "https://vault.azure.net:443/secrets",
+            "https://graph.microsoft.us",  # sovereign cloud
+        ],
+    )
+    def test_first_party_floor_cannot_be_reenabled_by_allowlist(self, aud, monkeypatch):
+        # The first-party floor is checked before the operator allowlist, so listing
+        # a first-party resource in EGRESS_OBO_ALLOWED_AUDIENCES does NOT re-enable
+        # it (any form: https host, bare GUID, or api://<guid>).
+        from registry.core.config import settings
+
+        monkeypatch.setattr(
+            settings,
+            "egress_obo_allowed_audiences",
+            (
+                "https://graph.microsoft.com 00000003-0000-0000-c000-000000000000 "
+                "api://00000003-0000-0000-c000-000000000000 https://management.azure.com "
+                "https://vault.azure.net https://graph.microsoft.us"
+            ),
+            raising=False,
+        )
         assert schemas._is_disallowed_obo_audience(aud) is True
 
     def test_bare_guid_target_allowed_only_via_allowlist(self, monkeypatch):

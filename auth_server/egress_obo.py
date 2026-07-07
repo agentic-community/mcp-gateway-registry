@@ -1,17 +1,15 @@
-"""On-Behalf-Of (OBO) token exchange for the egress hop (hop 1).
+"""On-Behalf-Of (OBO) token exchange for the egress hop.
 
 This is the auth_server side of the same-IdP OBO flow. When a registered server
 has ``egress_auth_mode == "obo_exchange"``, the gateway re-audiences the user's
 ingress JWT to the internal MCP server's app via the gateway's OWN IdP client
-credentials, preserving the user's ``sub``. The MCP server then performs its own
-downstream exchange (hop 2), which is out of scope here.
-
-Design: ``.scratchpad/design-obo-flow-2026-06-09.md`` and
-``.scratchpad/plan-obo-exchange-2026-06-25.md``.
+credentials, preserving the user's ``sub``. The forwarded token is an IdP-issued
+token audienced to the MCP server's app; what the MCP server does with it (call
+its own downstream APIs, exchange it further, etc.) is out of scope here.
 
 Security invariants:
-- The minted token bakes in the user's ``sub``; it is exchanged PER REQUEST and
-  is NEVER cached or reused across users. This module holds no cache.
+- The minted token embeds the user's ``sub``; it is exchanged PER REQUEST and is
+  NEVER cached or reused across users. This module holds no cache.
 - The gateway authenticates with its OWN IdP client credentials (read from the
   provider object), not any per-server secret.
 """
@@ -32,7 +30,7 @@ _TOKEN_EXCHANGE_TIMEOUT_SECONDS: float = 10.0
 
 
 class OboExchangeError(Exception):
-    """Base error for OBO hop-1 exchange failures."""
+    """Base error for OBO token-exchange failures."""
 
 
 class OboReauthRequired(OboExchangeError):
@@ -143,7 +141,7 @@ async def obo_exchange(
     target_audience: str,
     scopes: list[str] | None = None,
 ) -> str:
-    """Perform OBO hop 1: re-audience the ingress JWT to ``target_audience``.
+    """Perform the OBO exchange: re-audience the ingress JWT to ``target_audience``.
 
     Args:
         idp_provider: the gateway's OWN IdP provider (from get_auth_provider()),

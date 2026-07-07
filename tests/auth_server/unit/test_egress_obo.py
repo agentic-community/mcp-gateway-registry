@@ -1,4 +1,4 @@
-"""Unit tests for the OBO hop-1 token-exchange engine (auth_server/egress_obo.py).
+"""Unit tests for the OBO token-exchange engine (auth_server/egress_obo.py).
 
 Covers:
 - Entra jwt-bearer request body shape (grant_type, assertion, scope, on_behalf_of).

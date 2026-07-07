@@ -47,7 +47,12 @@ _SERVER_PATH_RE = re.compile(r"^[A-Za-z0-9._\-/]+$")
 _GUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
 # Known Microsoft first-party resource app-id GUIDs -- rejected as an obo target in
-# BOTH bare and ``api://<guid>`` forms (see _GUID_RE comment).
+# BOTH bare and ``api://<guid>`` forms (see _GUID_RE comment). These are also an
+# ALWAYS-ON floor: EGRESS_OBO_ALLOWED_AUDIENCES cannot re-enable them (see
+# _is_first_party_obo_audience / _is_disallowed_obo_audience). There is no
+# legitimate reason to OBO-exchange into Graph/ARM/Key Vault and forward that
+# broad delegated token to an MCP server's upstream -- that IS the confused deputy
+# the control exists to stop -- so the operator override does not extend to them.
 _FIRST_PARTY_APPID_GUIDS: frozenset[str] = frozenset(
     {
         "00000003-0000-0000-c000-000000000000",  # Microsoft Graph
@@ -56,6 +61,50 @@ _FIRST_PARTY_APPID_GUIDS: frozenset[str] = frozenset(
         "cfa8b339-82a2-471a-a3c9-0fc0be7a4093",  # Azure Key Vault
     }
 )
+
+# Host portions of the same first-party resources' canonical https:// audiences,
+# for the always-on floor (an allowlisted 'https://graph.microsoft.com' must still
+# be blocked). Matched against the target's host regardless of scheme/port/path.
+_FIRST_PARTY_HOSTS: frozenset[str] = frozenset(
+    {
+        "graph.microsoft.com",
+        "graph.microsoft.us",  # GCC-High / DoD
+        "dod-graph.microsoft.us",
+        "graph.microsoft.de",  # legacy Germany
+        "microsoftgraph.chinacloudapi.cn",  # China
+        "management.azure.com",
+        "management.core.windows.net",
+        "management.usgovcloudapi.net",
+        "management.chinacloudapi.cn",
+        "vault.azure.net",
+        "vault.usgovcloudapi.net",
+        "vault.azure.cn",
+        "vault.microsoftazure.de",
+    }
+)
+
+
+def _is_first_party_obo_audience(target: str) -> bool:
+    """True if ``target`` names a blocked first-party resource in ANY form.
+
+    Detects Microsoft Graph / Azure AD Graph / ARM / Key Vault whether expressed
+    as a bare app-id GUID, an ``api://<guid>`` URI, or an ``http(s)://<host>``
+    URL (any port/path). This is the ALWAYS-ON floor: it is checked before the
+    operator allowlist, so ``EGRESS_OBO_ALLOWED_AUDIENCES`` cannot re-enable these.
+    ``target`` must already be lowercased/stripped.
+    """
+    # api://<guid> or bare guid
+    bare = target[len("api://") :] if target.startswith("api://") else target
+    if bare in _FIRST_PARTY_APPID_GUIDS:
+        return True
+    # http(s)://<host>[:port][/...] -- extract the host and compare.
+    if target.startswith("https://") or target.startswith("http://"):
+        rest = target.split("://", 1)[1]
+        host = rest.split("/", 1)[0].split(":", 1)[0]
+        if host in _FIRST_PARTY_HOSTS:
+            return True
+    return False
+
 
 # The authority of an accepted ``api://<authority>`` target, and the accepted bare
 # (schemeless) client-id form. Deliberately narrow so the shape rule fails CLOSED:
@@ -148,12 +197,16 @@ def _is_disallowed_obo_audience(target_audience: str) -> bool:
     cloud), or the exchange would mint a broadly-scoped delegated token and forward
     it to the server's upstream (confused-deputy token exfiltration).
 
-    A **denylist of hosts/GUIDs cannot express this** (new first-party hosts,
-    ports, path suffixes, sovereign clouds, and the full first-party app-id GUID
-    set all evade it), so this is a POSITIVE control that **fails closed**:
+    A denylist of hosts/GUIDs cannot express this (new first-party hosts, ports,
+    path suffixes, sovereign clouds, and the full first-party app-id GUID set all
+    evade it), so this is a positive control that fails closed:
 
+    0. A fixed set of first-party resources (Graph/ARM/Key Vault, in any form) is
+       ALWAYS disallowed, checked before the operator allowlist -- the allowlist
+       cannot re-enable them.
     1. If the operator set ``EGRESS_OBO_ALLOWED_AUDIENCES``, the target must be in
-       that exact set (authoritative). Anything else is disallowed.
+       that exact set (authoritative for everything not blocked by (0)). Anything
+       else is disallowed.
     2. Otherwise a shape allowlist: ONLY two shapes are accepted, everything else
        (unknown schemes, host URLs, bare GUIDs, braced/urn forms, garbage) is
        disallowed:
@@ -180,6 +233,14 @@ def _is_disallowed_obo_audience(target_audience: str) -> bool:
         # Empty is handled as "missing" by the caller; not this function's job.
         return False
 
+    # Always-on floor (checked BEFORE the operator allowlist): the fixed set of
+    # first-party resources (Graph/ARM/Key Vault, any spelling) are never a valid
+    # obo target, and EGRESS_OBO_ALLOWED_AUDIENCES cannot re-enable them. There is
+    # no legitimate reason to OBO-exchange into them and forward that broad
+    # delegated token to an MCP server's upstream.
+    if _is_first_party_obo_audience(target):
+        return True
+
     allowlist = _obo_audience_allowlist()
     if allowlist:
         return target not in allowlist
@@ -188,17 +249,12 @@ def _is_disallowed_obo_audience(target_audience: str) -> bool:
     # target matches one of exactly two accepted shapes.
     if target.startswith("api://"):
         authority = target[len("api://") :]
-        # Reject a malformed/empty authority.
+        # Reject a malformed/empty authority. (The api:// form of the blocked
+        # first-party GUIDs is already handled by the always-on floor above.)
         if not _OBO_API_AUTHORITY_RE.match(authority):
             return True
-        # Defense-in-depth: block the api:// form of the known first-party app-id
-        # GUIDs (Graph/ARM/Key Vault) even though an api://<guid> normally names a
-        # custom app -- in case Entra scheme-normalizes api://<appId> to a
-        # bare-GUID first-party SPN match. Their bare form is already rejected.
-        if authority in _FIRST_PARTY_APPID_GUIDS:
-            return True
-        # Any other well-formed api:// authority (a named App ID URI or the
-        # auto-generated api://<guid> for a custom app) is accepted.
+        # Any well-formed api:// authority (a named App ID URI or the auto-generated
+        # api://<guid> for a custom app) is accepted.
         return False
     # No scheme: accept only a bare non-GUID client-id token; reject a BARE GUID
     # (directly addresses a first-party resource) or any value carrying a scheme
@@ -293,8 +349,8 @@ class EgressOAuthConfig(BaseModel):
     - ``oauth_user`` (3LO vault): the operator supplies
       ``provider``/``client_id``/``client_secret``/``scopes`` at registration;
       ``custom_*`` fields apply only when ``provider == 'custom'``.
-    - ``obo_exchange`` (same-IdP OBO hop 1): the gateway re-audiences the user's
-      ingress token to the internal MCP server's app via the gateway's OWN IdP
+    - ``obo_exchange`` (same-IdP OBO): the gateway re-audiences the user's ingress
+      token to the internal MCP server's app via the gateway's OWN IdP
       credentials. No per-server provider/client_id/secret is needed; only
       ``target_audience`` (and audience-scoped ``scopes``) are required.
 
@@ -319,7 +375,8 @@ class EgressOAuthConfig(BaseModel):
         default=None,
         description="obo_exchange only: the internal MCP server's App ID URI (Entra, "
         "e.g. 'api://outlook-mcp-server') or client id (Keycloak). The 'aud' the gateway "
-        "requests in OBO hop 1. IdP-shaped; the exchange engine formats the request per IdP.",
+        "requests in the OBO exchange. IdP-shaped; the exchange engine formats the request "
+        "per IdP.",
     )
     # Custom-OIDC overrides (only when provider == 'custom')
     custom_authorize_url: str | None = None
@@ -618,7 +675,7 @@ class ServerInfo(BaseModel):
     egress_auth_mode: str = Field(
         default="none",
         description="Egress auth to the upstream: 'none', 'oauth_user' (3LO vault), "
-        "or 'obo_exchange' (same-IdP OBO hop 1).",
+        "or 'obo_exchange' (same-IdP OBO).",
     )
     egress_oauth: EgressOAuthConfig | None = Field(
         default=None,

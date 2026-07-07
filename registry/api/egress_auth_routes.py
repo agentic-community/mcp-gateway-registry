@@ -164,7 +164,7 @@ class EgressTokenResponse(BaseModel):
     )
     obo_target_audience: str | None = Field(
         default=None,
-        description="obo_exchange: the 'aud' the auth_server requests in OBO hop 1.",
+        description="obo_exchange: the 'aud' the auth_server requests in the OBO exchange.",
     )
     obo_scopes: list[str] | None = Field(
         default=None,

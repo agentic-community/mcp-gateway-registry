@@ -6,20 +6,23 @@
 vaulted third-party token (see [Per-User Egress Credential Vault](egress-credential-vault.md)),
 performs an **On-Behalf-Of token exchange at the same IdP** as the gateway. It
 takes the user's ingress JWT and re-audiences it (Entra `jwt-bearer` / Keycloak
-RFC 8693) to an **internal** MCP server's app, preserving the user's identity.
-The forwarded token is itself a valid IdP-signed JWT the MCP server can chain
-again (hop 2) for a downstream resource.
+RFC 8693) to an **internal** MCP server's app, preserving the user's identity, and
+forwards that exchanged token to the MCP server.
 
-Two hops make up the full chain; the gateway does **hop 1**, the MCP server does
-**hop 2**:
+What the gateway does — the complete `obo_exchange` behavior — is a single
+exchange: user's ingress JWT in, a token audienced to the MCP server's app out.
+Using the gateway's OWN IdP client credentials it re-audiences the token,
+preserving the user's `sub`/`oid`, strips the user's gateway credentials, injects
+the exchanged token, and forwards the request. The MCP server receives an
+IdP-signed JWT that authenticates the calling user to it.
 
-- **Hop 1 (the gateway):** take the user's ingress JWT, exchange it at the IdP
-  (using the gateway's OWN IdP client credentials) for a token audienced to the
-  internal MCP server's app, preserving the user's `sub`/`oid`. Strip the user's
-  gateway credentials, inject the exchanged token, forward.
-- **Hop 2 (the MCP server, out of scope for the gateway):** the server exchanges
-  that re-audienced token at the SAME IdP for a downstream resource token (e.g.
-  Microsoft Graph) and calls the resource as the user.
+Because the forwarded token is a valid IdP-signed JWT, the MCP server **may
+optionally** exchange it again at the same IdP for a downstream-resource token
+(e.g. Microsoft Graph) and call that resource as the user — a further OBO exchange
+the server author chooses to implement. That second exchange is entirely the MCP
+server's own code and is out of scope for the gateway; `obo_exchange` neither
+performs nor requires it. Some servers simply validate the token and act on it
+directly.
 
 This is the same-IdP, stateless sibling of the 3LO vault: no per-user consent, no
 token storage, no provider table — the gateway mints a fresh exchanged token per
@@ -27,8 +30,8 @@ request. It is for **internal** MCP servers that live in the same tenant/realm a
 the gateway.
 
 This document doubles as a **verification runbook**: §2–§3 walk through deploying
-a barebones `obo-echo` server (which performs hop 2 against Graph) and exercising
-the full chain against the `mcp-entra` Helm release.
+a barebones `obo-echo` server (which, as an example, exchanges the token again
+against Graph) and exercising the flow against the `mcp-entra` Helm release.
 
 ---
 
@@ -53,11 +56,11 @@ the full chain against the `mcp-entra` Helm release.
 
 | Term | Meaning |
 |------|---------|
-| **OBO (on-behalf-of)** | The gateway calls a downstream as the user's delegated identity, not a shared bot. |
-| **Hop 1** | The gateway's IdP token exchange: ingress JWT -> token audienced to the internal MCP server's app. |
-| **Hop 2** | The MCP server's own exchange of the hop-1 token for a downstream-resource token (server-author's code, not the gateway's). |
+| **OBO (on-behalf-of)** | An IdP token exchange that re-audiences a token to another app while preserving the user's delegated identity, not a shared bot. |
+| **`obo_exchange` (the gateway's exchange)** | The complete gateway behavior: ingress JWT -> token audienced to the internal MCP server's app, forwarded to the server. This is all `obo_exchange` does. |
+| **Downstream exchange (optional, MCP-server side)** | The MCP server's own, optional further exchange of the token it receives for a downstream-resource token (e.g. Graph). Server-author's code, not the gateway's; out of scope here. |
 | **`egress_auth_mode=obo_exchange`** | Per-server flag selecting this mode instead of `none` / `oauth_user` (3LO vault). |
-| **`target_audience`** | The internal MCP server's IdP audience (Entra App ID URI / Keycloak client id) the gateway requests in hop 1. |
+| **`target_audience`** | The internal MCP server's IdP audience (Entra App ID URI / Keycloak client id) the gateway requests in the exchange. |
 | **Ingress token** | The user's JWT presented to the gateway (`X-Authorization`), used as the OBO `assertion`/`subject_token`. Must be a bearer JWT, not a session cookie. |
 | **Per-server resource (RFC 8707)** | `https://<gateway>/<server>/mcp` — the resource an MCP client requests at login; must be a registered Entra App ID URI (see [resource constraint](#resource-constraint)). |
 | **Egress injection seam** | The shared `mcp_proxy` code (gate -> strip gateway creds -> inject `Authorization`) reused by both `oauth_user` and `obo_exchange`. |
@@ -70,28 +73,46 @@ Deployment facts for the verification runbook (`mcp-entra` release):
 - Namespace `mcp-entra`; the echo upstream is in-cluster at
   `http://obo-echo.mcp-entra.svc.cluster.local:8000/mcp`.
 - `target_audience` MUST be an internal MCP server's own IdP audience and is
-  validated at registration: it must differ from the gateway's own
+  validated at registration. It must differ from the gateway's own
   `ENTRA_CLIENT_ID` / App ID URI (same-app OBO is rejected), and must be an
   `api://` App ID URI — including the auto-generated `api://<app-guid>` form
   (e.g. `api://00000000-0000-0000-0000-000000000000`) — or a bare non-GUID
-  client-id. It must NEVER be an `https://` host URL or a **bare** GUID, which is
-  how a shared first-party resource (Microsoft Graph, ARM, Key Vault) is directly
-  addressable. An `api://<guid>` is safe because Entra only resolves an `api://`
-  string to a custom (tenant-local) app that advertises it as an identifierUri —
-  no first-party resource does — so the normal case needs no allowlist entry.
+  client-id. It must not be an `https://` host URL or a bare GUID, which is how a
+  shared first-party resource (Microsoft Graph, ARM, Key Vault) is directly
+  addressable. The `api://<guid>` form is accepted without an allowlist entry
+  because an `api://` string names a custom (tenant-local) app registration, so
+  the normal case needs no configuration.
+
   Every `egress_oauth.scope` must also be audience-scoped to `target_audience`
   (e.g. `api://<app>/.default`); a scope for a different resource is rejected,
-  since the exchange engine sends scopes verbatim. To register a target that is a
-  **bare** GUID, pin it via `EGRESS_OBO_ALLOWED_AUDIENCES` (an operator allowlist
-  that, when set, is the authoritative control). This prevents a confused-deputy
-  where an over-permitted gateway app mints a broad delegated token for a
+  since the exchange engine sends scopes verbatim. This prevents a confused
+  deputy where an over-permitted gateway app mints a broad delegated token for a
   first-party API that is then forwarded to the server's upstream.
+
+- **Always-on first-party floor.** Microsoft Graph, Azure AD Graph, Azure
+  Resource Manager, and Azure Key Vault (matched by app-id GUID in bare or
+  `api://` form, and by canonical `https://` host including sovereign clouds) are
+  rejected as an obo target unconditionally. `EGRESS_OBO_ALLOWED_AUDIENCES` cannot
+  re-enable them; there is no supported configuration that OBO-exchanges into
+  these resources.
+
+- **`EGRESS_OBO_ALLOWED_AUDIENCES`** (optional operator allowlist). When set, a
+  target must be listed (authoritative for everything not covered by the
+  always-on floor above). Use it to permit an internal audience that is a bare
+  GUID, or to restrict obo targets to an explicit, audited set.
+
+- **Residual, by design.** A Microsoft first-party resource outside the floor set
+  (e.g. Azure Storage, Azure SQL) expressed as `api://<its-app-guid>` passes the
+  shape rule. Reaching it additionally requires (a) an administrator to register
+  the obo server for that target and (b) the gateway app to already hold delegated
+  permissions on that resource — neither of which exists by default. To eliminate
+  the residual entirely, set `EGRESS_OBO_ALLOWED_AUDIENCES` to an explicit list.
 
 ---
 
 ## Architecture
 
-The gateway performs hop 1 inline at the `mcp_proxy` hop, reusing the egress
+The gateway performs its exchange inline at the `mcp_proxy` hop, reusing the egress
 injection seam. Unlike the 3LO vault, there is **no secret store and no consent
 facade** — the exchange is stateless and uses the gateway's own IdP credentials.
 
@@ -120,7 +141,7 @@ graph TB
     end
 
     subgraph mcp["Internal MCP server"]
-        SRV["obo-echo<br/>(validates aud, does hop 2)"]
+        SRV["obo-echo<br/>(validates aud, optionally exchanges again)"]
         GRAPH["downstream resource<br/>(MS Graph /me)"]
     end
 
@@ -131,13 +152,17 @@ graph TB
     PROXY -->|"2. vend (obo_exchange?)"| VEND
     VEND --> CFG
     VEND -.->|"OBO directive: target_audience + scopes"| PROXY
-    PROXY -->|"3. exchange (hop 1)<br/>assertion=user JWT, gateway client creds"| OBO
+    PROXY -->|"3. gateway exchange<br/>assertion=user JWT, gateway client creds"| OBO
     OBO -->|"jwt-bearer / token-exchange"| TOKEN
     TOKEN -.->|"token aud=internal MCP app, sub=user"| OBO
     PROXY -->|"4. strip user creds, inject Bearer &lt;exchanged&gt;"| SRV
-    SRV -->|"5. hop 2: exchange again"| TOKEN
-    SRV -->|"6. call downstream as user"| GRAPH
+    SRV -.->|"5. OPTIONAL: server exchanges again"| TOKEN
+    SRV -.->|"6. OPTIONAL: call downstream as user"| GRAPH
 ```
+
+Steps 1–4 are the gateway's `obo_exchange`; steps 5–6 are the example echo
+server's own optional downstream exchange (dashed), not something the gateway
+performs or requires.
 
 ---
 
@@ -166,14 +191,14 @@ sequenceDiagram
     N->>P: forward with X-Internal-Token (+ raw user JWT)
     P->>V: POST /internal/egress-token (server_path)
     V-->>P: {mode: obo_exchange, target_audience, scopes}
-    Note over P,O: HOP 1 — re-audience the user's token
+    Note over P,O: Gateway obo_exchange — re-audience the user's token
     P->>O: obo_exchange(user JWT, target_audience, scopes)
     O->>I: grant_type=jwt-bearer, assertion=<user JWT>,<br/>client_id/secret=GATEWAY app, scope=<target>/.default
     I-->>O: access_token (aud=internal MCP app, sub=user)
     O-->>P: exchanged token
     P->>P: strip Authorization/X-Authorization/Cookie/X-Internal-Token
     P->>M: forward with Authorization: Bearer <exchanged token>
-    Note over M,D: HOP 2 — server's own exchange (out of scope for gateway)
+    Note over M,D: OPTIONAL server-side exchange (not the gateway; server-author's choice)
     M->>M: validate aud == this server's app
     M->>I: grant_type=jwt-bearer, assertion=<exchanged token>,<br/>client_id/secret=MCP server app, scope=Graph
     I-->>M: downstream token (aud=Graph, sub still the user)
@@ -185,14 +210,16 @@ sequenceDiagram
 
 Key points:
 
-- **Stateless, per-request.** The hop-1 token bakes in the user's `sub`; it is
+- **Stateless, per-request.** The exchanged token embeds the user's `sub`; it is
   minted fresh each request and never cached/reused across users.
 - **The user's gateway credentials never reach the MCP server.** The seam strips
   `Authorization`/`X-Authorization`/`Cookie`/`X-Internal-Token` before injecting
   the exchanged token.
-- **The forwarded token is chainable.** Because it is an IdP-signed JWT audienced
-  to the MCP server's app, the server can legitimately exchange it again (hop 2).
-  A raw 3LO provider token or the internal HS256 proxy token could not.
+- **The forwarded token can be exchanged again.** Because it is an IdP-signed JWT
+  audienced to the MCP server's app, the server MAY exchange it again for a
+  downstream resource if its author chooses to — but it does not have to; many
+  servers just validate and use it. A raw 3LO provider token or the internal HS256
+  proxy token could not be exchanged this way.
 - **Non-interactive.** Unlike `oauth_user`, there is no consent elicitation; a
   failure is terminal (the agent cannot open a browser mid tool-call).
 
@@ -209,7 +236,7 @@ the forwarded token is **sourced**.
 | IdP relationship | Third-party provider (GitHub/Google/...) | SAME IdP as the gateway |
 | User interaction | One-time browser consent per `(provider, server)` | None (ingress token is the exchange subject) |
 | Storage | Secret store (OpenBao / Secrets Manager) + refresh | Stateless — nothing stored |
-| Forwarded token | Provider resource token (opaque, not chainable) | IdP JWT re-audienced to the MCP server (chainable for hop 2) |
+| Forwarded token | Provider resource token (opaque, not re-exchangeable) | IdP JWT re-audienced to the MCP server (the server may optionally exchange it again) |
 | Registration | `provider`, `client_id`, `client_secret`, scopes | `target_audience` (+ audience scopes) |
 | Credentials used | Per-server operator-supplied OAuth app | The gateway's OWN IdP client credentials |
 | Target servers | External SaaS | Internal MCP servers in the same tenant/realm |
@@ -223,13 +250,14 @@ An `obo_exchange` server entry needs only:
 | Field | Role |
 |-------|------|
 | `egress_auth_mode = "obo_exchange"` | Selects the exchange path at the seam. |
-| `egress_oauth.target_audience` | The internal MCP server's IdP audience (Entra App ID URI / Keycloak client id). The `aud` the gateway requests in hop 1; the value the MCP server validates and chains from. **Required; must differ from the gateway's own client id.** |
-| `egress_oauth.scopes` | Audience-scoped scopes for hop 1 (e.g. `["api://<mcp-app>/.default"]`). Optional; defaults to `<target_audience>/.default` for Entra. |
+| `egress_oauth.target_audience` | The internal MCP server's IdP audience (Entra App ID URI / Keycloak client id). The `aud` the gateway requests in the exchange; the value the MCP server validates (and, if it exchanges again, chains from). **Required; must differ from the gateway's own client id.** |
+| `egress_oauth.scopes` | Audience-scoped scopes for the exchange (e.g. `["api://<mcp-app>/.default"]`). Optional; defaults to `<target_audience>/.default` for Entra. |
 
-No `provider` / `client_id` / `client_secret` (those are 3LO-only). The MCP-server
-author codes hop 2 against two facts the gateway guarantees: the **expected `aud`**
-(their own app, which they register as `target_audience`) and the **shared issuer**
-(the same IdP — already known).
+No `provider` / `client_id` / `client_secret` (those are 3LO-only). The MCP server
+validates the token it receives against two facts the gateway guarantees: the
+**expected `aud`** (its own app, registered as `target_audience`) and the **shared
+issuer** (the same IdP — already known). If it exchanges the token again for a
+downstream resource, it does so against those same facts.
 
 ---
 
@@ -618,7 +646,8 @@ curl -ksS -i -X POST "$GW/obo-echo/mcp" \
 
 > **WORKING on Entra end-to-end (2026-06-25)** via the per-server PRM. Claude Code
 > discovers OAuth, logs in via browser PKCE, gets a gateway-audienced token, and
-> the gateway performs OBO hop 1 -> the echo server does hop 2. No CLI token.
+> the gateway performs its OBO exchange -> the echo server (optionally) exchanges
+> again. No CLI token.
 >
 > **How it works (the per-server resource chain).** The hard part was making three
 > independent constraints agree on ONE resource string:
@@ -639,7 +668,8 @@ curl -ksS -i -X POST "$GW/obo-echo/mcp" \
 >        trailing-slash) + that scope -> Entra matches the App ID URI -> token
 >        `aud = <gw>/<server>/mcp`.
 >     4. auth_server validates that per-server `aud` (built from the PUBLIC
->        gateway URL, `_obo_extra_audiences`) -> OBO hop 1 -> hop 2.
+>        gateway URL, `_obo_extra_audiences`) -> gateway OBO exchange -> the echo
+>        server's optional downstream exchange.
 >
 > **Operator's only manual step: keep Entra's `identifierUris` in sync.** Each obo
 > server's per-server URL (`https://gw/<server>/mcp`) must be one of the gateway
@@ -735,18 +765,19 @@ kubectl logs -n mcp-entra -l app=obo-echo --tail=80
 
 ## Security model
 
-- **User identity preserved (audit).** The user's `sub`/`oid` carries through hop
-  1 (and hop 2). Compare `oid`, not `sub`, across hops: Entra `sub` is
-  pairwise/audience-scoped and legitimately differs per resource for the same user.
+- **User identity preserved (audit).** The user's `sub`/`oid` carries through the
+  gateway exchange (and any further exchange the server performs). Compare `oid`,
+  not `sub`, across exchanges: Entra `sub` is pairwise/audience-scoped and
+  legitimately differs per resource for the same user.
 - **No credential sharing.** The user never gives their token to the MCP server.
   The seam strips the user's gateway credentials (`Authorization`,
   `X-Authorization`, `Cookie`, `X-Internal-Token`, `X-User*`) before injecting the
   exchanged token, so the MCP server sees only the re-audienced OBO token.
-- **Least privilege per hop, bounded by app grants.** Hop 1 requests
+- **Least privilege, bounded by app grants.** The gateway exchange requests
   `<target>/.default` — every delegated permission the gateway app holds on the
   MCP server's API. Tighter scoping requires listing explicit scopes rather than
   `.default`; privilege is otherwise bounded by the app-registration grants.
-- **Stateless mint is a hard invariant.** The hop-1 token bakes in the user's
+- **Stateless mint is a hard invariant.** The exchanged token embeds the user's
   `sub`; it is minted per request and never cached or reused across users. A
   cache-key bug would be privilege escalation; the `obo_exchange` branch shares no
   cache with the `oauth_user` vault.

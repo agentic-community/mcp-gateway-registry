@@ -5226,9 +5226,9 @@ def _obo_subject_matches_principal(subject_token: str, internal_claims: dict) ->
     it is ``sub``. So we accept a match against EITHER the subject token's
     ``preferred_username`` or its ``sub`` -- whichever the provider used to derive
     the authorized username. This re-checks that the raw subject token we are
-    about to exchange in OBO hop 1 identifies the SAME principal the internal
-    token authorized, removing reliance on the implicit "nginx forwards the same
-    header to both the auth_request subrequest and this hop" invariant.
+    about to exchange identifies the SAME principal the internal token authorized,
+    removing reliance on the implicit "nginx forwards the same header to both the
+    auth_request subrequest and this hop" invariant.
 
     The subject token's signature was already verified by /validate; here we only
     read identity claims (unverified decode) to compare. A missing internal
@@ -5727,7 +5727,7 @@ async def mcp_proxy(
             server_first_segment = (server_name or "").split("/", 1)[0]
             vend = await _vend_egress_token(internal_proxy_token, server_first_segment)
             if vend and vend.get("mode") == "obo_exchange":
-                # OBO hop 1: re-audience the user's ingress JWT to the internal
+                # OBO exchange: re-audience the user's ingress JWT to the internal
                 # MCP server's app via the gateway's OWN IdP credentials. The
                 # registry returned only the DIRECTIVE (target_audience+scopes),
                 # never a token; the exchange runs HERE because this hop holds the
