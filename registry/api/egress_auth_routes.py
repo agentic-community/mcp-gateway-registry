@@ -536,12 +536,14 @@ async def list_available_egress_servers(
 async def get_obo_identifier_uris(
     user_context: Annotated[dict, Depends(nginx_proxied_auth)],
 ):
-    """List the Entra Application ID URIs the operator must register for OBO.
+    """List the Entra Application ID URIs the operator must register.
 
-    Each obo_exchange server's per-server resource URL (the value the gateway
-    advertises in its PRM and the audience it validates) must be present in the
-    gateway app's ``identifierUris`` list in Entra. This endpoint returns the
-    exact set, so the operator can keep Entra in sync as obo servers are
+    Each server that logs the client in at the gateway via a per-server PRM
+    (``obo_exchange`` and the 3LO vault's ``oauth_user`` ingress leg) has a
+    per-server resource URL -- the value the gateway advertises in its PRM and
+    validates as the ingress ``aud``. On Entra, every one of those URLs must be
+    present in the gateway app's ``identifierUris`` list. This endpoint returns
+    the exact set so the operator can keep Entra in sync as such servers are
     added/removed -- the registry side is automatic; only this list is manual.
 
     Admin only. Returns ``{"identifier_uris": [...], "count": N}``.
@@ -549,13 +551,14 @@ async def get_obo_identifier_uris(
     _feature_enabled_or_404()
     _require_admin(user_context)
 
+    from registry.api.wellknown_routes import server_needs_per_server_prm
     from registry.auth.oauth_metadata import build_per_server_resource_url
     from registry.core.config import settings
 
     servers = await server_service.get_all_servers(include_inactive=True)
     uris: list[str] = []
     for path, info in (servers or {}).items():
-        if (info or {}).get("egress_auth_mode") != "obo_exchange":
+        if not server_needs_per_server_prm((info or {}).get("egress_auth_mode")):
             continue
         append_mcp = info.get("append_mcp_path") is not False
         uris.append(

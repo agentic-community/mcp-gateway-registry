@@ -1693,13 +1693,19 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
         # `set $backend_url "..."` context.
         safe_proxy_pass_url = self._sanitize_for_nginx_set(proxy_pass_url)
 
-        # For obo_exchange servers, the 401 WWW-Authenticate must point MCP clients
-        # at the PER-SERVER PRM (so the client discovers the per-server resource that
-        # matches its connection URL and the Entra App ID URI). Override the default
-        # global $mcp_resource_metadata in this location only. RFC 9728 clients
-        # follow the resource_metadata from the 401 header in preference to guessing.
+        # For servers that need a per-server PRM (obo_exchange on any provider,
+        # oauth_user on Entra only -- see server_needs_per_server_prm), the 401
+        # WWW-Authenticate must point MCP clients at the PER-SERVER PRM (so the
+        # client discovers the per-server resource that matches its connection URL
+        # and the Entra App ID URI, not the bare-origin gateway PRM Entra rejects).
+        # Override the default global $mcp_resource_metadata in this location only.
+        # Keycloak/Cognito 3LO keeps the global PRM (unchanged working behavior).
+        # RFC 9728 clients follow the resource_metadata from the 401 header in
+        # preference to guessing.
+        from registry.api.wellknown_routes import server_needs_per_server_prm
+
         obo_resource_metadata = ""
-        if server_info and server_info.get("egress_auth_mode") == "obo_exchange":
+        if server_info and server_needs_per_server_prm(server_info.get("egress_auth_mode")):
             from registry.auth.oauth_metadata import build_per_server_prm_url
 
             try:

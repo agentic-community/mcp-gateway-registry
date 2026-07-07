@@ -346,12 +346,13 @@ class TestPerServerOAuthProtectedResource:
     unknown servers 404 so clients fall back to the global PRM.
     """
 
-    def _settings(self):
+    def _settings(self, auth_provider="entra"):
         s = MagicMock()
         s.registry_url = "https://gw.example.com"
         s.mcp_https_required = True
         s.mcp_resource_documentation_url = None
         s.mcp_advertised_scopes = ""
+        s.auth_provider = auth_provider
         return s
 
     def test_obo_server_returns_per_server_connection_url_resource(self, fake_provider):
@@ -405,8 +406,10 @@ class TestPerServerOAuthProtectedResource:
             assert resp.status_code == 200
             assert resp.json()["resource"] == "https://gw.example.com/aws-knowledge"
 
-    def test_non_obo_server_404s(self, fake_provider):
-        s = self._settings()
+    def test_oauth_user_server_returns_per_server_resource_on_entra(self, fake_provider):
+        # 3LO (oauth_user) on ENTRA gets a per-server PRM: its ingress leg hits the
+        # same strict resource/scope alignment constraint as obo_exchange.
+        s = self._settings(auth_provider="entra")
         oauth_user_server = {"path": "/github", "egress_auth_mode": "oauth_user"}
         with (
             patch(
@@ -422,6 +425,54 @@ class TestPerServerOAuthProtectedResource:
         ):
             client = TestClient(_make_oauth_discovery_app(fake_provider))
             resp = client.get("/.well-known/oauth-protected-resource/github/mcp")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["resource"] == "https://gw.example.com/github/mcp"
+            assert data["scopes_supported"] == [
+                "https://gw.example.com/github/mcp/user_impersonation"
+            ]
+
+    def test_oauth_user_server_404s_on_keycloak(self, fake_provider):
+        # REGRESSION GUARD: Keycloak 3LO works today via the gateway-wide root PRM.
+        # oauth_user must NOT get a per-server PRM on Keycloak (only on Entra), or
+        # we'd change that working path. 404 here -> client falls back to the global
+        # PRM, exactly as on main.
+        s = self._settings(auth_provider="keycloak")
+        oauth_user_server = {"path": "/github", "egress_auth_mode": "oauth_user"}
+        with (
+            patch(
+                "registry.api.wellknown_routes._get_active_auth_provider",
+                return_value=fake_provider,
+            ),
+            patch("registry.auth.oauth_metadata.settings", s),
+            patch("registry.api.wellknown_routes.settings", s),
+            patch(
+                "registry.api.wellknown_routes.server_service.get_server_info",
+                new=AsyncMock(return_value=oauth_user_server),
+            ),
+        ):
+            client = TestClient(_make_oauth_discovery_app(fake_provider))
+            resp = client.get("/.well-known/oauth-protected-resource/github/mcp")
+            assert resp.status_code == 404
+
+    def test_non_egress_server_404s(self, fake_provider):
+        # A server with no gateway-login egress mode falls back to the global PRM.
+        s = self._settings()
+        plain_server = {"path": "/plain", "egress_auth_mode": "none"}
+        with (
+            patch(
+                "registry.api.wellknown_routes._get_active_auth_provider",
+                return_value=fake_provider,
+            ),
+            patch("registry.auth.oauth_metadata.settings", s),
+            patch("registry.api.wellknown_routes.settings", s),
+            patch(
+                "registry.api.wellknown_routes.server_service.get_server_info",
+                new=AsyncMock(return_value=plain_server),
+            ),
+        ):
+            client = TestClient(_make_oauth_discovery_app(fake_provider))
+            resp = client.get("/.well-known/oauth-protected-resource/plain/mcp")
             assert resp.status_code == 404
 
     def test_unknown_server_404s(self, fake_provider):

@@ -185,6 +185,30 @@ def _get_active_auth_provider():
     return get_auth_provider()
 
 
+def server_needs_per_server_prm(egress_auth_mode: str | None) -> bool:
+    """Whether a server should advertise a per-server RFC 9728 PRM (vs the global one).
+
+    The per-server PRM exists to satisfy Entra's strict resource/scope alignment
+    (the ingress login must target a path-qualified App ID URI, not the bare
+    origin). It applies to:
+
+    - ``obo_exchange`` on any provider (the same-IdP exchange always logs the user
+      in at the gateway against a per-server resource), and
+    - ``oauth_user`` ONLY on Entra. The 3LO vault's ingress leg is a gateway login
+      too, but lenient IdPs (Keycloak/Cognito) accept the gateway-wide root PRM's
+      bare origin + OIDC scopes, which is how Keycloak 3LO works today. We must NOT
+      route those through the per-server PRM, or we'd change that working path (and
+      force an exact connection-URL match they don't need). Only Entra requires it.
+
+    Everything else uses the gateway-wide PRM (unchanged behavior).
+    """
+    if egress_auth_mode == "obo_exchange":
+        return True
+    if egress_auth_mode == "oauth_user":
+        return (settings.auth_provider or "").lower() == "entra"
+    return False
+
+
 @router.get("/oauth-protected-resource")
 async def get_oauth_protected_resource() -> JSONResponse:
     """
@@ -257,15 +281,18 @@ def _normalize_prm_server_path(server_path: str) -> str:
 async def get_oauth_protected_resource_for_server(
     server_path: str,
 ) -> JSONResponse:
-    """Per-server RFC 9728 PRM for obo_exchange servers (path-aware discovery).
+    """Per-server RFC 9728 PRM for egress servers (path-aware discovery).
 
     Spec-compliant MCP clients (Claude Code, etc.) try the path-suffixed
     well-known URL first, derived from the per-server connection URL. We serve a
-    document ONLY for ``obo_exchange`` servers; everything else 404s so the
-    client falls back to the gateway-wide PRM (unchanged behavior).
+    document only for servers that need it (see ``server_needs_per_server_prm``):
+    ``obo_exchange`` on any provider, and ``oauth_user`` on Entra only. Everything
+    else -- including Keycloak/Cognito 3LO, which works with the gateway-wide root
+    PRM -- 404s here so the client falls back to the global PRM (unchanged
+    behavior).
 
     The advertised ``resource`` is the **per-server connection URL** (e.g.
-    ``https://gw/obo-echo/mcp``). This is the ONLY value that satisfies all three
+    ``https://gw/github/mcp``). This is the ONLY value that satisfies all three
     constraints simultaneously:
       - RFC 9728 §3.3: the client only accepts a PRM ``resource`` equal to the
         connection URL it is accessing (or the origin); a made-up shared path is
@@ -274,16 +301,17 @@ async def get_oauth_protected_resource_for_server(
         wire, which Entra App ID URIs cannot match -- a path-qualified per-server
         URL is sent verbatim.
       - Entra: the sent ``resource`` must equal a registered App ID URI exactly.
-    The trade-off: each obo server's per-server URL must be an App ID URI on the
+    The trade-off: each such server's per-server URL must be an App ID URI on the
     gateway app (operator maintains the ``identifierUris`` list; see
     GET /api/egress/obo-identifier-uris for the exact list to register). The
     registry side is fully dynamic -- this is derived from the server entry, no
-    per-server env config.
+    per-server env config. Lenient IdPs (Keycloak/Cognito) do not hit these
+    constraints; this per-server PRM is what makes Entra ingress login work.
     """
     normalized = _normalize_prm_server_path(server_path)
     info = await server_service.get_server_info(normalized)
-    if not info or info.get("egress_auth_mode") != "obo_exchange":
-        # Not an obo server -> no per-server PRM; client falls back to global.
+    if not info or not server_needs_per_server_prm(info.get("egress_auth_mode")):
+        # No per-server PRM for this server -> client falls back to the global PRM.
         raise HTTPException(status_code=404, detail="no per-server resource metadata")
 
     # Per-server connection-URL resource: the only value that satisfies the

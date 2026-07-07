@@ -2063,8 +2063,10 @@ def _obo_extra_audiences(server_name_from_url: str | None) -> list[str]:
     bare-path forms to be robust to the server's ``append_mcp_path``. Returns []
     when there's no server context or no configured gateway URL.
 
-    Gated on the egress feature: the per-server resource audience is only ever a
-    valid ingress ``aud`` for an obo_exchange server, and obo cannot function with
+    Gated on the egress feature (not on a specific egress mode): the per-server
+    resource audience is a valid ingress ``aud`` for any server that logs the
+    client in at the gateway via a per-server PRM -- both obo_exchange and the
+    3LO vault's oauth_user ingress leg -- and none of that can function with
     egress disabled. Returning [] when egress is off keeps the accepted-audience
     surface at exactly the gateway-app audience for every non-egress deployment
     rather than always widening it to the per-server resource form.
