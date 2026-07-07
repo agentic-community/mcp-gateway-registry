@@ -233,13 +233,13 @@ app:
   # document (`/.well-known/oauth-protected-resource`). Space-separated scope
   # names.
   #
-  # Default ("profile email offline_access") matches the docs' recommended
-  # Keycloak-DCR setup: MCP clients (Claude Code, Claude.ai, Cursor) perform
-  # RFC 7591 DCR against the bundled Keycloak realm, and Keycloak rejects
-  # any scope name that isn't already in the realm. These three are present
-  # by default in every Keycloak realm, so DCR succeeds and the user's
-  # groups (delivered via the `basic` scope's groups mapper) drive
-  # authorization at the gateway.
+  # Default ("openid profile email offline_access") is the set of standard OIDC
+  # scopes MCP clients (Claude Code, Claude.ai, Cursor) request at the gateway
+  # authorize endpoint. `openid` is REQUIRED: Entra rejects an authorize request
+  # without it (AADSTS70011), and it is present in every Keycloak realm too, so
+  # the default works for both providers. The Keycloak-DCR path (RFC 7591 against
+  # the bundled realm) also accepts these because Keycloak only rejects scope
+  # names not already in the realm, and all four are standard.
   #
   # Set to empty ("") to let the registry derive the list from its own
   # scopes config (DocumentDB-backed in production, YAML-backed in dev) —
@@ -247,7 +247,7 @@ app:
   # whose scopes match the registry's internal scope names.
   #
   # See docs/ai-coding-assistant-registry-integration.md for the rationale.
-  mcpAdvertisedScopes: "profile email offline_access"
+  mcpAdvertisedScopes: "openid profile email offline_access"
   # SSRF guard bypass for internal MCP-server upstreams. The health checker and
   # proxy validate each server's proxy_pass_url through the SSRF guard, which
   # blocks private/cluster IPs by default. Internal MCP servers live at private

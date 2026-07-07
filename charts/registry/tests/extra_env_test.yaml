@@ -471,13 +471,13 @@ tests:
       - failedTemplate:
           errorPattern: "\"CUSTOM_ENTITY_TYPES_ENABLED\" is a reserved variable"
 
-  - it: emits Keycloak-DCR-aligned MCP_ADVERTISED_SCOPES by default
+  - it: emits standard OIDC MCP_ADVERTISED_SCOPES (incl. openid) by default
     asserts:
       - contains:
           path: spec.template.spec.containers[0].env
           content:
             name: MCP_ADVERTISED_SCOPES
-            value: "profile email offline_access"
+            value: "openid profile email offline_access"
 
   - it: lets app.mcpAdvertisedScopes be overridden (custom scope list)
     set:
