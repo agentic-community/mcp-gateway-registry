@@ -280,7 +280,10 @@ The only value satisfying all three is the **per-server connection URL**
 
 - The 401 on `/<server>/mcp` advertises a **per-server** `WWW-Authenticate:
   resource_metadata=.../.well-known/oauth-protected-resource/<server>/mcp` (nginx
-  per-location override, obo servers only).
+  per-location override). This override fires for any server whose ingress login
+  needs a path-qualified Entra App ID URI: every `obo_exchange` server, plus
+  `oauth_user` (3LO) servers **when the gateway's IdP is Entra**. Lenient IdPs
+  (Keycloak/Cognito) keep using the gateway-wide root PRM for 3LO.
 - That per-server PRM advertises `resource = https://<gateway>/<server>/mcp` and
   scope `.../user_impersonation`, derived dynamically from the registry entry.
 - auth-server validates that per-server `aud` (built from the **public** gateway
@@ -437,7 +440,7 @@ this automatic; the only requirements are:
 No `MCP_ADVERTISED_SCOPES` tuning is needed for obo: the per-server PRM advertises
 the correct per-server `resource` + scope dynamically from the registry entry.
 (`MCP_ADVERTISED_SCOPES` only affects the gateway-wide root PRM used by non-obo
-discovery; leave it at the chart default `profile email offline_access`.)
+discovery; leave it at the chart default `openid profile email offline_access`.)
 
 > For the CLI token path (3a) the `aud` is whatever resource you mint against via
 > `--scope`; for the MCP-client path it is the per-server resource the client
@@ -662,7 +665,8 @@ curl -ksS -i -X POST "$GW/obo-echo/mcp" \
 >   (`https://gw/<server>/mcp`). The gateway now advertises exactly that:
 >     1. The 401 on `/<server>/mcp` emits a PER-SERVER
 >        `WWW-Authenticate: resource_metadata=<gw>/.well-known/oauth-protected-resource/<server>/mcp`
->        (nginx per-location `set $mcp_resource_metadata`, obo servers only).
+>        (nginx per-location `set $mcp_resource_metadata`; every obo server, and
+>        `oauth_user` servers too when the gateway IdP is Entra).
 >     2. That per-server PRM advertises `resource = <gw>/<server>/mcp` and
 >        `scope = <gw>/<server>/mcp/user_impersonation` (dynamic, from the registry).
 >     3. Claude sends `resource=<gw>/<server>/mcp` verbatim (has a path -> no

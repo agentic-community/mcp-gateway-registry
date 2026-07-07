@@ -77,7 +77,7 @@ Every stored third-party token is addressed by `(auth_method, user_id, provider,
 | Segment | Meaning | Example |
 |---------|---------|---------|
 | `auth_method` | The canonical ingress auth method the user logged in with | `oauth2` |
-| `user_id` | The verified user identity (from the signed ingress claims) | `admin` |
+| `user_id` | The verified user's canonical OIDC `sub` (from the signed ingress claims; falls back to username for non-OIDC callers) | `00000000-0000-0000-0000-000000000000` |
 | `provider` | The egress OAuth provider | `github` / `slack` / `atlassian` / `custom` |
 | `server_path` | The registered MCP server path | `/slack` |
 
