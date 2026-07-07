@@ -60,12 +60,12 @@ class TestExcludeCharacters:
 def _extract_default(source: str) -> str:
     """Extract the default value from os.environ.get('EXCLUDE_CHARACTERS', ...).
 
-    Returns the raw string between the outermost quotes of the second argument.
+    Handles escaped quotes inside the string literal (e.g. \").
     """
     import re
 
     match = re.search(
-        r'''os\.environ\.get\(\s*["']EXCLUDE_CHARACTERS["']\s*,\s*(["'])(.*?)\1''',
+        r'''os\.environ\.get\(\s*["']EXCLUDE_CHARACTERS["']\s*,\s*(["'])((?:[^\\]|\\.)*?)\1''',
         source,
     )
     assert match, "Could not find EXCLUDE_CHARACTERS default in source"
