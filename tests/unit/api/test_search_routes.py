@@ -1161,6 +1161,138 @@ class TestSemanticSearchSuccess:
         assert currenttime_server.matching_tools[0].tool_name == "get_current_time"
 
 
+@pytest.mark.unit
+@pytest.mark.api
+@pytest.mark.search
+class TestSemanticSearchBackendUrlRedaction:
+    """Semantic search must not leak internal backend URLs to non-admins.
+
+    Mirrors the redaction ``GET /servers/{path}`` enforces: in with-gateway
+    mode, non-admins never receive the raw proxy_pass_url / mcp_endpoint /
+    sse_endpoint. Admins and registry-only mode keep them.
+    """
+
+    @pytest.fixture
+    def results_with_backend_urls(self) -> dict[str, list[dict[str, Any]]]:
+        """A single accessible server result carrying internal backend URLs."""
+        return {
+            "servers": [
+                {
+                    "path": "/servers/currenttime",
+                    "server_name": "currenttime",
+                    "description": "Get current time",
+                    "tags": ["time"],
+                    "num_tools": 1,
+                    "is_enabled": True,
+                    "relevance_score": 0.95,
+                    "match_context": "time",
+                    "matching_tools": [],
+                    "proxy_pass_url": "http://internal-backend:8080",
+                    "mcp_endpoint": "http://internal-backend:8080/mcp",
+                    "sse_endpoint": "http://internal-backend:8080/sse",
+                }
+            ],
+            "tools": [],
+            "agents": [],
+        }
+
+    @staticmethod
+    def _with_gateway():
+        from registry.core.config import DeploymentMode
+
+        return patch(
+            "registry.services.visibility.settings.deployment_mode",
+            DeploymentMode.WITH_GATEWAY,
+        )
+
+    @staticmethod
+    def _registry_only():
+        from registry.core.config import DeploymentMode
+
+        return patch(
+            "registry.services.visibility.settings.deployment_mode",
+            DeploymentMode.REGISTRY_ONLY,
+        )
+
+    @pytest.mark.asyncio
+    async def test_non_admin_backend_urls_redacted(
+        self,
+        mock_http_request,
+        mock_search_repo,
+        regular_user_context,
+        results_with_backend_urls,
+    ):
+        """A permitted non-admin sees the server but not its raw backend URLs."""
+        mock_search_repo.search = AsyncMock(return_value=results_with_backend_urls)
+        request = SemanticSearchRequest(query="time")
+
+        with self._with_gateway():
+            response = await semantic_search(
+                mock_http_request, request, regular_user_context, mock_search_repo
+            )
+
+        assert len(response.servers) == 1
+        server = response.servers[0]
+        assert server.proxy_pass_url is None
+        assert server.mcp_endpoint is None
+        assert server.sse_endpoint is None
+        # The derived endpoint_url must NOT echo the internal mcp_endpoint
+        # override either (that is the Priority-1 leak): a non-admin only ever
+        # gets the public gateway URL, never the internal backend host.
+        assert "internal-backend" not in (server.endpoint_url or "")
+
+    @pytest.mark.asyncio
+    async def test_admin_backend_urls_present(
+        self,
+        mock_http_request,
+        mock_search_repo,
+        admin_user_context,
+        results_with_backend_urls,
+    ):
+        """Admins still receive the raw backend URLs."""
+        mock_search_repo.search = AsyncMock(return_value=results_with_backend_urls)
+        request = SemanticSearchRequest(query="time")
+
+        with self._with_gateway():
+            response = await semantic_search(
+                mock_http_request, request, admin_user_context, mock_search_repo
+            )
+
+        server = response.servers[0]
+        assert server.proxy_pass_url == "http://internal-backend:8080"
+        assert server.mcp_endpoint == "http://internal-backend:8080/mcp"
+        assert server.sse_endpoint == "http://internal-backend:8080/sse"
+        # Admins are not redacted, so the endpoint_url still resolves to the
+        # explicit mcp_endpoint override (Priority 1).
+        assert server.endpoint_url == "http://internal-backend:8080/mcp"
+
+    @pytest.mark.asyncio
+    async def test_registry_only_keeps_backend_urls_for_non_admin(
+        self,
+        mock_http_request,
+        mock_search_repo,
+        regular_user_context,
+        results_with_backend_urls,
+    ):
+        """Registry-only mode has no gateway, so non-admins keep the URLs."""
+        mock_search_repo.search = AsyncMock(return_value=results_with_backend_urls)
+        request = SemanticSearchRequest(query="time")
+
+        with self._registry_only():
+            response = await semantic_search(
+                mock_http_request, request, regular_user_context, mock_search_repo
+            )
+
+        server = response.servers[0]
+        assert server.proxy_pass_url == "http://internal-backend:8080"
+        # The derived endpoint_url is what an agent copies to connect, so it
+        # must remain populated in registry-only mode (never redacted to None).
+        # With an explicit mcp_endpoint override present it resolves to that;
+        # this guards the "users can still find how to connect"
+        # property against future changes to _compute_endpoint_url.
+        assert server.endpoint_url == "http://internal-backend:8080/mcp"
+
+
 # =============================================================================
 # TEST: semantic_search Endpoint - Error Handling
 # =============================================================================

@@ -57,7 +57,7 @@ class TestMaskingFunctions:
         assert "..." in result
 
     def test_mask_token(self):
-        """Test masking JWT tokens showing first 4 characters."""
+        """mask_token emits no part of the value, not even a prefix."""
         from auth_server.server import mask_token
 
         # Arrange
@@ -66,10 +66,56 @@ class TestMaskingFunctions:
         # Act
         result = mask_token(token)
 
-        # Assert
-        assert result.startswith("eyJh")
-        assert result.endswith("...")
-        assert len(result) < len(token)
+        # Assert: no substring of the token leaks (a prefix is still sensitive
+        # for opaque tokens / API keys); only a fixed marker is returned.
+        assert result == "***MASKED***"
+        assert "eyJh" not in result
+        assert token[:4] not in result
+
+    def test_mask_headers_masks_auth_credential_and_variants(self):
+        """mask_headers redacts credential-bearing headers via substring match."""
+        from auth_server.server import mask_headers
+
+        headers = {
+            "X-Auth-Credential": "super-secret-token",
+            "Authorization": "Bearer eyJabc.def.ghi",
+            "Cookie": "mcp_gateway_session=abc",
+            "X-Api-Key": "k123456",
+            "X-Access-Token": "t123456",
+            "Accept": "application/json",
+        }
+
+        masked = mask_headers(headers)
+
+        # The plaintext credential never appears in the masked output.
+        assert masked["X-Auth-Credential"] == "***MASKED***"
+        assert masked["Cookie"] == "***MASKED***"
+        assert masked["X-Api-Key"] == "***MASKED***"
+        assert masked["X-Access-Token"] == "***MASKED***"
+        assert masked["Authorization"].startswith("Bearer ")
+        assert "eyJabc.def.ghi" not in masked["Authorization"]
+        # Non-sensitive headers pass through untouched.
+        assert masked["Accept"] == "application/json"
+        assert "super-secret-token" not in str(masked)
+
+    def test_header_substrings_match_shared_redactor(self):
+        """auth-server and registry header-substring sets must stay identical.
+
+        The credential-bearing substring list is duplicated across two
+        deployables (the auth server and the registry cannot import each
+        other), so nothing at runtime catches the two drifting apart. If one
+        gains a marker the other lacks, a credential header masked in one
+        service would leak in the other. Pin them equal here so any edit to
+        one copy without the other fails this test.
+        """
+        from auth_server.server import _SENSITIVE_HEADER_SUBSTRINGS
+        from registry.common.log_redaction import SENSITIVE_HEADER_SUBSTRINGS
+
+        assert set(_SENSITIVE_HEADER_SUBSTRINGS) == set(SENSITIVE_HEADER_SUBSTRINGS), (
+            "auth_server._SENSITIVE_HEADER_SUBSTRINGS has drifted from "
+            "registry.common.log_redaction.SENSITIVE_HEADER_SUBSTRINGS; keep them "
+            "identical so a credential header is masked consistently in both services"
+        )
 
     def test_anonymize_ip_ipv4(self):
         """Test IPv4 anonymization."""
@@ -113,6 +159,68 @@ class TestMaskingFunctions:
         assert len(result) > len(username)
         # Same input produces same hash
         assert hash_username(username) == result
+
+
+class TestSafeIdentitySummary:
+    """safe_identity_summary must never leak claim/user-info values."""
+
+    def test_omits_email_name_and_group_values(self):
+        from auth_server.server import safe_identity_summary
+
+        claims = {
+            "sub": "1234567890abcdef",
+            "email": "alice@example.com",
+            "name": "Alice Example",
+            "preferred_username": "alice.example",
+            "groups": ["engineering", "admins", "finance"],
+            "aud": "my-client",
+        }
+
+        summary = safe_identity_summary(claims)
+        rendered = str(summary)
+
+        # PII / authz values must NOT appear anywhere in the summary.
+        assert "alice@example.com" not in rendered
+        assert "Alice Example" not in rendered
+        assert "engineering" not in rendered
+        assert "admins" not in rendered
+        assert "finance" not in rendered
+        # sub is masked, not raw.
+        assert summary["sub"] != claims["sub"]
+        assert "..." in summary["sub"]
+        # Only counts and claim NAMES are exposed.
+        assert summary["group_count"] == 3
+        assert set(summary["claim_names"]) == set(claims.keys())
+        assert "email" in summary["claim_names"]  # the NAME, not the value
+
+    def test_counts_roles_when_groups_absent(self):
+        from auth_server.server import safe_identity_summary
+
+        claims = {"sub": "abcd1234efgh", "roles": ["r1", "r2"]}
+        summary = safe_identity_summary(claims)
+        assert summary["group_count"] == 2
+
+    def test_handles_missing_sub_and_non_dict(self):
+        from auth_server.server import safe_identity_summary
+
+        assert safe_identity_summary({})["sub"] is None
+        assert safe_identity_summary(None) == {"claims": "unavailable"}
+
+    def test_mapped_user_dict_is_safe(self):
+        """A mapped_user dict (email/name/groups) must not leak its values."""
+        from auth_server.server import safe_identity_summary
+
+        mapped_user = {
+            "username": "bob@corp.com",
+            "email": "bob@corp.com",
+            "name": "Bob Corp",
+            "groups": ["g1", "g2", "g3", "g4"],
+        }
+        rendered = str(safe_identity_summary(mapped_user))
+        assert "bob@corp.com" not in rendered
+        assert "Bob Corp" not in rendered
+        assert "g1" not in rendered
+        assert safe_identity_summary(mapped_user)["group_count"] == 4
 
 
 class TestServerNameNormalization:
@@ -670,6 +778,77 @@ class TestValidateEndpoint:
             data = response.json()
             assert data["valid"] is True
             assert data["username"] == "testuser"
+
+    @patch("auth_server.server.get_auth_provider")
+    def test_validate_uninspectable_body_fails_closed(
+        self,
+        mock_get_provider,
+        mock_cognito_provider,
+        auth_env_vars,
+        mock_scope_repository_with_data,
+    ):
+        """A server-scoped request with an uninspectable (spilled) body is denied.
+
+        When capture_body.lua could not buffer the body in memory it sets
+        X-Body-Uninspectable=1 and no X-Body. /validate must not default the
+        method to "initialize" and authorize -- it must fail closed so a
+        privileged body cannot slip through unauthorized (TM-15 edge defense).
+        """
+        mock_get_provider.return_value = mock_cognito_provider
+
+        import auth_server.server as server_module
+
+        with patch(
+            "auth_server.server.get_scope_repository",
+            return_value=mock_scope_repository_with_data,
+        ):
+            client = TestClient(server_module.app)
+
+            response = client.get(
+                "/validate",
+                headers={
+                    "Authorization": "Bearer test-token",
+                    "X-Original-URL": "https://example.com/test-server/mcp",
+                    "X-Body-Uninspectable": "1",
+                },
+            )
+
+        assert response.status_code == 413
+
+    @patch("auth_server.server.get_auth_provider")
+    def test_validate_unparseable_body_fails_closed(
+        self,
+        mock_get_provider,
+        mock_cognito_provider,
+        auth_env_vars,
+        mock_scope_repository_with_data,
+    ):
+        """A server-scoped request whose X-Body is present but unparseable is denied.
+
+        A non-empty body that cannot be parsed into a scope-relevant payload
+        must not silently default to "initialize" -- the real method is unknown,
+        so /validate fails closed rather than authorizing it (TM-15 edge defense).
+        """
+        mock_get_provider.return_value = mock_cognito_provider
+
+        import auth_server.server as server_module
+
+        with patch(
+            "auth_server.server.get_scope_repository",
+            return_value=mock_scope_repository_with_data,
+        ):
+            client = TestClient(server_module.app)
+
+            response = client.get(
+                "/validate",
+                headers={
+                    "Authorization": "Bearer test-token",
+                    "X-Original-URL": "https://example.com/test-server/mcp",
+                    "X-Body": "{not-valid-json",
+                },
+            )
+
+        assert response.status_code == 400
 
     @patch("auth_server.server.get_auth_provider")
     def test_validate_missing_auth_header(self, mock_get_provider, auth_env_vars):
@@ -2942,6 +3121,7 @@ class TestForwardedResponseHeadersAllowlist:
 def _mcp_proxy_token_headers(
     server_name: str = "office-docs",
     upstream_url: str = "https://upstream.example/mcp",
+    scopes: list[str] | None = None,
 ) -> dict:
     """Build the X-Internal-Token nginx would forward to /mcp-proxy.
 
@@ -2949,16 +3129,41 @@ def _mcp_proxy_token_headers(
     process-wide by the test conftest), and mint_mcp_proxy_token reads the same,
     so a token minted here verifies in-process. Identity/scopes/upstream are read
     from these claims; the handler ignores the inbound X-User/X-Scopes/X-Upstream-Url.
+
+    The handler now re-authorizes the forwarded body against these scopes, so the
+    default carries a wildcard scope (``admin:all``); pair it with
+    ``_patch_scope_repo_allow_all`` so the re-auth passes. Pass an explicit
+    ``scopes`` (e.g. ``[]``) to exercise the forwarded-body denial path.
     """
     from auth_server.internal_request_token import mint_mcp_proxy_token
 
     token = mint_mcp_proxy_token(
         subject="test-user",
-        scopes=[],
+        scopes=["admin:all"] if scopes is None else scopes,
         server_name=server_name,
         upstream_url=upstream_url,
     )
     return {"X-Internal-Token": token}
+
+
+def _patch_scope_repo_allow_all():
+    """Patch get_scope_repository so ``admin:all`` grants any server/method.
+
+    The /mcp-proxy handler re-authorizes the forwarded body via
+    validate_server_tool_access, which consults the scope repository. These
+    header-passthrough tests care about response-header handling, not the
+    allowlist itself, so they run with a wildcard-granting repository and an
+    ``admin:all`` token.
+    """
+    repo = AsyncMock()
+
+    async def _get_server_scopes(scope_name: str):
+        if scope_name == "admin:all":
+            return [{"server": "*", "methods": ["*"], "tools": ["*"]}]
+        return []
+
+    repo.get_server_scopes.side_effect = _get_server_scopes
+    return patch("auth_server.server.get_scope_repository", return_value=repo)
 
 
 class TestMcpProxyEndpointHeaderPassthrough:
@@ -2990,6 +3195,7 @@ class TestMcpProxyEndpointHeaderPassthrough:
 
         with (
             _patch_httpx_async_client(upstream_resp),
+            _patch_scope_repo_allow_all(),
             patch.object(server_module, "_read_mcp_filter_enabled", return_value=False),
         ):
             client = TestClient(server_module.app)
@@ -3025,6 +3231,7 @@ class TestMcpProxyEndpointHeaderPassthrough:
 
         with (
             _patch_httpx_async_client(upstream_resp),
+            _patch_scope_repo_allow_all(),
             patch.object(server_module, "_read_mcp_filter_enabled", return_value=True),
             patch.object(
                 server_module,
@@ -3060,6 +3267,7 @@ class TestMcpProxyEndpointHeaderPassthrough:
 
         with (
             _patch_httpx_async_client(upstream_resp),
+            _patch_scope_repo_allow_all(),
             patch.object(server_module, "_read_mcp_filter_enabled", return_value=True),
         ):
             client = TestClient(server_module.app)
@@ -3091,6 +3299,7 @@ class TestMcpProxyEndpointHeaderPassthrough:
 
         with (
             _patch_httpx_async_client(upstream_resp),
+            _patch_scope_repo_allow_all(),
             patch.object(server_module, "_read_mcp_filter_enabled", return_value=False),
         ):
             client = TestClient(server_module.app)
@@ -3118,6 +3327,33 @@ class TestMcpProxyEndpointHeaderPassthrough:
         )
 
         assert response.status_code == 401
+
+    def test_forwarded_body_reauthorized_denies_unscoped_caller(self):
+        """A token with no scopes is denied at the proxy hop before any
+        outbound call -- the forwarded body is re-authorized here, not only
+        at /validate on a separately-captured copy (TM-15).
+        """
+        import auth_server.server as server_module
+
+        # No upstream patch: if the guard fails open we would attempt the
+        # outbound call and this test would surface a different failure.
+        with (
+            _patch_scope_repo_allow_all(),
+            patch.object(server_module, "_read_mcp_filter_enabled", return_value=False),
+        ):
+            client = TestClient(server_module.app)
+            response = client.post(
+                "/mcp-proxy/office-docs",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
+                    "params": {"name": "privileged-tool"},
+                },
+                headers=_mcp_proxy_token_headers(scopes=[]),
+            )
+
+        assert response.status_code == 403
 
     def test_egress_consent_emits_iserror_baseline_with_connect_url(self):
         """DEFAULT consent delivery: when egress is on and the user has no token,
@@ -3339,6 +3575,7 @@ class TestMcpProxyEndpointHeaderPassthrough:
 
         with (
             _patch_httpx_async_client(upstream_resp),
+            _patch_scope_repo_allow_all(),
             patch.object(server_module, "_read_mcp_filter_enabled", return_value=False),
         ):
             client = TestClient(server_module.app)
@@ -3376,6 +3613,7 @@ class TestMcpProxyEndpointHeaderPassthrough:
 
         with (
             _patch_httpx_async_client(upstream_resp),
+            _patch_scope_repo_allow_all(),
             patch.object(server_module, "_read_mcp_filter_enabled", return_value=False),
         ):
             client = TestClient(server_module.app)
@@ -3511,6 +3749,236 @@ class TestTokenLifetimeEnforcement:
         assert result["expires_in"] == 1 * 3600
 
 
+# =============================================================================
+# FORWARDED-BODY RE-AUTHORIZATION TESTS (MCP proxy hop)
+# =============================================================================
+
+
+class TestRegisteredServerFromProxyPath:
+    """Tests for _registered_server_from_proxy_path scope-key derivation.
+
+    The scope key must match what /validate authorizes against so both hops
+    check the identical server. Only a trailing MCP transport segment is
+    stripped; federated "peer/server" keys are preserved.
+    """
+
+    def test_local_server_no_transport(self):
+        """A bare server name is returned unchanged."""
+        from auth_server.server import _registered_server_from_proxy_path
+
+        assert _registered_server_from_proxy_path("currenttime") == "currenttime"
+
+    def test_local_server_strips_trailing_transport(self):
+        """A trailing mcp/sse/messages segment is stripped."""
+        from auth_server.server import _registered_server_from_proxy_path
+
+        assert _registered_server_from_proxy_path("currenttime/mcp") == "currenttime"
+        assert _registered_server_from_proxy_path("currenttime/sse") == "currenttime"
+        assert _registered_server_from_proxy_path("currenttime/messages") == "currenttime"
+
+    def test_federated_peer_server_preserved(self):
+        """A federated peer/server key is preserved (not truncated to peer)."""
+        from auth_server.server import _registered_server_from_proxy_path
+
+        assert (
+            _registered_server_from_proxy_path("peer-registry-lob-1/cloudflare-docs")
+            == "peer-registry-lob-1/cloudflare-docs"
+        )
+
+    def test_federated_peer_server_strips_trailing_transport(self):
+        """peer/server/mcp -> peer/server (only the transport tail is stripped)."""
+        from auth_server.server import _registered_server_from_proxy_path
+
+        assert (
+            _registered_server_from_proxy_path("peer-registry-lob-1/cloudflare-docs/mcp")
+            == "peer-registry-lob-1/cloudflare-docs"
+        )
+
+    def test_leading_and_trailing_slashes_ignored(self):
+        """Surrounding slashes do not change the derived key."""
+        from auth_server.server import _registered_server_from_proxy_path
+
+        assert _registered_server_from_proxy_path("/currenttime/mcp/") == "currenttime"
+
+
+class TestAuthorizeForwardedMcpBody:
+    """Tests for _authorize_forwarded_mcp_body (TM-15 forwarded-body re-auth).
+
+    The proxy hop must re-authorize the EXACT forwarded body, independently of
+    the separately-captured X-Body /validate saw, and must fail closed on any
+    body it cannot parse well enough to determine the scope-relevant method.
+    """
+
+    @staticmethod
+    def _body(method: str, tool: str | None = None) -> bytes:
+        """Build a JSON-RPC request body as raw bytes."""
+        import json
+
+        payload: dict = {"jsonrpc": "2.0", "id": 1, "method": method}
+        if tool is not None:
+            payload["params"] = {"name": tool}
+        return json.dumps(payload).encode("utf-8")
+
+    @pytest.mark.asyncio
+    async def test_divergent_tools_call_rejected_for_readonly_scope(
+        self, mock_scope_repository_with_data
+    ):
+        """A tools/call forwarded body is rejected for a read-only scope.
+
+        This is the concrete TM-15 bypass: /validate saw no X-Body (or an
+        "initialize" default) and passed, but the forwarded body is a
+        privileged tools/call. read:servers only allows initialize/tools/list
+        on test-server, so re-authorizing the real body must deny.
+        """
+        from fastapi import HTTPException
+
+        from auth_server.server import _authorize_forwarded_mcp_body
+
+        with patch(
+            "auth_server.server.get_scope_repository",
+            return_value=mock_scope_repository_with_data,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await _authorize_forwarded_mcp_body(
+                    "test-server/mcp",
+                    self._body("tools/call", tool="danger-tool"),
+                    ["read:servers"],
+                )
+        assert exc_info.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_tools_call_allowed_for_write_scope(self, mock_scope_repository_with_data):
+        """A tools/call body is allowed when the scope permits it (no raise)."""
+        from auth_server.server import _authorize_forwarded_mcp_body
+
+        with patch(
+            "auth_server.server.get_scope_repository",
+            return_value=mock_scope_repository_with_data,
+        ):
+            # write:servers allows tools/call with wildcard tools on test-server.
+            await _authorize_forwarded_mcp_body(
+                "test-server/mcp",
+                self._body("tools/call", tool="any-tool"),
+                ["write:servers"],
+            )
+
+    @pytest.mark.asyncio
+    async def test_small_initialize_body_allowed(self, mock_scope_repository_with_data):
+        """A normal small initialize body still authorizes for a valid scope."""
+        from auth_server.server import _authorize_forwarded_mcp_body
+
+        with patch(
+            "auth_server.server.get_scope_repository",
+            return_value=mock_scope_repository_with_data,
+        ):
+            await _authorize_forwarded_mcp_body(
+                "test-server/mcp",
+                self._body("initialize"),
+                ["read:servers"],
+            )
+
+    @pytest.mark.asyncio
+    async def test_empty_body_treated_as_initialize(self, mock_scope_repository_with_data):
+        """An empty forwarded body is authorized as the initialize method."""
+        from auth_server.server import _authorize_forwarded_mcp_body
+
+        with patch(
+            "auth_server.server.get_scope_repository",
+            return_value=mock_scope_repository_with_data,
+        ):
+            # Allowed for a scope that grants initialize on the server ...
+            await _authorize_forwarded_mcp_body("test-server/mcp", b"", ["read:servers"])
+
+    @pytest.mark.asyncio
+    async def test_empty_body_denied_without_matching_scope(self, mock_scope_repository_with_data):
+        """Empty body (initialize) is denied when no scope grants the server."""
+        from fastapi import HTTPException
+
+        from auth_server.server import _authorize_forwarded_mcp_body
+
+        with patch(
+            "auth_server.server.get_scope_repository",
+            return_value=mock_scope_repository_with_data,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await _authorize_forwarded_mcp_body("other-server/mcp", b"", ["read:servers"])
+        assert exc_info.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_unparseable_body_fails_closed(self, mock_scope_repository_with_data):
+        """A non-JSON forwarded body is rejected (cannot determine method)."""
+        from fastapi import HTTPException
+
+        from auth_server.server import _authorize_forwarded_mcp_body
+
+        with patch(
+            "auth_server.server.get_scope_repository",
+            return_value=mock_scope_repository_with_data,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await _authorize_forwarded_mcp_body(
+                    "test-server/mcp",
+                    b"\xff\xfe not json at all {",
+                    ["write:servers"],
+                )
+        assert exc_info.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_non_object_json_fails_closed(self, mock_scope_repository_with_data):
+        """A well-formed JSON value that is not a JSON-RPC object is rejected."""
+        from fastapi import HTTPException
+
+        from auth_server.server import _authorize_forwarded_mcp_body
+
+        with patch(
+            "auth_server.server.get_scope_repository",
+            return_value=mock_scope_repository_with_data,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await _authorize_forwarded_mcp_body(
+                    "test-server/mcp",
+                    b'["tools/call", "danger"]',
+                    ["write:servers"],
+                )
+        assert exc_info.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_no_scopes_denied(self, mock_scope_repository_with_data):
+        """A caller with no scopes is denied regardless of body."""
+        from fastapi import HTTPException
+
+        from auth_server.server import _authorize_forwarded_mcp_body
+
+        with patch(
+            "auth_server.server.get_scope_repository",
+            return_value=mock_scope_repository_with_data,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await _authorize_forwarded_mcp_body("test-server/mcp", self._body("initialize"), [])
+        assert exc_info.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_tools_call_missing_tool_name_denied_for_readonly(
+        self, mock_scope_repository_with_data
+    ):
+        """tools/call with no tool name is denied under a read-only scope."""
+        from fastapi import HTTPException
+
+        from auth_server.server import _authorize_forwarded_mcp_body
+
+        with patch(
+            "auth_server.server.get_scope_repository",
+            return_value=mock_scope_repository_with_data,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await _authorize_forwarded_mcp_body(
+                    "test-server/mcp",
+                    self._body("tools/call"),
+                    ["read:servers"],
+                )
+        assert exc_info.value.status_code == 403
+
+
 class TestSessionCookieSecureDefault:
     """Verify the session cookie Secure flag resolves fail-closed.
 
@@ -3540,3 +4008,150 @@ class TestSessionCookieSecureDefault:
         """Even secure-by-default must not emit Secure over plain HTTP."""
         assert self._resolve_cookie_secure({}, is_https=False) is False
         assert self._resolve_cookie_secure({"secure": True}, is_https=False) is False
+
+
+class TestForwardHeadersIngressStrip:
+    """Egress ingress-auth policy (issue #1266): client auth headers are ingress
+    credentials, stripped on egress. X-Authorization and Cookie are ALWAYS
+    stripped; Authorization is stripped unless relay_authorization=True (set only
+    for the built-in internal registry-tools server). No general relay mode --
+    upstream creds come from the egress vault.
+    """
+
+    def _forward(self, incoming, relay=False):
+        from auth_server.server import _forward_headers
+
+        return _forward_headers(incoming, relay_authorization=relay)
+
+    def test_strips_authorization_by_default(self):
+        """Non-relay (default): Authorization stripped."""
+        out = self._forward({"Authorization": "Bearer a", "Accept": "x"})
+        assert "authorization" not in {k.lower() for k in out}
+        assert out.get("Accept") == "x"
+
+    def test_strips_x_authorization_always_even_when_relaying(self):
+        """X-Authorization is never forwarded, even for the internal relay server."""
+        out = self._forward({"X-Authorization": "Bearer x"}, relay=True)
+        assert "x-authorization" not in {k.lower() for k in out}
+
+    def test_strips_cookie_always_even_when_relaying(self):
+        """Cookie is never forwarded, even for the internal relay server."""
+        out = self._forward({"Cookie": "mcp_gateway_session=abc"}, relay=True)
+        assert "cookie" not in {k.lower() for k in out}
+
+    def test_relays_authorization_only_when_flag_set(self):
+        """relay_authorization=True keeps Authorization (internal relay server)."""
+        out = self._forward({"Authorization": "Bearer a"}, relay=True)
+        assert out.get("Authorization") == "Bearer a"
+
+    def test_relay_flag_does_not_readmit_x_authorization_or_cookie(self):
+        """With relay on, only Authorization is relayed; X-Authorization/Cookie stay stripped."""
+        out = self._forward(
+            {"Authorization": "Bearer a", "X-Authorization": "Bearer x", "Cookie": "s=1"},
+            relay=True,
+        )
+        assert out.get("Authorization") == "Bearer a"
+        assert "x-authorization" not in {k.lower() for k in out}
+        assert "cookie" not in {k.lower() for k in out}
+
+    def test_case_insensitive(self):
+        """Lowercase header keys are handled identically."""
+        out = self._forward(
+            {"authorization": "Bearer a", "x-authorization": "Bearer x", "cookie": "s=1"},
+            relay=False,
+        )
+        assert "authorization" not in {k.lower() for k in out}
+        assert "x-authorization" not in {k.lower() for k in out}
+        assert "cookie" not in {k.lower() for k in out}
+
+    def test_still_strips_hop_by_hop_and_x_upstream_url(self):
+        """Regression: existing exclusions (hop-by-hop, X-Upstream-Url) still apply."""
+        out = self._forward(
+            {"X-Upstream-Url": "http://x", "Connection": "keep-alive", "Accept": "y"},
+        )
+        assert "x-upstream-url" not in {k.lower() for k in out}
+        assert "connection" not in {k.lower() for k in out}
+        assert out.get("Accept") == "y"
+
+    def test_preserves_non_auth_headers(self):
+        """Regression: non-auth headers pass through untouched."""
+        out = self._forward(
+            {"Content-Type": "application/json", "Mcp-Session-Id": "vs-abc", "Accept": "z"},
+        )
+        assert out.get("Content-Type") == "application/json"
+        assert out.get("Mcp-Session-Id") == "vs-abc"
+        assert out.get("Accept") == "z"
+
+    def test_internal_relay_server_set_is_airegistry_tools(self):
+        """The internal relay allowlist is the single hardcoded registry-tools server."""
+        from auth_server.server import _INTERNAL_INGRESS_RELAY_SERVERS
+
+        assert _INTERNAL_INGRESS_RELAY_SERVERS == frozenset({"airegistry-tools"})
+
+    def test_proxy_authorization_stripped(self):
+        """Proxy-Authorization (hop-by-hop and an auth header) never reaches upstream."""
+        out = self._forward({"Proxy-Authorization": "Bearer p"}, relay=True)
+        assert "proxy-authorization" not in {k.lower() for k in out}
+
+    def test_empty_headers_no_crash(self):
+        """Empty input yields empty output without error."""
+        assert self._forward({}) == {}
+
+    def test_relay_false_strips_all_three_auth_headers_together(self):
+        """The core leak-closure: a request carrying all three auth headers to a
+        non-internal server forwards none of them."""
+        out = self._forward(
+            {
+                "Authorization": "Bearer a",
+                "X-Authorization": "Bearer x",
+                "Cookie": "mcp_gateway_session=s",
+                "Accept": "application/json",
+            },
+            relay=False,
+        )
+        assert set(k.lower() for k in out) == {"accept"}
+
+    def test_bearer_value_not_needed_key_only(self):
+        """Stripping is by header name, independent of value shape."""
+        out = self._forward({"Authorization": "Basic Zm9vOmJhcg=="}, relay=False)
+        assert "authorization" not in {k.lower() for k in out}
+
+
+class TestInternalRelayDecision:
+    """The mcp_proxy relay decision keys on the verified `server` claim (first
+    path segment), matches the hardcoded internal set exactly, and normalizes
+    case. Mirrors the inline logic in mcp_proxy (issue #1266).
+    """
+
+    def _decides_relay(self, server_claim):
+        from auth_server.server import _INTERNAL_INGRESS_RELAY_SERVERS
+
+        # Mirror mcp_proxy: registered_server = (claims.get("server") or "").lower()
+        registered_server = (server_claim or "").lower()
+        return registered_server in _INTERNAL_INGRESS_RELAY_SERVERS
+
+    def test_exact_internal_server_relays(self):
+        assert self._decides_relay("airegistry-tools") is True
+
+    def test_case_insensitive_match(self):
+        assert self._decides_relay("AiRegistry-Tools") is True
+
+    def test_missing_claim_does_not_relay(self):
+        assert self._decides_relay("") is False
+        assert self._decides_relay(None) is False
+
+    def test_similar_but_not_exact_name_does_not_relay(self):
+        """No substring/prefix match: only the exact internal name relays."""
+        for name in (
+            "airegistry-tools-evil",
+            "evil-airegistry-tools",
+            "airegistry",
+            "airegistry_tools",
+            "ai-registry",
+        ):
+            assert self._decides_relay(name) is False, name
+
+    def test_federated_prefixed_name_does_not_relay(self):
+        """A federated copy (e.g. server claim 'ai-registry' from /ai-registry/...)
+        is a different first path segment and must NOT relay."""
+        assert self._decides_relay("ai-registry") is False

@@ -313,6 +313,23 @@ class PeerRegistryClient(BaseFederationClient):
 
         logger.debug(f"Checking health of peer '{self.peer_config.peer_id}'")
 
+        # SSRF pre-check: this path calls the HTTP client directly (bypassing
+        # _make_request), so validate the health URL here as well, with the same
+        # FEDERATION profile (no allowlist bypass) as the pinned transport that
+        # backs self.client. Fail closed. The authoritative, rebinding-safe block
+        # still happens inside the guarded transport at connect time.
+        from ...exceptions import UrlValidationError
+        from ...utils.url_guard import FEDERATION_PROFILE, validate_url
+
+        try:
+            validate_url(health_url, profile=FEDERATION_PROFILE)
+        except UrlValidationError as exc:
+            logger.error(
+                f"Refusing health check to unsafe URL for peer "
+                f"'{self.peer_config.peer_id}': {health_url!r} ({exc})"
+            )
+            return False
+
         try:
             # Don't need auth for health check
             response = self.client.get(health_url)

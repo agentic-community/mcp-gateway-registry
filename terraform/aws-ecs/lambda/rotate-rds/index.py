@@ -95,7 +95,7 @@ def _create_secret(arn: str, token: str) -> None:
         if e.response["Error"]["Code"] != "ResourceNotFoundException":
             raise
 
-    exclude_chars = os.environ.get("EXCLUDE_CHARACTERS", "/@\"'\\")
+    exclude_chars = os.environ.get("EXCLUDE_CHARACTERS", "/@\"'+:?#&!=% ")
     logger.info(f"Generating new password (excluding: {exclude_chars})")
 
     passwd = secretsmanager.get_random_password(ExcludeCharacters=exclude_chars, PasswordLength=32)

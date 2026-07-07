@@ -275,9 +275,11 @@ class TestManagementListUsers:
         # Act
         response = client.get("/api/management/iam/users")
 
-        # Assert
+        # Assert - generic message returned, raw IdP error NOT reflected (stack-trace exposure)
         assert response.status_code == 502
-        assert "Connection refused" in response.json()["detail"]
+        detail = response.json()["detail"]
+        assert detail == "IAM provider error"
+        assert "Connection refused" not in detail
 
     def test_dedup_skips_mongo_entries_matching_idp(self, test_client_admin):
         """MongoDB entries whose client_id already appears in IdP are skipped.
@@ -435,7 +437,9 @@ class TestManagementDeleteUser:
             response = client.delete("/api/management/iam/users/some-user")
 
         assert response.status_code == 502
-        assert "Bad Gateway" in response.json()["detail"]
+        detail = response.json()["detail"]
+        assert detail == "IAM provider error"
+        assert "Bad Gateway" not in detail
         mock_collection.delete_one.assert_not_called()
 
     def test_mongo_delete_filter_is_case_insensitive(self, test_client_admin):
@@ -724,9 +728,11 @@ class TestManagementCreateGroup:
             },
         )
 
-        # Assert
+        # Assert - generic message returned, raw IdP error NOT reflected (stack-trace exposure)
         assert response.status_code == 502
-        assert "IAM service unavailable" in response.json()["detail"]
+        detail = response.json()["detail"]
+        assert detail == "IAM provider error"
+        assert "IAM service unavailable" not in detail
 
     def test_create_group_scope_import_failure_logs_warning(self, test_client_admin):
         """Test that scope import failure is logged but doesn't fail the request."""
@@ -1100,9 +1106,11 @@ class TestManagementDeleteGroup:
         # Act
         response = client.delete("/api/management/iam/groups/test-group")
 
-        # Assert
+        # Assert - generic message returned, raw IdP error NOT reflected (stack-trace exposure)
         assert response.status_code == 502
-        assert "IAM service error" in response.json()["detail"]
+        detail = response.json()["detail"]
+        assert detail == "IAM provider error"
+        assert "IAM service error" not in detail
 
     def test_delete_group_scope_deletion_failure_logs_warning(self, test_client_admin):
         """Test that scope deletion failure is logged but doesn't fail the request."""

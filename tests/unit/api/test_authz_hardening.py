@@ -329,6 +329,82 @@ class TestSkillGlobalCredentialsAdminOnly:
 
 
 @pytest.mark.unit
+class TestParseSkillMdCredentialViaHeader:
+    """The parse credential is accepted only via header, never a query parameter.
+
+    Query parameters land in access/proxy logs, browser history, and the audit
+    log's captured query params, so a plaintext credential must not travel in
+    the URL.
+    """
+
+    _SECRET = "super-secret-bearer-token-value"
+
+    def _mock_service(self):
+        svc = AsyncMock()
+        svc.parse_skill_md = AsyncMock(
+            return_value={
+                "name": "Demo",
+                "name_slug": "demo",
+                "description": "d",
+                "version": "1.0",
+                "tags": [],
+            }
+        )
+        return svc
+
+    def test_header_credential_reaches_service(self) -> None:
+        """A credential supplied via X-Auth-Credential is forwarded to parsing."""
+        _override_auth(_non_admin_with_execute)  # has publish_skill
+        try:
+            svc = self._mock_service()
+            with patch(
+                "registry.api.skill_routes.get_skill_service",
+                return_value=svc,
+            ):
+                client = TestClient(app)
+                response = client.post(
+                    "/api/skills/parse-skill-md"
+                    "?url=https://example.com/SKILL.md&auth_scheme=bearer",
+                    headers={"X-Auth-Credential": self._SECRET},
+                )
+            assert response.status_code == status.HTTP_200_OK, response.text
+            svc.parse_skill_md.assert_awaited_once()
+            _, kwargs = svc.parse_skill_md.await_args
+            assert kwargs["auth_credential"] == self._SECRET
+            assert kwargs["auth_scheme"] == "bearer"
+        finally:
+            _clear()
+
+    def test_credential_in_query_param_is_ignored(self) -> None:
+        """A credential passed as a query parameter is NOT consumed as the credential.
+
+        The endpoint only binds ``auth_credential`` from the header, so a
+        ``?auth_credential=...`` in the URL is treated as an unrelated query
+        param and never reaches the parsing service as the credential. This
+        proves the credential cannot be smuggled through the (logged) query
+        string.
+        """
+        _override_auth(_non_admin_with_execute)
+        try:
+            svc = self._mock_service()
+            with patch(
+                "registry.api.skill_routes.get_skill_service",
+                return_value=svc,
+            ):
+                client = TestClient(app)
+                response = client.post(
+                    "/api/skills/parse-skill-md"
+                    "?url=https://example.com/SKILL.md&auth_scheme=bearer"
+                    f"&auth_credential={self._SECRET}",
+                )
+            assert response.status_code == status.HTTP_200_OK, response.text
+            _, kwargs = svc.parse_skill_md.await_args
+            assert kwargs["auth_credential"] is None
+        finally:
+            _clear()
+
+
+@pytest.mark.unit
 class TestAnsServerLinkOwnership:
     """ANS server link/unlink must be owner-or-admin only."""
 

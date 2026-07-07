@@ -14,20 +14,33 @@ from pydantic import BaseModel, Field, field_validator
 
 def mask_credential(value: str) -> str:
     """
-    Mask credential to show only last 6 characters.
+    Mask a credential, emitting no part of its value.
+
+    Audit records persist to a store that may be read more widely than the
+    request path, so a credential value must never survive there -- not even a
+    suffix. The last characters of a bearer token, session cookie, or API key
+    are real key-space (and for short tokens a large fraction of it), so nothing
+    from the value is emitted; the fixed marker records only that a credential
+    was present. The credential TYPE (session vs bearer) is captured separately
+    on the audit Identity, so this loses no diagnostic value.
 
     Args:
         value: The credential string to mask
 
     Returns:
-        Masked string in format "***" + last 6 chars, or "***" if too short
+        A fixed ``"***"`` marker regardless of the value's length or content.
     """
-    if not value or len(value) <= 6:
+    if not value:
         return "***"
-    return "***" + value[-6:]
+    return "***"
 
 
-# Set of sensitive query parameter keys that should be masked
+# Set of sensitive query parameter keys that should be masked by exact match.
+# NOTE: Exact-match alone is fragile — a new parameter name (e.g.
+# ``auth_credential``, ``client_secret``) silently escapes masking until it is
+# added here. The masker below therefore ALSO applies substring matching against
+# SENSITIVE_QUERY_PARAM_SUBSTRINGS so future variants fail closed (masked by
+# default) rather than fail open (logged in plaintext).
 SENSITIVE_QUERY_PARAMS = frozenset(
     {
         "token",
@@ -42,8 +55,56 @@ SENSITIVE_QUERY_PARAMS = frozenset(
         "authorization",
         "credential",
         "credentials",
+        "auth_credential",
     }
 )
+
+
+# Substrings that, when present anywhere in a query parameter name (case
+# insensitive), mark its value as sensitive and force masking. This is the
+# fail-closed layer: any current or future parameter whose name contains one of
+# these tokens is masked without needing an exact-match entry above.
+#
+# This list is query-parameter oriented and intentionally DIFFERS from the
+# header substring lists (registry.common.log_redaction.SENSITIVE_HEADER_SUBSTRINGS
+# and auth_server._SENSITIVE_HEADER_SUBSTRINGS): header-only markers like
+# ``cookie``/``jwt``/``bearer``/``session`` appear in header names, not query
+# keys, so they are omitted here. ``key`` is deliberately broad -- it also masks
+# benign params such as ``sort_key`` or ``partition_key``. That over-redaction
+# is intentional (fail closed): do NOT narrow or remove ``key`` to un-mask a
+# benign param, or a future ``*_key`` credential would leak in plaintext.
+SENSITIVE_QUERY_PARAM_SUBSTRINGS: tuple[str, ...] = (
+    "token",
+    "password",
+    "passwd",
+    "secret",
+    "credential",
+    "auth",
+    "apikey",
+    "api_key",
+    "key",
+    "pwd",
+)
+
+
+def _is_sensitive_query_param(name: str) -> bool:
+    """Return True if a query parameter name should have its value masked.
+
+    Matching is case-insensitive and combines an exact-match allowlist with
+    substring matching so that variant names (``auth_credential``,
+    ``client_secret``, ``x_api_key``) are masked by default. Masking is
+    fail-closed: when in doubt, mask.
+
+    Args:
+        name: The query parameter key.
+
+    Returns:
+        True when the value for this key must be masked before logging.
+    """
+    lowered = name.lower()
+    if lowered in SENSITIVE_QUERY_PARAMS:
+        return True
+    return any(marker in lowered for marker in SENSITIVE_QUERY_PARAM_SUBSTRINGS)
 
 
 class Identity(BaseModel):
@@ -67,7 +128,9 @@ class Identity(BaseModel):
         description="Type of credential: session_cookie, bearer_token, none"
     )
     credential_hint: str | None = Field(
-        default=None, description="Masked hint of the credential (last 6 chars)"
+        default=None,
+        description="Fixed marker recording that a credential was present; "
+        "emits no part of the credential value",
     )
 
     @field_validator("credential_hint", mode="before")
@@ -106,7 +169,7 @@ class Request(BaseModel):
         if not v:
             return {}
         return {
-            k: mask_credential(str(val)) if k.lower() in SENSITIVE_QUERY_PARAMS else val
+            k: mask_credential(str(val)) if _is_sensitive_query_param(k) else val
             for k, val in v.items()
         }
 

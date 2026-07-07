@@ -26,16 +26,21 @@ class TestCredentialMasking:
     @given(st.text(min_size=0, max_size=6))
     @settings(max_examples=50)
     def test_short_credentials_masked_completely(self, credential: str):
-        """Short credentials (<=6 chars) return '***'."""
+        """Short credentials return the fixed marker."""
         assert mask_credential(credential) == "***"
 
     @given(st.text(min_size=7, max_size=100))
     @settings(max_examples=50)
-    def test_long_credentials_show_last_six(self, credential: str):
-        """Long credentials return '***' + last 6 characters."""
+    def test_long_credentials_emit_no_value(self, credential: str):
+        """Long credentials return the fixed marker with NO substring of the value.
+
+        Emitting even a suffix is a leak: for opaque tokens/cookies the trailing
+        bytes are real key-space. The masker must reveal nothing.
+        """
         result = mask_credential(credential)
-        assert result == "***" + credential[-6:]
-        assert len(result[3:]) <= 6
+        assert result == "***"
+        # No non-trivial substring of the credential appears in the output.
+        assert credential[-6:] not in result or len(credential[-6:].strip()) == 0
 
 
 class TestSensitiveQueryParamMasking:
@@ -60,6 +65,66 @@ class TestSensitiveQueryParamMasking:
         )
         for key, original_value in sensitive_params.items():
             assert request.query_params[key] == mask_credential(str(original_value))
+
+    def test_auth_credential_is_masked(self):
+        """The skill-parse ``auth_credential`` param is masked in the audit log."""
+        secret = "super-secret-token-value"
+        request = Request(
+            method="POST",
+            path="/api/skills/parse-skill-md",
+            query_params={"auth_credential": secret, "url": "https://example.com"},
+            client_ip="127.0.0.1",
+        )
+        assert request.query_params["auth_credential"] == mask_credential(secret)
+        # Non-sensitive params are untouched.
+        assert request.query_params["url"] == "https://example.com"
+
+    @given(
+        st.sampled_from(
+            [
+                "auth_credential",
+                "AUTH_CREDENTIAL",
+                "authCredential",
+                "auth_token",
+                "client_secret",
+                "x_api_key",
+                "X-Api-Key",
+                "user_password",
+                "session_token",
+                "bearer_credential",
+            ]
+        ),
+        st.text(min_size=7, max_size=50),
+    )
+    @settings(max_examples=50)
+    def test_sensitive_variant_names_are_masked(self, key: str, value: str):
+        """Variant / future sensitive param names are masked via substring match.
+
+        Fail-closed: a parameter name that merely *contains* a sensitive token
+        (case-insensitive) is masked even without an exact-match entry.
+        """
+        request = Request(
+            method="GET",
+            path="/api/test",
+            query_params={key: value},
+            client_ip="127.0.0.1",
+        )
+        assert request.query_params[key] == mask_credential(value)
+
+    @given(
+        st.sampled_from(["url", "page", "limit", "offset", "tag", "q", "include_disabled"]),
+        st.text(min_size=1, max_size=50),
+    )
+    @settings(max_examples=50)
+    def test_nonsensitive_params_are_not_masked(self, key: str, value: str):
+        """Ordinary, non-credential query params are logged verbatim."""
+        request = Request(
+            method="GET",
+            path="/api/test",
+            query_params={key: value},
+            client_ip="127.0.0.1",
+        )
+        assert request.query_params[key] == value
 
 
 class TestJSONLFormatValidity:

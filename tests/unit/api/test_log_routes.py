@@ -413,15 +413,22 @@ class TestRateLimiting:
 
 
 class TestSearchSanitization:
-    """Test that regex metacharacters in search are properly escaped."""
+    """Test search-string handling on the route.
 
-    def test_regex_metacharacters_escaped(self, admin_client, mock_app_log_repo):
+    Regex escaping now happens at the repository ``$regex`` sink (so the
+    repository is self-defending regardless of caller); the route only enforces
+    the length cap and passes the literal search string through unchanged.
+    """
+
+    def test_search_passed_through_unescaped(self, admin_client, mock_app_log_repo):
         mock_app_log_repo.query.return_value = ([], 0)
 
         response = admin_client.get("/api/admin/logs?search=error.*timeout")
         assert response.status_code == 200
         call_kwargs = mock_app_log_repo.query.call_args[1]
-        assert call_kwargs["search"] == r"error\.\*timeout"
+        # The route no longer escapes; the value reaches the repo verbatim
+        # (the repo escapes it at the sink). No double-escaping.
+        assert call_kwargs["search"] == "error.*timeout"
 
     def test_search_truncated_at_max_length(self, admin_client, mock_app_log_repo):
         mock_app_log_repo.query.return_value = ([], 0)

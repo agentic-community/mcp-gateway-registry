@@ -155,12 +155,14 @@ def _run_generic_oauth_flow_for_config(
 
         if result.returncode != 0:
             logger.error(f"OAuth flow failed with exit code {result.returncode}")
-            logger.error(f"stdout: {result.stdout}")
+            # NOTE: result.stdout carries the child's token JSON (access/refresh
+            # tokens) on success and may echo request context on failure — never
+            # log it in clear text. stderr is diagnostic-only (no token) so it is
+            # safe to surface for troubleshooting.
             logger.error(f"stderr: {result.stderr}")
             raise RuntimeError(f"Generic OAuth flow failed for {provider}")
 
         logger.debug("OAuth flow completed successfully")
-        logger.debug(f"stdout: {result.stdout}")
 
         # Parse the JSON output from the OAuth flow
         import json
@@ -218,13 +220,12 @@ def _run_generic_oauth_flow(
 
         if result.returncode != 0:
             logger.error(f"OAuth flow failed for {provider}")
-            logger.error(f"STDOUT: {result.stdout}")
+            # result.stdout carries the child's token JSON — never log it in
+            # clear text; stderr is diagnostic-only (no token).
             logger.error(f"STDERR: {result.stderr}")
             raise RuntimeError(f"OAuth flow failed with return code {result.returncode}")
 
         logger.info(f"✅ OAuth flow completed successfully for {provider}")
-        if verbose:
-            logger.debug(f"OAuth flow output: {result.stdout}")
 
         # Parse the output to extract token information
         # The generic_oauth_flow.py saves tokens to ~/.oauth-tokens/

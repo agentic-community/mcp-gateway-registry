@@ -5,7 +5,6 @@ All endpoints require admin access.
 
 import json
 import logging
-import re
 import time
 from datetime import UTC, datetime
 from typing import Annotated, Any
@@ -54,10 +53,15 @@ def _check_rate_limit(user_id: str) -> bool:
 
 
 def _sanitize_search(search: str | None) -> str | None:
-    """Escape regex metacharacters for safe MongoDB $regex use."""
+    """Bound the search string length before it reaches the repository.
+
+    The repository escapes regex metacharacters at the ``$regex`` sink, so the
+    value is matched as a literal substring. Escaping is deliberately NOT done
+    here to avoid double-escaping; this function only enforces the length cap.
+    """
     if not search:
         return None
-    return re.escape(search[:MAX_SEARCH_LENGTH])
+    return search[:MAX_SEARCH_LENGTH]
 
 
 def _require_admin(

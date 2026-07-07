@@ -21,6 +21,7 @@ import StatusBadge from './StatusBadge';
 import Badge from './Badge';
 import { ANSBadge } from './ANSBadge';
 import ServerDetailsModal from './ServerDetailsModal';
+import { SafeLink } from './SafeLink';
 import useEscapeKey from '../hooks/useEscapeKey';
 import { formatRelativeTime, formatTimeSince } from '../utils/dateUtils';
 import { normalizeHealthStatus } from '../utils/healthStatus';
@@ -649,7 +650,7 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
             {/* ARD discovery-only: link back to the source registry's server.json,
                 if the source published it (ard_source_url / upstream_path). */}
             {isArdDiscovery && ardSourceUrl && (
-              <a
+              <SafeLink
                 href={ardSourceUrl}
                 target="_blank"
                 rel="noopener noreferrer"
@@ -657,7 +658,7 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
               >
                 <LinkIcon className="h-3.5 w-3.5" />
                 View at source ↗
-              </a>
+              </SafeLink>
             )}
           </CardBody>
         </CardHeader>

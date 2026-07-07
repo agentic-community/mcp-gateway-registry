@@ -1,6 +1,7 @@
 """Read-only repository for querying application logs stored in MongoDB."""
 
 import logging
+import re
 from datetime import datetime
 from typing import Any
 
@@ -43,7 +44,9 @@ class AppLogRepository:
             hostname: Filter by pod/hostname.
             start: Only include entries at or after this timestamp.
             end: Only include entries at or before this timestamp.
-            search: Substring search within the message field (pre-escaped).
+            search: Literal substring to match within the message field. Regex
+                metacharacters are escaped here so the value is always treated as
+                a literal (no NoSQL regex injection / ReDoS regardless of caller).
             skip: Number of entries to skip (offset).
             limit: Maximum number of entries to return.
 
@@ -70,7 +73,10 @@ class AppLogRepository:
             query_filter["timestamp"] = time_filter
 
         if search:
-            query_filter["message"] = {"$regex": search, "$options": "i"}
+            # Escape at the sink: the search string is always matched as a literal
+            # substring. This keeps the repository self-defending even if a caller
+            # forgets to sanitize (fail closed against regex injection / ReDoS).
+            query_filter["message"] = {"$regex": re.escape(search), "$options": "i"}
 
         try:
             if not query_filter:

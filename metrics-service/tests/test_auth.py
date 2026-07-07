@@ -145,10 +145,16 @@ class TestAPIKeyHashingHelpers:
         assert hash1 != hash2
 
     def test_hash_empty_string(self):
-        """Test hashing empty string."""
+        """Test hashing empty string produces a stable 64-char hex digest.
+
+        The exact digest is deployment-dependent because the HMAC key is a
+        per-deployment pepper, so we assert shape + determinism rather than a
+        fixed literal (which would encode the old hard-coded key).
+        """
         hash_result = hash_api_key("")
         assert len(hash_result) == 64
-        assert hash_result == "8fce0c4373343f1d2652389a9d3b0e9d9997b4f701063df5582a0b894700f439"
+        assert all(c in "0123456789abcdef" for c in hash_result)
+        assert hash_result == hash_api_key("")
 
 
 class TestAuthenticationIntegration:

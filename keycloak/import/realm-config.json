@@ -263,28 +263,6 @@
       "realmRoles": [
         "mcp-admin"
       ]
-    },
-    {
-      "username": "testuser",
-      "email": "testuser@example.com",
-      "enabled": true,
-      "emailVerified": true,
-      "firstName": "Test",
-      "lastName": "User",
-      "credentials": [
-        {
-          "type": "password",
-          "value": "${env.INITIAL_USER_PASSWORD:testpass}",
-          "temporary": true
-        }
-      ],
-      "groups": [
-        "mcp-registry-user",
-        "mcp-servers-restricted"
-      ],
-      "realmRoles": [
-        "mcp-user"
-      ]
     }
   ],
   

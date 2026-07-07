@@ -104,7 +104,7 @@ def _run_security_scan(
     if access_token and "--headers" in cmd_for_log:
         header_idx = cmd_for_log.index("--headers") + 1
         headers_masked = json.dumps(
-            {"X-Authorization": f"Bearer {access_token[:20]}...{access_token[-10:]}"}
+            {"X-Authorization": f"Bearer <token len={len(access_token)}>"}
         )
         cmd_for_log[header_idx] = headers_masked
     logger.info(f"Running: {' '.join(cmd_for_log)}")

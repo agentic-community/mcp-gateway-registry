@@ -3,6 +3,7 @@ import axios from 'axios';
 import JSZip from 'jszip';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { safeMarkdownAnchor } from './SafeLink';
 import {
   ArrowDownTrayIcon,
   ArrowLeftIcon,
@@ -397,7 +398,7 @@ function ResourcePreview({
         </div>
       ) : isMarkdown ? (
         <div className="prose prose-sm dark:prose-invert max-w-none prose-headings:text-amber-800 dark:prose-headings:text-amber-200 prose-a:text-amber-600 dark:prose-a:text-amber-400">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+          <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: safeMarkdownAnchor }}>{content}</ReactMarkdown>
         </div>
       ) : (
         <pre className="bg-gray-100 dark:bg-gray-900 rounded p-4 overflow-x-auto text-xs">

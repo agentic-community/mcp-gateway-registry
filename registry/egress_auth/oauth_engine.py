@@ -28,6 +28,8 @@ from registry.egress_auth.schemas import (
     StoredToken,
     TokenEndpointAuthStyle,
 )
+from registry.exceptions import UrlValidationError
+from registry.utils.url_guard import PROXY_PROFILE, guarded_async_client
 
 logger = logging.getLogger(__name__)
 
@@ -169,9 +171,22 @@ def _build_token_request(
 
 
 async def _post_token(cfg: OAuthProviderConfig, data: dict, headers: dict) -> dict:
+    # The token endpoint receives the operator client_secret (and, on refresh, the
+    # user's refresh_token). For a 'custom' provider cfg.token_url is registrant-
+    # supplied, so the request MUST go through the SSRF/rebinding-safe client: it
+    # pins the connection to a validated public IP at connect time (blocking a
+    # post-registration DNS rebind to a private/metadata address) and rejects a
+    # non-http(s) scheme, so the credential can never be exfiltrated to an
+    # internal target. Built-in providers resolve to public hosts and pass
+    # through unchanged.
     try:
-        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+        async with guarded_async_client(profile=PROXY_PROFILE, timeout=_HTTP_TIMEOUT) as client:
             resp = await client.post(cfg.token_url, data=data, headers=headers)
+    except UrlValidationError as exc:
+        # The pinned guard rejected the target (private/metadata IP, bad scheme,
+        # or a post-registration DNS rebind). Fail closed WITHOUT having sent the
+        # client_secret/refresh_token; surface it in the engine's own contract.
+        raise OAuthEngineError(f"token endpoint blocked by SSRF guard: {exc}") from exc
     except httpx.HTTPError as exc:
         raise OAuthEngineError(f"token endpoint unreachable: {exc}") from exc
 

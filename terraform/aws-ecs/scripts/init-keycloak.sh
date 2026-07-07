@@ -55,10 +55,10 @@ wait_for_keycloak() {
 get_admin_token() {
     local response=$(curl -s -X POST "${KEYCLOAK_URL}/realms/master/protocol/openid-connect/token" \
         -H "Content-Type: application/x-www-form-urlencoded" \
-        -d "username=${KEYCLOAK_ADMIN}" \
-        -d "password=${KEYCLOAK_ADMIN_PASSWORD}" \
-        -d "grant_type=password" \
-        -d "client_id=admin-cli")
+        --data-urlencode "username=${KEYCLOAK_ADMIN}" \
+        --data-urlencode "password=${KEYCLOAK_ADMIN_PASSWORD}" \
+        --data-urlencode "grant_type=password" \
+        --data-urlencode "client_id=admin-cli")
 
     echo "$response" | grep -o '"access_token":"[^"]*' | cut -d'"' -f4
 }
@@ -585,11 +585,11 @@ update_user_password() {
         return 1
     fi
     
-    # Reset password
+    # Reset password (temporary: true forces a change on next login)
     local password_json='{
         "type": "password",
         "value": "'"${password}"'",
-        "temporary": false
+        "temporary": true
     }'
     
     local response=$(curl -s -o /dev/null -w "%{http_code}" \
@@ -609,13 +609,23 @@ create_users() {
 
     echo "Creating test users..."
 
+    # SA-9: LOB demo users must not fall back to weak default passwords. Require
+    # explicit passwords for any LOB user that will be created.
+    if [ -z "$LOB1_USER_PASSWORD" ] || [ -z "$LOB2_USER_PASSWORD" ]; then
+        echo -e "${RED}Error: LOB1_USER_PASSWORD and LOB2_USER_PASSWORD are required${NC}"
+        echo "These set the passwords for the lob1-user / lob2-user demo accounts."
+        echo "Export both before running this script, e.g.:"
+        echo "  export LOB1_USER_PASSWORD='YourSecurePassword1'"
+        echo "  export LOB2_USER_PASSWORD='YourSecurePassword2'"
+        exit 1
+    fi
+
     # Define usernames for consistency
     local admin_username="admin"
-    local test_username="testuser"
     local lob1_username="lob1-user"
     local lob2_username="lob2-user"
 
-    # Create admin user
+    # Create admin user (temporary: true forces a password change on first login)
     local admin_user_json='{
         "username": "'$admin_username'",
         "email": "'$admin_username'@example.com",
@@ -627,17 +637,17 @@ create_users() {
             {
                 "type": "password",
                 "value": "'${INITIAL_ADMIN_PASSWORD}'",
-                "temporary": false
+                "temporary": true
             }
         ]
     }'
-    
+
     local admin_response=$(curl -s -o /dev/null -w "%{http_code}" \
         -X POST "${KEYCLOAK_URL}/admin/realms/${REALM}/users" \
         -H "Authorization: Bearer ${token}" \
         -H "Content-Type: application/json" \
         -d "$admin_user_json")
-    
+
     if [ "$admin_response" = "201" ]; then
         echo "  - Created admin user with password from Secrets Manager"
     elif [ "$admin_response" = "409" ]; then
@@ -650,30 +660,8 @@ create_users() {
     else
         echo -e "${RED}  - Failed to create admin user (HTTP $admin_response)${NC}"
     fi
-    
-    # Create test user
-    local test_user_json='{
-        "username": "'$test_username'",
-        "email": "'$test_username'@example.com",
-        "enabled": true,
-        "emailVerified": true,
-        "firstName": "Test",
-        "lastName": "User",
-        "credentials": [
-            {
-                "type": "password",
-                "value": "'${INITIAL_USER_PASSWORD:-testpass}'",
-                "temporary": false
-            }
-        ]
-    }'
-    
-    curl -s -X POST "${KEYCLOAK_URL}/admin/realms/${REALM}/users" \
-        -H "Authorization: Bearer ${token}" \
-        -H "Content-Type: application/json" \
-        -d "$test_user_json" > /dev/null
 
-    # Create lob1-user
+    # Create lob1-user (temporary: true forces a password change on first login)
     local lob1_user_json='{
         "username": "'$lob1_username'",
         "email": "'$lob1_username'@example.com",
@@ -684,8 +672,8 @@ create_users() {
         "credentials": [
             {
                 "type": "password",
-                "value": "'${LOB1_USER_PASSWORD:-lob1pass}'",
-                "temporary": false
+                "value": "'${LOB1_USER_PASSWORD}'",
+                "temporary": true
             }
         ]
     }'
@@ -695,7 +683,7 @@ create_users() {
         -H "Content-Type: application/json" \
         -d "$lob1_user_json" > /dev/null
 
-    # Create lob2-user
+    # Create lob2-user (temporary: true forces a password change on first login)
     local lob2_user_json='{
         "username": "'$lob2_username'",
         "email": "'$lob2_username'@example.com",
@@ -706,8 +694,8 @@ create_users() {
         "credentials": [
             {
                 "type": "password",
-                "value": "'${LOB2_USER_PASSWORD:-lob2pass}'",
-                "temporary": false
+                "value": "'${LOB2_USER_PASSWORD}'",
+                "temporary": true
             }
         ]
     }'
@@ -724,10 +712,6 @@ create_users() {
         "${KEYCLOAK_URL}/admin/realms/${REALM}/users?username=$admin_username" 2>/dev/null | \
         jq -r 'if type == "array" then (.[0].id // empty) else empty end' 2>/dev/null)
 
-    local test_user_id=$(curl -s -H "Authorization: Bearer ${token}" \
-        "${KEYCLOAK_URL}/admin/realms/${REALM}/users?username=$test_username" 2>/dev/null | \
-        jq -r 'if type == "array" then (.[0].id // empty) else empty end' 2>/dev/null)
-
     local lob1_user_id=$(curl -s -H "Authorization: Bearer ${token}" \
         "${KEYCLOAK_URL}/admin/realms/${REALM}/users?username=$lob1_username" 2>/dev/null | \
         jq -r 'if type == "array" then (.[0].id // empty) else empty end' 2>/dev/null)
@@ -735,31 +719,15 @@ create_users() {
     local lob2_user_id=$(curl -s -H "Authorization: Bearer ${token}" \
         "${KEYCLOAK_URL}/admin/realms/${REALM}/users?username=$lob2_username" 2>/dev/null | \
         jq -r 'if type == "array" then (.[0].id // empty) else empty end' 2>/dev/null)
-    
-    # Get all group IDs
+
+    # Get the group IDs the admin and LOB users need
     local admin_group_id=$(curl -s -H "Authorization: Bearer ${token}" \
         "${KEYCLOAK_URL}/admin/realms/${REALM}/groups" 2>/dev/null | \
         jq -r 'if type == "array" then (.[] | select(.name=="mcp-registry-admin") | .id) else empty end' 2>/dev/null)
 
-    local user_group_id=$(curl -s -H "Authorization: Bearer ${token}" \
-        "${KEYCLOAK_URL}/admin/realms/${REALM}/groups" 2>/dev/null | \
-        jq -r 'if type == "array" then (.[] | select(.name=="mcp-registry-user") | .id) else empty end' 2>/dev/null)
-
-    local developer_group_id=$(curl -s -H "Authorization: Bearer ${token}" \
-        "${KEYCLOAK_URL}/admin/realms/${REALM}/groups" 2>/dev/null | \
-        jq -r 'if type == "array" then (.[] | select(.name=="mcp-registry-developer") | .id) else empty end' 2>/dev/null)
-
-    local operator_group_id=$(curl -s -H "Authorization: Bearer ${token}" \
-        "${KEYCLOAK_URL}/admin/realms/${REALM}/groups" 2>/dev/null | \
-        jq -r 'if type == "array" then (.[] | select(.name=="mcp-registry-operator") | .id) else empty end' 2>/dev/null)
-
     local unrestricted_group_id=$(curl -s -H "Authorization: Bearer ${token}" \
         "${KEYCLOAK_URL}/admin/realms/${REALM}/groups" 2>/dev/null | \
         jq -r 'if type == "array" then (.[] | select(.name=="mcp-servers-unrestricted") | .id) else empty end' 2>/dev/null)
-
-    local restricted_group_id=$(curl -s -H "Authorization: Bearer ${token}" \
-        "${KEYCLOAK_URL}/admin/realms/${REALM}/groups" 2>/dev/null | \
-        jq -r 'if type == "array" then (.[] | select(.name=="mcp-servers-restricted") | .id) else empty end' 2>/dev/null)
 
     local lob1_group_id=$(curl -s -H "Authorization: Bearer ${token}" \
         "${KEYCLOAK_URL}/admin/realms/${REALM}/groups" 2>/dev/null | \
@@ -771,10 +739,9 @@ create_users() {
 
     # Define usernames for consistent logging
     local admin_username="admin"
-    local test_username="testuser"
     local lob1_username="lob1-user"
     local lob2_username="lob2-user"
-    
+
     # Get registry-admins group ID for admin user
     local registry_admins_group_id=$(curl -s -H "Authorization: Bearer ${token}" \
         "${KEYCLOAK_URL}/admin/realms/${REALM}/groups" 2>/dev/null | \
@@ -801,25 +768,6 @@ create_users() {
         echo "  - $admin_username assigned to registry-admins group"
     fi
     
-    # Assign test user to all groups except admin
-    if [ ! -z "$test_user_id" ]; then
-        # Arrays of group IDs and names for loop processing
-        local group_ids=("$user_group_id" "$developer_group_id" "$operator_group_id" "$unrestricted_group_id" "$restricted_group_id")
-        local group_names=("mcp-registry-user" "mcp-registry-developer" "mcp-registry-operator" "mcp-servers-unrestricted" "mcp-servers-restricted")
-        
-        # Loop through groups and assign test user to each
-        for i in "${!group_ids[@]}"; do
-            local group_id="${group_ids[$i]}"
-            local group_name="${group_names[$i]}"
-            
-            if [ ! -z "$group_id" ]; then
-                curl -s -X PUT "${KEYCLOAK_URL}/admin/realms/${REALM}/users/$test_user_id/groups/$group_id" \
-                    -H "Authorization: Bearer ${token}" > /dev/null
-                echo "  - $test_username assigned to $group_name group"
-            fi
-        done
-    fi
-
     # Assign lob1-user to registry-users-lob1 group
     if [ ! -z "$lob1_user_id" ] && [ ! -z "$lob1_group_id" ]; then
         curl -s -X PUT "${KEYCLOAK_URL}/admin/realms/${REALM}/users/$lob1_user_id/groups/$lob1_group_id" \
@@ -1229,11 +1177,10 @@ main() {
     echo "Admin console: ${KEYCLOAK_URL}/admin"
     echo "Realm: ${REALM}"
     echo ""
-    echo "Users created:"
-    echo "  - admin/${INITIAL_ADMIN_PASSWORD} (realm admin - all groups including mcp-registry-admin)"
-    echo "  - testuser/${INITIAL_USER_PASSWORD:-testpass} (test user - user/developer/operator groups)"
-    echo "  - lob1-user/${LOB1_USER_PASSWORD:-lob1pass} (LOB1 user - registry-users-lob1 group)"
-    echo "  - lob2-user/${LOB2_USER_PASSWORD:-lob2pass} (LOB2 user - registry-users-lob2 group)"
+    echo "Users created (passwords are temporary; each user is prompted to reset on first login):"
+    echo "  - admin (realm admin - all groups including mcp-registry-admin)"
+    echo "  - lob1-user (LOB1 user - registry-users-lob1 group)"
+    echo "  - lob2-user (LOB2 user - registry-users-lob2 group)"
     echo "  - service-account-mcp-gateway-m2m (service account for M2M access)"
     echo ""
     echo "Service Account Clients (M2M):"

@@ -227,7 +227,7 @@ When creating CLI applications:
    Example usage:
        # Basic usage
        uv run python -m module --param value
-       
+
        # With environment variable
        export PARAM=value
        uv run python -m module
@@ -240,11 +240,11 @@ When creating CLI applications:
    def _get_config_value(cli_value: Optional[str] = None) -> str:
        if cli_value:
            return cli_value
-       
+
        env_value = os.getenv("CONFIG_VAR")
        if env_value:
            return env_value
-       
+
        raise ValueError("Value must be provided via --param or CONFIG_VAR env var")
    ```
 
@@ -289,7 +289,7 @@ When creating CLI applications:
 - Always use the following logging configuration:
   ```python
   import logging
-  
+
   # Configure logging with basicConfig
   logging.basicConfig(
       level=logging.INFO,  # Set the log level to INFO
@@ -321,7 +321,7 @@ Provide users with feedback on long-running operations:
    elapsed_time = time.time() - start_time
    minutes = int(elapsed_time // 60)
    seconds = elapsed_time % 60
-   
+
    if minutes > 0:
        logger.info(f"Completed in {minutes} minutes and {seconds:.1f} seconds")
    else:
@@ -368,20 +368,20 @@ When working with external data sources (APIs, datasets, databases):
        limit: Optional[int] = None
    ) -> List[dict]:
        data = fetch_from_source()
-       
+
        # Apply filters with clear feedback
        for key, value in filters.items():
            filtered = [item for item in data if item.get(key) == value]
            logger.info(f"Filter '{key}={value}': {len(data)} -> {len(filtered)} items")
            data = filtered
-       
+
        if not data:
            raise ValueError(f"No data found matching filters: {filters}")
-       
+
        # Handle size limits
        if limit and len(data) < limit:
            logger.warning(f"Only {len(data)} items available (requested: {limit})")
-           
+
        return data[:limit] if limit else data
    ```
 
@@ -443,7 +443,7 @@ capitalized = list(map(str.capitalize, names))
 Example - Avoid complex patterns:
 ```python
 # Bad - too complex, hard to understand
-result = reduce(lambda x, y: x + y, 
+result = reduce(lambda x, y: x + y,
                 filter(lambda x: x % 2 == 0,
                        map(lambda x: x**2, range(10))))
 
@@ -475,18 +475,18 @@ def process_data(data):
 def process_data(data):
     if not data:
         return
-    
+
     users = data.get("users", [])
     if not users:
         return
-    
+
     for user in users:
         _process_active_user(user)
 
 def _process_active_user(user):
     if not user.get("active"):
         return
-    
+
     email = user.get("email")
     if email:
         send_email(email)
@@ -546,22 +546,22 @@ from unittest.mock import Mock, patch
 
 class TestFeatureName:
     """Tests for feature_name module"""
-    
+
     def test_happy_path(self):
         """Test normal operation with valid inputs"""
         # Arrange
         input_data = {"key": "value"}
-        
+
         # Act
         result = function_under_test(input_data)
-        
+
         # Assert
         assert result["status"] == "success"
-    
+
     def test_edge_case(self):
         """Test boundary conditions"""
         pass
-    
+
     def test_error_handling(self):
         """Test error scenarios"""
         with pytest.raises(ValueError, match="Invalid input"):
@@ -691,20 +691,20 @@ def calculate_metrics(
     threshold: float = 0.5
 ) -> Dict[str, float]:
     """Calculate statistical metrics for the given data.
-    
+
     Args:
         data: List of numerical values to analyze
         threshold: Minimum value to include in calculations
-        
+
     Returns:
         Dictionary containing calculated metrics:
         - mean: Average value
         - std: Standard deviation
         - count: Number of values above threshold
-        
+
     Raises:
         ValueError: If data is empty or contains non-numeric values
-        
+
     Example:
         >>> metrics = calculate_metrics([1.0, 2.0, 3.0])
         >>> print(metrics['mean'])
@@ -722,6 +722,95 @@ def calculate_metrics(
 
 ## Security Guidelines
 
+### Security invariants (always apply)
+
+These are hard rules distilled from prior security-review findings. Keep them in
+mind on every change touching auth, authorization, outbound requests, credential
+handling, config generation, or logging. Full detail, rationale, and examples
+are in [docs/SECURITY_GUIDELINES.md](docs/SECURITY_GUIDELINES.md) — read it before
+working in those areas.
+
+- **Use the canonical helper, never reinvent/copy-paste** (see the "Canonical
+  helpers" section in the guidelines doc): outbound HTTP from user/registry URLs →
+  `registry/utils/url_guard.py` `guarded_client`/`guarded_async_client` (never a
+  bare `httpx` client); CSRF → `registry/auth/csrf.py`; internal service auth →
+  `registry/auth/internal.py`; signing-secret validation →
+  `registry/common/secret_key.py`; read redaction → `registry/services/visibility.py`;
+  frontend hrefs → `frontend/src/utils/safeUrl.ts`; log redaction (never log raw
+  headers/body/user_context/claims) → `registry/common/log_redaction.py`; writing a
+  credential to disk → `os.open(..., 0o600)` atomically, never print it. A copied
+  snippet is how these findings get reopened.
+- **Fail closed.** On error, missing config, or ambiguity, DENY. A check that can
+  be silently skipped (optional param, truthiness on an emptyable value, a
+  sanitizer that isn't called) is equivalent to no check.
+- **Signing secrets:** validate for missing AND weak (unset/empty/whitespace,
+  `< 32` stripped chars, known-weak literals — weak-check before length) at every
+  signing entrypoint. Never ship a default/vendor credential fallback in code;
+  use one chokepoint that raises and denylists the weak value. Example creds must
+  be unmistakably fake (`YOUR_*`).
+- **SSRF:** one shared hardened URL guard for every outbound fetch — block
+  RFC-1918/loopback/link-local/reserved/multicast/metadata (`169.254.169.254`),
+  unwrap IPv4-mapped IPv6, require http/https. Validate at registration AND pin
+  the resolved IP at fetch time (re-validate per redirect); never attach
+  credentials to a target that fails validation. Internal targets are opt-in
+  allowlist, default deny.
+- **Injection:** sanitize at EVERY interpolation site AND validate at the source
+  (a sanitizer that exists but isn't called is worthless); `re.escape` user input
+  in regex/`$regex` queries.
+- **Authorization:** deny by default; never treat a broad/execute scope as admin;
+  enforce ownership server-side before every mutation across the whole endpoint
+  family; `dict.get("k")` not `getattr(dict, "k")`; no substring matching for
+  privilege decisions; verify externally-supplied JWTs (sig/iss/aud/exp) before
+  trusting claims; attach shared/global credentials only on explicit admin opt-in.
+- **Never log** secrets, tokens, PII, or full credential/claim payloads — redact
+  (including setup/debug scripts in verbose mode).
+- **OAuth/OIDC:** bind the code flow to the login — per-login `nonce` (checked
+  after signature verification) + PKCE (`S256`), fail closed if the verifier is
+  missing. Authorize the EXACT bytes you forward, never a separately-captured
+  copy; fail closed when the body isn't inspectable.
+- **Read endpoints:** redaction + access checks must be uniform across the whole
+  entity family (versions, bulk, discovery projections, search, admin-config
+  reads) via one shared helper — not just the reported endpoint.
+- **Tokens/JWT:** never derive `verify_aud`/issuer/alg from an unverified claim —
+  enforce audience against a config allowlist, fail closed. Never auto-grant
+  groups/admin from a code-shipped mapping (config-driven, fail closed).
+- **Admin ops:** refuse self-delete + last-admin removal/demotion (fail closed if
+  the admin population can't be counted); audit admin-tier grants.
+- **Never put a secret on subprocess argv** (world-readable via `ps`) — pass via
+  `env=`/stdin. **Trust forwarded metadata only from the proxy hop:** rightmost/
+  trusted XFF (not leftmost), allowlist `Host` before building a redirect_uri.
+- **One entity type's access grant must never gate a different entity type** (a
+  skill filter keyed on agent access = bypass); filter each resource by its own
+  access check, admin-only universal bypass.
+- **Honor the disabled/inactive flag** on every request where access is derived
+  (group→scope enrichment / validate), not just login; filter it in the query AND
+  re-check the doc; fail closed.
+- **IAM least privilege:** no wildcard `Action`/`Resource` — scope to the exact
+  operations the code calls + specific ARNs; cross-account AssumeRole behind an
+  explicit-list default-empty (fail closed); keep Terraform+CDK in parity.
+- **Internal tokens:** short TTL isn't enough — add `jti` + single-use via a
+  shared store (unless the token is legitimately verified twice per flow).
+- **DoS:** rate-limit at the inbound edge (nginx `limit_req`), never the shared
+  `/validate` subrequest; cover all deploy modes. **Audit:** durable-by-default
+  (fail closed), attributable to a specific actor.
+- **OAuth CSRF `state`:** validate at the token-exchange point, not a post-hoc
+  check that may be dead code; OAuth discovery metadata → `Cache-Control: no-store`.
+- **Frontend:** one shared URL-scheme guard on every dynamic href/`window.open`/
+  markdown link (allowlist http/https/mailto, render unsafe as text); enforce
+  `react/jsx-no-script-url`.
+- **Deployment/config:** sensitive ports on loopback not `0.0.0.0`; no working
+  default for a required secret (`${VAR:?}` + reject weak literals); no secrets in
+  Docker build ARGs; pin image tags; TLS verify on by default (private certs via
+  a CA bundle, never `verify=False`); dangerous toggles require an explicit flag +
+  localhost guard.
+- **After fixing a finding, grep the pattern repo-wide** — findings usually have
+  siblings the report didn't list.
+
+**Standing rule:** when you find or fix a NEW category of security issue, persist
+the generalizable lesson in [docs/SECURITY_GUIDELINES.md](docs/SECURITY_GUIDELINES.md)
+(one entry per pattern) and, if it's a new category, add a matching line to the
+invariants checklist above so it loads every session.
+
 ### Input Validation
 - Always validate and sanitize user inputs
 - Use Pydantic models for request/response validation
@@ -734,7 +823,7 @@ from typing import Optional
 
 def get_secret(key: str, default: Optional[str] = None) -> str:
     """Retrieve secret from environment variable.
-    
+
     Never hardcode secrets in source code.
     """
     value = os.environ.get(key, default)
@@ -759,7 +848,7 @@ def get_secret(key: str, default: Optional[str] = None) -> str:
   # This is not for security/cryptographic purposes - nosec B311
   random.seed(random_seed)
   samples = random.sample(dataset, size)  # nosec B311
-  
+
   # When loading from trusted sources with version pinning
   # This is acceptable for evaluation tools using well-known datasets - nosec B615
   ds = load_dataset(DATASET_NAME, revision="main")  # nosec B615
@@ -773,15 +862,42 @@ def get_secret(key: str, default: Optional[str] = None) -> str:
   ```python
   # Bad - exposes to all interfaces
   app.run(host="0.0.0.0", port=8000)
-  
+
   # Good - local only
   app.run(host="127.0.0.1", port=8000)
-  
+
   # Good - specific private IP
   import socket
   private_ip = socket.gethostbyname(socket.gethostname())
   app.run(host=private_ip, port=8000)
   ```
+
+### LLM Agent Tool-Execution Safety
+
+When an LLM autonomously emits tool calls (a tool loop, an agent, an A2A server),
+the model's output is untrusted: it can be steered by prompt injection in registry
+data, upstream tool results, documentation, or inbound messages. System-prompt
+`<security>` guidance is NOT an enforcement control — it can be ignored or
+overridden. Enforce at the execution boundary instead:
+
+- **Gate every mutating/destructive tool call behind a mandatory human confirmation.**
+  Classify each tool invocation read vs. mutate at the point of execution;
+  anything not provably read-only is treated as mutating and requires explicit
+  approval. Fail closed: if no confirmation channel is available (e.g.
+  non-interactive mode), deny the action rather than run it.
+- **Deny-by-default executable allowlist for any shell/exec tool.** Permit only a
+  fixed set of read-only diagnostic binaries; reject unknown executables,
+  path-qualified executables, and shell metacharacters (`;`, `|`, `&`, backticks,
+  redirection) before running. Run with a scrubbed environment so read-only
+  commands cannot read credential-bearing variables and echo them back.
+- **Do not authenticate an agent/tool-loop endpoint by network isolation alone.**
+  An A2A / agent HTTP server that drives an LLM tool loop must validate an inbound
+  bearer JWT (signature/issuer/expiry/audience against the IdP JWKS) on every
+  request before the message reaches the model. Bind to loopback by default;
+  require an explicit opt-in to expose on all interfaces. Auth stays enforced
+  regardless of bind address, and an unconfigured auth layer denies (never falls
+  open). Provide the guard as the shipped default so downstream copies of sample
+  agents inherit it.
 
 ### Subprocess Security Guidelines
 
@@ -1345,13 +1461,13 @@ from typing import Optional
 
 class Settings(BaseSettings):
     """Application settings from environment variables."""
-    
+
     app_name: str = "MyApp"
     debug: bool = False
     database_url: str
     api_key: str
     redis_url: Optional[str] = None
-    
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
@@ -1378,18 +1494,18 @@ from datetime import datetime
 
 class UserRequest(BaseModel):
     """User creation request model."""
-    
+
     username: str = Field(..., min_length=3, max_length=50)
     email: str = Field(..., regex=r'^[\w\.-]+@[\w\.-]+\.\w+$')
     age: Optional[int] = Field(None, ge=0, le=150)
     created_at: datetime = Field(default_factory=datetime.utcnow)
-    
+
     @validator('username')
     def username_alphanumeric(cls, v: str) -> str:
         if not v.replace('_', '').isalnum():
             raise ValueError('Username must be alphanumeric')
         return v.lower()
-    
+
     class Config:
         json_schema_extra = {
             "example": {
@@ -1420,6 +1536,7 @@ class UserRequest(BaseModel):
 ## Documentation Guidelines
 - Never add emojis to README.md files in repositories
 - Keep README files professional and emoji-free
+- Never hard word-wrap Markdown files at 76 characters (or any fixed column). Write one sentence or paragraph per line and let the editor soft-wrap. Hard wrapping creates noisy diffs and breaks tables, lists, and links.
 
 ### Emoji Usage Guidelines
 - **Code**: Absolutely no emojis in source code, comments, or docstrings
@@ -1452,10 +1569,10 @@ A well-structured README should include:
    ## Usage
    # Basic usage
    uv run python -m module_name --required-param value
-   
+
    # With all options
    uv run python -m module_name --param1 value1 --param2 value2
-   
+
    # Using environment variables
    export CONFIG_VAR=value
    uv run python -m module_name

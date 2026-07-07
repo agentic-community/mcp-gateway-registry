@@ -2,7 +2,7 @@
 
 from datetime import UTC, datetime
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -120,6 +120,25 @@ class TestQuery:
         await repo.query(search="timeout")
         filter_arg = mock_collection.find.call_args[0][0]
         assert filter_arg["message"] == {"$regex": "timeout", "$options": "i"}
+
+    @pytest.mark.asyncio
+    async def test_search_metacharacters_escaped_at_sink(self, repo, mock_collection):
+        """The repository escapes the search string so it matches literally.
+
+        Even if a caller forgets to sanitize, a pathological pattern such as
+        ``(a+)+`` (a classic ReDoS trigger) must never reach Mongo as a live
+        regex. The repository is the single escape point for this sink.
+        """
+        import re
+
+        malicious = "(a+)+.*$"
+        await repo.query(search=malicious)
+        filter_arg = mock_collection.find.call_args[0][0]
+        assert filter_arg["message"] == {"$regex": re.escape(malicious), "$options": "i"}
+        # No raw quantifiers or wildcards leaked into the pattern.
+        pattern = filter_arg["message"]["$regex"]
+        assert ".*" not in pattern
+        assert "(a+)+" not in pattern
 
     @pytest.mark.asyncio
     async def test_pagination(self, repo, mock_collection):

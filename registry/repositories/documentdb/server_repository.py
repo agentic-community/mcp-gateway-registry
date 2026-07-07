@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import re
 from datetime import datetime
 from typing import Any
 
@@ -400,11 +401,14 @@ class DocumentDBServerRepository(ServerRepositoryBase):
         collection = await self._get_collection()
 
         try:
-            # Match the active document (exact path) and version documents (path:version)
+            # Match the active document (exact path) and version documents (path:version).
+            # The path is user-controlled (from the remove-server form field), so escape
+            # regex metacharacters before interpolating; keep the ^ anchor and ":" separator
+            # outside the escape so only literal path prefixes are matched.
             filter_query = {
                 "$or": [
                     {"_id": path},
-                    {"_id": {"$regex": f"^{path}:"}},
+                    {"_id": {"$regex": f"^{re.escape(path)}:"}},
                 ]
             }
 
@@ -528,7 +532,12 @@ class DocumentDBServerRepository(ServerRepositoryBase):
 
         pipeline = [
             {"$match": {"_id": {"$not": {"$regex": ":"}}}},
-            {"$group": {"_id": None, "total": {"$sum": {"$size": {"$ifNull": ["$tool_list", []]}}}}},
+            {
+                "$group": {
+                    "_id": None,
+                    "total": {"$sum": {"$size": {"$ifNull": ["$tool_list", []]}}},
+                }
+            },
         ]
 
         try:

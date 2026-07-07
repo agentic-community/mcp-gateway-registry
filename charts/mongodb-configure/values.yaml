@@ -13,7 +13,11 @@ mongodb:
   #   - A full hostname/FQDN (e.g., "mongodb.example.com" or "10.0.1.100") - will be used as-is
   host: mcp-registry-mongodb-svc
   namespace: default
-  password: CHANGEME
+  # Leave empty to auto-generate a strong random password on first install
+  # (see templates/secret.yaml: empty -> lookup existing -> randAlphaNum 64).
+  # Set an explicit value only when you must match an externally-provisioned
+  # credential. Do NOT ship a weak literal here.
+  password: ""
   port: 27017
   replica_set: mcp-registry-mongodb
   username: my-user

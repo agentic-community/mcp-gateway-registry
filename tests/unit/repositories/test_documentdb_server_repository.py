@@ -1,5 +1,6 @@
 """Unit tests for documentdb/server_repository.py."""
 
+import re
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -239,6 +240,43 @@ class TestDeleteWithVersions:
         mock_collection.delete_many.side_effect = Exception("db error")
         assert await repo.delete_with_versions("/a") == 0
 
+    async def test_regex_metacharacters_in_path_are_escaped(self, repo, mock_collection):
+        """A path with regex metacharacters must match only its literal versions.
+
+        Without escaping, a path like "/a.b" would let "." match any character
+        (over-deleting "/aXb:v1"), and a path like "/(a+)+" could trigger ReDoS.
+        """
+        mock_collection.delete_many.return_value = MagicMock(deleted_count=1)
+
+        malicious_path = "/a.*b(c+)+"
+        await repo.delete_with_versions(malicious_path)
+
+        filter_query = mock_collection.delete_many.call_args[0][0]
+        version_clause = next(
+            clause for clause in filter_query["$or"] if isinstance(clause.get("_id"), dict)
+        )
+        pattern = version_clause["_id"]["$regex"]
+
+        # The anchor and separator stay outside the escape; the path is a literal.
+        assert pattern == f"^{re.escape(malicious_path)}:"
+        # No raw metacharacters leaked into the pattern body.
+        assert ".*" not in pattern
+        assert "(c+)+" not in pattern
+        # The compiled pattern matches the intended version doc and nothing else.
+        compiled = re.compile(pattern)
+        assert compiled.match(f"{malicious_path}:1.0.0")
+        assert not compiled.match("/aXXXb:1.0.0")
+
+    async def test_exact_path_clause_is_literal_string(self, repo, mock_collection):
+        """The active-document clause must be an exact string match, never a regex."""
+        mock_collection.delete_many.return_value = MagicMock(deleted_count=1)
+        await repo.delete_with_versions("/a.*")
+        filter_query = mock_collection.delete_many.call_args[0][0]
+        exact_clause = next(
+            clause for clause in filter_query["$or"] if isinstance(clause.get("_id"), str)
+        )
+        assert exact_clause["_id"] == "/a.*"
+
 
 class TestStateMethods:
     async def test_get_state_enabled(self, repo, mock_collection):
@@ -289,9 +327,7 @@ class TestCount:
         result = await repo.count(exclude_versions=True)
         assert result == 5
         # Version documents (_id containing ":") are excluded from the count
-        mock_collection.count_documents.assert_called_once_with(
-            {"_id": {"$not": {"$regex": ":"}}}
-        )
+        mock_collection.count_documents.assert_called_once_with({"_id": {"$not": {"$regex": ":"}}})
 
     async def test_error_returns_zero(self, repo, mock_collection):
         mock_collection.count_documents.side_effect = Exception("db error")
@@ -300,7 +336,9 @@ class TestCount:
 
 class TestCountTools:
     async def test_sums_tool_list_sizes(self, repo, mock_collection):
-        mock_collection.aggregate = MagicMock(return_value=_make_cursor([{"_id": None, "total": 13}]))
+        mock_collection.aggregate = MagicMock(
+            return_value=_make_cursor([{"_id": None, "total": 13}])
+        )
 
         result = await repo.count_tools()
 

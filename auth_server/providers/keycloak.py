@@ -269,9 +269,15 @@ class KeycloakProvider(AuthProvider):
             if isinstance(groups, str):
                 groups = [groups]
 
+            # Counts only: group names are organizational PII and the scope list
+            # reveals the authz model. The subject is masked (may be an email).
+            _sub = str(claims.get("sub") or "")
+            _masked_sub = f"{_sub[:4]}***" if _sub else "unknown"
             logger.info(
-                f"Successfully validated self-signed token for user: {claims.get('sub')}, "
-                f"groups: {groups}, scopes: {scopes}"
+                "Successfully validated self-signed token for user %s (groups=%d, scopes=%d)",
+                _masked_sub,
+                len(groups),
+                len(scopes),
             )
 
             return {

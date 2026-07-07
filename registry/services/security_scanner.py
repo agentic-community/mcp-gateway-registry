@@ -53,8 +53,10 @@ def _extract_bearer_token_from_headers(headers: str) -> str | None:
             logger.warning("Headers provided but no Bearer token found in X-Authorization header")
             return None
     except json.JSONDecodeError as e:
+        # Never echo the raw headers string: it may contain a bearer token /
+        # API key. Log/raise only the parser's positional error, not the value.
         logger.error(f"Failed to parse headers JSON: {e}")
-        raise ValueError(f"Invalid headers JSON: {headers}") from e
+        raise ValueError(f"Invalid headers JSON: {e}") from e
 
 
 def _parse_scanner_json_output(stdout: str) -> list:

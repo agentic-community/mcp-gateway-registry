@@ -23,7 +23,7 @@ Rotates DocumentDB cluster master password.
 
 **Environment Variables:**
 - `SECRETS_MANAGER_ENDPOINT`: Secrets Manager API endpoint
-- `EXCLUDE_CHARACTERS`: Characters to exclude from generated passwords (default: `/@"'\`)
+- `EXCLUDE_CHARACTERS`: Characters to exclude from generated passwords (default: `` /@"'+:?#&!=%  ``)
 
 **IAM Permissions Required:**
 - `secretsmanager:DescribeSecret`
@@ -52,7 +52,7 @@ Rotates RDS Aurora MySQL cluster master password (Keycloak database).
 
 **Environment Variables:**
 - `SECRETS_MANAGER_ENDPOINT`: Secrets Manager API endpoint
-- `EXCLUDE_CHARACTERS`: Characters to exclude from generated passwords (default: `/@"'\`)
+- `EXCLUDE_CHARACTERS`: Characters to exclude from generated passwords (default: `` /@"'+:?#&!=%  ``)
 
 **IAM Permissions Required:**
 - `secretsmanager:DescribeSecret`

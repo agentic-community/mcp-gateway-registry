@@ -146,6 +146,11 @@ variable "keycloak_database_password" {
   description = "Keycloak database password"
   type        = string
   sensitive   = true
+
+  validation {
+    condition     = !can(regex("[/ @\"'+:?#&!=%]", var.keycloak_database_password))
+    error_message = "Password cannot contain URI-reserved or RDS-rejected characters: / @ \" ' + : ? # & ! = % or spaces."
+  }
 }
 
 variable "keycloak_database_min_acu" {
@@ -175,19 +180,19 @@ variable "keycloak_log_level" {
 variable "registry_image_uri" {
   description = "Container image URI for registry service (defaults to pre-built image from public ECR)"
   type        = string
-  default     = "public.ecr.aws/p3v1o3c6/registry:1.25.0"
+  default     = "public.ecr.aws/p3v1o3c6/registry:1.26.0"
 }
 
 variable "auth_server_image_uri" {
   description = "Container image URI for auth server service (defaults to pre-built image from public ECR)"
   type        = string
-  default     = "public.ecr.aws/p3v1o3c6/auth-server:1.25.0"
+  default     = "public.ecr.aws/p3v1o3c6/auth-server:1.26.0"
 }
 
 variable "mcpgw_image_uri" {
   description = "Container image URI for mcpgw service (defaults to pre-built image from public ECR)"
   type        = string
-  default     = "public.ecr.aws/p3v1o3c6/mcpgw:1.25.0"
+  default     = "public.ecr.aws/p3v1o3c6/mcpgw:1.26.0"
 }
 
 variable "keycloak_image_uri" {
@@ -383,6 +388,11 @@ variable "documentdb_admin_password" {
   type        = string
   sensitive   = true
   default     = ""
+
+  validation {
+    condition     = var.documentdb_admin_password == "" || !can(regex("[/ @\"'+:?#&!=%]", var.documentdb_admin_password))
+    error_message = "Password cannot contain URI-reserved or RDS-rejected characters: / @ \" ' + : ? # & ! = % or spaces."
+  }
 }
 
 variable "documentdb_shard_capacity" {

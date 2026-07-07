@@ -10,6 +10,7 @@ Based on: registry/services/server_service.py and registry/services/agent_servic
 
 import asyncio
 import logging
+import socket
 import time
 import uuid
 from datetime import UTC, datetime
@@ -36,6 +37,92 @@ from .federation.peer_registry_client import PeerRegistryClient
 from .server_service import server_service
 
 logger = logging.getLogger(__name__)
+
+
+def _resolves_only_to_public_ips(
+    endpoint: str,
+) -> bool:
+    """Return True only if every resolved IP for the endpoint host is public.
+
+    This is the federation-specific complement to ``_is_safe_url``. The shared
+    ``_is_safe_url`` guard skips the private-IP check for hosts on its trusted-
+    domain allowlist (github.com, gitlab.com, and any ``github_extra_hosts`` —
+    which may be private GHES instances). Federation peers never legitimately
+    point at that allowlist, so we must NOT inherit its bypass: a peer endpoint
+    that resolves to a private/metadata address must be rejected even if its host
+    happens to be allowlisted for skill fetching. Fails closed on resolution
+    error or any exception.
+
+    Args:
+        endpoint: The peer registry base URL.
+
+    Returns:
+        True if the host resolves and every address is public, else False.
+    """
+    from urllib.parse import urlparse
+
+    from ..utils.url_guard import _Allowlist, _is_blocked_ip
+
+    # Federation grants NO allowlist bypass: an empty allowlist means every
+    # private/loopback/link-local/reserved/metadata address is blocked outright,
+    # so an allowlisted host (e.g. github.com) that resolves to a private IP is
+    # still rejected here.
+    federation_allowlist = _Allowlist()
+
+    try:
+        parsed = urlparse(endpoint)
+        hostname = parsed.hostname
+        if not hostname:
+            return False
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        addr_info = socket.getaddrinfo(hostname, port, proto=socket.IPPROTO_TCP)
+        if not addr_info:
+            return False
+        for _family, _socktype, _proto, _canon, sockaddr in addr_info:
+            if _is_blocked_ip(sockaddr[0], federation_allowlist):
+                return False
+        return True
+    except Exception as e:
+        logger.warning(f"SSRF protection: failed to resolve federation endpoint: {e}")
+        return False
+
+
+def _assert_endpoint_safe(
+    endpoint: str,
+    peer_id: str,
+) -> None:
+    """Reject a peer endpoint that fails SSRF safety validation.
+
+    Peer endpoints are fetched server-side during sync with the peer's
+    ``federation_token`` attached as a bearer credential. An attacker-chosen
+    endpoint (e.g. ``http://169.254.169.254/`` or an RFC-1918 host) would be both
+    an SSRF pivot and a token-exfiltration vector.
+
+    Two layers, both fail-closed:
+    1. The shared ``_is_safe_url`` guard (http/https scheme, host must not resolve
+       to private/loopback/link-local/reserved or cloud-metadata addresses).
+    2. ``_resolves_only_to_public_ips`` — closes the trusted-domain-allowlist
+       bypass in ``_is_safe_url``, which federation must not inherit.
+
+    Args:
+        endpoint: The peer registry base URL about to be persisted or synced.
+        peer_id: Peer identifier, for the error message and logs.
+
+    Raises:
+        ValueError: If the endpoint is empty or fails SSRF validation.
+    """
+    from .skill_service import _is_safe_url
+
+    if not endpoint or not _is_safe_url(endpoint) or not _resolves_only_to_public_ips(endpoint):
+        logger.warning(
+            f"Rejected unsafe federation endpoint for peer '{peer_id}': "
+            "private, loopback, link-local, reserved, and cloud-metadata "
+            "addresses are not allowed and the scheme must be http(s)."
+        )
+        raise ValueError(
+            f"Peer endpoint for '{peer_id}' failed SSRF safety validation; "
+            "private, loopback, link-local, and metadata addresses are not allowed"
+        )
 
 
 class PeerFederationService:
@@ -134,6 +221,11 @@ class PeerFederationService:
         Raises:
             ValueError: If peer_id already exists or is invalid
         """
+        # Validate the endpoint is safe to fetch before persisting it. This is a
+        # write-time SSRF guard: a peer whose endpoint targets a private/metadata
+        # address must never be stored, so sync can never send the token there.
+        _assert_endpoint_safe(config.endpoint, config.peer_id)
+
         async with self._operation_lock:
             repo = self._get_repo()
 
@@ -204,6 +296,12 @@ class PeerFederationService:
         Raises:
             ValueError: If peer not found or invalid
         """
+        # If the endpoint is being changed, validate it is safe to fetch before
+        # persisting. This blocks re-pointing an existing peer (which may already
+        # hold a token) at a private/metadata address.
+        if "endpoint" in updates:
+            _assert_endpoint_safe(updates["endpoint"], peer_id)
+
         async with self._operation_lock:
             repo = self._get_repo()
 
@@ -492,6 +590,13 @@ class PeerFederationService:
             error_msg = f"Peer '{peer_id}' is disabled. Enable it before syncing."
             logger.error(error_msg)
             raise ValueError(error_msg)
+
+        # Re-validate the endpoint immediately before egress. This is the
+        # fail-closed sync-time SSRF guard: even if an unsafe endpoint reached
+        # storage through some other path (legacy data, direct import, or a host
+        # that has since started resolving to a private address), we refuse to
+        # create the client or attach the federation token to it.
+        _assert_endpoint_safe(peer_config.endpoint, peer_id)
 
         # Get current sync status for incremental sync
         sync_status = await self.get_sync_status(peer_id)

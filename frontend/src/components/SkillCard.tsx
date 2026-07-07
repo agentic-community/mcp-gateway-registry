@@ -28,6 +28,7 @@ import SecurityScanModal from './SecurityScanModal';
 import useEscapeKey from '../hooks/useEscapeKey';
 import ResourceBoundTokenButton from './ResourceBoundTokenButton';
 import SkillResources from './SkillResources';
+import { SafeLink, safeMarkdownAnchor } from './SafeLink';
 import { toScanSummary } from '../utils/securityScan';
 
 /**
@@ -575,7 +576,7 @@ const SkillCard: React.FC<SkillCardProps> = React.memo(({
             {/* ARD discovery-only: link back to the source registry's descriptor,
                 if present (ard_source_url / skill_md_url). */}
             {isArdDiscovery && ardSourceUrl && (
-              <a
+              <SafeLink
                 href={ardSourceUrl}
                 target="_blank"
                 rel="noopener noreferrer"
@@ -583,12 +584,12 @@ const SkillCard: React.FC<SkillCardProps> = React.memo(({
               >
                 <ArrowTopRightOnSquareIcon className="h-3 w-3" />
                 View at source ↗
-              </a>
+              </SafeLink>
             )}
 
             {/* SKILL.md Link — non-discovery only (discovery shows "View at source"). */}
             {!isArdDiscovery && skill.skill_md_url && (
-              <a
+              <SafeLink
                 href={skill.skill_md_url}
                 target="_blank"
                 rel="noopener noreferrer"
@@ -596,7 +597,7 @@ const SkillCard: React.FC<SkillCardProps> = React.memo(({
               >
                 <ArrowTopRightOnSquareIcon className="h-3 w-3" />
                 SKILL.md
-              </a>
+              </SafeLink>
             )}
           </div>
         </div>
@@ -738,7 +739,7 @@ const SkillCard: React.FC<SkillCardProps> = React.memo(({
             {/* Action buttons */}
             <div className="flex items-center gap-4 mb-4 pb-4 border-b border-gray-200 dark:border-gray-700">
               {skill.skill_md_url && (
-                <a
+                <SafeLink
                   href={skill.skill_md_url}
                   target="_blank"
                   rel="noopener noreferrer"
@@ -746,10 +747,10 @@ const SkillCard: React.FC<SkillCardProps> = React.memo(({
                 >
                   <ArrowTopRightOnSquareIcon className="h-4 w-4" />
                   View Skill
-                </a>
+                </SafeLink>
               )}
               {skill.repository_url && (
-                <a
+                <SafeLink
                   href={skill.repository_url}
                   target="_blank"
                   rel="noopener noreferrer"
@@ -757,7 +758,7 @@ const SkillCard: React.FC<SkillCardProps> = React.memo(({
                 >
                   <ArrowTopRightOnSquareIcon className="h-4 w-4" />
                   View Repo
-                </a>
+                </SafeLink>
               )}
               {skillMdContent && (
                 <>
@@ -840,7 +841,7 @@ const SkillCard: React.FC<SkillCardProps> = React.memo(({
                     />
                     {/* Markdown Body */}
                     <div className="prose prose-sm dark:prose-invert max-w-none prose-headings:text-amber-800 dark:prose-headings:text-amber-200 prose-a:text-amber-600 dark:prose-a:text-amber-400 prose-code:bg-gray-100 dark:prose-code:bg-gray-900 prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-pre:bg-gray-100 dark:prose-pre:bg-gray-900">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{body}</ReactMarkdown>
+                      <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: safeMarkdownAnchor }}>{body}</ReactMarkdown>
                     </div>
                   </>
                 );
@@ -850,14 +851,14 @@ const SkillCard: React.FC<SkillCardProps> = React.memo(({
                 <p>Could not load SKILL.md content.</p>
                 <p className="mt-2 text-sm">
                   Try visiting the{' '}
-                  <a
+                  <SafeLink
                     href={skill.skill_md_url}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="text-amber-600 hover:underline"
                   >
                     source URL
-                  </a>{' '}
+                  </SafeLink>{' '}
                   directly.
                 </p>
               </div>

@@ -152,6 +152,12 @@ credentials-provider/agentcore-auth/config.yaml
 credentials-provider/oauth/config.yaml
 cli/examples/peer-registry-lob-1.json
 cli/examples/peer-sales-registry.json
+
+# One-time credential dumps written by management/CLI helpers to the CWD.
+# These hold a freshly-minted API key / M2M client secret and must never be
+# committed; operators are told to delete them after use.
+.api_key_*.txt
+.m2m_client_secret_*.txt
 .venv
 env/
 venv/
@@ -452,3 +458,6 @@ pingfederate/setup/pingfederate-ca-bundle.pem
 
 # Local Docker Compose override (machine-specific paths, e.g. macOS log-dir redirect)
 docker-compose.override.yml
+
+# Local MCP connect command with bearer token (never commit)
+.mcp

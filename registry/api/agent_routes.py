@@ -31,6 +31,7 @@ from pydantic import BaseModel, ValidationError
 from ..audit import set_audit_action
 from ..auth.csrf import verify_csrf_token_flexible
 from ..auth.dependencies import nginx_proxied_auth
+from ..common.log_redaction import redact_headers, redact_mapping
 from ..core.config import settings
 from ..exceptions import UrlValidationError
 from ..repositories.factory import get_search_repository
@@ -346,14 +347,18 @@ async def _fetch_remote_agent_card(
             detail=f"Timeout fetching agent card from {agent_card_url}",
         )
     except httpx.HTTPError as exc:
+        # Do not reflect the httpx error (leaks resolved hosts / internal
+        # network detail); log it and return the URL only.
+        logger.warning("Failed to fetch agent card from %s: %s", agent_card_url, exc)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Failed to fetch agent card from {agent_card_url}: {exc}",
+            detail=f"Failed to fetch agent card from {agent_card_url}",
         )
     except Exception as exc:
+        logger.warning("Invalid response from %s: %s", agent_card_url, exc)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Invalid response from {agent_card_url}: {exc}",
+            detail=f"Invalid response from {agent_card_url}",
         )
 
 
@@ -1048,21 +1053,20 @@ async def list_agents(
         f"query={query!r}, enabled_only={enabled_only}, visibility={visibility}"
     )
 
-    # CRITICAL DIAGNOSTIC: Log that we reached this endpoint
+    # Diagnostics: log at DEBUG with sensitive values redacted. Raw headers carry
+    # Authorization/Cookie and the user_context can carry credential material, so
+    # neither is ever emitted verbatim or at INFO.
     logger.info(f"[GET_AGENTS_ENTRY] GET /api/agents called from {get_client_ip(request)}")
-    logger.info(f"[GET_AGENTS_ENTRY] Request headers: {dict(request.headers)}")
+    logger.debug(
+        f"[GET_AGENTS_ENTRY] Request headers (redacted): {redact_headers(request.headers)}"
+    )
 
-    # CRITICAL DIAGNOSTIC: Log user_context received by endpoint (for comparison with /servers)
-    logger.info(f"[GET_AGENTS_DEBUG] Received user_context: {user_context}")
-    logger.info(f"[GET_AGENTS_DEBUG] user_context type: {type(user_context)}")
     if user_context:
-        logger.info(f"[GET_AGENTS_DEBUG] Username: {user_context.get('username', 'NOT PRESENT')}")
-        logger.info(f"[GET_AGENTS_DEBUG] Scopes: {user_context.get('scopes', 'NOT PRESENT')}")
-        logger.info(
+        logger.debug(f"[GET_AGENTS_DEBUG] user_context (redacted): {redact_mapping(user_context)}")
+        logger.debug(f"[GET_AGENTS_DEBUG] Username: {user_context.get('username', 'NOT PRESENT')}")
+        logger.debug(f"[GET_AGENTS_DEBUG] Scopes: {user_context.get('scopes', 'NOT PRESENT')}")
+        logger.debug(
             f"[GET_AGENTS_DEBUG] Auth method: {user_context.get('auth_method', 'NOT PRESENT')}"
-        )
-        logger.info(
-            f"[GET_AGENTS_DEBUG] Accessible agents: {user_context.get('accessible_agents', 'NOT PRESENT')}"
         )
 
     # Determine if user has unrestricted access (no agents will be filtered out)

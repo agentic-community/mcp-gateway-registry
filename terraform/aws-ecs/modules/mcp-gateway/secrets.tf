@@ -87,8 +87,8 @@ resource "random_password" "secret_key" {
 
 # Core application secrets
 
-#checkov:skip=CKV2_AWS_57:Application-generated secret key - rotation requires coordinated service restart
 resource "aws_secretsmanager_secret" "secret_key" {
+  #checkov:skip=CKV2_AWS_57:Application-generated secret key - rotation requires coordinated service restart
   name_prefix             = "${local.name_prefix}-secret-key-"
   description             = "Secret key for MCP Gateway Registry"
   recovery_window_in_days = 0
@@ -113,8 +113,8 @@ resource "random_password" "nginx_marker_secret" {
   special = false
 }
 
-#checkov:skip=CKV2_AWS_57:Application-generated marker secret - rotation requires coordinated service restart
 resource "aws_secretsmanager_secret" "nginx_marker_secret" {
+  #checkov:skip=CKV2_AWS_57:Application-generated marker secret - rotation requires coordinated service restart
   name_prefix             = "${local.name_prefix}-nginx-marker-"
   description             = "nginx marker secret shared by auth-server and registry (guards mcp-proxy token minting)"
   recovery_window_in_days = 0
@@ -129,8 +129,8 @@ resource "aws_secretsmanager_secret_version" "nginx_marker_secret" {
 }
 
 # Keycloak client secrets (created with placeholder, updated by init-keycloak.sh)
-#checkov:skip=CKV2_AWS_57:Keycloak client secret managed by Keycloak init script, not rotatable via Secrets Manager
 resource "aws_secretsmanager_secret" "keycloak_client_secret" {
+  #checkov:skip=CKV2_AWS_57:Keycloak client secret managed by Keycloak init script, not rotatable via Secrets Manager
   name                    = "mcp-gateway-keycloak-client-secret"
   description             = "Keycloak web client secret (updated by init-keycloak.sh after deployment)"
   recovery_window_in_days = 0
@@ -149,8 +149,8 @@ resource "aws_secretsmanager_secret_version" "keycloak_client_secret" {
   }
 }
 
-#checkov:skip=CKV2_AWS_57:Keycloak M2M client secret managed by Keycloak init script, not rotatable via Secrets Manager
 resource "aws_secretsmanager_secret" "keycloak_m2m_client_secret" {
+  #checkov:skip=CKV2_AWS_57:Keycloak M2M client secret managed by Keycloak init script, not rotatable via Secrets Manager
   name                    = "mcp-gateway-keycloak-m2m-client-secret"
   description             = "Keycloak M2M client secret (updated by init-keycloak.sh after deployment)"
   recovery_window_in_days = 0
@@ -171,8 +171,8 @@ resource "aws_secretsmanager_secret_version" "keycloak_m2m_client_secret" {
 
 
 # Keycloak admin password secret (for Management API operations)
-#checkov:skip=CKV2_AWS_57:Keycloak admin password managed by Keycloak, not rotatable via Secrets Manager
 resource "aws_secretsmanager_secret" "keycloak_admin_password" {
+  #checkov:skip=CKV2_AWS_57:Keycloak admin password managed by Keycloak, not rotatable via Secrets Manager
   name_prefix             = "${local.name_prefix}-keycloak-admin-password-"
   description             = "Keycloak admin password for Management API user/group operations"
   recovery_window_in_days = 0
@@ -187,8 +187,8 @@ resource "aws_secretsmanager_secret_version" "keycloak_admin_password" {
 
 
 # Embeddings API key secret (optional - only needed for LiteLLM provider)
-#checkov:skip=CKV2_AWS_57:Third-party API key managed in external provider dashboard, not rotatable via Secrets Manager
 resource "aws_secretsmanager_secret" "embeddings_api_key" {
+  #checkov:skip=CKV2_AWS_57:Third-party API key managed in external provider dashboard, not rotatable via Secrets Manager
   name_prefix             = "${local.name_prefix}-embeddings-api-key-"
   description             = "API key for embeddings provider (OpenAI, Anthropic, etc.)"
   recovery_window_in_days = 0
@@ -207,8 +207,8 @@ resource "aws_secretsmanager_secret_version" "embeddings_api_key" {
 
 
 # Microsoft Entra ID client secret (for OAuth and IAM operations)
-#checkov:skip=CKV2_AWS_57:IdP client secret managed in Microsoft Entra ID portal, not rotatable via Secrets Manager
 resource "aws_secretsmanager_secret" "entra_client_secret" {
+  #checkov:skip=CKV2_AWS_57:IdP client secret managed in Microsoft Entra ID portal, not rotatable via Secrets Manager
   count = var.entra_enabled ? 1 : 0
 
   name_prefix             = "${local.name_prefix}-entra-client-secret-"
@@ -231,8 +231,8 @@ resource "aws_secretsmanager_secret_version" "entra_client_secret" {
 
 
 # Amazon Cognito App Client secret (for OAuth authentication)
-#checkov:skip=CKV2_AWS_57:IdP client secret managed in the Cognito App Client, not rotatable via Secrets Manager
 resource "aws_secretsmanager_secret" "cognito_client_secret" {
+  #checkov:skip=CKV2_AWS_57:IdP client secret managed in the Cognito App Client, not rotatable via Secrets Manager
   count = var.cognito_enabled ? 1 : 0
 
   name_prefix             = "${local.name_prefix}-cognito-client-secret-"
@@ -255,8 +255,8 @@ resource "aws_secretsmanager_secret_version" "cognito_client_secret" {
 
 
 # Okta client secret (for OAuth authentication)
-#checkov:skip=CKV2_AWS_57:IdP client secret managed in Okta admin console, not rotatable via Secrets Manager
 resource "aws_secretsmanager_secret" "okta_client_secret" {
+  #checkov:skip=CKV2_AWS_57:IdP client secret managed in Okta admin console, not rotatable via Secrets Manager
   count = var.okta_enabled ? 1 : 0
 
   name_prefix             = "${local.name_prefix}-okta-client-secret-"
@@ -279,8 +279,8 @@ resource "aws_secretsmanager_secret_version" "okta_client_secret" {
 
 
 # Okta M2M client secret (for service account operations)
-#checkov:skip=CKV2_AWS_57:IdP M2M client secret managed in Okta admin console, not rotatable via Secrets Manager
 resource "aws_secretsmanager_secret" "okta_m2m_client_secret" {
+  #checkov:skip=CKV2_AWS_57:IdP M2M client secret managed in Okta admin console, not rotatable via Secrets Manager
   count = var.okta_enabled ? 1 : 0
 
   name_prefix             = "${local.name_prefix}-okta-m2m-client-secret-"
@@ -303,8 +303,8 @@ resource "aws_secretsmanager_secret_version" "okta_m2m_client_secret" {
 
 
 # Okta API token (for management operations)
-#checkov:skip=CKV2_AWS_57:IdP API token managed in Okta admin console, not rotatable via Secrets Manager
 resource "aws_secretsmanager_secret" "okta_api_token" {
+  #checkov:skip=CKV2_AWS_57:IdP API token managed in Okta admin console, not rotatable via Secrets Manager
   count = var.okta_enabled ? 1 : 0
 
   name_prefix             = "${local.name_prefix}-okta-api-token-"
@@ -331,9 +331,9 @@ resource "aws_secretsmanager_secret_version" "okta_api_token" {
 # =============================================================================
 
 # Auth0 client secret (for OAuth authentication)
-#checkov:skip=CKV_AWS_149:Rotation managed externally in Auth0 dashboard, not applicable for IdP client secrets
-#checkov:skip=CKV2_AWS_57:IdP client secret managed in Auth0 dashboard, not rotatable via Secrets Manager
 resource "aws_secretsmanager_secret" "auth0_client_secret" {
+  #checkov:skip=CKV_AWS_149:Rotation managed externally in Auth0 dashboard, not applicable for IdP client secrets
+  #checkov:skip=CKV2_AWS_57:IdP client secret managed in Auth0 dashboard, not rotatable via Secrets Manager
   count = var.auth0_enabled ? 1 : 0
 
   name_prefix             = "${local.name_prefix}-auth0-client-secret-"
@@ -356,9 +356,9 @@ resource "aws_secretsmanager_secret_version" "auth0_client_secret" {
 
 
 # Auth0 M2M client secret (for IAM Management operations)
-#checkov:skip=CKV_AWS_149:Rotation managed externally in Auth0 dashboard, not applicable for IdP client secrets
-#checkov:skip=CKV2_AWS_57:IdP M2M client secret managed in Auth0 dashboard, not rotatable via Secrets Manager
 resource "aws_secretsmanager_secret" "auth0_m2m_client_secret" {
+  #checkov:skip=CKV_AWS_149:Rotation managed externally in Auth0 dashboard, not applicable for IdP client secrets
+  #checkov:skip=CKV2_AWS_57:IdP M2M client secret managed in Auth0 dashboard, not rotatable via Secrets Manager
   count = var.auth0_enabled ? 1 : 0
 
   name_prefix             = "${local.name_prefix}-auth0-m2m-client-secret-"
@@ -385,8 +385,8 @@ resource "aws_secretsmanager_secret_version" "auth0_m2m_client_secret" {
 # =============================================================================
 
 # PingFederate client secret (for OAuth authentication)
-#checkov:skip=CKV2_AWS_57:IdP client secret managed in PingFederate admin console
 resource "aws_secretsmanager_secret" "pingfederate_client_secret" {
+  #checkov:skip=CKV2_AWS_57:IdP client secret managed in PingFederate admin console
   count = var.pingfederate_enabled ? 1 : 0
 
   name_prefix             = "${local.name_prefix}-pingfederate-client-secret-"
@@ -408,8 +408,8 @@ resource "aws_secretsmanager_secret_version" "pingfederate_client_secret" {
 }
 
 # PingFederate M2M client secret (for service account operations)
-#checkov:skip=CKV2_AWS_57:IdP M2M client secret managed in PingFederate admin console
 resource "aws_secretsmanager_secret" "pingfederate_m2m_client_secret" {
+  #checkov:skip=CKV2_AWS_57:IdP M2M client secret managed in PingFederate admin console
   count = var.pingfederate_enabled ? 1 : 0
 
   name_prefix             = "${local.name_prefix}-pingfederate-m2m-client-secret-"
@@ -431,8 +431,8 @@ resource "aws_secretsmanager_secret_version" "pingfederate_m2m_client_secret" {
 }
 
 # PingFederate Admin API password (used by registry to call PF admin API)
-#checkov:skip=CKV2_AWS_57:PingFederate admin password managed in PingFederate admin console
 resource "aws_secretsmanager_secret" "pf_admin_pass" {
+  #checkov:skip=CKV2_AWS_57:PingFederate admin password managed in PingFederate admin console
   count = var.pingfederate_enabled ? 1 : 0
 
   name_prefix             = "${local.name_prefix}-pf-admin-pass-"
@@ -461,8 +461,8 @@ resource "random_password" "metrics_api_key" {
   special = false
 }
 
-#checkov:skip=CKV2_AWS_57:Application-generated API key - rotation requires coordinated service restart
 resource "aws_secretsmanager_secret" "metrics_api_key" {
+  #checkov:skip=CKV2_AWS_57:Application-generated API key - rotation requires coordinated service restart
   count = var.enable_observability ? 1 : 0
 
   name_prefix             = "${local.name_prefix}-metrics-api-key-"
@@ -479,13 +479,42 @@ resource "aws_secretsmanager_secret_version" "metrics_api_key" {
   secret_string = random_password.metrics_api_key[0].result
 }
 
+# Metrics API-key HMAC pepper. The metrics-service peppers stored API-key hashes
+# with this per-deployment secret and refuses to start unless it is present and
+# high-entropy. Generated (not operator-supplied) so a fresh deploy does not
+# fail closed; hex output keeps it length-safe (>= 32 chars) with no special
+# characters. Rotating it invalidates existing API-key hashes -- re-issue keys.
+resource "random_password" "metrics_key_pepper" {
+  count   = var.enable_observability ? 1 : 0
+  length  = 64
+  special = false
+}
+
+resource "aws_secretsmanager_secret" "metrics_key_pepper" {
+  #checkov:skip=CKV2_AWS_57:Application-generated pepper - rotation invalidates existing API-key hashes and requires re-issuing keys
+  count = var.enable_observability ? 1 : 0
+
+  name_prefix             = "${local.name_prefix}-metrics-key-pepper-"
+  description             = "Per-deployment HMAC pepper for metrics-service API-key hashing"
+  recovery_window_in_days = 0
+  kms_key_id              = aws_kms_key.secrets.id
+  tags                    = local.common_tags
+}
+
+resource "aws_secretsmanager_secret_version" "metrics_key_pepper" {
+  count = var.enable_observability ? 1 : 0
+
+  secret_id     = aws_secretsmanager_secret.metrics_key_pepper[0].id
+  secret_string = random_password.metrics_key_pepper[0].result
+}
+
 # Grafana admin password (issue #1325). Previously injected as a plaintext
 # container env value, exposing it via `aws ecs describe-task-definition` and in
 # Terraform state. Now stored in Secrets Manager and referenced via valueFrom so
 # it no longer appears in the rendered task definition. Sourced from the
 # operator-supplied var.grafana_admin_password.
-#checkov:skip=CKV2_AWS_57:Operator-supplied Grafana admin password - rotation requires coordinated service restart
 resource "aws_secretsmanager_secret" "grafana_admin_password" {
+  #checkov:skip=CKV2_AWS_57:Operator-supplied Grafana admin password - rotation requires coordinated service restart
   count = var.enable_observability ? 1 : 0
 
   name_prefix             = "${local.name_prefix}-grafana-admin-"
@@ -505,8 +534,8 @@ resource "aws_secretsmanager_secret_version" "grafana_admin_password" {
 
 # OTLP exporter headers (e.g., dd-api-key=xxx for Datadog)
 # Only created when observability is enabled AND an OTLP endpoint is configured
-#checkov:skip=CKV2_AWS_57:Observability provider API key managed in external provider dashboard, not rotatable via Secrets Manager
 resource "aws_secretsmanager_secret" "otlp_exporter_headers" {
+  #checkov:skip=CKV2_AWS_57:Observability provider API key managed in external provider dashboard, not rotatable via Secrets Manager
   count = var.enable_observability && var.otel_otlp_endpoint != "" ? 1 : 0
 
   name_prefix             = "${local.name_prefix}-otlp-exporter-headers-"

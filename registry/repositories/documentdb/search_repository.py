@@ -1505,12 +1505,14 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
         for doc in indexed_docs:
             doc_id = doc["_id"]
             if doc_id not in source_ids:
-                stale.append({
-                    "path": doc_id,
-                    "entity_type": doc.get("entity_type", "unknown"),
-                    "name": doc.get("name") or doc_id,
-                    "is_enabled": doc.get("is_enabled", True),
-                })
+                stale.append(
+                    {
+                        "path": doc_id,
+                        "entity_type": doc.get("entity_type", "unknown"),
+                        "name": doc.get("name") or doc_id,
+                        "is_enabled": doc.get("is_enabled", True),
+                    }
+                )
 
         stale.sort(key=lambda x: (x["entity_type"], x["path"]))
 
@@ -1559,11 +1561,13 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                     details.append({"path": path, "status": "not_found", "error": None})
             except Exception as e:
                 logger.error("Failed to remove stale embedding '%s': %s", path, e)
-                details.append({
-                    "path": path,
-                    "status": "failed",
-                    "error": "Failed to remove stale embedding",
-                })
+                details.append(
+                    {
+                        "path": path,
+                        "status": "failed",
+                        "error": "Failed to remove stale embedding",
+                    }
+                )
 
         removed_count = sum(1 for d in details if d["status"] == "removed")
         not_found_count = sum(1 for d in details if d["status"] == "not_found")
@@ -2347,18 +2351,25 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                 include_disabled=include_disabled,
             )
 
-            # Tokenize query and create regex pattern for matching any token
+            # Tokenize query and create a regex pattern for keyword matching.
+            # Tokens are always regex-escaped so query metacharacters are treated as
+            # literals. If tokenization yields nothing (e.g. the query is all stopwords
+            # or punctuation), we DO NOT fall back to the raw query as a regex pattern:
+            # that would allow NoSQL regex injection / ReDoS. Instead the keyword-boost
+            # and keyword-merge stages are skipped and results come from vector search
+            # alone (fail-safe: no unbounded/attacker-controlled pattern reaches Mongo).
             query_tokens = _tokenize_query(query)
             escaped_tokens = [re.escape(token) for token in query_tokens]
-            token_regex = "|".join(escaped_tokens) if escaped_tokens else query
+            has_keyword_tokens = bool(escaped_tokens)
+            token_regex = "|".join(escaped_tokens)
             logger.info(
                 "Hybrid search tokens for '%s': %s (regex: %s)",
                 query,
                 query_tokens,
-                token_regex,
+                token_regex if has_keyword_tokens else "<none: keyword stage skipped>",
             )
 
-            text_boost_stage = _build_text_boost_stage(token_regex)
+            text_boost_stage = _build_text_boost_stage(token_regex) if has_keyword_tokens else None
 
             default_scope = await self._default_search_scope()
             search_types = [t for t in (entity_types or default_scope) if t != "tool"]
@@ -2383,8 +2394,9 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                 ]
                 if status_filter:
                     pipeline.append({"$match": status_filter})
-                pipeline.append(text_boost_stage)
-                pipeline.append({"$sort": {"text_boost": -1}})
+                if text_boost_stage is not None:
+                    pipeline.append(text_boost_stage)
+                    pipeline.append({"$sort": {"text_boost": -1}})
                 pipeline.append({"$limit": k_per_type})
 
                 cursor = collection.aggregate(pipeline)
@@ -2408,13 +2420,17 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
 
             # NOTE: DocumentDB does not support $unionWith, so we run a separate
             # keyword query and merge results in Python code after the main pipeline.
-            keyword_match_filter = _build_keyword_match_filter(
-                token_regex=token_regex,
-                entity_types=entity_types,
-            )
+            # Skip the keyword pass entirely when there are no escaped tokens so that
+            # no attacker-controlled regex pattern is ever handed to Mongo.
+            keyword_results: list[dict[str, Any]] = []
+            if has_keyword_tokens:
+                keyword_match_filter = _build_keyword_match_filter(
+                    token_regex=token_regex,
+                    entity_types=entity_types,
+                )
 
-            keyword_cursor = collection.find(keyword_match_filter).limit(max(max_results, 10))
-            keyword_results = await keyword_cursor.to_list(length=max(max_results, 10))
+                keyword_cursor = collection.find(keyword_match_filter).limit(max(max_results, 10))
+                keyword_results = await keyword_cursor.to_list(length=max(max_results, 10))
 
             logger.info(
                 "Keyword search for '%s' found %d candidates",

@@ -128,8 +128,12 @@ def _build_headers_for_server(server_info: dict = None) -> dict[str, str]:
         if server_headers and isinstance(server_headers, list):
             for header_dict in server_headers:
                 if isinstance(header_dict, dict):
+                    from ..common.log_redaction import redact_headers
+
                     headers.update(header_dict)
-                    logger.debug(f"Added server headers to MCP client: {header_dict}")
+                    logger.debug(
+                        f"Added server headers to MCP client: {redact_headers(header_dict)}"
+                    )
 
         # Custom headers go first; auth_scheme below overwrites name collisions
         encrypted_custom = server_info.get("custom_headers_encrypted")

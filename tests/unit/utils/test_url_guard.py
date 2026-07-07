@@ -251,6 +251,59 @@ class TestAllowlists:
                     == []
                 )
 
+    def test_proxy_profile_builtin_mcpgw_bypasses_with_no_config(self):
+        """The bundled registry-tools server (mcpgw-server) is trusted with ZERO
+        operator config, so upgrading to an SSRF-guarded build keeps
+        airegistry-tools healthy (mcpgw-server resolves to a private container IP)."""
+        with patch.object(url_guard, "settings", _settings(ssrf_allowed_hosts="")):
+
+            def _boom(*a, **k):
+                raise AssertionError("resolution should be skipped for built-in host")
+
+            with patch.object(url_guard.socket, "getaddrinfo", _boom):
+                assert (
+                    url_guard.validate_url(
+                        "http://mcpgw-server:8003/mcp", profile=url_guard.PROXY_PROFILE
+                    )
+                    == []
+                )
+
+    def test_proxy_profile_demo_servers_not_trusted_by_default(self):
+        """Demo servers (currenttime, realserverfaketools) are opt-in and are NOT
+        in the built-in trust set: they resolve normally and a private IP is
+        blocked unless the operator allowlists them."""
+        with patch.object(url_guard, "settings", _settings(ssrf_allowed_hosts="")):
+            with patch.object(url_guard.socket, "getaddrinfo", _resolve_to("10.0.0.7")):
+                for host in ("currenttime-server", "realserverfaketools-server"):
+                    with pytest.raises(UrlValidationError):
+                        url_guard.validate_url(
+                            f"http://{host}:8000/mcp", profile=url_guard.PROXY_PROFILE
+                        )
+
+    def test_proxy_profile_builtin_hosts_survive_operator_allowlist(self):
+        """Operator-supplied ssrf_allowed_hosts is UNIONED with the built-ins, not
+        a replacement: setting a custom host must not drop the bundled servers."""
+        with patch.object(url_guard, "settings", _settings(ssrf_allowed_hosts="internal.corp")):
+
+            def _boom(*a, **k):
+                raise AssertionError("resolution should be skipped for allowlisted host")
+
+            with patch.object(url_guard.socket, "getaddrinfo", _boom):
+                # operator host works
+                assert (
+                    url_guard.validate_url(
+                        "http://internal.corp/mcp", profile=url_guard.PROXY_PROFILE
+                    )
+                    == []
+                )
+                # built-in host STILL works alongside it
+                assert (
+                    url_guard.validate_url(
+                        "http://mcpgw-server:8003/mcp", profile=url_guard.PROXY_PROFILE
+                    )
+                    == []
+                )
+
     def test_proxy_profile_cidr_allowlist_permits_private(self):
         with patch.object(url_guard, "settings", _settings(ssrf_allowed_cidrs="10.0.0.0/8")):
             with patch.object(url_guard.socket, "getaddrinfo", _resolve_to("10.1.2.3")):

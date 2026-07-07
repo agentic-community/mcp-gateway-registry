@@ -243,20 +243,6 @@ terraform plan
 terraform apply
 ```
 
-#### DockerHub Images
-
-Pre-built images are available:
-
-```bash
-docker pull mcpgateway/registry:{version}
-docker pull mcpgateway/auth-server:{version}
-docker pull mcpgateway/currenttime-server:{version}
-docker pull mcpgateway/realserverfaketools-server:{version}
-docker pull mcpgateway/mcpgw-server:{version}
-docker pull mcpgateway/fininfo-server:{version}
-docker pull mcpgateway/metrics-service:{version}
-```
-
 ---
 
 ## Major Features
@@ -400,11 +386,7 @@ Once the user confirms the release notes are ready:
    git tag -l {version} --format="%(refname:short) -> %(objectname:short)"
    ```
 
-5. Tell the user the tag is created and pushed, and provide the DockerHub push command:
-   ```
-   To publish images to DockerHub with this tag:
-   make publish-dockerhub-version VERSION={version}
-   ```
+5. Tell the user the release notes are committed and the tag is created and pushed.
 
 ## Important Rules
 
@@ -416,7 +398,6 @@ Once the user confirms the release notes are ready:
 - **Always list breaking changes first** in the upgrade section -- this is the most critical information for operators.
 - **Always verify Helm Chart.yaml diffs** to detect dependency additions/removals -- these are the most common breaking changes for EKS users.
 - **Always check the full `charts/` tree diff**, not just `Chart.yaml`. If ANY file under `charts/` changed between base and HEAD, the upgrade instructions MUST include `helm dependency build` and `helm dependency update` for stack-chart consumers. The packaged `.tgz` subcharts inside `charts/mcp-gateway-registry-stack/charts/` are gitignored and only repackage when those commands run -- a plain `git pull` + `helm upgrade` will silently use stale subcharts.
-- **DockerHub image list** should match the components defined in `scripts/publish_containers.sh` in the `COMPONENTS` array. Read this file to get the current list rather than hardcoding.
 - **Always credit squash-merge co-authors.** `git log {base}..HEAD` only sees the squashed commit's single author, so co-authors on the source branch get dropped. Always also iterate every merged PR with `gh pr view <num> --json commits --jq '[.commits[].authors[].name] | unique'` and union the results into the contributor list.
 - **Never synthesize GitHub usernames from display names.** Resolve every login from a real PR (`gh pr view <num> --json author` for openers, or `.commits[].authors[].login` for co-authors), and verify uncertain ones with `gh api users/<candidate>` (404 = wrong guess). Past mistakes: "Amit Arora" -> `amitarora` (wrong; actual: `aarora79`); "Nathan Fernandes Pedroza" -> `nathanfernandes` (wrong; actual: `nathanzilgo`).
 

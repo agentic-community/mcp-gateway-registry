@@ -6,12 +6,17 @@ import aiosqlite
 import sys
 from pathlib import Path
 
+# Compute the hash with the same peppered HMAC the service uses, so the
+# inserted row matches what verify_api_key looks up. Requires METRICS_KEY_PEPPER
+# to be set in the environment (same value the running service uses).
+sys.path.insert(0, str(Path(__file__).parent))
+from app.utils.helpers import hash_api_key
+
 
 async def add_test_key():
     db_path = "/var/lib/sqlite/metrics.db"
-    key_hash = (
-        "1f8e8c97805e4ad56c611029fbba4c04dab40bf05d18c46655696357705cc136"  # hash of "test_key_123"
-    )
+    api_key = "test_key_123"
+    key_hash = hash_api_key(api_key)
 
     async with aiosqlite.connect(db_path) as db:
         await db.execute(
@@ -22,8 +27,11 @@ async def add_test_key():
             (key_hash, "test-service"),
         )
         await db.commit()
-        print(f"Added test API key for service: test-service")
-        print(f"API Key: test_key_123")
+        # Do not print the API key in clear text (it lands in stdout/CI logs).
+        # This is a fixed local-dev test key; show only a masked form + the hash.
+        masked_key = f"{api_key[:4]}...{api_key[-2:]}" if len(api_key) > 8 else "***"
+        print("Added test API key for service: test-service")
+        print(f"API Key (masked): {masked_key}")
         print(f"Key Hash: {key_hash}")
 
 
