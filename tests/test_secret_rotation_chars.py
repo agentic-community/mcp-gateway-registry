@@ -7,12 +7,7 @@ and mismatched EXCLUDE_CHARACTERS between Lambda defaults and Terraform env.
 See: https://github.com/agentic-community/mcp-gateway-registry/issues/1354
 """
 
-import importlib
-import os
-import sys
 from pathlib import Path
-
-import pytest
 
 # Required characters that must appear in the exclusion set.
 # Any password containing these will break URI parsing, RDS auth, or
@@ -22,32 +17,6 @@ REQUIRED_EXCLUDED = set("/@\"'+:?&!=% ")
 # Paths to Lambda source directories (relative to repo root)
 _RDS_DIR = Path(__file__).resolve().parent.parent / "terraform/aws-ecs/lambda/rotate-rds"
 _DOCDB_DIR = Path(__file__).resolve().parent.parent / "terraform/aws-ecs/lambda/rotate-documentdb"
-
-
-def _import_lambda_module(name: str, source_dir: Path):
-    """Import a Lambda module by temporarily adding its directory to sys.path."""
-    original_path = sys.path.copy()
-    try:
-        sys.path.insert(0, str(source_dir))
-        # Remove any previously cached version
-        sys.modules.pop(name, None)
-        return importlib.import_module(name)
-    finally:
-        sys.path = original_path
-
-
-@pytest.fixture()
-def rds_module():
-    mod = _import_lambda_module("index", _RDS_DIR)
-    yield mod
-    sys.modules.pop("index", None)
-
-
-@pytest.fixture()
-def docdb_module():
-    mod = _import_lambda_module("index", _DOCDB_DIR)
-    yield mod
-    sys.modules.pop("index", None)
 
 
 class TestExcludeCharacters:
@@ -63,29 +32,15 @@ class TestExcludeCharacters:
         source = (_DOCDB_DIR / "index.py").read_text()
         compile(source, str(_DOCDB_DIR / "index.py"), "exec")
 
-    def test_rds_default_contains_required_chars(self, rds_module):
+    def test_rds_default_contains_required_chars(self):
         """The RDS Lambda default exclusion set must include every required char."""
-        # Temporarily remove the env var so os.environ.get falls back to the default
-        env_backup = os.environ.pop("EXCLUDE_CHARACTERS", None)
-        try:
-            # Re-evaluate the module-level get() by importing fresh
-            sys.modules.pop("index", None)
-            mod = importlib.import_module("index")
-            # We can't easily re-evaluate module-level code, so read the source
-            # and extract the default value directly.
-        finally:
-            if env_backup is not None:
-                os.environ["EXCLUDE_CHARACTERS"] = env_backup
-
-        # Direct source check: read the default from source
         source = (_RDS_DIR / "index.py").read_text()
         for ch in REQUIRED_EXCLUDED:
-            # The default string literal must contain each required character
             assert ch in _extract_default(source), (
                 f"RDS Lambda default is missing required char {ch!r}"
             )
 
-    def test_documentdb_default_contains_required_chars(self, docdb_module):
+    def test_documentdb_default_contains_required_chars(self):
         """The DocumentDB Lambda default exclusion set must include every required char."""
         source = (_DOCDB_DIR / "index.py").read_text()
         for ch in REQUIRED_EXCLUDED:
