@@ -47,6 +47,36 @@ tests:
             name: INTERNAL_DEPLOYMENT_TYPE
             value: "workshop"
 
+  - it: renders empty SSRF allowlist env vars by default
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SSRF_ALLOWED_HOSTS
+            value: ""
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SSRF_ALLOWED_CIDRS
+            value: ""
+
+  - it: renders SSRF allowlist overrides for internal MCP-server upstreams
+    set:
+      app:
+        ssrfAllowedHosts: "obo-echo.mcp-entra.svc.cluster.local"
+        ssrfAllowedCidrs: "172.20.0.0/16"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SSRF_ALLOWED_HOSTS
+            value: "obo-echo.mcp-entra.svc.cluster.local"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SSRF_ALLOWED_CIDRS
+            value: "172.20.0.0/16"
+
   - it: appends extraEnv entries after chart-managed env vars
     set:
       extraEnv:
@@ -77,17 +107,18 @@ tests:
       # INTERNAL_ONLY_DEPLOYMENT/INTERNAL_DEPLOYMENT_TYPE is env[3]/env[4];
       # CODING_ASSISTANTS is env[9]; UI_TITLE is env[10]; the tool-level access
       # control pair (issue #1026) is env[11]/env[12]; MCP_ADVERTISED_SCOPES is
-      # env[13]; the IDE OAuth login pair (PR #1224) IDE_OAUTH_CLIENT_ID/
-      # IDE_OAUTH_CALLBACK_PORT is env[14]/env[15]; the custom-entity-types
-      # quartet (CUSTOM_ENTITY_TYPES_ENABLED, CUSTOM_TYPE_CACHE_TTL_SECONDS,
-      # MAX_CUSTOM_RECORDS_PER_TYPE, MAX_CUSTOM_TYPES) is
-      # env[16]/env[17]/env[18]/env[19]; the internal-token pair
-      # (INTERNAL_TOKEN_TTL_SECONDS, INTERNAL_TOKEN_LEEWAY_SECONDS) is
-      # env[20]/env[21];
-      # KEYCLOAK_ADMIN_PASSWORD (conditional on keycloak provider) is env[22];
+      # env[13]; the SSRF-guard allowlist pair (SSRF_ALLOWED_HOSTS/
+      # SSRF_ALLOWED_CIDRS) is env[14]/env[15]; the IDE OAuth login pair
+      # (PR #1224) IDE_OAUTH_CLIENT_ID/IDE_OAUTH_CALLBACK_PORT is env[16]/env[17];
+      # the custom-entity-types quartet (CUSTOM_ENTITY_TYPES_ENABLED,
+      # CUSTOM_TYPE_CACHE_TTL_SECONDS, MAX_CUSTOM_RECORDS_PER_TYPE,
+      # MAX_CUSTOM_TYPES) is env[18]/env[19]/env[20]/env[21]; the internal-token
+      # pair (INTERNAL_TOKEN_TTL_SECONDS, INTERNAL_TOKEN_LEEWAY_SECONDS) is
+      # env[22]/env[23];
+      # KEYCLOAK_ADMIN_PASSWORD (conditional on keycloak provider) is env[24];
       # PF_ADMIN_URL/PF_ADMIN_USER (registry-only, always rendered) are
-      # env[23]/env[24]; UPDATE_CHECK_ENABLED/UPDATE_CHECK_INTERVAL_HOURS
-      # (always rendered) are env[25]/env[26]; user extraEnv entries are
+      # env[25]/env[26]; UPDATE_CHECK_ENABLED/UPDATE_CHECK_INTERVAL_HOURS
+      # (always rendered) are env[27]/env[28]; user extraEnv entries are
       # appended at the end.
       #
       # NOTE: The indices below assume global.authProvider.type=keycloak
@@ -127,48 +158,54 @@ tests:
           value: MCP_ADVERTISED_SCOPES
       - equal:
           path: spec.template.spec.containers[0].env[14].name
-          value: IDE_OAUTH_CLIENT_ID
+          value: SSRF_ALLOWED_HOSTS
       - equal:
           path: spec.template.spec.containers[0].env[15].name
-          value: IDE_OAUTH_CALLBACK_PORT
+          value: SSRF_ALLOWED_CIDRS
       - equal:
           path: spec.template.spec.containers[0].env[16].name
-          value: CUSTOM_ENTITY_TYPES_ENABLED
+          value: IDE_OAUTH_CLIENT_ID
       - equal:
           path: spec.template.spec.containers[0].env[17].name
-          value: CUSTOM_TYPE_CACHE_TTL_SECONDS
+          value: IDE_OAUTH_CALLBACK_PORT
       - equal:
           path: spec.template.spec.containers[0].env[18].name
-          value: MAX_CUSTOM_RECORDS_PER_TYPE
+          value: CUSTOM_ENTITY_TYPES_ENABLED
       - equal:
           path: spec.template.spec.containers[0].env[19].name
-          value: MAX_CUSTOM_TYPES
+          value: CUSTOM_TYPE_CACHE_TTL_SECONDS
       - equal:
           path: spec.template.spec.containers[0].env[20].name
-          value: INTERNAL_TOKEN_TTL_SECONDS
+          value: MAX_CUSTOM_RECORDS_PER_TYPE
       - equal:
           path: spec.template.spec.containers[0].env[21].name
-          value: INTERNAL_TOKEN_LEEWAY_SECONDS
+          value: MAX_CUSTOM_TYPES
       - equal:
           path: spec.template.spec.containers[0].env[22].name
-          value: KEYCLOAK_ADMIN_PASSWORD
+          value: INTERNAL_TOKEN_TTL_SECONDS
       - equal:
           path: spec.template.spec.containers[0].env[23].name
-          value: PF_ADMIN_URL
+          value: INTERNAL_TOKEN_LEEWAY_SECONDS
       - equal:
           path: spec.template.spec.containers[0].env[24].name
-          value: PF_ADMIN_USER
+          value: KEYCLOAK_ADMIN_PASSWORD
       - equal:
           path: spec.template.spec.containers[0].env[25].name
-          value: UPDATE_CHECK_ENABLED
+          value: PF_ADMIN_URL
       - equal:
           path: spec.template.spec.containers[0].env[26].name
-          value: UPDATE_CHECK_INTERVAL_HOURS
+          value: PF_ADMIN_USER
       - equal:
           path: spec.template.spec.containers[0].env[27].name
-          value: MY_FLAG
+          value: UPDATE_CHECK_ENABLED
       - equal:
           path: spec.template.spec.containers[0].env[28].name
+          value: UPDATE_CHECK_INTERVAL_HOURS
+      - equal:
+          path: spec.template.spec.containers[0].env[29].name
+          value: MY_FLAG
+      - equal:
+          path: spec.template.spec.containers[0].env[30].name
           value: MY_SECRET_VAR
 
   - it: appends extraEnvFrom entries after chart-managed envFrom sources
@@ -272,6 +309,15 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: "\"DOCUMENTDB_PASSWORD\" is a reserved variable"
+
+  - it: fails when extraEnv contains a reserved SSRF allowlist name (SSRF_ALLOWED_CIDRS)
+    set:
+      extraEnv:
+        - name: SSRF_ALLOWED_CIDRS
+          value: "oops"
+    asserts:
+      - failedTemplate:
+          errorPattern: "\"SSRF_ALLOWED_CIDRS\" is a reserved variable"
 
   - it: fails when extraEnv contains a reserved egress name (EGRESS_AUTH_ENABLED)
     set:

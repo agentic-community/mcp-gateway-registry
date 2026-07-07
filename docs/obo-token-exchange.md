@@ -301,11 +301,12 @@ registry and uses the gateway's existing IdP credentials. Relevant existing vars
 
 | Variable | Service | Role for `obo_exchange` |
 |----------|---------|--------------------------|
-| `ENTRA_CLIENT_ID` / `ENTRA_CLIENT_SECRET` / `ENTRA_TENANT_ID` | auth-server | The gateway's OWN IdP app — used as the calling client in hop 1. Already set for ingress auth. |
+| `ENTRA_CLIENT_ID` / `ENTRA_CLIENT_SECRET` / `ENTRA_TENANT_ID` | auth-server | The gateway's OWN IdP app — used as the calling client in the exchange. Already set for ingress auth. |
 | `AUTH_SERVER_EXTERNAL_URL` | auth-server | Public gateway URL; auth-server builds the per-server audience to validate from it (NOT the internal `REGISTRY_URL`). |
 | `REGISTRY_URL` | registry | Public gateway URL; the per-server PRM `resource` is built from it. |
 | `IDE_OAUTH_CLIENT_ID` / `IDE_OAUTH_CALLBACK_PORT` | registry | Pre-registered public client advertised to IDEs that consume the Connect config (Cursor). Claude Code passes these as CLI flags instead. |
 | `MCP_ADVERTISED_SCOPES` | registry | Affects only the gateway-wide root PRM (non-obo discovery). Leave at the chart default; obo uses the per-server PRM. |
+| `SSRF_ALLOWED_HOSTS` / `SSRF_ALLOWED_CIDRS` | registry | **Required for an in-cluster MCP server.** The registry validates each server's `proxy_pass_url` through the SSRF guard, which blocks private/cluster IPs; an internal server (private ClusterIP) is otherwise marked unhealthy and its nginx location is commented out, so requests return `405`. List the server's host (`SSRF_ALLOWED_HOSTS=obo-echo.<ns>.svc.cluster.local`) or the cluster service CIDR (`SSRF_ALLOWED_CIDRS=172.20.0.0/16`, the EKS default). Chart values: `registry.app.ssrfAllowedHosts` / `registry.app.ssrfAllowedCidrs`. |
 
 ---
 
@@ -741,7 +742,8 @@ The `whoami` result has `hop1` and `hop2`:
 
 | Symptom | Meaning | Fix |
 |---------|---------|-----|
-| JSON-RPC `obo_exchange_failed`, `invalid_grant` | HOP 1: gateway app not granted the echo API / user lacks scope / ingress JWT expired | step 1b consent; re-mint user token (3a) |
+| `405 Method Not Allowed` on `POST /<server>/mcp` (before any OBO error) | The internal server was marked unhealthy and its nginx location commented out, so the POST hit a catch-all. Registry logs show `Health check blocked by SSRF guard ... resolves to blocked/private IP`. | Allowlist the server's private address for the SSRF guard: set `SSRF_ALLOWED_CIDRS` (cluster service CIDR) or `SSRF_ALLOWED_HOSTS` on the registry (see [Environment variables](#environment-variables)). |
+| JSON-RPC `obo_exchange_failed`, `invalid_grant` | the gateway app is not granted the echo API / user lacks scope / ingress JWT expired | step 1b consent; re-mint user token (3a) |
 | `obo_exchange_failed`, `interaction_required` | HOP 1: echo app not admin-consented | grant admin consent (1b) |
 | `obo_exchange_failed`, `AADSTS50013 ... signature validation` | HOP 1: the ingress token's `aud` is NOT the gateway app (it's Graph/echo/other) | the token must be minted against the gateway's `user_impersonation` scope -- check 1d (advertised scope) and that the client requested it |
 | `obo_exchange_failed`, "requires a bearer JWT" | session cookie / no `X-Authorization` / M2M token | use a delegated USER bearer token (MCP-client PKCE login, 3d-alt) in `X-Authorization` |

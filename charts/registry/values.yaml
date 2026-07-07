@@ -248,6 +248,19 @@ app:
   #
   # See docs/ai-coding-assistant-registry-integration.md for the rationale.
   mcpAdvertisedScopes: "profile email offline_access"
+  # SSRF guard bypass for internal MCP-server upstreams. The health checker and
+  # proxy validate each server's proxy_pass_url through the SSRF guard, which
+  # blocks private/cluster IPs by default. Internal MCP servers live at private
+  # ClusterIPs, so an in-cluster server is marked UNHEALTHY (its nginx location is
+  # commented out, so requests 405) unless its host or IP range is listed here.
+  # Set ONE of these for in-cluster MCP servers:
+  #   ssrfAllowedCidrs: the cluster service CIDR (covers all in-cluster servers at
+  #     once, e.g. EKS default "172.20.0.0/16"); OR
+  #   ssrfAllowedHosts: comma-separated exact hostnames (least privilege; no
+  #     wildcards, e.g. "obo-echo.<ns>.svc.cluster.local").
+  # The cloud metadata address (169.254.169.254) is never permitted by either.
+  ssrfAllowedHosts: ""
+  ssrfAllowedCidrs: ""
   # IDE OAuth login (PR #1224). Pre-registered PUBLIC OAuth client_id that IDEs
   # (Cursor, Claude Code, Codex) use to start the gateway login flow. When set,
   # the Connect config advertises it and drops the static gateway token. Empty

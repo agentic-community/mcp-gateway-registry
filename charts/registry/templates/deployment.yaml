@@ -126,6 +126,17 @@ spec:
             # DCR scope-allowlist alignment
             - name: MCP_ADVERTISED_SCOPES
               value: {{ .Values.app.mcpAdvertisedScopes | default "" | quote }}
+            # SSRF guard bypass for internal MCP-server upstreams. The health
+            # checker and proxy validate a server's proxy_pass_url through the
+            # SSRF guard, which blocks private/cluster IPs by default. Internal
+            # MCP servers live at private ClusterIPs, so list their hosts or the
+            # cluster service CIDR here or they are marked unhealthy (their nginx
+            # location is commented out -> requests 405). The cloud metadata
+            # address is never permitted regardless of these values.
+            - name: SSRF_ALLOWED_HOSTS
+              value: {{ .Values.app.ssrfAllowedHosts | default "" | quote }}
+            - name: SSRF_ALLOWED_CIDRS
+              value: {{ .Values.app.ssrfAllowedCidrs | default "" | quote }}
             # IDE OAuth login (PR #1224): public client_id + fixed callback port
             - name: IDE_OAUTH_CLIENT_ID
               value: {{ .Values.app.ideOauthClientId | default "" | quote }}
