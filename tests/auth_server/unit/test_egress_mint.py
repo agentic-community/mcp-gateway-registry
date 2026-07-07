@@ -72,6 +72,53 @@ class TestCanonicalAuthMethod:
         assert server._canonical_auth_method({"method": "self_signed", "data": {}}) == "oauth2"
 
 
+@pytest.mark.unit
+class TestCanonicalEgressUser:
+    """The per-user egress vault id must resolve identically on the consent-write
+    (cookie) and vend (bearer) paths, or the vaulted token is written under one
+    id and looked up under another (permanent vend miss). It keys on the OIDC
+    ``sub``, which is present in both id_tokens and access tokens across providers.
+    """
+
+    def test_bearer_uses_data_sub(self):
+        # Vend path: verified bearer claims land in ``data``; the sub wins.
+        vr = {"username": "alice@example.com", "data": {"sub": "00000000-sub-alice"}}
+        assert server._canonical_egress_user(vr) == "00000000-sub-alice"
+
+    def test_cookie_uses_persisted_subject(self):
+        # Consent-write path: the session carries the sub persisted at login as
+        # ``subject`` (create_session), NOT ``sub``. It must resolve the same value.
+        vr = {
+            "method": "session_cookie",
+            "username": "alice@example.com",
+            "data": {"subject": "00000000-sub-alice", "auth_method": "oauth2"},
+        }
+        assert server._canonical_egress_user(vr) == "00000000-sub-alice"
+
+    def test_consent_and_vend_agree_for_entra_shaped_result(self):
+        # Entra: the browser id_token has preferred_username (email) but the DCR
+        # client's access token does not -- yet both carry the same sub. Keying on
+        # sub makes the two paths agree even though ``username`` differs.
+        cookie_vr = {
+            "method": "session_cookie",
+            "username": "alice@contoso.com",  # from preferred_username / email
+            "data": {"subject": "entra-oid-sub-123", "auth_method": "oauth2"},
+        }
+        bearer_vr = {
+            "username": "entra-oid-sub-123",  # access token lacks preferred_username
+            "data": {"sub": "entra-oid-sub-123"},
+        }
+        assert server._canonical_egress_user(cookie_vr) == server._canonical_egress_user(bearer_vr)
+
+    def test_falls_back_to_username_when_no_sub(self):
+        # Non-OIDC callers (no sub anywhere) keep their pre-existing bucket.
+        vr = {"username": "svc-account", "data": {}}
+        assert server._canonical_egress_user(vr) == "svc-account"
+
+    def test_empty_when_nothing_present(self):
+        assert server._canonical_egress_user({}) == ""
+
+
 def _decode(token: str) -> dict:
     return pyjwt.decode(
         token,
@@ -154,3 +201,20 @@ class TestAttachMcpProxyTokenMarker:
             auth_method="oauth2",
         )
         assert "X-Internal-Token" not in resp.headers
+
+    def test_egress_user_claim_is_stamped(self, monkeypatch):
+        # The vend path reads egress_user off this token to key the vault, so the
+        # canonical per-user id must ride along even when it differs from subject.
+        monkeypatch.setattr(server.settings, "auth_server_nginx_marker_secret", "")
+        resp = _FakeResponse()
+        server._attach_mcp_proxy_token(
+            _FakeRequest({"X-Resolved-Upstream": "https://u/mcp"}),
+            resp,
+            subject="alice@example.com",
+            scopes=[],
+            server_name="github-mcp",
+            auth_method="oauth2",
+            egress_user="00000000-sub-alice",
+        )
+        claims = _decode(resp.headers["X-Internal-Token"])
+        assert claims["egress_user"] == "00000000-sub-alice"

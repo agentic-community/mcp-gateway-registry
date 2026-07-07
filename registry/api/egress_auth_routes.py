@@ -219,7 +219,13 @@ async def vend_egress_token(
     # Independently re-verify the mcp-proxy token; identity is the verified
     # claim, never an asserted body field.
     claims = verify_mcp_proxy_token(x_internal_token)
-    sub = claims.get("sub") or ""
+    # Egress vault user id: the canonical OIDC-sub-based ``egress_user`` claim,
+    # which /validate stamps identically into the consent-write and vend tokens
+    # so one human maps to one bucket across providers (see _canonical_egress_user
+    # in auth_server; the browser-consent and bearer-vend paths otherwise diverged
+    # when an IdP omits preferred_username from access tokens, e.g. Entra). Fall
+    # back to ``sub`` for tokens minted before this claim existed.
+    sub = claims.get("egress_user") or claims.get("sub") or ""
     auth_method = claims.get("auth_method") or ""
     token_upstream = claims.get("upstream_url") or ""
 
@@ -602,7 +608,10 @@ async def initiate_consent(
 
     url = get_egress_auth_service().build_consent_url(
         auth_method=auth_method,
-        user_id=user_context.get("username") or "",
+        # Canonical egress user (OIDC sub, else username): must match the id the
+        # vend path derives from the mcp-proxy token so one human maps to one
+        # vault bucket regardless of token type / provider. See #933.
+        user_id=user_context.get("egress_user") or user_context.get("username") or "",
         client_id_audit=user_context.get("client_id") or "",
         session_id=user_context.get("session_id") or "",
         server_path=server_path,
@@ -655,7 +664,9 @@ async def egress_callback(
             # a direct call without it always sees session=None (the account-swap
             # guard would silently never engage).
             ctx = await nginx_proxied_auth(request, session=session_cookie)
-            current_user = ctx.get("username")
+            # Compare on the canonical egress user (OIDC sub, else username) so the
+            # account-swap guard matches the id the consent state was built with.
+            current_user = ctx.get("egress_user") or ctx.get("username")
             current_method = ctx.get("auth_method")
         except Exception:
             pass
@@ -699,7 +710,7 @@ async def list_connections(
     _feature_enabled_or_404()
     conns = await get_egress_auth_service().list_connections(
         auth_method=user_context.get("auth_method") or "",
-        user_id=user_context.get("username") or "",
+        user_id=user_context.get("egress_user") or user_context.get("username") or "",
     )
     return [c.model_dump() for c in conns]
 
@@ -718,7 +729,7 @@ async def disconnect(
         server_path = "/" + server_path
     await get_egress_auth_service().disconnect(
         auth_method=user_context.get("auth_method") or "",
-        user_id=user_context.get("username") or "",
+        user_id=user_context.get("egress_user") or user_context.get("username") or "",
         provider=provider,
         server_path=server_path,
     )

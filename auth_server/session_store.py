@@ -115,11 +115,12 @@ async def create_session(
     auth_method: str,
     max_age_seconds: int,
     id_token: str | None = None,
+    subject: str | None = None,
 ) -> str:
     """Persist a new session and return its opaque session_id.
 
     Args:
-        username: Authenticated user identity.
+        username: Authenticated user identity (display / login id).
         email: Optional user email.
         name: Optional user display name.
         groups: External IdP groups (may be empty).
@@ -129,6 +130,12 @@ async def create_session(
         id_token: Optional OIDC id_token, encrypted at rest. Required for
             SSO logout via id_token_hint; only pass None when the IdP did
             not return one.
+        subject: The OIDC ``sub`` claim from the id_token. Persisted so the
+            per-user egress vault can key on a stable subject that is present in
+            BOTH id_tokens and access_tokens across providers — unlike
+            ``username`` (preferred_username), which some IdPs (e.g. Entra) omit
+            from access tokens, causing the browser-consent and bearer-vend paths
+            to key on different identities. See canonical_egress_user.
 
     Returns:
         Opaque session_id to be embedded in the signed session cookie.
@@ -148,6 +155,8 @@ async def create_session(
         "created_at": now,
         "expires_at": expires_at,
     }
+    if subject:
+        document["subject"] = subject
     if id_token:
         document["id_token_encrypted"] = encrypt_id_token(id_token)
 
@@ -191,6 +200,11 @@ async def resolve_session(session_id: str) -> dict[str, Any] | None:
         "groups": doc.get("groups", []),
         "provider": doc.get("provider"),
         "auth_method": doc.get("auth_method"),
+        # OIDC sub, when the callback persisted it. The egress vault keys on this
+        # stable subject (present in id_tokens and access_tokens) rather than
+        # username, so the browser-consent and bearer-vend paths agree. See
+        # canonical_egress_user.
+        "subject": doc.get("subject"),
     }
 
     encrypted = doc.get("id_token_encrypted")

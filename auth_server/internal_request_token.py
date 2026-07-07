@@ -144,6 +144,7 @@ def mint_mcp_proxy_token(
     server_name: str,
     upstream_url: str,
     auth_method: str = "",
+    egress_user: str = "",
 ) -> str:
     """Mint the per-request /mcp-proxy token in /validate's 200 path.
 
@@ -157,6 +158,11 @@ def mint_mcp_proxy_token(
     on it, so it MUST match what the consent/list paths resolve for the same
     user (cookie users are ``oauth2``, never ``session_cookie``). It also lets
     the registry vend endpoint reject non-per-user callers.
+
+    ``egress_user`` is the CANONICAL per-user vault id (the OIDC ``sub``; see
+    ``_canonical_egress_user``). The egress vend keys the vault on this, so it
+    MUST match what the consent-write path resolved for the same human — both
+    derive it identically. Empty for non-per-user callers.
     """
     return _mint_internal_token(
         audience=MCP_PROXY_AUDIENCE,
@@ -166,6 +172,7 @@ def mint_mcp_proxy_token(
             "server": server_name.split("/", 1)[0] if server_name else "",
             "upstream_url": upstream_url,
             "auth_method": auth_method,
+            "egress_user": egress_user or "",
             "token_use": MCP_PROXY_TOKEN_USE,
         },
     )
@@ -182,6 +189,7 @@ def mint_registry_ui_token(
     groups: list[str],
     auth_method: str,
     client_id: str,
+    egress_user: str = "",
 ) -> str:
     """Mint the per-request registry /api/ token in /validate's 200 path.
 
@@ -196,6 +204,10 @@ def mint_registry_ui_token(
     no session row and instead rely on the ``groups`` claim. ``groups`` is the
     fallback for those non-session callers (small, machine-identity group sets).
 
+    ``egress_user`` is the CANONICAL per-user egress vault id (OIDC ``sub``). The
+    registry's consent-write path keys the vault on this; it must match the value
+    the vend path reads from the mcp-proxy token so one human maps to one bucket.
+
     ``_mint_internal_token`` refuses an empty subject (fail-closed): if minting
     raises, /validate attaches no token and the registry rejects the request
     rather than trusting unsigned headers.
@@ -209,6 +221,7 @@ def mint_registry_ui_token(
             "groups": list(groups or []),
             "auth_method": auth_method or "",
             "client_id": client_id or "",
+            "egress_user": egress_user or "",
             "token_use": MCP_REGISTRY_UI_TOKEN_USE,
         },
     )

@@ -253,6 +253,37 @@ def _canonical_auth_method(validation_result: dict) -> str:
     return method
 
 
+def _canonical_egress_user(validation_result: dict) -> str:
+    """The stable per-user id the egress vault keys on, for ONE human identity.
+
+    Must resolve to the SAME value on the consent-write path (browser cookie
+    session) and the vend path (bearer token), or the user's vaulted token is
+    written under one id and looked up under another -> permanent vend miss.
+
+    Uses the OIDC ``sub`` claim, which is present in BOTH id_tokens and access
+    tokens for every OIDC provider and is stable per (user, gateway app). This is
+    provider-agnostic: it avoids ``preferred_username``, which some IdPs (notably
+    Entra) omit from ACCESS tokens, so the browser id_token (has it) and a DCR
+    client's bearer access token (lacks it) would otherwise key differently.
+
+    Resolution (first hit wins):
+      1. ``data.sub`` -- the raw IdP subject. Bearer paths expose the verified
+         claims here; the cookie path carries the sub persisted into the session
+         at login (see create_session ``subject``).
+      2. top-level ``sub`` -- direct-token paths that surface it there.
+      3. ``username`` -- fallback for callers with no sub (keeps pre-existing
+         non-OIDC behavior unchanged; only OIDC callers change bucket).
+    """
+    data = validation_result.get("data") or {}
+    return (
+        data.get("sub")
+        or data.get("subject")
+        or validation_result.get("sub")
+        or validation_result.get("username")
+        or ""
+    )
+
+
 def _attach_mcp_proxy_token(
     request: "Request",
     response: "JSONResponse",
@@ -260,6 +291,7 @@ def _attach_mcp_proxy_token(
     scopes: list[str],
     server_name: str,
     auth_method: str = "",
+    egress_user: str = "",
 ) -> None:
     """Mint and attach the X-Internal-Token for the /mcp-proxy hop.
 
@@ -300,6 +332,7 @@ def _attach_mcp_proxy_token(
             server_name=server_name,
             upstream_url=resolved_upstream,
             auth_method=auth_method,
+            egress_user=egress_user,
         )
     except ValueError as exc:
         logger.error(f"/validate: could not mint mcp-proxy token: {exc}")
@@ -313,6 +346,7 @@ def _attach_registry_ui_token(
     groups: list[str],
     auth_method: str,
     client_id: str,
+    egress_user: str = "",
 ) -> None:
     """Mint and attach the X-Internal-Token-Registry for the registry /api/ hop.
 
@@ -335,6 +369,7 @@ def _attach_registry_ui_token(
             groups=groups,
             auth_method=auth_method,
             client_id=client_id,
+            egress_user=egress_user,
         )
     except ValueError as exc:
         logger.error(f"/validate: could not mint registry-ui token: {exc}")
@@ -3106,6 +3141,11 @@ async def validate_request(request: Request):
         # "oauth2" (the session record's value), not the literal "session_cookie".
         # Both internal tokens stamp THIS so consent-write and vend-read agree.
         _canon_auth_method = _canonical_auth_method(validation_result)
+        # Canonical egress vault user id (OIDC sub). Both internal tokens stamp
+        # THIS so the consent-write and vend paths key the vault on one value for
+        # one human -- avoids the preferred_username-vs-sub divergence that made
+        # the browser-consent and bearer-vend paths miss on Entra.
+        _egress_user = _canonical_egress_user(validation_result)
 
         _attach_mcp_proxy_token(
             request,
@@ -3114,6 +3154,7 @@ async def validate_request(request: Request):
             scopes=user_scopes,
             server_name=server_name or "",
             auth_method=_canon_auth_method,
+            egress_user=_egress_user,
         )
 
         # Registry /api/ hop token. Discriminate cookie vs JWT-bearer: the cookie
@@ -3134,6 +3175,7 @@ async def validate_request(request: Request):
             # disagreed. Stamp the canonical value so they match.
             auth_method=_canon_auth_method,
             client_id=validation_result.get("client_id") or "",
+            egress_user=_egress_user,
         )
 
         return response
@@ -4285,6 +4327,8 @@ async def oauth2_callback(
                                 "username"
                             ),  # Cognito username is usually email
                             "name": token_validation.get("username"),
+                            "subject": token_validation.get("sub")
+                            or token_validation.get("username"),
                             "groups": token_validation.get("groups", []),
                         }
                         logger.info(
@@ -4318,6 +4362,7 @@ async def oauth2_callback(
                             "email": id_token_claims.get("email"),
                             "name": id_token_claims.get("name")
                             or id_token_claims.get("given_name"),
+                            "subject": id_token_claims.get("sub"),
                             "groups": id_token_claims.get("groups", []),
                         }
                         logger.info(
@@ -4397,6 +4442,7 @@ async def oauth2_callback(
                         "email": id_token_claims.get("email")
                         or id_token_claims.get("preferred_username"),
                         "name": id_token_claims.get("name") or id_token_claims.get("given_name"),
+                        "subject": id_token_claims.get("sub"),
                         "groups": groups,
                     }
                     logger.info(
@@ -4447,6 +4493,7 @@ async def oauth2_callback(
                         or id_token_claims.get("sub"),
                         "email": id_token_claims.get("email"),
                         "name": id_token_claims.get("name") or id_token_claims.get("given_name"),
+                        "subject": id_token_claims.get("sub"),
                         "groups": id_token_claims.get("groups", []),
                     }
                     logger.info(
@@ -4547,6 +4594,7 @@ async def oauth2_callback(
                         or id_token_claims.get("sub"),
                         "email": id_token_claims.get("email"),
                         "name": id_token_claims.get("name") or id_token_claims.get("given_name"),
+                        "subject": id_token_claims.get("sub"),
                         "groups": id_token_claims.get(groups_claim_name, []),
                     }
                     logger.info(
@@ -4676,6 +4724,7 @@ async def oauth2_callback(
             auth_method="oauth2",
             max_age_seconds=session_max_age,
             id_token=token_data.get("id_token"),
+            subject=mapped_user.get("subject"),
         )
         registry_session = signer.dumps(session_id)
 
@@ -4817,6 +4866,11 @@ def map_user_info(user_info: dict, provider_config: dict) -> dict:
         "username": user_info.get(provider_config["username_claim"]),
         "email": user_info.get(provider_config["email_claim"]),
         "name": user_info.get(provider_config["name_claim"]),
+        # OIDC subject: stable across id_tokens and access_tokens for the same
+        # (user, app) on every provider. Persisted into the session so the egress
+        # vault can key on it consistently (see canonical_egress_user); "sub" is
+        # the standard claim name across IdPs.
+        "subject": user_info.get("sub"),
         "groups": [],
     }
 
