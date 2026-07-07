@@ -38,16 +38,16 @@ def _import_lambda_module(name: str, source_dir: Path):
 
 @pytest.fixture()
 def rds_module():
-    mod = _import_lambda_module("rotate_rds_index", _RDS_DIR)
+    mod = _import_lambda_module("index", _RDS_DIR)
     yield mod
-    sys.modules.pop("rotate_rds_index", None)
+    sys.modules.pop("index", None)
 
 
 @pytest.fixture()
 def docdb_module():
-    mod = _import_lambda_module("rotate_docdb_index", _DOCDB_DIR)
+    mod = _import_lambda_module("index", _DOCDB_DIR)
     yield mod
-    sys.modules.pop("rotate_docdb_index", None)
+    sys.modules.pop("index", None)
 
 
 class TestExcludeCharacters:
@@ -69,8 +69,8 @@ class TestExcludeCharacters:
         env_backup = os.environ.pop("EXCLUDE_CHARACTERS", None)
         try:
             # Re-evaluate the module-level get() by importing fresh
-            sys.modules.pop("rotate_rds_index", None)
-            mod = importlib.import_module("rotate_rds_index")
+            sys.modules.pop("index", None)
+            mod = importlib.import_module("index")
             # We can't easily re-evaluate module-level code, so read the source
             # and extract the default value directly.
         finally:
