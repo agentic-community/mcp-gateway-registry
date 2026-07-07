@@ -869,6 +869,17 @@ registry_api_token = "m3zT65wREARMVDToKosg_DgNkKqS_434hNxy3sslGPY"
 # If not set, uses the default Org Authorization Server
 # okta_auth_server_id = "your-auth-server-id"
 
+# Okta M2M audience allowlist (optional). Comma/space-separated list of "aud"
+# values accepted on M2M (client-credentials) access tokens (custom auth servers
+# mint the API identifier, e.g. api://ai-registry, as the audience). Leave unset
+# to accept only the configured client ids (fail closed).
+# okta_m2m_allowed_audiences = "api://ai-registry"
+
+# Okta M2M client -> groups map for RBAC sync (optional). JSON object mapping
+# each M2M client_id to the groups it should receive. A client id not listed
+# here is synced with NO groups (fail closed).
+# okta_m2m_client_groups = "{\"0oaEXAMPLECLIENTID\":[\"public-mcp-users\"]}"
+
 # ============================================================================
 # AUTH0 CONFIGURATION (Alternative to Keycloak)
 # ============================================================================
@@ -908,6 +919,11 @@ registry_api_token = "m3zT65wREARMVDToKosg_DgNkKqS_434hNxy3sslGPY"
 
 # Auth0 M2M Client Secret (REQUIRED for IAM Management)
 # auth0_m2m_client_secret = "your-m2m-client-secret"
+
+# Auth0 M2M client -> groups map for RBAC sync (optional). JSON object mapping
+# each M2M client_id to the groups it should receive. A client id not listed
+# here is synced with NO groups (fail closed).
+# auth0_m2m_client_groups = "{\"abc123clientid\":[\"public-mcp-users\"]}"
 
 # Auth0 Management API Token (alternative to M2M credentials)
 # You can use a static Management API token instead of M2M client credentials
@@ -1144,6 +1160,9 @@ aws_registry_federation_enabled = true
 # pingfederate_m2m_client_secret    = ""
 # pingfederate_application_id_uri   = ""
 # pingfederate_groups_claim         = "groups"
+# Comma/space-separated allowlist of accepted M2M token audiences. Empty accepts
+# only the configured client ids / application id URI (fail closed).
+# pingfederate_m2m_allowed_audiences = ""
 
 # ---------------------------------------------------------------------------
 # Per-user egress credential vault (third-party OBO support). Off by default.

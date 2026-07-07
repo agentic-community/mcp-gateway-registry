@@ -586,6 +586,8 @@ auth-server:
     m2mClientSecret: "" # Optional: defaults to clientSecret
     apiToken: "" # Optional: required for IAM operations
     authServerId: "" # Optional: uses default Org Authorization Server if not set
+    m2mAllowedAudiences: "" # Optional: comma/space-separated M2M audience allowlist; empty = only client ids accepted (fail closed)
+    m2mClientGroups: "" # Optional: JSON client_id->[groups] map for M2M RBAC sync; empty = no groups (fail closed)
   # Auth0 settings (used when global.authProvider.type = "auth0")
   auth0:
     domain: "" # e.g., your-tenant.us.auth0.com
@@ -595,6 +597,7 @@ auth-server:
     groupsClaim: "https://mcp-gateway/groups"
     m2mClientId: ""
     m2mClientSecret: ""
+    m2mClientGroups: "" # Optional: JSON client_id->[groups] map for M2M RBAC sync; empty = no groups (fail closed)
     managementApiToken: "" # Optional: alternative to M2M credentials (expires after 24h)
   # Cognito settings (used when global.authProvider.type = "cognito")
   cognito:

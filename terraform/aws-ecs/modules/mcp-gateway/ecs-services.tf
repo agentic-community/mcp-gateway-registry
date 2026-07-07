@@ -220,6 +220,14 @@ module "ecs_service_auth" {
           value = var.okta_auth_server_id
         },
         {
+          name  = "OKTA_M2M_ALLOWED_AUDIENCES"
+          value = var.okta_m2m_allowed_audiences
+        },
+        {
+          name  = "OKTA_M2M_CLIENT_GROUPS"
+          value = var.okta_m2m_client_groups
+        },
+        {
           name  = "AUTH0_DOMAIN"
           value = var.auth0_domain
         },
@@ -238,6 +246,10 @@ module "ecs_service_auth" {
         {
           name  = "AUTH0_M2M_CLIENT_ID"
           value = var.auth0_m2m_client_id
+        },
+        {
+          name  = "AUTH0_M2M_CLIENT_GROUPS"
+          value = var.auth0_m2m_client_groups
         },
         {
           name  = "AUTH0_MANAGEMENT_API_TOKEN"
@@ -275,6 +287,10 @@ module "ecs_service_auth" {
         {
           name  = "PINGFEDERATE_GROUPS_CLAIM"
           value = var.pingfederate_groups_claim
+        },
+        {
+          name  = "PINGFEDERATE_M2M_ALLOWED_AUDIENCES"
+          value = var.pingfederate_m2m_allowed_audiences
         },
         {
           name  = "SESSION_COOKIE_SECURE"
@@ -910,6 +926,14 @@ module "ecs_service_registry" {
           value = var.okta_auth_server_id
         },
         {
+          name  = "OKTA_M2M_ALLOWED_AUDIENCES"
+          value = var.okta_m2m_allowed_audiences
+        },
+        {
+          name  = "OKTA_M2M_CLIENT_GROUPS"
+          value = var.okta_m2m_client_groups
+        },
+        {
           name  = "AUTH0_ENABLED"
           value = tostring(var.auth0_enabled)
         },
@@ -932,6 +956,10 @@ module "ecs_service_registry" {
         {
           name  = "AUTH0_M2M_CLIENT_ID"
           value = var.auth0_m2m_client_id
+        },
+        {
+          name  = "AUTH0_M2M_CLIENT_GROUPS"
+          value = var.auth0_m2m_client_groups
         },
         {
           name  = "AUTH0_MANAGEMENT_API_TOKEN"
@@ -965,6 +993,10 @@ module "ecs_service_registry" {
         {
           name  = "PINGFEDERATE_GROUPS_CLAIM"
           value = var.pingfederate_groups_claim
+        },
+        {
+          name  = "PINGFEDERATE_M2M_ALLOWED_AUDIENCES"
+          value = var.pingfederate_m2m_allowed_audiences
         },
         # PingFederate Admin API (registry only; PF_ADMIN_PASS via Secrets Manager below)
         {

@@ -33,6 +33,52 @@ tests:
             name: PINGFEDERATE_BASE_URL
             value: https://pf:9031
 
+  - it: emits PINGFEDERATE_M2M_ALLOWED_AUDIENCES only when set
+    set:
+      global:
+        authProvider:
+          type: pingfederate
+      pingfederate:
+        enabled: true
+        baseUrl: https://pf:9031
+        externalUrl: https://pf:9031
+        clientId: mcp-gateway
+        m2mAllowedAudiences: "api://ai-registry https://other"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: PINGFEDERATE_M2M_ALLOWED_AUDIENCES
+            value: "api://ai-registry https://other"
+
+  - it: omits PINGFEDERATE_M2M_ALLOWED_AUDIENCES when unset (fail closed)
+    set:
+      global:
+        authProvider:
+          type: pingfederate
+      pingfederate:
+        enabled: true
+        baseUrl: https://pf:9031
+        externalUrl: https://pf:9031
+        clientId: mcp-gateway
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: PINGFEDERATE_M2M_ALLOWED_AUDIENCES
+
+  - it: rejects PINGFEDERATE_M2M_ALLOWED_AUDIENCES via extraEnv (reserved name)
+    set:
+      global:
+        authProvider:
+          type: keycloak
+      extraEnv:
+        - name: PINGFEDERATE_M2M_ALLOWED_AUDIENCES
+          value: bypass-attempt
+    asserts:
+      - failedTemplate:
+          errorPattern: "PINGFEDERATE_M2M_ALLOWED_AUDIENCES.*reserved"
+
   - it: emits secretKeyRef when clientSecretExistingSecret is set
     set:
       global:

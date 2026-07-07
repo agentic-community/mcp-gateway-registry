@@ -104,6 +104,8 @@ okta:
   apiTokenExistingSecret: "" # If set, read OKTA_API_TOKEN from this K8s secret
   apiTokenExistingSecretKey: "OKTA_API_TOKEN"
   authServerId: "" # Optional: uses default Org Authorization Server if not set
+  m2mAllowedAudiences: "" # Optional: comma/space-separated M2M audience allowlist; empty = only client ids accepted (fail closed)
+  m2mClientGroups: "" # Optional: JSON client_id->[groups] map for M2M RBAC sync; empty = no groups (fail closed)
 # Auth0 integration (used when authProvider.type = "auth0")
 auth0:
   domain: "" # e.g., your-tenant.us.auth0.com
@@ -117,6 +119,7 @@ auth0:
   m2mClientSecret: "" # Required for IAM Management
   m2mClientSecretExistingSecret: "" # If set, read AUTH0_M2M_CLIENT_SECRET from this K8s secret
   m2mClientSecretExistingSecretKey: "AUTH0_M2M_CLIENT_SECRET"
+  m2mClientGroups: "" # Optional: JSON client_id->[groups] map for M2M RBAC sync; empty = no groups (fail closed)
   managementApiToken: "" # Optional: alternative to M2M credentials (expires after 24h)
   managementApiTokenExistingSecret: "" # If set, read AUTH0_MANAGEMENT_API_TOKEN from this K8s secret
   managementApiTokenExistingSecretKey: "AUTH0_MANAGEMENT_API_TOKEN"
@@ -170,6 +173,7 @@ pingfederate:
   m2mClientSecretExistingSecretKey: "PINGFEDERATE_M2M_CLIENT_SECRET"
   applicationIdUri: ""
   groupsClaim: "groups"
+  m2mAllowedAudiences: "" # Optional: comma/space-separated M2M audience allowlist; empty = only client ids accepted (fail closed)
 # IdP user-to-group fallback (issue #1127)
 # Comma-separated list of IdP providers (e.g. pingfederate) for which the
 # registry's local idp_user_groups collection is consulted to populate empty

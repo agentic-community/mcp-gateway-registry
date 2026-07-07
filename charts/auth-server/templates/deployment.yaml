@@ -167,6 +167,10 @@ spec:
             {{- end }}
             - name: PINGFEDERATE_GROUPS_CLAIM
               value: {{ .Values.pingfederate.groupsClaim | default "groups" | quote }}
+            {{- if .Values.pingfederate.m2mAllowedAudiences }}
+            - name: PINGFEDERATE_M2M_ALLOWED_AUDIENCES
+              value: {{ .Values.pingfederate.m2mAllowedAudiences | quote }}
+            {{- end }}
             {{- end }}
             # OTel-native metric emission (Issue #1122)
             - name: METRICS_LEGACY_HTTP_POST

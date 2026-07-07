@@ -253,6 +253,10 @@ spec:
             {{- end }}
             - name: PINGFEDERATE_GROUPS_CLAIM
               value: {{ .Values.pingfederate.groupsClaim | default "groups" | quote }}
+            {{- if .Values.pingfederate.m2mAllowedAudiences }}
+            - name: PINGFEDERATE_M2M_ALLOWED_AUDIENCES
+              value: {{ .Values.pingfederate.m2mAllowedAudiences | quote }}
+            {{- end }}
             {{- end }}
             # Update-check: poll GitHub Releases for newer registry versions
             # (admin banner). Set updateCheck.enabled=false for air-gapped clusters.
