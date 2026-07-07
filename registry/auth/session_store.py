@@ -90,6 +90,10 @@ async def resolve_session(session_id: str) -> dict[str, Any] | None:
         "groups": doc.get("groups", []),
         "provider": doc.get("provider"),
         "auth_method": doc.get("auth_method"),
+        # OIDC sub persisted by the auth_server at login. The egress consent-write
+        # path (cookie session, no internal token) keys the vault on this stable
+        # subject so it matches the vend path's egress_user claim. See #933.
+        "subject": doc.get("subject"),
     }
 
     encrypted = doc.get("id_token_encrypted")

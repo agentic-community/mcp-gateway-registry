@@ -470,8 +470,6 @@ class TestGetUserSessionData:
 
 
 @pytest.mark.unit
-
-
 @pytest.mark.unit
 @pytest.mark.auth
 class TestMapCognitoGroupsToScopes:
@@ -609,9 +607,7 @@ class TestGetUIPermissionsForUser:
         assert permissions == {}
 
     @pytest.mark.asyncio
-    async def test_admin_ui_permissions_with_mixed_scopes(
-        self, mock_scopes_config: dict[str, Any]
-    ):
+    async def test_admin_ui_permissions_with_mixed_scopes(self, mock_scopes_config: dict[str, Any]):
         """Test admin gets permissions when scopes include non-UI server scopes (#930).
 
         In production, the admin group maps to both UI scopes (with permissions)
@@ -645,9 +641,7 @@ class TestMapAndResolveEndToEnd:
     """
 
     @pytest.mark.asyncio
-    async def test_admin_group_to_ui_permissions(
-        self, mock_scopes_config: dict[str, Any]
-    ):
+    async def test_admin_group_to_ui_permissions(self, mock_scopes_config: dict[str, Any]):
         """Admin group must produce non-empty ui_permissions."""
         # Step 1: map groups → scopes
         scopes = await map_cognito_groups_to_scopes(["mcp-registry-admin"])
@@ -1132,6 +1126,59 @@ class TestEnhancedAuth:
         assert "registry-users-lob1" in context["groups"]
         assert context["can_modify_servers"] is False
         assert context["is_admin"] is False
+
+    @pytest.mark.asyncio
+    async def test_enhanced_auth_egress_user_is_persisted_subject(
+        self,
+        mock_signer: URLSafeTimedSerializer,
+        mock_session_store,
+        mock_scopes_config: dict[str, Any],
+    ):
+        """The cookie path (reached by the egress OAuth callback) must expose the
+        persisted OIDC sub as egress_user, so the consent-write vault key matches
+        the vend path's egress_user claim even when username is an email. See #933.
+        """
+        mock_session_store.next_value = {
+            "session_id": "sid-1",
+            "username": "alice@contoso.com",  # Entra preferred_username / email
+            "auth_method": "oauth2",
+            "provider": "entra",
+            "groups": ["registry-users-lob1"],
+            "subject": "entra-oid-sub-123",
+        }
+        session_cookie = _make_session_cookie(mock_signer)
+        mock_request = Mock(spec=Request)
+        mock_request.state = Mock()
+
+        context = await enhanced_auth(request=mock_request, session=session_cookie)
+
+        assert context["egress_user"] == "entra-oid-sub-123"
+        assert context["username"] == "alice@contoso.com"
+
+    @pytest.mark.asyncio
+    async def test_enhanced_auth_egress_user_falls_back_to_username(
+        self,
+        mock_signer: URLSafeTimedSerializer,
+        mock_session_store,
+        mock_scopes_config: dict[str, Any],
+    ):
+        """A session with no persisted subject (non-OIDC / pre-fix login) keeps its
+        prior vault bucket by falling back to username.
+        """
+        mock_session_store.next_value = {
+            "session_id": "sid-1",
+            "username": "oauth_user",
+            "auth_method": "oauth2",
+            "provider": "cognito",
+            "groups": ["registry-users-lob1"],
+        }
+        session_cookie = _make_session_cookie(mock_signer)
+        mock_request = Mock(spec=Request)
+        mock_request.state = Mock()
+
+        context = await enhanced_auth(request=mock_request, session=session_cookie)
+
+        assert context["egress_user"] == "oauth_user"
 
     @pytest.mark.asyncio
     async def test_enhanced_auth_no_session(self):

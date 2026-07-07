@@ -652,6 +652,10 @@ async def enhanced_auth(
         auth_method=auth_method,
         provider=session_data.get("provider", "local"),
         session_id=session_data.get("session_id"),
+        # Canonical egress vault id (OIDC sub persisted at login). Keeps the
+        # consent-write path (which reaches enhanced_auth via the callback's
+        # cookie, no internal token) keyed the same as the vend path. See #933.
+        egress_user=session_data.get("subject") or "",
     )
 
     # Set user context on request state for audit logging middleware
