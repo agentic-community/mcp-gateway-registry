@@ -79,9 +79,11 @@ More walkthroughs are in the [demo videos](docs/demo-videos.md).
 
 ## Start here if you are a...
 
-- **Developer** — start with the [Complete Setup Guide](docs/complete-setup-guide.md); you can also try the [macOS setup skill](.claude/skills/macos-setup/SKILL.md) to get it running on your MacBook. Then connect your AI coding assistant with the [AI Coding Assistant Integration guide](docs/ai-coding-assistants-setup.md) and the [API reference](docs/registry_api.md).
-- **Platform / security / ops team** — see the deployment guides for [Amazon EKS (Helm)](charts/README.md), [Amazon ECS (Terraform)](terraform/aws-ecs/README.md), and [Docker Compose](docs/installation.md); the [authentication guide](docs/auth.md); the [configuration reference](docs/configuration.md); and [access control & scopes](docs/scopes.md).
-- **Decision-maker evaluating adoption** — read the [Executive Brief](docs/overview/executive-brief.md), watch the [demo videos](docs/demo-videos.md), and try the [AWS Workshop](https://catalog.us-east-1.prod.workshops.aws/workshops/0c3265a6-1a4a-467b-ae56-e4d019184b0e/en-US).
+| You are a... | Start here |
+|---|---|
+| **Developer** | Start with the [Complete Setup Guide](docs/complete-setup-guide.md); you can also try the [macOS setup skill](.claude/skills/macos-setup/SKILL.md) to get it running on your MacBook. Then connect your AI coding assistant with the [AI Coding Assistant Integration guide](docs/ai-coding-assistants-setup.md) and the [API reference](docs/registry_api.md). |
+| **Platform / security / ops team** | See the deployment guides for [Amazon EKS (Helm)](charts/README.md), [Amazon ECS (Terraform)](terraform/aws-ecs/README.md), and [Docker Compose](docs/installation.md); the [authentication guide](docs/auth.md); the [configuration reference](docs/configuration.md); and [access control & scopes](docs/scopes.md). |
+| **Decision-maker evaluating adoption** | Read the [Executive Brief](docs/overview/executive-brief.md), watch the [demo videos](docs/demo-videos.md), and try the [AWS Workshop](https://catalog.us-east-1.prod.workshops.aws/workshops/0c3265a6-1a4a-467b-ae56-e4d019184b0e/en-US). |
 
 ## Quick Start
 
