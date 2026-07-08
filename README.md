@@ -109,29 +109,29 @@ The [Complete Installation Guide](docs/installation.md) has the full walkthrough
 
 **Deploying somewhere else?**
 
-- **Amazon ECS** — see the [Terraform stack README](terraform/aws-ecs/README.md), or better, use the [Terraform setup skill](https://github.com/agentic-community/mcp-gateway-registry/blob/main/.claude/skills/terraform-setup/SKILL.md) to have your AI coding assistant run the deployment for you.
-- **Amazon EKS** — see the [Helm charts](charts/README.md).
-- **Just want to try it on macOS?** — use the [macOS setup skill](https://github.com/agentic-community/mcp-gateway-registry/blob/main/.claude/skills/macos-setup/SKILL.md) to get it running on your MacBook end to end.
+- **Amazon ECS**: see the [Terraform stack README](terraform/aws-ecs/README.md), or better, use the [Terraform setup skill](https://github.com/agentic-community/mcp-gateway-registry/blob/main/.claude/skills/terraform-setup/SKILL.md) to have your AI coding assistant run the deployment for you.
+- **Amazon EKS**: see the [Helm charts](charts/README.md).
+- **Just want to try it on macOS?**: use the [macOS setup skill](https://github.com/agentic-community/mcp-gateway-registry/blob/main/.claude/skills/macos-setup/SKILL.md) to get it running on your MacBook end to end.
 
 ## What's in the box
 
 The registry holds four built-in asset types plus admin-defined custom ones, all on one control plane:
 
-- **MCP servers** — register, discover, and govern access to MCP servers behind a single authenticated gateway.
-- **Agents (A2A)** — register agents and let them discover each other by capability; agent-to-agent traffic stays peer-to-peer.
-- **Skills** — register, version, and discover reusable `SKILL.md` skills, with security scanning at registration.
-- **Custom entities** — admins define their own schema-driven entity types (n8n workflows, policies, prompt templates, model cards, and more); see [Custom Entity Types](docs/custom-entities.md).
+- **MCP servers**: register, discover, and govern access to MCP servers behind a single authenticated gateway.
+- **Agents (A2A)**: register agents and let them discover each other by capability; by default agent-to-agent traffic runs peer-to-peer.
+- **Skills**: register, version, and discover reusable `SKILL.md` skills, with security scanning at registration.
+- **Custom entities**: admins define their own schema-driven entity types (n8n workflows, policies, prompt templates, model cards, and more); see [Custom Entity Types](docs/custom-entities.md).
 
 Across all of them you get semantic + lexical search, UI, REST, and MCP-native interfaces, and uniform governance. Key features worth calling out:
 
-- **Single authenticated gateway** — one entry point; OAuth against your existing IdP (Keycloak, Entra ID, Okta, Auth0, Cognito, PingFederate) with fine-grained [scopes](docs/scopes.md).
-- **Dynamic tool discovery** — agents and coding assistants find tools at runtime by natural-language [semantic search](docs/dynamic-tool-discovery.md), not hard-coded config.
-- **[Virtual MCP servers](docs/design/virtual-mcp-server.md)** — aggregate tools from many backends behind one endpoint, with per-tool access control.
-- **[Per-user egress auth (3LO)](docs/design/egress-auth-design.md)** — the gateway brokers third-party SaaS credentials so tokens never live on a user's laptop.
-- **Security scanning + [fail-closed admission gate](docs/registration-webhooks.md)** — every registered server, agent, and skill is scanned; unsafe items are held for review.
-- **[External-registry federation](docs/federation.md)** — pull in Anthropic's MCP Registry, AWS Agent Registry, and peer registries for one unified surface.
-- **[Audit logging](docs/audit-logging.md)** — a full, attributable audit trail of access and admin events, with credential masking, for compliance and incident review.
-- **Observability** — [OpenTelemetry metrics](docs/OBSERVABILITY.md) and health monitoring built in.
+- **Single authenticated gateway**: one entry point; OAuth against your existing IdP (Keycloak, Entra ID, Okta, Auth0, Cognito, PingFederate) with fine-grained [scopes](docs/scopes.md).
+- **Dynamic tool discovery**: agents and coding assistants find tools at runtime by natural-language [semantic search](docs/dynamic-tool-discovery.md), not hard-coded config.
+- **[Virtual MCP servers](docs/design/virtual-mcp-server.md)**: aggregate tools from many backends behind one endpoint, with per-tool access control.
+- **[Per-user egress auth (3LO)](docs/design/egress-auth-design.md)**: the gateway brokers third-party SaaS credentials so tokens never live on a user's laptop.
+- **Security scanning + [fail-closed admission gate](docs/registration-webhooks.md)**: every registered server, agent, and skill is scanned; unsafe items are held for review.
+- **[External-registry federation](docs/federation.md)**: pull in Anthropic's MCP Registry, AWS Agent Registry, and peer registries for one unified surface.
+- **[Audit logging](docs/audit-logging.md)**: a full, attributable audit trail of access and admin events, with credential masking, for compliance and incident review.
+- **Observability**: [OpenTelemetry metrics](docs/OBSERVABILITY.md) and health monitoring built in.
 
 ## What's New
 
@@ -139,23 +139,23 @@ Across all of them you get semantic + lexical search, UI, REST, and MCP-native i
 
 - **Security Hardening Pass (1.26.0)** - A broad security-hardening release across the auth, proxy, data, and frontend layers: MongoDB authenticated by default with loopback-bound ports in local Docker Compose, a weak-secret preflight, internal/user token separation, SSRF and CSRF protections, and access-control fixes. See the [1.26.0 release notes](docs/release-notes/1.26.0.md).
 - **Per-User Egress Auth for Third-Party SaaS MCP Servers (3LO)** - Users connect their own GitHub / Slack / Atlassian accounts once; the gateway runs the OAuth flow out of band, vaults the per-user token, and injects it on egress, so third-party tokens never live on the user's laptop. [How it works](docs/design/egress-auth-design.md).
-- **Agentic Resource Discovery (ARD) — full spec support** - The registry implements the ARD v1.0 spec end to end as a Publisher, a Registry, and a federating peer, so any ARD-aware client can discover and cross-reference its assets. [ARD Guide](docs/ard.md).
+- **Agentic Resource Discovery (ARD), full spec support** - The registry implements the ARD v1.0 spec end to end as a Publisher, a Registry, and a federating peer, so any ARD-aware client can discover and cross-reference its assets. [ARD Guide](docs/ard.md).
 
 **Older highlights → [Feature & Release Highlights](docs/overview/feature-release-highlights.md)** · full per-version detail in the [release notes](docs/release-notes/) and on the [GitHub Releases page](https://github.com/agentic-community/mcp-gateway-registry/releases).
 
 ## Roadmap
 
-The roadmap is best tracked on the [GitHub Milestones](https://github.com/agentic-community/mcp-gateway-registry/milestones) page. At a high level, as of July–August 2026 the big features we're working on are:
+The roadmap is best tracked on the [GitHub Milestones](https://github.com/agentic-community/mcp-gateway-registry/milestones) page. At a high level, as of July-August 2026 the big features we're working on are:
 
-- **3LO, OBO, and CIMD for coding assistants** — richer per-user auth flows so coding assistants connect with the least friction across identity providers.
-- **Generic routing to any HTTP endpoint** — so the gateway can proxy A2A traffic between agents (and skills, and REST endpoints in future) through the same single ingress.
-- **Registry Copilot** — an embedded agent-builder experience for discovering assets and composing agents from inside the registry.
+- **3LO, OBO, and CIMD for coding assistants**: richer per-user auth flows so coding assistants connect with the least friction across identity providers.
+- **Generic routing to any HTTP endpoint**: so the gateway can proxy A2A traffic between agents (and skills, and REST endpoints in future) through the same single ingress.
+- **Registry Copilot**: an embedded agent-builder experience for discovering assets and composing agents from inside the registry.
 
-Have a feature request? Please [open a GitHub issue](https://github.com/agentic-community/mcp-gateway-registry/issues/new) — we build in the open.
+Have a feature request? Please [open a GitHub issue](https://github.com/agentic-community/mcp-gateway-registry/issues/new), we build in the open.
 
 ## Documentation
 
-Full documentation is on the [documentation site](https://agentic-community.github.io/mcp-gateway-registry/), and every guide also lives in the [`docs/` folder](docs/). **Stuck or have a question? Start with the [FAQ / Troubleshooting guide](docs/faq/index.md)** — it covers the most common setup, auth, deployment, and registration issues.
+Full documentation is on the [documentation site](https://agentic-community.github.io/mcp-gateway-registry/), and every guide also lives in the [`docs/` folder](docs/). **Stuck or have a question? Start with the [FAQ / Troubleshooting guide](docs/faq/index.md)**: it covers the most common setup, auth, deployment, and registration issues.
 
 High-traffic pages by audience:
 
@@ -174,9 +174,9 @@ The registry collects **anonymous, non-sensitive** usage telemetry (version, OS,
 
 ## Community
 
-- [GitHub Discussions](https://github.com/agentic-community/mcp-gateway-registry/discussions) — feature requests and general discussion
-- [GitHub Issues](https://github.com/agentic-community/mcp-gateway-registry/issues) — bug reports and feature requests
-- [Roadmap (GitHub Milestones)](https://github.com/agentic-community/mcp-gateway-registry/milestones) — upcoming releases and their issues
+- [GitHub Discussions](https://github.com/agentic-community/mcp-gateway-registry/discussions), feature requests and general discussion
+- [GitHub Issues](https://github.com/agentic-community/mcp-gateway-registry/issues), bug reports and feature requests
+- [Roadmap (GitHub Milestones)](https://github.com/agentic-community/mcp-gateway-registry/milestones), upcoming releases and their issues
 - [Contributing Guide](CONTRIBUTING.md) · [Code of Conduct](CODE_OF_CONDUCT.md) · [Security Policy](SECURITY.md)
 
 [![Star History Chart](https://api.star-history.com/svg?repos=agentic-community/mcp-gateway-registry&type=Date)](https://star-history.com/#agentic-community/mcp-gateway-registry&Date)
