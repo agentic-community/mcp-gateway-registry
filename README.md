@@ -50,8 +50,6 @@ This platform replaces that with **one governed entry point for every AI asset**
 
 **Onboard third-party OAuth MCP servers, the enterprise way.** Because the gateway provides [per-user egress authentication](docs/design/egress-auth-design.md), you can connect OAuth-protected SaaS MCP servers such as Slack, Atlassian, and GitHub without every user setting up network access to those services or storing credentials on their laptop. Each user connects their account once; the gateway runs the OAuth (3LO) flow, vaults the per-user token in a secrets manager, and injects it on egress. That collapses onboarding to a single, auditable choke point, so a team can adopt a new SaaS MCP server across the enterprise without per-laptop plumbing or scattered long-lived tokens.
 
-> **Origin:** it grew from an MCP gateway into a general-purpose AI asset registry, keeping the same gateway / access-control / audit model throughout. That single-spine design is why servers, agents, skills, and custom entities all share one registration, search, and governance path.
-
 ## How it works
 
 The gateway is the **data plane** (a generic nginx reverse proxy: TLS, auth validation, routing to backends) and the registry is the **control plane** (a FastAPI service that owns the inventory, access model, and audit trail, and decides what the gateway may route to). An **auth server** integrates your identity provider (Keycloak, Entra ID, Okta, Auth0, Cognito, PingFederate) for OAuth2/OIDC, and **MongoDB / DocumentDB** stores configuration, embeddings, sessions, and audit records.
