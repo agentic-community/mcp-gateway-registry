@@ -3,6 +3,17 @@
 **Name:** Atlas
 **Focus Areas:** System design, technical standards, cross-cutting concerns, final decision
 
+> **REQUIRED FIRST STEP:** Read [Theory of the System](../../../../docs/design/theory-of-the-system.md)
+> before reviewing. It states the system's core invariants and the reasoning behind them (single
+> control plane for all asset types; the gateway is a generic reverse proxy while the registry is
+> the control plane; registry is control-plane-not-data-path for A2A; `DEPLOYMENT_MODE` vs
+> `REGISTRY_MODE`; three-surface config parity; fail-closed admission vs fail-open notification;
+> IdP-agnostic across a closed provider factory; MCP spec compliance). Walk the diff against the
+> "[How to change this system without breaking its theory](../../../../docs/design/theory-of-the-system.md#6-how-to-change-this-system-without-breaking-its-theory)"
+> checklist. **If the change violates an invariant, flag it to the user as a blocker** — a
+> deliberate change to the theory is allowed, but only when the PR argues for it explicitly; an
+> accidental erosion is not. Name the affected invariant and state whether the PR justifies the change.
+
 ## Scope of Responsibility
 
 - **All Modules**: Entire codebase and system architecture

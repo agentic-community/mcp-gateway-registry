@@ -386,6 +386,18 @@ When working from an existing GitHub issue, create a summary document:
 
 **CRITICAL:** Before writing the LLD, you MUST thoroughly understand all relevant code in the repository. This is not optional - a design that doesn't account for existing code patterns will fail during implementation.
 
+> **REQUIRED: theory alignment.** Read [Theory of the System](../../../docs/design/theory-of-the-system.md)
+> and check the proposed feature against its core invariants (single control plane for all asset
+> types; the gateway is a generic reverse proxy and the registry is the control plane; registry is
+> control-plane-not-data-path for A2A; `DEPLOYMENT_MODE` vs `REGISTRY_MODE`; three-surface config
+> parity; fail-closed admission vs fail-open notification; IdP-agnostic across a closed provider
+> factory; MCP spec compliance). Use the doc's
+> "[how to change this system without breaking its theory](../../../docs/design/theory-of-the-system.md#6-how-to-change-this-system-without-breaking-its-theory)"
+> checklist. **If the design would violate an invariant, flag it explicitly to the user** in the
+> LLD (a "Theory impact" note) and in the Expert Review — a deliberate theory change is allowed, but
+> it must be called out and argued, never slipped in. State which invariant is affected and the
+> justification.
+
 ### What to Analyze
 
 1. **Existing Models and Data Structures**
@@ -482,6 +494,12 @@ Create a detailed technical design document. This is the most critical document 
 
 ### Non-Goals
 - {What this design explicitly does NOT address}
+
+### Theory Impact
+{State whether this feature upholds or changes any core invariant in
+[Theory of the System](../../../docs/design/theory-of-the-system.md). Default: "No invariant
+affected." If an invariant IS affected, name it, explain why the change is deliberate and
+justified, and note the consequence — this is a flag for the reviewer, not something to bury.}
 
 ## Codebase Analysis
 

@@ -130,6 +130,13 @@ Create the folder structure:
 
 For each relevant persona, adopt that perspective and review the changes. Reference the persona definition files:
 
+> **Theory check (always):** the Chief Architect persona must read
+> [Theory of the System](../../../docs/design/theory-of-the-system.md) and walk the diff against its
+> "how to change this system without breaking its theory" checklist. If the PR violates a core
+> invariant (control-plane/data-plane split, generic gateway, A2A peer-to-peer, mode axes, config
+> parity, fail-closed admission, IdP-agnosticism, MCP spec compliance) without explicitly arguing
+> for the change, **flag it to the user as a blocker.**
+
 - [Merge Specialist](personas/merge-specialist.md) - Always included
 - [Frontend Developer](personas/frontend-developer.md) - For frontend changes
 - [Backend Developer](personas/backend-developer.md) - For backend/API changes
