@@ -74,7 +74,7 @@ jobs:
         with:
           # docker/metadata-action v5 accepts both `v`-prefixed and bare semver
           # tags (e.g. `v1.0.22` and `1.23.0`). See the strict-semver switch in
-          # release-notes/1.23.0.md.
+          # docs/release-notes/1.23.0.md.
           images: ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/${{ matrix.service }}
           tags: |
             type=semver,pattern={{version}}

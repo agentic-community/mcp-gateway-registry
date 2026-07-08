@@ -356,15 +356,18 @@ After writing the release notes file:
 
 Once the user confirms the release notes are ready:
 
-1. **Add the new version to `mkdocs.yml`** so it appears at the top of the Release Notes nav in descending order. Find the `Release Notes:` section and insert the new entry immediately after the `- Overview:` line:
+1. **Confirm the new version appears in the `mkdocs.yml` Release Notes nav.** The nav uses a
+   single directory entry that auto-includes every file in `docs/release-notes/`:
    ```yaml
    - Release Notes:
-     - Overview: release-notes/DISCLAIMER.md
-     - {version}: release-notes/{version}.md   # <-- insert here
-     - {previous_version}: release-notes/{previous_version}.md
-     ...
+     - release-notes
    ```
-   Use Edit to insert the single line `    - {version}: release-notes/{version}.md` after the `Overview` line.
+   Because the whole directory is included automatically, **a new `docs/release-notes/{version}.md`
+   file needs no `mkdocs.yml` edit** — it is picked up on the next build. Verify with
+   `mkdocs build` (or check the built `site/release-notes/{version}/` directory exists) and
+   confirm no new build warnings were introduced. Do NOT hand-maintain a per-version nav list;
+   the directory entry owns ordering. If the maintainer later wants an explicit descending
+   order, that is a separate, deliberate `mkdocs.yml` change — not part of the routine release cut.
 
 2. **Commit the release notes and nav update together:**
    ```bash

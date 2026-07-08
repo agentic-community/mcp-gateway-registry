@@ -1020,7 +1020,7 @@ curl -X POST /api/servers/{path}/rescan -H "Authorization: Bearer $TOKEN"
 - **Do NOT create public GitHub issues for security vulnerabilities**
 
 **Security Updates:**
-- Monitor [release notes](release-notes/) for security patches
+- Monitor [release notes](https://github.com/agentic-community/mcp-gateway-registry/releases) for security patches
 - Subscribe to [GitHub Security Advisories](https://github.com/agentic-community/mcp-gateway-registry/security/advisories)
 
 ---
