@@ -6,7 +6,7 @@
 
 [![GitHub stars](https://img.shields.io/github/stars/agentic-community/mcp-gateway-registry?style=flat&logo=github)](https://github.com/agentic-community/mcp-gateway-registry/stargazers)
 [![GitHub forks](https://img.shields.io/github/forks/agentic-community/mcp-gateway-registry?style=flat&logo=github)](https://github.com/agentic-community/mcp-gateway-registry/network)
-[![License](https://img.shields.io/github/license/agentic-community/mcp-gateway-registry?style=flat)](https://github.com/agentic-community/mcp-gateway-registry/blob/main/LICENSE)
+[![License](https://img.shields.io/github/license/agentic-community/mcp-gateway-registry?style=flat)](LICENSE)
 [![GitHub release](https://img.shields.io/github/v/release/agentic-community/mcp-gateway-registry?style=flat&logo=github)](https://github.com/agentic-community/mcp-gateway-registry/releases)
 
 [Get Running Now](#quick-start) | [Docs](https://agentic-community.github.io/mcp-gateway-registry/) | [Executive Brief](docs/overview/executive-brief.md) | [Slide Deck](docs/slides/mcp-gateway-registry-presentation.pdf) | [Demo Videos](docs/demo-videos.md) | [AWS Workshop](https://catalog.us-east-1.prod.workshops.aws/workshops/0c3265a6-1a4a-467b-ae56-e4d019184b0e/en-US) | [Community](#community)
@@ -81,7 +81,7 @@ More walkthroughs are in the [demo videos](docs/demo-videos.md).
 
 | You are a... | Start here |
 |---|---|
-| **Developer** | Start with the [Complete Setup Guide](docs/complete-setup-guide.md); you can also try the [macOS setup skill](.claude/skills/macos-setup/SKILL.md) to get it running on your MacBook. Then connect your AI coding assistant with the [AI Coding Assistant Integration guide](docs/ai-coding-assistants-setup.md). For programmatic access, see the [OpenAPI spec](https://github.com/agentic-community/mcp-gateway-registry/blob/main/api/openapi.json) plus a Python registration client ([`registry_client.py`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/api/registry_client.py)) and CLI ([`registry_management.py`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/api/registry_management.py)). |
+| **Developer** | Start with the [Complete Setup Guide](docs/complete-setup-guide.md); you can also try the [macOS setup skill](.claude/skills/macos-setup/SKILL.md) to get it running on your MacBook. Then connect your AI coding assistant with the [AI Coding Assistant Integration guide](docs/ai-coding-assistants-setup.md). For programmatic access, see the [OpenAPI spec](api/openapi.json) plus a Python registration client ([`registry_client.py`](api/registry_client.py)) and CLI ([`registry_management.py`](api/registry_management.py)). |
 | **Platform / security / ops team** | See the deployment guides for [Amazon EKS (Helm)](charts/README.md), [Amazon ECS (Terraform)](terraform/aws-ecs/README.md), and [Docker Compose](docs/installation.md); the [authentication guide](docs/auth.md); the [configuration reference](docs/configuration.md); and [access control & scopes](docs/scopes.md). |
 | **Decision-maker evaluating adoption** | Read the [Executive Brief](docs/overview/executive-brief.md), watch the [demo videos](docs/demo-videos.md), and try the [AWS Workshop](https://catalog.us-east-1.prod.workshops.aws/workshops/0c3265a6-1a4a-467b-ae56-e4d019184b0e/en-US). |
 
@@ -109,9 +109,9 @@ The [Complete Installation Guide](docs/installation.md) has the full walkthrough
 
 **Deploying somewhere else?**
 
-- **Amazon ECS**: see the [Terraform stack README](terraform/aws-ecs/README.md), or better, use the [Terraform setup skill](https://github.com/agentic-community/mcp-gateway-registry/blob/main/.claude/skills/terraform-setup/SKILL.md) to have your AI coding assistant run the deployment for you.
+- **Amazon ECS**: see the [Terraform stack README](terraform/aws-ecs/README.md), or better, use the [Terraform setup skill](.claude/skills/terraform-setup/SKILL.md) to have your AI coding assistant run the deployment for you.
 - **Amazon EKS**: see the [Helm charts](charts/README.md).
-- **Just want to try it on macOS?**: use the [macOS setup skill](https://github.com/agentic-community/mcp-gateway-registry/blob/main/.claude/skills/macos-setup/SKILL.md) to get it running on your MacBook end to end.
+- **Just want to try it on macOS?**: use the [macOS setup skill](.claude/skills/macos-setup/SKILL.md) to get it running on your MacBook end to end.
 
 ## What's in the box
 

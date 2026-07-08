@@ -44,6 +44,6 @@ The M2M identity will only see the servers and tools that its assigned group all
 
 ## Related Documentation
 
-- [Entra ID Setup - M2M Token Generation](https://github.com/agentic-community/mcp-gateway-registry/blob/main/docs/entra-id-setup.md#generating-jwt-tokens-for-m2m-accounts) -- covers direct token requests, credentials provider scripts, and token usage
-- [Authentication Overview](https://github.com/agentic-community/mcp-gateway-registry/blob/main/docs/auth.md) -- covers all three identity types (Human, Programmatic, M2M) and how group-to-scope mapping works for each
-- [Auth Management](https://github.com/agentic-community/mcp-gateway-registry/blob/main/docs/auth-mgmt.md) -- M2M account creation and token usage examples
+- [Entra ID Setup - M2M Token Generation](../entra-id-setup.md#generating-jwt-tokens-for-m2m-accounts) -- covers direct token requests, credentials provider scripts, and token usage
+- [Authentication Overview](../auth.md) -- covers all three identity types (Human, Programmatic, M2M) and how group-to-scope mapping works for each
+- [Auth Management](../auth-mgmt.md) -- M2M account creation and token usage examples

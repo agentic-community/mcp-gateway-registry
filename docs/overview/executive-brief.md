@@ -46,8 +46,8 @@ Three deployment surfaces are supported, and configuration is kept at parity acr
 a [single cross-surface parameter reference](../unified-parameter-reference.md):
 
 - **Docker Compose** — for evaluation and local development.
-- **Amazon ECS (Terraform)** — a Fargate stack under [`terraform/aws-ecs/`](https://github.com/agentic-community/mcp-gateway-registry/tree/main/terraform/aws-ecs/).
-- **Amazon EKS (Helm)** — Helm charts under [`charts/`](https://github.com/agentic-community/mcp-gateway-registry/tree/main/charts/).
+- **Amazon ECS (Terraform)** — a Fargate stack under [`terraform/aws-ecs/`](../../terraform/aws-ecs).
+- **Amazon EKS (Helm)** — Helm charts under [`charts/`](../../charts).
 
 Operational signal is first-class: services emit metrics via OpenTelemetry with an always-on
 Prometheus `/metrics` endpoint and optional OTLP push to a backend of your choice, plus health

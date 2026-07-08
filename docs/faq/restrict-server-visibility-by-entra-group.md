@@ -25,7 +25,7 @@ python api/registry_management.py \
   --file my-group.json
 ```
 
-Example JSON file (`my-group.json`) -- adapted from [`cli/examples/public-mcp-users.json`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/cli/examples/public-mcp-users.json):
+Example JSON file (`my-group.json`) -- adapted from [`cli/examples/public-mcp-users.json`](../../cli/examples/public-mcp-users.json):
 ```json
 {
   "scope_name": "restricted-mcp-users",
@@ -59,11 +59,11 @@ Example JSON file (`my-group.json`) -- adapted from [`cli/examples/public-mcp-us
 
 Set `"create_in_idp": false` since the group already exists in Entra ID. The `group_mappings` array should include both the group name and the Entra ID Group Object ID (GUID).
 
-Example scope JSON files are also available in [`scripts/registry-admins.json`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/scripts/registry-admins.json) and [`cli/examples/public-mcp-users.json`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/cli/examples/public-mcp-users.json).
+Example scope JSON files are also available in [`scripts/registry-admins.json`](../../scripts/registry-admins.json) and [`cli/examples/public-mcp-users.json`](../../cli/examples/public-mcp-users.json).
 
 ## Related Documentation
 
-- [IAM Settings UI Guide](https://github.com/agentic-community/mcp-gateway-registry/blob/main/docs/iam-settings-ui.md) -- full walkthrough of the Groups UI with server access, tools, and permissions configuration
-- [Entra ID Setup Guide](https://github.com/agentic-community/mcp-gateway-registry/blob/main/docs/entra-id-setup.md) -- Steps 5-10 cover configuring group claims in Azure and mapping Entra ID Group Object IDs to registry scopes
-- [Scopes Management](https://github.com/agentic-community/mcp-gateway-registry/blob/main/docs/scopes-mgmt.md) -- detailed field reference for scope/group JSON configuration
-- [Entra ID Setup - IAM API for Groups](https://github.com/agentic-community/mcp-gateway-registry/blob/main/docs/entra-id-setup.md#using-the-iam-api-to-manage-groups-users-and-m2m-accounts) -- covers `import-group`, `group-create`, `group-delete` commands with full JSON examples
+- [IAM Settings UI Guide](../iam-settings-ui.md) -- full walkthrough of the Groups UI with server access, tools, and permissions configuration
+- [Entra ID Setup Guide](../entra-id-setup.md) -- Steps 5-10 cover configuring group claims in Azure and mapping Entra ID Group Object IDs to registry scopes
+- [Scopes Management](../scopes-mgmt.md) -- detailed field reference for scope/group JSON configuration
+- [Entra ID Setup - IAM API for Groups](../entra-id-setup.md#using-the-iam-api-to-manage-groups-users-and-m2m-accounts) -- covers `import-group`, `group-create`, `group-delete` commands with full JSON examples

@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MCP Gateway &amp; Registry</title>
+<meta name="description" content="A single, governed control plane for every AI asset: MCP servers, AI agents, skills, and custom entities.">
+<style>
+  :root {
+    --bg:#ffffff; --ink:#1a2233; --muted:#5a6b7b; --line:#e6e9ef;
+    --brand:#3b5bdb; --brand-dark:#2f49b0; --sidebar:#f5f7fa; --code-bg:#f6f8fa;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:#0f1420; --ink:#e6e9ef; --muted:#9aa7b8; --line:#232c3d;
+      --brand:#7c93f5; --brand-dark:#9fb0f8; --sidebar:#151b28; --code-bg:#151b28;
+    }
+  }
+  * { box-sizing:border-box; }
+  html { scroll-behavior:smooth; }
+  body { margin:0; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+         color:var(--ink); line-height:1.65; background:var(--bg); }
+  header.top { display:flex; align-items:center; gap:.7rem; padding:.85rem 1.5rem;
+               border-bottom:1px solid var(--line); position:sticky; top:0; background:var(--bg); z-index:20; }
+  header.top .mark { width:34px; height:34px; border-radius:8px; background:var(--brand);
+                     display:flex; align-items:center; justify-content:center; color:#fff; font-weight:800; }
+  header.top h1 { font-size:1.12rem; margin:0; font-weight:700; }
+  header.top .links { margin-left:auto; display:flex; gap:1.1rem; align-items:center; }
+  header.top .links a { color:var(--brand); text-decoration:none; font-weight:600; font-size:.9rem; }
+  header.top .links a:hover { color:var(--brand-dark); }
+  .layout { display:grid; grid-template-columns:270px 1fr; max-width:1200px; margin:0 auto; }
+  nav.side { border-right:1px solid var(--line); padding:1.6rem 1rem; position:sticky; top:64px;
+             align-self:start; height:calc(100vh - 64px); overflow:auto; }
+  nav.side a { display:block; padding:.34rem .65rem; color:var(--muted); text-decoration:none;
+               border-radius:6px; font-size:.92rem; }
+  nav.side a:hover { background:var(--sidebar); color:var(--ink); }
+  main { padding:2.2rem 3.2rem; max-width:840px; min-width:0; }
+  main .hero { margin-bottom:1.5rem; }
+  main .hero-logo { width:100%; max-width:720px; border-radius:12px; display:block; }
+  main .hero-tagline { font-size:1.15rem; color:var(--muted); font-weight:500; margin:.9rem 0 0; }
+  main h1 { font-size:2rem; }
+  main h2 { margin-top:2.6rem; font-size:1.5rem; scroll-margin-top:80px; }
+  main h3 { margin-top:1.5rem; font-size:1.12rem; }
+  main img { max-width:100%; height:auto; border-radius:8px; }
+  main pre { background:var(--code-bg); padding:1rem; border-radius:8px; overflow:auto;
+             font-size:.85rem; line-height:1.5; border:1px solid var(--line); }
+  main code { background:var(--code-bg); padding:.12rem .38rem; border-radius:4px; font-size:.88em; }
+  main pre code { background:none; padding:0; border:none; }
+  main table { border-collapse:collapse; width:100%; margin:1.1rem 0; font-size:.92rem; display:block; overflow-x:auto; }
+  main th, main td { border:1px solid var(--line); padding:.55rem .75rem; text-align:left; vertical-align:top; }
+  main th { background:var(--sidebar); }
+  main a { color:var(--brand); }
+  main blockquote { border-left:4px solid var(--brand); margin:1.1rem 0; padding:.5rem 1rem;
+                    background:var(--sidebar); border-radius:0 6px 6px 0; }
+  main hr { border:none; border-top:1px solid var(--line); margin:2rem 0; }
+  footer.foot { border-top:1px solid var(--line); padding:1.5rem 3.2rem; color:var(--muted);
+                font-size:.85rem; max-width:840px; }
+  @media (max-width:860px) {
+    .layout { grid-template-columns:1fr; }
+    nav.side { display:none; }
+    main, footer.foot { padding:1.5rem; }
+  }
+</style>
+</head>
+<body>
+<header class="top">
+  <span class="mark">M</span>
+  <h1>MCP Gateway &amp; Registry</h1>
+  <div class="links">
+    <a href="https://github.com/agentic-community/mcp-gateway-registry" target="_blank" rel="noopener">GitHub</a>
+    <a href="https://github.com/agentic-community/mcp-gateway-registry/tree/main/docs" target="_blank" rel="noopener">Docs</a>
+  </div>
+</header>
+<div class="layout">
+  <nav class="side">
+{{SIDEBAR}}
+  </nav>
+  <main>
+    <div class="hero">
+{{HERO}}
+    </div>
+{{CONTENT}}
+  </main>
+</div>
+<footer class="foot">
+  Generated from <a href="https://github.com/agentic-community/mcp-gateway-registry/blob/main/README.md">README.md</a>.
+  Licensed under Apache 2.0.
+</footer>
+</body>
+</html>

@@ -125,13 +125,13 @@ uv run python api/registry_management.py \
 
 ### Example Group Definitions
 
-See the [cli/examples/](https://github.com/agentic-community/mcp-gateway-registry/tree/main/cli/examples) directory for sample group definitions:
-- [public-mcp-users.json](https://github.com/agentic-community/mcp-gateway-registry/blob/main/cli/examples/public-mcp-users.json) - Public access group with access to context7, cloudflare-docs servers and flight-booking agent
+See the [cli/examples/](../cli/examples) directory for sample group definitions:
+- [public-mcp-users.json](../cli/examples/public-mcp-users.json) - Public access group with access to context7, cloudflare-docs servers and flight-booking agent
 - `currenttime-users.json` - Access to currenttime server only
 
 ### Bootstrap Admin Scope
 
-The `registry-admins` scope is automatically loaded during database initialization from [scripts/registry-admins.json](https://github.com/agentic-community/mcp-gateway-registry/blob/main/scripts/registry-admins.json). This file defines full administrative access:
+The `registry-admins` scope is automatically loaded during database initialization from [scripts/registry-admins.json](../scripts/registry-admins.json). This file defines full administrative access:
 
 ```json
 {
@@ -457,4 +457,4 @@ curl -s -X POST "https://login.microsoftonline.com/{TENANT_ID}/oauth2/v2.0/token
 
 - [Entra ID Setup Guide](./entra-id-setup.md) - Complete Entra ID configuration
 - [Complete Setup Guide](./complete-setup-guide.md) - Initial system setup
-- [Terraform AWS ECS README](https://github.com/agentic-community/mcp-gateway-registry/blob/main/terraform/aws-ecs/README.md) - Production deployment
+- [Terraform AWS ECS README](../terraform/aws-ecs/README.md) - Production deployment

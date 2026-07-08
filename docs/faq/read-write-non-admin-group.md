@@ -6,8 +6,8 @@ You can define a "read-write" group whose members can see servers, register new 
 
 Create a group scope JSON that grants the read-write permissions and omits the destructive ones, import it into the registry, and create a matching group of the same name in your IdP. Two ready-made examples ship with the repo:
 
-- [`cli/examples/read_all_register_new.json`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/cli/examples/read_all_register_new.json): members see **all** servers.
-- [`cli/examples/read_select_register_new.json`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/cli/examples/read_select_register_new.json): members see only a **select** list; a server they register stays invisible to the group until an admin grants access to it.
+- [`cli/examples/read_all_register_new.json`](../../cli/examples/read_all_register_new.json): members see **all** servers.
+- [`cli/examples/read_select_register_new.json`](../../cli/examples/read_select_register_new.json): members see only a **select** list; a server they register stays invisible to the group until an admin grants access to it.
 
 ```bash
 export REGISTRY_URL="https://your-registry"
@@ -30,7 +30,7 @@ The second case is the interesting one: a user in `read-select-register-new` can
 
 ## How the access control works
 
-The registry enforces permissions in two layers (see [registry/api/server_routes.py](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/api/server_routes.py) and [registry/auth/dependencies.py](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/auth/dependencies.py)):
+The registry enforces permissions in two layers (see [registry/api/server_routes.py](../../registry/api/server_routes.py) and [registry/auth/dependencies.py](../../registry/auth/dependencies.py)):
 
 1. **API method layer** (`server_access` -> the `api` pseudo-server): gates which REST verbs reach the gateway. These groups get `GET` and `POST` (needed to list and register), but not `PUT` or `DELETE`.
 
@@ -49,15 +49,15 @@ A permission that is not listed defaults to deny, so omitting `toggle_service`, 
 
 ## Important: do not use `register_service: ["all"]`
 
-A user is auto-promoted to **admin** if they hold any *mutating* UI permission with the literal value `"all"`. The mutating prefixes are `register_`, `modify_`, `toggle_`, `delete_`, `publish_`, `create_` (see `_user_is_admin` and `_ADMIN_ACTION_PREFIXES` in [registry/auth/dependencies.py](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/auth/dependencies.py)).
+A user is auto-promoted to **admin** if they hold any *mutating* UI permission with the literal value `"all"`. The mutating prefixes are `register_`, `modify_`, `toggle_`, `delete_`, `publish_`, `create_` (see `_user_is_admin` and `_ADMIN_ACTION_PREFIXES` in [registry/auth/dependencies.py](../../registry/auth/dependencies.py)).
 
-Because `register_` is a mutating prefix, writing `register_service: ["all"]` would flip the user into full admin (settings gear, delete buttons, toggle switches, and the "Admin Access" badge all appear). To avoid this, these group files use `register_service: ["*"]` instead. The registration backend only requires `register_service` to be **non-empty** (it does not require the literal `"all"`, see [registry/api/server_routes.py](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/api/server_routes.py)), so `["*"]` permits registration without triggering admin promotion.
+Because `register_` is a mutating prefix, writing `register_service: ["all"]` would flip the user into full admin (settings gear, delete buttons, toggle switches, and the "Admin Access" badge all appear). To avoid this, these group files use `register_service: ["*"]` instead. The registration backend only requires `register_service` to be **non-empty** (it does not require the literal `"all"`, see [registry/api/server_routes.py](../../registry/api/server_routes.py)), so `["*"]` permits registration without triggering admin promotion.
 
 `list_service` and `health_check_service` are read-only prefixes, so `["all"]` is safe for them.
 
 ## Why a registered server is invisible to `read-select-register-new`
 
-`register_service` only controls whether a user may create a server; it does not add that server to any group's visible list. Visibility is controlled by `list_service`, which for this group is a fixed allowlist (`/currenttime`, `/mcpgw`). Adding a server to a group's `list_service` (and `server_access`) is done by the `add-to-groups` admin command, which calls `add_server_to_groups` in [registry/services/scope_service.py](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/services/scope_service.py). That command requires admin privileges, so a non-admin user cannot make their own newly registered server visible to their group.
+`register_service` only controls whether a user may create a server; it does not add that server to any group's visible list. Visibility is controlled by `list_service`, which for this group is a fixed allowlist (`/currenttime`, `/mcpgw`). Adding a server to a group's `list_service` (and `server_access`) is done by the `add-to-groups` admin command, which calls `add_server_to_groups` in [registry/services/scope_service.py](../../registry/services/scope_service.py). That command requires admin privileges, so a non-admin user cannot make their own newly registered server visible to their group.
 
 ## Step 1: Import the group scope configuration
 
@@ -196,7 +196,7 @@ For Entra ID specifically, the token group claim is usually a Group Object ID (G
 
 ## Related Documentation
 
-- [User and Group Management Guide](https://github.com/agentic-community/mcp-gateway-registry/blob/main/api/USER-GROUP-MANAGEMENT.md) -- the full create-group / create-user workflow
+- [User and Group Management Guide](../../api/USER-GROUP-MANAGEMENT.md) -- the full create-group / create-user workflow
 - [How do I restrict which agents a user can see based on their group?](group-restricted-agent-visibility.md) -- the agent-side equivalent
 - [How do I restrict which MCP servers a user can see based on their Entra ID group?](restrict-server-visibility-by-entra-group.md) -- IdP-specific server visibility
 - [Agent Visibility and Group-Based Access Control](../agent-visibility-and-group-access.md) -- the two-layer access model in depth

@@ -209,9 +209,9 @@ Reserved names are the environment variables the chart itself sets on the contai
 
 The three reserved-name lists are the shared source of truth across all three surfaces:
 
-- [`charts/registry/reserved-env-names.txt`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/charts/registry/reserved-env-names.txt)
-- [`charts/auth-server/reserved-env-names.txt`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/charts/auth-server/reserved-env-names.txt)
-- [`charts/mcpgw/reserved-env-names.txt`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/charts/mcpgw/reserved-env-names.txt)
+- [`charts/registry/reserved-env-names.txt`](../../charts/registry/reserved-env-names.txt)
+- [`charts/auth-server/reserved-env-names.txt`](../../charts/auth-server/reserved-env-names.txt)
+- [`charts/mcpgw/reserved-env-names.txt`](../../charts/mcpgw/reserved-env-names.txt)
 
 CI (`.github/workflows/helm-test.yml` → `reserved-list-sync`) renders the stack chart and fails the build if any name the chart actually injects is missing from the corresponding reserved list, so the lists cannot silently drift out of sync with the templates.
 
@@ -222,5 +222,5 @@ CI (`.github/workflows/helm-test.yml` → `reserved-list-sync`) renders the stac
 ## Related documentation
 
 - [Unified Parameter Reference](../unified-parameter-reference.md) — surface-by-surface parameter mapping (see Group 29 for extra_env).
-- [`CLAUDE.md`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/CLAUDE.md) "Deployment Surface Customization" section — detailed notes for maintainers.
+- [`CLAUDE.md`](../../CLAUDE.md) "Deployment Surface Customization" section — detailed notes for maintainers.
 - [Issue #1000](https://github.com/agentic-community/mcp-gateway-registry/issues/1000) — design rationale.

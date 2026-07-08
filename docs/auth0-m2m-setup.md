@@ -311,5 +311,5 @@ db.idp_m2m_clients.find({ provider: "auth0" }).pretty()
 
 - [Auth0 Management API](https://auth0.com/docs/api/management/v2)
 - [Auth0 M2M Applications](https://auth0.com/docs/get-started/applications/application-types#machine-to-machine-applications)
-- [Groups Enrichment](https://github.com/agentic-community/mcp-gateway-registry/blob/main/auth_server/mongodb_groups_enrichment.py)
+- [Groups Enrichment](../auth_server/mongodb_groups_enrichment.py)
 - [Okta M2M Setup](okta-setup.md) - Similar pattern for Okta

@@ -16,7 +16,7 @@ across replicas, and the verification step.
 
 > **DRAFT — destructive validation not exercised.** The procedures
 > below were authored from the implementation in
-> [`registry/auth/session_crypto.py`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/auth/session_crypto.py)
+> [`registry/auth/session_crypto.py`](../../registry/auth/session_crypto.py)
 > and related modules. The destructive steps (rotating `SECRET_KEY`,
 > invalidating sessions) were **not** executed against the running
 > validation stack; doing so would log out all users mid-session.
@@ -29,7 +29,7 @@ across replicas, and the verification step.
 
 | Secret | What it does | Rotation invalidates | Restart required |
 |---|---|---|---|
-| `SECRET_KEY` | (1) HMAC-signs internal-auth JWTs between auth-server, registry, and mcpgw. (2) Derives an AES-GCM key (via HKDF) that encrypts `id_token` blobs in the OAuth session store. | All in-process JWT trust + every encrypted `id_token` in `oauth_sessions_*`. Active sessions cannot decrypt their stored `id_token` after rotation. | **Yes — all auth_server and registry replicas.** The AES-GCM cipher is cached in a process-wide singleton ([`session_crypto.py:37`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/auth/session_crypto.py#L37)) and won't re-derive on a config reload. |
+| `SECRET_KEY` | (1) HMAC-signs internal-auth JWTs between auth-server, registry, and mcpgw. (2) Derives an AES-GCM key (via HKDF) that encrypts `id_token` blobs in the OAuth session store. | All in-process JWT trust + every encrypted `id_token` in `oauth_sessions_*`. Active sessions cannot decrypt their stored `id_token` after rotation. | **Yes — all auth_server and registry replicas.** The AES-GCM cipher is cached in a process-wide singleton ([`session_crypto.py:37`](../../registry/auth/session_crypto.py#L37)) and won't re-derive on a config reload. |
 | Federation static token | Authenticates one peer registry to another for federation API access. | Inbound federation calls from peers using the old token (they get 401 until they update their config). | No restart for the *issuing* registry; peer registries must re-fetch and reload. |
 | IdP client secret (Keycloak, Entra, Cognito) | OAuth2 client_secret used by the auth-server to exchange authorization codes for tokens. | Pending OAuth flows fail (5-minute grace window). New logins use the new secret. | **Yes — auth-server replicas** (env-var-based config, not hot-reloaded). |
 | M2M client secret | Authenticates a non-interactive M2M client to the registry / IdP. | API calls from the M2M client using the old secret (they get 401 until config update). | No registry restart. The M2M client itself must rotate. |
@@ -61,7 +61,7 @@ active sessions, no restart required.
 ### Procedure
 
 1. Generate a new key. The implementation requires at least 32
-   bytes ([`config.py:766-771`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/core/config.py#L766-L771)):
+   bytes ([`config.py:766-771`](../../registry/core/config.py#L766-L771)):
 
    ```bash
    # 64-character hex string (32 bytes of entropy)
@@ -121,7 +121,7 @@ active sessions, no restart required.
 - **Cookie-only deployments before this rewrite carried the
   encrypted token in the cookie.** This deployment carries it in
   MongoDB. The blast radius is the same: rotation invalidates
-  stored tokens. ([`session_crypto.py:13-16`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/auth/session_crypto.py#L13-L16))
+  stored tokens. ([`session_crypto.py:13-16`](../../registry/auth/session_crypto.py#L13-L16))
 - **Half-rolled deploys break SSO.** A registry replica running
   with the new key cannot decrypt sessions written by an
   auth-server still running on the old key. Keep the rollout
@@ -137,7 +137,7 @@ active sessions, no restart required.
 - Periodic rotation of inbound federation credentials.
 
 The federation static token is configured at
-[`config.py:251-252`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/core/config.py#L251-L252)
+[`config.py:251-252`](../../registry/core/config.py#L251-L252)
 (`federation_static_token_auth_enabled`, `federation_static_token`).
 It authenticates inbound federation API calls; the issuing peer
 registry includes it in its outbound requests to ours.
@@ -164,7 +164,7 @@ registry includes it in its outbound requests to ours.
 
 4. Verify the peer's reconciliation worker resumes successfully:
 
-   - Use [`api/registry_management.py peer-status <peer_id>`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/api/registry_management.py)
+   - Use [`api/registry_management.py peer-status <peer_id>`](../../api/registry_management.py)
      against your registry — the peer should report `enabled` and
      have a recent `last_synced_at`.
    - Tail the registry logs for `Federation auth: ALLOW` entries
@@ -315,9 +315,9 @@ that can no longer decrypt under the new `SECRET_KEY`.
 
 ## Code references
 
-- [`registry/auth/session_crypto.py:13-23`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/auth/session_crypto.py#L13-L23) — rotation behavior documented inline; restart-required is by design.
-- [`registry/auth/session_crypto.py:37`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/auth/session_crypto.py#L37) — process-wide AES-GCM cipher singleton.
-- [`registry/auth/internal.py:49-63`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/auth/internal.py#L49-L63) — internal-JWT signing with `SECRET_KEY`.
-- [`registry/core/config.py:71`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/core/config.py#L71) — `secret_key` setting.
-- [`registry/core/config.py:251-252`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/core/config.py#L251-L252) — federation static token settings.
-- [`registry/core/config.py:766-771`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/core/config.py#L766-L771) — `SECRET_KEY` startup validation (required, 32+ bytes).
+- [`registry/auth/session_crypto.py:13-23`](../../registry/auth/session_crypto.py#L13-L23) — rotation behavior documented inline; restart-required is by design.
+- [`registry/auth/session_crypto.py:37`](../../registry/auth/session_crypto.py#L37) — process-wide AES-GCM cipher singleton.
+- [`registry/auth/internal.py:49-63`](../../registry/auth/internal.py#L49-L63) — internal-JWT signing with `SECRET_KEY`.
+- [`registry/core/config.py:71`](../../registry/core/config.py#L71) — `secret_key` setting.
+- [`registry/core/config.py:251-252`](../../registry/core/config.py#L251-L252) — federation static token settings.
+- [`registry/core/config.py:766-771`](../../registry/core/config.py#L766-L771) — `SECRET_KEY` startup validation (required, 32+ bytes).

@@ -128,7 +128,7 @@ embeddings_aws_region       = "us-east-1"
 embeddings_api_key          = ""  # Empty for Bedrock (uses IAM)
 ```
 
-See [terraform/aws-ecs/terraform.tfvars.example](https://github.com/agentic-community/mcp-gateway-registry/blob/main/terraform/aws-ecs/terraform.tfvars.example) for complete examples.
+See [terraform/aws-ecs/terraform.tfvars.example](../terraform/aws-ecs/terraform.tfvars.example) for complete examples.
 
 ## Supported Models
 
@@ -424,4 +424,4 @@ To add a new embeddings provider:
 
 ## License
 
-Apache 2.0 - See [LICENSE](https://github.com/agentic-community/mcp-gateway-registry/blob/main/LICENSE) file for details
+Apache 2.0 - See [LICENSE](../LICENSE) file for details

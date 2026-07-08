@@ -2,7 +2,7 @@
 
 An MCP server that provides AI agents with tools to discover and query MCP servers, tools, agents, and skills registered in the MCP Gateway Registry.
 
-See the [What's New section](https://github.com/agentic-community/mcp-gateway-registry/blob/main/README.md#whats-new) in the main README for the latest updates and features.
+See the [What's New section](../README.md#whats-new) in the main README for the latest updates and features.
 
 ## What This Server Does
 

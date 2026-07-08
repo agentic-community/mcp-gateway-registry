@@ -593,4 +593,4 @@ def validate_server_tool_access(
 
 - [Multi-Provider IdP Support](./idp-provider-support.md)
 - [Microsoft Entra ID Integration](../entra.md)
-- [Management API Testing Guide](https://github.com/agentic-community/mcp-gateway-registry/blob/main/api/test-management-api-e2e.md)
+- [Management API Testing Guide](../../api/test-management-api-e2e.md)

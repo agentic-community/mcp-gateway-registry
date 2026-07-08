@@ -490,9 +490,9 @@ for the end-to-end browser login flow that uses this collection.
 
 **Code references:**
 
-- Writer: [auth_server/session_store.py](https://github.com/agentic-community/mcp-gateway-registry/blob/main/auth_server/session_store.py) (create / resolve / delete + index management).
-- Reader: [registry/auth/session_store.py](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/auth/session_store.py) (resolve / delete only).
-- Crypto: [registry/auth/session_crypto.py](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/auth/session_crypto.py) (HKDF-derived AES-GCM cipher, shared by writer and reader).
+- Writer: [auth_server/session_store.py](../auth_server/session_store.py) (create / resolve / delete + index management).
+- Reader: [registry/auth/session_store.py](../registry/auth/session_store.py) (resolve / delete only).
+- Crypto: [registry/auth/session_crypto.py](../registry/auth/session_crypto.py) (HKDF-derived AES-GCM cipher, shared by writer and reader).
 
 ---
 
@@ -711,7 +711,7 @@ terraform apply
 
 ## Repository Layer
 
-All database operations go through repository interfaces defined in [`registry/repositories/interfaces.py`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/repositories/interfaces.py):
+All database operations go through repository interfaces defined in [`registry/repositories/interfaces.py`](../registry/repositories/interfaces.py):
 
 - **ServerRepositoryBase:** Server CRUD operations
 - **AgentRepositoryBase:** Agent card CRUD operations

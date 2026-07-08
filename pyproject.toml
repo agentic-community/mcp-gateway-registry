@@ -93,12 +93,9 @@ dev = [
     "moto[secretsmanager]>=5.0.0",  # mock AWS Secrets Manager for egress vault tests
 ]
 docs = [
-    "mkdocs>=1.5.0",
-    "mkdocs-material>=9.4.0",
-    "mkdocs-git-revision-date-localized-plugin>=1.2.0",
-    "mkdocs-minify-plugin>=0.7.0",
-    "mkdocs-awesome-pages-plugin>=2.9.0",
-    "pymdown-extensions>=10.0.0",
+    # The docs site is a single landing page generated from README.md by
+    # scripts/build_landing_page.py. Only a Markdown renderer is required.
+    "markdown>=3.7",
 ]
 
 [tool.setuptools]

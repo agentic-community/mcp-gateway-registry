@@ -27,7 +27,7 @@ The MCP Gateway Registry implements a sophisticated fine-grained access control 
 - Uses hierarchical scope validation for precise permission control
 - Follows the principle of least privilege by default
 
-The access control system is stored in DocumentDB / MongoDB (the `mcp_scopes` collection) and enforced by the validation logic in [`auth_server/server.py`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/auth_server/server.py). Default scopes are seeded at initialization time from the JSON seed files in [`scripts/`](https://github.com/agentic-community/mcp-gateway-registry/tree/main/scripts) (for example `registry-admins.json` and `federation-service.json`); additional scopes can be created through the scope management API. The legacy `scopes.yml` file was removed in v1.24.8.
+The access control system is stored in DocumentDB / MongoDB (the `mcp_scopes` collection) and enforced by the validation logic in [`auth_server/server.py`](../auth_server/server.py). Default scopes are seeded at initialization time from the JSON seed files in [`scripts/`](../scripts) (for example `registry-admins.json` and `federation-service.json`); additional scopes can be created through the scope management API. The legacy `scopes.yml` file was removed in v1.24.8.
 
 ## Scope System Architecture
 
@@ -35,9 +35,9 @@ The access control system is stored in DocumentDB / MongoDB (the `mcp_scopes` co
 
 The access control system consists of three main components:
 
-1. **Scope Configuration** (the `mcp_scopes` collection in DocumentDB / MongoDB, seeded from the JSON files in [`scripts/`](https://github.com/agentic-community/mcp-gateway-registry/tree/main/scripts)): Defines all available scopes and their permissions
+1. **Scope Configuration** (the `mcp_scopes` collection in DocumentDB / MongoDB, seeded from the JSON files in [`scripts/`](../scripts)): Defines all available scopes and their permissions
 2. **Group Mappings**: Maps Amazon Cognito groups to both UI and server scopes
-3. **Validation Engine** ([`auth_server/server.py`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/auth_server/server.py)): Enforces access control decisions
+3. **Validation Engine** ([`auth_server/server.py`](../auth_server/server.py)): Enforces access control decisions
 
 ### Authentication Flow Integration
 
@@ -222,7 +222,7 @@ For detailed Cognito setup instructions, see [`docs/cognito.md`](./cognito.md).
 
 ## Scope Validation Logic
 
-The scope validation is implemented in the [`validate_server_tool_access()`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/auth_server/server.py) function, which follows a systematic approach to determine access permissions.
+The scope validation is implemented in the [`validate_server_tool_access()`](../auth_server/server.py) function, which follows a systematic approach to determine access permissions.
 
 ### Validation Algorithm
 
@@ -281,7 +281,7 @@ Grant Access   Continue to next scope
 Create a basic user with read-only access to specific servers. The examples
 below use YAML for readability; the equivalent scope documents are stored in
 the DocumentDB `mcp_scopes` collection (one document per scope, keyed by `_id`)
-and can be seeded from a JSON file in [`scripts/`](https://github.com/agentic-community/mcp-gateway-registry/tree/main/scripts) or created via
+and can be seeded from a JSON file in [`scripts/`](../scripts) or created via
 the scope management API:
 
 ```yaml
@@ -405,7 +405,7 @@ Virtual servers are treated identically to regular MCP servers in scope definiti
 }
 ```
 
-See [virtual-server-scoped-users.json](https://github.com/agentic-community/mcp-gateway-registry/blob/main/cli/examples/virtual-server-scoped-users.json) for the complete example.
+See [virtual-server-scoped-users.json](../cli/examples/virtual-server-scoped-users.json) for the complete example.
 
 ### Key Points
 

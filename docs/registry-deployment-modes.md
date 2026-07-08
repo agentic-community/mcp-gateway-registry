@@ -289,5 +289,5 @@ uv run python api/registry_management.py \
 ## Related Documentation
 
 - [Configuration Reference](configuration.md) - All environment variables
-- [AWS ECS Deployment](https://github.com/agentic-community/mcp-gateway-registry/blob/main/terraform/aws-ecs/README.md) - Production deployment guide
+- [AWS ECS Deployment](../terraform/aws-ecs/README.md) - Production deployment guide
 - [Static Token Auth](static-token-auth.md) - API authentication without IdP

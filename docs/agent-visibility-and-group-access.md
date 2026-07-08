@@ -8,7 +8,7 @@ An admin creates a group scope that defines exactly which agents a group can acc
 
 - The **UI** (IAM group management page)
 - The **CLI** (`registry_management.py scope-create`)
-- The **API** directly (see [openapi.json](https://github.com/agentic-community/mcp-gateway-registry/blob/main/api/openapi.json))
+- The **API** directly (see [openapi.json](../api/openapi.json))
 
 The scope is synced to the identity provider (Keycloak, Entra, Cognito, Okta).
 

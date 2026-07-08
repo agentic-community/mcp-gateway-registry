@@ -461,3 +461,6 @@ docker-compose.override.yml
 
 # Local MCP connect command with bearer token (never commit)
 .mcp
+
+# Generated landing page (built by scripts/build_landing_page.py in CI)
+site/

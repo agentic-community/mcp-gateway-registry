@@ -236,7 +236,7 @@ Example workflow:
 
 #### Agent Implementation
 
-The agent implementation in [`agents/agent.py`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/agents/agent.py) shows how to:
+The agent implementation in [`agents/agent.py`](../agents/agent.py) shows how to:
 
 1. **Load MCP tools** from the registry
 2. **Combine built-in and discovered tools**

@@ -611,5 +611,5 @@ curl -v http://localhost/health
 
 - [Authentication Setup](auth.md) - Configure identity providers
 - [AI Assistant Integration](ai-coding-assistants-setup.md) - Setup development tools
-- [AWS ECS Deployment](https://github.com/agentic-community/mcp-gateway-registry/blob/main/terraform/aws-ecs/README.md) - Multi-instance configuration
+- [AWS ECS Deployment](../terraform/aws-ecs/README.md) - Multi-instance configuration
 - [API Reference](registry_api.md) - Programmatic management

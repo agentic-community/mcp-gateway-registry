@@ -110,7 +110,7 @@ Analyzes agent source code (local folder or GitHub URL) and generates an A2A-com
 /generate-agent-card https://github.com/org/agent-repo
 ```
 
-See [.claude/skills/generate-agent-card/SKILL.md](https://github.com/agentic-community/mcp-gateway-registry/blob/main/.claude/skills/generate-agent-card/SKILL.md) for details.
+See [.claude/skills/generate-agent-card/SKILL.md](../.claude/skills/generate-agent-card/SKILL.md) for details.
 
 ### Generate Server Card
 
@@ -121,7 +121,7 @@ Analyzes MCP server source code and generates a registry-compatible server card 
 /generate-server-card https://github.com/org/server-repo
 ```
 
-See [.claude/skills/generate-server-card/SKILL.md](https://github.com/agentic-community/mcp-gateway-registry/blob/main/.claude/skills/generate-server-card/SKILL.md) for details.
+See [.claude/skills/generate-server-card/SKILL.md](../.claude/skills/generate-server-card/SKILL.md) for details.
 
 ## Frontend Changes
 

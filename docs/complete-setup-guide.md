@@ -1298,7 +1298,7 @@ curl -f https://mcpgateway.mycorp.com/realms/mcp-gateway
 - [Keycloak: MCP Client Guide](keycloak-mcp-clients.md) - DCR and OAuth flows for end-user MCP clients
 - [API Reference](registry_api.md) - Programmatic registry management
 - [Dynamic Tool Discovery](dynamic-tool-discovery.md) - AI agent capabilities
-- [AWS ECS Deployment](https://github.com/agentic-community/mcp-gateway-registry/blob/main/terraform/aws-ecs/README.md) - Deployment best practices
+- [AWS ECS Deployment](../terraform/aws-ecs/README.md) - Deployment best practices
 
 ### Getting Help
 

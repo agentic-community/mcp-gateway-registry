@@ -9,7 +9,7 @@ rebuild the builders' model without archaeology through the commit history.
 Every invariant below was checked against the code and the design docs before it was written
 here. Where the code contradicts a comfortable summary, the contradiction is stated rather than
 smoothed over. This document *indexes and narrates* the design docs under
-[`docs/design/`](https://github.com/agentic-community/mcp-gateway-registry/tree/main/docs/design/);
+[`docs/design/`](.);
 it does not replace them.
 
 ---
@@ -50,13 +50,13 @@ adding a schema and a handful of route handlers, not a new subsystem.
   auth, every new type would multiply the governance surface and the places a check could be
   forgotten.
 - **In code:** the unified `semantic_search` endpoint returns servers, agents, skills, and
-  virtual servers from one path ([`registry/api/search_routes.py`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/api/search_routes.py)),
+  virtual servers from one path ([`registry/api/search_routes.py`](../../registry/api/search_routes.py)),
   filtered by a shared `entity_type` field in the search repository. The registration-gate check
   is invoked uniformly from `server_routes.py`, `agent_routes.py`, and `skill_routes.py`. Custom
   entity types are schema-driven at runtime
-  ([`registry/api/custom_type_routes.py`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/api/custom_type_routes.py)) and mirror
+  ([`registry/api/custom_type_routes.py`](../../registry/api/custom_type_routes.py)) and mirror
   the skill save-then-index pattern. The audit model enumerates one resource-type taxonomy
-  ([`registry/audit/`](https://github.com/agentic-community/mcp-gateway-registry/tree/main/registry/audit/)).
+  ([`registry/audit/`](../../registry/audit)).
 - **If violated:** a new asset type that bypasses the shared spine (its own search, its own
   registration) reintroduces exactly the sprawl the system exists to prevent, and creates a place
   where an access check can be silently missing.
@@ -121,10 +121,10 @@ registry only (discovery/governance, no data-plane) is a deliberate config choic
 emergent behavior.
 
 - **Precision (verified — corrects a common mislabel):** the master switch is **`DEPLOYMENT_MODE`**
-  (`WITH_GATEWAY` / `REGISTRY_ONLY`) in [`registry/core/config.py`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/core/config.py),
+  (`WITH_GATEWAY` / `REGISTRY_ONLY`) in [`registry/core/config.py`](../../registry/core/config.py),
   which gates nginx updates and even the UI title. This is *distinct* from **`REGISTRY_MODE`**
   (`FULL` / `SKILLS_ONLY` / `MCP_SERVERS_ONLY` / `AGENTS_ONLY`), which controls *which entity-type
-  features/tabs* are enabled (enforced by [`registry/middleware/mode_filter.py`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/middleware/mode_filter.py)).
+  features/tabs* are enabled (enforced by [`registry/middleware/mode_filter.py`](../../registry/middleware/mode_filter.py)).
   The two are orthogonal and interact (a `WITH_GATEWAY + SKILLS_ONLY` combination auto-corrects to
   `REGISTRY_ONLY`). If you are reasoning about "is there a data plane," look at `DEPLOYMENT_MODE`,
   not `REGISTRY_MODE`.
@@ -158,9 +158,9 @@ delivery is logged and never blocks the caller.
 - **Why:** admission is a security control — if you cannot prove an asset is allowed, you must not
   persist it. Notification is an integration convenience — its failure must never take down the
   registration path it observes.
-- **In code:** [`registry/services/registration_gate_service.py`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/services/registration_gate_service.py)
+- **In code:** [`registry/services/registration_gate_service.py`](../../registry/services/registration_gate_service.py)
   ("Blocking registration (fail-closed)"; "Registrations will be blocked until the gate is
-  available") vs [`registry/services/webhook_service.py`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/services/webhook_service.py)
+  available") vs [`registry/services/webhook_service.py`](../../registry/services/webhook_service.py)
   ("fire-and-forget: failures are logged at WARNING but never propagated"). The gate also strips
   credential fields from the payload it sends outward.
 - **If violated:** a fail-open gate is not a gate; a fail-closed webhook couples your registry's
@@ -174,7 +174,7 @@ them. Group-to-scope mapping lives in the database, not in provider-specific cod
 
 - **Precision (verified — corrects an overstatement):** this is **not** generic "point at any OIDC
   issuer" discovery. Each provider is a hand-written class in
-  [`auth_server/providers/`](https://github.com/agentic-community/mcp-gateway-registry/tree/main/auth_server/providers/) selected by a factory; **adding a new
+  [`auth_server/providers/`](../../auth_server/providers) selected by a factory; **adding a new
   provider requires writing a new provider class**
   ([`docs/design/idp-provider-support.md`](idp-provider-support.md): "Create Provider Class / Create
   IAM Manager / Update Factory"). Some providers resolve endpoints via
@@ -196,8 +196,8 @@ pointing at that metadata.
 - **Why:** MCP clients (coding assistants) rely on this discovery handshake to connect without
   hand-configured client IDs. Tracking the spec is what makes one-command assistant integration
   possible.
-- **In code:** [`registry/auth/oauth_metadata.py`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/auth/oauth_metadata.py) defines
-  the PRM path; a dedicated [`registry/middleware/mcp_www_authenticate.py`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/middleware/mcp_www_authenticate.py)
+- **In code:** [`registry/auth/oauth_metadata.py`](../../registry/auth/oauth_metadata.py) defines
+  the PRM path; a dedicated [`registry/middleware/mcp_www_authenticate.py`](../../registry/middleware/mcp_www_authenticate.py)
   attaches the header ("RFC 9728 §5.1"), with matching RFC citations in the nginx config generator.
 - **If violated:** dropping the discovery header silently breaks the zero-config assistant
   onboarding that several features depend on.
@@ -237,14 +237,14 @@ A half-page map of which directory owns which invariant.
 
 | Directory | Owns | Notable contents |
 |---|---|---|
-| [`registry/`](https://github.com/agentic-community/mcp-gateway-registry/tree/main/registry/) | The control plane: registration, search, access control, audit, health, config, all entity types. | `api/` (route handlers per entity type + `search_routes.py`, `custom_type_routes.py`), `services/` (`registration_gate_service.py`, `webhook_service.py`, `federation/`), `repositories/` (storage-agnostic data access), `auth/` (`oauth_metadata.py`, `internal.py`), `egress_auth/`, `search/` + `embeddings/`, `middleware/` (`mode_filter.py`, `mcp_www_authenticate.py`), `audit/`. |
-| [`auth_server/`](https://github.com/agentic-community/mcp-gateway-registry/tree/main/auth_server/) | The single `/validate` chokepoint; per-provider IdP classes; session store; group→scope enrichment. | `providers/{keycloak,cognito,entra,okta,auth0,pingfederate}.py`, `factory.py`, `session_store.py` |
-| [`frontend/`](https://github.com/agentic-community/mcp-gateway-registry/tree/main/frontend/) | React/TypeScript admin UI. | `src/` |
-| [`cli/`](https://github.com/agentic-community/mcp-gateway-registry/tree/main/cli/) | Command-line client + service management. | |
-| [`docker/`](https://github.com/agentic-community/mcp-gateway-registry/tree/main/docker/) | The gateway data plane: nginx templates + Lua (`virtual_router.lua`, `agent_card_rewrite.lua`). | `lua/`, `nginx_rev_proxy_*.conf` |
-| [`charts/`](https://github.com/agentic-community/mcp-gateway-registry/tree/main/charts/) | EKS/Helm deployment + reserved-env-name enforcement. | subcharts + `mcp-gateway-registry-stack`, `reserved-env-names.txt` |
-| [`terraform/`](https://github.com/agentic-community/mcp-gateway-registry/tree/main/terraform/) | ECS Fargate IaC (the ECS surface). | `aws-ecs/modules/mcp-gateway/` |
-| [`credentials-provider/`](https://github.com/agentic-community/mcp-gateway-registry/tree/main/credentials-provider/) | Egress credential/token handling + refresh. | |
+| [`registry/`](../../registry) | The control plane: registration, search, access control, audit, health, config, all entity types. | `api/` (route handlers per entity type + `search_routes.py`, `custom_type_routes.py`), `services/` (`registration_gate_service.py`, `webhook_service.py`, `federation/`), `repositories/` (storage-agnostic data access), `auth/` (`oauth_metadata.py`, `internal.py`), `egress_auth/`, `search/` + `embeddings/`, `middleware/` (`mode_filter.py`, `mcp_www_authenticate.py`), `audit/`. |
+| [`auth_server/`](../../auth_server) | The single `/validate` chokepoint; per-provider IdP classes; session store; group→scope enrichment. | `providers/{keycloak,cognito,entra,okta,auth0,pingfederate}.py`, `factory.py`, `session_store.py` |
+| [`frontend/`](../../frontend) | React/TypeScript admin UI. | `src/` |
+| [`cli/`](../../cli) | Command-line client + service management. | |
+| [`docker/`](../../docker) | The gateway data plane: nginx templates + Lua (`virtual_router.lua`, `agent_card_rewrite.lua`). | `lua/`, `nginx_rev_proxy_*.conf` |
+| [`charts/`](../../charts) | EKS/Helm deployment + reserved-env-name enforcement. | subcharts + `mcp-gateway-registry-stack`, `reserved-env-names.txt` |
+| [`terraform/`](../../terraform) | ECS Fargate IaC (the ECS surface). | `aws-ecs/modules/mcp-gateway/` |
+| [`credentials-provider/`](../../credentials-provider) | Egress credential/token handling + refresh. | |
 
 The **three-way boundary that explains the most code:** `registry/` decides *what is allowed*
 (control plane), `auth_server/` *proves who you are and enforces the check* (the `/validate`
@@ -288,7 +288,7 @@ implements. Prefer the code and the newer doc when they disagree.
 ## 6. How to change this system without breaking its theory
 
 Before merging a change that touches auth, routing, registration, or configuration, check it
-against the invariants above. The [`pr-review`](https://github.com/agentic-community/mcp-gateway-registry/tree/main/.claude/skills/pr-review/) skill encodes the
+against the invariants above. The [`pr-review`](../../.claude/skills/pr-review) skill encodes the
 security-specific version of this list; the theory-level checks are:
 
 1. **New asset type or entity behavior?** It must ride the shared registration/search/access-control/

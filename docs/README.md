@@ -1,88 +1,26 @@
 # Documentation
 
-This directory contains the MkDocs-based documentation for the MCP Gateway & Registry.
+This directory contains the project documentation as plain Markdown. Browse it directly on
+GitHub, or start from the top-level [README](../README.md).
 
-## Building Documentation Locally
+The published landing page at
+[agentic-community.github.io/mcp-gateway-registry](https://agentic-community.github.io/mcp-gateway-registry/)
+is a single page generated from the top-level `README.md` by
+[`scripts/build_landing_page.py`](../scripts/build_landing_page.py) and deployed by the
+`Build and Deploy Landing Page` GitHub Actions workflow. The detailed guides below are read as
+Markdown here in the repository.
 
-### Prerequisites
+## Where to start
 
-```bash
-# Using uv (recommended)
-uv pip install -e ".[docs]"
+- [Quick Start](quickstart.md) and [Installation Guide](installation.md)
+- [Complete Setup Guide](complete-setup-guide.md)
+- [Authentication](auth.md) and [Access Control & Scopes](scopes.md)
+- [Theory of the System](design/theory-of-the-system.md) - the design and its invariants
+- [Executive Brief](overview/executive-brief.md)
+- [FAQ / Troubleshooting](faq/index.md)
+- [Release Notes](release-notes/)
 
-# Or using pip
-pip install -e ".[docs]"
-```
+## Contributing docs
 
-### Development Server
-
-```bash
-# Start development server with live reload
-mkdocs serve
-
-# The documentation will be available at http://127.0.0.1:8000
-```
-
-### Building Static Site
-
-```bash
-# Build static site
-mkdocs build
-
-# The built site will be in the `site/` directory
-```
-
-## Documentation Structure
-
-- `index.md` - Main landing page (generated from README.md)
-- `complete-setup-guide.md` - Step-by-step setup from scratch
-- `installation.md` - Complete installation guide
-- `auth.md` - Authentication and OAuth setup
-- `cognito.md` - Amazon Cognito configuration
-- `keycloak-agent-m2m.md` - Keycloak agent M2M and operations guide (service accounts, ops)
-- `keycloak-mcp-clients.md` - Keycloak guide for end-user MCP clients (DCR, OAuth flows)
-- `ai-coding-assistant-registry-integration.md` - One-command DCR setup for Claude Code, Claude.ai (umbrella: #988)
-- `scopes.md` - Access control and permissions
-- `registry_api.md` - API reference
-- `dynamic-tool-discovery.md` - AI agent tool discovery
-- `ai-coding-assistants-setup.md` - IDE integration guide
-- `faq/index.md` - Frequently asked questions
-
-## Deployment
-
-The documentation is automatically deployed to GitHub Pages when changes are pushed to the `main` branch via GitHub Actions.
-
-### Manual Deployment
-
-```bash
-# Deploy to GitHub Pages
-mkdocs gh-deploy
-```
-
-## Theme and Configuration
-
-The documentation uses the [Material for MkDocs](https://squidfunk.github.io/mkdocs-material/) theme with:
-
-- Light/dark mode toggle
-- Navigation tabs and sections
-- Search functionality
-- Code syntax highlighting
-- Mermaid diagram support
-- Git revision dates
-
-## Contributing
-
-When adding new documentation:
-
-1. Create markdown files in the appropriate directory
-2. Update `mkdocs.yml` navigation structure
-3. Use proper markdown formatting and admonitions
-4. Include code examples where relevant
-5. Test locally with `mkdocs serve` before committing
-
-## Plugins Used
-
-- **search** - Full-text search functionality
-- **git-revision-date-localized** - Shows last update dates
-- **minify** - Minifies HTML output for production
-- **pymdown-extensions** - Enhanced markdown features
+Add or edit Markdown files anywhere under `docs/`. Use repository-relative links so they resolve
+both on GitHub and in forks. No build step or navigation config is required.
