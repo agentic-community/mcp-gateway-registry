@@ -71,16 +71,16 @@ By default, the registry handles A2A discovery, authentication, and access contr
 
 ## See it in action
 
-A 60-second tour of MCP servers, A2A agents, and external registries working together for dynamic tool discovery:
+Watch how MCP servers, A2A agents, and external registries work together for dynamic tool discovery:
 
 https://github.com/user-attachments/assets/97c640db-f78b-4a6c-9662-894f975f66e2
 
-MCP tools discovered and invoked through the gateway ([view the demo](docs/img/MCP_tools.gif)). More walkthroughs are in the [demo videos](docs/demo-videos.md).
+More walkthroughs are in the [demo videos](docs/demo-videos.md).
 
 ## Start here if you are a...
 
-- **Developer** — begin with the [Quick Start](#quick-start) below, then connect your AI coding assistant with the [AI Coding Assistant Integration guide](docs/ai-coding-assistants-setup.md) and the [API reference](docs/registry_api.md).
-- **Platform / security / ops team** — see the deployment guides for [Docker Compose](docs/installation.md), [Amazon ECS (Terraform)](terraform/aws-ecs/README.md), and [Amazon EKS (Helm)](charts/README.md); the [authentication guide](docs/auth.md); the [configuration reference](docs/configuration.md); and [access control & scopes](docs/scopes.md).
+- **Developer** — start with the [Complete Setup Guide](docs/complete-setup-guide.md); you can also try the [macOS setup skill](.claude/skills/macos-setup/SKILL.md) to get it running on your MacBook. Then connect your AI coding assistant with the [AI Coding Assistant Integration guide](docs/ai-coding-assistants-setup.md) and the [API reference](docs/registry_api.md).
+- **Platform / security / ops team** — see the deployment guides for [Amazon EKS (Helm)](charts/README.md), [Amazon ECS (Terraform)](terraform/aws-ecs/README.md), and [Docker Compose](docs/installation.md); the [authentication guide](docs/auth.md); the [configuration reference](docs/configuration.md); and [access control & scopes](docs/scopes.md).
 - **Decision-maker evaluating adoption** — read the [Executive Brief](docs/overview/executive-brief.md), watch the [demo videos](docs/demo-videos.md), and try the [AWS Workshop](https://catalog.us-east-1.prod.workshops.aws/workshops/0c3265a6-1a4a-467b-ae56-e4d019184b0e/en-US).
 
 ## Quick Start
