@@ -53,7 +53,7 @@ Two key environment variables control cookie security behavior:
 - **Solution**: Auth server checks `X-Forwarded-Proto` header to detect original protocol
 - **Behavior**: Cookie `secure` flag is set based on **original request protocol**, not backend protocol
 
-**Code Logic** ([`auth_server/server.py:1797-1803`](../auth_server/server.py)):
+**Code Logic** (`auth_server/server.py:1797-1803`):
 ```python
 x_forwarded_proto = request.headers.get("x-forwarded-proto", "")
 is_https = x_forwarded_proto == "https" or request.url.scheme == "https"
@@ -210,17 +210,17 @@ AUTH_SERVER_EXTERNAL_URL=https://auth.example.com  # External URL
 
 The cookie security implementation is found in:
 
-- **Configuration:** [`registry/core/config.py`](../registry/core/config.py)
+- **Configuration:** `registry/core/config.py`
   - `session_cookie_secure`: Controls HTTPS-only flag
   - `session_cookie_domain`: Controls cross-subdomain sharing
 
-- **Auth Server Cookie Setting:** [`auth_server/server.py`](../auth_server/server.py) (lines 1800-1831)
+- **Auth Server Cookie Setting:** `auth_server/server.py` (lines 1800-1831)
   - X-Forwarded-Proto detection for HTTPS termination at load balancer
   - Explicit configuration only - no automatic domain inference
   - Conditional secure flag based on both config AND actual protocol
   - All security flags properly set
 
-- **Registry Cookie Setting:** [`registry/auth/routes.py`](../registry/auth/routes.py) (lines 139-158)
+- **Registry Cookie Setting:** `registry/auth/routes.py` (lines 139-158)
   - Comprehensive security comments explaining single-tenant model
   - Conditional domain attribute application
   - All security flags properly set

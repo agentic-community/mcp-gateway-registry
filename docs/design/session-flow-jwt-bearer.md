@@ -89,7 +89,7 @@ configured IdPs:
 Validation: signature checked against the IdP's JWKS, issuer against the
 configured allowed-issuer list, audience against the registered client_id,
 expiration against current time. Provider-specific code lives under
-[auth_server/providers/](../../auth_server/providers/) — each provider's
+[auth_server/providers/](https://github.com/agentic-community/mcp-gateway-registry/tree/main/auth_server/providers) — each provider's
 `validate_token` method returns a normalized dict shape.
 
 ### 2.2 Self-signed JWT (programmatic API token)
@@ -102,7 +102,7 @@ issuing user.
 
 Validation: HS256 signature against `SECRET_KEY`, issuer match, audience
 match, `token_use=access`, expiration. See
-[auth_server/providers/entra.py:226-296](../../auth_server/providers/entra.py#L226-L296)
+[auth_server/providers/entra.py:226-296](https://github.com/agentic-community/mcp-gateway-registry/blob/main/auth_server/providers/entra.py#L226-L296)
 (present on every provider — the auth-server checks self-signed first,
 falls back to provider validation if the issuer does not match).
 
@@ -121,7 +121,7 @@ Operator-configured shared secret intended for trusted internal tooling
 Activated by `REGISTRY_STATIC_TOKEN_AUTH_ENABLED=true`. If enabled but no
 keys are set, static-token auth is **disabled with a warning** rather than
 failing open. See
-[auth_server/server.py:129-149](../../auth_server/server.py#L129-L149).
+[auth_server/server.py:129-149](https://github.com/agentic-community/mcp-gateway-registry/blob/main/auth_server/server.py#L129-L149).
 
 ### 2.4 Federation static token
 
@@ -130,8 +130,8 @@ Used when one registry calls another in a federation deployment.
 Minimum length enforced (`MIN_FEDERATION_TOKEN_LENGTH`). The validating
 registry recognizes the token and synthesizes a `federation-peer` identity
 with federation-specific scopes. See
-[auth_server/server.py:376-396](../../auth_server/server.py#L376-L396) and
-[auth_server/server.py:1846-1850](../../auth_server/server.py#L1846-L1850).
+[auth_server/server.py:376-396](https://github.com/agentic-community/mcp-gateway-registry/blob/main/auth_server/server.py#L376-L396) and
+[auth_server/server.py:1846-1850](https://github.com/agentic-community/mcp-gateway-registry/blob/main/auth_server/server.py#L1846-L1850).
 
 ---
 
@@ -226,7 +226,7 @@ response onto the upstream request:
 | `X-Tool-Name` | string | auth-server | registry | The tool name when the URL targets a specific tool (used by #1026 tool-level access control). |
 
 The registry consumes these in `nginx_proxied_auth`
-([registry/auth/dependencies.py:562-668](../../registry/auth/dependencies.py#L562-L668)).
+([registry/auth/dependencies.py:562-668](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/auth/dependencies.py#L562-L668)).
 Both the cookie path and the header path eventually call `_derive_user_context`,
 the single source of truth for "is this user an admin and what can they see?"
 
@@ -235,7 +235,7 @@ the single source of truth for "is this user an admin and what can they see?"
 If `X-Auth-Method` is missing on a header-auth request (a misconfigured
 nginx, or a future provider whose `/validate` forgot to set it), the
 registry **logs a warning and defaults to `keycloak`** — see
-[registry/auth/dependencies.py:626-637](../../registry/auth/dependencies.py#L626-L637).
+[registry/auth/dependencies.py:626-637](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/auth/dependencies.py#L626-L637).
 This used to be silent; #1055 added the warning. The default is preserved for
 backward compatibility but operators are expected to fix the upstream
 config.
@@ -255,7 +255,7 @@ status is derived purely from the auth-server-computed scopes in `X-Scopes`.
 Both auth paths normalize their inputs to the same tuple
 `(username, groups, scopes, auth_method, provider, client_id?)` and call
 `_derive_user_context`
-([registry/auth/dependencies.py:453-518](../../registry/auth/dependencies.py#L453-L518)).
+([registry/auth/dependencies.py:453-518](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/auth/dependencies.py#L453-L518)).
 The output is a dict used everywhere downstream:
 
 ```python
@@ -292,7 +292,7 @@ no-access context. Federation static tokens use a separate routing path
 
 - M2M tokens use the `roles` claim instead of `groups`. The provider
   detects this and substitutes
-  ([auth_server/providers/entra.py:199-203](../../auth_server/providers/entra.py#L199-L203)).
+  ([auth_server/providers/entra.py:199-203](https://github.com/agentic-community/mcp-gateway-registry/blob/main/auth_server/providers/entra.py#L199-L203)).
 - Two valid issuers per token: `https://login.microsoftonline.com/<tenant>/v2.0`
   (v2.0 endpoint) and `https://sts.windows.net/<tenant>/` (v1.0/M2M).
   The validator accepts either.
@@ -398,7 +398,7 @@ set custom headers.
 A: Yes. The header path takes precedence — `nginx_proxied_auth` checks
 headers first, falls back to cookies only if no `X-User`/`X-Username` is
 present. See
-[registry/auth/dependencies.py:611-668](../../registry/auth/dependencies.py#L611-L668).
+[registry/auth/dependencies.py:611-668](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/auth/dependencies.py#L611-L668).
 
 **Q: Does the JWT flow ever touch the `oauth_sessions_<ns>` collection?**
 A: No. Tokens are stateless; that collection is only for browser sessions.

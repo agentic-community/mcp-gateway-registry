@@ -220,7 +220,6 @@ Tests all 9 CRUD operations:
 8. VERIFY - Confirm deletion
 9. RE-CREATE - Restore agent
 
-See [Test Quick Reference](../tests/TEST_QUICK_REFERENCE.md) for details.
 
 ### Access Control Testing
 
@@ -240,7 +239,6 @@ Tests include:
 - **MCP Service Access** (Tests 1-6) - Verify service permissions
 - **Agent Registry API** (Tests 7-14) - Verify agent visibility and access
 
-See [LOB Bot Access Control Testing](../tests/lob-bot-access-control-testing.md) for detailed test documentation.
 
 ## Implementation Details
 
@@ -348,8 +346,8 @@ Continues with confidence in code quality
 ## Documentation
 
 - **[A2A Agent Management](a2a-agent-management.md)** - Complete CLI guide and examples
-- **[Agent CRUD Test](../tests/TEST_QUICK_REFERENCE.md#agent-crud-test)** - Testing CRUD operations
-- **[LOB Bot Access Control Testing](../tests/lob-bot-access-control-testing.md)** - Testing access control
+- **Agent CRUD Test** - Testing CRUD operations
+- **LOB Bot Access Control Testing** - Testing access control
 - **[Scopes Configuration](scopes.md)** - Permission definitions (stored in the `mcp_scopes` collection in DocumentDB)
 - **[LLM Navigation Guide](llms.txt#section-45)** - For AI systems understanding implementation
 

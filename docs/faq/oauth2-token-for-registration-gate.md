@@ -82,10 +82,10 @@ While this example uses Entra, the same configuration pattern works with any OAu
 
 If you deploy with Helm, set these values in your Helm values file:
 
-- [`charts/registry/values.yaml`](../../charts/registry/values.yaml) (lines 60-68): set `app.registrationGateAuthType`, `app.registrationGateOauth2TokenUrl`, `app.registrationGateOauth2ClientId`, `app.registrationGateOauth2ClientSecret`, and `app.registrationGateOauth2Scope`
-- [`charts/mcp-gateway-registry-stack/values.yaml`](../../charts/mcp-gateway-registry-stack/values.yaml) (lines 229-237): same keys under `registry.app.*`
+- [`charts/registry/values.yaml`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/charts/registry/values.yaml) (lines 60-68): set `app.registrationGateAuthType`, `app.registrationGateOauth2TokenUrl`, `app.registrationGateOauth2ClientId`, `app.registrationGateOauth2ClientSecret`, and `app.registrationGateOauth2Scope`
+- [`charts/mcp-gateway-registry-stack/values.yaml`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/charts/mcp-gateway-registry-stack/values.yaml) (lines 229-237): same keys under `registry.app.*`
 
-These values are injected into the registry container via [`charts/registry/templates/secret.yaml`](../../charts/registry/templates/secret.yaml) (lines 173-190).
+These values are injected into the registry container via [`charts/registry/templates/secret.yaml`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/charts/registry/templates/secret.yaml) (lines 173-190).
 
 ## Related documentation
 

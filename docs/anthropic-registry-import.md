@@ -316,7 +316,7 @@ Add to cron or systemd timer for automatic updates:
 
 - [Anthropic MCP Registry API](anthropic_registry_api.md)
 - [Service Management](service-management.md)
-- [Authentication Setup](../README.md#authentication)
+- [Authentication Setup](https://github.com/agentic-community/mcp-gateway-registry/blob/main/README.md#authentication)
 - [Health Monitoring](OBSERVABILITY.md)
 
 ## Support

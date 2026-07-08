@@ -1,0 +1,93 @@
+nav:
+  - index.md
+  - overview
+  - Getting Started:
+    - quickstart.md
+    - installation.md
+    - complete-setup-guide.md
+    - macos-setup-guide.md
+    - prebuilt-images.md
+    - podman-apple-silicon.md
+    - configuration.md
+    - deployment-modes.md
+    - registry-deployment-modes.md
+  - Authentication & Security:
+    - auth.md
+    - registry-api-auth.md
+    - static-token-auth.md
+    - jwt-token-vending.md
+    - oauth-discovery-endpoints.md
+    - scopes.md
+    - scopes-mgmt.md
+    - iam-settings-ui.md
+    - agent-visibility-and-group-access.md
+    - egress-credential-vault.md
+    - security-posture.md
+    - security-scanner.md
+    - scan_report_example.md
+    - SECURITY.md
+    - SECURITY_GUIDELINES.md
+  - Identity Providers: idp
+  - Architecture & Development:
+    - design
+    - architecture-diagrams.md
+    - registry-auth-architecture.md
+    - registry-auth-detailed.md
+    - database-design.md
+    - api-reference.md
+    - registry_api.md
+    - anthropic_registry_api.md
+    - dynamic-tool-discovery.md
+    - custom-entities.md
+    - embeddings.md
+    - server-versioning-operations.md
+    - virtual-server-operations.md
+    - logging-standard.md
+  - Integration & Clients:
+    - ai-coding-assistants-setup.md
+    - ai-coding-assistant-registry-integration.md
+    - keycloak-mcp-clients.md
+    - keycloak-agent-m2m.md
+    - mcp-registry-cli.md
+    - ai-registry-tools.md
+    - connection-methods
+  - Agents & Skills:
+    - a2a.md
+    - a2a-agent-management.md
+    - agent-skills-operational-guide.md
+    - supported-protocol-and-trust-fields.md
+    - agentcore.md
+    - agentcore-auto-registration-prerequisites.md
+  - Federation & Registries:
+    - federation.md
+    - federation-operational-guide.md
+    - anthropic-registry-import.md
+    - aws-agent-registry-federation.md
+    - ard.md
+  - Observability & Operations:
+    - OBSERVABILITY.md
+    - metrics-architecture.md
+    - TELEMETRY.md
+    - audit-logging.md
+    - logging.md
+    - service-management.md
+    - datastore-management.md
+    - token-refresh-service.md
+    - custom-metadata.md
+    - operations
+  - Reference:
+    - unified-parameter-reference.md
+    - FEATURES.md
+    - registration-webhooks.md
+    - mongodb-m2m-collections.md
+    - benchmarks
+    - testing
+  - FAQ: faq
+  - Contributing:
+    - CONTRIBUTING.md
+    - CODE_OF_CONDUCT.md
+  - Legal:
+    - LICENSE.md
+    - NOTICE.md
+  - Release Notes: release-notes
+  - ...

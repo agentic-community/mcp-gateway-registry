@@ -406,7 +406,7 @@ Content-Type: application/json
 Created by `init-keycloak.sh::create_realm()`. Issuer URL is
 `https://mcpgateway.ddns.net/realms/mcp-gateway`. Tokens carry this in the
 `iss` claim and are validated against it server-side
-([auth_server/providers/keycloak.py:118-123](../auth_server/providers/keycloak.py#L118)).
+([auth_server/providers/keycloak.py:118-123](https://github.com/agentic-community/mcp-gateway-registry/blob/main/auth_server/providers/keycloak.py#L118)).
 
 #### Pre-defined clients
 
@@ -542,23 +542,23 @@ the gateway's validator strictly requires (see "Token validation" below).
 
 The `included.custom.audience` value `"mcp-gateway"` is the audience name
 the gateway accepts. If you change it, you must also update
-[auth_server/providers/keycloak.py](../auth_server/providers/keycloak.py)'s
+[auth_server/providers/keycloak.py](https://github.com/agentic-community/mcp-gateway-registry/blob/main/auth_server/providers/keycloak.py)'s
 `accepted_audiences` list to match.
 
 ### Gateway-side code paths
 
 #### PRM endpoint
 
-[registry/api/wellknown_routes.py::get_oauth_protected_resource()](../registry/api/wellknown_routes.py)
+[registry/api/wellknown_routes.py::get_oauth_protected_resource()](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/api/wellknown_routes.py)
 
 Reads `settings.registry_url` for the canonical resource URL, calls
 `provider.protected_resource_metadata()` (default impl in
-[auth_server/providers/base.py](../auth_server/providers/base.py)) which
+[auth_server/providers/base.py](https://github.com/agentic-community/mcp-gateway-registry/blob/main/auth_server/providers/base.py)) which
 returns the RFC 9728 doc. Cache-Control: `public, max-age=300`.
 
 #### AS metadata endpoint
 
-[registry/api/wellknown_routes.py::get_oauth_authorization_server()](../registry/api/wellknown_routes.py)
+[registry/api/wellknown_routes.py::get_oauth_authorization_server()](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/api/wellknown_routes.py)
 
 Calls `provider.authorization_server_metadata()` which fetches Keycloak's
 `/.well-known/openid-configuration` (note: hyphen form, not the legacy
@@ -570,8 +570,8 @@ so the discovery client can reach the issuer.
 
 Two emission paths:
 - nginx `@auth_error` named-location adds the header on auth_request 401s
-  (configured in [docker/nginx_rev_proxy_http_and_https.conf](../docker/nginx_rev_proxy_http_and_https.conf))
-- ASGI middleware [registry/middleware/mcp_www_authenticate.py](../registry/middleware/mcp_www_authenticate.py)
+  (configured in [docker/nginx_rev_proxy_http_and_https.conf](https://github.com/agentic-community/mcp-gateway-registry/blob/main/docker/nginx_rev_proxy_http_and_https.conf))
+- ASGI middleware [registry/middleware/mcp_www_authenticate.py](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/middleware/mcp_www_authenticate.py)
   adds the header on FastAPI 401s
 
 The `resource_metadata` URL must equal the PRM `resource` field byte-for-byte
@@ -579,7 +579,7 @@ The `resource_metadata` URL must equal the PRM `resource` field byte-for-byte
 
 #### Token validation
 
-[auth_server/providers/keycloak.py::validate_token()](../auth_server/providers/keycloak.py)
+[auth_server/providers/keycloak.py::validate_token()](https://github.com/agentic-community/mcp-gateway-registry/blob/main/auth_server/providers/keycloak.py)
 
 1. Decode JWT header for `kid`
 2. Fetch JWKS from `<realm>/protocol/openid-connect/certs` (cached 1h)
@@ -597,8 +597,8 @@ The `resource_metadata` URL must equal the PRM `resource` field byte-for-byte
 
 #### Group → scope mapping
 
-[auth_server/server.py::map_groups_to_scopes()](../auth_server/server.py) +
-[auth_server/server.py:2099-2106](../auth_server/server.py#L2099)
+[auth_server/server.py::map_groups_to_scopes()](https://github.com/agentic-community/mcp-gateway-registry/blob/main/auth_server/server.py) +
+[auth_server/server.py:2099-2106](https://github.com/agentic-community/mcp-gateway-registry/blob/main/auth_server/server.py#L2099)
 
 Reads `validation_result["groups"]`, queries DocumentDB for each group's
 `group_mappings`, returns the union of mapped scopes. The result is what gets
@@ -665,7 +665,7 @@ Captured here so future hardening passes have a checklist:
 
 - PR #1115 / issue #989 — the gateway-side discovery surface
 - [docs/oauth-discovery-endpoints.md](oauth-discovery-endpoints.md) — operator-facing PRM/AS-metadata reference
-- [.scratchpad/coding-assistant-oauth/discussion-2026-05-24-claude-connector-q-and-a.md](../.scratchpad/coding-assistant-oauth/discussion-2026-05-24-claude-connector-q-and-a.md) — running discussion log including all live-test findings
-- [keycloak/setup/init-keycloak.sh](../keycloak/setup/init-keycloak.sh) — fresh-install setup script
-- [keycloak/setup/upgrade-realm-for-dcr.sh](../keycloak/setup/upgrade-realm-for-dcr.sh) — standalone upgrade script for existing installs
-- [keycloak/setup/cleanup-stale-dcr-clients.sh](../keycloak/setup/cleanup-stale-dcr-clients.sh) — on-demand cleanup of DCR'd clients with no active sessions; supports `--dry-run`
+- [.scratchpad/coding-assistant-oauth/discussion-2026-05-24-claude-connector-q-and-a.md](https://github.com/agentic-community/mcp-gateway-registry/blob/main/.scratchpad/coding-assistant-oauth/discussion-2026-05-24-claude-connector-q-and-a.md) — running discussion log including all live-test findings
+- [keycloak/setup/init-keycloak.sh](https://github.com/agentic-community/mcp-gateway-registry/blob/main/keycloak/setup/init-keycloak.sh) — fresh-install setup script
+- [keycloak/setup/upgrade-realm-for-dcr.sh](https://github.com/agentic-community/mcp-gateway-registry/blob/main/keycloak/setup/upgrade-realm-for-dcr.sh) — standalone upgrade script for existing installs
+- [keycloak/setup/cleanup-stale-dcr-clients.sh](https://github.com/agentic-community/mcp-gateway-registry/blob/main/keycloak/setup/cleanup-stale-dcr-clients.sh) — on-demand cleanup of DCR'd clients with no active sessions; supports `--dry-run`

@@ -70,7 +70,7 @@ Virtual servers are created from a JSON configuration file. Here is an example t
 }
 ```
 
-See [cli/examples/virtual-server-combined-example.json](../cli/examples/virtual-server-combined-example.json) for the full example.
+See [cli/examples/virtual-server-combined-example.json](https://github.com/agentic-community/mcp-gateway-registry/blob/main/cli/examples/virtual-server-combined-example.json) for the full example.
 
 ### Configuration Fields
 
@@ -245,7 +245,7 @@ Virtual servers support fine-grained access control through scopes. Virtual serv
 
 For comprehensive documentation on how access control works, see [Virtual MCP Server Access Control](scopes.md#virtual-mcp-server-access-control) in the Fine-Grained Access Control documentation.
 
-See [Scope-Based Access Control Example](../cli/examples/virtual-server-scoped-example.json) for a virtual server configuration with scopes.
+See [Scope-Based Access Control Example](https://github.com/agentic-community/mcp-gateway-registry/blob/main/cli/examples/virtual-server-scoped-example.json) for a virtual server configuration with scopes.
 
 ### Server-Level Scopes
 
@@ -298,7 +298,7 @@ The test script creates:
 - An M2M service account for API testing
 - A regular user for UI testing
 
-See [test_virtual_server_scopes_e2e.sh](../tests/integration/test_virtual_server_scopes_e2e.sh) for details.
+See [test_virtual_server_scopes_e2e.sh](https://github.com/agentic-community/mcp-gateway-registry/blob/main/tests/integration/test_virtual_server_scopes_e2e.sh) for details.
 
 ## Web UI Alternative
 

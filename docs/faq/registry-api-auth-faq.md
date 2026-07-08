@@ -68,7 +68,7 @@ The **Settings → Authentication** page shows:
 | `registry_api_keys` | Registry API Keys | Masked |
 | `m2m_direct_registration_enabled` | M2M Direct Registration Enabled | Displayed as `true` / `false` (from [#851](https://github.com/agentic-community/mcp-gateway-registry/issues/851)) |
 
-The field registry is defined in [registry/api/config_routes.py](../../registry/api/config_routes.py).
+The field registry is defined in [registry/api/config_routes.py](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/api/config_routes.py).
 
 ## What's the roadmap?
 

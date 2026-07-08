@@ -77,7 +77,7 @@ pdftotext document.pdf output.txt
 
 **Using the API:**
 
-For API details, see the OpenAPI specification at [api/openapi.json](../api/openapi.json). Use the `registry_management.py` CLI for Python-based commands (see [CLI Commands](#cli-commands) section below).
+For API details, see the OpenAPI specification at [api/openapi.json](https://github.com/agentic-community/mcp-gateway-registry/blob/main/api/openapi.json). Use the `registry_management.py` CLI for Python-based commands (see [CLI Commands](#cli-commands) section below).
 
 ### Step 3: Verify Registration
 
@@ -111,13 +111,13 @@ uv run python api/registry_management.py \
   skill-list
 ```
 
-For custom curl commands with query parameters (e.g., `include_disabled`, `tag`), see [api/openapi.json](../api/openapi.json).
+For custom curl commands with query parameters (e.g., `include_disabled`, `tag`), see [api/openapi.json](https://github.com/agentic-community/mcp-gateway-registry/blob/main/api/openapi.json).
 
 ### Update a Skill
 
 **UI:** Click the edit (pencil) icon on a skill card.
 
-**API:** For update endpoints, see the OpenAPI specification at [api/openapi.json](../api/openapi.json).
+**API:** For update endpoints, see the OpenAPI specification at [api/openapi.json](https://github.com/agentic-community/mcp-gateway-registry/blob/main/api/openapi.json).
 
 ### Enable/Disable Skills
 
@@ -254,7 +254,7 @@ Skills can reference required MCP server tools. Validate tool availability:
 
 **UI:** Click the wrench icon on a skill card.
 
-**API:** For tool validation endpoints, see [api/openapi.json](../api/openapi.json).
+**API:** For tool validation endpoints, see [api/openapi.json](https://github.com/agentic-community/mcp-gateway-registry/blob/main/api/openapi.json).
 
 Response example:
 ```json
@@ -283,7 +283,7 @@ Response example:
 
 ### Set Visibility
 
-For visibility update endpoints, see [api/openapi.json](../api/openapi.json). Visibility options are:
+For visibility update endpoints, see [api/openapi.json](https://github.com/agentic-community/mcp-gateway-registry/blob/main/api/openapi.json). Visibility options are:
 - `public` - Visible to all authenticated users
 - `private` - Visible only to the owner
 - `group` - Visible to specified groups (requires `allowed_groups` parameter)
@@ -302,7 +302,7 @@ uv run python api/registry_management.py \
   skill-search --query "pdf"
 ```
 
-For advanced search with multiple filters, see [api/openapi.json](../api/openapi.json).
+For advanced search with multiple filters, see [api/openapi.json](https://github.com/agentic-community/mcp-gateway-registry/blob/main/api/openapi.json).
 
 ## Integration with AI Assistants
 
@@ -563,7 +563,7 @@ Or the simpler format:
 ## API Reference
 
 For complete API endpoint documentation, see:
-- **OpenAPI Specification**: [api/openapi.json](../api/openapi.json) - Full API spec for writing custom curl commands
+- **OpenAPI Specification**: [api/openapi.json](https://github.com/agentic-community/mcp-gateway-registry/blob/main/api/openapi.json) - Full API spec for writing custom curl commands
 - **API Reference**: [API Reference](api-reference.md) - Human-readable endpoint documentation
 
 ## Related Documentation

@@ -49,6 +49,7 @@ theme:
 plugins:
   - search:
       lang: en
+  - awesome-pages
   - git-revision-date-localized:
       enable_creation_date: true
   - minify:
@@ -94,46 +95,14 @@ markdown_extensions:
       custom_checkbox: true
   - pymdownx.tilde
 
-# Page tree
-nav:
-  - Home: index.md
-  - Overview:
-    - Executive Brief: overview/executive-brief.md
-    - Feature & Release Highlights: overview/feature-release-highlights.md
-  - Getting Started:
-    - Complete Setup Guide: complete-setup-guide.md
-    - Installation: installation.md
-    - Configuration: configuration.md
-    - FAQ: faq/index.md
-  - Authentication & Security:
-    - Authentication Guide: auth.md
-    - Registry API Authentication: registry-api-auth.md
-    - IAM Settings UI: iam-settings-ui.md
-    - Amazon Cognito Setup: cognito.md
-    - Amazon Cognito (Deployment Surfaces): idp/cognito.md
-    - PingFederate Setup: idp/pingfederate.md
-    - Access Control & Scopes: scopes.md
-    - JWT Token Vending: jwt-token-vending.md
-    - Per-User Egress Credential Vault: egress-credential-vault.md
-    - Security Policy: SECURITY.md
-  - Architecture & Development:
-    - Theory of the System: design/theory-of-the-system.md
-    - Registry API: registry_api.md
-    - Dynamic Tool Discovery: dynamic-tool-discovery.md
-    - Custom Entity Types: custom-entities.md
-    - Architecture Overview: registry-auth-architecture.md
-    - Detailed Architecture: registry-auth-detailed.md
-  - Integration:
-    - AI Coding Assistants: ai-coding-assistants-setup.md
-    - MCP-Gateway CLI Guide: mcp-registry-cli.md
-  - Contributing:
-    - Contributing Guide: CONTRIBUTING.md
-    - Code of Conduct: CODE_OF_CONDUCT.md
-  - Legal:
-    - License: LICENSE.md
-    - Notice: NOTICE.md
-  - Release Notes:
-    - release-notes
+# Navigation is generated automatically from the docs/ tree by the awesome-pages plugin.
+# Ordering and section titles are controlled by `.pages` files (docs/.pages and per-folder).
+# This means a new docs/*.md page appears in the nav on the next build with no mkdocs.yml edit.
+
+# Do not publish contributor-facing readmes that would collide with a section index.
+exclude_docs: |
+  README.md
+
 # Extra
 extra:
   social:

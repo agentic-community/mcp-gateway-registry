@@ -36,7 +36,7 @@ When `MONGODB_CONNECTION_STRING` is set, the `DOCUMENTDB_*` variables are ignore
 
 ## Deployment Type 1: Docker Compose (local or single-host)
 
-Edit your `.env` file (copy from [`.env.example`](../../.env.example) if you haven't already):
+Edit your `.env` file (copy from [`.env.example`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/.env.example) if you haven't already):
 
 ```bash
 # STORAGE_BACKEND selects the repository code path. For MongoDB Atlas any of
@@ -83,7 +83,7 @@ Connecting to mongodb-ce via connection string override
 Connected to DocumentDB/MongoDB 8.x.x
 ```
 
-You can also delete or not deploy the local `mongodb` service in [`docker-compose.yml`](../../docker-compose.yml) if you only want Atlas — the `docker-compose.yml` bundles a local MongoDB container for convenience, but the registry code doesn't care where the connection points.
+You can also delete or not deploy the local `mongodb` service in [`docker-compose.yml`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/docker-compose.yml) if you only want Atlas — the `docker-compose.yml` bundles a local MongoDB container for convenience, but the registry code doesn't care where the connection points.
 
 ---
 
@@ -91,7 +91,7 @@ You can also delete or not deploy the local `mongodb` service in [`docker-compos
 
 > **ECS tfvars note:** today the ECS Terraform allowlist in `terraform/aws-ecs/variables.tf` accepts only `"file"` and `"documentdb"`. For an Atlas deployment via ECS, keep `storage_backend = "documentdb"` in tfvars and let the `MONGODB_CONNECTION_STRING` override point the container at your Atlas URI — the Python registry reads the URI verbatim and does not care what the `storage_backend` value is at that point. Issue #955 tracks expanding the Terraform allowlist and gating the `aws_docdb_cluster` resource so a future `storage_backend = "mongodb-atlas"` in tfvars will skip the AWS DocumentDB provisioning entirely.
 
-The ECS Terraform module accepts two new variables (see [`terraform/aws-ecs/variables.tf`](../../terraform/aws-ecs/variables.tf)):
+The ECS Terraform module accepts two new variables (see [`terraform/aws-ecs/variables.tf`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/terraform/aws-ecs/variables.tf)):
 
 | Variable | Type | Purpose |
 |----------|------|---------|
@@ -109,7 +109,7 @@ aws secretsmanager create-secret \
   --region us-east-1
 ```
 
-Then in [`terraform/aws-ecs/terraform.tfvars`](../../terraform/aws-ecs/terraform.tfvars):
+Then in [`terraform/aws-ecs/terraform.tfvars`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/terraform/aws-ecs/terraform.tfvars):
 
 ```hcl
 mongodb_connection_string_secret_arn = "arn:aws:secretsmanager:us-east-1:123456789012:secret:mcp-registry/mongodb-atlas-uri-abc123"
@@ -153,9 +153,9 @@ Connected to DocumentDB/MongoDB 8.x.x
 
 ## Deployment Type 3: Kubernetes / EKS via Helm
 
-> **Helm `storage_backend` note:** the `mongodb-configure` chart defaults to `storage_backend: mongodb-ce` (see [`charts/mongodb-configure/values.yaml`](../../charts/mongodb-configure/values.yaml)). That value is accepted by the registry. You may also override it to `mongodb` or `mongodb-atlas` — all three route to the same code path. Do not set it to `mongo` or other typos; the registry will fail startup at container init with a clear error listing accepted values.
+> **Helm `storage_backend` note:** the `mongodb-configure` chart defaults to `storage_backend: mongodb-ce` (see [`charts/mongodb-configure/values.yaml`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/charts/mongodb-configure/values.yaml)). That value is accepted by the registry. You may also override it to `mongodb` or `mongodb-atlas` — all three route to the same code path. Do not set it to `mongo` or other typos; the registry will fail startup at container init with a clear error listing accepted values.
 
-The [Helm chart](../../charts/mcp-gateway-registry-stack/) exposes the connection string through its values file. If using the [`mcp-gateway-registry-stack` chart](https://github.com/agentic-community/mcp-gateway-registry/tree/main/charts/mcp-gateway-registry-stack), set the [mongodb.connectionString](https://github.com/agentic-community/mcp-gateway-registry/blob/c0c41b182323bbabc26d37d6d6610a5009dd85eb/charts/mcp-gateway-registry-stack/values.yaml#L95) variable (fill in the `"`s). 
+The [Helm chart](https://github.com/agentic-community/mcp-gateway-registry/tree/main/charts/mcp-gateway-registry-stack) exposes the connection string through its values file. If using the [`mcp-gateway-registry-stack` chart](https://github.com/agentic-community/mcp-gateway-registry/tree/main/charts/mcp-gateway-registry-stack), set the [mongodb.connectionString](https://github.com/agentic-community/mcp-gateway-registry/blob/c0c41b182323bbabc26d37d6d6610a5009dd85eb/charts/mcp-gateway-registry-stack/values.yaml#L95) variable (fill in the `"`s). 
 
 This will set the connection string in the [`mongo-credentials` secret](https://github.com/agentic-community/mcp-gateway-registry/blob/c0c41b182323bbabc26d37d6d6610a5009dd85eb/charts/mongodb-configure/templates/secret.yaml#L17) , which will be used by both the mongodb configuration job and the registry to access MongoDB Atlas.
 
@@ -240,6 +240,6 @@ When `MONGODB_CONNECTION_STRING` is set, `DOCUMENTDB_USE_TLS` and `DOCUMENTDB_TL
 
 ## Related
 
-- [`.env.example`](../../.env.example) — full variable reference with an inline example.
-- [`terraform/aws-ecs/terraform.tfvars.example`](../../terraform/aws-ecs/terraform.tfvars.example) — ECS variable examples.
+- [`.env.example`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/.env.example) — full variable reference with an inline example.
+- [`terraform/aws-ecs/terraform.tfvars.example`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/terraform/aws-ecs/terraform.tfvars.example) — ECS variable examples.
 - [Configuration Guide](../configuration.md) — all registry configuration parameters.

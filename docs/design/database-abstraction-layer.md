@@ -93,11 +93,11 @@ Different storage backends are **strategies** implementing the same interface:
 
 ## Abstract Base Classes
 
-All repository implementations inherit from abstract base classes defined in [`registry/repositories/interfaces.py`](../../registry/repositories/interfaces.py). These define the contract that ALL implementations must follow.
+All repository implementations inherit from abstract base classes defined in [`registry/repositories/interfaces.py`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/repositories/interfaces.py). These define the contract that ALL implementations must follow.
 
 ### ServerRepositoryBase
 
-**Location:** [`registry/repositories/interfaces.py` (lines 14-76)](../../registry/repositories/interfaces.py#L14-L76)
+**Location:** [`registry/repositories/interfaces.py` (lines 14-76)](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/repositories/interfaces.py#L14-L76)
 
 **Purpose:** Data access for MCP server definitions and lifecycle management
 
@@ -120,14 +120,14 @@ async def load_all() -> None  # Load/reload from storage at startup
 ```
 
 **Implementations:**
-- [`registry/repositories/file/server_repository.py`](../../registry/repositories/file/server_repository.py) - File-based
-- [`registry/repositories/documentdb/server_repository.py`](../../registry/repositories/documentdb/server_repository.py) - DocumentDB/MongoDB
+- `registry/repositories/file/server_repository.py` - File-based
+- [`registry/repositories/documentdb/server_repository.py`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/repositories/documentdb/server_repository.py) - DocumentDB/MongoDB
 
 ---
 
 ### AgentRepositoryBase
 
-**Location:** [`registry/repositories/interfaces.py` (lines 78-140)](../../registry/repositories/interfaces.py#L78-L140)
+**Location:** [`registry/repositories/interfaces.py` (lines 78-140)](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/repositories/interfaces.py#L78-L140)
 
 **Purpose:** Data access for A2A (Agent-to-Agent) agent definitions
 
@@ -147,14 +147,14 @@ async def load_all() -> None  # Load/reload from storage
 ```
 
 **Implementations:**
-- [`registry/repositories/file/agent_repository.py`](../../registry/repositories/file/agent_repository.py) - File-based
-- [`registry/repositories/documentdb/agent_repository.py`](../../registry/repositories/documentdb/agent_repository.py) - DocumentDB/MongoDB
+- `registry/repositories/file/agent_repository.py` - File-based
+- [`registry/repositories/documentdb/agent_repository.py`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/repositories/documentdb/agent_repository.py) - DocumentDB/MongoDB
 
 ---
 
 ### ScopeRepositoryBase
 
-**Location:** [`registry/repositories/interfaces.py` (lines 142-506)](../../registry/repositories/interfaces.py#L142-L506)
+**Location:** [`registry/repositories/interfaces.py` (lines 142-506)](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/repositories/interfaces.py#L142-L506)
 
 **Purpose:** Data access for authorization scopes (RBAC - Role-Based Access Control)
 
@@ -214,14 +214,14 @@ async def load_all() -> None  # Load/reload from storage
 ```
 
 **Implementations:**
-- [`registry/repositories/file/scope_repository.py`](../../registry/repositories/file/scope_repository.py) - File-based (YAML)
-- [`registry/repositories/documentdb/scope_repository.py`](../../registry/repositories/documentdb/scope_repository.py) - DocumentDB/MongoDB
+- `registry/repositories/file/scope_repository.py` - File-based (YAML)
+- [`registry/repositories/documentdb/scope_repository.py`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/repositories/documentdb/scope_repository.py) - DocumentDB/MongoDB
 
 ---
 
 ### SecurityScanRepositoryBase
 
-**Location:** [`registry/repositories/interfaces.py` (lines 508-598)](../../registry/repositories/interfaces.py#L508-L598)
+**Location:** [`registry/repositories/interfaces.py` (lines 508-598)](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/repositories/interfaces.py#L508-L598)
 
 **Purpose:** Data access for security scanning results (both MCP servers and agents)
 
@@ -241,14 +241,14 @@ async def load_all() -> None  # Load/reload from storage
 ```
 
 **Implementations:**
-- [`registry/repositories/file/security_scan_repository.py`](../../registry/repositories/file/security_scan_repository.py) - File-based
-- [`registry/repositories/documentdb/security_scan_repository.py`](../../registry/repositories/documentdb/security_scan_repository.py) - DocumentDB/MongoDB
+- `registry/repositories/file/security_scan_repository.py` - File-based
+- [`registry/repositories/documentdb/security_scan_repository.py`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/repositories/documentdb/security_scan_repository.py) - DocumentDB/MongoDB
 
 ---
 
 ### SearchRepositoryBase
 
-**Location:** [`registry/repositories/interfaces.py` (lines 600-645)](../../registry/repositories/interfaces.py#L600-L645)
+**Location:** [`registry/repositories/interfaces.py` (lines 600-645)](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/repositories/interfaces.py#L600-L645)
 
 **Purpose:** Data access for semantic/hybrid search functionality
 
@@ -281,14 +281,14 @@ async def remove_entity(path: str) -> None
 ```
 
 **Implementations:**
-- [`registry/repositories/file/search_repository.py`](../../registry/repositories/file/search_repository.py) - Application-level vector search (legacy)
-- [`registry/repositories/documentdb/search_repository.py`](../../registry/repositories/documentdb/search_repository.py) - DocumentDB/MongoDB Hybrid Search (BM25 + k-NN)
+- `registry/repositories/file/search_repository.py` - Application-level vector search (legacy)
+- [`registry/repositories/documentdb/search_repository.py`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/repositories/documentdb/search_repository.py) - DocumentDB/MongoDB Hybrid Search (BM25 + k-NN)
 
 ---
 
 ### FederationConfigRepositoryBase
 
-**Location:** [`registry/repositories/interfaces.py` (lines 647-709)](../../registry/repositories/interfaces.py#L647-L709)
+**Location:** [`registry/repositories/interfaces.py` (lines 647-709)](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/repositories/interfaces.py#L647-L709)
 
 **Purpose:** Data access for federation configuration (multi-registry federation)
 
@@ -307,8 +307,8 @@ async def list_configs() -> List[Dict[str, Any]]
 ```
 
 **Implementations:**
-- [`registry/repositories/file/federation_config_repository.py`](../../registry/repositories/file/federation_config_repository.py) - File-based (JSON)
-- [`registry/repositories/documentdb/federation_config_repository.py`](../../registry/repositories/documentdb/federation_config_repository.py) - DocumentDB/MongoDB
+- `registry/repositories/file/federation_config_repository.py` - File-based (JSON)
+- [`registry/repositories/documentdb/federation_config_repository.py`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/repositories/documentdb/federation_config_repository.py) - DocumentDB/MongoDB
 
 ---
 
@@ -348,12 +348,12 @@ registry/
 ```
 
 **Implementation Classes:**
-- [`FileServerRepository`](../../registry/repositories/file/server_repository.py)
-- [`FileAgentRepository`](../../registry/repositories/file/agent_repository.py)
-- [`FileScopeRepository`](../../registry/repositories/file/scope_repository.py)
-- [`FileSecurityScanRepository`](../../registry/repositories/file/security_scan_repository.py)
-- [`FileSearchRepository`](../../registry/repositories/file/search_repository.py)
-- [`FileFederationConfigRepository`](../../registry/repositories/file/federation_config_repository.py)
+- `FileServerRepository`
+- `FileAgentRepository`
+- `FileScopeRepository`
+- `FileSecurityScanRepository`
+- `FileSearchRepository`
+- `FileFederationConfigRepository`
 
 **Advantages:**
 - No infrastructure setup needed
@@ -394,14 +394,14 @@ DocumentDB/MongoDB Cluster
 ```
 
 **Implementation Classes:**
-- [`DocumentDBServerRepository`](../../registry/repositories/documentdb/server_repository.py)
-- [`DocumentDBAgentRepository`](../../registry/repositories/documentdb/agent_repository.py)
-- [`DocumentDBScopeRepository`](../../registry/repositories/documentdb/scope_repository.py)
-- [`DocumentDBSecurityScanRepository`](../../registry/repositories/documentdb/security_scan_repository.py)
-- [`DocumentDBSearchRepository`](../../registry/repositories/documentdb/search_repository.py)
-- [`DocumentDBFederationConfigRepository`](../../registry/repositories/documentdb/federation_config_repository.py)
+- [`DocumentDBServerRepository`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/repositories/documentdb/server_repository.py)
+- [`DocumentDBAgentRepository`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/repositories/documentdb/agent_repository.py)
+- [`DocumentDBScopeRepository`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/repositories/documentdb/scope_repository.py)
+- [`DocumentDBSecurityScanRepository`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/repositories/documentdb/security_scan_repository.py)
+- [`DocumentDBSearchRepository`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/repositories/documentdb/search_repository.py)
+- [`DocumentDBFederationConfigRepository`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/repositories/documentdb/federation_config_repository.py)
 
-**DocumentDB Client:** [`registry/repositories/documentdb/client.py`](../../registry/repositories/documentdb/client.py)
+**DocumentDB Client:** [`registry/repositories/documentdb/client.py`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/repositories/documentdb/client.py)
 
 Provides:
 - Async MongoDB client singleton
@@ -451,7 +451,7 @@ This gives 60% weight to semantic search (vector similarity) and 40% to keyword 
 
 ### Factory Implementation
 
-**Location:** [`registry/repositories/factory.py`](../../registry/repositories/factory.py)
+**Location:** [`registry/repositories/factory.py`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/repositories/factory.py)
 
 The factory provides singleton repository instances with lazy initialization:
 
@@ -485,7 +485,7 @@ def get_server_repository() -> ServerRepositoryBase:
 
 ### Backend Selection Logic
 
-Backend selection is controlled by the `storage_backend` setting in [`registry/core/config.py`](../../registry/core/config.py):
+Backend selection is controlled by the `storage_backend` setting in [`registry/core/config.py`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/core/config.py):
 
 ```python
 storage_backend: str = "file"  # Options: "file", "documentdb"
@@ -673,7 +673,7 @@ registry/repositories/
 
 ### Configuration
 
-Backend selection and DocumentDB/MongoDB settings in [`registry/core/config.py`](../../registry/core/config.py):
+Backend selection and DocumentDB/MongoDB settings in [`registry/core/config.py`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/core/config.py):
 
 ```python
 # Backend selection
@@ -726,7 +726,7 @@ documentdb_namespace: str = "default"
 - Isolated test environments
 - Customer separation in SaaS deployments
 
-**Implementation:** [`registry/repositories/documentdb/client.py`](../../registry/repositories/documentdb/client.py)
+**Implementation:** [`registry/repositories/documentdb/client.py`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/repositories/documentdb/client.py)
 
 ```python
 def get_index_name(base_name: str) -> str:

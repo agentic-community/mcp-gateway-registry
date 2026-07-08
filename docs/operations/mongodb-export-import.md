@@ -15,7 +15,7 @@ self-contained procedure intended to be useful at 2am.
 The registry stores all per-namespace state under collections suffixed
 with the deployment's `documentdb_namespace` (default: `default`). The
 suffix is appended at write time by
-[`get_collection_name()`](../../registry/repositories/documentdb/client.py#L54-L58),
+[`get_collection_name()`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/repositories/documentdb/client.py#L54-L58),
 so on a stock install the collections are
 `oauth_sessions_default`, `audit_events_default`,
 `mcp_servers_default`, etc. Use `show collections` in `mongosh` to
@@ -318,7 +318,7 @@ docker exec mcp-mongodb mongorestore \
 
 ## Code references
 
-- [`registry/repositories/documentdb/client.py:54-58`](../../registry/repositories/documentdb/client.py#L54-L58) — `get_collection_name()` namespace suffixing.
-- [`registry/auth/session_store.py:23`](../../registry/auth/session_store.py#L23) — `oauth_sessions` base collection name.
-- [`registry/repositories/audit_repository.py:151`](../../registry/repositories/audit_repository.py#L151) — `audit_events` base collection name.
-- [`registry/core/config.py:751`](../../registry/core/config.py#L751) — `documentdb_namespace` setting (default: `default`).
+- [`registry/repositories/documentdb/client.py:54-58`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/repositories/documentdb/client.py#L54-L58) — `get_collection_name()` namespace suffixing.
+- [`registry/auth/session_store.py:23`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/auth/session_store.py#L23) — `oauth_sessions` base collection name.
+- [`registry/repositories/audit_repository.py:151`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/repositories/audit_repository.py#L151) — `audit_events` base collection name.
+- [`registry/core/config.py:751`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/core/config.py#L751) — `documentdb_namespace` setting (default: `default`).

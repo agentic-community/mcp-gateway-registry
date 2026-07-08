@@ -114,7 +114,7 @@ This setup is for agents that have their own identity and authenticate using cli
    - **App type**: Select "Machine to Machine"
    - **App client name**: Enter `Agent` (or `My AI Assistant` or any name that reflects what the agent will do)
    - **Client secret**: Select "Generate a client secret"
-   - **Copy and save** the **Client ID** and **Client Secret** - you'll need these for the [`agents/.env.agent`](../agents/.env.agent) file
+   - **Copy and save** the **Client ID** and **Client Secret** - you'll need these for the `agents/.env.agent` file
 
 #### Step 2: Create Resource Server and Custom Scopes
 
@@ -163,7 +163,7 @@ Ensure your Cognito User Pool is configured with:
 
 #### 2. OAuth 2.0 PKCE Flow Setup
 
-The PKCE (Proof Key for Code Exchange) flow is implemented in [`agents/cli_user_auth.py`](../agents/cli_user_auth.py):
+The PKCE (Proof Key for Code Exchange) flow is implemented in [`agents/cli_user_auth.py`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/agents/cli_user_auth.py):
 
 ```mermaid
 sequenceDiagram
@@ -272,7 +272,7 @@ sequenceDiagram
 
 #### 2. Client Credentials Flow Configuration
 
-The M2M flow is implemented in [`auth_server/cognito_utils.py`](../auth_server/cognito_utils.py):
+The M2M flow is implemented in [`auth_server/cognito_utils.py`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/auth_server/cognito_utils.py):
 
 1. **Token Request**: Agent requests token using client credentials
 2. **JWT Token**: Cognito issues JWT token with embedded scopes
@@ -509,9 +509,9 @@ docker compose logs -f auth-server | grep -i "mapped scopes"
 - [Main Authentication Guide](auth.md) - Overview of the authentication architecture
 - [Amazon Cognito (Deployment Surfaces)](idp/cognito.md) - Wiring Cognito into Docker Compose, Terraform/ECS, and Helm
 - [Access Control & Scopes](scopes.md) - How group-to-scope mappings and permissions work (stored in DocumentDB)
-- [Environment Template](../.env.example) - Complete environment configuration template
-- [Agent Implementation](../agents/agent.py) - Reference agent implementation
-- [CLI Authentication Tool](../agents/cli_user_auth.py) - User authentication utility
+- [Environment Template](https://github.com/agentic-community/mcp-gateway-registry/blob/main/.env.example) - Complete environment configuration template
+- [Agent Implementation](https://github.com/agentic-community/mcp-gateway-registry/blob/main/agents/agent.py) - Reference agent implementation
+- [CLI Authentication Tool](https://github.com/agentic-community/mcp-gateway-registry/blob/main/agents/cli_user_auth.py) - User authentication utility
 
 ## Support and Troubleshooting
 
@@ -539,7 +539,7 @@ touch .env.user
 
 ### Step 2: Configure Client Credentials
 
-Edit the [`agents/.env.user`](../agents/.env.user) file with your Cognito credentials obtained from the [User Group Setup](#user-group-setup-for-users-and-agents-using-user-identity) section:
+Edit the `agents/.env.user` file with your Cognito credentials obtained from the [User Group Setup](#user-group-setup-for-users-and-agents-using-user-identity) section:
 
 ```bash
 # Cognito Authentication Configuration

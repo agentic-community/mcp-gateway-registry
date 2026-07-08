@@ -27,7 +27,7 @@ distinguished by the `log_type` field:
 | `mcp_server_access` | MCP tool invocations through the gateway (which user invoked which tool on which server). |
 
 The relevant fields differ slightly between the two streams. See
-[`registry/audit/routes.py:215-275`](../../registry/audit/routes.py#L215-L275)
+[`registry/audit/routes.py:215-275`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/audit/routes.py#L215-L275)
 for the canonical query construction the registry uses.
 
 A registry-API record looks like this:
@@ -83,7 +83,7 @@ only when the API path can't satisfy the use case.
 > **DRAFT — admin-auth bootstrap not exercised in this PR's
 > validation.** The endpoint behavior, query parameters, and CSV/JSONL
 > formats below come from
-> [`registry/audit/routes.py:567-918`](../../registry/audit/routes.py#L567-L918).
+> [`registry/audit/routes.py:567-918`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/audit/routes.py#L567-L918).
 > The exact `Authorization` header form depends on your deployment's
 > auth mode (session cookie vs. M2M token), and full validation of
 > the bootstrap path is left for a follow-up. **Treat the curl
@@ -93,7 +93,7 @@ only when the API path can't satisfy the use case.
 ### Procedure
 
 1. Obtain an admin-tier credential. The endpoints under
-   `/api/audit/*` use `require_admin` ([`routes.py:44`](../../registry/audit/routes.py#L44)),
+   `/api/audit/*` use `require_admin` ([`routes.py:44`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/audit/routes.py#L44)),
    so the credential must produce a `user_context` with
    `is_admin == true`.
 
@@ -112,7 +112,7 @@ only when the API path can't satisfy the use case.
 
 3. Export filtered events as JSONL or CSV. All filters are optional
    and can be combined (see
-   [`routes.py:821-885`](../../registry/audit/routes.py#L821-L885)
+   [`routes.py:821-885`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/audit/routes.py#L821-L885)
    for the full parameter list):
 
    ```bash
@@ -145,7 +145,7 @@ only when the API path can't satisfy the use case.
 ### Caveats
 
 - **The `username` filter does case-insensitive substring matching**
-  ([`routes.py:223-227`](../../registry/audit/routes.py#L223-L227)),
+  ([`routes.py:223-227`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/audit/routes.py#L223-L227)),
   not exact equality. `username=alice` will also match
   `alice@example.com` and `MaliceSamuels@example.com`.
 - **The export endpoint caps at 100000 events** per call. Larger
@@ -260,7 +260,7 @@ not real-time).
 
 > **DRAFT — environment-specific.** The registry writes audit events
 > via the in-process audit logger initialized at
-> [`registry/main.py:394-397`](../../registry/main.py#L394-L397).
+> [`registry/main.py:394-397`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/main.py#L394-L397).
 > The path to disable it varies by deployment surface (env var,
 > Helm values, Terraform variable). Confirm the exact knob for your
 > environment before disabling — and remember that disabling audit
@@ -288,9 +288,9 @@ then address the producer.
 
 ## Code references
 
-- [`registry/audit/routes.py:30`](../../registry/audit/routes.py#L30) — audit router prefix (`/audit`, mounted at `/api`).
-- [`registry/audit/routes.py:44`](../../registry/audit/routes.py#L44) — `require_admin` dependency.
-- [`registry/audit/routes.py:567`](../../registry/audit/routes.py#L567) — `GET /api/audit/events` (paginated query).
-- [`registry/audit/routes.py:821`](../../registry/audit/routes.py#L821) — `GET /api/audit/export` (JSONL/CSV streaming).
-- [`registry/audit/routes.py:215-275`](../../registry/audit/routes.py#L215-L275) — `_build_query()`, the canonical filter-to-Mongo translation.
-- [`registry/repositories/audit_repository.py:151`](../../registry/repositories/audit_repository.py#L151) — `audit_events` base collection name.
+- [`registry/audit/routes.py:30`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/audit/routes.py#L30) — audit router prefix (`/audit`, mounted at `/api`).
+- [`registry/audit/routes.py:44`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/audit/routes.py#L44) — `require_admin` dependency.
+- [`registry/audit/routes.py:567`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/audit/routes.py#L567) — `GET /api/audit/events` (paginated query).
+- [`registry/audit/routes.py:821`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/audit/routes.py#L821) — `GET /api/audit/export` (JSONL/CSV streaming).
+- [`registry/audit/routes.py:215-275`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/audit/routes.py#L215-L275) — `_build_query()`, the canonical filter-to-Mongo translation.
+- [`registry/repositories/audit_repository.py:151`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/repositories/audit_repository.py#L151) — `audit_events` base collection name.

@@ -558,7 +558,6 @@ The registry supports three backend authentication schemes:
 
 **Screenshot Example:**
 
-![MCP Configuration Modal showing dual authentication headers](img/mcp-config-dual-auth.png)
 
 ### Registry-Only Mode
 
@@ -586,6 +585,6 @@ See [Registry Deployment Modes](registry-deployment-modes.md) for more details o
 - [Configuration Reference](configuration.md) - Complete configuration options
 - [Authentication Guide](auth.md) - Identity provider setup and server credential management
 - [Server Registration](auth.md#server-authentication-credentials) - How to register servers with auth credentials
-- [Troubleshooting Guide](troubleshooting.md) - Common issues and solutions
+- Troubleshooting Guide - Common issues and solutions
 - [API Reference](registry_api.md) - Programmatic management
 - [GitHub Discussions](https://github.com/agentic-community/mcp-gateway-registry/discussions) - Community support

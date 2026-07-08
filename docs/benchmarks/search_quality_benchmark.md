@@ -1,6 +1,6 @@
 # Search Quality Benchmark (Reference)
 
-These results are from our development registry and are provided as sample reference output. Your registry will have different assets and different results. To generate your own benchmark, follow the instructions in [tests/fixtures/search_dataset/README.md](../../tests/fixtures/search_dataset/README.md).
+These results are from our development registry and are provided as sample reference output. Your registry will have different assets and different results. To generate your own benchmark, follow the instructions in [tests/fixtures/search_dataset/README.md](https://github.com/agentic-community/mcp-gateway-registry/blob/main/tests/fixtures/search_dataset/README.md).
 
 ## Deployment Under Test
 
@@ -113,4 +113,4 @@ uv run python scripts/benchmark_search.py \
     --queries tests/fixtures/search_dataset/generated_ground_truth.json
 ```
 
-See [tests/fixtures/search_dataset/README.md](../../tests/fixtures/search_dataset/README.md) for full documentation on the evaluation harness, metrics explained, and how to add custom queries.
+See [tests/fixtures/search_dataset/README.md](https://github.com/agentic-community/mcp-gateway-registry/blob/main/tests/fixtures/search_dataset/README.md) for full documentation on the evaluation harness, metrics explained, and how to add custom queries.

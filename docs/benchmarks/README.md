@@ -78,7 +78,7 @@ More reports with other configurations (2x replicas, mongodb-ce backend, Kuberne
 
 ## Running Your Own Benchmarks
 
-See [`tests/stress/README.md`](../../tests/stress/README.md) for the full benchmark procedure. The sequence is:
+See [`tests/stress/README.md`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/tests/stress/README.md) for the full benchmark procedure. The sequence is:
 
 ```bash
 # 1. Register entities

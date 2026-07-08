@@ -317,7 +317,7 @@ Set `REGISTRY_STATIC_TOKEN_AUTH_ENABLED=false`. Session cookies and IdP JWTs kee
 
 ### Verify the System Config UI
 
-The current values appear on the **Settings → Authentication** page in the web UI. `REGISTRY_API_TOKEN` is masked. The field registry is defined in [registry/api/config_routes.py:75-76](../registry/api/config_routes.py).
+The current values appear on the **Settings → Authentication** page in the web UI. `REGISTRY_API_TOKEN` is masked. The field registry is defined in [registry/api/config_routes.py:75-76](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/api/config_routes.py).
 
 ## FAQ
 
@@ -328,7 +328,7 @@ See the dedicated FAQ page: [Registry API Authentication FAQ](faq/registry-api-a
 - Issue #871: [feat: allow JWT/session auth to coexist with static token auth](https://github.com/agentic-community/mcp-gateway-registry/issues/871)
 - Issue #779: [feat: Support multiple static API keys with per-key group/scope assignments](https://github.com/agentic-community/mcp-gateway-registry/issues/779)
 - Issue #826: [feat: Support External User Access Tokens (Service-to-Service on Behalf of Users)](https://github.com/agentic-community/mcp-gateway-registry/issues/826)
-- Auth server entry point: [`auth_server/server.py`](../auth_server/server.py) — `/validate` endpoint
-- Registry auth handoff: [`registry/auth/dependencies.py`](../registry/auth/dependencies.py) — consumes `X-Auth-Method` header
+- Auth server entry point: [`auth_server/server.py`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/auth_server/server.py) — `/validate` endpoint
+- Registry auth handoff: [`registry/auth/dependencies.py`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/registry/auth/dependencies.py) — consumes `X-Auth-Method` header
 - Scope configuration format: [`scopes.md`](scopes.md)
 - General authentication overview: [`auth.md`](auth.md)

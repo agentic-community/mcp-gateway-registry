@@ -97,6 +97,7 @@ docs = [
     "mkdocs-material>=9.4.0",
     "mkdocs-git-revision-date-localized-plugin>=1.2.0",
     "mkdocs-minify-plugin>=0.7.0",
+    "mkdocs-awesome-pages-plugin>=2.9.0",
     "pymdown-extensions>=10.0.0",
 ]
 

@@ -65,7 +65,7 @@ These skills produce JSON files that can be uploaded through the UI or used with
 
 ### Option 3: Register programmatically via API
 
-Use the [Registry Management CLI](../../api/registry_management.py) to register from the command line.
+Use the [Registry Management CLI](https://github.com/agentic-community/mcp-gateway-registry/blob/main/api/registry_management.py) to register from the command line.
 
 To get a token, click the **"Get JWT Token"** button in the top-left corner of the registry UI, then click **"Copy JSON"** and save it to a `.token` file:
 
@@ -88,11 +88,11 @@ uv run python api/registry_management.py \
     agent-register --config my-agent-card.json
 ```
 
-You can also call the REST API directly. See the [OpenAPI specification](../../api/openapi.json) for the full API reference, available at `/openapi.json` on your running registry instance.
+You can also call the REST API directly. See the [OpenAPI specification](https://github.com/agentic-community/mcp-gateway-registry/blob/main/api/openapi.json) for the full API reference, available at `/openapi.json` on your running registry instance.
 
 ### Example JSON files
 
-See the [cli/examples/](../../cli/examples/) directory for complete registration examples:
+See the [cli/examples/](https://github.com/agentic-community/mcp-gateway-registry/tree/main/cli/examples) directory for complete registration examples:
 
 **MCP Servers:**
 - `currenttime.json` -- minimal server example

@@ -427,7 +427,7 @@ export STORAGE_BACKEND=documentdb
 docker-compose restart registry
 ```
 
-**For AWS ECS Deployments:** See [terraform/aws-ecs/README.md](../terraform/aws-ecs/README.md) for automated Terraform deployment with DocumentDB.
+**For AWS ECS Deployments:** See [terraform/aws-ecs/README.md](https://github.com/agentic-community/mcp-gateway-registry/blob/main/terraform/aws-ecs/README.md) for automated Terraform deployment with DocumentDB.
 
 **For Detailed Architecture:** See [Storage Architecture: MongoDB CE & AWS DocumentDB](design/storage-architecture-mongodb-documentdb.md) for comprehensive implementation details.
 

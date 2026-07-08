@@ -660,4 +660,4 @@ See [docs/design/anthropic-api-test-commands.md](anthropic-api-test-commands.md)
 - **OpenAPI Spec**: https://github.com/modelcontextprotocol/registry/blob/main/docs/reference/api/openapi.yaml
 - **API Guide**: https://github.com/modelcontextprotocol/registry/blob/main/docs/guides/consuming/use-rest-api.md
 - **Test Commands**: [anthropic-api-test-commands.md](anthropic-api-test-commands.md)
-- **Progress Notes**: [.scratchpad/anthropic-api-v0-jwt-auth-progress.md](../../.scratchpad/anthropic-api-v0-jwt-auth-progress.md)
+- **Progress Notes**: .scratchpad/anthropic-api-v0-jwt-auth-progress.md

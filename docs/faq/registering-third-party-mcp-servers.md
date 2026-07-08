@@ -12,13 +12,13 @@ never handles the token. Here is the end-to-end flow.
 ### 1. Register the server
 
 Three ready-to-use registration files are provided under
-[`cli/examples/`](../../cli/examples/):
+[`cli/examples/`](https://github.com/agentic-community/mcp-gateway-registry/tree/main/cli/examples):
 
 | Server | File | `proxy_pass_url` (edit as needed) |
 |--------|------|-----------------------------------|
-| GitHub | [`github-mcp-server.json`](../../cli/examples/github-mcp-server.json) | `https://api.githubcopilot.com/mcp/` |
-| Slack | [`slack-mcp-server.json`](../../cli/examples/slack-mcp-server.json) | `https://mcp.slack.com/mcp` |
-| Atlassian | [`atlassian-mcp-server.json`](../../cli/examples/atlassian-mcp-server.json) | `https://mcp.atlassian.com/v1/mcp` |
+| GitHub | [`github-mcp-server.json`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/cli/examples/github-mcp-server.json) | `https://api.githubcopilot.com/mcp/` |
+| Slack | [`slack-mcp-server.json`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/cli/examples/slack-mcp-server.json) | `https://mcp.slack.com/mcp` |
+| Atlassian | [`atlassian-mcp-server.json`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/cli/examples/atlassian-mcp-server.json) | `https://mcp.atlassian.com/v1/mcp` |
 
 The `proxy_pass_url` values point at the third-party SaaS-hosted MCP endpoints.
 **Edit these as needed** — if you run a self-hosted version of one of these MCP
