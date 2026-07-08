@@ -97,6 +97,9 @@ markdown_extensions:
 # Page tree
 nav:
   - Home: index.md
+  - Overview:
+    - Executive Brief: overview/executive-brief.md
+    - Feature & Release Highlights: overview/feature-release-highlights.md
   - Getting Started:
     - Complete Setup Guide: complete-setup-guide.md
     - Installation: installation.md
@@ -114,6 +117,7 @@ nav:
     - Per-User Egress Credential Vault: egress-credential-vault.md
     - Security Policy: SECURITY.md
   - Architecture & Development:
+    - Theory of the System: design/theory-of-the-system.md
     - Registry API: registry_api.md
     - Dynamic Tool Discovery: dynamic-tool-discovery.md
     - Custom Entity Types: custom-entities.md
