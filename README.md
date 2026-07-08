@@ -130,7 +130,8 @@ Across all of them you get semantic + lexical search, UI, REST, and MCP-native i
 - **[Per-user egress auth (3LO)](docs/design/egress-auth-design.md)** — the gateway brokers third-party SaaS credentials so tokens never live on a user's laptop.
 - **Security scanning + [fail-closed admission gate](docs/registration-webhooks.md)** — every registered server, agent, and skill is scanned; unsafe items are held for review.
 - **[External-registry federation](docs/federation.md)** — pull in Anthropic's MCP Registry, AWS Agent Registry, and peer registries for one unified surface.
-- **Observability** — [OpenTelemetry metrics](docs/OBSERVABILITY.md), health monitoring, and full audit logging built in.
+- **[Audit logging](docs/audit-logging.md)** — a full, attributable audit trail of access and admin events, with credential masking, for compliance and incident review.
+- **Observability** — [OpenTelemetry metrics](docs/OBSERVABILITY.md) and health monitoring built in.
 
 ## What's New
 
@@ -141,6 +142,16 @@ Across all of them you get semantic + lexical search, UI, REST, and MCP-native i
 - **Agentic Resource Discovery (ARD) — full spec support** - The registry implements the ARD v1.0 spec end to end as a Publisher, a Registry, and a federating peer, so any ARD-aware client can discover and cross-reference its assets. [ARD Guide](docs/ard.md).
 
 **Older highlights → [Feature & Release Highlights](docs/overview/feature-release-highlights.md)** · full per-version detail in the [release notes](docs/release-notes/) and on the [GitHub Releases page](https://github.com/agentic-community/mcp-gateway-registry/releases).
+
+## Roadmap
+
+The roadmap is best tracked on the [GitHub Milestones](https://github.com/agentic-community/mcp-gateway-registry/milestones) page. At a high level, as of July–August 2026 the big features we're working on are:
+
+- **3LO, OBO, and CIMD for coding assistants** — richer per-user auth flows so coding assistants connect with the least friction across identity providers.
+- **Generic routing to any HTTP endpoint** — so the gateway can proxy A2A traffic between agents (and skills, and REST endpoints in future) through the same single ingress.
+- **Registry Copilot** — an embedded agent-builder experience for discovering assets and composing agents from inside the registry.
+
+Have a feature request? Please [open a GitHub issue](https://github.com/agentic-community/mcp-gateway-registry/issues/new) — we build in the open.
 
 ## Documentation
 
