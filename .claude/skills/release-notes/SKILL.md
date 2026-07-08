@@ -369,9 +369,25 @@ Once the user confirms the release notes are ready:
    the directory entry owns ordering. If the maintainer later wants an explicit descending
    order, that is a separate, deliberate `mkdocs.yml` change — not part of the routine release cut.
 
-2. **Commit the release notes and nav update together:**
+2. **Add a highlight entry and rotate the README's "What's New" (regrowth prevention).** The
+   README's `## What's New` section holds **exactly the 3 most-recent highlights**; the full
+   history lives in `docs/overview/feature-release-highlights.md`. On a release with a notable
+   user-facing feature:
+   - **Prepend** one curated highlight entry (headline + 1-3 sentences + doc links) to the top of
+     `docs/overview/feature-release-highlights.md`, just under its intro, matching the existing
+     bullet format.
+   - **Rotate the README:** add that same highlight as the new first bullet under `## What's New`
+     in `README.md`, then **delete the now-fourth bullet** so exactly three remain (the dropped one
+     already lives in the archive — this is a delete, not a re-copy). Keep the
+     "Older highlights → Feature & Release Highlights" line in place.
+   - This is the ONLY change the release cut makes to `README.md`. **Never add a new `##` section,
+     never let What's New exceed 3 bullets, and never touch any other part of the README** — those
+     require their own dedicated PR. The README has a CI line-budget (350 lines) that will fail the
+     build otherwise. A patch release with no user-facing feature skips this step entirely.
+
+3. **Commit the release notes, highlights, README rotation, and nav together:**
    ```bash
-   git add docs/release-notes/{version}.md mkdocs.yml
+   git add docs/release-notes/{version}.md docs/overview/feature-release-highlights.md README.md mkdocs.yml
    git commit -m "docs: Add {version} release notes"
    ```
 

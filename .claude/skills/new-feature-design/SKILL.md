@@ -1289,6 +1289,12 @@ See [security-patterns.md#review-checklist](../pr-review/personas/security-patte
 4. **Specify Files**: Always mention which files to create/modify and approximate line numbers
 5. **Consider All Aspects**: Think about error handling, logging, testing, and deployment
 6. **Expert Reviews**: Make the reviews realistic - identify actual issues, not just praise
+7. **Never announce the feature in `README.md`**: feature documentation goes to the feature's own
+   docs page (create one if it lacks one) and, on release, to `docs/release-notes/` plus a single
+   curated highlight in `docs/overview/feature-release-highlights.md`. The README's "What's New"
+   section is limited to the 3 most-recent highlights and is rotated only by the `release-notes`
+   skill; it has a CI-enforced 350-line budget. A design must not plan to add README sections or
+   inline feature blurbs — call out the docs page it will add instead.
 
 ## Example Usage
 

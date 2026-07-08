@@ -5,6 +5,11 @@
 
 Before you start contributing, please review the project's contribution guidelines.
 
+**Then read the [Theory of the System](docs/design/theory-of-the-system.md)** — the causal design
+narrative and the core invariants (control-plane/data-plane split, generic reverse-proxy gateway,
+A2A peer-to-peer, config parity, fail-closed admission, and more). A change that breaks an
+invariant without arguing for it will be flagged in review, so understand them before you design.
+
 ## Setup Instructions for Contributors
 
 ### Step 1: Choose Your Development Environment
@@ -29,6 +34,7 @@ Before making any code changes, ask your AI coding assistant to read:
 
 **LLM/AI Documentation (Critical for understanding the project):**
 - [docs/llms.txt](docs/llms.txt)
+- [docs/design/theory-of-the-system.md](docs/design/theory-of-the-system.md) - the system's core invariants and the reasoning behind them
 
 **Coding Standards and Guidelines:**
 - [CLAUDE.md](CLAUDE.md) - Project-specific coding standards

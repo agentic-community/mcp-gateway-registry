@@ -24,6 +24,33 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  readme-length:
+    name: "README length budget"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      # Maximum allowed README.md length. The README is the highest-traffic page and
+      # regrows without a hard limit. Feature announcements belong in
+      # docs/overview/feature-release-highlights.md (top 3 mirrored in the README),
+      # not inline. Adjust this number deliberately if the structure genuinely changes.
+      README_MAX_LINES: "350"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Enforce README length budget
+        run: |
+          lines=$(wc -l < README.md)
+          echo "README.md is ${lines} lines (budget: ${README_MAX_LINES})."
+          if [ "${lines}" -gt "${README_MAX_LINES}" ]; then
+            echo "::error file=README.md::README.md is ${lines} lines, over the ${README_MAX_LINES}-line budget."
+            echo "Move detail into docs/ and link out. Feature announcements go to"
+            echo "docs/overview/feature-release-highlights.md (top 3 mirrored in the README)."
+            echo "See docs/design/theory-of-the-system.md#6-how-to-change-this-system-without-breaking-its-theory."
+            exit 1
+          fi
+
   build:
     name: "Build Documentation"
     runs-on: ubuntu-latest
