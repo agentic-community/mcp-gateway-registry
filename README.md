@@ -67,7 +67,7 @@ flowchart LR
     GW -->|routes to| Servers["MCP Servers, Agents, Skills<br/>(anywhere: EKS / ECS / Lambda / SaaS)"]
 ```
 
-A key invariant: **discovery is centralized, but agent-to-agent communication is direct.** The registry handles A2A discovery, authentication, and access control; once agents find each other they communicate peer-to-peer, never routing traffic through the gateway. For the full design and its invariants, read the [Theory of the System](docs/design/theory-of-the-system.md); for layered diagrams, see [Architecture Diagrams](docs/architecture-diagrams.md).
+By default, the registry handles A2A discovery, authentication, and access control, and agents then communicate directly (peer-to-peer) rather than routing every call through the gateway. For the full design and its invariants, read the [Theory of the System](docs/design/theory-of-the-system.md); for layered diagrams, see [Architecture Diagrams](docs/architecture-diagrams.md).
 
 ## See it in action
 
