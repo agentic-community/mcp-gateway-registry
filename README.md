@@ -105,9 +105,13 @@ nano .env
 open http://localhost        # macOS  (Linux: xdg-open http://localhost)
 ```
 
-The [Quick Start Guide](docs/quickstart.md) has the full walkthrough (prerequisites, MongoDB and Keycloak initialization, first user and service account, registering a server, and testing the gateway).
+The [Complete Installation Guide](docs/installation.md) has the full walkthrough for **Amazon EC2** (prerequisites, MongoDB and Keycloak initialization, first user and service account, registering a server, and testing the gateway).
 
-**Other paths** — building from source, macOS / Podman (rootless), and EC2 / ECS / EKS — are in the [Installation Guide](docs/installation.md). On macOS you can also ask your AI coding assistant to run the [macOS setup guide](docs/macos-setup-guide.md) end to end.
+**Deploying somewhere else?**
+
+- **Amazon ECS** — see the [Terraform stack README](terraform/aws-ecs/README.md), or better, use the [Terraform setup skill](https://github.com/agentic-community/mcp-gateway-registry/blob/main/.claude/skills/terraform-setup/SKILL.md) to have your AI coding assistant run the deployment for you.
+- **Amazon EKS** — see the [Helm charts](charts/README.md).
+- **Just want to try it on macOS?** — use the [macOS setup skill](https://github.com/agentic-community/mcp-gateway-registry/blob/main/.claude/skills/macos-setup/SKILL.md) to get it running on your MacBook end to end.
 
 ## What's in the box
 
