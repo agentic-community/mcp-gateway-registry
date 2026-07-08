@@ -15,7 +15,7 @@
 
 ---
 
-The **MCP Gateway & Registry** is a single, governed control plane for every AI asset in your organization, from MCP servers and AI agents to skills and any custom asset your teams build. It is open source, licensed under Apache 2.0, and runs on Amazon EKS, Amazon ECS, or Docker Compose.
+The **MCP Gateway & Registry** is a single, governed control plane for every AI asset in your organization, from MCP servers and AI agents to skills and any custom asset your teams build. It is open source, licensed under Apache 2.0, and runs on Kubernetes (Amazon EKS), fully managed serverless (Amazon ECS), or Docker Compose (Amazon EC2).
 
 It began as a gateway and registry for the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/introduction): one secure entry point to many MCP servers, with centralized discovery and governance. As teams started registering agents, skills, and other assets alongside their servers, it grew into a general-purpose **AI asset registry** on the same gateway, access-control, and audit model it started with.
 
