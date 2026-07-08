@@ -9,7 +9,7 @@
 [![License](https://img.shields.io/github/license/agentic-community/mcp-gateway-registry?style=flat)](https://github.com/agentic-community/mcp-gateway-registry/blob/main/LICENSE)
 [![GitHub release](https://img.shields.io/github/v/release/agentic-community/mcp-gateway-registry?style=flat&logo=github)](https://github.com/agentic-community/mcp-gateway-registry/releases)
 
-[Get Running Now](#quick-start) | [Docs](https://agentic-community.github.io/mcp-gateway-registry/) | [Executive Brief](docs/overview/executive-brief.md) | [Demo Videos](docs/demo-videos.md) | [AWS Workshop](https://catalog.us-east-1.prod.workshops.aws/workshops/0c3265a6-1a4a-467b-ae56-e4d019184b0e/en-US) | [Community](#community)
+[Get Running Now](#quick-start) | [Docs](https://agentic-community.github.io/mcp-gateway-registry/) | [Executive Brief](docs/overview/executive-brief.md) | [Slide Deck](docs/slides/mcp-gateway-registry-presentation.pdf) | [Demo Videos](docs/demo-videos.md) | [AWS Workshop](https://catalog.us-east-1.prod.workshops.aws/workshops/0c3265a6-1a4a-467b-ae56-e4d019184b0e/en-US) | [Community](#community)
 
 </div>
 
@@ -46,11 +46,19 @@ flowchart LR
 
 A key invariant: **discovery is centralized, but agent-to-agent communication is direct.** The registry handles A2A discovery, authentication, and access control; once agents find each other they communicate peer-to-peer, never routing traffic through the gateway. For the full design and its invariants, read the [Theory of the System](docs/design/theory-of-the-system.md); for layered diagrams, see [Architecture Diagrams](docs/architecture-diagrams.md).
 
-## Who are you?
+## See it in action
 
-- **Developer?** Start with the [Quick Start](#quick-start) below, then connect your AI coding assistant with the [AI Coding Assistant Integration guide](docs/ai-coding-assistants-setup.md) and the [API reference](docs/registry_api.md).
-- **Platform / security / ops team?** See the deployment guides for [Docker Compose](docs/installation.md), [Amazon ECS (Terraform)](terraform/aws-ecs/README.md), and [Amazon EKS (Helm)](charts/README.md); the [authentication guide](docs/auth.md); the [configuration reference](docs/configuration.md); and [access control & scopes](docs/scopes.md).
-- **Evaluating adoption?** Read the [Executive Brief](docs/overview/executive-brief.md), watch the [demo videos](docs/demo-videos.md), and try the [AWS Workshop](https://catalog.us-east-1.prod.workshops.aws/workshops/0c3265a6-1a4a-467b-ae56-e4d019184b0e/en-US).
+A 60-second tour of MCP servers, A2A agents, and external registries working together for dynamic tool discovery:
+
+https://github.com/user-attachments/assets/97c640db-f78b-4a6c-9662-894f975f66e2
+
+MCP tools discovered and invoked through the gateway ([view the demo](docs/img/MCP_tools.gif)). More walkthroughs are in the [demo videos](docs/demo-videos.md).
+
+## Start here if you are a...
+
+- **Developer** — begin with the [Quick Start](#quick-start) below, then connect your AI coding assistant with the [AI Coding Assistant Integration guide](docs/ai-coding-assistants-setup.md) and the [API reference](docs/registry_api.md).
+- **Platform / security / ops team** — see the deployment guides for [Docker Compose](docs/installation.md), [Amazon ECS (Terraform)](terraform/aws-ecs/README.md), and [Amazon EKS (Helm)](charts/README.md); the [authentication guide](docs/auth.md); the [configuration reference](docs/configuration.md); and [access control & scopes](docs/scopes.md).
+- **Decision-maker evaluating adoption** — read the [Executive Brief](docs/overview/executive-brief.md), watch the [demo videos](docs/demo-videos.md), and try the [AWS Workshop](https://catalog.us-east-1.prod.workshops.aws/workshops/0c3265a6-1a4a-467b-ae56-e4d019184b0e/en-US).
 
 ## Quick Start
 
@@ -85,7 +93,15 @@ The registry holds four built-in asset types plus admin-defined custom ones, all
 - **Skills** — register, version, and discover reusable `SKILL.md` skills, with security scanning at registration.
 - **Custom entities** — admins define their own schema-driven entity types (n8n workflows, policies, prompt templates, model cards, and more); see [Custom Entity Types](docs/custom-entities.md).
 
-Across all of them you get semantic + lexical search, [virtual servers](docs/design/virtual-mcp-server.md) that aggregate tools behind one endpoint, health monitoring, [OpenTelemetry metrics](docs/OBSERVABILITY.md), [external-registry federation](docs/federation.md) (e.g. Anthropic's MCP Registry), and UI, REST, and MCP-native interfaces. Governance is uniform: fine-grained [scopes](docs/scopes.md), a fail-closed [registration admission gate](docs/registration-webhooks.md), audit logging, and OAuth against your existing IdP.
+Across all of them you get semantic + lexical search, UI, REST, and MCP-native interfaces, and uniform governance. Key features worth calling out:
+
+- **Single authenticated gateway** — one entry point; OAuth against your existing IdP (Keycloak, Entra ID, Okta, Auth0, Cognito, PingFederate) with fine-grained [scopes](docs/scopes.md).
+- **Dynamic tool discovery** — agents and coding assistants find tools at runtime by natural-language [semantic search](docs/dynamic-tool-discovery.md), not hard-coded config.
+- **[Virtual MCP servers](docs/design/virtual-mcp-server.md)** — aggregate tools from many backends behind one endpoint, with per-tool access control.
+- **[Per-user egress auth (3LO)](docs/design/egress-auth-design.md)** — the gateway brokers third-party SaaS credentials so tokens never live on a user's laptop.
+- **Security scanning + [fail-closed admission gate](docs/registration-webhooks.md)** — every registered server, agent, and skill is scanned; unsafe items are held for review.
+- **[External-registry federation](docs/federation.md)** — pull in Anthropic's MCP Registry, AWS Agent Registry, and peer registries for one unified surface.
+- **Observability** — [OpenTelemetry metrics](docs/OBSERVABILITY.md), health monitoring, and full audit logging built in.
 
 ## What's New
 
@@ -99,7 +115,9 @@ Across all of them you get semantic + lexical search, [virtual servers](docs/des
 
 ## Documentation
 
-Full documentation is on the [documentation site](https://agentic-community.github.io/mcp-gateway-registry/). High-traffic pages by audience:
+Full documentation is on the [documentation site](https://agentic-community.github.io/mcp-gateway-registry/), and every guide also lives in the [`docs/` folder](docs/). **Stuck or have a question? Start with the [FAQ / Troubleshooting guide](docs/faq/index.md)** — it covers the most common setup, auth, deployment, and registration issues.
+
+High-traffic pages by audience:
 
 **Get started**
 - [Quick Start](docs/quickstart.md) · [Installation Guide](docs/installation.md) · [Configuration Reference](docs/configuration.md) · [FAQ / Troubleshooting](docs/faq/index.md)
