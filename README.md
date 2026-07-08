@@ -19,13 +19,36 @@ The **MCP Gateway & Registry** is a single, governed control plane for every AI 
 
 It began as a gateway and registry for the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/introduction): one secure entry point to many MCP servers, with centralized discovery and governance. As teams started registering agents, skills, and other assets alongside their servers, it grew into a general-purpose **AI asset registry** on the same gateway, access-control, and audit model it started with.
 
-## The 30-second pitch
+## Why we built this
 
 Without a control plane, every team wires its own MCP servers and agents by hand: separate credentials in every dotfile, no shared inventory, no audit trail, and no way to discover or govern what exists. Agents can't find other agents; servers and agents live in separate registries that can't share policy.
 
 This platform replaces that with **one governed entry point for every AI asset**. Register a server, agent, skill, or custom entity once; discover it by natural-language search; reach it through a single authenticated gateway that enforces access and records every call. One control plane, one access model, one audit trail, across all asset types.
 
-> **Origin:** it grew from an MCP gateway into a general-purpose AI asset registry, keeping the same gateway / access-control / audit model throughout. That single-spine design is why servers, agents, skills, and custom entities all share one registration, search, and governance path. See the [Theory of the System](docs/design/theory-of-the-system.md).
+```
+┌─────────────────────────────────────┐     ┌──────────────────────────────────────────────────────┐
+│          BEFORE: Chaos              │     │    AFTER: MCP Gateway & Registry                     │
+├─────────────────────────────────────┤     ├──────────────────────────────────────────────────────┤
+│                                     │     │                                                      │
+│  Developer 1 ──┬──► MCP Server A    │     │  Developer 1 ──┐                  ┌─ MCP Server A    │
+│                ├──► MCP Server B    │     │                │                  ├─ MCP Server B    │
+│                └──► MCP Server C    │     │  Developer 2 ──┼──► MCP Gateway   │                  │
+│                                     │     │                │    & Registry ───┼─ MCP Server C    │
+│  Developer 2 ──┬──► MCP Server A    │ ──► │  AI Agent 1 ───┘         │        │                  │
+│                ├──► MCP Server D    │     │                          │        ├─ AI Agent 1      │
+│                └──► MCP Server E    │     │  AI Agent 2 ──────────────┤        ├─ AI Agent 2     │
+│                                     │     │                          │        │                  │
+│  AI Agent 1 ───┬──► MCP Server B    │     │  AI Agent 3 ──────────────┘        └─ AI Agent 3     │
+│                ├──► MCP Server C    │     │                                                      │
+│                └──► MCP Server F    │     │              Single Connection Point                 │
+│                                     │     │                                                      │
+│  ❌ Multiple connections per user  │     │         ✅ One gateway for all                      │
+│  ❌ No centralized control         │     │         ✅ Unified server & agent access            │
+│  ❌ Credential sprawl              │     │         ✅ Unified governance & audit trails        │
+└─────────────────────────────────────┘     └──────────────────────────────────────────────────────┘
+```
+
+> **Origin:** it grew from an MCP gateway into a general-purpose AI asset registry, keeping the same gateway / access-control / audit model throughout. That single-spine design is why servers, agents, skills, and custom entities all share one registration, search, and governance path.
 
 ## How it works
 
@@ -126,7 +149,7 @@ High-traffic pages by audience:
 - [Authentication Guide](docs/auth.md) · [Access Control & Scopes](docs/scopes.md) · [AWS ECS Deployment](terraform/aws-ecs/README.md) · [Amazon EKS (Helm)](charts/README.md) · [Observability](docs/OBSERVABILITY.md) · [Federation](docs/federation.md)
 
 **Architecture & development**
-- [Theory of the System](docs/design/theory-of-the-system.md) · [Architecture Diagrams](docs/architecture-diagrams.md) · [API Reference](docs/registry_api.md) · [AI Coding Assistant Integration](docs/ai-coding-assistants-setup.md) · [MCP Registry CLI](docs/mcp-registry-cli.md)
+- [Architecture Diagrams](docs/architecture-diagrams.md) · [API Reference](docs/registry_api.md) · [AI Coding Assistant Integration](docs/ai-coding-assistants-setup.md) · [MCP Registry CLI](docs/mcp-registry-cli.md)
 
 ## Telemetry
 
