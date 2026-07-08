@@ -52,9 +52,23 @@ except ImportError:
     from auth_server.observability.meters import token_mint_total
 
 try:
-    from egress_obo import OboExchangeError, obo_exchange
+    from egress_obo import (
+        OboConfigError,
+        OboConsentRequired,
+        OboExchangeError,
+        OboReauthRequired,
+        OboUnsupportedIdpError,
+        obo_exchange,
+    )
 except ImportError:
-    from auth_server.egress_obo import OboExchangeError, obo_exchange
+    from auth_server.egress_obo import (
+        OboConfigError,
+        OboConsentRequired,
+        OboExchangeError,
+        OboReauthRequired,
+        OboUnsupportedIdpError,
+        obo_exchange,
+    )
 
 # Import provider factory
 from providers.factory import get_auth_provider
@@ -5305,6 +5319,24 @@ def _obo_subject_matches_principal(subject_token: str, internal_claims: dict) ->
     return principal in candidates
 
 
+def _obo_failure_reason(exc: OboExchangeError) -> str:
+    """Map a typed OBO exchange error to a short, stable audit failure_reason.
+
+    Mirrors the typed hierarchy in egress_obo so audit consumers can group by
+    failure class (re-auth vs consent vs config vs unsupported-idp) without
+    parsing the free-text detail.
+    """
+    if isinstance(exc, OboReauthRequired):
+        return "reauth_required"
+    if isinstance(exc, OboConsentRequired):
+        return "consent_required"
+    if isinstance(exc, OboConfigError):
+        return "config_error"
+    if isinstance(exc, OboUnsupportedIdpError):
+        return "unsupported_idp"
+    return "exchange_failed"
+
+
 def _obo_error_response(req_id: object, detail: str):
     """Terminal JSON-RPC error for an obo_exchange failure.
 
@@ -5821,18 +5853,59 @@ async def mcp_proxy(
                     return _obo_error_response(
                         req_id, "OBO subject token does not match the authorized principal"
                     )
+                # Audit context for the OBO mint. This is a per-user delegated
+                # token mint (the exchanged token bakes in the caller's `sub`),
+                # so it is attributable in the same audit stream as the 3LO vault
+                # vend: actor principal, target server, scopes, outcome. The
+                # username is the /validate-authorized principal (the internal
+                # token's `sub`); _emit_token_mint_audit hashes it before storing.
+                obo_principal = str((claims or {}).get("sub") or "")
+                obo_auth_method = str((claims or {}).get("auth_method") or "") or "unknown"
+                obo_target_audience = vend.get("obo_target_audience") or ""
+                obo_scopes = vend.get("obo_scopes") or []
                 try:
                     obo_token = await obo_exchange(
                         get_auth_provider(),
                         subject_token=subject_token,
-                        target_audience=vend.get("obo_target_audience") or "",
-                        scopes=vend.get("obo_scopes") or [],
+                        target_audience=obo_target_audience,
+                        scopes=obo_scopes,
                     )
                 except OboExchangeError as exc:
                     logger.warning(
                         "mcp_proxy: obo_exchange failed for server=%s: %s", server_name, exc
                     )
+                    await _emit_token_mint_audit(
+                        request_id=str(uuid.uuid4()),
+                        correlation_id=None,
+                        username=obo_principal,
+                        auth_method=obo_auth_method,
+                        provider=settings.auth_provider,
+                        internal_caller="mcp-proxy",
+                        token_kind=TokenKind.USER.value,
+                        resource_type="server",
+                        resource_id=server_first_segment,
+                        token_path="obo_exchange",
+                        requested_scopes=list(obo_scopes),
+                        expires_in_seconds=None,
+                        outcome="failure",
+                        failure_reason=_obo_failure_reason(exc),
+                    )
                     return _obo_error_response(req_id, str(exc))
+                await _emit_token_mint_audit(
+                    request_id=str(uuid.uuid4()),
+                    correlation_id=None,
+                    username=obo_principal,
+                    auth_method=obo_auth_method,
+                    provider=settings.auth_provider,
+                    internal_caller="mcp-proxy",
+                    token_kind=TokenKind.USER.value,
+                    resource_type="server",
+                    resource_id=server_first_segment,
+                    token_path="obo_exchange",
+                    requested_scopes=list(obo_scopes),
+                    expires_in_seconds=None,
+                    outcome="success",
+                )
                 # Reuse the egress strip+inject: drop the user's gateway creds /
                 # internal identity headers before injecting the exchanged token.
                 forward_headers = {

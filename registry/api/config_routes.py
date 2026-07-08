@@ -401,6 +401,7 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             ("egress_refresh_worker_interval_seconds", "Refresh Worker Interval (s)", False),
             ("egress_state_ttl_seconds", "OAuth State TTL (s)", False),
             ("egress_registry_internal_url", "Registry Internal Vend URL", False),
+            ("egress_obo_allowed_audiences", "OBO Allowed Audiences", False),
             # secrets-manager backend
             ("secrets_manager_kms_key_id", "Secrets Manager KMS Key ID", True),
             ("secrets_manager_path_prefix", "Secrets Manager Path Prefix", False),

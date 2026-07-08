@@ -229,3 +229,30 @@ class TestSsrfGuard:
         )
         assert token == "ok"
         assert capture["calls"] == 1
+
+
+class TestOboFailureReason:
+    """The audit failure_reason mapping used when an OBO mint is emitted to the
+    token-mint audit stream (auth_server.server._obo_failure_reason). Groups the
+    typed exception hierarchy into stable, low-cardinality reason codes so audit
+    consumers can bucket by failure class without parsing free-text detail."""
+
+    @pytest.mark.parametrize(
+        "exc_name, expected",
+        [
+            ("OboReauthRequired", "reauth_required"),
+            ("OboConsentRequired", "consent_required"),
+            ("OboConfigError", "config_error"),
+            ("OboUnsupportedIdpError", "unsupported_idp"),
+            ("OboExchangeError", "exchange_failed"),
+        ],
+    )
+    def test_typed_exception_maps_to_reason(self, exc_name, expected):
+        # Construct the exception from the SAME module object server.py imports
+        # (bare `from egress_obo import ...`), which conftest resolves as a
+        # distinct module from `auth_server.egress_obo`. Using the class off
+        # auth_server.server guarantees isinstance identity matches.
+        import auth_server.server as server
+
+        exc_cls = getattr(server, exc_name)
+        assert server._obo_failure_reason(exc_cls("x")) == expected
