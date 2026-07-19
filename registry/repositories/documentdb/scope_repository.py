@@ -2,7 +2,7 @@
 
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorCollection
@@ -496,7 +496,7 @@ class DocumentDBScopeRepository(ScopeRepositoryBase):
                             "$each": [{"scope_name": scope_name, "access_rules": [server_entry]}]
                         }
                     },
-                    "$set": {"updated_at": datetime.utcnow()},
+                    "$set": {"updated_at": datetime.now(timezone.utc)},
                 },
             )
 
@@ -531,7 +531,7 @@ class DocumentDBScopeRepository(ScopeRepositoryBase):
                             "access_rules.server": server_name,
                         }
                     },
-                    "$set": {"updated_at": datetime.utcnow()},
+                    "$set": {"updated_at": datetime.now(timezone.utc)},
                 },
             )
 
@@ -575,8 +575,8 @@ class DocumentDBScopeRepository(ScopeRepositoryBase):
                 "group_mappings": [],
                 "ui_permissions": {},
                 "is_idp_managed": is_idp_managed,
-                "created_at": datetime.utcnow(),
-                "updated_at": datetime.utcnow(),
+                "created_at": datetime.now(timezone.utc),
+                "updated_at": datetime.now(timezone.utc),
             }
 
             await collection.insert_one(doc)
@@ -637,7 +637,7 @@ class DocumentDBScopeRepository(ScopeRepositoryBase):
                     {
                         "$set": {
                             "is_idp_managed": backfilled,
-                            "updated_at": datetime.utcnow(),
+                            "updated_at": datetime.now(timezone.utc),
                         }
                     },
                 )
@@ -673,7 +673,7 @@ class DocumentDBScopeRepository(ScopeRepositoryBase):
                     {
                         "$set": {
                             "is_idp_managed": backfilled,
-                            "updated_at": datetime.utcnow(),
+                            "updated_at": datetime.now(timezone.utc),
                         }
                     },
                 )
@@ -730,7 +730,7 @@ class DocumentDBScopeRepository(ScopeRepositoryBase):
                 {"_id": group_name},
                 {
                     "$addToSet": {"ui_permissions.list_service": server_name},
-                    "$set": {"updated_at": datetime.utcnow()},
+                    "$set": {"updated_at": datetime.now(timezone.utc)},
                 },
             )
 
@@ -757,7 +757,7 @@ class DocumentDBScopeRepository(ScopeRepositoryBase):
                 {"_id": group_name},
                 {
                     "$pull": {"ui_permissions.list_service": server_name},
-                    "$set": {"updated_at": datetime.utcnow()},
+                    "$set": {"updated_at": datetime.now(timezone.utc)},
                 },
             )
 
@@ -787,7 +787,7 @@ class DocumentDBScopeRepository(ScopeRepositoryBase):
             set_fields: dict[str, Any] = {
                 f"ui_permissions.{key}": value for key, value in ui_permissions.items()
             }
-            set_fields["updated_at"] = datetime.utcnow()
+            set_fields["updated_at"] = datetime.now(timezone.utc)
 
             result = await collection.update_one(
                 {"_id": group_name},
@@ -829,7 +829,7 @@ class DocumentDBScopeRepository(ScopeRepositoryBase):
                 {"_id": group_name},
                 {
                     "$unset": unset_fields,
-                    "$set": {"updated_at": datetime.utcnow()},
+                    "$set": {"updated_at": datetime.now(timezone.utc)},
                 },
             )
 
@@ -872,7 +872,7 @@ class DocumentDBScopeRepository(ScopeRepositoryBase):
                 match_filter,
                 {
                     "$unset": unset_fields,
-                    "$set": {"updated_at": datetime.utcnow()},
+                    "$set": {"updated_at": datetime.now(timezone.utc)},
                 },
             )
 
@@ -906,7 +906,7 @@ class DocumentDBScopeRepository(ScopeRepositoryBase):
                 {"_id": group_name},
                 {
                     "$addToSet": {"group_mappings": scope_name},
-                    "$set": {"updated_at": datetime.utcnow()},
+                    "$set": {"updated_at": datetime.now(timezone.utc)},
                 },
             )
 
@@ -933,7 +933,7 @@ class DocumentDBScopeRepository(ScopeRepositoryBase):
                 {"_id": group_name},
                 {
                     "$pull": {"group_mappings": scope_name},
-                    "$set": {"updated_at": datetime.utcnow()},
+                    "$set": {"updated_at": datetime.now(timezone.utc)},
                 },
             )
 
@@ -1012,7 +1012,7 @@ class DocumentDBScopeRepository(ScopeRepositoryBase):
                 {},
                 {
                     "$pull": {"server_access": {"access_rules.server": server_name}},
-                    "$set": {"updated_at": datetime.utcnow()},
+                    "$set": {"updated_at": datetime.now(timezone.utc)},
                 },
             )
 
@@ -1114,8 +1114,8 @@ class DocumentDBScopeRepository(ScopeRepositoryBase):
                 "ui_permissions": ui_permissions,
                 "agent_access": agent_access,
                 "is_idp_managed": is_idp_managed,
-                "created_at": datetime.utcnow(),
-                "updated_at": datetime.utcnow(),
+                "created_at": datetime.now(timezone.utc),
+                "updated_at": datetime.now(timezone.utc),
             }
 
             # Use replace_one with upsert=True to create or replace the entire document

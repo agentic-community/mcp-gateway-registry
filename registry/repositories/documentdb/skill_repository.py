@@ -10,7 +10,7 @@ Implements all recommendations:
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import (
     Any,
 )
@@ -301,7 +301,7 @@ class DocumentDBSkillRepository(SkillRepositoryBase):
         """Update a skill."""
         await self.ensure_indexes()
         collection = await self._get_collection()
-        updates["updated_at"] = datetime.utcnow().isoformat()
+        updates["updated_at"] = datetime.now(timezone.utc).isoformat()
 
         # Keep the normalized sidecar in sync when this update touches
         # skill_md_url. If skill_md_url isn't in the patch we leave the
@@ -369,7 +369,7 @@ class DocumentDBSkillRepository(SkillRepositoryBase):
         collection = await self._get_collection()
         result = await collection.update_one(
             {"_id": path},
-            {"$set": {"is_enabled": enabled, "updated_at": datetime.utcnow().isoformat()}},
+            {"$set": {"is_enabled": enabled, "updated_at": datetime.now(timezone.utc).isoformat()}},
         )
         if result.modified_count > 0:
             logger.info(f"Set skill {path} enabled={enabled}")
@@ -410,7 +410,7 @@ class DocumentDBSkillRepository(SkillRepositoryBase):
 
         count = 0
         for path, update_data in updates.items():
-            update_data["updated_at"] = datetime.utcnow().isoformat()
+            update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
             result = await collection.update_one({"_id": path}, {"$set": update_data}, upsert=True)
             if result.modified_count > 0 or result.upserted_id:
                 count += 1

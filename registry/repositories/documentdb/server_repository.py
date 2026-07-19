@@ -3,7 +3,7 @@
 import asyncio
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorCollection
@@ -280,8 +280,8 @@ class DocumentDBServerRepository(ServerRepositoryBase):
         )
         collection = await self._get_collection()
 
-        server_info["registered_at"] = datetime.utcnow().isoformat()
-        server_info["updated_at"] = datetime.utcnow().isoformat()
+        server_info["registered_at"] = datetime.now(timezone.utc).isoformat()
+        server_info["updated_at"] = datetime.now(timezone.utc).isoformat()
         server_info.setdefault("is_enabled", False)
 
         try:
@@ -313,7 +313,7 @@ class DocumentDBServerRepository(ServerRepositoryBase):
         )
         collection = await self._get_collection()
 
-        server_info["updated_at"] = datetime.utcnow().isoformat()
+        server_info["updated_at"] = datetime.now(timezone.utc).isoformat()
 
         try:
             doc = {**server_info}
@@ -475,7 +475,7 @@ class DocumentDBServerRepository(ServerRepositoryBase):
 
             result = await collection.update_one(
                 {"_id": path},
-                {"$set": {"is_enabled": enabled, "updated_at": datetime.utcnow().isoformat()}},
+                {"$set": {"is_enabled": enabled, "updated_at": datetime.now(timezone.utc).isoformat()}},
             )
 
             if result.matched_count == 0:

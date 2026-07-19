@@ -1,7 +1,7 @@
 """DocumentDB-based repository for skill security scan results storage."""
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorCollection
@@ -128,7 +128,7 @@ class DocumentDBSkillSecurityScanRepository(SkillSecurityScanRepositoryBase):
             collection = await self._get_collection()
 
             if "scan_timestamp" not in scan_result:
-                scan_result["scan_timestamp"] = datetime.utcnow().isoformat()
+                scan_result["scan_timestamp"] = datetime.now(timezone.utc).isoformat()
 
             await collection.insert_one(scan_result)
 

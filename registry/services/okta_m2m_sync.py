@@ -8,7 +8,7 @@ authorization server expressions.
 import json
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 
 import requests
 from motor.motor_asyncio import AsyncIOMotorDatabase
@@ -242,14 +242,14 @@ class OktaM2MSync:
                         "groups": groups,
                         "enabled": app.get("status") == "ACTIVE",
                         "okta_app_id": app.get("id"),
-                        "last_synced": datetime.utcnow(),
+                        "last_synced": datetime.now(timezone.utc),
                     }
 
                     masked_cid = f"{client_id[:8]}..." if client_id else "<none>"
 
                     if existing:
                         # Update existing record
-                        client_doc["updated_at"] = datetime.utcnow()
+                        client_doc["updated_at"] = datetime.now(timezone.utc)
                         await self.collection.update_one(
                             {"client_id": client_id}, {"$set": client_doc}
                         )
@@ -257,8 +257,8 @@ class OktaM2MSync:
                         logger.info(f"Updated client: {masked_cid}")
                     else:
                         # Insert new record
-                        client_doc["created_at"] = datetime.utcnow()
-                        client_doc["updated_at"] = datetime.utcnow()
+                        client_doc["created_at"] = datetime.now(timezone.utc)
+                        client_doc["updated_at"] = datetime.now(timezone.utc)
                         await self.collection.insert_one(client_doc)
                         added_count += 1
                         logger.info(f"Added new client: {masked_cid}")
@@ -272,7 +272,7 @@ class OktaM2MSync:
                         "enabled": client_doc["enabled"],
                         "provider": "okta",
                         "idp_app_id": app.get("id"),
-                        "updated_at": datetime.utcnow(),
+                        "updated_at": datetime.now(timezone.utc),
                     }
 
                     existing_idp = await self.idp_collection.find_one({"client_id": client_id})
@@ -281,7 +281,7 @@ class OktaM2MSync:
                             {"client_id": client_id}, {"$set": idp_doc}
                         )
                     else:
-                        idp_doc["created_at"] = datetime.utcnow()
+                        idp_doc["created_at"] = datetime.now(timezone.utc)
                         await self.idp_collection.insert_one(idp_doc)
 
                 except Exception as e:
@@ -367,7 +367,7 @@ class OktaM2MSync:
             {
                 "$set": {
                     "groups": groups,
-                    "updated_at": datetime.utcnow(),
+                    "updated_at": datetime.now(timezone.utc),
                 }
             },
         )
@@ -378,7 +378,7 @@ class OktaM2MSync:
             {
                 "$set": {
                     "groups": groups,
-                    "updated_at": datetime.utcnow(),
+                    "updated_at": datetime.now(timezone.utc),
                 }
             },
         )

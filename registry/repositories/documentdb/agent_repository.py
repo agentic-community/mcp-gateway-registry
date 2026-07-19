@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorCollection
@@ -142,9 +142,9 @@ class DocumentDBAgentRepository(AgentRepositoryBase):
         collection = await self._get_collection()
 
         if not agent.registered_at:
-            agent.registered_at = datetime.utcnow()
+            agent.registered_at = datetime.now(timezone.utc)
         if not agent.updated_at:
-            agent.updated_at = datetime.utcnow()
+            agent.updated_at = datetime.now(timezone.utc)
 
         agent_dict = agent.model_dump(mode="json")
         agent_dict["is_enabled"] = False
@@ -191,7 +191,7 @@ class DocumentDBAgentRepository(AgentRepositoryBase):
 
         agent_dict = existing_agent.model_dump()
         agent_dict.update(updates)
-        agent_dict["updated_at"] = datetime.utcnow()
+        agent_dict["updated_at"] = datetime.now(timezone.utc)
 
         try:
             updated_agent = AgentCard(**agent_dict)
@@ -298,7 +298,7 @@ class DocumentDBAgentRepository(AgentRepositoryBase):
 
             result = await collection.update_one(
                 {"_id": path},
-                {"$set": {"is_enabled": enabled, "updated_at": datetime.utcnow().isoformat()}},
+                {"$set": {"is_enabled": enabled, "updated_at": datetime.now(timezone.utc).isoformat()}},
             )
 
             if result.matched_count == 0:

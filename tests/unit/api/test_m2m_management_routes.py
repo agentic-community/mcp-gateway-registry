@@ -9,7 +9,7 @@ Tests the direct M2M client registration endpoints:
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -58,7 +58,7 @@ def regular_user_context() -> dict[str, Any]:
 
 @pytest.fixture
 def sample_client() -> IdPM2MClient:
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     return IdPM2MClient(
         client_id="test-client-id",
         name="Test Client",

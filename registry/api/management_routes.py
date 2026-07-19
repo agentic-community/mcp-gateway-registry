@@ -317,7 +317,7 @@ async def management_create_m2m_user(
 
         # Store M2M client in MongoDB for all providers (authorization database)
         try:
-            from datetime import datetime
+            from datetime import datetime, timezone
             from os import environ
 
             db = await get_documentdb_client()
@@ -333,8 +333,8 @@ async def management_create_m2m_user(
                 "enabled": True,
                 "provider": provider,
                 "idp_app_id": result.get("okta_app_id") or result.get("client_id"),
-                "created_at": datetime.utcnow(),
-                "updated_at": datetime.utcnow(),
+                "created_at": datetime.now(timezone.utc),
+                "updated_at": datetime.now(timezone.utc),
             }
 
             await collection.insert_one(client_doc)
@@ -542,7 +542,7 @@ async def management_update_user_groups(
                 {
                     "$set": {
                         "groups": new_groups,
-                        "updated_at": datetime.utcnow(),
+                        "updated_at": datetime.now(timezone.utc),
                     }
                 },
             )

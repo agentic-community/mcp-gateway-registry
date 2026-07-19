@@ -4,7 +4,7 @@ This module defines the request/response schemas for Okta M2M client
 management endpoints.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from pydantic import BaseModel, Field
 

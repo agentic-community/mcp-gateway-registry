@@ -9,7 +9,7 @@ import httpx
 import asyncio
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any, Optional, List
 import json
 
@@ -73,7 +73,7 @@ class MetricsClient:
                 "metrics": [
                     {
                         "type": metric_type,
-                        "timestamp": (timestamp or datetime.utcnow()).isoformat(),
+                        "timestamp": (timestamp or datetime.now(timezone.utc)).isoformat(),
                         "value": value,
                         "duration_ms": duration_ms,
                         "dimensions": dimensions or {},
@@ -305,7 +305,7 @@ class MetricsClient:
             for metric in metrics:
                 formatted_metric = {
                     "type": metric.get("type", "custom"),
-                    "timestamp": (metric.get("timestamp") or datetime.utcnow()).isoformat(),
+                    "timestamp": (metric.get("timestamp") or datetime.now(timezone.utc)).isoformat(),
                     "value": metric.get("value", 1.0),
                     "duration_ms": metric.get("duration_ms"),
                     "dimensions": metric.get("dimensions", {}),

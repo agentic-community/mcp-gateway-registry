@@ -8,7 +8,7 @@ scripts and authentication tokens.
 import asyncio
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -76,7 +76,7 @@ async def initialize_airegistry_server() -> bool:
             logger.info(f"AI Registry Tools server already exists at {path}, updating...")
 
             # Update with new configuration
-            config["updated_at"] = datetime.utcnow().isoformat()
+            config["updated_at"] = datetime.now(timezone.utc).isoformat()
             config["is_enabled"] = True  # Ensure it's enabled
 
             success = await server_repo.update(path, config)
@@ -89,8 +89,8 @@ async def initialize_airegistry_server() -> bool:
             logger.info(f"Creating AI Registry Tools server at {path}...")
 
             # Set metadata for new server
-            config["registered_at"] = datetime.utcnow().isoformat()
-            config["updated_at"] = datetime.utcnow().isoformat()
+            config["registered_at"] = datetime.now(timezone.utc).isoformat()
+            config["updated_at"] = datetime.now(timezone.utc).isoformat()
             config["is_enabled"] = True  # Enable by default
             config["source"] = "builtin"  # Mark as built-in server
 
