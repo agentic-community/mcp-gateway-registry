@@ -153,12 +153,19 @@ class TestFetchFlagGate:
 
 
 class TestCreateBlock:
-    def _block(self, entity_type="skill", path="/skills/proxy-demo", target="https://b.example/"):
+    def _block(
+        self,
+        entity_type="skill",
+        path="/skills/proxy-demo",
+        target="https://b.example/",
+        streaming=False,
+    ):
         with patch("registry.core.nginx_service.settings") as s:
             s.auth_server_url = "http://auth-server:8888"
             s.gateway_generic_client_max_body_size = "1m"
             s.gateway_proxy_prefix = "gateway"
-            return _service()._create_generic_proxy_block(entity_type, path, target)
+            s.gateway_generic_stream_read_timeout_seconds = 3600
+            return _service()._create_generic_proxy_block(entity_type, path, target, streaming)
 
     def test_location_is_prefixed_type_name(self):
         # Client-facing path = /{prefix}/{type}/{name} (namespace segment stripped
@@ -223,6 +230,23 @@ class TestCreateBlock:
         assert "proxy_set_header X-Internal-Token-Generic $auth_internal_token_generic;" in block
         # must NOT forward the generic token under the MCP header name
         assert "proxy_set_header X-Internal-Token $auth_internal_token_generic;" not in block
+
+    def test_non_streaming_block_has_no_streaming_directives(self):
+        # Default (buffered) route: no streaming marker, no buffering-off, so the
+        # hop keeps the bounded/buffered path and nginx buffers normally.
+        block = self._block(streaming=False)
+        assert 'set $generic_streaming "1";' not in block
+        assert "proxy_buffering off;" not in block
+
+    def test_streaming_block_emits_marker_and_buffering_off(self):
+        # Streaming route (proxy_streaming=true entity): sets the $generic_streaming
+        # marker (forwarded on /validate, bound into the token), disables nginx
+        # buffering, and raises the read timeout for long-lived SSE / token streams.
+        block = self._block(streaming=True)
+        assert 'set $generic_streaming "1";' in block
+        assert "proxy_buffering off;" in block
+        assert "proxy_read_timeout 3600s;" in block
+        assert 'proxy_set_header Connection "";' in block
 
     def test_auth_server_url_trailing_slash_not_doubled(self):
         with patch("registry.core.nginx_service.settings") as s:

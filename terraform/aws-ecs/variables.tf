@@ -2194,6 +2194,12 @@ variable "gateway_proxy_prefix" {
   default     = "gateway"
 }
 
+variable "gateway_generic_stream_read_timeout_seconds" {
+  description = "nginx proxy_read_timeout (seconds) for generic-proxy routes whose entity has proxy_streaming=true (SSE / token streams, e.g. an LLM proxied as a custom type). Only affects streaming routes."
+  type        = number
+  default     = 3600
+}
+
 # Auth-server container settings
 variable "generic_proxy_token_ttl_seconds" {
   description = "Lifetime (seconds) of the auth-server-minted generic-proxy internal token; the replay-window cap."

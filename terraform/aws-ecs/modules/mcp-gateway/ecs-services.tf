@@ -1546,6 +1546,10 @@ module "ecs_service_registry" {
           name  = "GATEWAY_PROXY_PREFIX"
           value = tostring(var.gateway_proxy_prefix)
         },
+        {
+          name  = "GATEWAY_GENERIC_STREAM_READ_TIMEOUT_SECONDS"
+          value = tostring(var.gateway_generic_stream_read_timeout_seconds)
+        },
         # Internal/workshop deployment classification (telemetry labels; issue #1216)
         {
           name  = "INTERNAL_ONLY_DEPLOYMENT"

@@ -1840,6 +1840,7 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
         entity_type: str,
         path: str,
         target_url: str,
+        streaming: bool = False,
     ) -> str:
         """Render one nginx location block routing a proxied non-MCP entity.
 
@@ -1852,10 +1853,19 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
         IP-pinning and TLS SNI for the backend happen at the auth-server httpx
         layer, not here.
 
+        When ``streaming`` is true the route disables nginx response buffering and
+        raises the read timeout so a long-lived SSE / chunked upstream (e.g. an
+        LLM proxied as a custom type) flows to the client incrementally instead of
+        being held until complete. The ``$generic_streaming`` marker is forwarded
+        on the /validate subrequest and bound into the token, so the hop switches
+        to a StreamingResponse only when the SIGNED claim says so — never on a
+        forgeable inbound header.
+
         Args:
             entity_type: Canonical entity type (e.g. "skill", "a2a_agent").
             path: The registered entity path (e.g. "/skills/proxy-demo").
             target_url: The resolved, egress-validated backend URL.
+            streaming: Emit the buffering-off + long-timeout streaming variant.
 
         Returns:
             The nginx location block string (with ``{{ROOT_PATH}}`` placeholder).
@@ -1877,6 +1887,22 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
             + "/"
         )
         body_size = settings.gateway_generic_client_max_body_size
+        # Streaming variant: disable nginx buffering (so SSE/chunked bytes are not
+        # held), raise the read timeout for long-lived token streams, and set the
+        # $generic_streaming marker (forwarded on /validate, bound into the token).
+        # $generic_streaming is a fixed literal ("1"/"") — no untrusted input — so
+        # it needs no sanitization. Non-streaming keeps the marker empty (map
+        # default), so the mint stays buffered.
+        if streaming:
+            stream_read_timeout = settings.gateway_generic_stream_read_timeout_seconds
+            streaming_directives = f"""
+        # Streaming route: forward SSE/chunked bytes incrementally.
+        set $generic_streaming "1";
+        proxy_buffering off;
+        proxy_read_timeout {stream_read_timeout}s;
+        proxy_set_header Connection "";"""
+        else:
+            streaming_directives = ""
         return f"""
     # Proxied {entity_type}: {location_path}
     location {{{{ROOT_PATH}}}}{location_path} {{
@@ -1891,7 +1917,7 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
         # fires and exactly one (generic-audience) token is issued per request.
         set $generic_backend_url "{target_url}";
         set $generic_proxy_kind "{entity_type}";
-        set $entity_path "{entity_path}";
+        set $entity_path "{entity_path}";{streaming_directives}
         proxy_set_header X-Upstream-Url $generic_backend_url;
 
         proxy_pass {proxy_target};
@@ -1918,6 +1944,7 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
         entity_type: str,
         path: str,
         target_url: str,
+        streaming: bool = False,
     ) -> str | None:
         """Return a generic block, or None to SKIP if the target is invalid/denied.
 
@@ -1962,7 +1989,7 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
                 raise ValueError("illegal character in target")
             if any(c in path for c in structural):
                 raise ValueError("illegal character in path")
-            return self._create_generic_proxy_block(entity_type, path, target_url)
+            return self._create_generic_proxy_block(entity_type, path, target_url, streaming)
         except Exception as e:
             logger.warning("Skipping generic block for %s%s: %s", entity_type, path, e)
             GATEWAY_GENERIC_BLOCKS_DROPPED.labels(reason="invalid").inc()
@@ -1998,7 +2025,9 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
 
         blocks: list[str] = []
         for res in sorted(resources, key=lambda r: (r["entity_type"], r["path"])):
-            block = self._safe_generic_block(res["entity_type"], res["path"], res["target_url"])
+            block = self._safe_generic_block(
+                res["entity_type"], res["path"], res["target_url"], res.get("streaming", False)
+            )
             if block is None:
                 continue  # _safe_generic_block already logged + counted the drop
             block_paths = self._location_paths_in(block)
@@ -3056,7 +3085,16 @@ async def _fetch_generic_proxied_resources() -> list[dict[str, Any]]:
             if not target:
                 # Not renderable (federated / disabled / auto-disabled / no target).
                 continue
-            resources.append({"entity_type": row_type, "path": doc["path"], "target_url": target})
+            resources.append(
+                {
+                    "entity_type": row_type,
+                    "path": doc["path"],
+                    "target_url": target,
+                    # Opt-in streaming: chunk-forward + buffering-off nginx route.
+                    # Coerced to bool so a missing/None projection field is False.
+                    "streaming": bool(doc.get("proxy_streaming")),
+                }
+            )
     return resources
 
 

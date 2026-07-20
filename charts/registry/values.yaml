@@ -299,6 +299,7 @@ app:
   gatewayProxyAllowPrivateTargets: false # Allow private/loopback proxy targets (metadata always denied)
   gatewayGenericClientMaxBodySize: "1m" # nginx client_max_body_size for generic blocks
   gatewayProxyPrefix: "gateway" # URL path prefix for auto-generated client routes (/{prefix}/{type}/{name})
+  gatewayGenericStreamReadTimeoutSeconds: 3600 # nginx proxy_read_timeout (s) for proxy_streaming routes (SSE/token streams)
   # Registry-UI internal token verification (the /api/ hop). The auth-server mints
   # the token (using its own INTERNAL_TOKEN_TTL_SECONDS); the registry verifies it
   # and uses the leeway below. Not secrets -- plain env. See docs/unified-parameter-reference.md.

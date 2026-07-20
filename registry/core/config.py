@@ -1396,6 +1396,18 @@ class Settings(BaseSettings):
             "constrained single-replica deployments. Consumed by the auth-server."
         ),
     )
+    gateway_generic_stream_read_timeout_seconds: int = Field(
+        default=3600,
+        ge=1,
+        description=(
+            "nginx proxy_read_timeout (seconds) for generic-proxy routes whose "
+            "entity has proxy_streaming=true. Long by design: an SSE / token-"
+            "streaming upstream (e.g. an LLM proxied as a custom type) can be idle "
+            "between chunks for a while. Only affects streaming routes; buffered "
+            "generic routes keep nginx's default read timeout. Rendered into the "
+            "nginx config by the registry (not read by the auth-server)."
+        ),
+    )
     gateway_generic_tls_verify: str = Field(
         default="true",
         description=(
