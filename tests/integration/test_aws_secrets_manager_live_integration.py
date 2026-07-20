@@ -51,6 +51,7 @@ class _TrackingSecretsManagerClient:
     def __getattr__(self, name):
         return getattr(self._client, name)
 
+
 @pytest.fixture
 async def live_secrets_manager():
     if os.getenv(_ENABLE_ENV) != "1":
@@ -93,11 +94,11 @@ async def test_live_aws_secrets_manager_integration_overflow_lifecycle(
     inline but two tokens (~3.2 KiB) overflow to shards.
     """
     client, store, prefix = live_secrets_manager
-    print(f"\n{'='*60}")
-    print(f"LIVE AWS Secrets Manager integration test")
+    print(f"\n{'=' * 60}")
+    print("LIVE AWS Secrets Manager integration test")
     print(f"Prefix: {prefix}")
     print(f"Target payload bytes: {store._target_bytes}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     token_a = StoredToken(access_token="a" * 700, refresh_token="r" * 700)
     token_b = StoredToken(access_token="b" * 700, refresh_token="s" * 700)
@@ -111,16 +112,20 @@ async def test_live_aws_secrets_manager_integration_overflow_lifecycle(
     print(f"    Root secret: {root_name}")
     print(f"    Layout: inline (bare map, {inline_size} bytes)")
     print(f"    Keys: {list(inline.keys())[:3]}...")
-    assert "_egress" not in inline, f"Expected inline layout but got manifest: {list(inline.keys())}"
+    assert "_egress" not in inline, (
+        f"Expected inline layout but got manifest: {list(inline.keys())}"
+    )
     print("    ✓ inline confirmed")
 
     # Step 2: Second token overflows to sharded layout.
     print("\n[2] put_token slack — expecting overflow to sharded layout")
     await store.put_token("oauth2", "integration-user", "slack", "/slack", token_b)
     manifest = json.loads(client.get_secret_value(SecretId=root_name)["SecretString"])
-    assert "_egress" in manifest, f"Expected sharded manifest but got bare map: {list(manifest.keys())}"
+    assert "_egress" in manifest, (
+        f"Expected sharded manifest but got bare map: {list(manifest.keys())}"
+    )
     meta = manifest["_egress"]
-    print(f"    Layout: sharded")
+    print("    Layout: sharded")
     print(f"    Generation: {meta['generation']}")
     print(f"    Bucket count: {meta['bucket_count']}")
     print(f"    Hash algorithm: {meta['hash']}")
@@ -172,6 +177,6 @@ async def test_live_aws_secrets_manager_integration_overflow_lifecycle(
     assert not client.active_names, f"Leaked secrets: {client.active_names}"
     print("    ✓ all secrets cleaned up")
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("PASSED: Full overflow lifecycle verified against live AWS")
-    print(f"{'='*60}\n")
+    print(f"{'=' * 60}\n")
