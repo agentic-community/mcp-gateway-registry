@@ -309,6 +309,18 @@ _nginx_config_writes_counter = _meter.create_counter(
 )
 nginx_config_writes_total = _CounterAdapter(_nginx_config_writes_counter)
 
+_nginx_resolver_failures_counter = _meter.create_counter(
+    name="mcpgw_registry_nginx_resolver_failures_total",
+    description=(
+        "Times the nginx DNS resolver for dynamic proxy_pass upstreams could "
+        "not be determined (no NGINX_DNS_RESOLVER override and /etc/resolv.conf "
+        "unreadable or empty) or a virtual/dynamic backend location had to be "
+        "skipped as a result"
+    ),
+    unit="1",
+)
+nginx_resolver_failures_total = _CounterAdapter(_nginx_resolver_failures_counter)
+
 
 # Mode-blocked requests (registry/core/metrics.py:43)
 _mode_blocked_requests_counter = _meter.create_counter(
