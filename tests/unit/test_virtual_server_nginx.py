@@ -180,6 +180,42 @@ class TestGenerateVirtualBackendLocations:
         assert "resolver " not in result
 
     @pytest.mark.asyncio
+    async def test_preserves_nested_mcp_transport_path(self, mock_server_repository):
+        """A configured /mcp/... endpoint must not receive a second /mcp suffix."""
+        vs = _make_vs_config()
+        mock_server_repository.get.return_value = {
+            "proxy_pass_url": "https://insights.example.com/mcp/http",
+        }
+
+        from registry.core.nginx_service import NginxConfigService
+
+        service = NginxConfigService()
+        result = await service._generate_virtual_backend_locations([vs])
+
+        assert "proxy_pass https://insights.example.com/mcp/http;" in result
+        assert "/mcp/http/mcp" not in result
+
+    @pytest.mark.asyncio
+    async def test_explicit_mcp_endpoint_keeps_proxy_host(self, mock_server_repository):
+        """Explicit endpoint paths use the private proxy host for internal routing."""
+        vs = _make_vs_config()
+        mock_server_repository.get.return_value = {
+            "proxy_pass_url": "http://insights-service:8000",
+            "mcp_endpoint": "https://public.example.com/custom/mcp/http",
+        }
+
+        from registry.core.nginx_service import NginxConfigService
+
+        service = NginxConfigService()
+        result = await service._generate_virtual_backend_locations([vs])
+
+        assert (
+            'set $vs_backend_github "http://insights-service:8000/custom/mcp/http"'
+            in result
+        )
+        assert "public.example.com" not in result
+
+    @pytest.mark.asyncio
     async def test_credentials_not_forwarded_to_untrusted_backend(self, mock_server_repository):
         """The caller's credential must not be relayed to a registrant-controlled backend.
 
