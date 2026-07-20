@@ -460,6 +460,15 @@ class Settings(BaseSettings):
             "Empty uses the entity type (server/agent/skill)."
         ),
     )
+    ard_catalog_max_entries_per_type: int = Field(
+        default=500,
+        description=(
+            "Maximum number of entries to load per entity type (servers, agents, "
+            "skills) when building the ARD catalog. Caps the DB queries to "
+            "prevent unbounded result sets from exhausting memory or starving "
+            "connections."
+        ),
+    )
 
     # ARD Phase 3 ingestion (issue #1296): all behavior config lives in the DB
     # (FederationConfig.ai_catalog) and is managed via the federation API / External

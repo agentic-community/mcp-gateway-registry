@@ -2083,6 +2083,7 @@ def test_conf_declares_rate_limit_zones(conf_path):
         "limit_req_zone $mcp_gateway_register_key zone=mcp_gateway_register:10m rate=5r/s;" in text
     )
     assert "limit_conn_zone $binary_remote_addr zone=mcp_gateway_conn:10m;" in text
+    assert "limit_req_zone $binary_remote_addr zone=mcp_gateway_wellknown:5m rate=2r/s;" in text
     # Registration classifier map + fail-safe empty default (skip when non-register).
     assert "map $uri $mcp_gateway_register_key {" in text
     assert re.search(r'default\s+"";', text)
