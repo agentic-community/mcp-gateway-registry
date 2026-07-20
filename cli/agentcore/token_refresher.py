@@ -27,12 +27,24 @@ import argparse
 import json
 import logging
 import os
+import re
 import time
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlparse
 
 import boto3
 import requests
+
+from .models import _warn_if_world_readable
+from .security import (
+    EgressSecurityError,
+    guarded_oidc_get,
+    guarded_oidc_post,
+    is_safe_egress_url,
+    require_secure_registry_url,
+    write_secret_file,
+)
 
 # Configure logging with basicConfig
 logging.basicConfig(
@@ -48,13 +60,28 @@ TOKEN_REQUEST_TIMEOUT: int = 15
 REGISTRY_REQUEST_TIMEOUT: int = 15
 SECURITY_SCAN_TIMEOUT: int = 120
 
-IDP_PATTERNS: dict[str, str] = {
-    "cognito-idp": "cognito",
+# Shape guards for values spliced out of a (registrant/manifest-supplied)
+# Cognito discovery_url before they reach boto3 — the region is interpolated into
+# the client's endpoint host, so it must not carry host-steering characters.
+_AWS_REGION_RE = re.compile(r"^[a-z]{2}-[a-z]+-\d+$")
+_COGNITO_POOL_ID_RE = re.compile(r"^[a-z]{2}-[a-z]+-\d+_[A-Za-z0-9]+$")
+
+# IdP vendor detection. Matched against the parsed HOSTNAME on registered-domain
+# boundaries (host == domain or host endswith "." + domain), NEVER as a substring
+# of the whole URL: a substring match ("auth0.com" in url) classifies a look-alike
+# host like ``myorg.auth0.com.attacker.example`` as auth0, and the vendor's real
+# client secret (from AUTH0_CLIENT_SECRET etc.) would then be POSTed to the
+# attacker. Keycloak is the exception — it has no fixed vendor domain and is
+# identified by the ``/realms/`` path segment.
+IDP_HOST_SUFFIXES: dict[str, str] = {
+    "amazoncognito.com": "cognito",
     "auth0.com": "auth0",
     "okta.com": "okta",
+    "oktapreview.com": "okta",
     "microsoftonline.com": "entra",
-    "/realms/": "keycloak",
 }
+# Cognito discovery URLs use the cognito-idp.<region>.amazonaws.com service host.
+_COGNITO_HOST_RE = re.compile(r"^cognito-idp\.[a-z]{2}-[a-z]+-\d+\.amazonaws\.com$")
 
 IDP_SECRET_ENV_VARS: dict[str, str] = {
     "auth0": "AUTH0_CLIENT_SECRET",
@@ -98,16 +125,62 @@ def _read_manifest(
     if not isinstance(entries, list):
         raise ValueError(f"Manifest must be a JSON array, got {type(entries).__name__}")
 
-    logger.info(f"Read {len(entries)} entries from {manifest_path}")
-    return entries
+    # Re-validate each entry's discovery_url at READ time, not just at
+    # registration. The manifest is a credential-fetch driver read fresh on every
+    # refresh; if it was tampered on disk (or hand-authored / delivered from a
+    # lower-trust source), an entry whose discovery_url now points at a private/
+    # metadata/non-HTTPS target must be dropped BEFORE it reaches any egress —
+    # including the Cognito secret path, which parses discovery_url and calls AWS
+    # before the fetch-time guards run. Fail closed: drop the entry, keep the rest.
+    safe_entries: list[dict[str, Any]] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            logger.error("Dropping malformed manifest entry (not an object): %r", entry)
+            continue
+        # An entry missing either required field cannot drive a valid refresh
+        # (and would KeyError downstream); drop it fail-closed rather than carry
+        # it forward.
+        discovery_url = entry.get("discovery_url", "")
+        if not entry.get("server_path"):
+            logger.error("Dropping manifest entry: missing server_path")
+            continue
+        if not discovery_url:
+            logger.error(
+                "Dropping manifest entry for %s: missing discovery_url",
+                entry.get("server_path", "<unknown>"),
+            )
+            continue
+        if not is_safe_egress_url(discovery_url):
+            logger.error(
+                "Dropping manifest entry for %s: discovery_url failed SSRF/HTTPS "
+                "validation at read time (refusing to drive a credential fetch to it)",
+                entry.get("server_path", "<unknown>"),
+            )
+            continue
+        safe_entries.append(entry)
+
+    logger.info(f"Read {len(safe_entries)} entries from {manifest_path}")
+    return safe_entries
+
+
+def _host_matches_domain(host: str, domain: str) -> bool:
+    """Return True if ``host`` is ``domain`` or a subdomain of it (label-safe).
+
+    Boundary-anchored so ``auth0.com.attacker.example`` does NOT match
+    ``auth0.com`` (it would under a naive substring/endswith-without-dot check).
+    """
+    return host == domain or host.endswith("." + domain)
 
 
 def _detect_idp_vendor(
     discovery_url: str,
 ) -> str:
-    """Detect IdP vendor from OIDC discovery URL.
+    """Detect IdP vendor from an OIDC discovery URL, matching on the HOSTNAME.
 
-    Matches known patterns in the URL string.
+    Parses the URL and matches known vendor domains on registered-domain
+    boundaries (not substring-in-URL), so a look-alike host cannot be
+    misclassified into a vendor whose real client secret would then be sent to
+    it. Keycloak has no fixed domain and is detected by the ``/realms/`` path.
 
     Args:
         discovery_url: OIDC discovery URL.
@@ -115,9 +188,19 @@ def _detect_idp_vendor(
     Returns:
         Vendor name (cognito, auth0, okta, entra, keycloak, or unknown).
     """
-    for pattern, vendor in IDP_PATTERNS.items():
-        if pattern in discovery_url:
+    parsed = urlparse(discovery_url)
+    host = (parsed.hostname or "").lower()
+
+    if host and _COGNITO_HOST_RE.match(host):
+        return "cognito"
+    for domain, vendor in IDP_HOST_SUFFIXES.items():
+        if host and _host_matches_domain(host, domain):
             return vendor
+    # Keycloak: no fixed vendor host — identified by the realm path segment, but
+    # only when the URL is a well-formed http(s) URL with a host (so a bare
+    # attacker string can't trivially claim keycloak).
+    if host and parsed.scheme in ("http", "https") and "/realms/" in (parsed.path or ""):
+        return "keycloak"
     return "unknown"
 
 
@@ -141,6 +224,18 @@ def _get_cognito_client_secret(
         # Parse: https://cognito-idp.{region}.amazonaws.com/{pool_id}/...
         region = discovery_url.split("cognito-idp.")[1].split(".amazonaws")[0]
         pool_id = discovery_url.split("amazonaws.com/")[1].split("/")[0]
+
+        # The region is spliced into the boto3 client's endpoint host
+        # (cognito-idp.{region}.amazonaws.com), so a crafted discovery_url could
+        # otherwise steer the signed request (with the caller's AWS creds) at an
+        # attacker-influenced host. Validate the parsed values fail-closed against
+        # the AWS region / Cognito pool-id shapes before touching boto3.
+        if not _AWS_REGION_RE.match(region):
+            logger.error(f"Refusing Cognito lookup: malformed region {region!r} in discovery_url")
+            return None
+        if not _COGNITO_POOL_ID_RE.match(pool_id):
+            logger.error(f"Refusing Cognito lookup: malformed pool_id {pool_id!r}")
+            return None
 
         client = boto3.client("cognito-idp", region_name=region)
         response = client.describe_user_pool_client(
@@ -217,15 +312,19 @@ def _get_token_endpoint(
         Token endpoint URL, or None on failure.
     """
     try:
-        response = requests.get(
-            discovery_url,
-            timeout=OIDC_DISCOVERY_TIMEOUT,
-        )
+        # SSRF-guard the registrant/manifest-supplied discovery_url: scheme +
+        # default-deny private/loopback/link-local/metadata, IP pinned at connect
+        # time. A poisoned or tampered discovery_url cannot reach an internal
+        # target or downgrade to a non-http(s) scheme.
+        response = guarded_oidc_get(discovery_url, timeout=OIDC_DISCOVERY_TIMEOUT)
         response.raise_for_status()
         token_endpoint = response.json().get("token_endpoint")
         if not token_endpoint:
             logger.error(f"No token_endpoint in OIDC discovery: {discovery_url}")
         return token_endpoint
+    except EgressSecurityError as e:
+        logger.error(f"OIDC discovery blocked by URL guard: {e}")
+        return None
     except Exception as e:
         logger.error(f"OIDC discovery failed for {discovery_url}: {e}")
         return None
@@ -299,17 +398,24 @@ def _request_token(
         data["scope"] = scope
 
     try:
-        response = requests.post(
+        # SSRF-guard the token endpoint too: this request carries the OAuth2
+        # client_secret in the body, and token_endpoint is derived from a
+        # registrant/manifest-supplied discovery document, so it must be proven
+        # non-internal (and http(s)) before the secret leaves the process.
+        response = guarded_oidc_post(
             token_endpoint,
+            timeout=TOKEN_REQUEST_TIMEOUT,
             headers={"Content-Type": "application/x-www-form-urlencoded"},
             data=data,
-            timeout=TOKEN_REQUEST_TIMEOUT,
         )
         response.raise_for_status()
         token = response.json().get("access_token")
         if not token:
             logger.error("Token response missing access_token field")
         return token
+    except EgressSecurityError as e:
+        logger.error(f"OAuth2 token request blocked by URL guard: {e}")
+        return None
     except Exception as e:
         logger.error(f"Token request failed: {e}")
         return None
@@ -334,6 +440,13 @@ def _update_registry_credential(
     Returns:
         True if update succeeded, False otherwise.
     """
+    # This PATCH carries the registry Bearer JWT and a plaintext upstream OAuth2
+    # access token; refuse to send them over cleartext HTTP to a remote host.
+    try:
+        require_secure_registry_url(registry_url)
+    except EgressSecurityError as e:
+        logger.error(f"Refusing credential PATCH: {e}")
+        return False
     url = f"{registry_url.rstrip('/')}/api/servers{server_path}/auth-credential"
     try:
         response = requests.patch(
@@ -387,6 +500,12 @@ def _trigger_security_scan(
     Returns:
         True if scan was triggered successfully, False otherwise.
     """
+    # Carries the registry Bearer JWT; refuse cleartext HTTP to a remote host.
+    try:
+        require_secure_registry_url(registry_url)
+    except EgressSecurityError as e:
+        logger.error(f"Refusing rescan trigger: {e}")
+        return False
     url = f"{registry_url.rstrip('/')}/api/servers{server_path}/rescan"
     try:
         response = requests.post(
@@ -445,6 +564,7 @@ def _load_registry_token(
         ValueError: If token file is invalid or missing token field.
     """
     abs_path = os.path.abspath(token_file)
+    _warn_if_world_readable(abs_path)
     try:
         with open(abs_path) as f:
             data = json.load(f)
@@ -549,9 +669,10 @@ def refresh_all(
         else:
             failure_count += 1
 
-    # Update manifest with timestamps
-    with open(manifest_path, "w") as f:
-        json.dump(entries, f, indent=2)
+    # Update manifest with timestamps. The manifest holds OIDC discovery URLs
+    # and per-client refresh metadata used to mint credentials, so write it
+    # 0o600 (owner-only) atomically rather than a world-readable default-mode file.
+    write_secret_file(manifest_path, json.dumps(entries, indent=2))
 
     elapsed = time.time() - start_time
     summary: dict[str, Any] = {

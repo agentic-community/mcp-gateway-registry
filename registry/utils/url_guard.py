@@ -43,14 +43,44 @@ import logging
 import socket
 from dataclasses import dataclass, field
 from functools import lru_cache
+from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 import httpx
 
-from ..core.config import settings
 from ..exceptions import UrlValidationError
 
+if TYPE_CHECKING:
+    from ..core.config import Settings
+
 logger = logging.getLogger(__name__)
+
+
+# Registry settings are bound lazily on first use rather than imported at module
+# load: importing ``registry.core.config`` eagerly builds the full ``Settings()``
+# (SECRET_KEY, DocumentDB, etc.), which a standalone tool that only needs the
+# SSRF/URL guard (e.g. the AgentCore sync sidecar in ``cli/agentcore``) must not
+# require. This stays ``None`` until an allowlist factory actually needs operator
+# config, so ``import registry.utils.url_guard`` — and ``validate_url`` /
+# ``guarded_*`` with the default (empty) allowlist, e.g. FEDERATION_PROFILE —
+# work with zero registry server configuration. Tests patch this attribute
+# directly (``patch("registry.utils.url_guard.settings", ...)``).
+settings: Settings | None = None
+
+
+def _get_settings() -> Settings:
+    """Return the registry settings object, binding it lazily on first use.
+
+    Honors a caller/test-supplied module-level ``settings`` (patched in tests);
+    otherwise imports ``registry.core.config.settings`` on first access so the
+    heavy config is never built merely by importing this module.
+    """
+    if settings is not None:
+        return settings
+    from ..core.config import settings as _resolved
+
+    return _resolved
+
 
 # Default connect/read timeout applied to guarded fetches when a caller does not
 # supply its own. Keeps a hung internal target from tying up a worker.
@@ -174,7 +204,7 @@ def _skill_allowlist() -> _Allowlist:
     validation. Only operator-configured GHES hosts skip the private-IP block.
     Cached because settings are immutable per-process.
     """
-    return _Allowlist(hosts=_parse_hosts(settings.github_extra_hosts))
+    return _Allowlist(hosts=_parse_hosts(_get_settings().github_extra_hosts))
 
 
 @lru_cache(maxsize=1)
@@ -187,9 +217,10 @@ def _proxy_allowlist() -> _Allowlist:
     upgrade to an SSRF-guarded build keeps them healthy with zero configuration.
     Cached because settings are immutable per-process.
     """
+    _settings = _get_settings()
     return _Allowlist(
-        hosts=_BUILTIN_PROXY_ALLOWED_HOSTS | _parse_hosts(settings.ssrf_allowed_hosts),
-        cidrs=_parse_cidrs(settings.ssrf_allowed_cidrs),
+        hosts=_BUILTIN_PROXY_ALLOWED_HOSTS | _parse_hosts(_settings.ssrf_allowed_hosts),
+        cidrs=_parse_cidrs(_settings.ssrf_allowed_cidrs),
     )
 
 

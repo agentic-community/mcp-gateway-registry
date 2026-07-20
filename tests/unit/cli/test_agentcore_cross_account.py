@@ -18,9 +18,17 @@ import pytest
 class TestParseAccountIds:
     """Tests for _parse_account_ids helper."""
 
+    @pytest.fixture(autouse=True)
+    def _clear_account_env(self, monkeypatch):
+        # Isolate from any ambient allowlist / opt-in the host env may carry.
+        monkeypatch.delenv("AGENTCORE_ALLOWED_ACCOUNTS", raising=False)
+        monkeypatch.delenv("AGENTCORE_ALLOW_ANY_ACCOUNT", raising=False)
+
     def test_empty_string_returns_empty_list(self):
         from cli.agentcore.sync import _parse_account_ids
 
+        # Empty (single-account / current-account mode) never triggers the
+        # cross-account allowlist gate.
         assert _parse_account_ids("") == []
 
     def test_whitespace_only_returns_empty_list(self):
@@ -28,28 +36,64 @@ class TestParseAccountIds:
 
         assert _parse_account_ids("   ") == []
 
-    def test_single_account(self):
+    def test_single_account_with_opt_in(self, monkeypatch):
         from cli.agentcore.sync import _parse_account_ids
 
+        monkeypatch.setenv("AGENTCORE_ALLOW_ANY_ACCOUNT", "1")
         assert _parse_account_ids("111122223333") == ["111122223333"]
 
-    def test_multiple_accounts(self):
+    def test_multiple_accounts_with_opt_in(self, monkeypatch):
         from cli.agentcore.sync import _parse_account_ids
 
+        monkeypatch.setenv("AGENTCORE_ALLOW_ANY_ACCOUNT", "true")
         result = _parse_account_ids("111122223333,444455556666,777788889999")
         assert result == ["111122223333", "444455556666", "777788889999"]
 
-    def test_strips_whitespace(self):
+    def test_strips_whitespace(self, monkeypatch):
         from cli.agentcore.sync import _parse_account_ids
 
+        monkeypatch.setenv("AGENTCORE_ALLOW_ANY_ACCOUNT", "1")
         result = _parse_account_ids(" 111122223333 , 444455556666 ")
         assert result == ["111122223333", "444455556666"]
 
-    def test_ignores_empty_entries(self):
+    def test_ignores_empty_entries(self, monkeypatch):
         from cli.agentcore.sync import _parse_account_ids
 
+        monkeypatch.setenv("AGENTCORE_ALLOW_ANY_ACCOUNT", "1")
         result = _parse_account_ids("111122223333,,444455556666,")
         assert result == ["111122223333", "444455556666"]
+
+    def test_fails_closed_without_allowlist_or_opt_in(self):
+        # The core fail-closed guard: cross-account with neither an allowlist nor
+        # the explicit opt-in must raise before any AssumeRole.
+        from cli.agentcore.security import EgressSecurityError
+        from cli.agentcore.sync import _parse_account_ids
+
+        with pytest.raises(EgressSecurityError):
+            _parse_account_ids("111122223333")
+
+    def test_rejects_malformed_account_id(self, monkeypatch):
+        # Non-12-digit IDs are rejected fail-closed even with the opt-in set.
+        from cli.agentcore.security import EgressSecurityError
+        from cli.agentcore.sync import _parse_account_ids
+
+        monkeypatch.setenv("AGENTCORE_ALLOW_ANY_ACCOUNT", "1")
+        with pytest.raises(EgressSecurityError):
+            _parse_account_ids("12345,444455556666")
+
+    def test_allowlist_permits_listed_accounts(self, monkeypatch):
+        from cli.agentcore.sync import _parse_account_ids
+
+        monkeypatch.setenv("AGENTCORE_ALLOWED_ACCOUNTS", "111122223333,444455556666")
+        assert _parse_account_ids("111122223333") == ["111122223333"]
+
+    def test_allowlist_rejects_unlisted_account(self, monkeypatch):
+        from cli.agentcore.security import EgressSecurityError
+        from cli.agentcore.sync import _parse_account_ids
+
+        monkeypatch.setenv("AGENTCORE_ALLOWED_ACCOUNTS", "111122223333")
+        with pytest.raises(EgressSecurityError):
+            _parse_account_ids("999988887777")
 
 
 # ---------------------------------------------------------------------------
