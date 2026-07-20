@@ -502,6 +502,12 @@ class TestRegisterAgent:
         with (
             patch("registry.api.agent_routes.agent_service") as mock_agent_service,
             patch("registry.utils.agent_validator.agent_validator") as mock_validator,
+            patch("registry.api.agent_routes._refresh_agent_health", new_callable=AsyncMock),
+            patch(
+                "registry.api.agent_routes._perform_agent_security_scan_on_registration",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
         ):
             mock_agent_service.get_agent_info = AsyncMock(return_value=None)
             mock_agent_service.register_agent = AsyncMock(return_value=True)
