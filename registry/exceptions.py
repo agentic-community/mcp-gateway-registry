@@ -138,6 +138,24 @@ class ServerNotFoundError(ServerRegistryError):
         super().__init__(f"Server not found: {path}")
 
 
+class AssetIdConflictError(RegistryError):
+    """A caller-supplied asset ``id`` collides with an existing asset (#1276).
+
+    Raised by the agent/skill registration services (and available to the
+    server route) when the resolved ``id`` already exists for that asset
+    type. Routes map this to HTTP 409.
+    """
+
+    def __init__(
+        self,
+        asset_type: str,
+        asset_id: str,
+    ):
+        self.asset_type = asset_type
+        self.asset_id = asset_id
+        super().__init__(f"{asset_type} with id '{asset_id}' already exists")
+
+
 class ServerAlreadyExistsError(ServerRegistryError):
     """Server with this path already exists."""
 

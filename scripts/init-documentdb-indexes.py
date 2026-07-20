@@ -305,6 +305,18 @@ async def _create_servers_indexes(
         except Exception as e:
             logger.error(f"Failed to create index '{index_name}' on {collection_name}: {e}")
 
+    # Unique partial index on caller-supplied id (#1276).
+    try:
+        await collection.create_index(
+            "id",
+            name="id_idx",
+            unique=True,
+            partialFilterExpression={"id": {"$exists": True}},
+        )
+        logger.info(f"Created unique partial index 'id_idx' on {collection_name}")
+    except Exception as e:
+        logger.error(f"Failed to create index 'id_idx' on {collection_name}: {e}")
+
 
 async def _create_agents_indexes(
     collection,
@@ -342,6 +354,18 @@ async def _create_agents_indexes(
             )
         except Exception as e:
             logger.error(f"Failed to create index '{index_name}' on {collection_name}: {e}")
+
+    # Unique partial index on caller-supplied id (#1276).
+    try:
+        await collection.create_index(
+            "id",
+            name="id_idx",
+            unique=True,
+            partialFilterExpression={"id": {"$exists": True}},
+        )
+        logger.info(f"Created unique partial index 'id_idx' on {collection_name}")
+    except Exception as e:
+        logger.error(f"Failed to create index 'id_idx' on {collection_name}: {e}")
 
 
 async def _create_scopes_indexes(

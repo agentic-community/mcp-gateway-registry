@@ -1083,6 +1083,13 @@ variable "batch_worker_lease_heartbeat_seconds" {
   default     = 15
 }
 
+# Caller-supplied asset id (issue #1276)
+variable "allow_caller_supplied_asset_id" {
+  description = "Allow callers to supply their own asset id on public registration routes. Fail-closed: OFF by default. Federation is not affected. Default: false."
+  type        = bool
+  default     = false
+}
+
 # Registration gate / admission control (issue #809)
 variable "registration_gate_enabled" {
   description = "Enable registration gate (admission control). Default: false."

@@ -17,7 +17,6 @@ from datetime import datetime
 from enum import Enum
 from typing import Any
 from urllib.parse import quote
-from uuid import UUID
 
 import requests
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -56,6 +55,14 @@ class InternalServiceRegistration(BaseModel):
 
     service_path: str = Field(
         ..., alias="path", description="Service path (e.g., /cloudflare-docs)"
+    )
+    # Optional caller-supplied asset id (#1276). Omitted -> server auto-generates
+    # a uuid4. Honored only when the registry enables ALLOW_CALLER_SUPPLIED_ASSET_ID.
+    id: str | None = Field(
+        None,
+        min_length=1,
+        max_length=512,
+        description="Optional caller-supplied id (UUID, ARN, ...). Auto-generated if omitted.",
     )
     name: str | None = Field(None, description="Service name")
     description: str | None = Field(None, description="Service description")
@@ -535,6 +542,15 @@ class AgentRegistration(BaseModel):
     specification (v0.3.0), with extensions for MCP Gateway Registry integration.
     Note: Uses snake_case internally but serializes to camelCase for A2A compliance.
     """
+
+    # Optional caller-supplied asset id (#1276). Omitted -> server auto-generates
+    # a uuid4. Honored only when the registry enables ALLOW_CALLER_SUPPLIED_ASSET_ID.
+    id: str | None = Field(
+        None,
+        min_length=1,
+        max_length=512,
+        description="Optional caller-supplied id (UUID, ARN, ...). Auto-generated if omitted.",
+    )
 
     # Required A2A fields
     protocol_version: str = Field(
@@ -1552,6 +1568,14 @@ class SkillRegistrationRequest(BaseModel):
 
     name: str = Field(..., description="Skill name (lowercase alphanumeric with hyphens)")
     skill_md_url: str = Field(..., description="URL to SKILL.md file")
+    # Optional caller-supplied asset id (#1276). Omitted -> server auto-generates
+    # a uuid4. Honored only when the registry enables ALLOW_CALLER_SUPPLIED_ASSET_ID.
+    id: str | None = Field(
+        None,
+        min_length=1,
+        max_length=512,
+        description="Optional caller-supplied id (UUID, ARN, ...). Auto-generated if omitted.",
+    )
     description: str | None = Field(None, description="Skill description")
     repository_url: str | None = Field(None, description="Repository URL")
     version: str | None = Field(None, description="Skill version (e.g., 1.0.0)")
@@ -1571,7 +1595,10 @@ class SkillRegistrationRequest(BaseModel):
 class SkillCard(BaseModel):
     """Response model for a skill."""
 
-    id: UUID = Field(..., description="Unique identifier (UUID) for this skill")
+    id: str = Field(
+        ...,
+        description="Unique identifier for this skill (any non-empty string: UUID, ARN, ...)",
+    )
     name: str = Field(..., description="Skill name")
     path: str = Field(..., description="Skill path (e.g., /skills/pdf-processing)")
     description: str | None = Field(None, description="Skill description")

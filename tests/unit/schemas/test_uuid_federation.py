@@ -31,8 +31,7 @@ class TestFederatedUUIDPreservation:
         server = ServerInfo(**federated_data)
 
         # UUID should be preserved, not regenerated
-        assert isinstance(server.id, UUID)
-        assert str(server.id) == federated_uuid
+        assert server.id == federated_uuid
 
     def test_serverinfo_generates_uuid_when_missing(self):
         """Test that UUID is generated when not present in federated data."""
@@ -48,7 +47,8 @@ class TestFederatedUUIDPreservation:
         server = ServerInfo(**federated_data)
 
         # UUID should be auto-generated
-        assert isinstance(server.id, UUID)
+        assert isinstance(server.id, str)
+        assert UUID(server.id).version == 4
         assert server.id is not None
 
     def test_agentcard_preserves_federated_uuid(self):
@@ -69,8 +69,7 @@ class TestFederatedUUIDPreservation:
         agent = AgentCard(**federated_data)
 
         # UUID should be preserved
-        assert isinstance(agent.id, UUID)
-        assert str(agent.id) == federated_uuid
+        assert agent.id == federated_uuid
 
     def test_agentcard_generates_uuid_when_missing(self):
         """Test that Agent UUID is generated when not present."""
@@ -87,7 +86,8 @@ class TestFederatedUUIDPreservation:
         agent = AgentCard(**federated_data)
 
         # UUID should be auto-generated
-        assert isinstance(agent.id, UUID)
+        assert isinstance(agent.id, str)
+        assert UUID(agent.id).version == 4
         assert agent.id is not None
 
     def test_skillcard_preserves_federated_uuid(self):
@@ -106,8 +106,7 @@ class TestFederatedUUIDPreservation:
         skill = SkillCard(**federated_data)
 
         # UUID should be preserved
-        assert isinstance(skill.id, UUID)
-        assert str(skill.id) == federated_uuid
+        assert skill.id == federated_uuid
 
     def test_skillcard_generates_uuid_when_missing(self):
         """Test that Skill UUID is generated when not present."""
@@ -122,7 +121,8 @@ class TestFederatedUUIDPreservation:
         skill = SkillCard(**federated_data)
 
         # UUID should be auto-generated
-        assert isinstance(skill.id, UUID)
+        assert isinstance(skill.id, str)
+        assert UUID(skill.id).version == 4
         assert skill.id is not None
 
     def test_multiple_servers_same_data_different_uuids(self):

@@ -541,6 +541,16 @@ registry_api_token = "m3zT65wREARMVDToKosg_DgNkKqS_434hNxy3sslGPY"
 # batch_worker_lease_heartbeat_seconds = 15
 
 # ============================================================================
+# CALLER-SUPPLIED ASSET ID (Issue #1276)
+# ============================================================================
+
+# Allow callers to supply their own asset id on the public server/agent/skill
+# registration routes (UUID, ARN, URN, ...). Fail-closed: OFF by default, so a
+# supplied id is rejected (422) and ids auto-generate. Federation is not
+# affected (peer ids are governed by the peer allowlist). Default: false
+# allow_caller_supplied_asset_id = false
+
+# ============================================================================
 # REGISTRATION GATE / ADMISSION CONTROL (Issue #809)
 # ============================================================================
 

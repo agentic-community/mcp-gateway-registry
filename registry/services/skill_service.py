@@ -19,7 +19,9 @@ from urllib.parse import urlparse
 import httpx
 
 from ..core.config import settings
+from ..core.metrics import ASSET_ID_CONFLICT_TOTAL
 from ..exceptions import (
+    AssetIdConflictError,
     SkillUrlValidationError,
     UrlValidationError,
 )
@@ -53,6 +55,7 @@ from ..utils.url_utils import (
     extract_repository_url,
     translate_skill_url,
 )
+from ._asset_id import resolve_asset_id
 from .github_auth import github_auth_provider as _github_auth
 
 # Configure logging
@@ -1163,6 +1166,7 @@ def _build_skill_card(
 
     return SkillCard(
         path=path,
+        id=resolve_asset_id(request.id),
         name=request.name,
         description=request.description,
         skill_md_url=request.skill_md_url,
@@ -1295,6 +1299,14 @@ class SkillService:
 
         # Save to repository
         repo = self._get_repo()
+
+        # Id uniqueness pre-check (#1276): a caller-supplied id must not
+        # collide with an existing skill. Raise -> route maps to 409.
+        if skill.id and await repo.find_by_id(skill.id):
+            logger.warning(f"Skill registration rejected: id '{skill.id}' already exists")
+            ASSET_ID_CONFLICT_TOTAL.labels(asset_type="skill").inc()
+            raise AssetIdConflictError(asset_type="skill", asset_id=skill.id)
+
         created_skill = await repo.create(skill)
 
         # Index for search

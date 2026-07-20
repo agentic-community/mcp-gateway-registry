@@ -1519,6 +1519,11 @@ module "ecs_service_registry" {
           name  = "BATCH_WORKER_LEASE_HEARTBEAT_SECONDS"
           value = tostring(var.batch_worker_lease_heartbeat_seconds)
         },
+        # Caller-supplied asset id (issue #1276)
+        {
+          name  = "ALLOW_CALLER_SUPPLIED_ASSET_ID"
+          value = tostring(var.allow_caller_supplied_asset_id)
+        },
         # Registration gate / admission control (issue #809)
         {
           name  = "REGISTRATION_GATE_ENABLED"

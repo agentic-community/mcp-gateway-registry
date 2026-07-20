@@ -316,6 +316,7 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             ("registration_webhook_timeout_seconds", "Timeout (s)", False),
             ("registration_webhook_signing_secret", "Signing Secret", True),
             ("registration_enforced_status", "Enforced Initial Status", False),
+            ("allow_caller_supplied_asset_id", "Allow Caller-Supplied Asset ID", False),
         ],
     },
     "registration_gate": {

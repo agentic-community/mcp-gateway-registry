@@ -2,6 +2,8 @@ import asyncio
 import logging
 from typing import Any
 
+from ..core.metrics import ASSET_ID_CONFLICT_TOTAL
+from ..exceptions import AssetIdConflictError
 from ..repositories.factory import get_server_repository
 from ..repositories.interfaces import ServerRepositoryBase
 from ..utils.credential_encryption import (
@@ -154,13 +156,38 @@ class ServerService:
                 "is_new_version": False,
             }
 
+        # Id uniqueness pre-check (#1276): a caller-supplied id must not
+        # collide with an existing asset. Return a failure dict (mirrors the
+        # path-conflict contract above) so the routes surface a 409.
+        asset_id = server_info.get("id")
+        if asset_id and await self._repo.find_by_id(asset_id):
+            logger.warning(f"Server registration rejected: id '{asset_id}' already exists")
+            ASSET_ID_CONFLICT_TOTAL.labels(asset_type="server").inc()
+            return {
+                "success": False,
+                "message": f"Server with id '{asset_id}' already exists",
+                "is_new_version": False,
+                "error_type": "id_conflict",
+            }
+
         # New server - create it
         # Initialize version metadata for new servers
         if not server_info.get("version"):
             server_info["version"] = "v1.0.0"
         server_info["is_active"] = True
 
-        result = await self._repo.create(server_info)
+        try:
+            result = await self._repo.create(server_info)
+        except AssetIdConflictError as e:
+            # Lost the insert race after the pre-check (#1276).
+            logger.warning(f"Server registration id conflict (race): {e}")
+            ASSET_ID_CONFLICT_TOTAL.labels(asset_type="server").inc()
+            return {
+                "success": False,
+                "message": f"Server with id '{e.asset_id}' already exists",
+                "is_new_version": False,
+                "error_type": "id_conflict",
+            }
 
         if result:
             # Index in search backend

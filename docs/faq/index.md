@@ -37,6 +37,7 @@ Common questions and answers about the MCP Gateway Registry.
 ## Deployment Customization
 
 - [How do I add custom environment variables to the registry, auth-server, or mcpgw services?](adding-custom-env-vars.md)
+- [How do I register an asset with my own id instead of an auto-generated one?](caller-supplied-asset-id.md)
 
 ## Access Control and Visibility
 

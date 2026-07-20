@@ -856,6 +856,7 @@ def cmd_register(args: argparse.Namespace) -> int:
         # Handle both old and new config formats
         registration = InternalServiceRegistration(
             service_path=config.get("path") or config.get("service_path"),
+            id=config.get("id"),  # caller-supplied asset id (#1276), optional
             name=config.get("server_name") or config.get("name"),
             description=config.get("description"),
             proxy_pass_url=config.get("proxy_pass_url"),
@@ -2429,6 +2430,7 @@ def cmd_agent_register(args: argparse.Namespace) -> int:
             "description",
             "path",
             "url",
+            "id",  # caller-supplied asset id (#1276)
             "version",
             "capabilities",
             "metadata",
@@ -3276,6 +3278,7 @@ def cmd_skill_register(args: argparse.Namespace) -> int:
         request = SkillRegistrationRequest(
             name=args.name,
             skill_md_url=args.url,
+            id=args.id if hasattr(args, "id") and args.id else None,
             description=args.description if hasattr(args, "description") else None,
             version=args.version if hasattr(args, "version") else None,
             tags=args.tags.split(",") if hasattr(args, "tags") and args.tags else [],
@@ -6811,6 +6814,11 @@ Examples:
         "--name", required=True, help="Skill name (lowercase alphanumeric with hyphens)"
     )
     skill_register_parser.add_argument("--url", required=True, help="URL to SKILL.md file")
+    skill_register_parser.add_argument(
+        "--id",
+        help="Optional caller-supplied id (UUID, ARN, ...). Auto-generated if omitted. "
+        "Honored only when the registry enables ALLOW_CALLER_SUPPLIED_ASSET_ID.",
+    )
     skill_register_parser.add_argument("--description", help="Skill description")
     skill_register_parser.add_argument("--version", help="Skill version (e.g., 1.0.0)")
     skill_register_parser.add_argument("--tags", help="Comma-separated tags")

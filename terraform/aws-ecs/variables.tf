@@ -1141,6 +1141,16 @@ variable "batch_worker_lease_heartbeat_seconds" {
 }
 
 # =============================================================================
+# CALLER-SUPPLIED ASSET ID (Issue #1276)
+# =============================================================================
+
+variable "allow_caller_supplied_asset_id" {
+  description = "Allow callers to supply their own asset id on the public server/agent/skill registration routes. Fail-closed: OFF by default (supplied id rejected, ids auto-generate). Federation is not affected. Default: false."
+  type        = bool
+  default     = false
+}
+
+# =============================================================================
 # REGISTRATION GATE / ADMISSION CONTROL (Issue #809)
 # =============================================================================
 

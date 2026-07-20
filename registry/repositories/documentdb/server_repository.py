@@ -9,6 +9,7 @@ from typing import Any
 from motor.motor_asyncio import AsyncIOMotorCollection
 from pymongo.errors import DuplicateKeyError
 
+from ...exceptions import AssetIdConflictError
 from ...utils.url_normalize import ENTITY_TYPE_SERVER, NORMALIZED_IDENTITY_URL_FIELD
 from ..interfaces import ServerRepositoryBase
 from ._identity_url_sidecar import (
@@ -16,6 +17,11 @@ from ._identity_url_sidecar import (
     ensure_normalized_identity_url_index,
     find_by_normalized_identity_url,
     populate_normalized_identity_url,
+)
+from ._unique_id_index import (
+    backfill_missing_id,
+    ensure_unique_id_index,
+    find_doc_by_id,
 )
 from .client import get_collection_name, get_documentdb_client
 
@@ -67,6 +73,10 @@ class DocumentDBServerRepository(ServerRepositoryBase):
                 self._collection_name,
                 ENTITY_TYPE_SERVER,
             )
+            # Unique id index (#1276): backfill legacy rows BEFORE building
+            # the unique partial index, so the build never fails on missing ids.
+            await backfill_missing_id(collection, self._collection_name)
+            await ensure_unique_id_index(collection, self._collection_name)
             # Publish only after the index + backfill are in place so
             # other coroutines never see a half-initialized state.
             self._collection = collection
@@ -295,12 +305,31 @@ class DocumentDBServerRepository(ServerRepositoryBase):
                 f"DocumentDB WRITE: Created server '{server_info['server_name']}' at '{path}'"
             )
             return True
-        except DuplicateKeyError:
+        except DuplicateKeyError as exc:
+            # Disambiguate id-collision from path-collision via the structured
+            # key spec (#1276). An id collision here means two registrations
+            # raced past the service-layer pre-check; surface it precisely.
+            key_pattern = (exc.details or {}).get("keyPattern", {})
+            if "id" in key_pattern:
+                logger.warning(f"Server id '{server_info.get('id')}' already exists (race)")
+                raise AssetIdConflictError(
+                    asset_type="server", asset_id=server_info.get("id", "")
+                ) from exc
             logger.error(f"Server path '{path}' already exists in DocumentDB")
             return False
         except Exception as e:
             logger.error(f"Failed to create server in DocumentDB: {e}", exc_info=True)
             return False
+
+    async def find_by_id(
+        self,
+        asset_id: str,
+    ) -> dict[str, Any] | None:
+        """Indexed lookup by ``id`` (#1276). Overrides the scanning default."""
+        if not asset_id:
+            return None
+        collection = await self._get_collection()
+        return await find_doc_by_id(collection, asset_id)
 
     async def update(
         self,

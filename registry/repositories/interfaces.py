@@ -284,6 +284,29 @@ class ServerRepositoryBase(ABC):
                 return doc
         return None
 
+    async def find_by_id(
+        self,
+        asset_id: str,
+    ) -> dict[str, Any] | None:
+        """Find a server whose ``id`` equals ``asset_id`` (#1276).
+
+        Used by the registration id pre-check to return a precise 409 on
+        id collision. Default scans ``list_all()``; DocumentDB overrides
+        with an indexed ``find_one({"id": asset_id})``.
+
+        Returns:
+            The full document with ``path`` populated, or None.
+        """
+        if not asset_id:
+            return None
+        all_servers = await self.list_all()
+        for path, server_info in all_servers.items():
+            if server_info.get("id") == asset_id:
+                doc = dict(server_info)
+                doc["path"] = path
+                return doc
+        return None
+
 
 class AgentRepositoryBase(ABC):
     """Abstract base class for A2A agent data access."""
@@ -450,6 +473,29 @@ class AgentRepositoryBase(ABC):
             if not candidate_url:
                 continue
             if normalize_identity_url(candidate_url, ENTITY_TYPE_AGENT) == identity_url:
+                doc = agent.model_dump(mode="json") if hasattr(agent, "model_dump") else dict(agent)
+                doc["path"] = getattr(agent, "path", doc.get("path"))
+                return doc
+        return None
+
+    async def find_by_id(
+        self,
+        asset_id: str,
+    ) -> dict[str, Any] | None:
+        """Find an agent whose ``id`` equals ``asset_id`` (#1276).
+
+        Used by the registration id pre-check to return a precise 409 on
+        id collision. Default scans ``list_all()``; DocumentDB overrides
+        with an indexed ``find_one({"id": asset_id})``.
+
+        Returns:
+            A dict with the agent document fields plus ``path``, or None.
+        """
+        if not asset_id:
+            return None
+        agents = await self.list_all()
+        for agent in agents:
+            if getattr(agent, "id", None) == asset_id:
                 doc = agent.model_dump(mode="json") if hasattr(agent, "model_dump") else dict(agent)
                 doc["path"] = getattr(agent, "path", doc.get("path"))
                 return doc
@@ -1713,6 +1759,29 @@ class SkillRepositoryBase(ABC):
             if not candidate_url:
                 continue
             if normalize_identity_url(candidate_url, ENTITY_TYPE_SKILL) == identity_url:
+                doc = skill.model_dump(mode="json") if hasattr(skill, "model_dump") else dict(skill)
+                doc["path"] = getattr(skill, "path", doc.get("path"))
+                return doc
+        return None
+
+    async def find_by_id(
+        self,
+        asset_id: str,
+    ) -> dict[str, Any] | None:
+        """Find a skill whose ``id`` equals ``asset_id`` (#1276).
+
+        Used by the registration id pre-check to return a precise 409 on
+        id collision. Default scans ``list_all()``; DocumentDB overrides
+        with an indexed ``find_one({"id": asset_id})``.
+
+        Returns:
+            A dict with the skill document fields plus ``path``, or None.
+        """
+        if not asset_id:
+            return None
+        skills = await self.list_all()
+        for skill in skills:
+            if getattr(skill, "id", None) == asset_id:
                 doc = skill.model_dump(mode="json") if hasattr(skill, "model_dump") else dict(skill)
                 doc["path"] = getattr(skill, "path", doc.get("path"))
                 return doc

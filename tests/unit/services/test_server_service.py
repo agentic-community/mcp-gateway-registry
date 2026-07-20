@@ -404,6 +404,46 @@ class TestRegisterServer:
         mock_search_repository.index_server.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_register_server_rejects_duplicate_id(
+        self,
+        server_service: ServerService,
+        sample_server_dict: dict[str, Any],
+        mock_server_repository,
+        mock_search_repository,
+    ):
+        """A supplied id colliding with an existing asset -> id_conflict (#1276)."""
+        mock_server_repository.get.return_value = None  # path is free
+        mock_server_repository.find_by_id.return_value = {
+            "path": "/other",
+            "id": "arn:aws:x",
+        }
+
+        server_info = {**sample_server_dict, "id": "arn:aws:x"}
+        result = await server_service.register_server(server_info)
+
+        assert result["success"] is False
+        assert result["error_type"] == "id_conflict"
+        mock_server_repository.create.assert_not_called()
+
+    async def test_register_server_unique_id_proceeds(
+        self,
+        server_service: ServerService,
+        sample_server_dict: dict[str, Any],
+        mock_server_repository,
+        mock_search_repository,
+    ):
+        """A supplied id with no collision proceeds to create (#1276)."""
+        mock_server_repository.get.return_value = None
+        mock_server_repository.find_by_id.return_value = None
+        mock_server_repository.create.return_value = True
+        mock_server_repository.get_state.return_value = False
+
+        server_info = {**sample_server_dict, "id": "arn:aws:unique"}
+        result = await server_service.register_server(server_info)
+
+        assert result["success"] is True
+        mock_server_repository.create.assert_called_once()
+
     async def test_register_server_calls_repository_create(
         self,
         server_service: ServerService,

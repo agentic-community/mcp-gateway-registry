@@ -205,6 +205,16 @@ Async batch register/patch/replace/delete for agent cards, drained by an in-proc
 
 ---
 
+## Group 7b — Caller-Supplied Asset ID (Issue #1276)
+
+Fail-closed opt-in for callers to supply their own asset `id` (UUID, ARN, URN, ...) on the public server/agent/skill registration routes instead of auto-generating one. Federation is not affected (peer ids are governed by the peer allowlist).
+
+| Parameter | Docker (`.env`) | Terraform (`.tfvars`) | Helm (`values.yaml`) | Purpose |
+|-----------|-----------------|-----------------------|----------------------|---------|
+| Enable | `ALLOW_CALLER_SUPPLIED_ASSET_ID` | `allow_caller_supplied_asset_id` | `registry.app.allowCallerSuppliedAssetId` | Master switch. OFF by default (supplied id rejected with 422). When on, a supplied id must pass safe-charset validation and be unique. |
+
+---
+
 ## Group 8 — Federation (Peer Registries)
 
 Static-token and OAuth2 config for peer-to-peer federation.

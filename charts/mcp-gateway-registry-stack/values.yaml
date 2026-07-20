@@ -364,6 +364,8 @@ registry:
     batchWorkerLeaseTtlSeconds: "60.0"
     batchWorkerLeaseHeartbeatSeconds: "15.0"
     batchMaxRequestBytes: "4194304"
+    # Caller-supplied asset id (issue #1276). Fail-closed: OFF by default.
+    allowCallerSuppliedAssetId: false
     # Registration gate / admission control (issue #809)
     registrationGateEnabled: false
     registrationGateUrl: ""

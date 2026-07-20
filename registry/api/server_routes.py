@@ -35,12 +35,18 @@ from ..auth.tool_filter import filter_tools_for_user
 from ..common.log_redaction import redact_mapping
 from ..constants import VALID_AUTH_SCHEMES, DeploymentType, HealthStatus
 from ..core.config import DeploymentMode, settings
+from ..core.metrics import ASSET_ID_SUPPLIED_TOTAL
 from ..core.schemas import AuthCredentialUpdateRequest
 from ..schemas.registry_card import LifecycleStatus
 from ..schemas.server_update_models import (
     SERVER_REGISTRANT_ONLY_FIELDS,
     ServerCardPatch,
     ServerUpdateRequest,
+)
+from ..services._asset_id import (
+    InvalidAssetIdError,
+    check_caller_supplied_id_allowed,
+    resolve_asset_id,
 )
 from ..services.canonical_export import redact_backend_urls, to_canonical
 from ..services.lifecycle_events import (
@@ -1332,6 +1338,7 @@ async def register_service(
     mcp_endpoint: Annotated[str | None, Form()] = None,
     sse_endpoint: Annotated[str | None, Form()] = None,
     metadata: Annotated[str | None, Form()] = None,
+    id: Annotated[str | None, Form()] = None,
     visibility: Annotated[str, Form()] = "public",
     allowed_groups: Annotated[str | None, Form()] = None,
     auth_scheme: Annotated[str, Form()] = "none",
@@ -1432,11 +1439,24 @@ async def register_service(
 
     visibility, allowed_groups_list = _validate_visibility_and_groups(visibility, allowed_groups)
 
-    # Create server entry with auto-generated UUID
-    from uuid import uuid4
+    # Resolve caller-supplied id (or auto-generate). No Pydantic model guards
+    # this form route, so resolve_asset_id is the only id validation here —
+    # map its InvalidAssetIdError to 422 explicitly. The feature-flag gate raises
+    # CallerSuppliedIdDisabledError (a subclass), so it maps to 422 here too.
+    try:
+        check_caller_supplied_id_allowed(id, settings.allow_caller_supplied_asset_id)
+        resolved_id = resolve_asset_id(id)
+    except InvalidAssetIdError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid asset id: {e}",
+        )
+    if id is not None:
+        logger.info(f"Honoring caller-supplied id for server '{name}'")
+        ASSET_ID_SUPPLIED_TOTAL.labels(asset_type="server").inc()
 
     server_entry: dict[str, Any] = {
-        "id": str(uuid4()),
+        "id": resolved_id,
         "server_name": name,
         "description": description,
         "path": path,
@@ -3842,6 +3862,7 @@ async def register_service_api(
     mcp_endpoint: Annotated[str | None, Form()] = None,
     sse_endpoint: Annotated[str | None, Form()] = None,
     metadata: Annotated[str | None, Form()] = None,
+    id: Annotated[str | None, Form()] = None,
     version: Annotated[str | None, Form()] = None,
     status: Annotated[str | None, Form()] = None,
     provider_organization: Annotated[str | None, Form()] = None,
@@ -4030,11 +4051,24 @@ async def register_service_api(
         if "security-pending-local" not in tag_list:
             tag_list.append("security-pending-local")
 
-    # Create server entry with auto-generated UUID
-    from uuid import uuid4
+    # Resolve caller-supplied id (or auto-generate). Like the /register form
+    # route, this JSON route has no Pydantic model guarding it, so
+    # resolve_asset_id is the only id validation -- map InvalidAssetIdError to 422.
+    # The feature-flag gate raises a subclass, so it maps to 422 here too.
+    try:
+        check_caller_supplied_id_allowed(id, settings.allow_caller_supplied_asset_id)
+        resolved_id = resolve_asset_id(id)
+    except InvalidAssetIdError as e:
+        raise HTTPException(
+            status_code=fastapi_status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid asset id: {e}",
+        )
+    if id is not None:
+        logger.info(f"Honoring caller-supplied id for server '{name}'")
+        ASSET_ID_SUPPLIED_TOTAL.labels(asset_type="server").inc()
 
     server_entry: dict[str, Any] = {
-        "id": str(uuid4()),
+        "id": resolved_id,
         "server_name": name,
         "description": description,
         "path": path,

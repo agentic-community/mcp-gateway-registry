@@ -254,6 +254,9 @@ module "mcp_gateway" {
   batch_worker_lease_ttl_seconds       = var.batch_worker_lease_ttl_seconds
   batch_worker_lease_heartbeat_seconds = var.batch_worker_lease_heartbeat_seconds
 
+  # Caller-supplied asset id (issue #1276)
+  allow_caller_supplied_asset_id = var.allow_caller_supplied_asset_id
+
   # Registration gate / admission control (issue #809)
   registration_gate_enabled              = var.registration_gate_enabled
   registration_gate_url                  = var.registration_gate_url

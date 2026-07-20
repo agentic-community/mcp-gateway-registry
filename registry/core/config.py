@@ -296,6 +296,19 @@ class Settings(BaseSettings):
         ),
     )
 
+    # Caller-supplied asset id (Issue #1276)
+    allow_caller_supplied_asset_id: bool = Field(
+        default=False,
+        description=(
+            "Allow callers to supply their own asset 'id' on the public "
+            "server/agent/skill registration routes. Fail-closed: OFF by default, "
+            "so a supplied id is rejected (422) and ids auto-generate as before. "
+            "When true, a supplied id must pass the safe-charset validation and be "
+            "unique. Federation sync is NOT affected by this flag (peer ids are "
+            "governed by the peer allowlist)."
+        ),
+    )
+
     # Registration Gate Configuration (Admission Control, Issue #809)
     registration_gate_enabled: bool = Field(
         default=False,

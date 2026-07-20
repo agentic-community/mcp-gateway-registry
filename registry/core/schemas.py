@@ -1,7 +1,7 @@
 import re
 from datetime import datetime
 from typing import Any, Literal, cast
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -529,9 +529,14 @@ class LocalRuntime(BaseModel):
 class ServerInfo(BaseModel):
     """Server information model."""
 
-    id: UUID = Field(
-        default_factory=uuid4,
-        description="Unique identifier (UUID) for this server",
+    id: str = Field(
+        default_factory=lambda: str(uuid4()),
+        min_length=1,
+        max_length=512,
+        description=(
+            "Unique identifier for this server. Any non-empty string "
+            "(UUID, ARN, URN, ...). Auto-generated UUID if not supplied."
+        ),
     )
     server_name: str
     description: str = ""

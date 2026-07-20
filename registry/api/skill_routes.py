@@ -34,7 +34,10 @@ from ..audit.context import set_audit_action
 from ..auth.asset_permissions import user_has_asset_permission
 from ..auth.csrf import verify_csrf_token_flexible
 from ..auth.dependencies import nginx_proxied_auth
+from ..core.config import settings
+from ..core.metrics import ASSET_ID_SUPPLIED_TOTAL
 from ..exceptions import (
+    AssetIdConflictError,
     SkillAlreadyExistsError,
     SkillContentFetchError,
     SkillContentSSRFError,
@@ -1038,12 +1041,29 @@ async def register_skill(
     if effective_status:
         request.status = effective_status
 
+    # Feature-flag gate (#1276): reject a caller-supplied id when the flag is off
+    # (fail-closed). Charset/length are already validated by the request model.
+    from ..services._asset_id import (
+        InvalidAssetIdError,
+        check_caller_supplied_id_allowed,
+    )
+
+    try:
+        check_caller_supplied_id_allowed(request.id, settings.allow_caller_supplied_asset_id)
+    except InvalidAssetIdError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid asset id: {e}",
+        )
+
     service = get_skill_service()
     owner = user_context.get("username")
 
     try:
         skill = await service.register_skill(request=request, owner=owner, validate_url=True)
         logger.info(f"Registered skill: {skill.name} by {owner}")
+        if request.id is not None:
+            ASSET_ID_SUPPLIED_TOTAL.labels(asset_type="skill").inc()
 
         # Security scanning if enabled (non-blocking — mirrors server registration pattern)
         scan_task = asyncio.create_task(
@@ -1070,6 +1090,11 @@ async def register_skill(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
     except SkillValidationError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except AssetIdConflictError as e:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Skill with id '{e.asset_id}' already exists",
+        )
     except SkillServiceError as e:
         logger.error(f"Failed to register skill: {e}")
         raise HTTPException(

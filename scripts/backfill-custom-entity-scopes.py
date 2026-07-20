@@ -41,14 +41,18 @@ import logging
 import sys
 from pathlib import Path
 
-# Ensure the repo root (this file's parent's parent) is importable. Running the
-# script directly (``python scripts/backfill-custom-entity-scopes.py``) puts the
-# ``scripts/`` directory on sys.path[0], NOT the repo root, so ``import
-# registry`` would fail with ModuleNotFoundError. Prepending the repo root makes
-# the script self-contained regardless of the working directory.
-_REPO_ROOT = Path(__file__).resolve().parent.parent
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
+# Ensure both the repo root AND this script's own directory are importable.
+# Running the script directly (``python scripts/backfill-custom-entity-scopes.py``)
+# puts the ``scripts/`` directory on sys.path[0] but NOT the repo root, so
+# ``import registry`` would fail. Conversely, when the script is loaded by path
+# (e.g. by the pytest suite via importlib), NEITHER is on sys.path, so the
+# sibling ``import _mongo_conn_args`` would fail with ModuleNotFoundError.
+# Prepending both makes the script self-contained regardless of how it is run.
+_SCRIPT_DIR = Path(__file__).resolve().parent
+_REPO_ROOT = _SCRIPT_DIR.parent
+for _path in (_REPO_ROOT, _SCRIPT_DIR):
+    if str(_path) not in sys.path:
+        sys.path.insert(0, str(_path))
 
 # Shared Mongo/DocumentDB connection CLI args (sibling module in scripts/).
 from _mongo_conn_args import (  # noqa: E402
