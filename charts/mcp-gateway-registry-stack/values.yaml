@@ -441,6 +441,7 @@ registry:
     gatewayProxyAllowPrivateTargets: false
     gatewayGenericClientMaxBodySize: "1m"
     gatewayProxyPrefix: "gateway" # URL path prefix for auto-generated client routes (/{prefix}/{type}/{name})
+    gatewayGenericStreamReadTimeoutSeconds: 3600 # nginx proxy_read_timeout (s) for proxy_streaming routes
     # Registry-UI internal token verification (the /api/ hop; minted by auth-server)
     internalTokenTtlSeconds: "30" # Token lifetime (seconds); the replay-window cap (min 5)
     internalTokenLeewaySeconds: "5" # Clock-skew leeway (seconds) on token exp/iat

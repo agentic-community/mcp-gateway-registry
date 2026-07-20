@@ -63,6 +63,7 @@ PROXY_FIELD_NAMES: frozenset[str] = frozenset(
     {
         "is_proxied",
         "proxy_target_url",
+        "proxy_streaming",
         "proxy_resolved_ips",
         "proxy_target_host",
         "proxy_disabled_reason",
@@ -151,6 +152,18 @@ class ProxyableMixin(BaseModel):
         description=(
             "Backend HTTP(S) URL the gateway forwards to. Required when is_proxied "
             "is true and the entity has no native backend URL (skills, custom entities)."
+        ),
+    )
+    proxy_streaming: bool = Field(
+        default=False,
+        description=(
+            "When true, the generic hop streams the upstream response chunk-by-chunk "
+            "(SSE / chunked) instead of buffering it, and the generated nginx route "
+            "disables proxy_buffering with a long read timeout. Set this for "
+            "long-lived or token-streaming backends (e.g. an LLM proxied as a custom "
+            "type). When false (default) the response is buffered up to "
+            "GENERIC_PROXY_MAX_BODY_BYTES. The value is bound into the signed "
+            "generic-proxy token, so the hop never trusts a forgeable inbound header."
         ),
     )
     # Operational bookkeeping written by the resolve-and-validate refresh; not user-set.

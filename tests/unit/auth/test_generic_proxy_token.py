@@ -73,6 +73,25 @@ class TestMint:
         with pytest.raises(ValueError):
             _token(subject="")
 
+    def test_streaming_claim_defaults_false(self):
+        tok = _token()
+        claims = pyjwt.decode(tok, _SECRET, algorithms=["HS256"], audience=GENERIC_PROXY_AUDIENCE)
+        assert claims["streaming"] is False
+
+    def test_streaming_claim_bound_when_true(self):
+        # The hop reads this SIGNED claim (never a forgeable header) to decide
+        # whether to stream, so minting must carry the opt-in verbatim.
+        tok = mint_generic_proxy_token(
+            subject="alice",
+            scopes=["s/read"],
+            entity_type="custom-llm",
+            registered_path="custom-llm/chat",
+            upstream_url="https://llm.example/",
+            streaming=True,
+        )
+        claims = pyjwt.decode(tok, _SECRET, algorithms=["HS256"], audience=GENERIC_PROXY_AUDIENCE)
+        assert claims["streaming"] is True
+
 
 class TestVerifyAccept:
     async def test_exact_path_accepted(self):

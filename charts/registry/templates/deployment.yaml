@@ -346,6 +346,8 @@ spec:
               value: {{ .Values.app.gatewayGenericClientMaxBodySize | default "1m" | quote }}
             - name: GATEWAY_PROXY_PREFIX
               value: {{ .Values.app.gatewayProxyPrefix | default "gateway" | quote }}
+            - name: GATEWAY_GENERIC_STREAM_READ_TIMEOUT_SECONDS
+              value: {{ .Values.app.gatewayGenericStreamReadTimeoutSeconds | default 3600 | toString | quote }}
             {{- if .Values.app.registryApiKeysExistingSecret }}
             - name: REGISTRY_API_KEYS
               valueFrom:

@@ -37,7 +37,7 @@ import uvicorn
 import yaml
 from botocore.exceptions import ClientError
 from fastapi import APIRouter, Cookie, Depends, FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse, RedirectResponse, Response
+from fastapi.responses import JSONResponse, RedirectResponse, Response, StreamingResponse
 
 # Import metrics middleware
 from internal_request_token import (
@@ -50,6 +50,7 @@ from internal_request_token import (
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from jwt.api_jwk import PyJWK
 from metrics_middleware import add_auth_metrics_middleware
+from starlette.background import BackgroundTask
 
 try:
     from observability.meters import redirect_rejected_total, token_mint_total
@@ -449,6 +450,7 @@ def _attach_generic_proxy_token(
     scopes: list[str],
     entity_type: str,
     registered_path: str,
+    streaming: bool = False,
 ) -> None:
     """Mint and attach the X-Internal-Token-Generic for the generic-proxy hop.
 
@@ -471,6 +473,11 @@ def _attach_generic_proxy_token(
     header). If minting fails (e.g. empty subject), no token is attached: the
     generic hop then rejects (fail-closed).
 
+    ``streaming`` (from the server-set ``X-Generic-Streaming`` marker) is bound
+    into the token so the hop switches to a chunk-forwarding StreamingResponse
+    only when the SIGNED claim says so -- a client cannot force streaming (or
+    unbounded, uncapped buffering) by spoofing a header.
+
     SECURITY: the caller MUST ensure this is wired ONLY into the main 200-path,
     never the static-credential short-circuits (federation-static / network-
     trusted), which compute no cookie/Bearer discriminator and thus cannot run
@@ -486,6 +493,7 @@ def _attach_generic_proxy_token(
             entity_type=entity_type,
             registered_path=registered_path,
             upstream_url=resolved_upstream,
+            streaming=streaming,
         )
     except ValueError as exc:
         logger.error(f"/validate: could not mint generic-proxy token: {exc}")
@@ -3234,6 +3242,10 @@ async def validate_request(request: Request):
         # (not from client headers). See the marker-spoof invariant in the LLD.
         generic_proxy_kind = (request.headers.get("X-Generic-Proxy-Kind") or "").strip()
         generic_entity_path = (request.headers.get("X-Entity-Path") or "").strip()
+        # "1" only when the streaming generic location set it; nginx redefines it
+        # from $generic_streaming (map default ""), so a client cannot spoof it.
+        # Bound into the token below so the hop trusts the signed claim, not this.
+        generic_streaming = (request.headers.get("X-Generic-Streaming") or "").strip() == "1"
         original_method = (request.headers.get("X-Original-Method") or "").strip().upper()
         is_generic_request = bool(generic_proxy_kind)
 
@@ -4319,6 +4331,7 @@ async def validate_request(request: Request):
             scopes=user_scopes,
             entity_type=generic_proxy_kind,
             registered_path=generic_entity_path,
+            streaming=generic_streaming,
         )
 
         # Registry /api/ hop token. Discriminate cookie vs JWT-bearer: the cookie
@@ -8080,6 +8093,99 @@ def _set_egress_unverified_metric(value: int) -> None:
         logger.debug("could not set gateway_egress_policy_unverified: %s", exc)
 
 
+async def _generic_proxy_streaming(
+    *,
+    semaphore: "asyncio.Semaphore",
+    method: str,
+    outbound_url: str,
+    request_body: bytes,
+    forward_headers: dict[str, str],
+    query_params: dict[str, str],
+    verify: bool | str,
+) -> StreamingResponse:
+    """Forward a proxied entity's response to the client incrementally (SSE/chunked).
+
+    Only reached when the SIGNED token claim ``streaming`` is true (an entity with
+    proxy_streaming=true). Unlike the buffered path, the httpx client and the open
+    response are NOT closed via ``async with`` here: a StreamingResponse consumes
+    its body generator AFTER this function returns, so the transport must outlive
+    the handler. We open both manually, hand the byte iterator to StreamingResponse,
+    and close them (plus release the concurrency semaphore) in a BackgroundTask that
+    runs when the response finishes -- normally or on client disconnect.
+
+    No response-size cap is applied (streaming is unbounded by design; the DoS
+    ceiling for these routes is the concurrency semaphore + the nginx/hop read
+    timeout, not a per-response byte limit). follow_redirects stays False: a 30x is
+    streamed back verbatim and the next hop re-enters the gateway for re-auth.
+    """
+    # Hold a semaphore slot for the WHOLE stream lifetime (acquired here, released
+    # in the cleanup task), so long-lived streams still count against the
+    # concurrency cap rather than being released the instant the handler returns.
+    await semaphore.acquire()
+    # A streaming upstream is idle between chunks by design, so the READ timeout
+    # is disabled (nginx enforces proxy_read_timeout at the edge for these routes,
+    # and the semaphore bounds concurrency). Connect/write/pool timeouts are KEPT
+    # so a hung *connect* can't pin a concurrency slot forever.
+    stream_timeout = httpx.Timeout(10.0, read=None)
+    client = httpx.AsyncClient(timeout=stream_timeout, follow_redirects=False, verify=verify)
+    released = False
+
+    async def _cleanup() -> None:
+        nonlocal released
+        try:
+            await client.aclose()
+        finally:
+            if not released:
+                released = True
+                semaphore.release()
+
+    try:
+        stream_ctx = client.stream(
+            method,
+            outbound_url,
+            content=request_body,
+            headers=forward_headers,
+            params=query_params,
+        )
+        upstream_response = await stream_ctx.__aenter__()
+    except httpx.TimeoutException as exc:
+        await _cleanup()
+        logger.error(f"generic_proxy(stream): upstream timeout for {outbound_url}: {exc}")
+        raise HTTPException(status_code=504, detail="Upstream timed out") from exc
+    except httpx.HTTPError as exc:
+        await _cleanup()
+        logger.error(f"generic_proxy(stream): upstream error for {outbound_url}: {exc}")
+        raise HTTPException(status_code=502, detail="Upstream error") from exc
+    except BaseException:
+        await _cleanup()
+        raise
+
+    status_code = upstream_response.status_code
+    content_type = upstream_response.headers.get("content-type", "application/octet-stream")
+    response_headers = _select_forwarded_generic_response_headers(dict(upstream_response.headers))
+    response_headers.update(_GATEWAY_SET_SECURITY_HEADERS)
+
+    async def _body_iterator():
+        try:
+            async for chunk in upstream_response.aiter_bytes(chunk_size=64 * 1024):
+                yield chunk
+        finally:
+            # Exit the stream context (the BackgroundTask closes the client and
+            # releases the semaphore). Errors here are best-effort cleanup.
+            try:
+                await stream_ctx.__aexit__(None, None, None)
+            except Exception:  # nosec B110 # noqa: BLE001 - best-effort stream close on generator exit
+                pass
+
+    return StreamingResponse(
+        _body_iterator(),
+        status_code=status_code,
+        media_type=content_type,
+        headers=response_headers,
+        background=BackgroundTask(_cleanup),
+    )
+
+
 @app.api_route(
     "/proxy/{entity_type}/{entity_path:path}",
     methods=_GENERIC_PROXY_METHODS,
@@ -8133,15 +8239,31 @@ async def generic_proxy(
         if key.lower() not in _GENERIC_HOP_STRIP_HEADERS
     }
     verify = _generic_tls_verify()
+    # Streaming is read from the SIGNED token claim (bound at /validate from the
+    # server-set X-Generic-Streaming marker), never a forgeable inbound header.
+    streaming = bool(claims.get("streaming"))
 
     logger.info(
-        "generic_proxy: type=%s path=/%s method=%s",
+        "generic_proxy: type=%s path=/%s method=%s streaming=%s",
         entity_type,
         entity_path,
         request.method,
+        streaming,
     )
 
     semaphore = _get_generic_proxy_semaphore()
+
+    if streaming:
+        return await _generic_proxy_streaming(
+            semaphore=semaphore,
+            method=request.method,
+            outbound_url=outbound_url,
+            request_body=request_body,
+            forward_headers=forward_headers,
+            query_params=dict(request.query_params),
+            verify=verify,
+        )
+
     async with semaphore:
         try:
             # SSRF/rebinding-safe client (CLAUDE.md invariant): the guarded

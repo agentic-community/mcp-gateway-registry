@@ -225,6 +225,7 @@ def mint_generic_proxy_token(
     entity_type: str,
     registered_path: str,
     upstream_url: str,
+    streaming: bool = False,
 ) -> str:
     """Mint the per-request /proxy/{entity_type}/{path} token in /validate's 200 path.
 
@@ -237,6 +238,10 @@ def mint_generic_proxy_token(
 
     ``upstream_url`` is the resolved backend the generic hop forwards to,
     cryptographically pinned so the handler ignores forgeable headers.
+
+    ``streaming`` binds the entity's proxy_streaming opt-in into the token so the
+    hop streams (chunk-forward, no response-size cap) only on the signed claim,
+    never on a forgeable inbound header.
     """
     return _mint_internal_token(
         audience=GENERIC_PROXY_AUDIENCE,
@@ -246,6 +251,7 @@ def mint_generic_proxy_token(
             "entity_type": entity_type,
             "server": registered_path,  # FULL registered path, not first-segment
             "upstream_url": upstream_url,
+            "streaming": bool(streaming),
             "token_use": GENERIC_PROXY_TOKEN_USE,
         },
         ttl_seconds=_generic_ttl_seconds(),
