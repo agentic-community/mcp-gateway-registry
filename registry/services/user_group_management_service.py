@@ -13,7 +13,7 @@ Tracked by issue #1127.
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pymongo.errors import DuplicateKeyError
@@ -80,7 +80,7 @@ class UserGroupManagementService:
             UserGroupConflict: If ``username`` already exists (unique index
                 violation).
         """
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         doc: dict = {
             "username": payload.username,
             "groups": list(payload.groups),
@@ -180,7 +180,7 @@ class UserGroupManagementService:
             "email": "email",
             "enabled": "enabled",
         }
-        updates: dict = {"updated_at": datetime.utcnow()}
+        updates: dict = {"updated_at": datetime.now(timezone.utc)}
         for request_field, storage_field in field_map.items():
             if request_field in provided:
                 updates[storage_field] = provided[request_field]

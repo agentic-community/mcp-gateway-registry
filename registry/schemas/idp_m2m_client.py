@@ -9,7 +9,7 @@ This collection serves as the authorization database for M2M clients.
 """
 
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 
 from pydantic import BaseModel, Field, field_validator
 

@@ -28,7 +28,7 @@ import logging
 import os
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 logging.basicConfig(
     level=logging.INFO,
@@ -166,7 +166,7 @@ def _save_token(token_data: dict, output_path: str) -> None:
         output_path: Path to save token file
     """
     # Add metadata
-    token_data["obtained_at"] = datetime.utcnow().isoformat()
+    token_data["obtained_at"] = datetime.now(timezone.utc).isoformat()
 
     # Create the file atomically with owner-only (0600) permissions. A plain
     # open()-then-chmod leaves a window in which the token file is readable by

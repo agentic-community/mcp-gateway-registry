@@ -20,7 +20,7 @@ import urllib.parse
 import uuid
 from collections.abc import Mapping
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from string import Template
 from typing import Any
@@ -4429,7 +4429,7 @@ async def reload_scopes(caller_identity: str = Depends(validate_internal_auth)):
             status_code=200,
             content={
                 "message": "Scopes configuration reloaded successfully",
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "group_mappings_count": len(SCOPES_CONFIG.get("group_mappings", {})),
             },
         )

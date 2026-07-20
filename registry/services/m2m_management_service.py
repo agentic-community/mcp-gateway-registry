@@ -9,7 +9,7 @@ Tracked by issue #851.
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pymongo.errors import DuplicateKeyError
@@ -79,7 +79,7 @@ class M2MManagementService:
             M2MClientConflict: If ``client_id`` already exists (unique index
                 violation).
         """
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         doc: dict = {
             "client_id": payload.client_id,
             "name": payload.client_name,
@@ -173,7 +173,7 @@ class M2MManagementService:
             "description": "description",
             "enabled": "enabled",
         }
-        updates: dict = {"updated_at": datetime.utcnow()}
+        updates: dict = {"updated_at": datetime.now(timezone.utc)}
         for request_field, storage_field in field_map.items():
             if request_field in provided:
                 updates[storage_field] = provided[request_field]

@@ -8,7 +8,7 @@ authorization server expressions.
 import json
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 
 import requests
 from motor.motor_asyncio import AsyncIOMotorDatabase
@@ -276,12 +276,12 @@ class Auth0M2MSync:
                         "enabled": not client.get("is_first_party", False),
                         "auth0_client_id": client.get("client_id"),
                         "app_type": client.get("app_type"),
-                        "last_synced": datetime.utcnow(),
+                        "last_synced": datetime.now(timezone.utc),
                     }
 
                     if existing:
                         # Update existing record
-                        client_doc["updated_at"] = datetime.utcnow()
+                        client_doc["updated_at"] = datetime.now(timezone.utc)
                         await self.collection.update_one(
                             {"client_id": client_id}, {"$set": client_doc}
                         )
@@ -289,8 +289,8 @@ class Auth0M2MSync:
                         logger.info(f"Updated client: {client_id}")
                     else:
                         # Insert new record
-                        client_doc["created_at"] = datetime.utcnow()
-                        client_doc["updated_at"] = datetime.utcnow()
+                        client_doc["created_at"] = datetime.now(timezone.utc)
+                        client_doc["updated_at"] = datetime.now(timezone.utc)
                         await self.collection.insert_one(client_doc)
                         added_count += 1
                         logger.info(f"Added new client: {client_id}")
@@ -304,7 +304,7 @@ class Auth0M2MSync:
                         "enabled": not client.get("is_first_party", False),
                         "provider": "auth0",
                         "idp_app_id": client.get("client_id"),
-                        "updated_at": datetime.utcnow(),
+                        "updated_at": datetime.now(timezone.utc),
                     }
 
                     existing_idp = await self.idp_collection.find_one({"client_id": client_id})
@@ -313,7 +313,7 @@ class Auth0M2MSync:
                             {"client_id": client_id}, {"$set": idp_doc}
                         )
                     else:
-                        idp_doc["created_at"] = datetime.utcnow()
+                        idp_doc["created_at"] = datetime.now(timezone.utc)
                         await self.idp_collection.insert_one(idp_doc)
 
                 except Exception as e:
@@ -367,8 +367,8 @@ class Auth0M2MSync:
                     groups=doc.get("groups", []),
                     enabled=doc.get("enabled", True),
                     provider="auth0",
-                    created_at=doc.get("created_at", datetime.utcnow()),
-                    updated_at=doc.get("updated_at", datetime.utcnow()),
+                    created_at=doc.get("created_at", datetime.now(timezone.utc)),
+                    updated_at=doc.get("updated_at", datetime.now(timezone.utc)),
                     idp_app_id=doc.get("auth0_client_id"),
                 )
                 clients.append(client)
@@ -411,7 +411,7 @@ class Auth0M2MSync:
             {
                 "$set": {
                     "groups": groups,
-                    "updated_at": datetime.utcnow(),
+                    "updated_at": datetime.now(timezone.utc),
                 }
             },
         )
@@ -422,7 +422,7 @@ class Auth0M2MSync:
             {
                 "$set": {
                     "groups": groups,
-                    "updated_at": datetime.utcnow(),
+                    "updated_at": datetime.now(timezone.utc),
                 }
             },
         )

@@ -5,7 +5,7 @@ without a live MongoDB.
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -67,7 +67,7 @@ def service(mock_db: MagicMock) -> M2MManagementService:
 @pytest.fixture
 def sample_manual_doc() -> dict:
     """A manual-provider document as stored in MongoDB."""
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     return {
         "client_id": "test-client-id",
         "name": "Test Client",
@@ -85,7 +85,7 @@ def sample_manual_doc() -> dict:
 @pytest.fixture
 def sample_synced_doc() -> dict:
     """An IdP-synced document; must be immutable to this API."""
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     return {
         "client_id": "synced-client-id",
         "name": "Synced Client",
