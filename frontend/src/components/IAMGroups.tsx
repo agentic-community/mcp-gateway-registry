@@ -444,8 +444,9 @@ const IAMGroups: React.FC<IAMGroupsProps> = ({ onShowToast }) => {
     setIsCreating(true);
     try {
       // Build scope_config from form state.
-      // The management API currently only processes name/description.
-      // scope_config is included for future backend support.
+      // The management API validates scope_config (422 on malformed input),
+      // fully applies it via scope_service.import_group, and triggers an
+      // auth-server reload so the scope takes effect immediately.
       const scopeJson = _buildScopeJson(
         formName.trim(), formDescription.trim(),
         serverAccess, groupMappings, selectedAgents, uiPermissions, createInIdp,

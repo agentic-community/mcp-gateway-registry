@@ -52,21 +52,88 @@ class UserListResponse(BaseModel):
     total: int
 
 
+class ServerAccessRule(BaseModel):
+    """One MCP-server access rule inside a scope's server_access list."""
+
+    model_config = {"extra": "forbid"}
+
+    server: str = Field(
+        ...,
+        min_length=1,
+        description="Server name (leading/trailing slashes stripped by the caller).",
+    )
+    methods: list[str] = Field(
+        default_factory=list,
+        description="Allowed MCP methods (e.g. tools/call). Empty means none.",
+    )
+    tools: list[str] | str = Field(
+        default_factory=list,
+        description='Allowed tool names, or "*" for all tools on this server.',
+    )
+
+
+class AgentAccessRule(BaseModel):
+    """One A2A-agent access rule inside a scope's server_access list."""
+
+    model_config = {"extra": "forbid"}
+
+    agent: str = Field(..., min_length=1, description="Agent path, or */all.")
+    actions: list[str] = Field(
+        default_factory=list,
+        description="Allowed agent actions (list_agents, get_agent, invoke_agent, ...).",
+    )
+
+
+class ScopeConfig(BaseModel):
+    """Validated scope configuration carried on group create/update.
+
+    Replaces the previous free-form dict. Unknown keys are rejected so an
+    operator gets a clear 422 instead of a silently-dropped field.
+
+    All access fields default to None (omitted) rather than empty
+    collections so the PATCH handler can distinguish "not provided --
+    preserve existing values" from "explicitly provided". The create
+    handler coerces None to empty collections.
+    """
+
+    model_config = {"extra": "forbid"}
+
+    server_access: list[ServerAccessRule | AgentAccessRule] | None = Field(
+        default=None,
+        description="Per-server / per-agent invocation access rules.",
+    )
+    ui_permissions: dict[str, list[str]] | None = Field(
+        default=None,
+        description="UI permission name -> list of entity names/ids ('all' allowed).",
+    )
+    agent_access: list[str] | None = Field(
+        default=None,
+        description="Agent paths this scope may access.",
+    )
+    group_mappings: list[str] | None = Field(
+        default=None,
+        description="IdP group names/IDs. Defaults to [group_name] when omitted.",
+    )
+    create_in_idp: bool = Field(
+        default=False,
+        description="Create the group in the upstream IdP as well (default: local-only).",
+    )
+
+
 class GroupCreateRequest(BaseModel):
     """Payload for creating a group.
 
-    Note: The backend currently only processes name and description.
-    The scope_config field is accepted but not yet wired to
-    scope_service.import_group(). Future work should pass
-    server_access, group_mappings, and ui_permissions through
-    to the scope service when creating a group.
+    scope_config (server_access, ui_permissions, agent_access, group_mappings,
+    create_in_idp) is fully applied server-side via scope_service.import_group,
+    and the change takes effect immediately (the handler triggers an
+    auth-server scope reload).
     """
 
     name: str = Field(..., min_length=1)
     description: str | None = None
-    scope_config: dict | None = Field(
+    scope_config: ScopeConfig | None = Field(
         None,
-        description="Scope configuration (accepted but not yet applied server-side)",
+        description="Validated scope configuration, fully applied server-side.",
     )
 
 
@@ -120,9 +187,12 @@ class GroupUpdateRequest(BaseModel):
     """Request to update a group."""
 
     description: str | None = None
-    scope_config: dict | None = Field(
+    scope_config: ScopeConfig | None = Field(
         None,
-        description="Scope configuration (server_access, ui_permissions, etc.)",
+        description=(
+            "Validated scope configuration (server_access, ui_permissions, "
+            "agent_access, group_mappings). Omitted fields preserve existing values."
+        ),
     )
 
 
