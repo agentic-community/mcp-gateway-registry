@@ -50,6 +50,8 @@ export interface ObservabilityPipelineProps {
   readonly metricsApiKeySecret?: secretsmanager.ISecret;
   /** Secrets Manager secret holding the metrics API-key HMAC pepper */
   readonly metricsKeyPepperSecret?: secretsmanager.ISecret;
+  /** Secrets Manager secret holding the metrics admin API key (gates /admin/*) */
+  readonly metricsAdminApiKeySecret?: secretsmanager.ISecret;
   /** Secrets Manager secret holding the OTLP exporter headers */
   readonly otlpExporterHeadersSecret?: secretsmanager.ISecret;
   /** Secrets Manager secret holding the Grafana admin password (issue #1325) */
@@ -286,6 +288,13 @@ export class ObservabilityPipeline extends Construct {
       // Required: metrics-service refuses to start without a strong pepper.
       metricsSecrets['METRICS_KEY_PEPPER'] = ecs.Secret.fromSecretsManager(
         props.metricsKeyPepperSecret,
+      );
+    }
+    if (props.metricsAdminApiKeySecret) {
+      // Gates /admin/* (retention/cleanup/db stats). Distinct from the ingest
+      // key; /admin/* denies by default until this is present.
+      metricsSecrets['METRICS_ADMIN_API_KEY'] = ecs.Secret.fromSecretsManager(
+        props.metricsAdminApiKeySecret,
       );
     }
     if (props.otlpExporterHeadersSecret && config.otel.otlpEndpoint !== '') {

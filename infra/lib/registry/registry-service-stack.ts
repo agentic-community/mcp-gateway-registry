@@ -609,6 +609,7 @@ export class RegistryServiceStack extends cdk.Stack {
       appSecretsKmsKey: this.appSecretsKmsKey,
       metricsApiKeySecret: secretsBundle.metricsApiKey,
       metricsKeyPepperSecret: secretsBundle.metricsKeyPepper,
+      metricsAdminApiKeySecret: secretsBundle.metricsAdminApiKey,
       otlpExporterHeadersSecret: secretsBundle.otlpExporterHeaders,
       grafanaAdminPasswordSecret: secretsBundle.grafanaAdminPassword,
       secretsAccessStatements,

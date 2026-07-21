@@ -1,13 +1,17 @@
-from fastapi import APIRouter, HTTPException, Depends, Request, Response
+from fastapi import APIRouter, HTTPException, Depends, Request, Response, Query
 from typing import List, Dict, Any, Optional
 import uuid
 import logging
 from ..config import settings
 from ..core.models import MetricRequest, MetricResponse, ErrorResponse
 from ..core.processor import MetricsProcessor
-from ..core.retention import retention_manager
+from ..core.retention import (
+    retention_manager,
+    MIN_RETENTION_DAYS,
+    MAX_RETENTION_DAYS,
+)
 from ..core.rate_limiter import ip_throttle
-from ..api.auth import verify_api_key, get_rate_limit_status
+from ..api.auth import verify_api_key, verify_admin_api_key, get_rate_limit_status
 from ..utils.helpers import generate_request_id, generate_api_key, hash_api_key
 from ..storage.database import MetricsStorage
 
@@ -135,7 +139,7 @@ async def get_rate_limit(request: Request):
 
 @router.get("/admin/retention/preview")
 async def get_cleanup_preview(
-    table_name: str | None = None, api_key: str = Depends(verify_api_key)
+    table_name: str | None = None, admin: str = Depends(verify_admin_api_key)
 ):
     """Preview what would be cleaned up by retention policies.
 
@@ -168,7 +172,7 @@ async def get_cleanup_preview(
 
 @router.post("/admin/retention/cleanup")
 async def run_cleanup(
-    table_name: str | None = None, dry_run: bool = True, api_key: str = Depends(verify_api_key)
+    table_name: str | None = None, dry_run: bool = True, admin: str = Depends(verify_admin_api_key)
 ):
     """Run data cleanup according to retention policies.
 
@@ -197,7 +201,7 @@ async def run_cleanup(
 
 
 @router.get("/admin/retention/policies")
-async def get_retention_policies(api_key: str = Depends(verify_api_key)):
+async def get_retention_policies(admin: str = Depends(verify_admin_api_key)):
     """Get current retention policies."""
     try:
         policies = {}
@@ -217,20 +221,32 @@ async def get_retention_policies(api_key: str = Depends(verify_api_key)):
 @router.put("/admin/retention/policies/{table_name}")
 async def update_retention_policy(
     table_name: str,
-    retention_days: int,
+    retention_days: int = Query(
+        ...,
+        ge=MIN_RETENTION_DAYS,
+        le=MAX_RETENTION_DAYS,
+        description=(
+            "Number of days to retain data. Must be >= "
+            f"{MIN_RETENTION_DAYS}: a value below this would set the cleanup "
+            "cutoff in the future and delete the entire table."
+        ),
+    ),
     is_active: bool = True,
-    api_key: str = Depends(verify_api_key),
+    admin: str = Depends(verify_admin_api_key),
 ):
     """Update retention policy for a table.
 
     Args:
         table_name: The table name. Must be in the allowlist of valid tables.
-        retention_days: Number of days to retain data.
+        retention_days: Number of days to retain data. Must be at least
+            MIN_RETENTION_DAYS and at most MAX_RETENTION_DAYS; out-of-range
+            values are rejected with a 422 before any policy is mutated.
         is_active: Whether the policy is active.
         api_key: API key for authentication.
 
     Raises:
         HTTPException: 400 if table_name is not in the allowlist.
+        HTTPException: 422 if retention_days is out of the safe range.
         HTTPException: 500 for other errors.
     """
     try:
@@ -252,7 +268,7 @@ async def update_retention_policy(
 
 
 @router.get("/admin/database/stats")
-async def get_database_stats(api_key: str = Depends(verify_api_key)):
+async def get_database_stats(admin: str = Depends(verify_admin_api_key)):
     """Get database table statistics."""
     try:
         stats = await retention_manager.get_table_stats()
@@ -263,7 +279,7 @@ async def get_database_stats(api_key: str = Depends(verify_api_key)):
 
 
 @router.get("/admin/database/size")
-async def get_database_size(api_key: str = Depends(verify_api_key)):
+async def get_database_size(admin: str = Depends(verify_admin_api_key)):
     """Get database size information."""
     try:
         size_info = await retention_manager.get_database_size()

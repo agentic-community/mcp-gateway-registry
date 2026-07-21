@@ -543,6 +543,10 @@ services:
       # refuses to start without a strong value. Generated into .env by
       # build_and_run.sh; rotating it invalidates existing API-key hashes.
       - METRICS_KEY_PEPPER=${METRICS_KEY_PEPPER}
+      # Dedicated admin API key that gates /admin/* (retention/cleanup/db stats).
+      # Must be distinct from the ingest keys above; /admin/* denies by default
+      # until it is set. Do NOT set it equal to an ingest key.
+      - METRICS_ADMIN_API_KEY=${METRICS_ADMIN_API_KEY}
       - OTEL_SERVICE_NAME=mcp-metrics-service
       - OTEL_PROMETHEUS_ENABLED=true
       - OTEL_PROMETHEUS_PORT=9465
