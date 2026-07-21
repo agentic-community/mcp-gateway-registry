@@ -3791,6 +3791,7 @@ class TestMcpProxyEndpointHeaderPassthrough:
             patch.object(server_module.settings, "egress_auth_enabled", True),
             patch.object(server_module.settings, "egress_consent_use_elicitation", False),
             patch.object(server_module, "_vend_egress_token", _consent_vend),
+            _patch_scope_repo_allow_all(),
         ):
             client = TestClient(server_module.app)
             response = client.post(
@@ -3831,6 +3832,7 @@ class TestMcpProxyEndpointHeaderPassthrough:
             patch.object(server_module.settings, "egress_auth_enabled", True),
             patch.object(server_module.settings, "egress_consent_use_elicitation", True),
             patch.object(server_module, "_vend_egress_token", _consent_vend),
+            _patch_scope_repo_allow_all(),
         ):
             client = TestClient(server_module.app)
             response = client.post(
@@ -3878,6 +3880,7 @@ class TestMcpProxyEndpointHeaderPassthrough:
         with (
             patch.object(server_module.settings, "egress_auth_enabled", True),
             patch.object(server_module, "_vend_egress_token", _consent_vend),
+            _patch_scope_repo_allow_all(),
         ):
             client = TestClient(server_module.app)
             response = client.post(
@@ -3919,6 +3922,7 @@ class TestMcpProxyEndpointHeaderPassthrough:
         with (
             patch.object(server_module.settings, "egress_auth_enabled", True),
             patch.object(server_module, "_vend_egress_token", _consent_vend),
+            _patch_scope_repo_allow_all(),
         ):
             client = TestClient(server_module.app)
             response = client.post(
@@ -3951,6 +3955,7 @@ class TestMcpProxyEndpointHeaderPassthrough:
         with (
             patch.object(server_module.settings, "egress_auth_enabled", True),
             patch.object(server_module, "_vend_egress_token", _consent_vend),
+            _patch_scope_repo_allow_all(),
         ):
             client = TestClient(server_module.app)
             response = client.post(
@@ -4151,6 +4156,7 @@ class TestMcpProxyOboExchange:
         with (
             patch.object(server_module.settings, "egress_auth_enabled", True),
             patch.object(server_module, "_vend_egress_token", self._obo_directive_vend),
+            _patch_scope_repo_allow_all(),
         ):
             client = TestClient(server_module.app)
             response = client.post(
@@ -4233,6 +4239,7 @@ class TestMcpProxyOboExchange:
             patch.object(server_module, "_vend_egress_token", self._obo_directive_vend),
             patch.object(server_module, "get_auth_provider", lambda *a, **k: _FakeEntraProvider()),
             patch.object(server_module, "obo_exchange", _failing_exchange),
+            _patch_scope_repo_allow_all(),
         ):
             client = TestClient(server_module.app)
             response = client.post(
@@ -5927,6 +5934,7 @@ class TestMcpProxyEgressUnavailable:
         with (
             patch.object(server_module.settings, "egress_auth_enabled", True),
             patch.object(server_module, "_vend_egress_token", _boom),
+            _patch_scope_repo_allow_all(),
         ):
             client = TestClient(server_module.app)
             response = client.post(
@@ -5942,3 +5950,35 @@ class TestMcpProxyEgressUnavailable:
         assert "result" not in body
         assert body["error"]["code"] == -32001
         assert body["error"]["message"] == "egress_credential_service_unavailable"
+
+    def test_unscoped_caller_denied_403_before_vend_even_if_vend_would_fail(self):
+        # TM-15 ordering guarantee (reviewer request on #1529): an authorization
+        # denial must never be masked by a transient egress-availability 503. The
+        # scope re-auth runs BEFORE the vend, so a scopeless caller gets 403 and
+        # the vend is never even attempted -- regardless of OpenBao availability.
+        import auth_server.server as server_module
+
+        vend_called = {"n": 0}
+
+        async def _boom(token, server):
+            vend_called["n"] += 1
+            raise server_module.EgressVendUnavailable("registry returned 503")
+
+        with (
+            patch.object(server_module.settings, "egress_auth_enabled", True),
+            patch.object(server_module, "_vend_egress_token", _boom),
+        ):
+            client = TestClient(server_module.app)
+            response = client.post(
+                "/mcp-proxy/github",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 9,
+                    "method": "tools/call",
+                    "params": {"name": "privileged-tool"},
+                },
+                headers=_mcp_proxy_token_headers(server_name="github", scopes=[]),
+            )
+
+        assert response.status_code == 403
+        assert vend_called["n"] == 0  # denial happened before any vend/outbound work

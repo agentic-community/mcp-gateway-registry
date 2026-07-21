@@ -6931,6 +6931,20 @@ async def mcp_proxy(
         relay_authorization=relay_ingress_auth,
     )
 
+    # Re-authorize the caller's scopes against the EXACT body we are about to act
+    # on, BEFORE any outbound work (egress vend or upstream forward). /validate
+    # authorizes on a separately-captured copy (X-Body) that can diverge from this
+    # body (e.g. a large body that spilled to disk, which /validate then treats as
+    # an unprivileged "initialize"), so we authorize the forwarded bytes here and
+    # fail closed on any body we cannot parse (TM-15). Running this FIRST is a
+    # security ordering guarantee: an unscoped caller is denied 403 regardless of
+    # egress-vend / OpenBao availability -- otherwise a transient vend failure
+    # (503) could mask a genuine authorization denial, turning a "denied" into a
+    # "retry later" in responses, logs, and metrics. Authorized-but-not-connected
+    # callers still pass here and reach the egress consent/local-answer paths
+    # below (they already had these methods in scope on the connected path).
+    await _authorize_forwarded_mcp_body(server_name, request_body, user_scopes)
+
     # True once we inject a vaulted egress token below. An egress upstream is
     # itself an OAuth resource server: if it rejects our injected token it 401s
     # with its OWN WWW-Authenticate (resource_metadata pointing at the upstream's
@@ -7184,18 +7198,6 @@ async def mcp_proxy(
                     req_id=req_id,
                     vend=vend,
                 )
-
-    # Re-authorize the caller's scopes against the EXACT body we are about to
-    # forward upstream. /validate authorizes on a separately-captured copy
-    # (X-Body) that can diverge from this body (e.g. a large body that spilled to
-    # disk, which /validate then treats as an unprivileged "initialize"), so we
-    # authorize the forwarded bytes here and fail closed on any body we cannot
-    # parse (TM-15). This runs AFTER the egress-consent block above so methods the
-    # gateway answers LOCALLY for a tokenless egress server (initialize,
-    # notifications/*, tools/list, tools/call consent) are never gated here --
-    # they are not forwarded upstream. Only the request we actually forward is
-    # re-authorized. Raises 403 before the outbound call.
-    await _authorize_forwarded_mcp_body(server_name, request_body, user_scopes)
 
     logger.info(
         f"mcp_proxy: server={server_name} method={incoming_method} filter_enabled={filter_enabled} timeout={proxy_timeout}"
