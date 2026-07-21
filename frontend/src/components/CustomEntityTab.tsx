@@ -59,6 +59,7 @@ const CustomEntityTab: React.FC<CustomEntityTabProps> = ({
     error,
     createRecord,
     updateRecord,
+    rotateRecordHeaders,
     deleteRecord,
   } = useCustomEntities(typeName);
 
@@ -145,12 +146,23 @@ const CustomEntityTab: React.FC<CustomEntityTabProps> = ({
     setShowForm(true);
   };
 
-  const handleSave = async (body: any) => {
+  const handleSave = async (body: any, customHeaders?: Array<{ name: string; value?: string; overridable?: boolean }>) => {
     if (editing) {
-      await updateRecord(uuidFromPath(editing.path), body);
+      const uuid = uuidFromPath(editing.path);
+      await updateRecord(uuid, body);
+      // Headers are NOT settable on the general PUT; rotate them separately.
+      // Only when proxied (a non-proxied record has no upstream to auth to).
+      if (body.is_proxied) {
+        await rotateRecordHeaders(uuid, customHeaders ?? []);
+      }
       onShowToast?.(`Updated ${body.name}`, 'success');
     } else {
-      await createRecord(body);
+      // Create accepts custom_headers inline on the payload.
+      const createBody =
+        body.is_proxied && customHeaders && customHeaders.length > 0
+          ? { ...body, custom_headers: customHeaders }
+          : body;
+      await createRecord(createBody);
       onShowToast?.(`Created ${body.name}`, 'success');
     }
     setShowForm(false);

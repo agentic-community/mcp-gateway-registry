@@ -60,6 +60,17 @@ export interface CustomEntityRecord {
   is_proxied?: boolean;
   proxy_target_url?: string | null;
   proxy_client_url?: string | null;
+  // Upstream custom-header NAMES (values encrypted, never returned).
+  // custom_header_overridable_names is the caller-overridable subset.
+  custom_header_names?: string[];
+  custom_header_overridable_names?: string[];
+}
+
+/** One upstream custom header on the create payload / rotation body. */
+export interface CustomEntityHeader {
+  name: string;
+  value?: string;
+  overridable?: boolean;
 }
 
 /** Client payload for POST /api/custom/{type}. */
@@ -72,6 +83,7 @@ export interface CustomEntityCreate {
   attributes: Record<string, unknown>;
   is_proxied?: boolean;
   proxy_target_url?: string | null;
+  custom_headers?: CustomEntityHeader[];
 }
 
 /** Client payload for PUT /api/custom/{type}/{uuid} (all optional). */

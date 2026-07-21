@@ -81,8 +81,9 @@ def patched(service):
 
 
 def _patch_build(monkeypatch, captured):
-    def _fake_build(raw):
+    def _fake_build(raw, existing_encrypted=None):
         captured["raw"] = raw
+        captured["existing_encrypted"] = existing_encrypted
         return {
             "custom_headers_encrypted": [],
             "custom_header_names": [h["name"] for h in (raw or [])],
