@@ -467,6 +467,16 @@ class SkillRegistrationRequest(ProxyableMixin):
         None,
         description="Custom header name (default: Authorization for bearer, PRIVATE-TOKEN for api_key)",
     )
+    custom_headers: list[dict[str, str]] | None = Field(
+        default=None,
+        description=(
+            "Plaintext static upstream auth headers ([{name, value}, ...]) presented "
+            "to the proxied backend when is_proxied is true (e.g. an API key for an "
+            "LLM proxied as a skill). Encrypted into custom_headers_encrypted at "
+            "registration; never persisted or echoed in plaintext. Distinct from "
+            "auth_credential, which authenticates the SKILL.md FETCH, not the proxy hop."
+        ),
+    )
 
     @field_validator("id")
     @classmethod

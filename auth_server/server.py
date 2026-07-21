@@ -451,6 +451,7 @@ def _attach_generic_proxy_token(
     entity_type: str,
     registered_path: str,
     streaming: bool = False,
+    has_upstream_auth: bool = False,
 ) -> None:
     """Mint and attach the X-Internal-Token-Generic for the generic-proxy hop.
 
@@ -478,6 +479,10 @@ def _attach_generic_proxy_token(
     only when the SIGNED claim says so -- a client cannot force streaming (or
     unbounded, uncapped buffering) by spoofing a header.
 
+    ``has_upstream_auth`` (from the server-set ``X-Generic-Has-Upstream-Auth``
+    marker) is likewise bound in so the hop fetches + injects the entity's
+    decrypted upstream headers only on the signed claim.
+
     SECURITY: the caller MUST ensure this is wired ONLY into the main 200-path,
     never the static-credential short-circuits (federation-static / network-
     trusted), which compute no cookie/Bearer discriminator and thus cannot run
@@ -494,6 +499,7 @@ def _attach_generic_proxy_token(
             registered_path=registered_path,
             upstream_url=resolved_upstream,
             streaming=streaming,
+            has_upstream_auth=has_upstream_auth,
         )
     except ValueError as exc:
         logger.error(f"/validate: could not mint generic-proxy token: {exc}")
@@ -3246,6 +3252,12 @@ async def validate_request(request: Request):
         # from $generic_streaming (map default ""), so a client cannot spoof it.
         # Bound into the token below so the hop trusts the signed claim, not this.
         generic_streaming = (request.headers.get("X-Generic-Streaming") or "").strip() == "1"
+        # "1" only when the entity has registered upstream headers; same nginx-set
+        # trust as above. Bound into the token so the hop fetches+injects them only
+        # on the signed claim, never a forgeable header.
+        generic_has_upstream_auth = (
+            request.headers.get("X-Generic-Has-Upstream-Auth") or ""
+        ).strip() == "1"
         original_method = (request.headers.get("X-Original-Method") or "").strip().upper()
         is_generic_request = bool(generic_proxy_kind)
 
@@ -4332,6 +4344,7 @@ async def validate_request(request: Request):
             entity_type=generic_proxy_kind,
             registered_path=generic_entity_path,
             streaming=generic_streaming,
+            has_upstream_auth=generic_has_upstream_auth,
         )
 
         # Registry /api/ hop token. Discriminate cookie vs JWT-bearer: the cookie
@@ -6774,6 +6787,62 @@ async def _vend_egress_token(
         return None
 
 
+async def _vend_generic_upstream_headers(
+    generic_token: str,
+    entity_type: str,
+    registered_path: str,
+) -> dict[str, str] | None:
+    """Fetch a proxied entity's decrypted static upstream headers from the registry.
+
+    Forwards the verified X-Internal-Token-Generic; the registry re-verifies it,
+    re-derives entity_type/server/upstream from the signed claims, runs the
+    upstream cross-check, decrypts the entity's custom headers, and returns them.
+
+    Returns the header dict (possibly empty = entity has none), or None on a
+    transport/registry error. The caller FAILS CLOSED on None: it must not
+    forward the request unauthenticated when the entity was flagged as having
+    upstream auth but the vend failed.
+    """
+    from registry.auth.internal import generate_internal_token
+
+    base = settings.egress_registry_internal_url.rstrip("/")
+    try:
+        service_token = generate_internal_token(
+            subject="auth-server", purpose="generic-upstream-headers-vend"
+        )
+    except ValueError as exc:
+        logger.error(f"generic upstream-headers vend: cannot mint internal service token: {exc}")
+        return None
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"{base}/_egress_internal/generic-upstream-headers",
+                json={"entity_type": entity_type, "registered_path": registered_path},
+                headers={
+                    "Authorization": f"Bearer {service_token}",
+                    "X-Internal-Token-Generic": generic_token,
+                    "Content-Type": "application/json",
+                },
+            )
+    except httpx.HTTPError as exc:
+        logger.error(f"generic upstream-headers vend: registry unreachable: {exc}")
+        return None
+
+    if resp.status_code != 200:
+        logger.warning(f"generic upstream-headers vend: registry returned {resp.status_code}")
+        return None
+    try:
+        data = resp.json()
+    except ValueError:
+        return None
+    headers = data.get("headers")
+    if not isinstance(headers, dict):
+        return None
+    # Coerce to str->str; drop any non-string entries defensively.
+    return {str(k): str(v) for k, v in headers.items() if isinstance(k, str)}
+
+
 # JSON-RPC client requests on which MCP permits an InputRequiredResult (MRTR
 # spec: only tools/call, prompts/get, resources/read). Emitting it on any other
 # method (e.g. initialize, tools/list) would be a protocol violation, so those
@@ -8242,6 +8311,29 @@ async def generic_proxy(
     # Streaming is read from the SIGNED token claim (bound at /validate from the
     # server-set X-Generic-Streaming marker), never a forgeable inbound header.
     streaming = bool(claims.get("streaming"))
+
+    # Static upstream auth: when the SIGNED claim says the entity has registered
+    # upstream headers, fetch the DECRYPTED values from the registry's internal
+    # vend endpoint and inject them on egress. The claim is bound from the
+    # server-set X-Generic-Has-Upstream-Auth marker (never a forgeable header);
+    # the secret values only cross via the service-token-gated internal hop.
+    # FAIL CLOSED: if the vend fails, do NOT forward the request unauthenticated.
+    if claims.get("has_upstream_auth"):
+        generic_token = request.headers.get("X-Internal-Token-Generic", "")
+        vended = await _vend_generic_upstream_headers(
+            generic_token, entity_type, bound_registered_path
+        )
+        if vended is None:
+            logger.error(
+                "generic_proxy: upstream-headers vend failed for %s/%s; refusing to "
+                "forward unauthenticated",
+                entity_type,
+                bound_registered_path,
+            )
+            raise HTTPException(status_code=502, detail="Upstream auth unavailable")
+        # Injected headers overwrite any inbound same-named header (defence: a
+        # client cannot pre-set Authorization to something the backend would see).
+        forward_headers.update(vended)
 
     logger.info(
         "generic_proxy: type=%s path=/%s method=%s streaming=%s",

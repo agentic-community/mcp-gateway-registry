@@ -207,3 +207,83 @@ def verify_mcp_proxy_token(token: str) -> dict:
         )
 
     return claims
+
+
+# Must match auth_server/internal_request_token.py (GENERIC_PROXY_AUDIENCE/USE).
+_GENERIC_PROXY_AUDIENCE: str = "generic-proxy"
+_GENERIC_PROXY_TOKEN_USE: str = "generic-proxy"
+
+
+def verify_generic_proxy_token(token: str) -> dict:
+    """Decode and validate the /proxy/{entity_type}/{path} generic token, registry-side.
+
+    Mirrors ``verify_mcp_proxy_token`` with the ``generic-proxy`` audience/token_use
+    so the registry's internal upstream-headers vend endpoint can independently
+    re-derive ``entity_type``/``server``/``upstream_url`` from the SECRET_KEY-signed
+    token rather than trusting an asserted body field. The registry deliberately does
+    NOT import the auth_server verifier -- the two services share only SECRET_KEY and
+    the JWT contract.
+
+    Returns the verified claims: ``sub``, ``scopes``, ``entity_type``, ``server``
+    (FULL registered path), ``upstream_url``, ``streaming``, ``has_upstream_auth``
+    (plus standard JWT claims).
+
+    Raises:
+        HTTPException: 500 if ``SECRET_KEY`` is unset; 401 on any token failure
+            (missing/garbage/expired/wrong-audience/wrong-issuer/wrong-token_use/
+            tampered/missing entity_type/server/upstream binding).
+    """
+    secret_key = os.environ.get("SECRET_KEY")
+    if not secret_key:
+        logger.error("SECRET_KEY not set, cannot verify generic-proxy token")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server configuration error",
+        )
+
+    try:
+        claims = pyjwt.decode(
+            token,
+            secret_key,
+            algorithms=["HS256"],
+            issuer=_ISSUER,
+            audience=_GENERIC_PROXY_AUDIENCE,
+            leeway=_leeway_seconds(),
+            options={
+                "verify_signature": True,
+                "verify_exp": True,
+                "verify_iat": True,
+                "verify_iss": True,
+                "verify_aud": True,
+            },
+        )
+    except pyjwt.ExpiredSignatureError:
+        logger.warning("generic-proxy token expired")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Internal token expired",
+        )
+    except pyjwt.InvalidTokenError as exc:
+        logger.warning(f"generic-proxy token invalid: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid internal token",
+        )
+
+    if claims.get("token_use") != _GENERIC_PROXY_TOKEN_USE:
+        logger.warning("generic-proxy token has wrong token_use")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid internal token",
+        )
+
+    # entity_type + server + upstream binding are all required for the vend
+    # endpoint's entity resolution and upstream cross-check; fail closed.
+    if not claims.get("entity_type") or not claims.get("server") or not claims.get("upstream_url"):
+        logger.warning("generic-proxy token missing entity_type/server/upstream binding")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid internal token",
+        )
+
+    return claims

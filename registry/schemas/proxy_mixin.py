@@ -43,6 +43,19 @@ from registry.utils.url_guard import coerce_ip_literal
 
 logger = logging.getLogger(__name__)
 
+
+class CustomHeaderEncrypted(BaseModel):
+    """Stored form of a custom upstream header: name + Fernet-encrypted value.
+
+    Defined here (not core.schemas) so every proxyable entity can carry custom
+    upstream headers via ProxyableMixin without a schemas<->proxy_mixin import
+    cycle. core.schemas re-exports it for backward compatibility.
+    """
+
+    name: str
+    value_encrypted: str
+
+
 # Canonical built-in entity-type tokens that resolve_proxy_target knows how to
 # derive a fallback backend URL for. Custom entities pass their own descriptor
 # name as the type token and must always carry an explicit proxy_target_url.
@@ -68,6 +81,14 @@ PROXY_FIELD_NAMES: frozenset[str] = frozenset(
         "proxy_target_host",
         "proxy_disabled_reason",
         "proxy_client_url",
+        # Upstream auth secrets must NEVER travel to/from a peer. Stripped both
+        # ways (a peer must not plant creds, and we must not leak our own).
+        # The plaintext "custom_headers" key is normally never persisted, but is
+        # stripped too as defense-in-depth in case a raw-doc path ever carries it.
+        "custom_headers",
+        "custom_headers_encrypted",
+        "custom_header_names",
+        "custom_headers_updated_at",
     }
 )
 
@@ -84,6 +105,45 @@ def strip_proxy_fields(doc: dict[str, Any]) -> dict[str, Any]:
     if not any(k in doc for k in PROXY_FIELD_NAMES):
         return doc
     return {k: v for k, v in doc.items() if k not in PROXY_FIELD_NAMES}
+
+
+def _target_base(url: str | None) -> str:
+    """scheme://host[:port] of a URL, lowercased -- the target-identity surface.
+
+    Matches the vend endpoint's _base_url: the sub-path is confined to the bound
+    host, so two targets are "the same backend" iff their scheme+host+port match.
+    """
+    if not url:
+        return ""
+    p = urlparse(url)
+    return f"{(p.scheme or '').lower()}://{(p.netloc or '').lower()}"
+
+
+def clear_upstream_headers_on_repoint(
+    updates: dict[str, Any],
+    existing_target: str | None,
+    new_target: str | None,
+) -> None:
+    """Clear stored upstream custom headers when an update repoints the target.
+
+    Credential-misdirection guard (shared by every entity update path). The
+    encrypted ``custom_headers`` were entered by an operator for a SPECIFIC
+    upstream host. If an update changes the effective backend (different
+    scheme/host/port), continuing to inject those headers would send the OLD
+    host's secret to the NEW host -- and the vend cross-check would still pass,
+    because it re-pins to the new (registered) target. So on any host change we
+    null the stored headers in ``updates`` (mutated in place). Headers are not
+    settable on update, so the operator re-adds them for the new target via a
+    fresh create / the dedicated credential surface.
+
+    No-op when the base is unchanged (a same-host path/scheme-identical edit) or
+    when there is nothing to clear.
+    """
+    if _target_base(existing_target) == _target_base(new_target):
+        return
+    updates["custom_headers_encrypted"] = None
+    updates["custom_header_names"] = []
+    updates["custom_headers_updated_at"] = None
 
 
 class EgressPolicyError(ValueError):
@@ -165,6 +225,27 @@ class ProxyableMixin(BaseModel):
             "GENERIC_PROXY_MAX_BODY_BYTES. The value is bound into the signed "
             "generic-proxy token, so the hop never trusts a forgeable inbound header."
         ),
+    )
+    custom_headers_encrypted: list[CustomHeaderEncrypted] | None = Field(
+        default=None,
+        description=(
+            "Static upstream auth headers presented to the backend the gateway "
+            "proxies to (e.g. an API key for an LLM proxied as a custom type). "
+            "Stored as {name, value_encrypted} (Fernet); the plaintext values are "
+            "NEVER serialized to API consumers, rendered into nginx, or logged. At "
+            "request time the generic hop fetches the decrypted headers from the "
+            "registry's internal vend endpoint (same trust boundary as the egress "
+            "vault) and injects them on egress. Accepted on create/update via a "
+            "plaintext 'custom_headers' list that the registration path encrypts."
+        ),
+    )
+    custom_header_names: list[str] = Field(
+        default_factory=list,
+        description="Names of the custom upstream headers (values are encrypted). Safe to surface.",
+    )
+    custom_headers_updated_at: str | None = Field(
+        default=None,
+        description="ISO timestamp of the last custom-headers update.",
     )
     # Operational bookkeeping written by the resolve-and-validate refresh; not user-set.
     proxy_resolved_ips: list[str] = Field(
@@ -445,6 +526,31 @@ def resolve_proxy_target(
     if entity_type == "a2a_agent":
         return doc.get("url")
     return None  # skills / custom entities must set proxy_target_url explicitly
+
+
+def effective_proxy_target(entity_type: str, doc: dict[str, Any]) -> str | None:
+    """The target-IDENTITY of an entity, WITHOUT the routability gates.
+
+    Same target-derivation as ``resolve_proxy_target`` (explicit
+    ``proxy_target_url``, else the type's native fallback) but deliberately
+    OMITS the is_enabled / is_proxied / proxy_disabled_reason / federated
+    short-circuits. Use this ONLY to answer "does this update repoint the
+    backend host?" for the credential-misdirection guard: a disabled or
+    not-yet-enabled server can still be repointed, and its dormant upstream
+    headers must be cleared on that host change even though it currently
+    resolves to no live route. Never use this to decide whether to EMIT a route
+    (that must stay ``resolve_proxy_target``, which is fail-closed).
+    """
+    explicit = doc.get("proxy_target_url")
+    if explicit:
+        return explicit
+    if entity_type == "mcp_server":
+        if doc.get("deployment") == "local":
+            return None
+        return doc.get("proxy_pass_url")
+    if entity_type == "a2a_agent":
+        return doc.get("url")
+    return None
 
 
 def proxy_target_missing(

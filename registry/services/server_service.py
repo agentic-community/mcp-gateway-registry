@@ -266,7 +266,11 @@ class ServerService:
         # is_proxied server changes the effective target and must re-validate.
         _proxy_fields = ("is_proxied", "proxy_target_url", "proxy_pass_url")
         if any(f in server_info for f in _proxy_fields):
-            from ..schemas.proxy_mixin import validate_and_pin_proxy_target
+            from ..schemas.proxy_mixin import (
+                clear_upstream_headers_on_repoint,
+                effective_proxy_target,
+                validate_and_pin_proxy_target,
+            )
 
             existing = await self._repo.get(path)
             merged = dict(existing or {})
@@ -281,6 +285,19 @@ class ServerService:
                     server_info["proxy_target_host"] = pin["proxy_target_host"]
                 # Re-enabling clears any prior refresh auto-disable.
                 server_info["proxy_disabled_reason"] = None
+            # Credential-misdirection guard: an MCP server's effective target is
+            # proxy_target_url OR (fallback) proxy_pass_url. Use effective_proxy_target
+            # (NOT resolve_proxy_target) so the comparison is routability-agnostic:
+            # a freshly-registered server starts DISABLED, and resolve_proxy_target
+            # returns None for a disabled entity -- which would make both sides None
+            # and skip the clear, letting a repoint-before-enable carry the old
+            # host's secret to a new host. effective_proxy_target omits that gate,
+            # so a host change is caught even while the server is disabled.
+            clear_upstream_headers_on_repoint(
+                server_info,
+                existing_target=effective_proxy_target("mcp_server", dict(existing or {})),
+                new_target=effective_proxy_target("mcp_server", merged),
+            )
 
         result = await self._repo.update(path, server_info)
 

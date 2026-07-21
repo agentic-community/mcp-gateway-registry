@@ -315,6 +315,15 @@ class CustomEntityCreate(BaseModel):
     # proxy_target_url is required when is_proxied).
     is_proxied: bool = Field(default=False)
     proxy_target_url: str | None = Field(default=None)
+    proxy_streaming: bool = Field(default=False)
+    custom_headers: list[dict[str, str]] | None = Field(
+        default=None,
+        description=(
+            "Plaintext static upstream auth headers ([{name, value}, ...]) presented "
+            "to the proxied backend when is_proxied is true. Encrypted into "
+            "custom_headers_encrypted at creation; never persisted or echoed in plaintext."
+        ),
+    )
 
     @field_validator("proxy_target_url")
     @classmethod

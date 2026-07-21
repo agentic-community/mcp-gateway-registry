@@ -92,6 +92,25 @@ class TestMint:
         claims = pyjwt.decode(tok, _SECRET, algorithms=["HS256"], audience=GENERIC_PROXY_AUDIENCE)
         assert claims["streaming"] is True
 
+    def test_has_upstream_auth_claim_defaults_false(self):
+        tok = _token()
+        claims = pyjwt.decode(tok, _SECRET, algorithms=["HS256"], audience=GENERIC_PROXY_AUDIENCE)
+        assert claims["has_upstream_auth"] is False
+
+    def test_has_upstream_auth_claim_bound_when_true(self):
+        # The hop fetches + injects the entity's upstream headers only on this
+        # SIGNED claim, never on a forgeable inbound header.
+        tok = mint_generic_proxy_token(
+            subject="alice",
+            scopes=["s/read"],
+            entity_type="custom-llm",
+            registered_path="custom-llm/chat",
+            upstream_url="https://llm.example/",
+            has_upstream_auth=True,
+        )
+        claims = pyjwt.decode(tok, _SECRET, algorithms=["HS256"], audience=GENERIC_PROXY_AUDIENCE)
+        assert claims["has_upstream_auth"] is True
+
 
 class TestVerifyAccept:
     async def test_exact_path_accepted(self):

@@ -34,7 +34,7 @@ from pydantic import BaseModel, Field
 from registry.auth.csrf import verify_csrf_token_flexible
 from registry.auth.dependencies import nginx_proxied_auth
 from registry.auth.internal import validate_internal_auth
-from registry.auth.proxied_token import verify_mcp_proxy_token
+from registry.auth.proxied_token import verify_generic_proxy_token, verify_mcp_proxy_token
 from registry.core.config import settings
 from registry.core.schemas import _is_gateway_own_audience
 from registry.egress_auth.factory import get_egress_auth_service
@@ -51,11 +51,17 @@ from registry.egress_auth.upstream_binding import (
     registered_upstreams,
 )
 from registry.exceptions import UrlValidationError
-from registry.repositories.factory import get_server_repository
+from registry.repositories.factory import (
+    get_agent_repository,
+    get_custom_entity_repository,
+    get_server_repository,
+    get_skill_repository,
+)
+from registry.schemas.proxy_mixin import resolve_proxy_target
 from registry.secrets.factory import get_secret_store
 from registry.secrets.interfaces import SecretStoreError
 from registry.services.server_service import server_service
-from registry.utils.credential_encryption import encrypt_credential
+from registry.utils.credential_encryption import decrypt_custom_headers, encrypt_credential
 from registry.utils.url_guard import (
     CREDENTIALED_OAUTH_PROFILE,
     PROXY_PROFILE,
@@ -325,6 +331,161 @@ class EgressTokenResponse(BaseModel):
         default=None,
         description="pat: value prefix before the PAT (e.g. 'Bearer ' or '' for a bare token).",
     )
+
+
+def _base_url(url: str) -> str:
+    """scheme://host[:port] of a URL, lowercased -- the comparison surface for the upstream cross-check.
+
+    The mcp_proxy sub-path append is confined to the bound host, so the cross-check
+    compares the BASE (scheme+host+port), not the full post-append path.
+    """
+    p = urlparse(url)
+    return f"{(p.scheme or '').lower()}://{(p.netloc or '').lower()}"
+
+
+def _registered_upstreams(server: dict) -> set[str]:
+    """The legal upstream base-URL set for a server: proxy_pass_url ∪ versions[*]."""
+    bases: set[str] = set()
+    if server.get("proxy_pass_url"):
+        bases.add(_base_url(server["proxy_pass_url"]))
+    for ver in server.get("versions") or []:
+        ppu = (
+            ver.get("proxy_pass_url")
+            if isinstance(ver, dict)
+            else getattr(ver, "proxy_pass_url", None)
+        )
+        if ppu:
+            bases.add(_base_url(ppu))
+    return bases
+
+
+class GenericUpstreamHeadersRequest(BaseModel):
+    """Body for POST /internal/generic-upstream-headers.
+
+    entity_type + registered_path identify the proxied entity whose stored
+    upstream headers are vended. Identity and the pinned upstream are NOT trusted
+    from the body -- they are re-derived from the forwarded generic-proxy token.
+    """
+
+    entity_type: str
+    registered_path: str
+
+
+class GenericUpstreamHeadersResponse(BaseModel):
+    """Decrypted upstream auth headers for the generic hop to inject on egress.
+
+    ``headers`` is empty when the entity has none, is not proxyable, or fails the
+    upstream cross-check -- the hop treats an empty result as "no upstream auth".
+    """
+
+    headers: dict[str, str] = Field(default_factory=dict)
+
+
+def _proxyable_repo_for(entity_type: str):
+    """Return the repository that owns an entity type, or None for unknown types.
+
+    a2a_agent/skill/mcp_server map to their dedicated repos; every other token is
+    a custom-entity descriptor name and lives in the custom-entity repo.
+    """
+    if entity_type == "a2a_agent":
+        return get_agent_repository()
+    if entity_type == "skill":
+        return get_skill_repository()
+    if entity_type == "mcp_server":
+        return get_server_repository()
+    # Custom entities carry their descriptor name as the type token.
+    return get_custom_entity_repository()
+
+
+@router.post(
+    "/internal/generic-upstream-headers",
+    response_model=GenericUpstreamHeadersResponse,
+)
+async def vend_generic_upstream_headers(
+    body: GenericUpstreamHeadersRequest,
+    _caller: Annotated[str, Depends(validate_internal_auth)],
+    x_internal_token: Annotated[str | None, Header(alias="X-Internal-Token-Generic")] = None,
+) -> GenericUpstreamHeadersResponse:
+    """Vend an entity's decrypted static upstream headers for the generic hop.
+
+    Security model (mirrors POST /internal/egress-token):
+    - validate_internal_auth gates the caller (auth_server presents a fresh
+      internal service token) -- bound to the internal network.
+    - The forwarded X-Internal-Token-Generic is RE-VERIFIED here; the entity
+      identity (entity_type/server) and the pinned upstream come from the
+      verified claims, never from the request body.
+    - The token's upstream_url is cross-checked against the entity's registered
+      effective target, so a forged X-Resolved-Generic-Upstream (minted via a
+      direct /validate call) cannot cause headers to be vended for an
+      attacker-controlled host.
+    - The plaintext header VALUES leave the registry ONLY over this internal,
+      service-token-gated hop; they are never rendered into nginx or logged.
+
+    A clean miss (entity gone, not proxyable, no headers, upstream mismatch)
+    returns an EMPTY header set -- the hop then forwards with no upstream auth.
+    """
+    if not x_internal_token:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="missing X-Internal-Token-Generic")
+
+    # Independently re-verify the generic-proxy token; identity + pinned upstream
+    # are the verified claims, never asserted body fields.
+    claims = verify_generic_proxy_token(x_internal_token)
+    entity_type = claims.get("entity_type") or ""
+    registered_path = claims.get("server") or ""
+    token_upstream = claims.get("upstream_url") or ""
+
+    # The body must agree with the signed claims (defence-in-depth; the claims win).
+    if body.entity_type != entity_type or body.registered_path != registered_path:
+        logger.warning(
+            "generic upstream-headers: body/token mismatch (body=%s/%s token=%s/%s); refusing",
+            body.entity_type,
+            body.registered_path,
+            entity_type,
+            registered_path,
+        )
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="entity mismatch")
+
+    # Registered path is the entity's stored id (skills/custom/agents key on it).
+    path = registered_path if registered_path.startswith("/") else "/" + registered_path
+
+    repo = _proxyable_repo_for(entity_type)
+    entity = await repo.get(path)
+    if entity is None:
+        return GenericUpstreamHeadersResponse()
+
+    doc = entity.model_dump() if hasattr(entity, "model_dump") else dict(entity)
+
+    # Must still be a live proxied entity resolving to a target (not disabled /
+    # auto-disabled / federated / targetless).
+    effective_target = resolve_proxy_target(entity_type, doc)
+    if not effective_target:
+        return GenericUpstreamHeadersResponse()
+
+    # Upstream cross-check: the pinned upstream from the token MUST match the
+    # entity's registered effective target. Blocks a forged upstream from pulling
+    # this entity's credentials toward an attacker host.
+    if _base_url(token_upstream) != _base_url(effective_target):
+        logger.warning(
+            "generic upstream-headers REFUSED: token upstream %r != registered %r for %s/%s",
+            _base_url(token_upstream),
+            _base_url(effective_target),
+            entity_type,
+            registered_path,
+        )
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, detail="upstream not registered for this entity"
+        )
+
+    decrypted = decrypt_custom_headers(doc.get("custom_headers_encrypted"))
+    headers = {h["name"]: h["value"] for h in decrypted if h.get("name") and h.get("value")}
+    # Log names + count only -- never the header values.
+    logger.info(
+        "generic upstream-headers vended for %s/%s: %s",
+        entity_type,
+        registered_path,
+        sorted(headers.keys()),
+    )
+    return GenericUpstreamHeadersResponse(headers=headers)
 
 
 @router.post("/internal/egress-token", response_model=EgressTokenResponse)

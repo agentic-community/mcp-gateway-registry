@@ -7,6 +7,11 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from registry.constants import DeploymentType, LocalRuntimeType, TransportType
 from registry.schemas.agent_models import AgentProvider
+
+# CustomHeaderEncrypted is imported (and thereby re-exported) from proxy_mixin:
+# it moved there so ProxyableMixin can carry custom_headers_encrypted without a
+# schemas<->proxy_mixin import cycle. Existing
+# `from registry.core.schemas import CustomHeaderEncrypted` callers keep working.
 from registry.schemas.proxy_mixin import (
     ProxyableMixin,
     assert_proxy_target_resolvable,
@@ -339,13 +344,6 @@ class CustomHeader(BaseModel):
         return v
 
 
-class CustomHeaderEncrypted(BaseModel):
-    """Stored form: header name + Fernet-encrypted value."""
-
-    name: str
-    value_encrypted: str
-
-
 class EgressOAuthConfig(BaseModel):
     """Per-server egress OAuth config for the egress credential paths.
 
@@ -672,19 +670,9 @@ class ServerInfo(ProxyableMixin):
         default=None, description="ISO timestamp of last credential update."
     )
 
-    # Custom HTTP headers (encrypted values, names public)
-    custom_header_names: list[str] = Field(
-        default_factory=list,
-        description="Names of custom HTTP headers defined for this server.",
-    )
-    custom_headers_encrypted: list[CustomHeaderEncrypted] | None = Field(
-        default=None,
-        description="List of {name, value_encrypted} pairs. Never serialized to API consumers.",
-    )
-    custom_headers_updated_at: str | None = Field(
-        default=None,
-        description="ISO timestamp of last custom-headers update.",
-    )
+    # Custom HTTP headers (encrypted values, names public) are inherited from
+    # ProxyableMixin (custom_header_names / custom_headers_encrypted /
+    # custom_headers_updated_at) so every proxyable entity shares one definition.
 
     # Per-user egress credential vault (third-party OBO). Default 'none' keeps
     # today's behavior; the registration write path is not yet implemented.
