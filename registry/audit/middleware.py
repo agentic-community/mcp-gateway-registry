@@ -8,7 +8,6 @@ structured audit records.
 
 import logging
 import time
-import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
 
@@ -30,9 +29,69 @@ from .models import (
 from .models import (
     Response as AuditResponse,
 )
+from .request_id import new_audit_request_id, sanitize_correlation_id
 from .service import AuditLogger
 
 logger = logging.getLogger(__name__)
+
+# Exact request paths of the real monitoring / health endpoints whose GET traffic
+# may be suppressed from the audit trail when audit_log_health_checks is False.
+#
+# This is an EXACT/PREFIX allowlist, deliberately NOT a "/health" substring test.
+# A substring test skipped auditing for any request URL that merely CONTAINED
+# "/health" -- including MANAGEMENT-PLANE mutations against a server registered
+# under the name "health" (e.g. POST /api/toggle/health,
+# POST /api/servers/health/rescan, PATCH /api/servers/health/auth-credential).
+# Those routes embed the caller-chosen server path in request.url.path via
+# {service_path:path}/{path:path}, so the substring test let an attacker turn a
+# mutating admin action into an un-audited one. Matching the known health routes
+# exactly closes that bypass while preserving legitimate health-check suppression.
+#
+# MUST stay in sync with the actual monitoring routes:
+#   - registry/main.py            @app.get("/health")
+#   - registry/health/routes.py   mounted at prefix /api/health (all sub-paths)
+#   - registry/api/federation_export_routes.py  GET /api/federation/health
+#   - registry/api/ans_routes.py                GET /api/admin/ans/health
+#   - registry/api/server_routes.py             POST /api/internal/healthcheck
+#   - registry/api/server_routes.py             GET  /api/servers/health
+# Per-entity health checks with a user-controlled {path} segment
+# (/api/skills/.../health, /api/agents/.../health) are intentionally NOT listed:
+# they cannot be matched exactly, so they fail closed to being audited.
+_HEALTH_CHECK_EXACT_PATHS: frozenset[str] = frozenset(
+    {
+        "/health",
+        "/api/health",
+        "/api/federation/health",
+        "/api/admin/ans/health",
+        "/api/internal/healthcheck",
+        "/api/servers/health",
+    }
+)
+
+# Everything under the /api/health router (e.g. /api/health/ws/health_status,
+# /api/health/ws/stats) is monitoring traffic; matched by prefix.
+_HEALTH_CHECK_PREFIX: str = "/api/health/"
+
+
+def _is_health_check_path(path: str) -> bool:
+    """Return True only for the known monitoring/health endpoints.
+
+    Uses an exact match against :data:`_HEALTH_CHECK_EXACT_PATHS` plus the
+    :data:`_HEALTH_CHECK_PREFIX` sub-tree, never a ``"/health" in path``
+    substring test. This prevents a management-plane mutation whose URL happens
+    to contain a server named ``health`` (e.g. ``/api/toggle/health``) from being
+    misclassified as a health check and dropped from the audit trail.
+
+    Args:
+        path: The request path (``request.url.path``).
+
+    Returns:
+        True if ``path`` is a genuine health endpoint, False otherwise.
+    """
+    normalized = path.rstrip("/") or "/"
+    if normalized in _HEALTH_CHECK_EXACT_PATHS:
+        return True
+    return path.startswith(_HEALTH_CHECK_PREFIX)
 
 
 class AuditMiddleware(BaseHTTPMiddleware):
@@ -87,8 +146,10 @@ class AuditMiddleware(BaseHTTPMiddleware):
         if path in self.exclude_paths:
             return False
 
-        # Check health check endpoints
-        if not self.log_health_checks and "/health" in path.lower():
+        # Check health check endpoints. Match the known monitoring routes
+        # exactly (not a "/health" substring) so a management-plane mutation
+        # against a server named "health" is still audited.
+        if not self.log_health_checks and _is_health_check_path(path):
             return False
 
         # Check static assets
@@ -314,9 +375,16 @@ class AuditMiddleware(BaseHTTPMiddleware):
         if not self._should_log(request.url.path):
             return await call_next(request)
 
-        # Generate or extract request ID
-        request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
-        correlation_id = request.headers.get("X-Correlation-ID")
+        # The audit record's unique key (request_id, log_type) MUST be
+        # server-controlled. A client that chooses X-Request-ID could pre-seed a
+        # collision so a later action of the same log_type is silently dropped by
+        # the unique-index dedup, suppressing its audit trail. Always mint a fresh
+        # server-side id for the key, and keep the client-supplied ids only as a
+        # sanitized, NON-key correlation value for cross-record stitching.
+        request_id = new_audit_request_id()
+        correlation_id = sanitize_correlation_id(
+            request.headers.get("X-Correlation-ID") or request.headers.get("X-Request-ID")
+        )
 
         # Start timing
         start_time = time.perf_counter()

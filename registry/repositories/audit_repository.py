@@ -309,8 +309,9 @@ class DocumentDBAuditRepository(AuditRepositoryBase):
             record: The audit record to insert (RegistryApiAccessRecord or MCPServerAccessRecord)
 
         Returns:
-            True if inserted successfully or if the record already exists (duplicate request_id),
-            False if an unexpected error occurs
+            True if inserted successfully, False if an unexpected error occurs.
+            A DuplicateKeyError is treated as a non-fatal drop (returns True so the
+            request path is never failed) but is logged loudly — see below.
         """
         logger.debug(f"DocumentDB WRITE: Inserting audit event with request_id={record.request_id}")
         collection = await self._get_collection()
@@ -327,10 +328,21 @@ class DocumentDBAuditRepository(AuditRepositoryBase):
             logger.info(f"DocumentDB WRITE: Inserted audit event request_id={record.request_id}")
             return True
         except DuplicateKeyError:
-            logger.debug(
-                f"DocumentDB WRITE: Skipped duplicate audit event for request_id={record.request_id}. "
-                f"This occurs when the same request_id is processed twice (auth validation + endpoint execution). "
-                f"Returning True to not break the request."
+            # The (request_id, log_type) key is now server-generated (a fresh UUID
+            # per logging point — see registry.audit.request_id). A collision on a
+            # server UUID is astronomically unlikely and is NOT the routine
+            # same-request dedup it used to be; it means a genuine audit record was
+            # dropped by the unique index. That is an audit-integrity event, so
+            # surface it loudly/alertably rather than swallowing it at DEBUG. We
+            # still return True so an audit blip never fails the request path
+            # (failing every call on an audit collision would be self-inflicted
+            # DoS). Log only the server-side key, never the client correlation id.
+            logger.critical(
+                "AUDIT RECORD DROPPED: unexpected duplicate key for a "
+                "server-generated request_id (log_type=%s request_id=%s). A "
+                "record was silently dropped by the unique index; investigate.",
+                getattr(record, "log_type", "unknown"),
+                record.request_id,
             )
             return True
         except Exception as e:
