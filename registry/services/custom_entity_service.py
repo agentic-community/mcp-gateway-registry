@@ -371,6 +371,51 @@ class CustomEntityService:
             logger.exception("Failed to re-index custom entity %s (update persisted)", path)
         return updated
 
+    async def update_record_upstream_headers(
+        self,
+        type_name: str,
+        path: str,
+        custom_headers: list[dict],
+        user_context: dict,
+    ) -> CustomEntityRecord:
+        """Rotate a record's upstream custom headers (proxy-hop credentials).
+
+        Dedicated, narrowly-scoped mutation (the mirror of the skill rotation
+        endpoint / the MCP-server auth-credential PATCH): validate + encrypt the
+        full header set and persist ONLY the four header storage fields. An empty
+        list clears all headers. Same authz as ``update_record`` (viewable +
+        owner-or-admin). Raises CustomEntityValidationError (-> 400) on any policy
+        violation so the plaintext-secret path never yields a 500.
+
+        Note: rotation does NOT re-run the proxy-target repoint guard -- it only
+        touches header fields, not the target, so there is no host change to
+        misdirect against. The headers are always re-scoped to the CURRENT target.
+        """
+        existing = await self._get_entities().get(path)
+        if existing is None or not _user_can_view(existing, user_context):
+            raise CustomEntityNotFoundError(path)  # 404 — don't disclose existence
+        _require_owner_or_admin(existing, user_context)  # 403 if viewable-but-not-owned
+
+        from ..utils.credential_encryption import build_custom_headers_storage_fields
+
+        try:
+            updates = build_custom_headers_storage_fields(custom_headers)
+        except ValueError as e:
+            raise CustomEntityValidationError("custom_headers", str(e)) from e
+
+        updated = await self._get_entities().update(path, updates)
+        if updated is None:
+            raise CustomEntityNotFoundError(path)  # concurrent delete
+        try:
+            descriptor = await self.cache.get_for_write(type_name)
+            if descriptor is not None:
+                await self._get_search().index_custom_entity(record=updated, descriptor=descriptor)
+        except Exception:
+            logger.exception(
+                "Failed to re-index custom entity %s (header rotation persisted)", path
+            )
+        return updated
+
     async def delete_record(
         self,
         type_name: str,
