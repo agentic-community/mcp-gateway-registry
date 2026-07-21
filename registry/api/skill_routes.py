@@ -1343,8 +1343,17 @@ async def update_skill_upstream_headers(
 
     from ..utils.credential_encryption import build_custom_headers_storage_fields
 
+    # Pass the existing ciphertext so a blank submitted value preserves the stored
+    # secret (write-only value convention, same as the 3LO client_secret and the
+    # MCP-server custom-header edit path).
+    existing_encrypted = [
+        h.model_dump() if hasattr(h, "model_dump") else dict(h)
+        for h in (existing.custom_headers_encrypted or [])
+    ]
     try:
-        updates = build_custom_headers_storage_fields(body.custom_headers)
+        updates = build_custom_headers_storage_fields(
+            body.custom_headers, existing_encrypted=existing_encrypted
+        )
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 

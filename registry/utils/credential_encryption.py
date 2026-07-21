@@ -350,19 +350,33 @@ def encrypt_custom_headers_in_server_dict(
 
 def build_custom_headers_storage_fields(
     raw: list[dict] | None,
+    existing_encrypted: list[dict] | None = None,
 ) -> dict:
     """Validate + encrypt a plaintext header list into the four storage fields.
 
     Shared by the dedicated header-rotation endpoints (skill + custom entity),
     which -- unlike create -- must produce a self-contained ``$set`` of ALL header
     storage fields, including the CLEAR case (an empty/None list removes every
-    stored header). Enforces the same policy as create (via
-    ``validate_custom_headers``) then encrypts (via
-    ``encrypt_custom_headers_in_server_dict``).
+    stored header).
+
+    Write-only value convention (mirrors the 3LO egress ``client_secret`` and the
+    MCP-server custom-header edit path): stored header VALUES are never returned to
+    the client, so on edit each row arrives with a BLANK value. A blank value on a
+    row whose name already has a stored ciphertext means "keep the existing value"
+    -- the prior ciphertext is decrypted and carried forward, so an unchanged edit
+    does not wipe the secret. A blank value with NO prior ciphertext is only legal
+    when the row is ``overridable`` (a caller-only passthrough slot); otherwise it
+    is rejected (nothing to inject, nothing to preserve). After the preserve-merge,
+    the result is run through ``validate_custom_headers`` (full policy) and
+    encrypted.
 
     Args:
         raw: The plaintext ``[{name, value?, overridable?}, ...]`` list. An empty
             list or None means "remove all upstream headers".
+        existing_encrypted: The entity's current ``custom_headers_encrypted`` list
+            (``[{name, value_encrypted}, ...]``), used to preserve a header whose
+            submitted value is blank. None/absent = no priors (every blank
+            non-overridable row is then a policy error).
 
     Returns:
         A dict with exactly these keys, safe to merge into an entity update:
@@ -372,8 +386,8 @@ def build_custom_headers_storage_fields(
         ``custom_headers_updated_at`` (ISO timestamp).
 
     Raises:
-        ValueError: on any policy violation or encryption failure (the caller maps
-            it to a 400).
+        ValueError: on any policy violation, a blank non-preservable value, or
+            encryption failure (the caller maps it to a 400).
     """
     now = datetime.now(UTC).isoformat()
     if not raw:
@@ -385,8 +399,35 @@ def build_custom_headers_storage_fields(
             "custom_headers_updated_at": now,
         }
 
-    validate_custom_headers(raw)
-    tmp: dict = {CUSTOM_HEADERS_PLAINTEXT_FIELD: raw}
+    if not isinstance(raw, list):
+        raise ValueError("custom_headers must be a list")
+
+    # Preserve-by-name merge: a blank value inherits the prior ciphertext's
+    # plaintext so an unchanged edit keeps the secret (write-only value UX).
+    existing_by_name: dict[str, dict] = {
+        e["name"]: e for e in (existing_encrypted or []) if isinstance(e, dict) and e.get("name")
+    }
+    merged: list[dict] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            raise ValueError("custom_headers entry must be an object")
+        name = item.get("name")
+        value = item.get("value")
+        overridable = bool(item.get("overridable", False))
+        if name and not value:
+            prior = existing_by_name.get(name)
+            if prior is not None:
+                plaintext = decrypt_credential(prior.get("value_encrypted", ""))
+                if plaintext is None:
+                    raise ValueError(f"Could not preserve the existing value for header '{name}'")
+                value = plaintext
+            # No prior: a blank overridable row is a legitimate caller-only slot
+            # (validate_custom_headers accepts it); a blank non-overridable row is
+            # rejected there. Leave value blank and let validation decide.
+        merged.append({"name": name, "value": value, "overridable": overridable})
+
+    validate_custom_headers(merged)
+    tmp: dict = {CUSTOM_HEADERS_PLAINTEXT_FIELD: merged}
     encrypt_custom_headers_in_server_dict(tmp)
     return {
         CUSTOM_HEADERS_ENCRYPTED_FIELD: tmp.get(CUSTOM_HEADERS_ENCRYPTED_FIELD, []),

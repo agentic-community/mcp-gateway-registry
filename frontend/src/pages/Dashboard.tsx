@@ -554,6 +554,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
     is_proxied: false,
     proxy_target_url: '',
     proxy_client_url: '',
+    custom_headers: [],
   });
   const [skillFormLoading, setSkillFormLoading] = useState(false);
   const [showDeleteSkillConfirm, setShowDeleteSkillConfirm] = useState<string | null>(null);
@@ -1802,6 +1803,14 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         is_proxied: skill.is_proxied ?? false,
         proxy_target_url: skill.proxy_target_url || '',
         proxy_client_url: skill.proxy_client_url || '',
+        // Rebuild the editor rows from the registered NAMES (values are
+        // write-only and never returned): each name gets a blank value, and the
+        // overridable flag is set from custom_header_overridable_names.
+        custom_headers: (skill.custom_header_names || []).map((name) => ({
+          name,
+          value: '',
+          overridable: (skill.custom_header_overridable_names || []).includes(name),
+        })),
       });
     } else {
       // Create mode - reset form
@@ -1824,6 +1833,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         is_proxied: false,
         proxy_target_url: '',
         proxy_client_url: '',
+        custom_headers: [],
       });
     }
     setShowSkillModal(true);
@@ -1935,14 +1945,38 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         payload.proxy_target_url = skillForm.proxy_target_url.trim() || undefined;
       }
 
+      // Upstream headers, only meaningful when proxied. Drop fully-blank rows
+      // (no name). A blank value is preserved server-side (write-only UX) on
+      // edit; on create it must be a caller-only overridable slot.
+      const upstreamHeaders = skillForm.is_proxied
+        ? skillForm.custom_headers
+            .filter((h) => h.name.trim())
+            .map((h) => ({
+              name: h.name.trim(),
+              value: h.value,
+              overridable: h.overridable,
+            }))
+        : [];
+
       if (editingSkill) {
         // Update existing skill
         const skillPath = editingSkill.path.replace(/^\/skills\//, '');
         await axios.put(`/api/skills/${skillPath}`, payload);
+        // Headers are NOT settable on the general PUT (it strips them); rotate
+        // them through the dedicated endpoint. Only when proxied — a non-proxied
+        // skill has no upstream to authenticate to.
+        if (skillForm.is_proxied) {
+          await axios.patch(`/api/skills/${skillPath}/upstream-headers`, {
+            custom_headers: upstreamHeaders,
+          });
+        }
         showToast('Skill updated successfully!', 'success');
         notifyDataChanged();
       } else {
-        // Create new skill
+        // Create new skill (custom_headers accepted on the create payload).
+        if (upstreamHeaders.length > 0) {
+          payload.custom_headers = upstreamHeaders;
+        }
         await axios.post('/api/skills', payload);
         showToast('Skill registered successfully!', 'success');
         notifyDataChanged();

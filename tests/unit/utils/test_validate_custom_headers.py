@@ -311,6 +311,60 @@ class TestBuildCustomHeadersStorageFields:
         with pytest.raises(ValueError, match="caller-overridable"):
             build_custom_headers_storage_fields([{"name": "Authorization", "value": "Bearer x"}])
 
+    def test_blank_value_preserves_existing_ciphertext(self):
+        # Write-only value UX: on edit a fixed header arrives with a blank value;
+        # the prior ciphertext is decrypted and carried forward unchanged.
+        from registry.utils.credential_encryption import (
+            build_custom_headers_storage_fields,
+            decrypt_custom_headers,
+            encrypt_credential,
+        )
+
+        existing = [{"name": "X-Api-Key", "value_encrypted": encrypt_credential("sk-original")}]
+        out = build_custom_headers_storage_fields(
+            [{"name": "X-Api-Key", "value": "", "overridable": False}],
+            existing_encrypted=existing,
+        )
+        decrypted = {
+            h["name"]: h["value"] for h in decrypt_custom_headers(out["custom_headers_encrypted"])
+        }
+        assert decrypted == {"X-Api-Key": "sk-original"}
+
+    def test_blank_value_new_value_overwrites(self):
+        from registry.utils.credential_encryption import (
+            build_custom_headers_storage_fields,
+            decrypt_custom_headers,
+            encrypt_credential,
+        )
+
+        existing = [{"name": "X-Api-Key", "value_encrypted": encrypt_credential("sk-original")}]
+        out = build_custom_headers_storage_fields(
+            [{"name": "X-Api-Key", "value": "sk-rotated"}],
+            existing_encrypted=existing,
+        )
+        decrypted = {
+            h["name"]: h["value"] for h in decrypt_custom_headers(out["custom_headers_encrypted"])
+        }
+        assert decrypted == {"X-Api-Key": "sk-rotated"}
+
+    def test_blank_value_no_prior_non_overridable_rejected(self):
+        # A blank fixed header with no stored value to preserve is meaningless.
+        from registry.utils.credential_encryption import build_custom_headers_storage_fields
+
+        with pytest.raises(ValueError, match="no value and is not overridable"):
+            build_custom_headers_storage_fields([{"name": "X-New", "value": ""}])
+
+    def test_blank_value_no_prior_overridable_is_caller_slot(self):
+        # A blank overridable row with no prior is a caller-only slot (allowed).
+        from registry.utils.credential_encryption import build_custom_headers_storage_fields
+
+        out = build_custom_headers_storage_fields(
+            [{"name": "X-Tenant", "value": "", "overridable": True}]
+        )
+        assert out["custom_header_names"] == ["X-Tenant"]
+        assert out["custom_header_overridable_names"] == ["X-Tenant"]
+        assert out["custom_headers_encrypted"] == []  # no value stored
+
 
 class TestFederationStripCoversHeaders:
     """The upstream-header fields (encrypted + plaintext + bookkeeping) must all

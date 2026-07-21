@@ -398,8 +398,16 @@ class CustomEntityService:
 
         from ..utils.credential_encryption import build_custom_headers_storage_fields
 
+        # Preserve-by-name: a blank submitted value keeps the existing ciphertext
+        # (write-only value convention).
+        existing_encrypted = [
+            h.model_dump() if hasattr(h, "model_dump") else dict(h)
+            for h in (existing.custom_headers_encrypted or [])
+        ]
         try:
-            updates = build_custom_headers_storage_fields(custom_headers)
+            updates = build_custom_headers_storage_fields(
+                custom_headers, existing_encrypted=existing_encrypted
+            )
         except ValueError as e:
             raise CustomEntityValidationError("custom_headers", str(e)) from e
 

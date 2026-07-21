@@ -86,6 +86,10 @@ export interface Skill {
   proxy_target_url?: string;
   // Read-only, auto-derived client path ({prefix}/{type}/{name}).
   proxy_client_url?: string;
+  // Upstream custom-header NAMES (values are encrypted and never returned).
+  // custom_header_overridable_names is the subset the caller may override/supply.
+  custom_header_names?: string[];
+  custom_header_overridable_names?: string[];
   num_stars?: number;
   rating_details?: Array<{ user: string; rating: number }>;
   // Lightweight scan summary from the list payload, used to colour the shield

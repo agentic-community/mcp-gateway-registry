@@ -78,6 +78,8 @@ describe('CustomEntityForm', () => {
     await waitFor(() =>
       expect(onSave).toHaveBeenCalledWith(
         expect.objectContaining({ name: 'my-dataset', visibility: 'private' }),
+        // Second arg: the upstream-header rows (empty when not proxied).
+        expect.anything(),
       ),
     );
   });
@@ -110,6 +112,7 @@ describe('CustomEntityForm', () => {
           is_proxied: true,
           proxy_target_url: 'https://backend.example.com/',
         }),
+        expect.anything(),
       ),
     );
     // And they must NOT leak into the attributes bag.
