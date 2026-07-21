@@ -5804,3 +5804,141 @@ class TestEntraLogoutQueryStringGuard:
         query = self._run_logout(oversized)
         assert "id_token_hint" not in query
         assert query["post_logout_redirect_uri"] == ["https://gw.example.com/login"]
+
+
+def _patch_vend_httpx(*, status_code=None, json_body=None, raise_exc=None):
+    """Patch auth_server.server.httpx.AsyncClient for the vend POST path
+    (``async with httpx.AsyncClient(...) as c: await c.post(...)``)."""
+    mock_client = AsyncMock()
+    if raise_exc is not None:
+        mock_client.post = AsyncMock(side_effect=raise_exc)
+    else:
+        resp = MagicMock()
+        resp.status_code = status_code
+        resp.json = MagicMock(return_value=json_body)
+        mock_client.post = AsyncMock(return_value=resp)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    return patch("auth_server.server.httpx.AsyncClient", return_value=mock_client)
+
+
+class TestVendEgressTokenTransientClassification:
+    """The vend read path must distinguish a *transient* registry/store outage
+    (retryable) from a clean answer or a terminal deny. On a transient failure it
+    raises EgressVendUnavailable so the proxy surfaces a retryable 503 instead of
+    forwarding tokenless (a misleading upstream 401) -- the read-path mirror of
+    the consent-callback 503."""
+
+    def _patches(self, server_module):
+        return (
+            patch.object(server_module.settings, "egress_registry_internal_url", "http://reg"),
+            patch(
+                "registry.auth.internal.generate_internal_token",
+                return_value="svc-token",
+            ),
+        )
+
+    async def test_transport_error_raises_unavailable(self):
+        import httpx
+
+        import auth_server.server as server_module
+
+        p_url, p_tok = self._patches(server_module)
+        with p_url, p_tok, _patch_vend_httpx(raise_exc=httpx.ConnectError("refused")):
+            with pytest.raises(server_module.EgressVendUnavailable):
+                await server_module._vend_egress_token("proxy-tok", "github")
+
+    async def test_read_timeout_raises_unavailable(self):
+        import httpx
+
+        import auth_server.server as server_module
+
+        p_url, p_tok = self._patches(server_module)
+        with p_url, p_tok, _patch_vend_httpx(raise_exc=httpx.ReadTimeout("timed out")):
+            with pytest.raises(server_module.EgressVendUnavailable):
+                await server_module._vend_egress_token("proxy-tok", "github")
+
+    async def test_503_raises_unavailable(self):
+        import auth_server.server as server_module
+
+        p_url, p_tok = self._patches(server_module)
+        with p_url, p_tok, _patch_vend_httpx(status_code=503, json_body={}):
+            with pytest.raises(server_module.EgressVendUnavailable):
+                await server_module._vend_egress_token("proxy-tok", "github")
+
+    async def test_502_and_504_raise_unavailable(self):
+        import auth_server.server as server_module
+
+        p_url, p_tok = self._patches(server_module)
+        for code in (502, 504):
+            with p_url, p_tok, _patch_vend_httpx(status_code=code, json_body={}):
+                with pytest.raises(server_module.EgressVendUnavailable):
+                    await server_module._vend_egress_token("proxy-tok", "github")
+
+    async def test_200_returns_body(self):
+        import auth_server.server as server_module
+
+        body = {"consent_required": True, "connect_url": "https://gw/connect"}
+        p_url, p_tok = self._patches(server_module)
+        with p_url, p_tok, _patch_vend_httpx(status_code=200, json_body=body):
+            got = await server_module._vend_egress_token("proxy-tok", "github")
+        assert got == body
+
+    async def test_terminal_non_2xx_returns_none_not_unavailable(self):
+        # A 401/403/404 is a terminal deny (bad internal token, feature off,
+        # unregistered upstream) -- not a transient blip. It must NOT be retried
+        # as unavailable; the proxy falls through to its existing handling.
+        import auth_server.server as server_module
+
+        p_url, p_tok = self._patches(server_module)
+        for code in (401, 403, 404):
+            with p_url, p_tok, _patch_vend_httpx(status_code=code, json_body={}):
+                got = await server_module._vend_egress_token("proxy-tok", "github")
+                assert got is None
+
+
+class TestEgressVendTimeoutCoupling:
+    """The vend HTTP timeout must outlast the registry's transient Vault-retry
+    budget, derived from the store's single source of truth so the two can't
+    drift apart."""
+
+    def test_timeout_exceeds_registry_retry_budget(self):
+        import auth_server.server as server_module
+        from registry.secrets.openbao.store import transient_retry_budget_seconds
+
+        budget = transient_retry_budget_seconds()
+        timeout = server_module._egress_vend_timeout_seconds()
+        assert timeout > budget
+        assert timeout == pytest.approx(
+            budget + server_module._EGRESS_VEND_TIMEOUT_HEADROOM_SECONDS
+        )
+
+
+class TestMcpProxyEgressUnavailable:
+    """Call-site: a transient vend failure returns a retryable 503 (JSON-RPC
+    error), never a tokenless upstream forward."""
+
+    def test_tools_call_returns_retryable_503(self):
+        import auth_server.server as server_module
+
+        async def _boom(token, server):
+            raise server_module.EgressVendUnavailable("registry returned 503")
+
+        with (
+            patch.object(server_module.settings, "egress_auth_enabled", True),
+            patch.object(server_module, "_vend_egress_token", _boom),
+        ):
+            client = TestClient(server_module.app)
+            response = client.post(
+                "/mcp-proxy/github",
+                json={"jsonrpc": "2.0", "id": 9, "method": "tools/call"},
+                headers=_mcp_proxy_token_headers(server_name="github"),
+            )
+
+        assert response.status_code == 503
+        assert response.headers.get("Retry-After") == "2"
+        body = response.json()
+        assert body["id"] == 9
+        assert "result" not in body
+        assert body["error"]["code"] == -32001
+        assert body["error"]["message"] == "egress_credential_service_unavailable"

@@ -195,3 +195,24 @@ class TestInternalEgressTokenRoute:
         assert body.get("authorize_url") is None
         assert body.get("connect_url") is None
         assert body.get("request_state") is None
+
+    def test_store_transiently_unavailable_returns_503(self, make_client):
+        # When the token store fails transiently (get_valid_token raises
+        # SecretStoreError after the store exhausted its own retry budget), the
+        # vend must NOT masquerade as a clean miss (consent_required) -- that would
+        # wrongly tell the user to reconnect. It fails closed with a retryable 503
+        # so the auth-server vend hop can surface "temporarily unavailable, retry".
+        from registry.secrets.interfaces import SecretStoreError
+
+        client = make_client(_claims(), _server())
+
+        async def _boom(**kwargs):
+            client._svc.called = True
+            raise SecretStoreError("OpenBao get failed: connection refused")
+
+        client._svc.get_valid_token = _boom
+        r = _post(client)
+        assert r.status_code == 503
+        assert client._svc.called
+        # It is an availability signal, never a miss (no consent nudge).
+        assert "consent_required" not in r.text
