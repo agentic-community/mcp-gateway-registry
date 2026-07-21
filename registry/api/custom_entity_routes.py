@@ -54,6 +54,11 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/custom", tags=["custom-entities"])
 
+# Encrypted upstream-header values are WRITE-ONLY: accepted on create, never
+# echoed on read. Excluded from every CustomEntityRecord response (the model
+# keeps the field so the internal vend endpoint can still decrypt it).
+_CUSTOM_RECORD_EXCLUDE = {"custom_headers_encrypted"}
+
 # NoSQL-injection guards: both segments compose the record path
 # /{type}/{uuid} interpolated into find({"_id": path}) / find({"entity_type": type}).
 TYPE_PARAM = Path(..., pattern=r"^[a-z0-9_-]+$", max_length=64)
@@ -209,7 +214,13 @@ async def list_custom_entities(
 
     # Redact the internal backend origin (proxy_target_url) for non-admins,
     # mirroring the skill/agent read endpoints. is_proxied + proxy_client_url stay.
-    records = [redact_proxy_backend_url(r.model_dump(mode="json"), user_context) for r in items]
+    # Encrypted upstream headers (custom_headers_encrypted) are never listed.
+    records = [
+        redact_proxy_backend_url(
+            r.model_dump(mode="json", exclude=_CUSTOM_RECORD_EXCLUDE), user_context
+        )
+        for r in items
+    ]
 
     return {
         "records": records,
@@ -222,6 +233,7 @@ async def list_custom_entities(
 @router.get(
     "/{type}/{uuid}",
     response_model=CustomEntityRecord,
+    response_model_exclude=_CUSTOM_RECORD_EXCLUDE,
     summary="Get a custom record",
 )
 async def get_custom_entity(
@@ -244,6 +256,7 @@ async def get_custom_entity(
 @router.post(
     "/{type}",
     response_model=CustomEntityRecord,
+    response_model_exclude=_CUSTOM_RECORD_EXCLUDE,
     status_code=status.HTTP_201_CREATED,
     summary="Create a custom record",
 )
@@ -281,6 +294,7 @@ async def create_custom_entity(
 @router.put(
     "/{type}/{uuid}",
     response_model=CustomEntityRecord,
+    response_model_exclude=_CUSTOM_RECORD_EXCLUDE,
     summary="Update a custom record",
 )
 async def update_custom_entity(

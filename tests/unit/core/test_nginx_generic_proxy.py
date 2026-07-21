@@ -159,13 +159,16 @@ class TestCreateBlock:
         path="/skills/proxy-demo",
         target="https://b.example/",
         streaming=False,
+        has_upstream_auth=False,
     ):
         with patch("registry.core.nginx_service.settings") as s:
             s.auth_server_url = "http://auth-server:8888"
             s.gateway_generic_client_max_body_size = "1m"
             s.gateway_proxy_prefix = "gateway"
             s.gateway_generic_stream_read_timeout_seconds = 3600
-            return _service()._create_generic_proxy_block(entity_type, path, target, streaming)
+            return _service()._create_generic_proxy_block(
+                entity_type, path, target, streaming, has_upstream_auth
+            )
 
     def test_location_is_prefixed_type_name(self):
         # Client-facing path = /{prefix}/{type}/{name} (namespace segment stripped
@@ -247,6 +250,20 @@ class TestCreateBlock:
         assert "proxy_buffering off;" in block
         assert "proxy_read_timeout 3600s;" in block
         assert 'proxy_set_header Connection "";' in block
+
+    def test_no_upstream_auth_block_has_no_marker(self):
+        # Default: no upstream-auth marker, so the hop won't vend/inject headers.
+        block = self._block(has_upstream_auth=False)
+        assert 'set $generic_has_upstream_auth "1";' not in block
+
+    def test_upstream_auth_block_emits_marker_only(self):
+        # Entity with registered upstream headers: sets the bool marker (bound into
+        # the token so the hop vends+injects). The marker is a fixed literal -- the
+        # secret VALUES never appear in the rendered nginx config.
+        block = self._block(has_upstream_auth=True)
+        assert 'set $generic_has_upstream_auth "1";' in block
+        # Defence: no decrypted header value leaks into the config.
+        assert "value_encrypted" not in block
 
     def test_auth_server_url_trailing_slash_not_doubled(self):
         with patch("registry.core.nginx_service.settings") as s:

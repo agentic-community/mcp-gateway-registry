@@ -24,6 +24,7 @@ from ..core.metrics import ASSET_ID_CONFLICT_TOTAL
 from ..exceptions import (
     AssetIdConflictError,
     SkillUrlValidationError,
+    SkillValidationError,
     UrlValidationError,
 )
 from ..repositories.factory import (
@@ -34,7 +35,10 @@ from ..repositories.interfaces import (
     SearchRepositoryBase,
     SkillRepositoryBase,
 )
-from ..schemas.proxy_mixin import validate_and_pin_proxy_target
+from ..schemas.proxy_mixin import (
+    clear_upstream_headers_on_repoint,
+    validate_and_pin_proxy_target,
+)
 from ..schemas.skill_models import (
     ContentIntegrity,
     FileHash,
@@ -1171,6 +1175,27 @@ def _build_skill_card(
         auth_credential_encrypted = encrypt_credential(request.auth_credential)
         credential_updated_at = datetime.now(UTC)
 
+    # Encrypt static upstream auth headers (the proxy-hop credential, distinct
+    # from auth_credential above which is for the SKILL.md fetch). Reuses the
+    # shared server-dict encryptor: {name, value} -> {name, value_encrypted}.
+    custom_headers_encrypted = None
+    custom_header_names: list[str] = []
+    custom_headers_updated_at = None
+    if getattr(request, "custom_headers", None):
+        from ..utils.credential_encryption import (
+            encrypt_custom_headers_in_server_dict,
+            validate_custom_headers,
+        )
+
+        # Same header policy as the MCP-server route (reserved-name block + count
+        # cap): a skill must not register a gateway-managed header for injection.
+        validate_custom_headers(request.custom_headers)
+        _ch: dict[str, Any] = {"custom_headers": request.custom_headers}
+        encrypt_custom_headers_in_server_dict(_ch)
+        custom_headers_encrypted = _ch.get("custom_headers_encrypted")
+        custom_header_names = _ch.get("custom_header_names", [])
+        custom_headers_updated_at = _ch.get("custom_headers_updated_at")
+
     return SkillCard(
         path=path,
         id=resolve_asset_id(request.id),
@@ -1204,6 +1229,11 @@ def _build_skill_card(
         # Gateway-proxy opt-in (validated on the request model; carried through).
         is_proxied=request.is_proxied,
         proxy_target_url=request.proxy_target_url,
+        proxy_streaming=getattr(request, "proxy_streaming", False),
+        # Static upstream auth headers for the proxy hop (encrypted above).
+        custom_headers_encrypted=custom_headers_encrypted,
+        custom_header_names=custom_header_names,
+        custom_headers_updated_at=custom_headers_updated_at,
     )
 
 
@@ -1321,17 +1351,22 @@ class SkillService:
         except Exception as e:
             logger.warning("Content integrity computation failed for %s: %s", request.name, e)
 
-        # Build SkillCard
-        skill = _build_skill_card(
-            request=request,
-            path=path,
-            owner=owner,
-            content_version=content_version,
-            content_updated_at=content_updated_at,
-            skill_md_raw_url=raw_url,
-            resource_manifest=resource_manifest,
-            content_integrity=content_integrity,
-        )
+        # Build SkillCard. _build_skill_card validates custom_headers against the
+        # gateway header policy (reserved-name block + count cap) and raises
+        # ValueError on violation; surface that as a 400, not a 500.
+        try:
+            skill = _build_skill_card(
+                request=request,
+                path=path,
+                owner=owner,
+                content_version=content_version,
+                content_updated_at=content_updated_at,
+                skill_md_raw_url=raw_url,
+                resource_manifest=resource_manifest,
+                content_integrity=content_integrity,
+            )
+        except ValueError as e:
+            raise SkillValidationError(str(e)) from e
 
         # Gateway-proxy SSRF layer 2: when opting into proxying, resolve the target
         # hostname and validate every resolved IP against the egress policy, then
@@ -1557,6 +1592,14 @@ class SkillService:
                 updates["proxy_resolved_ips"] = pin.get("proxy_resolved_ips", [])
                 updates["proxy_target_host"] = pin.get("proxy_target_host")
                 updates["proxy_disabled_reason"] = None
+                # Credential-misdirection guard: if the effective target changed,
+                # the create-time upstream headers were scoped to the OLD host --
+                # clear them so we never inject the old host's secret at the new
+                # host. (Headers are not settable on update; re-add for the new
+                # target via a fresh create.)
+                clear_upstream_headers_on_repoint(
+                    updates, existing_target=existing.proxy_target_url, new_target=merged_target
+                )
 
         updated = await repo.update(normalized, updates)
 

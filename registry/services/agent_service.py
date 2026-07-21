@@ -16,7 +16,11 @@ from ..exceptions import AssetIdConflictError
 from ..repositories.factory import get_agent_repository, get_search_repository
 from ..repositories.interfaces import AgentRepositoryBase, SearchRepositoryBase
 from ..schemas.agent_models import AgentCard
-from ..schemas.proxy_mixin import validate_and_pin_proxy_target
+from ..schemas.proxy_mixin import (
+    clear_upstream_headers_on_repoint,
+    effective_proxy_target,
+    validate_and_pin_proxy_target,
+)
 from ..utils.url_guard import validate_agent_url
 
 logger = logging.getLogger(__name__)
@@ -262,13 +266,26 @@ class AgentService:
         # Gateway-proxy SSRF layer 2 + transport guard on the MERGED card when this
         # update touches the proxy opt-in or target. Re-validates + re-pins (or
         # clears the pin) on the merged state, before persist. Re-enabling clears a
-        # prior auto-disable.
-        if "is_proxied" in updates or "proxy_target_url" in updates:
+        # prior auto-disable. "url" is included: for an A2A agent the effective
+        # backend falls back to url when proxy_target_url is unset, so changing url
+        # repoints the backend and must re-validate + trigger the header clear.
+        if "is_proxied" in updates or "proxy_target_url" in updates or "url" in updates:
             merged_card.proxy_disabled_reason = None
             await _validate_and_pin_agent_proxy(merged_card)
             agent_dict["proxy_resolved_ips"] = merged_card.proxy_resolved_ips
             agent_dict["proxy_target_host"] = merged_card.proxy_target_host
             agent_dict["proxy_disabled_reason"] = None
+            # Credential-misdirection guard (symmetric with skill/custom/server):
+            # if the effective backend host changed, clear any create-time upstream
+            # headers so the old host's secret is never injected at the new host.
+            # Agents cannot carry headers through the API today, but wiring the
+            # guard here keeps the invariant safe if that ever changes, rather than
+            # relying on "agents never get headers".
+            clear_upstream_headers_on_repoint(
+                agent_dict,
+                existing_target=effective_proxy_target("a2a_agent", existing_agent.model_dump()),
+                new_target=effective_proxy_target("a2a_agent", merged_card.model_dump()),
+            )
 
         updated_agent = await self._repo.update(path, agent_dict)
 
