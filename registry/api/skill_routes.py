@@ -1237,14 +1237,15 @@ async def update_skill(
 
     updates = request.model_dump(exclude_unset=True, mode="json")
 
-    # Upstream custom headers are NOT settable on update (they are accepted only
-    # at create, mirroring the MCP-server update model's intentional omission —
-    # see server_update_models.py). Drop them from the update payload so a PUT
-    # carrying `custom_headers` can neither (a) bypass the create-path validation
-    # (reserved-name block + count cap) nor (b) persist PLAINTEXT header values
-    # straight into storage via $set (custom_headers_encrypted would be left
-    # untouched, so it would also be a silent egress no-op). Header rotation is a
-    # deliberate follow-up behind a dedicated, narrowly-scoped endpoint.
+    # Upstream custom headers are NOT settable on this general update (they are
+    # accepted at create, mirroring the MCP-server update model's intentional
+    # omission — see server_update_models.py). Drop them from the update payload so
+    # a PUT carrying `custom_headers` can neither (a) bypass the create-path
+    # validation (reserved-name block + count cap) nor (b) persist PLAINTEXT header
+    # values straight into storage via $set (custom_headers_encrypted would be left
+    # untouched, so it would also be a silent egress no-op). Header rotation after
+    # create goes through the dedicated PATCH /skills/{path}/upstream-headers
+    # endpoint (update_skill_upstream_headers).
     for _hdr_field in (
         "custom_headers",
         "custom_headers_encrypted",
