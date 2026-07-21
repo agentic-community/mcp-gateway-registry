@@ -262,6 +262,56 @@ class TestEncryptBuildsNameSets:
         assert d["custom_header_overridable_names"] == []
 
 
+class TestBuildCustomHeadersStorageFields:
+    """The rotation helper produces a self-contained $set of all four header
+    storage fields, including the CLEAR case, and validates like create."""
+
+    def test_populates_all_four_fields(self):
+        from registry.utils.credential_encryption import (
+            build_custom_headers_storage_fields,
+            decrypt_custom_headers,
+        )
+
+        out = build_custom_headers_storage_fields(
+            [
+                {"name": "X-Api-Key", "value": "sk-1"},
+                {"name": "X-Tenant", "overridable": True},
+            ]
+        )
+        assert out["custom_header_names"] == ["X-Api-Key", "X-Tenant"]
+        assert out["custom_header_overridable_names"] == ["X-Tenant"]
+        assert out["custom_headers_updated_at"]
+        decrypted = {
+            h["name"]: h["value"] for h in decrypt_custom_headers(out["custom_headers_encrypted"])
+        }
+        assert decrypted == {"X-Api-Key": "sk-1"}
+
+    def test_empty_list_clears_all_fields(self):
+        from registry.utils.credential_encryption import build_custom_headers_storage_fields
+
+        out = build_custom_headers_storage_fields([])
+        assert out["custom_headers_encrypted"] == []
+        assert out["custom_header_names"] == []
+        assert out["custom_header_overridable_names"] == []
+        assert out["custom_headers_updated_at"]  # rotation is still stamped
+
+    def test_none_clears_all_fields(self):
+        from registry.utils.credential_encryption import build_custom_headers_storage_fields
+
+        out = build_custom_headers_storage_fields(None)
+        assert out["custom_header_names"] == []
+        assert out["custom_headers_encrypted"] == []
+
+    def test_policy_violation_raises(self):
+        # Reserved / internal names are still rejected on rotation.
+        from registry.utils.credential_encryption import build_custom_headers_storage_fields
+
+        with pytest.raises(ValueError, match="managed by the gateway"):
+            build_custom_headers_storage_fields([{"name": "X-Internal-Token", "value": "x"}])
+        with pytest.raises(ValueError, match="caller-overridable"):
+            build_custom_headers_storage_fields([{"name": "Authorization", "value": "Bearer x"}])
+
+
 class TestFederationStripCoversHeaders:
     """The upstream-header fields (encrypted + plaintext + bookkeeping) must all
     be stripped at the federation boundary so a peer can neither plant nor

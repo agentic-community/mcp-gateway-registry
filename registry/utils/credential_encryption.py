@@ -348,6 +348,54 @@ def encrypt_custom_headers_in_server_dict(
     return server_dict
 
 
+def build_custom_headers_storage_fields(
+    raw: list[dict] | None,
+) -> dict:
+    """Validate + encrypt a plaintext header list into the four storage fields.
+
+    Shared by the dedicated header-rotation endpoints (skill + custom entity),
+    which -- unlike create -- must produce a self-contained ``$set`` of ALL header
+    storage fields, including the CLEAR case (an empty/None list removes every
+    stored header). Enforces the same policy as create (via
+    ``validate_custom_headers``) then encrypts (via
+    ``encrypt_custom_headers_in_server_dict``).
+
+    Args:
+        raw: The plaintext ``[{name, value?, overridable?}, ...]`` list. An empty
+            list or None means "remove all upstream headers".
+
+    Returns:
+        A dict with exactly these keys, safe to merge into an entity update:
+        ``custom_headers_encrypted`` (list, [] when cleared),
+        ``custom_header_names`` (list, [] when cleared),
+        ``custom_header_overridable_names`` (list, [] when cleared),
+        ``custom_headers_updated_at`` (ISO timestamp).
+
+    Raises:
+        ValueError: on any policy violation or encryption failure (the caller maps
+            it to a 400).
+    """
+    now = datetime.now(UTC).isoformat()
+    if not raw:
+        # Clear case: remove every stored header (and stamp the update time).
+        return {
+            CUSTOM_HEADERS_ENCRYPTED_FIELD: [],
+            CUSTOM_HEADER_NAMES_FIELD: [],
+            CUSTOM_HEADER_OVERRIDABLE_NAMES_FIELD: [],
+            "custom_headers_updated_at": now,
+        }
+
+    validate_custom_headers(raw)
+    tmp: dict = {CUSTOM_HEADERS_PLAINTEXT_FIELD: raw}
+    encrypt_custom_headers_in_server_dict(tmp)
+    return {
+        CUSTOM_HEADERS_ENCRYPTED_FIELD: tmp.get(CUSTOM_HEADERS_ENCRYPTED_FIELD, []),
+        CUSTOM_HEADER_NAMES_FIELD: tmp.get(CUSTOM_HEADER_NAMES_FIELD, []),
+        CUSTOM_HEADER_OVERRIDABLE_NAMES_FIELD: tmp.get(CUSTOM_HEADER_OVERRIDABLE_NAMES_FIELD, []),
+        "custom_headers_updated_at": now,
+    }
+
+
 def decrypt_custom_headers(
     encrypted_list: list[dict] | None,
 ) -> list[dict]:

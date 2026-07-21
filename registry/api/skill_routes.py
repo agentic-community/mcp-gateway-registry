@@ -101,6 +101,18 @@ class RatingRequest(BaseModel):
     rating: int
 
 
+class UpstreamHeadersUpdateRequest(BaseModel):
+    """Body for PATCH /api/skills/{path}/upstream-headers.
+
+    Replaces the skill's ENTIRE upstream custom-header set (rotation semantics,
+    like PATCH /servers/{path}/auth-credential replaces the credential). Each
+    entry is ``{name, value?, overridable?}`` -- same policy as create. An empty
+    list clears all upstream headers. Values are write-only: never echoed back.
+    """
+
+    custom_headers: list[dict[str, Any]] = []
+
+
 router = APIRouter(prefix="/skills", tags=["skills"])
 
 _SKILL_CARD_EXCLUDE = {"auth_credential_encrypted", "custom_headers_encrypted"}
@@ -1286,6 +1298,61 @@ async def update_skill(
             status_code=status.HTTP_404_NOT_FOUND, detail=f"Skill not found: {normalized_path}"
         )
 
+    return updated
+
+
+@router.patch(
+    "/{skill_path:path}/upstream-headers",
+    response_model=SkillCard,
+    response_model_exclude=_SKILL_CARD_EXCLUDE,
+    summary="Rotate a skill's upstream proxy headers",
+)
+async def update_skill_upstream_headers(
+    http_request: Request,
+    body: UpstreamHeadersUpdateRequest,
+    user_context: Annotated[dict, Depends(nginx_proxied_auth)],
+    skill_path: str = Path(..., description="Skill path or name"),
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
+) -> SkillCard:
+    """Replace a skill's upstream custom headers (the proxy-hop credentials).
+
+    Dedicated, narrowly-scoped mutation surface -- the mirror of PATCH
+    /servers/{path}/auth-credential -- so headers can be rotated after create
+    without re-registering, while the general PUT stays free of plaintext-secret
+    handling. Owner-or-admin + the modify_skill scope, same as PUT. An empty
+    ``custom_headers`` list clears all upstream headers. Fails with 400 on any
+    policy violation (reserved name, count cap, fixed Authorization, ...).
+    """
+    normalized_path = normalize_skill_path(skill_path)
+    set_audit_action(
+        http_request,
+        "update",
+        "skill_upstream_headers",
+        resource_id=normalized_path,
+        description=f"Rotate upstream headers for skill {normalized_path}",
+    )
+
+    service = get_skill_service()
+    existing = await service.get_skill(normalized_path)
+    if not existing:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"Skill not found: {normalized_path}"
+        )
+    if not _user_can_modify_skill(existing, user_context):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    from ..utils.credential_encryption import build_custom_headers_storage_fields
+
+    try:
+        updates = build_custom_headers_storage_fields(body.custom_headers)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+    updated = await service.update_skill(normalized_path, updates)
+    if not updated:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"Skill not found: {normalized_path}"
+        )
     return updated
 
 
