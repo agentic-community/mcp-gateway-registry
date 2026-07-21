@@ -586,14 +586,25 @@ The `resource_metadata` URL must equal the PRM `resource` field byte-for-byte
 3. Verify signature using the matching public key
 4. Verify `iss` matches one of the valid issuer URLs (external + internal +
    localhost variants)
-5. Verify `aud` is in `[account, mcp-gateway-web, mcp-gateway-m2m, mcp-gateway]`.
-   The first three cover the gateway's pre-defined web/M2M clients and
-   Keycloak's default user-token audience. The fourth (`mcp-gateway`) is the
-   custom audience emitted by the audience protocol mapper attached to the
-   `basic` client-scope (see "Client-scopes" above and
+5. Verify `aud` is in `[mcp-gateway-web, mcp-gateway-m2m, mcp-gateway]`. The
+   first two are the gateway's pre-defined web/M2M clients; the third
+   (`mcp-gateway`) is the custom audience emitted by the audience protocol
+   mapper attached to the `basic` client-scope (see "Client-scopes" above and
    `setup_dcr_audience_mapper` in `init-keycloak.sh`). DCR'd clients receive
    `basic` automatically, so every DCR'd-client token carries
    `aud="mcp-gateway"` and is validated strictly per RFC 8707 — no fallback.
+
+   Keycloak's default `aud="account"` is deliberately **not** accepted.
+   `account` is present on every realm user token regardless of which client
+   requested it, so accepting it would let a token minted for a different client
+   in the same realm be replayed against the gateway (a same-realm cross-client
+   confused-deputy). Because the audience mapper puts `aud="mcp-gateway"` on
+   every token via the `basic` scope, dropping `account` does not lock out any
+   legitimately-issued token. **Upgrade note:** a realm provisioned before the
+   audience mapper existed (or without running the current `init-keycloak.sh` /
+   `upgrade-realm-for-dcr.sh`) mints `account`-only tokens and will now be
+   rejected with `Invalid audience` — re-run the setup to attach the mapper and
+   have users re-authenticate.
 
 #### Group → scope mapping
 
