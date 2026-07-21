@@ -6636,6 +6636,123 @@ def _forward_headers(
     return forwarded
 
 
+def _bearer_value(header: str | None) -> str:
+    """Return a header's bearer token value (scheme + whitespace stripped).
+
+    Module-level twin of the nested helper in the /validate handler, reused by the
+    generic hop's equal-token guard so a duplicate that differs only by the
+    ``Bearer `` prefix or surrounding whitespace is still caught.
+    """
+    if not header:
+        return ""
+    value = header.strip()
+    if value.lower().startswith("bearer "):
+        value = value[len("bearer ") :].strip()
+    return value
+
+
+def _pop_header_ci(headers: dict[str, str], name: str) -> None:
+    """Remove every entry of ``headers`` whose name case-insensitively equals ``name``.
+
+    HTTP header names are case-insensitive (RFC 9110 5.1), but a plain dict is not:
+    a caller-sent ``x-api-key`` and an operator-injected ``X-Api-Key`` would both
+    survive an ``update()`` and BOTH be sent upstream. Callers use this to drop any
+    caller-cased copy before injecting the operator's value, so the operator's
+    header is the only one on the wire.
+    """
+    lower = name.lower()
+    for key in [k for k in headers if k.lower() == lower]:
+        del headers[key]
+
+
+def _merge_generic_upstream_headers(
+    forward_headers: dict[str, str],
+    incoming: dict[str, str],
+    vended_defaults: dict[str, str],
+    overridable_names: list[str],
+) -> None:
+    """Merge operator upstream headers + caller passthrough into ``forward_headers``.
+
+    ``forward_headers`` has already been through ``_forward_headers`` (the
+    never-forward gateway-cred set -- X-Authorization / Cookie / Authorization /
+    internal X-* -- is gone; benign caller headers survive with their original
+    casing). This applies the per-header ``overridable`` policy on top:
+
+    - FIXED header (in ``vended_defaults``, NOT overridable): inject the operator
+      value, dropping any caller-cased copy first -> operator value is authoritative.
+    - DEFAULT + override (in ``vended_defaults`` AND overridable): if the caller
+      supplied that header, the caller's value wins (leave it, drop the operator
+      copy); otherwise inject the operator default.
+    - CALLER-ONLY (overridable, no default value): the caller's header already
+      survived ``_forward_headers`` and is left as-is -- EXCEPT ``Authorization``,
+      which ``_forward_headers`` always strips, so it is re-admitted here from
+      ``incoming`` when ``authorization`` is overridable and the caller sent it.
+
+    Only registered names are ever operator-injected; a caller header whose name is
+    neither registered-overridable nor otherwise forwarded by ``_forward_headers``
+    never gains upstream-auth meaning. ``overridable_names`` is the vended allowlist
+    (already backstopped against the reserved denylist by the registry).
+
+    Mutates ``forward_headers`` in place. Does NOT enforce the equal-token guard --
+    the caller runs ``_assert_generic_authorization_not_gateway_cred`` after this.
+    """
+    overridable_lower = {n.lower() for n in overridable_names}
+
+    # Case-insensitive view of the caller's raw headers (HTTP header names are
+    # case-insensitive per RFC 9110 5.1; a plain dict is not, so a caller could
+    # otherwise dodge a name check with odd casing).
+    caller_ci = {k.lower(): v for k, v in incoming.items()}
+
+    # Re-admit a caller-supplied Authorization ONLY when the operator opted in
+    # (authorization is overridable). The base strip removed it, so without this
+    # a caller-only / caller-overrides-default Authorization would silently vanish.
+    if "authorization" in overridable_lower:
+        caller_auth = caller_ci.get("authorization")
+        if caller_auth:
+            _pop_header_ci(forward_headers, "Authorization")
+            forward_headers["Authorization"] = caller_auth
+
+    caller_names_lower = set(caller_ci)
+    for name, value in vended_defaults.items():
+        lower = name.lower()
+        caller_sent = lower in caller_names_lower
+        if lower in overridable_lower and caller_sent:
+            # Caller wins over the operator default. The caller's value already
+            # survives in forward_headers (benign header) or was re-admitted above
+            # (Authorization); do not overlay the operator default.
+            continue
+        # Operator value is authoritative here (fixed header, or an overridable
+        # default the caller did not send). Drop any caller-cased copy, then inject.
+        _pop_header_ci(forward_headers, name)
+        forward_headers[name] = value
+
+
+def _assert_generic_authorization_not_gateway_cred(
+    forward_headers: dict[str, str],
+    x_authorization: str | None,
+) -> None:
+    """Reject (401) if the outbound Authorization equals the gateway credential.
+
+    A2A parity (see the /validate equal-token guard): a caller must not be able to
+    make the gateway forward its OWN gateway bearer (presented as X-Authorization)
+    to a registrant-controlled backend via an overridable Authorization slot, where
+    it could be replayed against the gateway. Compares bearer VALUES so a duplicate
+    differing only by scheme/whitespace is caught. Fail closed.
+    """
+    if not x_authorization:
+        return
+    outbound = forward_headers.get("Authorization") or forward_headers.get("authorization")
+    if outbound and _bearer_value(outbound) == _bearer_value(x_authorization):
+        logger.warning(
+            "generic_proxy: outbound Authorization duplicates the gateway credential; "
+            "refusing so the gateway credential cannot leak to the backend."
+        )
+        raise HTTPException(
+            status_code=401,
+            detail="Authorization must not duplicate the gateway credential",
+        )
+
+
 # Headers that MUST be stripped before injecting a vaulted egress token:
 # the user's gateway IdP JWT / session cookie / X-Authorization are full gateway
 # credentials and must never reach a third-party SaaS upstream; the X-User*/
@@ -6663,23 +6780,48 @@ _EGRESS_STRIP_HEADERS: frozenset[str] = frozenset(
 )
 
 
-# Headers stripped before forwarding to a generic-proxy upstream. The generic hop
-# fronts arbitrary (potentially third-party) registered backends, so the caller's
-# gateway identity/scopes and every gateway-internal routing/auth header must be
-# removed -- otherwise a proxied backend would receive the caller's X-User/X-Scopes
-# (identity + authorization-topology disclosure) and a valid signed
-# X-Internal-Token-Generic (replayable for the token TTL). This is the generic-hop
-# analogue of _EGRESS_STRIP_HEADERS (applied on the mcp-proxy vault path); it adds
-# the markers the generic nginx location block injects. Applied on EVERY generic
-# request, since the hop has no notion of a "trusted internal" upstream.
-_GENERIC_HOP_STRIP_HEADERS: frozenset[str] = _EGRESS_STRIP_HEADERS | frozenset(
+# The gateway-internal headers that /validate sets on the auth_request subresponse
+# and nginx copies onto the proxied request. On the GENERIC hop the backend is
+# always registrant-controlled, so these are stripped UNCONDITIONALLY (before any
+# operator/caller header merge) -- neither the caller's identity/scopes/groups nor
+# the gateway's own signed internal tokens may ever reach the backend, where they
+# could be replayed against the registry (the #1391 leak class). This is the
+# egress backstop; registration also rejects these names (RESERVED_CUSTOM_HEADER_
+# NAMES), but the strip must not depend on that (a bypass-written doc, or a future
+# code path, must still fail closed). Superset of _EGRESS_STRIP_HEADERS covering
+# the generic-proxy markers (incl. x-entity-path / x-original-method) + both extra
+# internal-token variants; Authorization / X-Authorization / Cookie are already
+# dropped by _forward_headers, kept here for an explicit, self-contained invariant.
+_GENERIC_INTERNAL_STRIP_HEADERS: frozenset[str] = frozenset(
     {
-        "x-internal-token-generic",
-        "x-generic-proxy-kind",
-        "x-entity-path",
-        "x-resolved-generic-upstream",
-        "x-resolved-upstream",
+        "authorization",
+        "x-authorization",
+        "proxy-authorization",
+        "cookie",
+        "x-user",
+        "x-username",
+        "x-scopes",
+        "x-auth-method",
+        "x-groups",
+        "x-client-id",
+        "x-user-pool-id",
+        "x-region",
+        "x-original-url",
         "x-original-method",
+        "x-server-name",
+        "x-tool-name",
+        "x-entity-path",
+        "x-internal-token",
+        "x-internal-token-generic",
+        "x-internal-token-registry",
+        "x-generic-proxy-kind",
+        "x-generic-streaming",
+        "x-generic-has-upstream-auth",
+        "x-resolved-upstream",
+        "x-resolved-generic-upstream",
+        "x-upstream-url",
+        "x-body",
+        "x-body-uninspectable",
     }
 )
 
@@ -6726,6 +6868,16 @@ def _egress_vend_timeout_seconds() -> float:
 # terminal outcome: transport failures raise below, and the registry now answers
 # 503 when its own token store fails transiently (see vend_egress_token).
 _EGRESS_VEND_TRANSIENT_STATUSES: frozenset[int] = frozenset({502, 503, 504})
+
+
+def _strip_generic_internal_headers(headers: dict[str, str]) -> dict[str, str]:
+    """Drop every gateway-internal header (case-insensitively) from ``headers``.
+
+    Returns a new dict; used by the generic hop as the egress backstop so the
+    caller's identity and the gateway's signed internal tokens never reach a
+    registrant-controlled backend, independent of the registration denylist.
+    """
+    return {k: v for k, v in headers.items() if k.lower() not in _GENERIC_INTERNAL_STRIP_HEADERS}
 
 
 async def _vend_egress_token(
@@ -6791,17 +6943,18 @@ async def _vend_generic_upstream_headers(
     generic_token: str,
     entity_type: str,
     registered_path: str,
-) -> dict[str, str] | None:
-    """Fetch a proxied entity's decrypted static upstream headers from the registry.
+) -> tuple[dict[str, str], list[str]] | None:
+    """Fetch a proxied entity's decrypted upstream headers + caller allowlist.
 
     Forwards the verified X-Internal-Token-Generic; the registry re-verifies it,
     re-derives entity_type/server/upstream from the signed claims, runs the
     upstream cross-check, decrypts the entity's custom headers, and returns them.
 
-    Returns the header dict (possibly empty = entity has none), or None on a
-    transport/registry error. The caller FAILS CLOSED on None: it must not
-    forward the request unauthenticated when the entity was flagged as having
-    upstream auth but the vend failed.
+    Returns ``(defaults, overridable_names)`` -- the operator-injected header
+    values (possibly empty) and the caller passthrough allowlist (possibly empty)
+    -- or None on a transport/registry error. The caller FAILS CLOSED on None: it
+    must not forward the request unauthenticated when the entity was flagged as
+    having upstream auth but the vend failed.
     """
     from registry.auth.internal import generate_internal_token
 
@@ -6840,7 +6993,14 @@ async def _vend_generic_upstream_headers(
     if not isinstance(headers, dict):
         return None
     # Coerce to str->str; drop any non-string entries defensively.
-    return {str(k): str(v) for k, v in headers.items() if isinstance(k, str)}
+    defaults = {str(k): str(v) for k, v in headers.items() if isinstance(k, str)}
+    raw_overridable = data.get("overridable_names")
+    overridable = (
+        [str(n) for n in raw_overridable if isinstance(n, str)]
+        if isinstance(raw_overridable, list)
+        else []
+    )
+    return defaults, overridable
 
 
 # JSON-RPC client requests on which MCP permits an InputRequiredResult (MRTR
@@ -8297,27 +8457,26 @@ async def generic_proxy(
         raise HTTPException(status_code=400, detail="Invalid request body") from exc
 
     max_body_bytes = _read_generic_max_body_bytes()
-    # Strip the gateway-internal identity/routing family before forwarding to the
-    # (possibly third-party) upstream: neither the caller's X-User/X-Scopes nor the
-    # signed X-Internal-Token-Generic may leak to a proxied backend. _forward_headers
-    # already drops cookie/authorization/x-upstream-url/hop-by-hop; this removes the
-    # remaining internal headers the generic nginx block injects.
-    forward_headers = {
-        key: value
-        for key, value in _forward_headers(dict(request.headers)).items()
-        if key.lower() not in _GENERIC_HOP_STRIP_HEADERS
-    }
+    # Base strip: hop-by-hop + ingress creds (_forward_headers), THEN the
+    # gateway-internal identity / signed-token set (_strip_generic_internal_
+    # headers). The generic backend is always registrant-controlled, so neither
+    # the caller's identity/scopes/groups nor the gateway's own internal tokens may
+    # ever reach it (the #1391 leak class). This runs BEFORE the operator/caller
+    # header merge, so no overridable slot can re-admit an internal header even if
+    # one were somehow registered.
+    forward_headers = _strip_generic_internal_headers(_forward_headers(dict(request.headers)))
     verify = _generic_tls_verify()
     # Streaming is read from the SIGNED token claim (bound at /validate from the
     # server-set X-Generic-Streaming marker), never a forgeable inbound header.
     streaming = bool(claims.get("streaming"))
 
-    # Static upstream auth: when the SIGNED claim says the entity has registered
-    # upstream headers, fetch the DECRYPTED values from the registry's internal
-    # vend endpoint and inject them on egress. The claim is bound from the
-    # server-set X-Generic-Has-Upstream-Auth marker (never a forgeable header);
-    # the secret values only cross via the service-token-gated internal hop.
-    # FAIL CLOSED: if the vend fails, do NOT forward the request unauthenticated.
+    # Upstream auth: when the SIGNED claim says the entity has registered upstream
+    # headers, fetch the DECRYPTED operator values + the caller passthrough
+    # allowlist from the registry's internal vend endpoint and merge them on
+    # egress. The claim is bound from the server-set X-Generic-Has-Upstream-Auth
+    # marker (never a forgeable header); the secret values only cross via the
+    # service-token-gated internal hop. FAIL CLOSED: if the vend fails, do NOT
+    # forward the request unauthenticated.
     if claims.get("has_upstream_auth"):
         generic_token = request.headers.get("X-Internal-Token-Generic", "")
         vended = await _vend_generic_upstream_headers(
@@ -8331,9 +8490,23 @@ async def generic_proxy(
                 bound_registered_path,
             )
             raise HTTPException(status_code=502, detail="Upstream auth unavailable")
-        # Injected headers overwrite any inbound same-named header (defence: a
-        # client cannot pre-set Authorization to something the backend would see).
-        forward_headers.update(vended)
+        vended_defaults, overridable_names = vended
+        # Apply the per-header overridable policy: fixed operator headers overwrite
+        # any caller copy; overridable headers let the caller's value win (or fall
+        # back to the operator default); a caller Authorization is re-admitted only
+        # when the operator opted in.
+        _merge_generic_upstream_headers(
+            forward_headers,
+            dict(request.headers),
+            vended_defaults,
+            overridable_names,
+        )
+        # A2A parity: never let the caller's gateway credential (X-Authorization)
+        # reach the backend via an overridable Authorization slot.
+        _assert_generic_authorization_not_gateway_cred(
+            forward_headers,
+            request.headers.get("X-Authorization"),
+        )
 
     logger.info(
         "generic_proxy: type=%s path=/%s method=%s streaming=%s",

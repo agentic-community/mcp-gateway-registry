@@ -24,13 +24,15 @@ from fastapi import HTTPException  # noqa: E402
 
 from auth_server.server import (  # noqa: E402
     _GATEWAY_SET_SECURITY_HEADERS,
-    _GENERIC_HOP_STRIP_HEADERS,
+    _assert_generic_authorization_not_gateway_cred,
     _assert_outbound_host_pinned,
     _build_generic_outbound_url,
     _forward_headers,
     _generic_tls_verify,
+    _merge_generic_upstream_headers,
     _run_egress_selfcheck,
     _select_forwarded_generic_response_headers,
+    _strip_generic_internal_headers,
 )
 
 pytestmark = pytest.mark.unit
@@ -39,15 +41,11 @@ pytestmark = pytest.mark.unit
 class TestGenericHopHeaderStrip:
     """The generic hop fronts arbitrary (third-party) backends, so no gateway
     identity/credential/routing header may leak to the upstream. Replicates the
-    handler's filter: _forward_headers(...) minus _GENERIC_HOP_STRIP_HEADERS.
+    handler's filter: _strip_generic_internal_headers(_forward_headers(...)).
     """
 
     def _forwarded(self, incoming: dict[str, str]) -> dict[str, str]:
-        return {
-            key: value
-            for key, value in _forward_headers(dict(incoming)).items()
-            if key.lower() not in _GENERIC_HOP_STRIP_HEADERS
-        }
+        return _strip_generic_internal_headers(_forward_headers(dict(incoming)))
 
     def test_strips_internal_identity_token_and_markers(self):
         incoming = {
@@ -208,6 +206,196 @@ class TestTlsVerifyResolution:
         with patch("auth_server.server.settings") as s:
             s.gateway_generic_tls_verify = "/etc/ssl/private-ca.pem"
             assert _generic_tls_verify() == "/etc/ssl/private-ca.pem"
+
+
+class TestStripGenericInternalHeaders:
+    """The generic hop must strip the gateway-internal identity + signed-token set
+    unconditionally (the #1391 leak class), independent of the registration
+    denylist -- so neither the caller's identity nor the gateway's internal tokens
+    reach a registrant-controlled backend."""
+
+    def test_internal_tokens_and_identity_stripped(self):
+        incoming = {
+            "X-Internal-Token": "signed-mcp",
+            "X-Internal-Token-Generic": "signed-generic",
+            "X-Internal-Token-Registry": "signed-registry",
+            "X-User": "alice",
+            "X-Username": "alice@example.com",
+            "X-Scopes": "admin",
+            "X-Groups": "everyone",
+            "X-Auth-Method": "jwt",
+            "X-Client-Id": "cid",
+            "X-Original-URL": "/proxy/x/y",
+            "X-Generic-Has-Upstream-Auth": "1",
+            "X-Upstream-Url": "https://internal/",
+            # A benign end-to-end header must survive.
+            "Content-Type": "application/json",
+            "X-Api-Key": "caller-key",
+        }
+        out = _strip_generic_internal_headers(incoming)
+        assert out == {"Content-Type": "application/json", "X-Api-Key": "caller-key"}
+
+    def test_strip_is_case_insensitive(self):
+        out = _strip_generic_internal_headers({"x-internal-token-generic": "t", "X-USER": "a"})
+        assert out == {}
+
+    def test_merge_cannot_readmit_stripped_internal_header(self):
+        # Even if an internal header name were (wrongly) vended as overridable, the
+        # base strip runs first and removed it; the caller's copy is gone, so the
+        # merge cannot re-admit it as an upstream value.
+        incoming = {"X-Internal-Token-Generic": "signed-generic"}
+        fwd = _strip_generic_internal_headers(_forward_headers(dict(incoming)))
+        assert "X-Internal-Token-Generic" not in fwd
+        _merge_generic_upstream_headers(
+            fwd, incoming, {}, overridable_names=["X-Internal-Token-Generic"]
+        )
+        assert all(k.lower() != "x-internal-token-generic" for k in fwd)
+
+
+class TestMergeGenericUpstreamHeaders:
+    """The per-header overridable merge policy on the generic egress hop.
+
+    forward_headers is what _forward_headers already produced (gateway creds
+    stripped, benign caller headers kept); the merge applies operator defaults +
+    caller passthrough on top.
+    """
+
+    def _base(self, incoming: dict) -> dict:
+        # Mirror the handler: run the raw request headers through _forward_headers
+        # first, then merge. This exercises the real interaction (Authorization /
+        # X-Authorization are stripped by _forward_headers before the merge).
+        return _forward_headers(dict(incoming))
+
+    def test_fixed_header_overwrites_caller(self):
+        incoming = {"X-Api-Key": "caller-key", "Content-Type": "application/json"}
+        fwd = self._base(incoming)
+        _merge_generic_upstream_headers(
+            fwd, incoming, {"X-Api-Key": "operator-key"}, overridable_names=[]
+        )
+        assert fwd["X-Api-Key"] == "operator-key"
+        # Benign end-to-end header is untouched.
+        assert fwd["Content-Type"] == "application/json"
+
+    def test_fixed_header_overwrites_caller_case_insensitively(self):
+        # Caller sends a differently-cased copy; the operator value must be the
+        # ONLY one on the wire (no dict-casing duplicate leak).
+        incoming = {"x-api-key": "caller-key"}
+        fwd = self._base(incoming)
+        _merge_generic_upstream_headers(
+            fwd, incoming, {"X-Api-Key": "operator-key"}, overridable_names=[]
+        )
+        keys = [k for k in fwd if k.lower() == "x-api-key"]
+        assert keys == ["X-Api-Key"]
+        assert fwd["X-Api-Key"] == "operator-key"
+
+    def test_overridable_caller_wins_over_default(self):
+        incoming = {"X-Tenant": "caller-tenant"}
+        fwd = self._base(incoming)
+        _merge_generic_upstream_headers(
+            fwd, incoming, {"X-Tenant": "default-tenant"}, overridable_names=["X-Tenant"]
+        )
+        keys = [k for k in fwd if k.lower() == "x-tenant"]
+        assert len(keys) == 1
+        assert fwd[keys[0]] == "caller-tenant"
+
+    def test_overridable_default_used_when_caller_absent(self):
+        incoming = {"Content-Type": "application/json"}
+        fwd = self._base(incoming)
+        _merge_generic_upstream_headers(
+            fwd, incoming, {"X-Tenant": "default-tenant"}, overridable_names=["X-Tenant"]
+        )
+        assert fwd["X-Tenant"] == "default-tenant"
+
+    def test_caller_only_slot_forwarded(self):
+        # Overridable, NO default value: the caller's header (survived
+        # _forward_headers) is forwarded as-is.
+        incoming = {"X-Tenant": "caller-tenant"}
+        fwd = self._base(incoming)
+        _merge_generic_upstream_headers(fwd, incoming, {}, overridable_names=["X-Tenant"])
+        assert fwd["X-Tenant"] == "caller-tenant"
+
+    def test_caller_only_slot_absent_yields_nothing(self):
+        incoming = {"Content-Type": "application/json"}
+        fwd = self._base(incoming)
+        _merge_generic_upstream_headers(fwd, incoming, {}, overridable_names=["X-Tenant"])
+        assert "X-Tenant" not in fwd
+
+    def test_non_registered_caller_header_gains_no_auth_meaning(self):
+        # A caller header that is neither registered-overridable nor operator-set
+        # is not injected by the merge (it may still flow as a benign header via
+        # _forward_headers, but the merge adds nothing for it).
+        incoming = {"X-Random": "whatever"}
+        fwd = self._base(incoming)
+        before = dict(fwd)
+        _merge_generic_upstream_headers(fwd, incoming, {"X-Api-Key": "op"}, overridable_names=[])
+        assert fwd["X-Random"] == before["X-Random"]
+        assert fwd["X-Api-Key"] == "op"
+
+    def test_authorization_readmitted_only_when_overridable(self):
+        # _forward_headers strips Authorization; it is re-admitted from incoming
+        # ONLY when authorization is overridable and the caller supplied it.
+        incoming = {"Authorization": "Bearer caller-token"}
+        fwd = self._base(incoming)
+        assert "Authorization" not in fwd  # stripped by _forward_headers
+
+        _merge_generic_upstream_headers(fwd, incoming, {}, overridable_names=["Authorization"])
+        assert fwd["Authorization"] == "Bearer caller-token"
+
+    def test_authorization_not_readmitted_when_not_overridable(self):
+        incoming = {"Authorization": "Bearer caller-token"}
+        fwd = self._base(incoming)
+        _merge_generic_upstream_headers(fwd, incoming, {}, overridable_names=[])
+        assert "Authorization" not in fwd
+
+    def test_authorization_default_used_when_caller_absent(self):
+        incoming = {"Content-Type": "application/json"}
+        fwd = self._base(incoming)
+        _merge_generic_upstream_headers(
+            fwd,
+            incoming,
+            {"Authorization": "Bearer operator-default"},
+            overridable_names=["Authorization"],
+        )
+        assert fwd["Authorization"] == "Bearer operator-default"
+
+    def test_authorization_caller_overrides_default(self):
+        incoming = {"Authorization": "Bearer caller-token"}
+        fwd = self._base(incoming)
+        _merge_generic_upstream_headers(
+            fwd,
+            incoming,
+            {"Authorization": "Bearer operator-default"},
+            overridable_names=["Authorization"],
+        )
+        assert fwd["Authorization"] == "Bearer caller-token"
+
+
+class TestAssertGenericAuthorizationNotGatewayCred:
+    """The A2A equal-token guard on the generic hop: the caller's gateway
+    credential (X-Authorization) must never reach the backend via Authorization."""
+
+    def test_rejects_when_outbound_auth_equals_gateway_cred(self):
+        fwd = {"Authorization": "Bearer gwtoken"}
+        with pytest.raises(HTTPException) as e:
+            _assert_generic_authorization_not_gateway_cred(fwd, "Bearer gwtoken")
+        assert e.value.status_code == 401
+
+    def test_rejects_ignoring_scheme_and_whitespace(self):
+        # X-Authorization sent without the Bearer prefix, Authorization with it.
+        fwd = {"Authorization": "Bearer gwtoken"}
+        with pytest.raises(HTTPException):
+            _assert_generic_authorization_not_gateway_cred(fwd, "  gwtoken  ")
+
+    def test_allows_distinct_upstream_token(self):
+        fwd = {"Authorization": "Bearer upstream-token"}
+        _assert_generic_authorization_not_gateway_cred(fwd, "Bearer gwtoken")
+
+    def test_noop_when_no_gateway_cred(self):
+        fwd = {"Authorization": "Bearer upstream-token"}
+        _assert_generic_authorization_not_gateway_cred(fwd, None)
+
+    def test_noop_when_no_outbound_auth(self):
+        _assert_generic_authorization_not_gateway_cred({}, "Bearer gwtoken")
 
 
 class TestEgressSelfCheck:

@@ -88,6 +88,7 @@ PROXY_FIELD_NAMES: frozenset[str] = frozenset(
         "custom_headers",
         "custom_headers_encrypted",
         "custom_header_names",
+        "custom_header_overridable_names",
         "custom_headers_updated_at",
     }
 )
@@ -143,6 +144,7 @@ def clear_upstream_headers_on_repoint(
         return
     updates["custom_headers_encrypted"] = None
     updates["custom_header_names"] = []
+    updates["custom_header_overridable_names"] = []
     updates["custom_headers_updated_at"] = None
 
 
@@ -242,6 +244,18 @@ class ProxyableMixin(BaseModel):
     custom_header_names: list[str] = Field(
         default_factory=list,
         description="Names of the custom upstream headers (values are encrypted). Safe to surface.",
+    )
+    custom_header_overridable_names: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Subset of custom_header_names the CALLER may override or supply on the "
+            "request (the entries registered with overridable=true). This IS the "
+            "caller passthrough allowlist: on egress the generic hop forwards a "
+            "caller-supplied header ONLY if its name is in this set; a name here with "
+            "a stored encrypted value is an operator DEFAULT the caller may override, "
+            "and a name here WITHOUT a stored value is a caller-only slot. Names only, "
+            "no secret. Safe to surface on reads."
+        ),
     )
     custom_headers_updated_at: str | None = Field(
         default=None,

@@ -34,6 +34,7 @@ ENCRYPTED_FIELD: str = "auth_credential_encrypted"
 CUSTOM_HEADERS_PLAINTEXT_FIELD: str = "custom_headers"
 CUSTOM_HEADERS_ENCRYPTED_FIELD: str = "custom_headers_encrypted"
 CUSTOM_HEADER_NAMES_FIELD: str = "custom_header_names"
+CUSTOM_HEADER_OVERRIDABLE_NAMES_FIELD: str = "custom_header_overridable_names"
 
 MAX_CUSTOM_HEADER_NAME_LENGTH: int = 256
 MAX_CUSTOM_HEADER_VALUE_LENGTH: int = 4096
@@ -70,12 +71,21 @@ def _validate_custom_header_value(value: object, *, allow_empty: bool = False) -
     return value
 
 
+_CALLER_OVERRIDABLE_RESERVED_NAMES: frozenset[str] = frozenset({"authorization"})
+
+
 def validate_custom_headers(
     raw: list[dict] | None,
     *,
     allow_empty_values: bool = False,
 ) -> list[dict] | None:
-    """Validate existing MCP custom headers before storage or use."""
+    """Validate bounded, control-free upstream headers and override metadata.
+
+    A fixed header requires an operator value. An ``overridable`` header may
+    instead be caller-only (no default value). Gateway-managed names remain
+    forbidden except ``Authorization``, which is accepted only as caller-
+    overridable; fixed credentials belong in the egress credential vault.
+    """
     if raw is None:
         return None
 
@@ -93,12 +103,27 @@ def validate_custom_headers(
         if not isinstance(item, dict):
             raise ValueError("custom_headers entry must be an object")
         name = validate_custom_header_name(item.get("name"))
-        _validate_custom_header_value(item.get("value"), allow_empty=allow_empty_values)
+        value = item.get("value")
+        overridable = bool(item.get("overridable", False))
+        if value in (None, ""):
+            if not overridable and not allow_empty_values:
+                raise ValueError(
+                    f"custom_headers entry '{name}' has no value and is not overridable"
+                )
+        else:
+            _validate_custom_header_value(value)
+
         lower = name.lower()
         if lower in RESERVED_CUSTOM_HEADER_NAMES:
-            raise ValueError(
-                f"Header '{name}' is managed by the gateway and cannot be set as a custom header"
-            )
+            if lower not in _CALLER_OVERRIDABLE_RESERVED_NAMES:
+                raise ValueError(
+                    f"Header '{name}' is managed by the gateway and cannot be set as a custom header"
+                )
+            if not overridable:
+                raise ValueError(
+                    f"Header '{name}' may only be a caller-overridable header; "
+                    "fixed credentials belong in the egress credential vault"
+                )
         if lower in seen:
             raise ValueError(f"Duplicate custom header name: {name}")
         seen.add(lower)
@@ -288,27 +313,37 @@ def strip_credentials_from_dict(
 def encrypt_custom_headers_in_server_dict(
     server_dict: dict,
 ) -> dict:
-    """Validate and encrypt custom-header values before storage."""
+    """Validate, encrypt defaults, and store caller-override header metadata."""
     raw = server_dict.get(CUSTOM_HEADERS_PLAINTEXT_FIELD)
     if raw is None:
         return server_dict
 
+    # Validate before mutating the input so malformed data cannot leave a
+    # partially encrypted record behind.
     validate_custom_headers(raw)
     encrypted_list: list[dict[str, str]] = []
     names: list[str] = []
+    overridable_names: list[str] = []
     for item in raw:
         name = validate_custom_header_name(item.get("name"))
-        value = _validate_custom_header_value(item.get("value"))
-        encrypted_list.append({"name": name, "value_encrypted": encrypt_credential(value)})
+        value = item.get("value")
+        overridable = bool(item.get("overridable", False))
+        if value not in (None, ""):
+            value = _validate_custom_header_value(value)
+            encrypted_list.append({"name": name, "value_encrypted": encrypt_credential(value)})
         names.append(name)
+        if overridable:
+            overridable_names.append(name)
 
     server_dict[CUSTOM_HEADERS_ENCRYPTED_FIELD] = encrypted_list
     server_dict[CUSTOM_HEADER_NAMES_FIELD] = names
+    server_dict[CUSTOM_HEADER_OVERRIDABLE_NAMES_FIELD] = overridable_names
     server_dict["custom_headers_updated_at"] = datetime.now(UTC).isoformat()
     server_dict.pop(CUSTOM_HEADERS_PLAINTEXT_FIELD, None)
 
     logger.info(
-        f"Custom headers encrypted for storage (path: {server_dict.get('path', 'unknown')}, count: {len(names):d})",
+        f"Custom headers encrypted for storage (path: {server_dict.get('path', 'unknown')}, "
+        f"count: {len(names):d}, overridable: {len(overridable_names):d})"
     )
     return server_dict
 

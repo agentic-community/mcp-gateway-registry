@@ -204,6 +204,7 @@ class CustomEntityService:
         # {name, value} -> {name, value_encrypted}); never persisted in plaintext.
         custom_headers_encrypted = None
         custom_header_names: list[str] = []
+        custom_header_overridable_names: list[str] = []
         custom_headers_updated_at = None
         if getattr(request, "custom_headers", None):
             from ..utils.credential_encryption import (
@@ -212,11 +213,11 @@ class CustomEntityService:
             )
 
             # Same header policy as the MCP-server route (reserved-name block +
-            # count cap): a custom entity must not register a gateway-managed
-            # header for injection. Surface a validation error as 400, not 500.
-            # Both validate and encrypt live under the boundary so their ValueError
-            # (bad header, or SECRET_KEY missing) maps to 4xx consistently with the
-            # skill create path.
+            # count cap, + the per-header overridable rules): a custom entity must
+            # not register a gateway-managed header for injection. Surface a
+            # validation error as 400, not 500. Both validate and encrypt live under
+            # the boundary so their ValueError (bad header, or SECRET_KEY missing)
+            # maps to 4xx consistently with the skill create path.
             try:
                 validate_custom_headers(request.custom_headers)
                 _ch: dict[str, Any] = {"custom_headers": request.custom_headers}
@@ -225,6 +226,7 @@ class CustomEntityService:
                 raise CustomEntityValidationError("custom_headers", str(e)) from e
             custom_headers_encrypted = _ch.get("custom_headers_encrypted")
             custom_header_names = _ch.get("custom_header_names", [])
+            custom_header_overridable_names = _ch.get("custom_header_overridable_names", [])
             custom_headers_updated_at = _ch.get("custom_headers_updated_at")
 
         record = CustomEntityRecord(
@@ -242,6 +244,7 @@ class CustomEntityService:
             proxy_streaming=getattr(request, "proxy_streaming", False),
             custom_headers_encrypted=custom_headers_encrypted,
             custom_header_names=custom_header_names,
+            custom_header_overridable_names=custom_header_overridable_names,
             custom_headers_updated_at=custom_headers_updated_at,
         )
         record.assign_path()

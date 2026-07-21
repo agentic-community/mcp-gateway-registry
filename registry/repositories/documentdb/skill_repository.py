@@ -220,6 +220,7 @@ class DocumentDBSkillRepository(SkillRepositoryBase):
             "proxy_target_url": 1,
             "proxy_streaming": 1,
             "custom_header_names": 1,
+            "custom_header_overridable_names": 1,
             "proxy_resolved_ips": 1,
             "proxy_target_host": 1,
             "proxy_disabled_reason": 1,

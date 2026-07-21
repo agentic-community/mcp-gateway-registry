@@ -134,3 +134,56 @@ class TestVend:
         resp = _post(client)
         assert resp.status_code == 200
         assert resp.json()["headers"] == {}
+
+
+class TestOverridableNamesVended:
+    """The vend surfaces the caller passthrough allowlist and backstops it against
+    the never-forward gateway-cred denylist."""
+
+    def test_overridable_names_returned(self, make_client):
+        client = make_client(
+            _claims(),
+            _entity(custom_header_overridable_names=["X-Tenant", "Authorization"]),
+        )
+        resp = _post(client)
+        assert resp.status_code == 200
+        assert sorted(resp.json()["overridable_names"]) == ["Authorization", "X-Tenant"]
+
+    def test_empty_when_none_registered(self, make_client):
+        client = make_client(_claims(), _entity())
+        resp = _post(client)
+        assert resp.json()["overridable_names"] == []
+
+    def test_reserved_names_backstopped_out(self, make_client):
+        # A bypass-written doc lists a gateway-cred name as overridable; the vend
+        # must drop everything reserved EXCEPT Authorization.
+        client = make_client(
+            _claims(),
+            _entity(
+                custom_header_overridable_names=[
+                    "X-Tenant",
+                    "Cookie",
+                    "X-Authorization",
+                    "Authorization",
+                    "Host",
+                ]
+            ),
+        )
+        resp = _post(client)
+        assert sorted(resp.json()["overridable_names"]) == ["Authorization", "X-Tenant"]
+
+    def test_default_values_backstopped_against_internal_names(self, make_client):
+        # A bypass-written doc stores an internal-header name as an operator
+        # DEFAULT (not just overridable). The vend must drop it so the hop can
+        # never inject a gateway-internal header toward the backend.
+        client = make_client(
+            _claims(),
+            _entity(),
+            decrypted=[
+                {"name": "X-Api-Key", "value": "sk-ok"},
+                {"name": "X-Internal-Token-Generic", "value": "sneaky"},
+                {"name": "X-User", "value": "spoofed"},
+            ],
+        )
+        resp = _post(client)
+        assert resp.json()["headers"] == {"X-Api-Key": "sk-ok"}

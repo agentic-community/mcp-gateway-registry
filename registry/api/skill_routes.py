@@ -1233,7 +1233,12 @@ async def update_skill(
     # straight into storage via $set (custom_headers_encrypted would be left
     # untouched, so it would also be a silent egress no-op). Header rotation is a
     # deliberate follow-up behind a dedicated, narrowly-scoped endpoint.
-    for _hdr_field in ("custom_headers", "custom_headers_encrypted", "custom_header_names"):
+    for _hdr_field in (
+        "custom_headers",
+        "custom_headers_encrypted",
+        "custom_header_names",
+        "custom_header_overridable_names",
+    ):
         updates.pop(_hdr_field, None)
 
     # Lifecycle status change requires change_lifecycle_status (Issue #1330).

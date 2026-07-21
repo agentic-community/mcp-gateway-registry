@@ -77,11 +77,24 @@ class TestEncryptCustomHeaders:
         with pytest.raises(ValueError, match="non-empty name"):
             encrypt_custom_headers_in_server_dict(server_dict)
 
-    def test_rejects_empty_value(self, mock_secret_key):
+    def test_rejects_empty_value_when_not_overridable(self, mock_secret_key):
+        # A value-less entry that is NOT overridable is meaningless (nothing to
+        # inject, caller cannot supply it) -> rejected.
         server_dict = {"custom_headers": [{"name": "X-Foo", "value": ""}]}
 
-        with pytest.raises(ValueError, match="non-empty value"):
+        with pytest.raises(ValueError, match="no value and is not overridable"):
             encrypt_custom_headers_in_server_dict(server_dict)
+
+    def test_accepts_value_less_overridable_slot(self, mock_secret_key):
+        # A value-less overridable entry is a caller-only passthrough slot: it
+        # contributes a name (+ overridable name) but no encrypted value.
+        server_dict = {"custom_headers": [{"name": "X-Tenant", "overridable": True}]}
+
+        result = encrypt_custom_headers_in_server_dict(server_dict)
+
+        assert result[CUSTOM_HEADERS_ENCRYPTED_FIELD] == []
+        assert result["custom_header_names"] == ["X-Tenant"]
+        assert result["custom_header_overridable_names"] == ["X-Tenant"]
 
     def test_rejects_duplicate_names(self, mock_secret_key):
         server_dict = {
