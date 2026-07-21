@@ -119,12 +119,21 @@ REGISTRY_CONSTANTS = RegistryConstants()
 MAX_CUSTOM_HEADERS_PER_SERVER: int = 10
 
 # Header names the registry and gateway own. Custom headers with a name
-# whose lowercased form appears here are rejected at registration time.
+# whose lowercased form appears here are rejected at registration time (and the
+# egress hop strips them as a backstop for any bypass-written document).
+#
+# Three groups: (1) hop-by-hop / framing / content headers a proxy must control;
+# (2) ingress credentials (authorization/x-authorization/cookie); (3) the
+# GATEWAY-INTERNAL identity + routing + signed-token headers that /validate sets
+# on the auth_request subresponse and nginx copies onto the proxied request.
+# Group 3 is the #1391 credential-leak class: if an entity could register one of
+# these as a custom (esp. overridable) upstream header, the caller could cause the
+# gateway's own signed internal token / the authenticated user's identity to be
+# forwarded to a registrant-controlled backend and replayed against the registry.
+# They must NEVER be registrable or forwarded, in any form.
 RESERVED_CUSTOM_HEADER_NAMES: frozenset[str] = frozenset(
     {
-        "authorization",
-        "x-authorization",
-        "proxy-authorization",
+        # (1) hop-by-hop / framing / content
         "content-type",
         "content-length",
         "accept",
@@ -139,7 +148,34 @@ RESERVED_CUSTOM_HEADER_NAMES: frozenset[str] = frozenset(
         "x-forwarded-proto",
         "x-forwarded-host",
         "x-real-ip",
-        "cookie",
         "set-cookie",
+        # (2) ingress credentials
+        "authorization",
+        "x-authorization",
+        "proxy-authorization",
+        "cookie",
+        # (3) gateway-internal identity / routing / signed-token headers
+        "x-user",
+        "x-username",
+        "x-scopes",
+        "x-auth-method",
+        "x-groups",
+        "x-client-id",
+        "x-user-pool-id",
+        "x-region",
+        "x-original-url",
+        "x-server-name",
+        "x-tool-name",
+        "x-internal-token",
+        "x-internal-token-generic",
+        "x-internal-token-registry",
+        "x-generic-proxy-kind",
+        "x-generic-streaming",
+        "x-generic-has-upstream-auth",
+        "x-resolved-upstream",
+        "x-resolved-generic-upstream",
+        "x-upstream-url",
+        "x-body",
+        "x-body-uninspectable",
     }
 )

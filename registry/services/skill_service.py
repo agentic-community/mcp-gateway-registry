@@ -1180,6 +1180,7 @@ def _build_skill_card(
     # shared server-dict encryptor: {name, value} -> {name, value_encrypted}.
     custom_headers_encrypted = None
     custom_header_names: list[str] = []
+    custom_header_overridable_names: list[str] = []
     custom_headers_updated_at = None
     if getattr(request, "custom_headers", None):
         from ..utils.credential_encryption import (
@@ -1188,12 +1189,14 @@ def _build_skill_card(
         )
 
         # Same header policy as the MCP-server route (reserved-name block + count
-        # cap): a skill must not register a gateway-managed header for injection.
+        # cap, + the per-header overridable rules): a skill must not register a
+        # gateway-managed header for injection.
         validate_custom_headers(request.custom_headers)
         _ch: dict[str, Any] = {"custom_headers": request.custom_headers}
         encrypt_custom_headers_in_server_dict(_ch)
         custom_headers_encrypted = _ch.get("custom_headers_encrypted")
         custom_header_names = _ch.get("custom_header_names", [])
+        custom_header_overridable_names = _ch.get("custom_header_overridable_names", [])
         custom_headers_updated_at = _ch.get("custom_headers_updated_at")
 
     return SkillCard(
@@ -1233,6 +1236,7 @@ def _build_skill_card(
         # Static upstream auth headers for the proxy hop (encrypted above).
         custom_headers_encrypted=custom_headers_encrypted,
         custom_header_names=custom_header_names,
+        custom_header_overridable_names=custom_header_overridable_names,
         custom_headers_updated_at=custom_headers_updated_at,
     )
 

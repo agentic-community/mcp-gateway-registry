@@ -62,7 +62,7 @@ def test_value_must_be_string_and_bounded():
 
 
 def test_reserved_and_duplicate_names_rejected_case_insensitively():
-    with pytest.raises(ValueError, match="managed by the gateway"):
+    with pytest.raises(ValueError, match="caller-overridable"):
         validate_custom_headers([{"name": "Authorization", "value": "secret"}])
     with pytest.raises(ValueError, match="Duplicate"):
         validate_custom_headers(
@@ -122,11 +122,37 @@ def test_valid_headers_accepted():
 
 @pytest.mark.parametrize(
     "reserved",
-    ["Authorization", "authorization", "Host", "Content-Length", "Cookie", "X-Forwarded-For"],
+    [
+        "Host",
+        "Content-Length",
+        "Cookie",
+        "X-Forwarded-For",
+        "X-Authorization",
+        # Gateway-internal identity / routing / signed-token headers: registering
+        # any of these (esp. as overridable) would let a caller exfiltrate the
+        # gateway's own internal token or the user's identity to the backend.
+        "X-Internal-Token",
+        "X-Internal-Token-Generic",
+        "X-Internal-Token-Registry",
+        "X-User",
+        "X-Username",
+        "X-Scopes",
+        "X-Groups",
+        "X-Auth-Method",
+        "X-Client-Id",
+        "X-Original-URL",
+        "X-Generic-Has-Upstream-Auth",
+        "X-Upstream-Url",
+    ],
 )
 def test_reserved_header_rejected(reserved):
+    # Every reserved gateway/hop-by-hop/internal name is rejected in ANY form --
+    # EXCEPT Authorization (covered separately below), which is allowed as
+    # overridable.
     with pytest.raises(ValueError, match="managed by the gateway"):
         validate_custom_headers([{"name": reserved, "value": "x"}])
+    with pytest.raises(ValueError, match="managed by the gateway"):
+        validate_custom_headers([{"name": reserved, "overridable": True}])
 
 
 def test_count_cap_enforced():
@@ -140,16 +166,100 @@ def test_duplicate_name_rejected():
         validate_custom_headers([{"name": "X-A", "value": "1"}, {"name": "x-a", "value": "2"}])
 
 
-def test_empty_name_or_value_rejected():
-    with pytest.raises(ValueError, match="non-empty"):
-        validate_custom_headers([{"name": "X-A", "value": ""}])
-    with pytest.raises(ValueError, match="non-empty"):
+def test_empty_name_rejected():
+    with pytest.raises(ValueError, match="non-empty name"):
         validate_custom_headers([{"name": "", "value": "v"}])
 
 
 def test_non_object_entry_rejected():
     with pytest.raises(ValueError, match="must be an object"):
         validate_custom_headers(["X-A: v"])
+
+
+class TestOverridablePolicy:
+    """Per-header overridable flag: the three expressible shapes + rejections."""
+
+    def test_fixed_header_with_value_accepted(self):
+        # {name, value} (overridable defaults false) = FIXED operator credential.
+        hdrs = [{"name": "X-Api-Key", "value": "sk-123"}]
+        assert validate_custom_headers(hdrs) == hdrs
+
+    def test_default_plus_override_accepted(self):
+        hdrs = [{"name": "X-Api-Key", "value": "sk-default", "overridable": True}]
+        assert validate_custom_headers(hdrs) == hdrs
+
+    def test_caller_only_slot_accepted(self):
+        # Value-less but overridable = caller-only passthrough slot.
+        hdrs = [{"name": "X-Tenant", "overridable": True}]
+        assert validate_custom_headers(hdrs) == hdrs
+
+    def test_valueless_non_overridable_rejected(self):
+        # Nothing to inject and the caller cannot supply it -> meaningless.
+        with pytest.raises(ValueError, match="no value and is not overridable"):
+            validate_custom_headers([{"name": "X-Tenant"}])
+        with pytest.raises(ValueError, match="no value and is not overridable"):
+            validate_custom_headers([{"name": "X-Tenant", "value": "", "overridable": False}])
+
+    def test_authorization_allowed_only_when_overridable(self):
+        # Caller-overridable Authorization (with or without a default) is allowed.
+        assert validate_custom_headers([{"name": "Authorization", "overridable": True}]) is not None
+        assert (
+            validate_custom_headers(
+                [{"name": "authorization", "value": "Bearer default", "overridable": True}]
+            )
+            is not None
+        )
+
+    def test_fixed_authorization_rejected(self):
+        # A baked-in operator Authorization belongs in the egress vault, not here.
+        with pytest.raises(ValueError, match="caller-overridable"):
+            validate_custom_headers([{"name": "Authorization", "value": "Bearer secret"}])
+        with pytest.raises(ValueError, match="caller-overridable"):
+            validate_custom_headers(
+                [{"name": "Authorization", "value": "Bearer secret", "overridable": False}]
+            )
+
+
+class TestEncryptBuildsNameSets:
+    """encrypt_custom_headers_in_server_dict must encrypt only value-bearing
+    entries, list every registered name, and separately list the overridable
+    subset (the caller allowlist)."""
+
+    def test_mixed_entries_produce_correct_sets(self):
+        from registry.utils.credential_encryption import (
+            decrypt_custom_headers,
+            encrypt_custom_headers_in_server_dict,
+        )
+
+        d = {
+            "custom_headers": [
+                {"name": "X-Fixed", "value": "sk-fixed"},  # fixed default
+                {"name": "X-Default", "value": "sk-def", "overridable": True},  # default+override
+                {"name": "X-Caller", "overridable": True},  # caller-only, no value
+            ]
+        }
+        encrypt_custom_headers_in_server_dict(d)
+
+        # Every registered name is present; the value-less caller-only slot has no
+        # encrypted entry but IS in the name + overridable sets.
+        assert d["custom_header_names"] == ["X-Fixed", "X-Default", "X-Caller"]
+        assert d["custom_header_overridable_names"] == ["X-Default", "X-Caller"]
+        enc_names = [e["name"] for e in d["custom_headers_encrypted"]]
+        assert enc_names == ["X-Fixed", "X-Default"]  # X-Caller has no value to store
+        assert "custom_headers" not in d  # plaintext removed
+
+        # The stored values round-trip.
+        decrypted = {
+            h["name"]: h["value"] for h in decrypt_custom_headers(d["custom_headers_encrypted"])
+        }
+        assert decrypted == {"X-Fixed": "sk-fixed", "X-Default": "sk-def"}
+
+    def test_no_overridable_yields_empty_allowlist(self):
+        from registry.utils.credential_encryption import encrypt_custom_headers_in_server_dict
+
+        d = {"custom_headers": [{"name": "X-Api-Key", "value": "sk"}]}
+        encrypt_custom_headers_in_server_dict(d)
+        assert d["custom_header_overridable_names"] == []
 
 
 class TestFederationStripCoversHeaders:
@@ -164,6 +274,7 @@ class TestFederationStripCoversHeaders:
             "custom_headers",  # plaintext (defense-in-depth)
             "custom_headers_encrypted",
             "custom_header_names",
+            "custom_header_overridable_names",
             "custom_headers_updated_at",
         ):
             assert field in PROXY_FIELD_NAMES, f"{field} not federation-stripped"
@@ -201,6 +312,7 @@ class TestClearUpstreamHeadersOnRepoint:
         )
         assert upd["custom_headers_encrypted"] is None
         assert upd["custom_header_names"] == []
+        assert upd["custom_header_overridable_names"] == []
         assert upd["custom_headers_updated_at"] is None
 
     def test_same_host_different_path_preserves(self):

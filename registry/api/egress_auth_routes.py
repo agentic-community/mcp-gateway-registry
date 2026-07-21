@@ -376,9 +376,16 @@ class GenericUpstreamHeadersResponse(BaseModel):
 
     ``headers`` is empty when the entity has none, is not proxyable, or fails the
     upstream cross-check -- the hop treats an empty result as "no upstream auth".
+
+    ``overridable_names`` is the caller passthrough allowlist (the entity's
+    ``custom_header_overridable_names``): on egress the hop forwards a
+    caller-supplied header ONLY if its name is in this set, and lets the caller's
+    value win over an operator default of the same name. Names only, no secret --
+    they gate which caller headers survive; they never carry a value.
     """
 
     headers: dict[str, str] = Field(default_factory=dict)
+    overridable_names: list[str] = Field(default_factory=list)
 
 
 def _proxyable_repo_for(entity_type: str):
@@ -476,16 +483,41 @@ async def vend_generic_upstream_headers(
             status.HTTP_403_FORBIDDEN, detail="upstream not registered for this entity"
         )
 
+    # Backstop the stored set against the never-forward gateway-cred/internal
+    # denylist (registration validation already blocks these, but a bypass-written
+    # doc -- direct DB write, migration -- must not slip one through). Applies to
+    # BOTH the operator DEFAULTS and the overridable allowlist: only
+    # ``Authorization`` is allowed among reserved names (its fixed form is rejected
+    # at validation and its bearer is guarded by the equal-token check at the hop);
+    # every other reserved name is dropped so the hop can never inject / forward a
+    # gateway-internal header (X-Internal-Token*, X-User, ...) to the backend.
+    from registry.constants import RESERVED_CUSTOM_HEADER_NAMES
+
+    def _allowed_upstream_name(name: str) -> bool:
+        lower = name.lower()
+        return lower not in RESERVED_CUSTOM_HEADER_NAMES or lower == "authorization"
+
     decrypted = decrypt_custom_headers(doc.get("custom_headers_encrypted"))
-    headers = {h["name"]: h["value"] for h in decrypted if h.get("name") and h.get("value")}
+    headers = {
+        h["name"]: h["value"]
+        for h in decrypted
+        if h.get("name") and h.get("value") and _allowed_upstream_name(h["name"])
+    }
+
+    # Caller passthrough allowlist: the subset the operator registered as
+    # overridable. This gates which caller-supplied headers the hop forwards and
+    # which caller values win over an operator default.
+    raw_overridable = doc.get("custom_header_overridable_names") or []
+    overridable_names = [n for n in raw_overridable if n and _allowed_upstream_name(n)]
     # Log names + count only -- never the header values.
     logger.info(
-        "generic upstream-headers vended for %s/%s: %s",
+        "generic upstream-headers vended for %s/%s: defaults=%s overridable=%s",
         entity_type,
         registered_path,
         sorted(headers.keys()),
+        sorted(overridable_names),
     )
-    return GenericUpstreamHeadersResponse(headers=headers)
+    return GenericUpstreamHeadersResponse(headers=headers, overridable_names=overridable_names)
 
 
 @router.post("/internal/egress-token", response_model=EgressTokenResponse)

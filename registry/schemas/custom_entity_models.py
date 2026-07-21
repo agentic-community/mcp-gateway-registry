@@ -316,12 +316,15 @@ class CustomEntityCreate(BaseModel):
     is_proxied: bool = Field(default=False)
     proxy_target_url: str | None = Field(default=None)
     proxy_streaming: bool = Field(default=False)
-    custom_headers: list[dict[str, str]] | None = Field(
+    custom_headers: list[dict[str, Any]] | None = Field(
         default=None,
         description=(
-            "Plaintext static upstream auth headers ([{name, value}, ...]) presented "
-            "to the proxied backend when is_proxied is true. Encrypted into "
-            "custom_headers_encrypted at creation; never persisted or echoed in plaintext."
+            "Plaintext upstream auth headers ([{name, value?, overridable?}, ...]) "
+            "presented to the proxied backend when is_proxied is true. A value makes "
+            "it an operator-injected header; overridable=true lets the CALLER supply "
+            "or override it on the request (a value-less overridable entry is a "
+            "caller-only passthrough slot). Encrypted into custom_headers_encrypted "
+            "at creation; never persisted or echoed in plaintext."
         ),
     )
 
