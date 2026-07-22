@@ -37,9 +37,22 @@ def _addrinfo(*ips):
 
 @contextmanager
 def _patch_settings(allow_private=False):
+    # resolve_and_validate_proxy_target delegates to url_guard, which reads the
+    # allowlist through its OWN imported `settings` reference and caches it
+    # (@lru_cache). Patch url_guard.settings directly and clear the cache so the
+    # flag flip is honored; also patch the config.settings the helper reads.
+    from registry.utils import url_guard
+
     with patch("registry.core.config.settings") as s:
         s.gateway_proxy_allow_private_targets = allow_private
-        yield s
+        s.ssrf_allowed_hosts = ""
+        s.ssrf_allowed_cidrs = ""
+        with patch.object(url_guard, "settings", s):
+            url_guard._proxy_allowlist.cache_clear()
+            try:
+                yield s
+            finally:
+                url_guard._proxy_allowlist.cache_clear()
 
 
 class TestLiteralIpTargets:
@@ -90,14 +103,16 @@ class TestHostnameResolution:
                     await resolve_and_validate_proxy_target("https://mixed.example/")
 
     async def test_unresolvable_hostname_raises_valueerror(self):
+        # url_guard surfaces a DNS failure as UrlValidationError; the proxy adapter
+        # wraps it as EgressPolicyError (a ValueError) so it maps to a 4xx.
         with _patch_settings():
             with patch("socket.getaddrinfo", side_effect=socket.gaierror("nxdomain")):
-                with pytest.raises(ValueError, match="Cannot resolve"):
+                with pytest.raises(ValueError, match="[Rr]esolution failed"):
                     await resolve_and_validate_proxy_target("https://nope.example/")
 
     async def test_non_http_scheme_rejected(self):
         with _patch_settings():
-            with pytest.raises(ValueError, match="http"):
+            with pytest.raises(ValueError, match="scheme"):
                 await resolve_and_validate_proxy_target("gopher://x/")
 
 

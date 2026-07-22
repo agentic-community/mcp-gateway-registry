@@ -424,6 +424,7 @@ class _Allowlist:
 
     hosts: frozenset[str] = field(default_factory=frozenset)
     cidrs: tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...] = ()
+    allow_private: bool = False
 
     def allows_host(
         self,
@@ -539,6 +540,7 @@ def _proxy_allowlist() -> _Allowlist:
     return _Allowlist(
         hosts=_parse_hosts(_settings.ssrf_allowed_hosts),
         cidrs=_parse_cidrs(_settings.ssrf_allowed_cidrs),
+        allow_private=bool(getattr(_settings, "gateway_proxy_allow_private_targets", False)),
     )
 
 
@@ -549,6 +551,7 @@ def _builtin_airegistry_tools_allowlist() -> _Allowlist:
     return _Allowlist(
         hosts=ordinary.hosts | _RESERVED_BUILTIN_PROXY_HOSTS,
         cidrs=ordinary.cidrs,
+        allow_private=ordinary.allow_private,
     )
 
 
@@ -651,7 +654,7 @@ def _is_blocked_ip(
     return (
         _ip_denial_reason(
             ip,
-            allow_private=False,
+            allow_private=allowlist.allow_private,
             allowed_cidrs=allowed_cidrs,
         )
         is not None

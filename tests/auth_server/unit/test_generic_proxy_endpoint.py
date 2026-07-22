@@ -55,30 +55,48 @@ class _FakeStreamResponse:
         yield self._body
 
 
-def _fake_client(captured, response: _FakeStreamResponse):
-    """Build a MagicMock httpx.AsyncClient whose .stream() records the call."""
+class _FakeGuardedClient:
+    """Stand-in for the object guarded_async_client() returns. Works both as an
+    ``async with`` context (buffered path) and used directly + aclose()'d
+    (streaming path)."""
 
-    class _Client:
-        def __init__(self, *a, **kw):
-            captured["client_kwargs"] = kw
+    def __init__(self, captured, response: _FakeStreamResponse):
+        self._captured = captured
+        self._response = response
 
-        async def __aenter__(self):
-            return self
+    async def __aenter__(self):
+        return self
 
-        async def __aexit__(self, *a):
-            return False
+    async def __aexit__(self, *a):
+        return False
 
-        def stream(self, method, url, **kw):
-            captured["method"] = method
-            captured["url"] = url
+    async def aclose(self):
+        return None
 
-            @asynccontextmanager
-            async def _cm():
-                yield response
+    def stream(self, method, url, **kw):
+        self._captured["method"] = method
+        self._captured["url"] = url
 
-            return _cm()
+        @asynccontextmanager
+        async def _cm():
+            yield self._response
 
-    return _Client
+        return _cm()
+
+
+def _fake_guarded_async_client(captured, response: _FakeStreamResponse):
+    """Build a guarded_async_client replacement that records how it was called.
+
+    The hop now uses url_guard.guarded_async_client (the pinned SSRF-safe client),
+    NOT a bare httpx.AsyncClient. Patching this asserts the guarded path is wired
+    in AND captures profile/verify/follow_redirects so a regression to a raw
+    client (or a dropped profile) fails the test."""
+
+    def _factory(*a, **kw):
+        captured["client_kwargs"] = kw
+        return _FakeGuardedClient(captured, response)
+
+    return _factory
 
 
 @pytest.fixture(autouse=True)
@@ -116,7 +134,10 @@ class TestHappyPathAndRedirect:
         )
         with (
             patch.object(server_module, "_generic_proxy_feature_active", True),
-            patch("auth_server.server.httpx.AsyncClient", _fake_client(captured, resp_obj)),
+            patch(
+                "auth_server.server.guarded_async_client",
+                _fake_guarded_async_client(captured, resp_obj),
+            ),
         ):
             client = TestClient(app)
             resp = client.get(
@@ -126,6 +147,8 @@ class TestHappyPathAndRedirect:
         assert resp.status_code == 200
         # pinned upstream used, forgeable inbound header ignored
         assert captured["url"] == "https://backend.example/"
+        # the SSRF-safe guarded client was used with the proxy egress profile
+        assert captured["client_kwargs"]["profile"] is server_module.PROXY_PROFILE
         # backend Set-Cookie dropped; gateway security headers set
         assert "set-cookie" not in {k.lower() for k in resp.headers}
         assert resp.headers["X-Content-Type-Options"] == "nosniff"
@@ -139,14 +162,53 @@ class TestHappyPathAndRedirect:
         )
         with (
             patch.object(server_module, "_generic_proxy_feature_active", True),
-            patch("auth_server.server.httpx.AsyncClient", _fake_client(captured, resp_obj)),
+            patch(
+                "auth_server.server.guarded_async_client",
+                _fake_guarded_async_client(captured, resp_obj),
+            ),
         ):
             client = TestClient(app, follow_redirects=False)
             resp = client.get("/proxy/skill/skills/proxy-demo")
-        # 302 returned verbatim; the httpx client was created with follow_redirects=False
+        # 302 returned verbatim; the guarded client was created with follow_redirects=False
         assert resp.status_code == 302
         assert resp.headers["Location"] == "http://169.254.169.254/latest/meta-data/"
         assert captured["client_kwargs"].get("follow_redirects") is False
+        assert captured["client_kwargs"]["profile"] is server_module.PROXY_PROFILE
+
+    def test_egress_block_at_fetch_returns_502_not_500(self):
+        """When the guarded transport blocks the outbound (rebind/denied IP at
+        connect time) it raises UrlValidationError. The hop must catch it and
+        return a deliberate 502, not let it escape as an opaque 500."""
+        from registry.exceptions import UrlValidationError
+
+        app.dependency_overrides[verify_generic_proxy_token] = _override_claims()
+
+        class _BlockingClient:
+            def __init__(self, *a, **kw):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            def stream(self, *a, **kw):
+                raise UrlValidationError("https://backend.example/", "resolves to blocked IP")
+
+        with (
+            patch.object(server_module, "_generic_proxy_feature_active", True),
+            patch(
+                "auth_server.server.guarded_async_client",
+                lambda *a, **kw: _BlockingClient(),
+            ),
+        ):
+            client = TestClient(app)
+            resp = client.get("/proxy/skill/skills/proxy-demo")
+        assert resp.status_code == 502
+        # The raw target/reason must NOT leak into the client response body.
+        assert "blocked IP" not in resp.text
+        assert "backend.example" not in resp.text
 
     def test_subpath_appended_to_pinned_base(self):
         app.dependency_overrides[verify_generic_proxy_token] = _override_claims(
@@ -156,7 +218,10 @@ class TestHappyPathAndRedirect:
         resp_obj = _FakeStreamResponse(200, {"Content-Type": "application/json"}, b"{}")
         with (
             patch.object(server_module, "_generic_proxy_feature_active", True),
-            patch("auth_server.server.httpx.AsyncClient", _fake_client(captured, resp_obj)),
+            patch(
+                "auth_server.server.guarded_async_client",
+                _fake_guarded_async_client(captured, resp_obj),
+            ),
         ):
             client = TestClient(app)
             resp = client.get("/proxy/skill/skills/proxy-demo/reports/2024")

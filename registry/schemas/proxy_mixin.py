@@ -5,35 +5,32 @@ can opt into being served through the gateway by setting ``is_proxied=True``.
 The registry then generates an nginx location block that routes authenticated
 traffic to the entity's effective backend URL.
 
-Security posture (this module is the application-layer SSRF control):
-- ``_assert_egress_allowed`` rejects loopback / private / reserved / multicast
-  targets unless ``gateway_proxy_allow_private_targets`` is set, and ALWAYS
-  rejects link-local (which includes the cloud metadata endpoint) and the
-  unspecified address regardless of that flag.
-- The guard is a best-effort STATIC check on literal-IP targets. Hostnames pass
-  here (DNS is resolved downstream by nginx/httpx); the authoritative defense
-  against DNS-rebind is the network egress policy (deny metadata/link-local at
-  the socket layer) documented in the LLD, not this function.
-- The same guard is DESIGNED to run at three points (model validator, repository
-  persist, nginx render) so a row written before the policy existed, or by a
-  federation sync that bypasses the Pydantic validator, still cannot emit a live
-  route to a denied host. This module lands the model validator; the persist-path
-  and render-path hooks are added in the federation-enforcement and nginx-render
-  changes respectively. The feature ships disabled (gateway_generic_proxy_enabled
-  defaults false) until all three are in place.
+Security posture (this module wires the entity/proxy layer to the SSRF control):
+- IP classification + the egress allowlist are owned by the canonical
+  ``registry.utils.url_guard``, including its inline literal parser and IP-category
+  classifier. The functions here are thin PROXY_PROFILE adapters that translate the guard's ``UrlValidationError`` into the local
+  ``EgressPolicyError`` (a ``ValueError``) so a Pydantic field validator surfaces a
+  clean 4xx. Registration and the fetch-time pinned transport therefore share ONE
+  policy — the ``gateway_proxy_allow_private_targets`` bool (relaxes loopback/
+  private/CGNAT only) plus ``ssrf_allowed_hosts``/``ssrf_allowed_cidrs`` (an explicit
+  CIDR re-permits any non-metadata category); the cloud metadata endpoints
+  (169.254.169.254 AND the IPv6 fd00:ec2::254) are NEVER reachable.
+- The static check is best-effort on literal-IP targets; hostnames pass it (no DNS
+  in a validator). The authoritative rebind defense is the fetch-time pinned
+  transport (``url_guard.guarded_async_client``, which resolves+validates+connects
+  inside the transport call for every request and redirect hop) plus the network
+  egress policy — not this static edge check.
+- The guard runs at three points (model validator, service resolve-and-pin, nginx
+  render) so a row written before the policy existed, or by a federation sync that
+  bypasses the Pydantic validator, still cannot emit a live route to a denied host.
 
 Two application-layer checks, by context:
 - ``_assert_egress_allowed`` / ``egress_guard_validator`` — the STATIC (literal-IP)
-  check at the Pydantic API edge (422). A genuine hostname passes it (no DNS in a
-  validator).
+  check at the Pydantic API edge (422), via ``url_guard.validate_url(resolve=False)``.
 - ``resolve_and_validate_proxy_target`` / ``validate_and_pin_proxy_target`` — the
-  DNS-aware check (layer 2), run at the service register/update layer and
-  by the scheduled pin-refresh. It resolves the hostname and validates every
-  resolved IP (like registry/services/ard_net_guard.py), catching a target that
-  resolves to a metadata/private IP *now* and pinning the resolved IPs. It is
-  best-effort against DNS-rebind (the set can change before the real request) —
-  which is why the authoritative control remains the network egress policy (layer
-  1). Do not enable the feature until that policy is deployed.
+  DNS-aware check (layer 2), run at the service register/update layer and by
+  the scheduled pin-refresh, via ``url_guard.validate_url(resolve=True)``. Resolves
+  the hostname, validates every resolved IP, and returns them for pin bookkeeping.
 """
 
 import logging
@@ -42,7 +39,7 @@ from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field
 
-from registry.utils.ip_guard import coerce_ip_literal, ip_denial_reason
+from registry.utils.url_guard import coerce_ip_literal
 
 logger = logging.getLogger(__name__)
 
@@ -99,46 +96,39 @@ class EgressPolicyError(ValueError):
 def _assert_egress_allowed(url: str) -> None:
     """Reject loopback / link-local / metadata / private / unspecified targets.
 
-    Delegates the IP category logic to ``registry.utils.ip_guard`` (the single
-    source of truth for encoding/NAT64/mapped bypasses). When
-    ``settings.gateway_proxy_allow_private_targets`` is true the
-    private/loopback/reserved/multicast checks are skipped (for trusted
-    on-cluster service URLs), but link-local (the cloud metadata endpoint) and
-    the unspecified address are ALWAYS denied.
+    Thin adapter over the canonical ``url_guard.validate_url`` (PROXY_PROFILE,
+    STATIC / no-DNS): the URL guard owns the classification (obfuscated literals,
+    embedded-v4, the non-overridable metadata deny) AND the egress allowlist (the
+    ``gateway_proxy_allow_private_targets`` bool + ``ssrf_allowed_hosts/cidrs``), so
+    registration and the fetch-time pinned transport share ONE policy. This adapter
+    exists only to (a) bind PROXY_PROFILE and (b) translate the guard's
+    ``UrlValidationError`` (a bare ``RegistryError``) into ``EgressPolicyError`` (a
+    ``ValueError``) so a Pydantic field validator surfaces it as a clean 4xx rather
+    than a 500.
 
     Literal-IP hosts (including obfuscated spellings) are category-checked here.
-    Genuine hostnames are allowed through (DNS is resolved downstream); see the
-    module docstring for why the real rebind defense is the network egress
-    policy, not this static check.
+    Genuine hostnames pass the static check (DNS is resolved downstream); the
+    authoritative rebind defense is the pinned transport at fetch time + the network
+    egress policy, not this static check.
 
     Args:
         url: The candidate proxy target URL.
 
     Raises:
-        ValueError: If the scheme is not http(s).
-        EgressPolicyError: If the target host is in a denied network range.
+        EgressPolicyError: If the scheme is not http(s) or the target host is in a
+            denied network range (both are ``ValueError`` subclasses).
     """
-    # Imported here (not at module import) so tests/callers that monkeypatch
-    # settings see the live value, and to avoid an import cycle with config.
-    from registry.core.config import settings
+    from registry.exceptions import UrlValidationError
+    from registry.utils.url_guard import PROXY_PROFILE, validate_url
 
-    parsed = urlparse(url)
-    if parsed.scheme not in ("http", "https"):
-        raise ValueError(f"proxy_target_url must be an http(s) URL, got scheme {parsed.scheme!r}")
-
-    host = (parsed.hostname or "").strip("[]")
-    ip = coerce_ip_literal(host)
-    if ip is None:
-        # Genuine hostname -> resolved downstream; static guard passes. The
-        # authoritative rebind defense is the network egress policy, not this.
-        return
-
-    reason = ip_denial_reason(ip, allow_private=settings.gateway_proxy_allow_private_targets)
-    if reason is not None:
+    try:
+        validate_url(url, profile=PROXY_PROFILE, resolve=False)
+    except UrlValidationError as e:
         raise EgressPolicyError(
-            f"proxy_target_url host {host} is denied ({reason}); "
-            "if this is a trusted on-cluster target set GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS=true"
-        )
+            f"proxy_target_url rejected: {e.reason}; if this is a trusted on-cluster "
+            "target set GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS=true or add it to "
+            "SSRF_ALLOWED_HOSTS / SSRF_ALLOWED_CIDRS"
+        ) from e
 
 
 class ProxyableMixin(BaseModel):
@@ -214,19 +204,13 @@ async def resolve_and_validate_proxy_target(
     """Resolve a proxy_target_url's hostname and validate every resolved IP.
 
     This is **layer 2** — the registration-time (and refresh-time)
-    DNS-aware SSRF check that ``_assert_egress_allowed`` deliberately skips for
-    hostnames. Resolving here catches a target that resolves to a
-    metadata/loopback/private IP *now*, giving a clear error at register/update
-    instead of a silent render-time drop. It is best-effort against DNS-rebind
-    (the resolved set can change before the real request) — which is exactly why
-    the authoritative control is the network egress policy (layer 1), not this.
-
-    Behavior mirrors ``_assert_egress_allowed``'s policy:
-    - scheme must be http(s);
-    - literal-IP targets are category-checked directly (no DNS);
-    - hostnames are resolved via ``getaddrinfo`` and EVERY resolved IP is checked;
-    - ``gateway_proxy_allow_private_targets`` relaxes private/loopback/reserved,
-      but link-local (metadata) and the unspecified address are ALWAYS denied.
+    DNS-aware SSRF check. It resolves the hostname and validates EVERY resolved IP
+    via the canonical ``url_guard.validate_url`` (PROXY_PROFILE, resolve=True), so
+    it shares ONE classifier + egress allowlist with the fetch-time pinned
+    transport (no register-vs-fetch policy drift). It is best-effort against
+    DNS-rebind (the resolved set can change before the real request) — which is why
+    the authoritative control is the pinned transport at fetch time + the network
+    egress policy (layer 1), not this.
 
     Args:
         url: The candidate proxy target URL.
@@ -234,63 +218,36 @@ async def resolve_and_validate_proxy_target(
     Returns:
         ``(hostname, resolved_ips)`` — the original hostname (or None for a
         literal-IP target) and the list of resolved IP strings (the literal
-        itself for an IP target). Callers persist these for pin bookkeeping.
+        itself for an IP target; empty when the host is operator-allowlisted, which
+        ``validate_url`` returns without resolving). Callers persist these for pin
+        bookkeeping.
 
     Raises:
-        ValueError: If the scheme is not http(s), or the host cannot be resolved.
-        EgressPolicyError: If any resolved IP is in a denied network range.
+        EgressPolicyError: If the scheme is not http(s), the host cannot be
+            resolved, or any resolved IP is in a denied network range (a
+            ``ValueError`` subclass, so a caller mapping ValueError -> 4xx works).
     """
     import asyncio
-    import socket
 
-    from registry.core.config import settings
+    from registry.exceptions import UrlValidationError
+    from registry.utils.url_guard import PROXY_PROFILE, validate_url
 
-    parsed = urlparse(url)
-    if parsed.scheme not in ("http", "https"):
-        raise ValueError(f"proxy_target_url must be an http(s) URL, got scheme {parsed.scheme!r}")
-    host = (parsed.hostname or "").strip("[]")
-    if not host:
-        raise ValueError(f"proxy_target_url has no host: {url!r}")
-
-    allow_private = settings.gateway_proxy_allow_private_targets
-
-    # Literal-IP target: no DNS, category-check directly (same as the static guard).
-    literal = coerce_ip_literal(host)
-    if literal is not None:
-        reason = ip_denial_reason(literal, allow_private=allow_private)
-        if reason is not None:
-            raise EgressPolicyError(
-                f"proxy_target_url host {host} is denied ({reason}); if this is a "
-                "trusted on-cluster target set GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS=true"
-            )
-        return None, [str(literal)]
-
-    # Hostname: resolve and check EVERY resolved IP (defeats rebind at check time).
-    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    host = (urlparse(url).hostname or "").strip("[]")
+    is_literal = coerce_ip_literal(host) is not None
     try:
-        infos = await asyncio.to_thread(socket.getaddrinfo, host, port, proto=socket.IPPROTO_TCP)
-    except socket.gaierror as e:
-        raise ValueError(f"Cannot resolve proxy_target_url host {host!r}: {e}") from e
+        # resolve=True performs getaddrinfo + validates every resolved IP, and
+        # returns the validated IP list (the literal itself for an IP target, or
+        # [] for an operator-allowlisted host it does not pin). validate_url is
+        # SYNCHRONOUS (socket.getaddrinfo), so run it in a worker thread — a slow
+        # or adversarial DNS answer must not block the event loop on this async
+        # register/refresh path.
+        ips = await asyncio.to_thread(validate_url, url, profile=PROXY_PROFILE, resolve=True)
+    except UrlValidationError as e:
+        raise EgressPolicyError(f"proxy_target_url rejected: {e.reason}") from e
 
-    resolved_ips: list[str] = []
-    for _family, _type, _proto, _canon, sockaddr in infos:
-        ip_str = str(sockaddr[0])
-        ip = coerce_ip_literal(ip_str)
-        if ip is None:
-            continue
-        reason = ip_denial_reason(ip, allow_private=allow_private)
-        if reason is not None:
-            raise EgressPolicyError(
-                f"proxy_target_url host {host} resolves to denied IP {ip_str} ({reason}); "
-                "if this is a trusted on-cluster target set "
-                "GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS=true"
-            )
-        if ip_str not in resolved_ips:
-            resolved_ips.append(ip_str)
-
-    if not resolved_ips:
-        raise ValueError(f"proxy_target_url host {host!r} resolved to no usable IPs")
-    return host, resolved_ips
+    # A literal-IP target has no hostname to preserve for the pin (Host/SNI); a
+    # genuine hostname is returned so callers can persist it for pin bookkeeping.
+    return (None if is_literal else host), ips
 
 
 async def validate_and_pin_proxy_target(

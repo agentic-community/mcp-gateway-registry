@@ -1,12 +1,13 @@
 """Unit tests for ProxyableMixin, resolve_proxy_target, and the SSRF egress guard.
 
-_assert_egress_allowed is a best-effort STATIC egress check that delegates IP
-classification to registry.utils.ip_guard (exhaustively tested in
-tests/unit/utils/test_ip_guard.py). It is deliberately weaker than
-ard_net_guard (it does not resolve DNS); the authoritative rebind defense is the
-network egress policy. These tests confirm the guard is wired into the model
-edge correctly and rejects literal-IP bypasses; they do not claim it is the sole
-SSRF control. They lock in the vectors so a future edit cannot silently weaken it:
+_assert_egress_allowed is a best-effort STATIC egress check that delegates to the
+canonical registry.utils.url_guard (PROXY_PROFILE, resolve=False), whose inline
+IP classifier is exhaustively tested in tests/unit/utils/test_url_guard.py. It is deliberately
+weaker than the fetch-time pinned transport (it does not resolve DNS); the
+authoritative rebind defense is that transport + the network egress policy. These
+tests confirm the guard is wired into the model edge correctly and rejects
+literal-IP bypasses; they do not claim it is the sole SSRF control. They lock in
+the vectors so a future edit cannot silently weaken it:
 
 - always-denied regardless of the allow-private flag: link-local (incl. the cloud
   metadata IP 169.254.169.254), IPv6 link-local, and the unspecified address
@@ -30,10 +31,18 @@ from registry.schemas.proxy_mixin import (
 
 
 def _set_allow_private(monkeypatch, value: bool) -> None:
-    """Point settings.gateway_proxy_allow_private_targets at ``value``."""
+    """Point settings.gateway_proxy_allow_private_targets at ``value``.
+
+    _assert_egress_allowed now delegates to url_guard, whose PROXY_PROFILE
+    allowlist is @lru_cached (settings are immutable per production process). The
+    cache must be cleared for a test that flips the flag, or the delegated guard
+    reads a stale allowlist.
+    """
     from registry.core import config
+    from registry.utils import url_guard
 
     monkeypatch.setattr(config.settings, "gateway_proxy_allow_private_targets", value, raising=True)
+    url_guard._proxy_allowlist.cache_clear()
 
 
 @pytest.mark.unit
@@ -248,10 +257,15 @@ class TestResolveProxyTarget:
 
 @pytest.mark.unit
 class TestEgressGuardErrorTaxonomy:
-    """Network denials raise EgressPolicyError; scheme errors raise plain ValueError.
+    """Every rejection is an EgressPolicyError (a ValueError subclass), so the
+    Pydantic edge surfaces it as a clean 4xx.
 
-    The two-tier taxonomy matters: the persist path catches EgressPolicyError
-    specifically, while the Pydantic edge surfaces both as 422.
+    NOTE: after converging onto url_guard (one code path for register + fetch),
+    scheme errors and network denials both raise EgressPolicyError rather than the
+    former split (plain ValueError for scheme). Nothing catches EgressPolicyError
+    *specifically* — every consumer uses ``except ValueError`` — so collapsing the
+    taxonomy has no functional effect; it just removes a distinction with no
+    consumer. Both remain ValueError subclasses.
     """
 
     def test_network_denial_is_egress_policy_error(self, monkeypatch):
@@ -259,11 +273,12 @@ class TestEgressGuardErrorTaxonomy:
         with pytest.raises(EgressPolicyError):
             _assert_egress_allowed("http://169.254.169.254/")
 
-    def test_bad_scheme_is_plain_value_error_not_egress(self, monkeypatch):
+    def test_bad_scheme_is_value_error(self, monkeypatch):
+        # A non-http(s) scheme is rejected as a ValueError (EgressPolicyError), so
+        # the Pydantic field validator surfaces it as a 4xx rather than a 500.
         _set_allow_private(monkeypatch, False)
-        with pytest.raises(ValueError) as exc:
+        with pytest.raises(ValueError):
             _assert_egress_allowed("file:///etc/passwd")
-        assert not isinstance(exc.value, EgressPolicyError)
 
     def test_userinfo_host_still_checked(self, monkeypatch):
         """A userinfo@host URL must be judged on the real host, not the userinfo."""
@@ -271,11 +286,12 @@ class TestEgressGuardErrorTaxonomy:
         with pytest.raises(EgressPolicyError):
             _assert_egress_allowed("http://user:pass@169.254.169.254/")
 
-    def test_empty_host_is_hostname_branch(self, monkeypatch):
-        """An http URL with no host has no literal IP to check; guard passes it
-        through (a downstream connect would simply fail)."""
+    def test_empty_host_rejected(self, monkeypatch):
+        """An http URL with no host is now rejected (url_guard requires a host) —
+        stricter than the former passthrough, and safer."""
         _set_allow_private(monkeypatch, False)
-        _assert_egress_allowed("http:///path")
+        with pytest.raises(ValueError):
+            _assert_egress_allowed("http:///path")
 
 
 @pytest.mark.unit

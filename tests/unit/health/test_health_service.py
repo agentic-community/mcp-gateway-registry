@@ -1502,6 +1502,10 @@ async def test_endpoint_check_blocks_unsafe_url_without_sending_credentials(
     settings_stub = MagicMock()
     settings_stub.ssrf_allowed_hosts = ""
     settings_stub.ssrf_allowed_cidrs = ""
+    # Explicit: a MagicMock auto-attr is truthy, so leaving this unset would make
+    # the PROXY_PROFILE allowlist relax private/loopback and the "unsafe URL is
+    # blocked" assertion would wrongly fail. Default matches production (False).
+    settings_stub.gateway_proxy_allow_private_targets = False
 
     with patch.object(url_guard, "settings", settings_stub):
         with patch.object(health_service, "_build_headers_for_server") as mock_build_headers:

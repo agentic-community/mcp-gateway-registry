@@ -97,11 +97,13 @@ from registry.audit.sink import emit_audit_event
 from registry.common.scopes_loader import reload_scopes_config
 from registry.common.secret_key import validate_secret_key, validate_signing_secret
 from registry.core.config import settings
-from registry.repositories.factory import get_scope_repository
 
 # Configure logging using shared module (RotatingFileHandler + optional MongoDB)
+from registry.exceptions import UrlValidationError
+from registry.repositories.factory import get_scope_repository
 from registry.utils.logging_setup import setup_logging as _setup_logging
 from registry.utils.request_utils import get_client_ip
+from registry.utils.url_guard import PROXY_PROFILE, guarded_async_client
 
 # Let setup_logging resolve the file path from settings.log_dir /
 # {service_name}.log. Honors APP_LOG_DIR overrides and the new
@@ -1942,9 +1944,7 @@ async def validate_server_tool_access(
                     # for all methods except tools/call we are good if the method is allowed
                     # for tools/call we need to do an extra validation to check if the tool
                     # itself is allowed or not
-                    if (
-                        method_in_allowed or has_wildcard_methods
-                    ) and method != "tools/call":
+                    if (method_in_allowed or has_wildcard_methods) and method != "tools/call":
                         logger.debug(f"  Method '{method}' found in allowed methods")
                         logger.debug(f"scope '{scope}' allows access to {server_name}.{method}")
                         logger.info(
@@ -8058,11 +8058,19 @@ async def generic_proxy(
     semaphore = _get_generic_proxy_semaphore()
     async with semaphore:
         try:
+            # SSRF/rebinding-safe client (CLAUDE.md invariant): the guarded
+            # transport resolves + validates + PINS the connection IP inside the
+            # transport call for the request AND every redirect hop, so a hostname
+            # that rebinds to a private/metadata IP between registration and fetch
+            # is blocked at connect time. PROXY_PROFILE shares the same egress
+            # policy (incl. gateway_proxy_allow_private_targets) the registration
+            # guard uses, so fetch-time and register-time decisions agree.
             # follow_redirects=False (second-SSRF guard): a 30x is returned to the
             # client verbatim (Location forwarded via the allowlist); the next hop
             # re-enters the gateway and is re-authorized. Auto-following would
             # bypass egress validation and could hit an attacker Location.
-            async with httpx.AsyncClient(
+            async with guarded_async_client(
+                profile=PROXY_PROFILE,
                 timeout=30.0,
                 follow_redirects=False,
                 verify=verify,
@@ -8082,6 +8090,20 @@ async def generic_proxy(
                     upstream_headers = dict(upstream_response.headers)
         except HTTPException:
             raise
+        except UrlValidationError as exc:
+            # The guarded transport blocked the outbound at connect time — the
+            # pinned target resolved to a denied (private/metadata/rebound) IP.
+            # This is the fetch-time SSRF net doing its job; surface a deliberate
+            # 502 rather than letting the RegistryError escape as an opaque 500.
+            # Log the reason only, never the raw target (avoid leaking internal
+            # resolution detail to logs on a hostile input).
+            logger.warning(
+                "generic_proxy: egress blocked for %s/%s: %s",
+                entity_type,
+                bound_registered_path,
+                exc.reason,
+            )
+            raise HTTPException(status_code=502, detail="Upstream not permitted") from exc
         except httpx.TimeoutException as exc:
             logger.error(f"generic_proxy: upstream timeout for {outbound_url}: {exc}")
             raise HTTPException(status_code=504, detail="Upstream timed out") from exc

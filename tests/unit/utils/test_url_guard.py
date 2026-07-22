@@ -43,11 +43,17 @@ def _resolve_to(*ips: str):
     return _stub
 
 
-def _settings(github_extra_hosts="", ssrf_allowed_hosts="", ssrf_allowed_cidrs=""):
+def _settings(
+    github_extra_hosts="",
+    ssrf_allowed_hosts="",
+    ssrf_allowed_cidrs="",
+    gateway_proxy_allow_private_targets=False,
+):
     s = MagicMock()
     s.github_extra_hosts = github_extra_hosts
     s.ssrf_allowed_hosts = ssrf_allowed_hosts
     s.ssrf_allowed_cidrs = ssrf_allowed_cidrs
+    s.gateway_proxy_allow_private_targets = gateway_proxy_allow_private_targets
     return s
 
 
@@ -720,3 +726,30 @@ class TestCredentialedOAuthProfile:
         )
         with pytest.raises(UrlValidationError):
             transport._pin_request(httpx.Request("POST", "http://93.184.216.34/token"))
+
+
+class TestProxyProfilePrivateTargetToggle:
+    def test_bool_relaxes_private_but_not_credential_endpoints(self):
+        settings = _settings(gateway_proxy_allow_private_targets=True)
+        with patch.object(url_guard, "settings", settings):
+            assert url_guard.validate_url(
+                "http://10.0.0.5/x", profile=url_guard.PROXY_PROFILE, resolve=False
+            ) == ["10.0.0.5"]
+            for target in (
+                "http://169.254.169.254/x",
+                "http://169.254.170.2/x",
+                "http://[fd00:ec2::254]/x",
+                "http://[fd00:ec2::23]/x",
+            ):
+                with pytest.raises(UrlValidationError):
+                    url_guard.validate_url(target, profile=url_guard.PROXY_PROFILE, resolve=False)
+
+    def test_bool_does_not_relax_noncredential_link_local(self):
+        settings = _settings(gateway_proxy_allow_private_targets=True)
+        with patch.object(url_guard, "settings", settings):
+            with pytest.raises(UrlValidationError):
+                url_guard.validate_url(
+                    "http://169.254.10.10/x",
+                    profile=url_guard.PROXY_PROFILE,
+                    resolve=False,
+                )
