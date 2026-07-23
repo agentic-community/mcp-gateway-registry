@@ -168,7 +168,7 @@ def _jwt_exp(access_token: str | None) -> int | None:
     except (ValueError, TypeError):
         return None
     exp = claims.get("exp")
-    return int(exp) if isinstance(exp, (int, float)) and not isinstance(exp, bool) else None
+    return int(exp) if isinstance(exp, int | float) and not isinstance(exp, bool) else None
 
 
 def _expires_at(expires_in: int | None, access_token: str | None = None) -> str | None:
