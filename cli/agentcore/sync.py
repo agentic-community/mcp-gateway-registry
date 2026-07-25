@@ -186,15 +186,24 @@ def _parse_account_ids(accounts_str: str) -> list[str]:
     the set is validated fail-closed at this single chokepoint (feeds both the
     server sync and token-refresh account loops):
 
-    - Every ID must be exactly 12 digits (``validate_account_ids``).
+    - An empty/blank value returns ``[]`` (current-account-only sync). This is
+      the default and is unchanged: single-account deployments are unaffected.
+    - Every requested ID must be exactly 12 digits (``validate_account_ids``).
     - When ``AGENTCORE_ALLOWED_ACCOUNTS`` is set, every requested ID must be a
-      member of that explicit allowlist; an off-list account raises. When it is
-      unset the shape check still applies and the widened (shape-only) scope is
-      logged, preserving backward compatibility for existing single-tenant
-      deployments while making the trust boundary explicit.
+      member of that explicit allowlist; an off-list account raises.
+    - When cross-account IDs are requested but NO allowlist is set, this fails
+      CLOSED: it raises unless the operator has set the separate, discouraged
+      ``AGENTCORE_ALLOW_ANY_ACCOUNT`` opt-in (in which case shape-only validation
+      applies and the widened scope is logged at WARNING). NOTE: this is a
+      behavior change from prior releases, which accepted any 12-digit
+      cross-account list unconditionally -- operators who set
+      ``AGENTCORE_ACCOUNTS`` for cross-account sync must now also set
+      ``AGENTCORE_ALLOWED_ACCOUNTS`` (recommended) or the opt-in.
 
     Raises:
-        EgressSecurityError: On a malformed or off-allowlist account ID.
+        EgressSecurityError: On a malformed or off-allowlist account ID, or on a
+            cross-account request with neither an allowlist nor the explicit
+            ``AGENTCORE_ALLOW_ANY_ACCOUNT`` opt-in.
     """
     if not accounts_str or not accounts_str.strip():
         return []
