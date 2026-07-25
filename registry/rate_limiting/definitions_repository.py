@@ -20,7 +20,10 @@ from ..repositories.documentdb.client import (
     get_collection_name,
     get_documentdb_client,
 )
-from .models import RateLimitDefinition
+from .models import (
+    SERVER_GROUP_ENTITY_TYPE,
+    RateLimitDefinition,
+)
 
 # Configure logging with basicConfig
 logging.basicConfig(
@@ -123,25 +126,90 @@ class DefinitionsRepository:
         self._cache_put(cache_key, definitions)
         return definitions
 
-    async def list_target_limits(
+    async def list_caller_target_limits(
         self,
         entity_type: str,
-        name: str,
+        names: list[str],
     ) -> list[RateLimitDefinition]:
-        """Return all enabled target-axis definitions (all windows) for one target entity."""
-        cache_key = f"target:{entity_type}:{name}"
+        """Return all enabled caller_target-axis definitions (all windows) for the given names.
+
+        Mirrors ``list_caller_limits`` with ``axis="caller_target"``. One bulk ``$in``
+        query, cached. A member of such a group gets an INDEPENDENT quota per target
+        (the limiter builds a composite counter subject).
+        """
+        if not names:
+            return []
+        cache_key = f"caller_target:{entity_type}:{','.join(sorted(names))}"
         cached = self._cache_get(cache_key)
         if cached is not None:
             return cached
         query = {
-            "axis": "target",
+            "axis": "caller_target",
             "entity_type": entity_type,
-            "name": name,
+            "name": {"$in": names},
             "enabled": True,
         }
         definitions = await self._find_definitions(query)
         self._cache_put(cache_key, definitions)
         return definitions
+
+    async def list_target_limits(
+        self,
+        entity_type: str,
+        name: str,
+    ) -> list[RateLimitDefinition]:
+        """Return all enabled target-axis definitions (all windows) for one target entity.
+
+        For an ``mcp_server`` target this ALSO returns enabled ``server_group``
+        definitions whose ``members`` array contains this server, so a server picks
+        up any group limit it belongs to. Each such definition is keyed per this
+        individual server by the limiter (``tgt:server_group:<server>:<window>``),
+        giving per-member uniform buckets rather than a shared pool. The exact-name
+        arm and the group arm are unioned via ``$or``; both a per-server and a
+        per-group definition can apply at once (independent buckets, all enforced).
+        """
+        cache_key = f"target:{entity_type}:{name}"
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached
+        # Exact single-target match always applies. Only server targets can belong
+        # to a server_group, so the group arm is added only for mcp_server (agent /
+        # tool / skill lookups keep their single-arm behavior, unchanged).
+        or_clauses: list[dict] = [{"entity_type": entity_type, "name": name}]
+        if entity_type == "mcp_server":
+            or_clauses.append({"entity_type": SERVER_GROUP_ENTITY_TYPE, "members": name})
+        query = {
+            "axis": "target",
+            "enabled": True,
+            "$or": or_clauses,
+        }
+        definitions = await self._find_definitions(query)
+        self._cache_put(cache_key, definitions)
+        return definitions
+
+    async def is_quarantine_group_enabled(
+        self,
+        group: str,
+    ) -> bool:
+        """Return whether a reserved quarantine group's sentinel definition is enabled.
+
+        A disabled sentinel is the operator's GLOBAL kill-switch off-toggle: the
+        limiter skips the quarantine short-circuit for that scope even if members
+        exist. Served from the definitions read cache. An unseeded group (no doc at
+        all) is treated as enabled so a fresh deploy still honors a hand-added
+        membership; seeding normally creates the sentinel enabled.
+        """
+        cache_key = f"quarantine_sentinel:{group}"
+        cached = self._cache_get(cache_key)
+        if cached is None:
+            # Query the sentinel WITHOUT the enabled filter so a disabled doc is
+            # still returned (we need its enabled flag). _find_definitions parses
+            # the model, which carries `enabled`.
+            cached = await self._find_definitions({"axis": "quarantine", "name": group})
+            self._cache_put(cache_key, cached)
+        if not cached:
+            return True  # unseeded -> honor a hand-added membership
+        return cached[0].enabled
 
     async def upsert(
         self,
@@ -194,3 +262,45 @@ class DefinitionsRepository:
             return None
         doc.pop("_id", None)
         return RateLimitDefinition(**doc)
+
+    async def seed_reserved_groups(self) -> None:
+        """Seed the two reserved quarantine group sentinels if absent (idempotent).
+
+        Uses ``$setOnInsert`` upserts so concurrent registry replicas racing at
+        startup converge to one doc each, and a restart NEVER clobbers an operator's
+        enable/disable state. Runs regardless of ``RATE_LIMITING_ENABLED`` so the
+        groups are always visible in the API/UI; enforcement is still feature-gated.
+        """
+        from .models import (
+            MIN_WINDOW_SECONDS,
+            QUARANTINE_CALLER_GROUP,
+            QUARANTINE_TARGET_GROUP,
+        )
+
+        collection = await self._get_collection()
+        sentinels = [
+            RateLimitDefinition(
+                axis="quarantine",
+                entity_type="group",
+                name=QUARANTINE_CALLER_GROUP,
+                scope="caller",
+                window_seconds=MIN_WINDOW_SECONDS,
+            ),
+            RateLimitDefinition(
+                axis="quarantine",
+                entity_type="group",
+                name=QUARANTINE_TARGET_GROUP,
+                scope="target",
+                window_seconds=MIN_WINDOW_SECONDS,
+            ),
+        ]
+        for sentinel in sentinels:
+            doc = sentinel.model_dump()
+            doc_id = sentinel.build_id()
+            await collection.update_one(
+                {"_id": doc_id},
+                {"$setOnInsert": {**doc, "_id": doc_id}},
+                upsert=True,
+            )
+        self.invalidate_cache()
+        logger.info("Seeded reserved quarantine groups (idempotent)")

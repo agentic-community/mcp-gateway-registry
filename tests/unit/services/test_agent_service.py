@@ -260,6 +260,20 @@ class TestRegisterAgent:
             await agent_service.register_agent(AgentCardFactory(path="/duplicate"))
 
     @pytest.mark.asyncio
+    async def test_register_agent_fails_for_duplicate_id(
+        self,
+        agent_service: AgentService,
+        fake_repo: InMemoryAgentRepository,
+    ):
+        """A caller-supplied id colliding with an existing agent -> 409 (#1276)."""
+        from registry.exceptions import AssetIdConflictError
+
+        await fake_repo.create(AgentCardFactory(path="/first", id="arn:aws:x"))
+
+        with pytest.raises(AssetIdConflictError):
+            await agent_service.register_agent(AgentCardFactory(path="/second", id="arn:aws:x"))
+
+    @pytest.mark.asyncio
     async def test_register_agent_defaults_to_disabled(
         self,
         agent_service: AgentService,

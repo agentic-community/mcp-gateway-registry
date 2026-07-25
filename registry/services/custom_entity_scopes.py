@@ -113,3 +113,33 @@ def list_grant_record_paths(
     """
     prefix = f"/{type_name}/"
     return [g for g in granted if isinstance(g, str) and g.startswith(prefix)]
+
+
+def resolve_list_grant(
+    type_name: str,
+    granted: list[str],
+) -> tuple[bool, set[str]]:
+    """Resolve a ``list_<type>_entity`` grant into its two discovery tiers.
+
+    Single place that classifies a grant list, so every enforcement site
+    (dependencies.user_can_list_custom_entity_type, the search discovery loop)
+    interprets the tiers identically instead of re-deriving them:
+
+    - Returns ``(True, set())`` when the grant opens the WHOLE type
+      (``"all"`` or the bare type name).
+    - Returns ``(False, {paths})`` when the grant is record-scoped — the set of
+      ``/<type>/<uuid>`` record paths it allows (possibly empty).
+
+    Admin bypass is intentionally NOT handled here (it is a property of the
+    caller's context, not of the grant); callers apply it themselves.
+
+    Args:
+        type_name: The custom type name.
+        granted: The caller's ``list_<type>_entity`` grant list (may be empty).
+
+    Returns:
+        ``(whole_type_open, record_paths)``.
+    """
+    if list_grant_allows_type(type_name, granted):
+        return True, set()
+    return False, set(list_grant_record_paths(type_name, granted))

@@ -237,11 +237,11 @@ async def link_ans_to_agent_endpoint(
     path: str,
     body: LinkANSRequest,
     user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ) -> dict[str, Any]:
     """Link an ANS Agent ID to an agent."""
     _check_ans_enabled()
     path = _normalize_path(path)
-    await verify_csrf_token_flexible(request)
     username = _get_username(user_context)
     _check_rate_limit(username)
     await _require_agent_owner_or_admin(path, user_context)
@@ -303,11 +303,11 @@ async def unlink_ans_from_agent_endpoint(
     request: Request,
     path: str,
     user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ) -> dict[str, Any]:
     """Remove ANS link from an agent."""
     _check_ans_enabled()
     path = _normalize_path(path)
-    await verify_csrf_token_flexible(request)
     username = _get_username(user_context)
     await _require_agent_owner_or_admin(path, user_context)
     set_audit_action(
@@ -339,11 +339,11 @@ async def link_ans_to_server_endpoint(
     path: str,
     body: LinkANSRequest,
     user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ) -> dict[str, Any]:
     """Link an ANS Agent ID to an MCP server."""
     _check_ans_enabled()
     path = _normalize_path(path)
-    await verify_csrf_token_flexible(request)
     username = _get_username(user_context)
     _check_rate_limit(username)
     await _require_server_owner_or_admin(path, user_context)
@@ -406,11 +406,11 @@ async def unlink_ans_from_server_endpoint(
     request: Request,
     path: str,
     user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ) -> dict[str, Any]:
     """Remove ANS link from a server."""
     _check_ans_enabled()
     path = _normalize_path(path)
-    await verify_csrf_token_flexible(request)
     username = _get_username(user_context)
     await _require_server_owner_or_admin(path, user_context)
     set_audit_action(
@@ -440,6 +440,7 @@ async def unlink_ans_from_server_endpoint(
 async def trigger_ans_sync(
     request: Request,
     user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ) -> dict[str, Any]:
     """Manually trigger ANS status sync (admin only)."""
     _check_ans_enabled()

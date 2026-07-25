@@ -59,15 +59,31 @@ PRIVILEGED_GRANTS: frozenset[str] = frozenset({"all"})
 # (scope_repository.py) call it so they cannot drift apart.
 _PER_TYPE_ENTITY_SCOPE_RE = re.compile(r"^(create|modify|delete)_.+_entity$")
 
+# Skill-management scopes (publish_/modify_/delete_/toggle_skill) also match the
+# mutating prefixes above, but they are NOT admin-conferring, for the same reason
+# as the per-type entity scopes: they gate SKILL management, not registry
+# management. Excluding them lets an admin grant a non-admin "skill-manager" group
+# the full skill scope set (publish/modify/delete/toggle_skill: ["all"]) -- exactly
+# what the admin seeds carry -- without silently promoting that group to full
+# registry admin. ``list_skills`` is read-only-prefixed and already excluded, so
+# only the four mutating forms are enumerated here. All four are excluded (not just
+# modify/delete/toggle) so the full grantable set stays non-conferring; leaving
+# ``publish_skill`` in would let a skill-manager holding the seeded set re-acquire
+# admin and defeat the exclusion.
+_SKILL_MANAGEMENT_SCOPES: frozenset[str] = frozenset(
+    {"publish_skill", "modify_skill", "delete_skill", "toggle_skill"}
+)
+
 
 def is_admin_conferring_action(action: str) -> bool:
     """Return True if holding ``action`` for "all" resources confers admin.
 
     An action confers admin when it starts with a mutating management prefix
-    (``ADMIN_ACTION_PREFIXES``) AND is not an excluded per-type custom-entity
-    scope (``create_/modify_/delete_<type>_entity``). Read-only prefixed actions
-    (``list_``/``get_``/``health_check_``) never match a mutating prefix and so
-    are non-conferring by construction.
+    (``ADMIN_ACTION_PREFIXES``) AND is not an excluded scope: a per-type
+    custom-entity scope (``create_/modify_/delete_<type>_entity``) or a
+    skill-management scope (``publish_/modify_/delete_/toggle_skill``). Read-only
+    prefixed actions (``list_``/``get_``/``health_check_``) never match a mutating
+    prefix and so are non-conferring by construction.
 
     This is the sole gate for the admin-derivation rule; both the per-request
     admin check and the privileged-write guard defer to it so the exclusion
@@ -75,7 +91,7 @@ def is_admin_conferring_action(action: str) -> bool:
 
     Args:
         action: A UI-Scopes action name (e.g. ``register_service``,
-            ``create_dataset_entity``).
+            ``create_dataset_entity``, ``modify_skill``).
 
     Returns:
         True if the action is admin-conferring (subject to a "all" grant),
@@ -84,6 +100,8 @@ def is_admin_conferring_action(action: str) -> bool:
     if not action.startswith(ADMIN_ACTION_PREFIXES):
         return False
     if _PER_TYPE_ENTITY_SCOPE_RE.match(action):
+        return False
+    if action in _SKILL_MANAGEMENT_SCOPES:
         return False
     return True
 

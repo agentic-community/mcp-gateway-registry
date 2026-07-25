@@ -282,6 +282,13 @@ export interface SessionConfig {
   cookieSecure: boolean;
   /** Domain for session cookies */
   cookieDomain: string;
+  /**
+   * Comma-separated exact-match allowlist of OAuth login/logout redirect URIs
+   * (open-redirect hardening). When set, an absolute redirect_uri is accepted
+   * only if it exactly matches an entry; relative paths are always allowed.
+   * Empty falls back to the weaker cookie-domain heuristic.
+   */
+  oauth2AllowedRedirectUris: string;
   /** Store OAuth provider tokens in session cookies */
   oauthStoreTokensInSession: boolean;
 }
@@ -404,7 +411,7 @@ export const DEFAULT_REGISTRY_CONFIG: RegistryConfig = {
   deploymentMode: 'with-gateway',
   registryMode: 'full',
   enableObservability: true,
-  enableWaf: false,
+  enableWaf: true,
   createCodebuild: false,
   idpGroupFilterPrefix: '',
   disableAiRegistryToolsServer: 'false',
@@ -568,6 +575,7 @@ export const DEFAULT_REGISTRY_CONFIG: RegistryConfig = {
   session: {
     cookieSecure: true,
     cookieDomain: '',
+    oauth2AllowedRedirectUris: '',
     oauthStoreTokensInSession: false,
   },
 

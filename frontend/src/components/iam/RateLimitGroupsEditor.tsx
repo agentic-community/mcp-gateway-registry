@@ -1,9 +1,12 @@
 import React, { useState, useMemo, useCallback, useEffect } from 'react';
-import { PencilIcon, XMarkIcon, CheckIcon } from '@heroicons/react/24/outline';
+import { PencilIcon, XMarkIcon, CheckIcon, NoSymbolIcon } from '@heroicons/react/24/outline';
 import SearchableSelect from '../SearchableSelect';
 import {
   setRateLimitMembership,
   deleteRateLimitMembership,
+  quarantineAdd,
+  quarantineRemove,
+  QUARANTINE_CALLER_GROUP,
   RateLimitMembership,
 } from '../../hooks/useRateLimits';
 
@@ -19,6 +22,9 @@ interface RateLimitGroupsEditorProps {
   // Called after a successful save so the parent can refetch the shared membership list.
   onSaved: () => void;
   onShowToast: (message: string, type: 'success' | 'error' | 'info') => void;
+  // Quarantine (add/remove) is an admin-only kill switch; the toggle is hidden
+  // for non-admins (the backend also enforces admin on the endpoint).
+  isAdmin?: boolean;
 }
 
 /**
@@ -38,10 +44,12 @@ const RateLimitGroupsEditor: React.FC<RateLimitGroupsEditorProps> = ({
   memberships,
   onSaved,
   onShowToast,
+  isAdmin = false,
 }) => {
   const [editing, setEditing] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [isSaving, setIsSaving] = useState(false);
+  const [isQuarantining, setIsQuarantining] = useState(false);
 
   // This subject's current membership groups.
   const currentGroups = useMemo(() => {
@@ -50,6 +58,31 @@ const RateLimitGroupsEditor: React.FC<RateLimitGroupsEditorProps> = ({
     );
     return m?.groups || [];
   }, [memberships, subjectType, subject]);
+
+  // A caller (user or client) is quarantined iff it belongs to the reserved
+  // quarantine-callers group. Toggling it is the admin-only kill switch.
+  const isQuarantined = currentGroups.includes(QUARANTINE_CALLER_GROUP);
+
+  const handleToggleQuarantine = useCallback(async () => {
+    setIsQuarantining(true);
+    try {
+      if (isQuarantined) {
+        await quarantineRemove(subjectType, subject);
+        onShowToast(`Removed ${subjectType}:${subject} from quarantine`, 'success');
+      } else {
+        await quarantineAdd(subjectType, subject);
+        onShowToast(`Quarantined ${subjectType}:${subject} (all traffic blocked)`, 'success');
+      }
+      onSaved();
+    } catch (err: any) {
+      onShowToast(
+        err?.response?.data?.detail || err?.message || 'Failed to update quarantine',
+        'error',
+      );
+    } finally {
+      setIsQuarantining(false);
+    }
+  }, [isQuarantined, subjectType, subject, onSaved, onShowToast]);
 
   useEffect(() => {
     if (editing) setSelected(new Set(currentGroups));
@@ -92,9 +125,19 @@ const RateLimitGroupsEditor: React.FC<RateLimitGroupsEditorProps> = ({
   };
 
   if (!editing) {
+    // Rate-limit group chips exclude the reserved quarantine group; quarantine
+    // state is shown as its own red badge + toggle so it reads as a kill switch,
+    // not a rate group.
+    const rateChips = currentGroups.filter((g) => g !== QUARANTINE_CALLER_GROUP);
     return (
       <div className="flex flex-wrap gap-1 items-center">
-        {currentGroups.map((g) => (
+        {isQuarantined && (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300">
+            <NoSymbolIcon className="h-3 w-3" />
+            quarantined
+          </span>
+        )}
+        {rateChips.map((g) => (
           <span
             key={g}
             className="inline-block px-2 py-0.5 text-xs rounded-full bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300"
@@ -102,7 +145,9 @@ const RateLimitGroupsEditor: React.FC<RateLimitGroupsEditorProps> = ({
             {g}
           </span>
         ))}
-        {currentGroups.length === 0 && <span className="text-gray-400 text-xs">{'—'}</span>}
+        {rateChips.length === 0 && !isQuarantined && (
+          <span className="text-gray-400 text-xs">{'—'}</span>
+        )}
         <button
           onClick={() => setEditing(true)}
           className="ml-2 p-1 text-gray-400 hover:text-blue-600 dark:hover:text-blue-400"
@@ -110,6 +155,24 @@ const RateLimitGroupsEditor: React.FC<RateLimitGroupsEditorProps> = ({
         >
           <PencilIcon className="h-3.5 w-3.5" />
         </button>
+        {isAdmin && (
+          <button
+            onClick={handleToggleQuarantine}
+            disabled={isQuarantining}
+            className={`p-1 disabled:opacity-50 ${
+              isQuarantined
+                ? 'text-red-500 hover:text-red-700 dark:hover:text-red-300'
+                : 'text-gray-400 hover:text-red-600 dark:hover:text-red-400'
+            }`}
+            title={
+              isQuarantined
+                ? 'Remove from quarantine (restore traffic)'
+                : 'Quarantine (block ALL data-plane traffic)'
+            }
+          >
+            <NoSymbolIcon className="h-3.5 w-3.5" />
+          </button>
+        )}
       </div>
     );
   }

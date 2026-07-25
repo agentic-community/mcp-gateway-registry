@@ -10,6 +10,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
+from registry.auth.csrf import verify_csrf_token_flexible
 from registry.auth.dependencies import nginx_proxied_auth
 
 logger = logging.getLogger(__name__)
@@ -59,6 +60,7 @@ async def get_telemetry_info(
 @router.post("/telemetry/heartbeat")
 async def force_heartbeat(
     user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ):
     """Force an immediate heartbeat telemetry event (admin only).
 
@@ -86,6 +88,7 @@ async def force_heartbeat(
 @router.post("/telemetry/startup")
 async def force_startup_ping(
     user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ):
     """Force an immediate startup telemetry event (admin only).
 

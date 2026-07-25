@@ -18,8 +18,11 @@ from urllib.parse import urlparse
 
 import httpx
 
+from ..common.log_redaction import redact_url
 from ..core.config import settings
+from ..core.metrics import ASSET_ID_CONFLICT_TOTAL
 from ..exceptions import (
+    AssetIdConflictError,
     SkillUrlValidationError,
     UrlValidationError,
 )
@@ -53,6 +56,7 @@ from ..utils.url_utils import (
     extract_repository_url,
     translate_skill_url,
 )
+from ._asset_id import resolve_asset_id
 from .github_auth import github_auth_provider as _github_auth
 
 # Configure logging
@@ -356,7 +360,8 @@ async def _discover_skill_resources(
     tree_info = _resolve_tree_api(skill_md_url)
     if not tree_info:
         logger.debug(
-            "Cannot derive tree API URL from %s — skipping resource discovery", skill_md_url
+            "Cannot derive tree API URL from %s — skipping resource discovery",
+            redact_url(skill_md_url),
         )
         return None
 
@@ -377,7 +382,9 @@ async def _discover_skill_resources(
             resp = await client.get(tree_url, headers=merged_headers)
             if resp.status_code >= 400:
                 logger.warning(
-                    "Resource discovery failed: HTTP %s for %s", resp.status_code, tree_url
+                    "Resource discovery failed: HTTP %s for %s",
+                    resp.status_code,
+                    redact_url(tree_url),
                 )
                 return None
             payload = resp.json()
@@ -405,7 +412,7 @@ async def _discover_skill_resources(
                         tree_url,
                     )
     except Exception as e:
-        logger.warning("Resource discovery error for %s: %s", tree_url, e)
+        logger.warning("Resource discovery error for %s: %s", redact_url(tree_url), e)
         return None
 
     # GitHub's Trees API returns {"sha": ..., "url": ..., "tree": [...], "truncated": bool}.
@@ -537,7 +544,7 @@ async def _validate_skill_md_url(
             final_url = str(response.url)
             if final_url != fetch_url and not _is_safe_url(final_url):
                 logger.warning(
-                    f"SSRF protection: Blocked redirect from {url} to unsafe URL {final_url}"
+                    f"SSRF protection: Blocked redirect from {redact_url(url)} to unsafe URL {redact_url(final_url)}"
                 )
                 raise SkillUrlValidationError(url, f"Redirect to unsafe URL blocked: {final_url}")
 
@@ -635,7 +642,7 @@ async def _parse_skill_md_content(
             final_url = str(response.url)
             if final_url != str(raw_url) and not _is_safe_url(final_url):
                 logger.warning(
-                    f"SSRF protection: Blocked redirect from {raw_url} to unsafe URL {final_url}"
+                    f"SSRF protection: Blocked redirect from {redact_url(raw_url)} to unsafe URL {redact_url(final_url)}"
                 )
                 raise SkillUrlValidationError(url, f"Redirect to unsafe URL blocked: {final_url}")
 
@@ -761,7 +768,7 @@ async def _parse_skill_md_content(
                 result["name_slug"] = name_slug
 
             logger.info(
-                f"Parsed SKILL.md from {user_url} (raw: {raw_url}): "
+                f"Parsed SKILL.md from {redact_url(user_url)} (raw: {redact_url(raw_url)}): "
                 f"name={result.get('name')}, has_description={bool(result.get('description'))}"
             )
             return result
@@ -831,7 +838,7 @@ async def _check_skill_health(
             final_url = str(response.url)
             if final_url != str(url) and not _is_safe_url(final_url):
                 logger.warning(
-                    f"SSRF protection: Blocked redirect from {url} to unsafe URL {final_url}"
+                    f"SSRF protection: Blocked redirect from {redact_url(url)} to unsafe URL {redact_url(final_url)}"
                 )
                 response_time_ms = (time.perf_counter() - start_time) * 1000
                 return {
@@ -851,7 +858,9 @@ async def _check_skill_health(
             }
 
     except UrlValidationError as e:
-        logger.warning("Skill health check blocked by SSRF guard for URL %s: %s", url, e)
+        logger.warning(
+            "Skill health check blocked by SSRF guard for URL %s: %s", redact_url(url), e
+        )
         response_time_ms = (time.perf_counter() - start_time) * 1000
         return {
             "healthy": False,
@@ -861,7 +870,7 @@ async def _check_skill_health(
         }
     except httpx.RequestError as e:
         # Log detailed exception on the server, but return a generic message to the client
-        logger.error("Error while checking skill health for URL %s: %s", url, e)
+        logger.error("Error while checking skill health for URL %s: %s", redact_url(url), e)
         response_time_ms = (time.perf_counter() - start_time) * 1000
         return {
             "healthy": False,
@@ -1032,10 +1041,10 @@ async def _fetch_authenticated_content(
 
             return response
     except UrlValidationError as e:
-        logger.warning("Skill content fetch blocked by SSRF guard for %s: %s", url, e)
+        logger.warning("Skill content fetch blocked by SSRF guard for %s: %s", redact_url(url), e)
         raise SkillContentSSRFError(url) from e
     except httpx.RequestError as e:
-        logger.error("Failed to fetch from %s: %s", url, e)
+        logger.error("Failed to fetch from %s: %s", redact_url(url), e)
         raise SkillContentFetchError(url, str(e))
 
 
@@ -1163,6 +1172,7 @@ def _build_skill_card(
 
     return SkillCard(
         path=path,
+        id=resolve_asset_id(request.id),
         name=request.name,
         description=request.description,
         skill_md_url=request.skill_md_url,
@@ -1295,6 +1305,14 @@ class SkillService:
 
         # Save to repository
         repo = self._get_repo()
+
+        # Id uniqueness pre-check (#1276): a caller-supplied id must not
+        # collide with an existing skill. Raise -> route maps to 409.
+        if skill.id and await repo.find_by_id(skill.id):
+            logger.warning(f"Skill registration rejected: id '{skill.id}' already exists")
+            ASSET_ID_CONFLICT_TOTAL.labels(asset_type="skill").inc()
+            raise AssetIdConflictError(asset_type="skill", asset_id=skill.id)
+
         created_skill = await repo.create(skill)
 
         # Index for search
@@ -1394,24 +1412,39 @@ class SkillService:
 
         Returns:
             List of SkillInfo visible to user
+
+        Authorization is two-layered, matching servers/agents/custom entities:
+        first the type-level ``list_skills`` discovery gate (a caller with no
+        ``list_skills`` grant sees zero skills — including public ones), then the
+        per-record visibility check (public/private-owner/group). The discovery
+        gate is defense-in-depth ON TOP of visibility, not a replacement.
         """
         all_skills = await self.list_skills(
             include_disabled=include_disabled,
             tag=tag,
         )
 
-        if not user_context:
-            # Anonymous - only public
-            return [s for s in all_skills if s.visibility == VisibilityEnum.PUBLIC]
-
-        if user_context.get("is_admin"):
+        if user_context and user_context.get("is_admin"):
             return all_skills
 
-        user_groups = set(user_context.get("groups", []))
-        username = user_context.get("username", "")
+        # Discovery gate (list_skills). accessible_skills is derived at auth time
+        # via the canonical accessible_resources_for("skill", ...): ["all"] or the
+        # named skills. Anonymous callers (no context) have no grant -> [] -> see
+        # nothing, which is the intended strict parity with list_service.
+        accessible_skills = (user_context or {}).get("accessible_skills") or []
+        discover_all = "all" in accessible_skills
+        if not discover_all and not accessible_skills:
+            return []
+
+        user_groups = set((user_context or {}).get("groups", []))
+        username = (user_context or {}).get("username", "")
 
         filtered = []
         for skill in all_skills:
+            # Type-level discovery gate first.
+            if not discover_all and skill.name not in accessible_skills:
+                continue
+            # Then per-record visibility (unchanged).
             if skill.visibility == VisibilityEnum.PUBLIC:
                 filtered.append(skill)
             elif skill.visibility == VisibilityEnum.PRIVATE:

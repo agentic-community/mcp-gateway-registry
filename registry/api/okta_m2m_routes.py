@@ -9,6 +9,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from registry.auth.csrf import verify_csrf_token_flexible
 from registry.auth.dependencies import nginx_proxied_auth
 from registry.repositories.documentdb.client import get_documentdb_client
 from registry.schemas.okta_m2m_client import (
@@ -60,6 +61,7 @@ def _require_admin(user_context: dict | None) -> None:
 async def sync_okta_m2m_clients(
     request: OktaSyncRequest = OktaSyncRequest(),
     user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ):
     """Sync M2M clients from Okta to MongoDB (admin only).
 
@@ -183,6 +185,7 @@ async def update_client_groups(
     client_id: str,
     payload: OktaM2MClientUpdate,
     user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ):
     """Update groups for an Okta M2M client (admin only).
 

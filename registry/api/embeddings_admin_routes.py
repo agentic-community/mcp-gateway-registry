@@ -10,6 +10,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
+from registry.auth.csrf import verify_csrf_token_flexible
 from registry.auth.dependencies import nginx_proxied_auth
 from registry.repositories.factory import get_search_repository
 
@@ -204,6 +205,7 @@ async def get_stale_embeddings(
 async def cleanup_stale_embeddings(
     request: StaleCleanupRequest,
     user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ) -> dict[str, Any]:
     """Remove orphaned embedding documents from the search index."""
     _require_admin(user_context)
@@ -235,6 +237,7 @@ async def cleanup_stale_embeddings(
 async def reindex_embeddings(
     request: ReindexRequest,
     user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ) -> dict[str, Any]:
     """Re-index specific documents by generating embeddings from source data.
 

@@ -10,6 +10,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from registry.auth.csrf import verify_csrf_token_flexible
 from registry.auth.dependencies import nginx_proxied_auth
 from registry.repositories.documentdb.client import get_documentdb_client
 from registry.schemas.idp_m2m_client import (
@@ -75,6 +76,7 @@ def _require_admin(user_context: dict | None) -> None:
 async def sync_auth0_m2m_clients(
     request: Auth0SyncRequest = Auth0SyncRequest(),
     user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ):
     """Sync M2M clients from Auth0 to MongoDB (admin only).
 
@@ -198,6 +200,7 @@ async def update_client_groups(
     client_id: str,
     payload: IdPM2MClientUpdate,
     user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ):
     """Update groups for an Auth0 M2M client (admin only).
 

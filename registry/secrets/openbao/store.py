@@ -25,6 +25,14 @@ logger = logging.getLogger(__name__)
 
 _T = TypeVar("_T")
 
+# Bounded backoff for transient Vault/OpenBao unavailability (see
+# ``_is_transient_error``). A HA leader election or a pod restart clears within a
+# few seconds, so a short exponential backoff (0.5, 1, 2, 4 -> ~7.5s total)
+# rides through it without stranding the caller. Kept as module constants so
+# tests can shrink the backoff.
+_TRANSIENT_RETRIES = 4
+_TRANSIENT_BACKOFF_BASE = 0.5
+
 
 def _is_auth_expiry_error(exc: Exception) -> bool:
     """True if an hvac error looks like an expired/invalid Vault token.
@@ -43,13 +51,66 @@ def _is_auth_expiry_error(exc: Exception) -> bool:
     return "permission denied" in text or "403" in text or "invalid token" in text
 
 
+def _is_transient_error(exc: Exception) -> bool:
+    """True if an hvac/transport error looks like a transient Vault availability
+    blip rather than a definitive failure.
+
+    A Vault/OpenBao HA cluster momentarily rejects requests while it (re-)elects a
+    leader -- e.g. after a pod restart (eviction / rollout / spot reclaim). During
+    that window in-flight requests see one of:
+
+      * ``connection refused`` / ``failed to establish a new connection`` -- the
+        Service still routes to a pod that is terminating, or a standby redirects
+        (307) to a now-dead leader ``api_addr``,
+      * HTTP 5xx with ``local node not active but active cluster node not found``
+        -- a standby that does not yet know who the active node is,
+      * read timeouts.
+
+    These clear within seconds once a leader is (re-)elected, so a short bounded
+    retry (see ``_run``) turns a user-visible failure -- a consent whose token
+    never persists, i.e. a silent "0 tools" -- into a transparent success. NOTE:
+    this is deliberately disjoint from ``_is_auth_expiry_error`` (403/permission
+    denied is NOT transient) so the two retry paths never overlap.
+    """
+    name = type(exc).__name__
+    if name in (
+        "InternalServerError",  # hvac 500
+        "VaultDown",  # hvac 503
+        "BadGateway",  # hvac 502
+        "GatewayTimeout",  # hvac 504
+        "ConnectionError",  # requests / urllib3
+        "ConnectTimeout",
+        "ReadTimeout",
+        "Timeout",
+        "MaxRetryError",  # urllib3
+        "NewConnectionError",  # urllib3
+    ):
+        return True
+    text = str(exc).lower()
+    return (
+        "local node not active" in text
+        or "connection refused" in text
+        or "max retries exceeded" in text
+        or "failed to establish a new connection" in text
+        or "read timed out" in text
+        or "temporarily unavailable" in text
+        or " 500" in text
+        or " 502" in text
+        or " 503" in text
+        or " 504" in text
+    )
+
+
 class OpenBaoStore(SecretStoreBase):
     """Per-entry KV v2 store. ``client`` is a connected, authenticated hvac client.
 
     ``reauthenticate`` re-runs the configured login on ``client`` in place; the
     store calls it and retries once when an operation fails with an expired-token
     error (see ``_is_auth_expiry_error``), making a long-lived store self-healing
-    against short Vault token TTLs.
+    against short Vault token TTLs. It also rides out transient Vault
+    unavailability (HA leader election / pod restart -- see
+    ``_is_transient_error``) with a short bounded backoff, so a consent's token
+    write is not lost to a few-second cluster blip.
     """
 
     def __init__(
@@ -65,16 +126,46 @@ class OpenBaoStore(SecretStoreBase):
         self._reauthenticate = reauthenticate
 
     async def _run(self, fn: Callable[[], _T]) -> _T:
-        """Run a blocking hvac call in a thread, re-authenticating + retrying ONCE
-        if it fails because the Vault token expired."""
-        try:
-            return await asyncio.to_thread(fn)
-        except Exception as exc:
-            if self._reauthenticate is None or not _is_auth_expiry_error(exc):
+        """Run a blocking hvac call in a thread, with two independent recoveries:
+
+        1. Expired Vault token (``_is_auth_expiry_error``) -> re-authenticate
+           once and retry (short-lived role tokens; hvac does not auto-renew).
+        2. Transient cluster unavailability (``_is_transient_error``, e.g. a HA
+           leader election after a pod restart) -> bounded exponential backoff
+           retry so a few-second blip does not surface as a hard failure (a
+           consent whose token never persists == a silent "0 tools").
+
+        A genuine error (bad path, real policy gap, malformed data) matches
+        neither and is raised immediately by the callers as a SecretStoreError.
+        """
+        attempt = 0
+        reauthed = False
+        while True:
+            try:
+                return await asyncio.to_thread(fn)
+            except Exception as exc:
+                # 1) expired token: re-login once, then keep going.
+                if not reauthed and self._reauthenticate is not None and _is_auth_expiry_error(exc):
+                    logger.warning(
+                        "OpenBao token rejected (%s); re-authenticating and retrying", exc
+                    )
+                    await asyncio.to_thread(self._reauthenticate)
+                    reauthed = True
+                    continue
+                # 2) transient unavailability: bounded backoff retry.
+                if attempt < _TRANSIENT_RETRIES and _is_transient_error(exc):
+                    delay = _TRANSIENT_BACKOFF_BASE * (2**attempt)
+                    attempt += 1
+                    logger.warning(
+                        "OpenBao request failed transiently (%s); retry %d/%d in %.1fs",
+                        exc,
+                        attempt,
+                        _TRANSIENT_RETRIES,
+                        delay,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
                 raise
-            logger.warning("OpenBao token rejected (%s); re-authenticating and retrying once", exc)
-            await asyncio.to_thread(self._reauthenticate)
-            return await asyncio.to_thread(fn)
 
     def _rel_path(
         self,

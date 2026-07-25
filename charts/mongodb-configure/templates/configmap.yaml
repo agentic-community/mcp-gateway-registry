@@ -24,7 +24,8 @@ data:
               {"action": "get_agent", "resources": ["all"]},
               {"action": "publish_agent", "resources": ["all"]},
               {"action": "modify_agent", "resources": ["all"]},
-              {"action": "delete_agent", "resources": ["all"]}
+              {"action": "delete_agent", "resources": ["all"]},
+              {"action": "toggle_agent", "resources": ["all"]}
             ]
           }
         }
@@ -35,7 +36,12 @@ data:
         "publish_agent": ["all"],
         "modify_agent": ["all"],
         "delete_agent": ["all"],
+        "toggle_agent": ["all"],
+        "list_skills": ["all"],
         "publish_skill": ["all"],
+        "modify_skill": ["all"],
+        "delete_skill": ["all"],
+        "toggle_skill": ["all"],
         "list_service": ["all"],
         "register_service": ["all"],
         "health_check_service": ["all"],
@@ -138,7 +144,12 @@ data:
         "publish_agent": ["all"],
         "modify_agent": ["all"],
         "delete_agent": ["all"],
+        "toggle_agent": ["all"],
+        "list_skills": ["all"],
         "publish_skill": ["all"],
+        "modify_skill": ["all"],
+        "delete_skill": ["all"],
+        "toggle_skill": ["all"],
         "list_service": ["all"],
         "register_service": ["all"],
         "health_check_service": ["all"],
@@ -203,6 +214,7 @@ data:
       "ui_permissions": {
         "list_agents": ["all"],
         "get_agent": ["all"],
+        "list_skills": ["all"],
         "list_service": ["all"],
         "health_check_service": ["all"]
       }

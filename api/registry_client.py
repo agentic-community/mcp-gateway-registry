@@ -17,7 +17,6 @@ from datetime import datetime
 from enum import Enum
 from typing import Any
 from urllib.parse import quote
-from uuid import UUID
 
 import requests
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -56,6 +55,14 @@ class InternalServiceRegistration(BaseModel):
 
     service_path: str = Field(
         ..., alias="path", description="Service path (e.g., /cloudflare-docs)"
+    )
+    # Optional caller-supplied asset id (#1276). Omitted -> server auto-generates
+    # a uuid4. Honored only when the registry enables ALLOW_CALLER_SUPPLIED_ASSET_ID.
+    id: str | None = Field(
+        None,
+        min_length=1,
+        max_length=512,
+        description="Optional caller-supplied id (UUID, ARN, ...). Auto-generated if omitted.",
     )
     name: str | None = Field(None, description="Service name")
     description: str | None = Field(None, description="Service description")
@@ -535,6 +542,15 @@ class AgentRegistration(BaseModel):
     specification (v0.3.0), with extensions for MCP Gateway Registry integration.
     Note: Uses snake_case internally but serializes to camelCase for A2A compliance.
     """
+
+    # Optional caller-supplied asset id (#1276). Omitted -> server auto-generates
+    # a uuid4. Honored only when the registry enables ALLOW_CALLER_SUPPLIED_ASSET_ID.
+    id: str | None = Field(
+        None,
+        min_length=1,
+        max_length=512,
+        description="Optional caller-supplied id (UUID, ARN, ...). Auto-generated if omitted.",
+    )
 
     # Required A2A fields
     protocol_version: str = Field(
@@ -1552,6 +1568,14 @@ class SkillRegistrationRequest(BaseModel):
 
     name: str = Field(..., description="Skill name (lowercase alphanumeric with hyphens)")
     skill_md_url: str = Field(..., description="URL to SKILL.md file")
+    # Optional caller-supplied asset id (#1276). Omitted -> server auto-generates
+    # a uuid4. Honored only when the registry enables ALLOW_CALLER_SUPPLIED_ASSET_ID.
+    id: str | None = Field(
+        None,
+        min_length=1,
+        max_length=512,
+        description="Optional caller-supplied id (UUID, ARN, ...). Auto-generated if omitted.",
+    )
     description: str | None = Field(None, description="Skill description")
     repository_url: str | None = Field(None, description="Repository URL")
     version: str | None = Field(None, description="Skill version (e.g., 1.0.0)")
@@ -1571,7 +1595,10 @@ class SkillRegistrationRequest(BaseModel):
 class SkillCard(BaseModel):
     """Response model for a skill."""
 
-    id: UUID = Field(..., description="Unique identifier (UUID) for this skill")
+    id: str = Field(
+        ...,
+        description="Unique identifier for this skill (any non-empty string: UUID, ARN, ...)",
+    )
     name: str = Field(..., description="Skill name")
     path: str = Field(..., description="Skill path (e.g., /skills/pdf-processing)")
     description: str | None = Field(None, description="Skill description")
@@ -1773,6 +1800,8 @@ class RegistryClient:
             or endpoint == "/api/servers/groups/import"
             or "/auth-credential" in endpoint
             or "/versions" in endpoint
+            or "/egress-auth" in endpoint
+            or "/egress-pat" in endpoint
             # The server rate endpoint (POST /api/servers/{path}/rate) takes a
             # JSON RatingRequest body, not form data.
             or endpoint.endswith("/rate")
@@ -2192,12 +2221,15 @@ class RegistryClient:
         window_seconds: int = 60,
         fail_closed: bool = False,
         enabled: bool = True,
+        members: list[str] | None = None,
     ) -> dict[str, Any]:
         """Create or update a rate-limit definition (admin only).
 
         Caller (group) axis: pass ``user_max_requests`` and/or ``agent_max_requests``.
-        Target axis: pass ``max_requests``. The ``_id`` is derived server-side; this
-        client builds the matching URL id.
+        Target axis: pass ``max_requests``. For a ``server_group`` target entity, also
+        pass ``members`` (a list of server paths); each listed server gets its own
+        independent ``max_requests``/window bucket (per-member uniform, not pooled).
+        The ``_id`` is derived server-side; this client builds the matching URL id.
 
         Raises:
             requests.HTTPError: If the request fails (e.g. 400 invalid definition).
@@ -2219,6 +2251,8 @@ class RegistryClient:
             body["user_max_requests"] = user_max_requests
         if agent_max_requests is not None:
             body["agent_max_requests"] = agent_max_requests
+        if members is not None:
+            body["members"] = members
         logger.info(f"Setting rate-limit definition {definition_id}")
         response = self._make_request(
             method="PUT",
@@ -2350,6 +2384,58 @@ class RegistryClient:
         response = self._make_request(
             method="DELETE",
             endpoint=f"/api/rate-limit-memberships/{membership_id}",
+        )
+        return response.json()
+
+    def quarantine_add(
+        self,
+        subject_type: str,
+        subject: str,
+    ) -> dict[str, Any]:
+        """Quarantine a subject (drops ALL its data-plane traffic). Admin only.
+
+        ``subject_type`` is one of user/client (caller) or server/agent (target);
+        the server picks the correct reserved group from it.
+
+        Raises:
+            requests.HTTPError: If the request fails (e.g. 400 invalid subject_type).
+        """
+        subject_id = f"{subject_type}:{subject}"
+        logger.info(f"Quarantining {subject_id}")
+        response = self._make_request(
+            method="POST",
+            endpoint=f"/api/rate-limit-quarantine/{subject_id}",
+        )
+        return response.json()
+
+    def quarantine_remove(
+        self,
+        subject_type: str,
+        subject: str,
+    ) -> dict[str, Any]:
+        """Remove a subject from quarantine (admin only).
+
+        Raises:
+            requests.HTTPError: If the request fails.
+        """
+        subject_id = f"{subject_type}:{subject}"
+        logger.info(f"Removing quarantine for {subject_id}")
+        response = self._make_request(
+            method="DELETE",
+            endpoint=f"/api/rate-limit-quarantine/{subject_id}",
+        )
+        return response.json()
+
+    def quarantine_list(self) -> dict[str, Any]:
+        """List everything currently quarantined (callers + targets). Admin only.
+
+        Raises:
+            requests.HTTPError: If the request fails.
+        """
+        logger.info("Listing quarantined subjects")
+        response = self._make_request(
+            method="GET",
+            endpoint="/api/rate-limit-quarantine",
         )
         return response.json()
 
@@ -3784,6 +3870,219 @@ class RegistryClient:
             method="GET", endpoint=f"/api/servers/{encoded_path}/versions"
         )
 
+        return response.json()
+
+    # Egress Auth Methods (per-user egress credential vault)
+
+    def configure_egress_auth(
+        self,
+        server_path: str,
+        mode: str,
+        provider: str | None = None,
+        client_id: str | None = None,
+        client_secret: str | None = None,
+        scopes: list[str] | None = None,
+        target_audience: str | None = None,
+    ) -> dict[str, Any]:
+        """Configure per-user egress auth on a server (admin only).
+
+        Wraps POST /api/servers/{path}/egress-auth. Sets the egress auth mode
+        and the mode-specific parameters. For ``pat`` mode, pass ``mode="pat"``
+        and ``provider=<slug>``.
+
+        Args:
+            server_path: Server path (e.g., "/github" or "github").
+            mode: Egress auth mode (none, oauth_user, obo_exchange, pat).
+            provider: Provider slug/name. Required for oauth_user and pat.
+            client_id: OAuth client id (oauth_user only).
+            client_secret: OAuth client secret (oauth_user only, write-only).
+            scopes: Optional list of OAuth scopes.
+            target_audience: Target audience (obo_exchange only).
+
+        Returns:
+            Non-secret egress config view dict.
+
+        Raises:
+            requests.HTTPError: If the request fails (e.g. 400 invalid config,
+                403 admin required, 404 server not found).
+        """
+        encoded_path = quote(server_path.lstrip("/"), safe="")
+        logger.info(f"Configuring egress auth for /{encoded_path}: mode={mode}")
+
+        body: dict[str, Any] = {"egress_auth_mode": mode}
+        if provider is not None:
+            body["egress_provider"] = provider
+        if client_id is not None:
+            body["client_id"] = client_id
+        if client_secret is not None:
+            body["client_secret"] = client_secret
+        if scopes is not None:
+            body["scopes"] = scopes
+        if target_audience is not None:
+            body["target_audience"] = target_audience
+
+        response = self._make_request(
+            method="POST",
+            endpoint=f"/api/servers/{encoded_path}/egress-auth",
+            data=body,
+        )
+        return response.json()
+
+    def get_egress_auth_config(
+        self,
+        server_path: str,
+    ) -> dict[str, Any]:
+        """Fetch the (non-secret) egress auth config for a server.
+
+        Wraps GET /api/servers/{path}/egress-auth.
+
+        Args:
+            server_path: Server path (e.g., "/github" or "github").
+
+        Returns:
+            Non-secret egress config view dict.
+
+        Raises:
+            requests.HTTPError: If the request fails (e.g. 404 server not found).
+        """
+        encoded_path = quote(server_path.lstrip("/"), safe="")
+        logger.info(f"Fetching egress auth config for /{encoded_path}")
+
+        response = self._make_request(
+            method="GET",
+            endpoint=f"/api/servers/{encoded_path}/egress-auth",
+        )
+        return response.json()
+
+    def set_egress_pat(
+        self,
+        server_path: str,
+        secret: str,
+        ttl_value: int,
+        ttl_unit: str,
+        sub: str | None = None,
+        auth_method: str | None = None,
+    ) -> dict[str, Any]:
+        """Submit (or replace) a per-user PAT for a ``pat`` server (write-only).
+
+        Wraps PUT /api/servers/{path}/egress-pat. The secret is stored, never
+        returned. ``sub`` is passed through; the server enforces admin-gating
+        (a non-admin supplying ``sub`` is rejected 403).
+
+        Args:
+            server_path: Server path (e.g., "/github" or "github").
+            secret: The PAT / API key to store.
+            ttl_value: Positive integer validity amount.
+            ttl_unit: Validity unit (minutes, hours, or days).
+            sub: Admin-only override to submit on another user's behalf.
+            auth_method: Admin-only, REQUIRED with ``sub``: the target's ingress
+                auth method (the vault partition the target vends from, e.g.
+                "oauth2"). Ignored for self-submit.
+
+        Returns:
+            Status dict with path, configured, sub, updated_at, expires_at.
+            The secret is never echoed.
+
+        Raises:
+            requests.HTTPError: If the request fails (e.g. 400 bad TTL/empty
+                secret or on-behalf missing auth_method, 403 non-admin sub, 409
+                server not in pat mode).
+        """
+        encoded_path = quote(server_path.lstrip("/"), safe="")
+        # Do NOT log the secret value.
+        logger.info(f"Submitting egress PAT for /{encoded_path}: ttl={ttl_value} {ttl_unit}")
+
+        body: dict[str, Any] = {
+            "secret": secret,
+            "ttl_value": ttl_value,
+            "ttl_unit": ttl_unit,
+        }
+        if sub is not None:
+            body["sub"] = sub
+        if auth_method is not None:
+            body["auth_method"] = auth_method
+
+        response = self._make_request(
+            method="PUT",
+            endpoint=f"/api/servers/{encoded_path}/egress-pat",
+            data=body,
+        )
+        return response.json()
+
+    def get_egress_pat_status(
+        self,
+        server_path: str,
+        sub: str | None = None,
+        auth_method: str | None = None,
+    ) -> dict[str, Any]:
+        """Report whether a per-user PAT is stored and when it expires.
+
+        Wraps GET /api/servers/{path}/egress-pat. Never returns the secret.
+
+        Args:
+            server_path: Server path (e.g., "/github" or "github").
+            sub: Admin-only override to query another user's status.
+            auth_method: Admin-only, REQUIRED with ``sub``: the target's ingress
+                auth method.
+
+        Returns:
+            Status dict with path, configured, expires_at, expired.
+
+        Raises:
+            requests.HTTPError: If the request fails (e.g. 403 non-admin sub,
+                409 server not in pat mode).
+        """
+        encoded_path = quote(server_path.lstrip("/"), safe="")
+        logger.info(f"Fetching egress PAT status for /{encoded_path}")
+
+        params: dict[str, Any] = {}
+        if sub is not None:
+            params["sub"] = sub
+        if auth_method is not None:
+            params["auth_method"] = auth_method
+        response = self._make_request(
+            method="GET",
+            endpoint=f"/api/servers/{encoded_path}/egress-pat",
+            params=params or None,
+        )
+        return response.json()
+
+    def delete_egress_pat(
+        self,
+        server_path: str,
+        sub: str | None = None,
+        auth_method: str | None = None,
+    ) -> dict[str, Any]:
+        """Delete a stored per-user PAT (idempotent).
+
+        Wraps DELETE /api/servers/{path}/egress-pat.
+
+        Args:
+            server_path: Server path (e.g., "/github" or "github").
+            sub: Admin-only override to delete another user's PAT.
+            auth_method: Admin-only, REQUIRED with ``sub``: the target's ingress
+                auth method.
+
+        Returns:
+            Dict with path and configured (always False).
+
+        Raises:
+            requests.HTTPError: If the request fails (e.g. 403 non-admin sub,
+                409 server not in pat mode).
+        """
+        encoded_path = quote(server_path.lstrip("/"), safe="")
+        logger.info(f"Deleting egress PAT for /{encoded_path}")
+
+        params: dict[str, Any] = {}
+        if sub is not None:
+            params["sub"] = sub
+        if auth_method is not None:
+            params["auth_method"] = auth_method
+        response = self._make_request(
+            method="DELETE",
+            endpoint=f"/api/servers/{encoded_path}/egress-pat",
+            params=params or None,
+        )
         return response.json()
 
     # Management API Methods (IAM/User Management)

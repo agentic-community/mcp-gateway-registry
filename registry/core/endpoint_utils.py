@@ -10,6 +10,8 @@ from typing import (
     Any,
 )
 
+from ..common.log_redaction import redact_url
+
 logger = logging.getLogger(__name__)
 
 
@@ -57,17 +59,17 @@ def get_endpoint_url(
     if transport_type == "sse":
         # Priority 1: Explicit sse_endpoint
         if sse_endpoint:
-            logger.debug(f"Using explicit sse_endpoint: {sse_endpoint}")
+            logger.debug(f"Using explicit sse_endpoint: {redact_url(sse_endpoint)}")
             return sse_endpoint
 
         # Priority 2: URL already contains transport path
         if base_url.endswith("/sse") or "/sse/" in base_url:
-            logger.debug(f"URL already contains /sse: {base_url}")
+            logger.debug(f"URL already contains /sse: {redact_url(base_url)}")
             return base_url
 
         # Priority 3: Append default suffix
         endpoint = f"{base_url}/sse"
-        logger.debug(f"Appending /sse suffix: {endpoint}")
+        logger.debug(f"Appending /sse suffix: {redact_url(endpoint)}")
         return endpoint
 
     else:
@@ -79,12 +81,12 @@ def get_endpoint_url(
 
         # Priority 2: URL already contains transport path
         if _url_contains_transport_path(base_url):
-            logger.debug(f"URL already contains transport path: {base_url}")
+            logger.debug(f"URL already contains transport path: {redact_url(base_url)}")
             return base_url
 
         # Priority 3: Append default suffix
         endpoint = f"{base_url}/mcp"
-        logger.debug(f"Appending /mcp suffix: {endpoint}")
+        logger.debug(f"Appending /mcp suffix: {redact_url(endpoint)}")
         return endpoint
 
 

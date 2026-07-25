@@ -9,6 +9,8 @@ import logging
 import re
 from urllib.parse import urlparse
 
+from registry.common.log_redaction import redact_url
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -126,7 +128,7 @@ def _translate_github_url_to_raw(
 
     if not match:
         # If not a blob URL, return as-is
-        logger.debug(f"URL path doesn't match blob pattern, returning as-is: {url}")
+        logger.debug(f"URL path doesn't match blob pattern, returning as-is: {redact_url(url)}")
         return url
 
     owner, repo, branch, file_path = match.groups()
@@ -146,7 +148,7 @@ def _translate_github_url_to_raw(
         raw_hostname = f"raw.{hostname_lower}"
         raw_url = f"https://{raw_hostname}/{owner}/{repo}/refs/heads/{branch}/{file_path}"
 
-    logger.debug(f"Translated GitHub URL: {url} -> {raw_url}")
+    logger.debug(f"Translated GitHub URL: {redact_url(url)} -> {redact_url(raw_url)}")
     return raw_url
 
 
@@ -174,18 +176,18 @@ def translate_skill_url(
     hostname = parsed.hostname or ""
 
     if not hostname:
-        logger.warning(f"URL has no hostname: {url}")
+        logger.warning(f"URL has no hostname: {redact_url(url)}")
         return (url, url)
 
     # Check if it's a GitHub-related hostname
     if not _is_github_hostname(hostname):
         # Non-GitHub URL: use same URL for both
-        logger.debug(f"Non-GitHub URL, using as-is: {url}")
+        logger.debug(f"Non-GitHub URL, using as-is: {redact_url(url)}")
         return (url, url)
 
     # Already a raw URL: keep as-is
     if _is_raw_github_url(hostname):
-        logger.debug(f"Already a raw GitHub URL: {url}")
+        logger.debug(f"Already a raw GitHub URL: {redact_url(url)}")
         return (url, url)
 
     # GitHub URL: translate to raw

@@ -706,10 +706,12 @@ configure_dcr_allowed_scopes() {
         return 1
     fi
 
-    # Get the union of all realm client-scope NAMES
+    # Get the union of all realm client-scope NAMES, plus "openid" (which is
+    # the OIDC identifier scope Claude/MCP DCR clients always request but is
+    # not defined as a Keycloak client-scope; without it the policy 403s).
     local all_scope_names=$(curl -s -H "Authorization: Bearer ${token}" \
         "${KEYCLOAK_URL}/admin/realms/${REALM}/client-scopes" | \
-        jq -c '[.[].name]')
+        jq -c '[.[].name] + ["openid"] | unique')
 
     # Build the updated policy body. Keep `allow-default-scopes` true so the
     # built-in OIDC scopes still pass; explicitly include every realm scope

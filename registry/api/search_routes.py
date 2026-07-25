@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
 from ..audit import set_audit_action
+from ..auth.asset_permissions import user_has_asset_permission
 from ..auth.dependencies import nginx_proxied_auth
 from ..auth.tool_filter import filter_tools_for_user, tool_allowed_for_user
 from ..constants import DeploymentType
@@ -17,8 +18,7 @@ from ..repositories.factory import get_search_repository
 from ..repositories.interfaces import SearchRepositoryBase
 from ..services.agent_service import agent_service
 from ..services.custom_entity_scopes import entity_scope as _entity_scope
-from ..services.custom_entity_scopes import list_grant_allows_type as _list_grant_allows_type
-from ..services.custom_entity_scopes import list_grant_record_paths as _list_grant_record_paths
+from ..services.custom_entity_scopes import resolve_list_grant as _resolve_list_grant
 from ..services.server_service import server_service
 from ..services.virtual_server_service import get_virtual_server_service
 
@@ -724,6 +724,14 @@ async def semantic_search(
         if not skill_path:
             continue
 
+        skill_name = skill.get("skill_name", skill_path.strip("/"))
+
+        # Discovery gate FIRST (list_skills, parity with list_service and the
+        # custom-entity type gate): a caller with no list_skills grant sees no
+        # skills -- not even public ones -- before the per-record visibility check.
+        if not user_has_asset_permission("skill", "list", skill_name, user_context):
+            continue
+
         visibility = skill.get("visibility", "public")
         owner = skill.get("owner", "")
         allowed_groups = skill.get("allowed_groups", [])
@@ -861,7 +869,9 @@ async def semantic_search(
     # visibility check.
     is_admin = bool(user_context.get("is_admin", False))
     ui_permissions = user_context.get("ui_permissions") or {}
-    # entity_type -> (whole_type_open, granted_record_paths)
+    # entity_type -> (whole_type_open, granted_record_paths). resolve_list_grant
+    # is the shared tier resolver used by user_can_list_custom_entity_type too, so
+    # the two enforcement sites can never disagree; admin bypass is applied here.
     discovery_cache: dict[str, tuple[bool, set[str]]] = {}
     for record in custom_results:
         record_path = record.get("path", "")
@@ -872,9 +882,8 @@ async def semantic_search(
         decision = discovery_cache.get(entity_type)
         if decision is None:
             granted = ui_permissions.get(_entity_scope("list", entity_type)) or []
-            whole = is_admin or _list_grant_allows_type(entity_type, granted)
-            paths = set() if whole else set(_list_grant_record_paths(entity_type, granted))
-            decision = (whole, paths)
+            whole, paths = _resolve_list_grant(entity_type, granted)
+            decision = (is_admin or whole, paths)
             discovery_cache[entity_type] = decision
         whole_open, granted_paths = decision
         if not whole_open and record_path not in granted_paths:

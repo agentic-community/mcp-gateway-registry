@@ -71,6 +71,10 @@ services:
       # Comma-separated host allowlist for the RUM snippet (fail-closed when set). Empty disables the check.
       - RUM_ALLOWED_HOSTS=${RUM_ALLOWED_HOSTS:-}
       - GATEWAY_ADDITIONAL_SERVER_NAMES=${GATEWAY_ADDITIONAL_SERVER_NAMES:-}
+      # SSRF guard allowlist for internal MCP-server / A2A-agent upstreams at
+      # private IPs (e.g. docker-network hostnames); mirrors docker-compose.yml.
+      - SSRF_ALLOWED_HOSTS=${SSRF_ALLOWED_HOSTS:-}
+      - SSRF_ALLOWED_CIDRS=${SSRF_ALLOWED_CIDRS:-}
       # Registry Card Configuration
       - REGISTRY_URL=${REGISTRY_URL:-http://localhost}
       # Request-source trust (audit client IP + OAuth external-URL host allowlist)
@@ -226,6 +230,7 @@ services:
       - RATE_LIMITING_ENABLED=${RATE_LIMITING_ENABLED:-false}
       - RATE_LIMIT_BACKEND=${RATE_LIMIT_BACKEND:-documentdb}
       - RATE_LIMIT_FAIL_OPEN=${RATE_LIMIT_FAIL_OPEN:-true}
+      - RATE_LIMIT_QUARANTINE_FAIL_CLOSED=${RATE_LIMIT_QUARANTINE_FAIL_CLOSED:-false}
       - RATE_LIMIT_DEFINITIONS_CACHE_TTL_SECONDS=${RATE_LIMIT_DEFINITIONS_CACHE_TTL_SECONDS:-30}
       - RATE_LIMIT_BACKEND_TIMEOUT_MS=${RATE_LIMIT_BACKEND_TIMEOUT_MS:-250}
       # Lockout-safeguard floors (registry validates group definitions at config time).
@@ -267,6 +272,8 @@ services:
       - BATCH_JOB_RETENTION_DAYS=${BATCH_JOB_RETENTION_DAYS:-7}
       - BATCH_WORKER_POLL_INTERVAL_SECONDS=${BATCH_WORKER_POLL_INTERVAL_SECONDS:-1.0}
       - BATCH_MAX_REQUEST_BYTES=${BATCH_MAX_REQUEST_BYTES:-4194304}
+      # Caller-supplied asset id (Issue #1276)
+      - ALLOW_CALLER_SUPPLIED_ASSET_ID=${ALLOW_CALLER_SUPPLIED_ASSET_ID:-false}
       # Registration Gate (Admission Control)
       - REGISTRATION_GATE_ENABLED=${REGISTRATION_GATE_ENABLED:-false}
       - REGISTRATION_GATE_URL=${REGISTRATION_GATE_URL:-}
@@ -365,6 +372,10 @@ services:
       - TRUSTED_PROXY_HOPS=${TRUSTED_PROXY_HOPS:-1}
       - TRUSTED_EXTERNAL_HOSTS=${TRUSTED_EXTERNAL_HOSTS:-}
       - SECRET_KEY=${SECRET_KEY}
+      # Exact-match allowlist of OAuth login/logout redirect URIs (comma-separated
+      # absolute URLs). Empty (default) falls back to the weaker cookie-domain
+      # heuristic; set it to harden against open-redirect via a controlled subdomain.
+      - OAUTH2_ALLOWED_REDIRECT_URIS=${OAUTH2_ALLOWED_REDIRECT_URIS:-}
       # Per-user egress credential vault: auth-server only needs the feature flag,
       # the internal vend URL, and the nginx marker secret (it does NOT touch the
       # secret store, so no SECRET_STORE/AWS/OPENBAO vars here).
@@ -453,6 +464,7 @@ services:
       - RATE_LIMITING_ENABLED=${RATE_LIMITING_ENABLED:-false}
       - RATE_LIMIT_BACKEND=${RATE_LIMIT_BACKEND:-documentdb}
       - RATE_LIMIT_FAIL_OPEN=${RATE_LIMIT_FAIL_OPEN:-true}
+      - RATE_LIMIT_QUARANTINE_FAIL_CLOSED=${RATE_LIMIT_QUARANTINE_FAIL_CLOSED:-false}
       - RATE_LIMIT_DEFINITIONS_CACHE_TTL_SECONDS=${RATE_LIMIT_DEFINITIONS_CACHE_TTL_SECONDS:-30}
       - RATE_LIMIT_BACKEND_TIMEOUT_MS=${RATE_LIMIT_BACKEND_TIMEOUT_MS:-250}
       # Registry API static token auth

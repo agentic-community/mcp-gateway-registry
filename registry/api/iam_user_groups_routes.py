@@ -20,6 +20,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from registry.audit.context import set_audit_action
+from registry.auth.csrf import verify_csrf_token_flexible
 from registry.auth.dependencies import nginx_proxied_auth
 from registry.core.config import settings
 from registry.schemas.idp_user_group import (
@@ -276,6 +277,7 @@ async def create_user_group(
     payload: IdPUserGroupCreate,
     request: Request,
     user_context: Annotated[dict | None, Depends(nginx_proxied_auth)] = None,
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ) -> IdPUserGroup:
     """Register a new user-group fallback record (admin only)."""
     _require_admin(user_context)
@@ -351,6 +353,7 @@ async def patch_user_group(
     payload: IdPUserGroupPatch,
     request: Request,
     user_context: Annotated[dict | None, Depends(nginx_proxied_auth)] = None,
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ) -> IdPUserGroup:
     """Update fields of an existing user-group record (admin only)."""
     _require_admin(user_context)
@@ -377,6 +380,7 @@ async def delete_user_group(
     username: str,
     request: Request,
     user_context: Annotated[dict | None, Depends(nginx_proxied_auth)] = None,
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ) -> None:
     """Delete a user-group fallback record (admin only)."""
     _require_admin(user_context)
@@ -406,6 +410,7 @@ async def create_pingfederate_user(
     payload: PingFederateUserCreateRequest,
     request: Request,
     user_context: Annotated[dict | None, Depends(nginx_proxied_auth)] = None,
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ) -> dict:
     """Create or update a user inside PingFederate's Simple PCV (admin only).
 

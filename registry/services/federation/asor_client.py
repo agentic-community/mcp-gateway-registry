@@ -12,6 +12,7 @@ from typing import Any
 
 from registry.core.config import settings
 
+from ...common.log_redaction import redact_url
 from ...schemas.federation_schema import AsorAgentConfig
 from .base_client import BaseFederationClient
 
@@ -221,7 +222,7 @@ class AsorFederationClient(BaseFederationClient):
             logger.error("Failed to authenticate with Workday")
             return []
 
-        logger.debug(f"ASOR DEBUG - URL: {url}")
+        logger.debug(f"ASOR DEBUG - URL: {redact_url(url)}")
         logger.debug(f"ASOR DEBUG - Endpoint: {self.endpoint}")
 
         # Build headers - match working test script format

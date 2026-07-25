@@ -71,7 +71,8 @@ import type {
 } from '../types/customEntity';
 import axios from 'axios';
 import { getBaseURL } from '../utils/basePath';
-import { isEgressAuthEnabled } from '../utils/egressAuth';
+import { isEgressAuthEnabled, loadEgressCardState, type EgressCardState } from '../utils/egressAuth';
+import { EgressConnectProvider } from '../contexts/EgressConnectContext';
 import {
   buildLocalRuntimeForm,
   buildLocalRuntimeJson,
@@ -305,7 +306,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
     },
     custom_headers: [] as Array<{ name: string; value: string }>,
     // Egress auth to the upstream (admin config).
-    egress_auth_mode: 'none' as 'none' | 'oauth_user' | 'obo_exchange',
+    egress_auth_mode: 'none' as 'none' | 'oauth_user' | 'obo_exchange' | 'pat',
     egress_provider: '',
     egress_client_id: '',
     egress_client_secret: '',  // write-only; blank on edit keeps the stored one
@@ -315,6 +316,9 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
     egress_target_audience: '',
   });
   const [egressEnabled, setEgressEnabled] = useState(false);
+  // Per-server egress connect state (card icon + connect-modal callout). Keyed by
+  // server path; empty when the feature is off or the caller is not per-user.
+  const [egressStateByPath, setEgressStateByPath] = useState<Map<string, EgressCardState>>(new Map());
   const [editLoading, setEditLoading] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
@@ -334,6 +338,20 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
     | 'external'
     | `custom:${string}`;
   const [viewFilter, setViewFilter] = useState<ViewFilter>('discover');
+
+  // Whether the user can DISCOVER any resource of an entity family, i.e. holds
+  // the family's list_ scope for at least one resource (or "all"). Admins always
+  // can. Used to hide entity tabs the user could never see anything in — a
+  // frontend-convenience mirror of the backend list/search discovery gate (which
+  // remains authoritative: hitting a hidden tab's endpoint still returns
+  // empty/404). Keep the scope names in sync with
+  // registry/auth/asset_permissions.py. Declared here (before the tab-redirect
+  // effect that uses it) so it precedes its first use.
+  const hasListAccess = useCallback((listScope: string): boolean => {
+    if (user?.is_admin) return true;
+    const granted = user?.ui_permissions?.[listScope];
+    return Array.isArray(granted) && granted.length > 0;
+  }, [user?.is_admin, user?.ui_permissions]);
 
   // Pagination state (per entity type)
   const PAGE_SIZE = 50;
@@ -360,7 +378,26 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
     };
   }, []);
 
-  // Reset viewFilter to 'discover' when the active tab is hidden by config
+  // Load the per-server egress connect state for the card icon + modal callout.
+  // Returns an empty map when the feature is off or the caller is not per-user.
+  // Extracted so the modal can re-run it after a connect/disconnect.
+  const reloadEgressState = useCallback(() => {
+    void loadEgressCardState().then(setEgressStateByPath);
+  }, []);
+
+  useEffect(() => {
+    reloadEgressState();
+  }, [reloadEgressState]);
+
+  // Reset viewFilter to 'discover' when the active tab is hidden by the
+  // deployment feature flag. For servers and custom-entity types we ALSO redirect
+  // when the user lacks the entity's list_ scope (those tabs stay hidden). Agents
+  // and Skills are deliberately NOT redirected on a missing scope: their tabs stay
+  // visible and render an access hint (see the agents/skills empty states) so a
+  // user whose skills/agents access changed learns why the tab is empty and what
+  // a registry admin must grant, rather than the tab silently disappearing. The
+  // backend discovery gate remains authoritative (the endpoints still return
+  // empty/404 without the scope).
   useEffect(() => {
     if (viewFilter === 'virtual' && registryConfig?.features.virtual_servers === false) {
       setViewFilter('discover');
@@ -371,18 +408,20 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
     if (viewFilter === 'skills' && registryConfig?.features.skills === false) {
       setViewFilter('discover');
     }
-    if (viewFilter === 'servers' && registryConfig?.features.mcp_servers === false) {
+    if (viewFilter === 'servers' &&
+        (registryConfig?.features.mcp_servers === false || !hasListAccess('list_service'))) {
       setViewFilter('discover');
     }
-    // A custom-type tab whose type is no longer in config (admin deleted it).
+    // A custom-type tab whose type is no longer in config (admin deleted it) OR
+    // that the user lacks list access to.
     if (viewFilter.startsWith('custom:')) {
       const typeName = viewFilter.slice('custom:'.length);
       const exists = (registryConfig?.custom_types ?? []).some((t) => t.name === typeName);
-      if (registryConfig && !exists) {
+      if (registryConfig && (!exists || !hasListAccess(`list_${typeName}_entity`))) {
         setViewFilter('discover');
       }
     }
-  }, [viewFilter, registryConfig]);
+  }, [viewFilter, registryConfig, hasListAccess]);
 
   // Collapsible state for registry groups (tracks which groups are expanded)
   // Key is registry name: 'local' or peer registry ID like 'peer-registry-lob-1'
@@ -576,6 +615,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
     // Check if user has 'all' permission or specific service permission
     return permissions.includes('all') || permissions.includes(serviceName);
   }, [user?.ui_permissions]);
+
 
   // External registry tags - can be configured via environment or constants
   // Default tags that identify servers from external registries
@@ -1253,7 +1293,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         deployment,
         local_runtime: buildLocalRuntimeForm(localRuntimeRaw),
         custom_headers: (serverDetails.custom_header_names || []).map((name: string) => ({ name, value: '' })),
-        egress_auth_mode: (serverDetails.egress_auth_mode || 'none') as 'none' | 'oauth_user' | 'obo_exchange',
+        egress_auth_mode: (serverDetails.egress_auth_mode || 'none') as 'none' | 'oauth_user' | 'obo_exchange' | 'pat',
         egress_provider: serverDetails.egress_oauth?.provider || '',
         egress_client_id: serverDetails.egress_oauth?.client_id || '',
         egress_client_secret: '',  // never round-trip the secret
@@ -1499,6 +1539,17 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
                 scopes: scopesList,
                 custom_authorize_url: editForm.egress_custom_authorize_url || undefined,
                 custom_token_url: editForm.egress_custom_token_url || undefined,
+              },
+              { headers: csrfHeaders }
+            );
+          } else if (mode === 'pat') {
+            await axios.post(
+              `/api/servers${editingServer.path}/egress-auth`,
+              {
+                egress_auth_mode: 'pat',
+                egress_provider: editForm.egress_provider.trim(),
+                // The inject header is inherited from Backend Authentication at
+                // vend time, so it is not sent here.
               },
               { headers: csrfHeaders }
             );
@@ -2188,6 +2239,8 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
                       onShowToast={showToast}
                       onServerUpdate={handleServerUpdate}
                       authToken={agentApiToken}
+                      egressConnect={egressStateByPath.get(server.path)}
+                      onEgressChanged={reloadEgressState}
                     />
                   );
 
@@ -2315,12 +2368,34 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
               </div>
             ) : filteredAgents.length === 0 ? (
               <div className="text-center py-12 bg-cyan-50 dark:bg-cyan-900/20 rounded-lg border border-cyan-200 dark:border-cyan-800">
-                <div className="text-gray-400 text-lg mb-2">No agents found</div>
-                <p className="text-gray-500 dark:text-gray-300 text-sm">
-                  {searchTerm || activeFilter !== 'all'
-                    ? 'Press Enter in the search bar to search semantically'
-                    : 'No agents are registered yet'}
-                </p>
+                {!hasListAccess('list_agents') ? (
+                  <>
+                    <div className="text-gray-400 text-lg mb-2">
+                      You don't have access to view agents
+                    </div>
+                    <p className="text-gray-500 dark:text-gray-300 text-sm max-w-md mx-auto">
+                      Agent discovery is managed by your registry administrator. Ask them to
+                      grant your group the "list_agents" permission so agents appear here.{' '}
+                      <a
+                        href="https://github.com/agentic-community/mcp-gateway-registry/blob/main/docs/faq/granting-skill-and-agent-discovery-permissions.md"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-cyan-600 dark:text-cyan-400 hover:underline"
+                      >
+                        Learn more
+                      </a>
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <div className="text-gray-400 text-lg mb-2">No agents found</div>
+                    <p className="text-gray-500 dark:text-gray-300 text-sm">
+                      {searchTerm || activeFilter !== 'all'
+                        ? 'Press Enter in the search bar to search semantically'
+                        : 'No agents are registered yet'}
+                    </p>
+                  </>
+                )}
               </div>
             ) : (
               <div className="space-y-6">
@@ -2423,6 +2498,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
             loading={skillsLoading}
             error={skillsError}
             isFiltered={!!searchTerm || activeFilter !== 'all'}
+            hasListAccess={hasListAccess('list_skills')}
             canModify={user?.can_modify_servers || false}
             page={skillPage}
             totalPages={skillTotalPages}
@@ -2490,6 +2566,8 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
               onServerUpdate={handleServerUpdate}
               onDelete={handleDeleteServer}
               authToken={agentApiToken}
+              egressConnect={egressStateByPath.get(server.path)}
+              onEgressChanged={reloadEgressState}
             />
           )}
           renderAgentCard={(agent) => (
@@ -2575,7 +2653,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
   }
 
   return (
-    <>
+    <EgressConnectProvider value={{ stateByPath: egressStateByPath, reload: reloadEgressState }}>
       {/* Toast Notification */}
       {toast && (
         <Toast
@@ -2601,7 +2679,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
             >
               Discover
             </button>
-            {registryConfig?.features.mcp_servers !== false && (
+            {registryConfig?.features.mcp_servers !== false && hasListAccess('list_service') && (
               <button
                 onClick={() => handleChangeViewFilter('servers')}
                 className={`px-4 py-2 text-sm font-medium whitespace-nowrap transition-colors border-b-2 ${
@@ -2652,7 +2730,9 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
             {/* Custom entity type tabs render before External Registries, which
                 is always the last tab. */}
             {registryConfig?.features.custom_types &&
-              (registryConfig?.custom_types ?? []).map((ct) => {
+              (registryConfig?.custom_types ?? [])
+                .filter((ct) => hasListAccess(`list_${ct.name}_entity`))
+                .map((ct) => {
                 const filter = `custom:${ct.name}` as const;
                 return (
                   <button
@@ -3070,7 +3150,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         isLoading={customDeleteLoading}
       />
 
-    </>
+    </EgressConnectProvider>
   );
 };
 

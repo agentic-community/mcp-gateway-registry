@@ -33,7 +33,7 @@ def user_context() -> dict[str, Any]:
         "accessible_agents": ["all"],
         "ui_permissions": {
             "publish_agent": ["all"],
-            "modify_service": ["all"],
+            "modify_agent": ["all"],
         },
         "is_admin": False,
     }

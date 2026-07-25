@@ -18,6 +18,7 @@ redact.
 """
 
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 REDACTED: str = "[REDACTED]"
 
@@ -147,6 +148,36 @@ def redact_headers(headers: Any) -> dict[str, str]:
         else:
             redacted[name] = value
     return redacted
+
+
+def redact_url(url: str | None) -> str:
+    """Return a URL safe to log, stripped of any credential-bearing parts.
+
+    A backend URL (e.g. a server ``proxy_pass_url``) can carry credentials in
+    its userinfo component (``user:pass@host``) or secrets in its query string
+    (``?access_token=...``). Keep only ``scheme://host[:port]/path`` and drop
+    the userinfo, query, and fragment. Non-parseable input is masked entirely
+    (fail closed) rather than logged raw.
+
+    Args:
+        url: The URL to redact. ``None`` and empty strings pass through as an
+            empty string.
+
+    Returns:
+        The URL reduced to ``scheme://host[:port]/path``, an empty string for
+        falsy input, or ``[REDACTED]`` when it cannot be parsed.
+    """
+    if not url:
+        return ""
+    try:
+        parts = urlsplit(url)
+        # ``hostname``/``port`` drop any ``user:pass@`` userinfo prefix.
+        netloc = parts.hostname or ""
+        if parts.port is not None:
+            netloc = f"{netloc}:{parts.port}"
+        return urlunsplit((parts.scheme, netloc, parts.path, "", ""))
+    except ValueError:
+        return REDACTED
 
 
 def redact_mapping(

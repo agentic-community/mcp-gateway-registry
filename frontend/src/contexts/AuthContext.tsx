@@ -26,6 +26,12 @@ interface UIPermissions {
   publish_agent?: string[];
   modify_agent?: string[];
   delete_agent?: string[];
+  toggle_agent?: string[];
+  list_skills?: string[];
+  publish_skill?: string[];
+  modify_skill?: string[];
+  delete_skill?: string[];
+  toggle_skill?: string[];
   [key: string]: string[] | undefined;
 }
 

@@ -205,6 +205,16 @@ Async batch register/patch/replace/delete for agent cards, drained by an in-proc
 
 ---
 
+## Group 7b — Caller-Supplied Asset ID (Issue #1276)
+
+Fail-closed opt-in for callers to supply their own asset `id` (UUID, ARN, URN, ...) on the public server/agent/skill registration routes instead of auto-generating one. Federation is not affected (peer ids are governed by the peer allowlist).
+
+| Parameter | Docker (`.env`) | Terraform (`.tfvars`) | Helm (`values.yaml`) | Purpose |
+|-----------|-----------------|-----------------------|----------------------|---------|
+| Enable | `ALLOW_CALLER_SUPPLIED_ASSET_ID` | `allow_caller_supplied_asset_id` | `registry.app.allowCallerSuppliedAssetId` | Master switch. OFF by default (supplied id rejected with 422). When on, a supplied id must pass safe-charset validation and be unique. |
+
+---
+
 ## Group 8 — Federation (Peer Registries)
 
 Static-token and OAuth2 config for peer-to-peer federation.
@@ -370,6 +380,7 @@ that server's Connect dialog:
 |-----------|-----------------|-----------------------|----------------------|---------|
 | Secure flag | `SESSION_COOKIE_SECURE` | `session_cookie_secure` | `auth-server.app.sessionCookieSecure` | Secure by default (`true`); set `false` only on plain-HTTP localhost. |
 | Cookie domain | `SESSION_COOKIE_DOMAIN` | `session_cookie_domain` | `auth-server.app.sessionCookieDomain` | Leading dot for cross-subdomain; empty is safest. |
+| OAuth redirect allowlist | `OAUTH2_ALLOWED_REDIRECT_URIS` | `oauth2_allowed_redirect_uris` | `auth-server.app.oauth2AllowedRedirectUris` | Comma-separated exact-match allowlist of login/logout redirect URIs (open-redirect hardening). When set, an absolute redirect_uri must exactly match an entry; relative paths always allowed. Empty falls back to the weaker cookie-domain heuristic (configuring the list is the hardened path). |
 | CORS allowlist | `CORS_ALLOWED_ORIGINS` | `cors_allowed_origins` | `registry.app.corsAllowedOrigins` | Comma-separated exact origins for credentialed cross-origin API access. Registry's own origin is always trusted; empty means same-origin only (no wildcard fallback). |
 
 ---
@@ -813,6 +824,7 @@ Application-level, identity/group/target-aware request limiting enforced at the 
 | Enable rate limiting | `RATE_LIMITING_ENABLED` | `rate_limiting_enabled` | `registry.app.rateLimiting.enabled` / `auth-server.app.rateLimiting.enabled` | Master switch. Default `false` = no checks (no behavior change). |
 | Counter backend | `RATE_LIMIT_BACKEND` | `rate_limit_backend` | `*.app.rateLimiting.backend` | Counter store. Only `documentdb` is implemented in v1 (no new infrastructure); the backend interface allows a future Redis. |
 | Fail open on error | `RATE_LIMIT_FAIL_OPEN` | `rate_limit_fail_open` | `*.app.rateLimiting.failOpen` | Default `true`: on a counter-store error, allow rather than deny (availability guardrail). A per-limit `fail_closed` definition overrides to deny. |
+| Quarantine fail closed | `RATE_LIMIT_QUARANTINE_FAIL_CLOSED` | `rate_limit_quarantine_fail_closed` | `*.app.rateLimiting.quarantineFailClosed` | Default `false`: on a backend error reading quarantine (kill-switch) membership, allow (fail open). Set `true` to deny instead (stricter block at the cost of denying data-plane traffic during a memberships-store outage). The `caller_target` axis and the quarantine groups themselves are runtime-managed via the admin API (no env var). |
 | Definitions cache TTL | `RATE_LIMIT_DEFINITIONS_CACHE_TTL_SECONDS` | `rate_limit_definitions_cache_ttl_seconds` | `*.app.rateLimiting.definitionsCacheTtlSeconds` | In-process cache TTL (seconds) for definition reads; steady-state per-call cost is zero DB reads for definitions. Default `30`. |
 | Backend op timeout | `RATE_LIMIT_BACKEND_TIMEOUT_MS` | `rate_limit_backend_timeout_ms` | `*.app.rateLimiting.backendTimeoutMs` | Hard per-op timeout (ms) for each counter operation; a slow store fails fast into the fail-open/closed policy, never hanging `/validate`. Default `250`. |
 | User floor (per min) | `RATE_LIMIT_USER_FLOOR_PER_MIN` | `rate_limit_user_floor_per_min` | `registry.app.rateLimiting.userFloorPerMin` | Lockout safeguard read by the **registry** at group-definition config time: on windows `<= 60s` a group's `user_max_requests` must be `>=` this floor, else the PUT is rejected. Config-only (no API). Default `20`. |

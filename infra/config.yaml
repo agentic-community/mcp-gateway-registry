@@ -50,7 +50,7 @@ registry:
   deploymentMode: with-gateway
   registryMode: full
   enableObservability: true
-  enableWaf: false
+  enableWaf: true
   createCodebuild: false
   disableAiRegistryToolsServer: "false"
 
@@ -86,7 +86,7 @@ registry:
     authServer: "mcpgateway/auth-server:latest"
     keycloak: "quay.io/keycloak/keycloak:26.2.4"
     currenttime: ""
-    mcpgw: ""
+    mcpgw: "public.ecr.aws/p3v1o3c6/mcpgw:1.26.0"
     realserverfaketools: ""
     flightBookingAgent: ""
     travelAssistantAgent: ""
@@ -189,6 +189,11 @@ registry:
   session:
     cookieSecure: false
     cookieDomain: ""
+    # Exact-match allowlist of OAuth login/logout redirect URIs (open-redirect
+    # hardening). Comma-separated absolute URLs. Empty falls back to the weaker
+    # cookie-domain heuristic; set it to harden. Example:
+    # "https://registry.example.com/,https://registry.example.com/login"
+    oauth2AllowedRedirectUris: ""
     oauthStoreTokensInSession: false
 
   # UI tabs

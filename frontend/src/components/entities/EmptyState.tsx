@@ -18,7 +18,7 @@ const TONE_CLASSES: Record<EmptyStateTone, string> = {
 
 interface EmptyStateProps {
   title: string;
-  subtitle?: string;
+  subtitle?: React.ReactNode;
   tone?: EmptyStateTone;
   /** Optional call-to-action button rendered under the message. */
   cta?: React.ReactNode;

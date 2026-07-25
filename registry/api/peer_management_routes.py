@@ -12,10 +12,11 @@ parameter from shadowing the specific paths.
 
 import logging
 from datetime import datetime
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 
+from ..auth.csrf import verify_csrf_token_flexible
 from ..auth.dependencies import nginx_proxied_auth
 from ..common.log_redaction import redact_mapping
 from ..schemas.peer_federation_schema import (
@@ -119,6 +120,7 @@ async def list_peers(
 async def create_peer(
     config: PeerRegistryConfig,
     user_context: dict = Depends(nginx_proxied_auth),
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ) -> PeerRegistryConfigResponse:
     """
     Create a new peer registry configuration.
@@ -174,6 +176,7 @@ async def create_peer(
 async def sync_all_peers(
     enabled_only: bool = Query(True, description="If True, only sync enabled peers"),
     user_context: dict = Depends(nginx_proxied_auth),
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ) -> dict[str, SyncResult]:
     """
     Trigger synchronization for all (or enabled) peers.
@@ -329,6 +332,7 @@ async def update_peer(
     peer_id: str,
     updates: dict[str, Any] = Body(...),
     user_context: dict = Depends(nginx_proxied_auth),
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ) -> PeerRegistryConfigResponse:
     """
     Update an existing peer configuration.
@@ -387,6 +391,7 @@ async def update_peer_token(
     peer_id: str,
     federation_token: str = Body(..., embed=True),
     user_context: dict = Depends(nginx_proxied_auth),
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ) -> dict[str, str]:
     """
     Update federation token for a peer without triggering full update.
@@ -462,6 +467,7 @@ async def update_peer_token(
 async def delete_peer(
     peer_id: str,
     user_context: dict = Depends(nginx_proxied_auth),
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ):
     """
     Delete a peer registry configuration.
@@ -498,6 +504,7 @@ async def delete_peer(
 async def sync_peer(
     peer_id: str,
     user_context: dict = Depends(nginx_proxied_auth),
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ) -> SyncResult:
     """
     Trigger synchronization for a specific peer.
@@ -587,6 +594,7 @@ async def get_peer_status(
 async def enable_peer(
     peer_id: str,
     user_context: dict = Depends(nginx_proxied_auth),
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ) -> PeerRegistryConfigResponse:
     """
     Enable a peer registry.
@@ -625,6 +633,7 @@ async def enable_peer(
 async def disable_peer(
     peer_id: str,
     user_context: dict = Depends(nginx_proxied_auth),
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ) -> PeerRegistryConfigResponse:
     """
     Disable a peer registry.

@@ -401,6 +401,12 @@ variable "session_cookie_domain" {
   default     = ""
 }
 
+variable "oauth2_allowed_redirect_uris" {
+  description = "Comma-separated exact-match allowlist of OAuth login/logout redirect URIs (open-redirect hardening). When set, an absolute redirect_uri is accepted only if it exactly matches an entry; relative paths are always allowed. Empty falls back to the weaker cookie-domain heuristic."
+  type        = string
+  default     = ""
+}
+
 variable "cors_allowed_origins" {
   description = "Comma-separated exact browser origins allowed to make credentialed cross-origin requests to the registry API (e.g. 'https://app.example.com,https://admin.example.com'). The registry's own origin is always trusted. Empty means same-origin only; there is no wildcard fallback."
   type        = string
@@ -525,6 +531,12 @@ variable "rate_limit_fail_open" {
   description = "Global fail-open on rate-limit backend error (per-limit fail_closed overrides)"
   type        = bool
   default     = true
+}
+
+variable "rate_limit_quarantine_fail_closed" {
+  description = "Deny (fail closed) on a backend error reading quarantine membership (default fail-open)"
+  type        = bool
+  default     = false
 }
 
 variable "rate_limit_definitions_cache_ttl_seconds" {
@@ -1081,6 +1093,13 @@ variable "batch_worker_lease_heartbeat_seconds" {
   description = "Interval at which a worker renews the lease on its in-flight job. Should be below batch_worker_lease_ttl_seconds."
   type        = number
   default     = 15
+}
+
+# Caller-supplied asset id (issue #1276)
+variable "allow_caller_supplied_asset_id" {
+  description = "Allow callers to supply their own asset id on public registration routes. Fail-closed: OFF by default. Federation is not affected. Default: false."
+  type        = bool
+  default     = false
 }
 
 # Registration gate / admission control (issue #809)

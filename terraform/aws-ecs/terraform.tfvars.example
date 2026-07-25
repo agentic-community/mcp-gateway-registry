@@ -274,6 +274,21 @@ session_cookie_secure = true
 # Default: Empty (cookie scoped to exact host only - safest option)
 session_cookie_domain = ""
 
+# Exact-match allowlist of OAuth login/logout redirect URIs (open-redirect hardening).
+# Comma-separated list of the FULL absolute callback/success/logout URLs the
+# deployment legitimately redirects to after login/logout. When set, an absolute
+# redirect_uri is accepted ONLY if it exactly matches an entry; relative paths are
+# always allowed as same-origin. When empty (default), the auth server falls back
+# to the weaker cookie-domain heuristic, which admits any host within
+# session_cookie_domain (including an attacker-controlled subdomain). Configuring
+# this list is the hardened path and is recommended for production.
+#
+#   Example:
+#     oauth2_allowed_redirect_uris = "https://registry.mycorp.click/,https://registry.mycorp.click/login"
+#
+# Default: Empty (falls back to cookie-domain heuristic)
+oauth2_allowed_redirect_uris = ""
+
 # Number of trusted reverse-proxy hops in front of the app. The audit client IP
 # is taken from the Nth-from-the-right X-Forwarded-For entry (never the
 # client-controlled left-most one). On ECS behind an ALB (+ optional CloudFront),
@@ -417,7 +432,7 @@ storage_backend = "documentdb"
 #
 # Examples:
 #   registry_rum_snippet_b64        = "PHNjcmlwdD4vLyBydW08L3NjcmlwdD4="
-#   registry_rum_snippet_secret_arn = "arn:aws:secretsmanager:us-east-1:123456789012:secret:rum-snippet-XXXXXX"
+#   registry_rum_snippet_secret_arn = "arn:aws:secretsmanager:us-east-1:123456789012:secret:rum-snippet-XXXXXX" # pragma: allowlist secret
 # registry_rum_snippet_b64        = ""
 # registry_rum_snippet_secret_arn = ""
 #
@@ -539,6 +554,16 @@ registry_api_token = "m3zT65wREARMVDToKosg_DgNkKqS_434hNxy3sslGPY"
 
 # Interval at which the worker renews the lease. Should be below TTL. Default: 15
 # batch_worker_lease_heartbeat_seconds = 15
+
+# ============================================================================
+# CALLER-SUPPLIED ASSET ID (Issue #1276)
+# ============================================================================
+
+# Allow callers to supply their own asset id on the public server/agent/skill
+# registration routes (UUID, ARN, URN, ...). Fail-closed: OFF by default, so a
+# supplied id is rejected (422) and ids auto-generate. Federation is not
+# affected (peer ids are governed by the peer allowlist). Default: false
+# allow_caller_supplied_asset_id = false
 
 # ============================================================================
 # REGISTRATION GATE / ADMISSION CONTROL (Issue #809)
@@ -1243,6 +1268,7 @@ aws_registry_federation_enabled = true
 # rate_limiting_enabled                    = false
 # rate_limit_backend                       = "documentdb"
 # rate_limit_fail_open                     = true
+# rate_limit_quarantine_fail_closed        = false  # deny on quarantine-read error (default fail-open)
 # rate_limit_definitions_cache_ttl_seconds = 30
 # rate_limit_backend_timeout_ms            = 250
 # Lockout-safeguard floors (registry validates group definitions at config time;

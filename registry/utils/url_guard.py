@@ -465,13 +465,20 @@ def validate_server_path(
     ``*``) is rejected: such a value would silently grant access to every server
     in the registry (see :data:`_RESERVED_SERVER_PATH_NAMES`).
 
+    A path that normalizes to empty (e.g. ``/``, ``//``) is also rejected: the
+    nginx location for a server is rendered with a trailing slash (issue #1501),
+    so a slashes-only path becomes ``location /`` -- a root prefix match that
+    subjects every URL on the gateway to the ``auth_request /validate`` subrequest
+    and shadows/duplicates the static catch-all. No real server registers at the
+    root, so this is a footgun with no legitimate use; fail closed.
+
     Args:
         path: The server path (e.g. ``/github``).
 
     Raises:
         UrlValidationError: If the path is empty, contains disallowed nginx
-            metacharacters, or normalizes to a reserved cross-server wildcard
-            name.
+            metacharacters, normalizes to an empty (slashes-only) path, or
+            normalizes to a reserved cross-server wildcard name.
     """
     if not path or not isinstance(path, str):
         raise UrlValidationError(str(path), "server path is empty or not a string")
@@ -481,10 +488,18 @@ def validate_server_path(
     # Normalize the same way the scope layer does (add_server_scope does
     # server_path.lstrip("/")), then also drop trailing slashes so "/all/" and
     # "//all//" collapse to the same reserved name. Compare case-insensitively.
-    # A path that normalizes to empty (e.g. "/") is left to existing handling:
-    # an empty server name is falsy and grants no access in the resolver, so it
-    # is not part of this escalation and must stay registerable.
     normalized = path.strip("/")
+
+    # A slashes-only path normalizes to empty. It renders as `location /` after
+    # the trailing-slash normalization (issue #1501), hijacking the whole gateway
+    # into /validate. Reject it: fail closed.
+    if not normalized:
+        raise UrlValidationError(
+            path,
+            "server path must have a non-empty segment (a root/slashes-only path "
+            "would render as a gateway-wide 'location /' block)",
+        )
+
     if normalized.lower() in _RESERVED_SERVER_PATH_NAMES:
         raise UrlValidationError(
             path,

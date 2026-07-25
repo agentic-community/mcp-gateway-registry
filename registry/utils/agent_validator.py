@@ -15,6 +15,7 @@ from typing import Any
 import httpx
 from pydantic import BaseModel
 
+from registry.common.log_redaction import redact_url
 from registry.schemas.agent_models import (
     AgentCard,
     SecurityScheme,
@@ -228,15 +229,15 @@ def _check_endpoint_reachability(
         return (False, f"Endpoint returned status {response.status_code}")
 
     except UrlValidationError as e:
-        logger.warning(f"Endpoint blocked by SSRF guard for {url}: {e}")
+        logger.warning(f"Endpoint blocked by SSRF guard for {redact_url(url)}: {e}")
         return (False, "Endpoint URL failed SSRF validation")
 
     except httpx.TimeoutException:
-        logger.warning(f"Endpoint timeout for {url}")
+        logger.warning(f"Endpoint timeout for {redact_url(url)}")
         return (False, "Endpoint request timed out")
 
     except Exception as e:
-        logger.warning(f"Could not reach endpoint {url}: {e}")
+        logger.warning(f"Could not reach endpoint {redact_url(url)}: {e}")
         return (False, str(e))
 
 

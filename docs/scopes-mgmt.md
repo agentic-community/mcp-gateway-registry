@@ -6,6 +6,39 @@ This document describes the scope configuration file format used by the MCP Gate
 
 Scopes define what resources (MCP servers, agents) users can access and what actions they can perform. The registry uses JSON-based scope configuration files that can be loaded during initialization or managed via the CLI.
 
+## Upgrade: skills and agents are now discovery-gated
+
+Skill and agent discovery is gated on a `list_*` UI permission, matching MCP servers. This is a fail-closed change: a non-admin group that does not hold the grant sees **zero** resources of that family, including public ones. If skills or agents suddenly stop appearing for a non-admin user after upgrade, the user's group is missing the discovery scope. Take these actions once, per deployment:
+
+- **Skills discovery (`list_skills`).** This scope is new, so no group has it until you grant it. Run the one-time backfill to grant `list_skills: ["all"]` to the built-in admin group (dry-run by default). The simplest place to run it is inside a running container, where the registry environment is already present:
+
+  ```bash
+  # Docker Compose
+  docker compose exec registry uv run python scripts/backfill-skill-list-scope.py --apply
+
+  # Kubernetes / EKS
+  kubectl exec -it deploy/registry -- uv run python scripts/backfill-skill-list-scope.py --apply
+  ```
+
+  To run it outside the deployment (host shell, one-off ECS task, admin pod), pass the connection explicitly; the password and `SECRET_KEY` are read from the environment, never as CLI args:
+
+  ```bash
+  DOCUMENTDB_PASSWORD=... SECRET_KEY=... \
+    uv run python scripts/backfill-skill-list-scope.py --apply \
+    --host <mongo-host> --username admin --direct-connection \
+    --auth-server-url <auth-server-url>
+  ```
+
+  See `--help` for the full connection-argument list (`--tls`, `--storage-backend documentdb` for Amazon DocumentDB, etc.). Then grant `list_skills` to any non-admin group that should see skills. Admins are unaffected (they bypass the check).
+
+- **Skill mutation (`modify_skill` / `delete_skill` / `toggle_skill`).** A non-admin who **owns** a skill now also needs the matching mutation scope; ownership alone is no longer sufficient. Grant these to whichever non-admin group manages skills. Not covered by the backfill.
+
+- **Agent delete (`delete_agent`).** A non-admin who owns an agent now needs `delete_agent` to delete it (previously ownership alone was enough). Every admin surface already carries this scope, so no data migration is required; grant it to any non-admin group that should delete agents it owns.
+
+- **Agent modify / toggle (`modify_agent` / `toggle_agent`).** These are now enforced against the agent family's own scopes. A non-admin who previously managed agents via the server scopes (`modify_service` / `toggle_service`) must instead be granted `modify_agent` / `toggle_agent`.
+
+The tabs for Servers and custom entity types are hidden when the user lacks the corresponding `list_*` scope. The Skills and Agents tabs stay visible and show an in-page hint explaining that discovery access is admin-managed, so a user whose access changed learns what to ask for rather than seeing the tab disappear.
+
 ## Scope Configuration File Format
 
 ### Example Files
@@ -208,11 +241,51 @@ UI permissions control what actions users can perform in the web interface and R
 | `publish_agent` | Register new agents via UI | Agent paths or `"all"` |
 | `modify_agent` | Edit agents via UI | Agent paths or `"all"` |
 | `delete_agent` | Delete agents via UI | Agent paths or `"all"` |
+| `toggle_agent` | Enable/disable agents via UI | Agent paths or `"all"` |
 | `list_service` | View MCP servers in UI | Server names or `"all"` |
 | `register_service` | Register new MCP servers | Server names or `"all"` |
 | `health_check_service` | Run health checks | Server names or `"all"` |
 | `toggle_service` | Enable/disable servers | Server names or `"all"` |
 | `modify_service` | Edit server configurations | Server names or `"all"` |
+| `delete_service` | Delete servers via UI | Server names or `"all"` |
+| `list_skills` | View skills in UI | Skill paths or `"all"` |
+| `publish_skill` | Register new skills via UI | Skill paths or `"all"` |
+| `modify_skill` | Edit skills via UI | Skill paths or `"all"` |
+| `delete_skill` | Delete skills via UI | Skill paths or `"all"` |
+| `toggle_skill` | Enable/disable skills via UI | Skill paths or `"all"` |
+| `list_<type>_entity` | View records of a custom entity type | Record paths or `"all"` |
+| `create_<type>_entity` | Create records of a custom entity type | Record paths or `"all"` |
+| `modify_<type>_entity` | Edit records of a custom entity type | Record paths or `"all"` |
+| `delete_<type>_entity` | Delete records of a custom entity type | Record paths or `"all"` |
+
+### How each operation is authorized
+
+Authorization is uniform across all four asset families (servers, agents, skills, custom entities). An **admin** bypasses every check below and can do anything. For a **non-admin**, each operation resolves as follows:
+
+| Operation | Gate for a non-admin caller |
+| --- | --- |
+| **Discover** (`list_*`) | scope only (holds the `list_` grant for the resource or `"all"`) |
+| **Create** (`register_`/`publish_`/`create_`) | scope only (a non-empty create grant) |
+| **Modify** (`modify_*`) | scope **AND** owner |
+| **Delete** (`delete_*`) | scope **AND** owner |
+| **Toggle** (`toggle_*`) | scope **AND** owner |
+
+**Dual gate (mutations).** Modify, delete, and toggle each require the caller to hold the scope for the specific resource (or `"all"`) **AND** be the resource's owner. Both halves are required: a scope grant alone does not let a non-admin mutate a resource someone else owns, and ownership alone does not let them mutate it without the scope. This is identical across servers, agents, skills, and custom entities.
+
+**Ownership** is the `registered_by` field for servers and agents, and the `owner` field for skills and custom entities (set to the creating user at registration).
+
+**Discovery (`list_*`) is scope-only and fail-closed.** A caller without the `list_` grant for a family sees zero resources of that family, including public ones. Discovery does not depend on ownership.
+
+The per-family scope names for each operation are:
+
+| Operation | Server | Agent | Skill | Custom entity `<type>` |
+| --- | --- | --- | --- | --- |
+| Discover | `list_service` | `list_agents` | `list_skills` | `list_<type>_entity` |
+| Create | `register_service` | `publish_agent` | `publish_skill` | `create_<type>_entity` |
+| Modify | `modify_service` | `modify_agent` | `modify_skill` | `modify_<type>_entity` |
+| Delete | `delete_service` | `delete_agent` | `delete_skill` | `delete_<type>_entity` |
+| Toggle | `toggle_service` | `toggle_agent` | `toggle_skill` | (n/a) |
+| Health check | `health_check_service` | (n/a) | (n/a) | (n/a) |
 
 **Example - Read-only access:**
 ```json

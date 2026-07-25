@@ -298,7 +298,7 @@ class TestServerPut:
         with (
             patch("registry.api.server_routes.server_service") as svc,
             patch(
-                "registry.auth.dependencies.user_has_ui_permission_for_service",
+                "registry.api.server_routes.user_has_asset_permission",
                 return_value=False,
             ),
         ):

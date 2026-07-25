@@ -4,11 +4,21 @@
  *
  * Translated from: terraform/aws-ecs/waf.tf
  *
- * Each Web ACL contains 4 rules:
- *   1. AWSManagedRulesCommonRuleSet (priority 1)
- *   2. AWSManagedRulesKnownBadInputsRuleSet (priority 2)
- *   3. IP-based rate limit: 100 requests / 5 minutes per IP (priority 3)
- *   4. Global rate limit: 2000 requests / 5 minutes (priority 4)
+ * Each Web ACL contains 5 rules:
+ *   1. AWSManagedRulesCommonRuleSet   (priority 1) — everywhere EXCEPT the
+ *      Keycloak anonymous DCR endpoint. Full block on all sub-rules.
+ *   2. AWSManagedRulesCommonRuleSet   (priority 2) — ONLY the Keycloak DCR
+ *      endpoint. Same managed group but with count-mode overrides on the
+ *      two sub-rules that false-positive on RFC 8252 loopback redirect_uris
+ *      (EC2MetaDataSSRF_BODY, GenericRFI_BODY).
+ *   3. AWSManagedRulesKnownBadInputsRuleSet (priority 3)
+ *   4. IP-based rate limit: 100 requests / 5 minutes per IP (priority 4)
+ *   5. Global rate limit: 2000 requests / 5 minutes (priority 5)
+ *
+ * Rules 1 and 2 share the same managed group but have mutually-exclusive
+ * scopeDownStatements. Together they preserve full CRS protection on every
+ * path except the one endpoint (Keycloak anonymous DCR) that has a documented
+ * false-positive on loopback callback URIs.
  *
  * This construct is a no-op when config.enableWaf is false.
  */
@@ -26,6 +36,12 @@ import { RegistryConfig } from '../registry-config';
 const IP_RATE_LIMIT = 100;
 const GLOBAL_RATE_LIMIT = 2000;
 const WAF_LOG_RETENTION_DAYS = 30;
+
+// Keycloak anonymous Dynamic Client Registration endpoint. Requests to this
+// path legitimately carry loopback callback URIs (http://localhost:<port>/...)
+// per RFC 8252, which trip EC2MetaDataSSRF_BODY (and, once that is downgraded,
+// GenericRFI_BODY as well). Elsewhere both rules stay at Block.
+const KEYCLOAK_DCR_PATH_PREFIX = '/realms/mcp-gateway/clients-registrations/';
 
 // ---------------------------------------------------------------------------
 // Props
@@ -122,28 +138,80 @@ export class WafRules extends Construct {
  * Build the standard array of 4 WAF rules used by both MCP Gateway and Keycloak ACLs.
  */
 function _buildWafRules(): wafv2.CfnWebACL.RuleProperty[] {
+  // Reusable byte match: URI path starts with the Keycloak DCR endpoint.
+  const dcrPathMatch: wafv2.CfnWebACL.StatementProperty = {
+    byteMatchStatement: {
+      fieldToMatch: { uriPath: {} },
+      positionalConstraint: 'STARTS_WITH',
+      searchString: KEYCLOAK_DCR_PATH_PREFIX,
+      textTransformations: [{ priority: 0, type: 'NONE' }],
+    },
+  };
+
   return [
-    // Rule 1: AWS Managed Rules - Common Rule Set
+    // Rule 1: CommonRuleSet EVERYWHERE EXCEPT Keycloak DCR.
+    // Full managed group at Block. AWS requires ManagedRuleGroupStatement at
+    // the rule's top level (cannot nest under AndStatement/NotStatement), so
+    // the path exclusion goes via managedRuleGroupStatement.scopeDownStatement.
     {
-      name: 'AWSManagedRulesCommonRuleSet',
+      name: 'CommonRuleSet',
       priority: 1,
       overrideAction: { none: {} },
       statement: {
         managedRuleGroupStatement: {
           name: 'AWSManagedRulesCommonRuleSet',
           vendorName: 'AWS',
+          // Managed group only evaluates when scope-down matches.
+          // scope-down = NOT starts_with('/realms/*/clients-registrations/').
+          scopeDownStatement: {
+            notStatement: { statement: dcrPathMatch },
+          },
         },
       },
       visibilityConfig: {
         cloudWatchMetricsEnabled: true,
-        metricName: 'AWSManagedRulesCommonRuleSetMetric',
+        metricName: 'CommonRuleSetMetric',
         sampledRequestsEnabled: true,
       },
     },
-    // Rule 2: AWS Managed Rules - Known Bad Inputs
+    // Rule 2: CommonRuleSet on Keycloak DCR endpoint ONLY, with count-mode
+    // overrides for the two sub-rules that false-positive on RFC 8252 loopback
+    // callback URIs. Every other CommonRuleSet sub-rule (LFI, XSS, SQLi, size,
+    // bad bots, etc.) still Blocks on this endpoint.
+    //
+    //   EC2MetaDataSSRF_BODY  — matches 'localhost' / '127.0.0.1' / '169.254.*'
+    //                           in the JSON body. DCR redirect_uris legitimately
+    //                           contain these per RFC 8252.
+    //   GenericRFI_BODY       — matches '127.0.0.1' / '169.254.*' in the body.
+    //                           Shadowed while _BODY was terminating; now that
+    //                           _BODY is Count on this path, GenericRFI_BODY
+    //                           becomes the next terminating match unless also
+    //                           downgraded.
+    {
+      name: 'CommonRuleSetForDcr',
+      priority: 2,
+      overrideAction: { none: {} },
+      statement: {
+        managedRuleGroupStatement: {
+          name: 'AWSManagedRulesCommonRuleSet',
+          vendorName: 'AWS',
+          ruleActionOverrides: [
+            { name: 'EC2MetaDataSSRF_BODY', actionToUse: { count: {} } },
+            { name: 'GenericRFI_BODY', actionToUse: { count: {} } },
+          ],
+          scopeDownStatement: dcrPathMatch,
+        },
+      },
+      visibilityConfig: {
+        cloudWatchMetricsEnabled: true,
+        metricName: 'CommonRuleSetForDcrMetric',
+        sampledRequestsEnabled: true,
+      },
+    },
+    // Rule 3: AWS Managed Rules - Known Bad Inputs
     {
       name: 'AWSManagedRulesKnownBadInputsRuleSet',
-      priority: 2,
+      priority: 3,
       overrideAction: { none: {} },
       statement: {
         managedRuleGroupStatement: {
@@ -157,10 +225,10 @@ function _buildWafRules(): wafv2.CfnWebACL.RuleProperty[] {
         sampledRequestsEnabled: true,
       },
     },
-    // Rule 3: IP-based rate limiting (100 req / 5 min per IP)
+    // Rule 4: IP-based rate limiting (100 req / 5 min per IP)
     {
       name: 'IPRateLimitRule',
-      priority: 3,
+      priority: 4,
       action: { block: {} },
       statement: {
         rateBasedStatement: {
@@ -174,15 +242,26 @@ function _buildWafRules(): wafv2.CfnWebACL.RuleProperty[] {
         sampledRequestsEnabled: true,
       },
     },
-    // Rule 4: Global rate limiting (2000 req / 5 min total)
+    // Rule 5: Global rate limiting (2000 req / 5 min total across all clients).
+    // WAF requires a scopeDownStatement when aggregateKeyType=CONSTANT. Match-all
+    // achieved via byte_match on URI path containing "/" — every HTTP request
+    // has a URI, so all traffic counts toward the global bucket.
     {
       name: 'GlobalRateLimitRule',
-      priority: 4,
+      priority: 5,
       action: { block: {} },
       statement: {
         rateBasedStatement: {
           limit: GLOBAL_RATE_LIMIT,
           aggregateKeyType: 'CONSTANT',
+          scopeDownStatement: {
+            byteMatchStatement: {
+              fieldToMatch: { uriPath: {} },
+              positionalConstraint: 'CONTAINS',
+              searchString: '/',
+              textTransformations: [{ priority: 0, type: 'NONE' }],
+            },
+          },
         },
       },
       visibilityConfig: {
@@ -195,7 +274,7 @@ function _buildWafRules(): wafv2.CfnWebACL.RuleProperty[] {
 }
 
 /**
- * Create a WAFv2 Web ACL with the standard 4-rule set.
+ * Create a WAFv2 Web ACL with the standard 5-rule set (see file header).
  */
 function _createWebAcl(
   scope: Construct,
@@ -265,7 +344,7 @@ function _createWafLogging(
     logDestinationConfigs: [logGroup.logGroupArn],
     redactedFields: [
       {
-        singleHeader: { name: 'authorization' },
+        singleHeader: { Name: 'authorization' },
       },
     ],
   });

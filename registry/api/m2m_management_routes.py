@@ -14,6 +14,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from registry.audit.context import set_audit_action
+from registry.auth.csrf import verify_csrf_token_flexible
 from registry.auth.dependencies import nginx_proxied_auth
 from registry.observability.meters import (
     m2m_management_requests_total,
@@ -72,6 +73,7 @@ async def create_m2m_client(
     payload: IdPM2MClientCreate,
     request: Request,
     user_context: Annotated[dict | None, Depends(nginx_proxied_auth)] = None,
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ) -> IdPM2MClient:
     """Register a new M2M client with its group mappings (admin only)."""
     _require_admin(user_context, operation="create")
@@ -145,6 +147,7 @@ async def patch_m2m_client(
     payload: IdPM2MClientPatch,
     request: Request,
     user_context: Annotated[dict | None, Depends(nginx_proxied_auth)] = None,
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ) -> IdPM2MClient:
     """Update fields of an existing manual M2M client (admin only)."""
     _require_admin(user_context, operation="patch")
@@ -182,6 +185,7 @@ async def delete_m2m_client(
     client_id: str,
     request: Request,
     user_context: Annotated[dict | None, Depends(nginx_proxied_auth)] = None,
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ) -> None:
     """Delete a manual M2M client (admin only)."""
     _require_admin(user_context, operation="delete")

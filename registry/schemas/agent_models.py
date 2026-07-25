@@ -12,7 +12,7 @@ import re
 from datetime import datetime
 from enum import Enum
 from typing import Annotated, Any, Literal
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 from pydantic import (
     BaseModel,
@@ -363,9 +363,14 @@ class AgentCard(BaseModel):
     """
 
     # Unique identifier
-    id: UUID = Field(
-        default_factory=uuid4,
-        description="Unique identifier (UUID) for this agent",
+    id: str = Field(
+        default_factory=lambda: str(uuid4()),
+        min_length=1,
+        max_length=512,
+        description=(
+            "Unique identifier for this agent. Any non-empty string "
+            "(UUID, ARN, URN, ...). Auto-generated UUID if not supplied."
+        ),
     )
 
     # Required A2A fields
@@ -897,6 +902,14 @@ class AgentRegistrationRequest(BaseModel):
         None,
         description="Registry path (optional - auto-generated if not provided)",
     )
+
+    id: str | None = Field(
+        None,
+        min_length=1,
+        max_length=512,
+        description="Optional caller-supplied id (UUID, ARN, ...). Auto-generated if omitted.",
+    )
+
     protocol_version: str = Field(
         default="1.0",
         alias="protocolVersion",
@@ -1029,6 +1042,17 @@ class AgentRegistrationRequest(BaseModel):
         if v is None:
             return None
         return _validate_path_format(v)
+
+    @field_validator("id")
+    @classmethod
+    def _validate_id(cls, v: str | None) -> str | None:
+        # Delegate to the shared validator so the id rules (non-empty, length,
+        # safe charset) never drift from the server route's resolve_asset_id.
+        from ..services._asset_id import validate_asset_id
+
+        if v is None:
+            return v
+        return validate_asset_id(v)
 
     @field_validator("protocol_version")
     @classmethod

@@ -36,6 +36,15 @@ app:
   # to scope the cookie tighter, or to a different parent
   # (".team.example.com") if this stack lives under a subdomain.
   sessionCookieDomain: ""
+  # Exact-match allowlist of OAuth login/logout redirect URIs (open-redirect
+  # hardening). Comma-separated list of the FULL absolute callback/success/logout
+  # URLs the deployment legitimately redirects to. When set, an absolute
+  # redirect_uri is accepted only if it exactly matches an entry (relative paths
+  # are always allowed as same-origin). When empty (default), the auth server
+  # falls back to the weaker cookie-domain heuristic. Configuring this is the
+  # hardened path and is recommended for production.
+  # Example: "https://registry.example.com/,https://registry.example.com/login"
+  oauth2AllowedRedirectUris: ""
   # Number of trusted reverse-proxy hops in front of the app. The audit client IP
   # is taken from the Nth-from-the-right X-Forwarded-For entry, never the
   # client-controlled left-most one. Default 1 (the bundled nginx). Raise it when
@@ -97,6 +106,9 @@ app:
     enabled: false
     backend: documentdb
     failOpen: true
+    # When true, a backend error reading quarantine membership DENIES (fails
+    # closed) instead of the default fail-open. Best-effort quarantine.
+    quarantineFailClosed: false
     definitionsCacheTtlSeconds: 30
     backendTimeoutMs: 250
 # Authentication Provider Configuration

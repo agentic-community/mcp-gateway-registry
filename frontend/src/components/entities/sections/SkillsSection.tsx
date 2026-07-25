@@ -15,6 +15,12 @@ interface SkillsSectionProps {
   error: string | null;
   /** True when a search term or non-default lifecycle filter is active. */
   isFiltered: boolean;
+  /**
+   * True when the caller holds the `list_skills` discovery scope (or is admin).
+   * When false, the empty state explains that skill access is admin-managed
+   * instead of claiming no skills are registered.
+   */
+  hasListAccess: boolean;
   canModify: boolean;
   page: number;
   totalPages: number;
@@ -44,6 +50,7 @@ const SkillsSection: React.FC<SkillsSectionProps> = ({
   loading,
   error,
   isFiltered,
+  hasListAccess,
   canModify,
   page,
   totalPages,
@@ -95,14 +102,31 @@ const SkillsSection: React.FC<SkillsSectionProps> = ({
       ) : filteredCount === 0 ? (
         <EmptyState
           tone="amber"
-          title="No skills found"
+          title={
+            hasListAccess ? 'No skills found' : "You don't have access to view skills"
+          }
           subtitle={
-            isFiltered
-              ? 'Press Enter in the search bar to search semantically'
-              : 'No skills are registered yet'
+            !hasListAccess ? (
+              <>
+                Skill discovery is managed by your registry administrator. Ask them to grant
+                your group the "list_skills" permission so skills appear here.{' '}
+                <a
+                  href="https://github.com/agentic-community/mcp-gateway-registry/blob/main/docs/faq/granting-skill-and-agent-discovery-permissions.md"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-amber-600 dark:text-amber-400 hover:underline"
+                >
+                  Learn more
+                </a>
+              </>
+            ) : isFiltered ? (
+              'Press Enter in the search bar to search semantically'
+            ) : (
+              'No skills are registered yet'
+            )
           }
           cta={
-            !isFiltered && canModify ? (
+            hasListAccess && !isFiltered && canModify ? (
               <button
                 onClick={onAddSkill}
                 className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-lg text-white bg-amber-600 hover:bg-amber-700 transition-colors"

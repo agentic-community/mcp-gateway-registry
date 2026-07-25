@@ -278,6 +278,7 @@ async def rate_virtual_server(
     rating_request: RatingRequest,
     user_context: Annotated[dict, Depends(nginx_proxied_auth)],
     vs_path: str = Path(..., description="Virtual server path"),
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ) -> dict:
     """Submit or update a rating for a virtual server.
 
@@ -373,6 +374,7 @@ async def create_virtual_server(
     http_request: Request,
     request: CreateVirtualServerRequest,
     user_context: Annotated[dict, Depends(nginx_proxied_auth)],
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ) -> VirtualServerConfig:
     """Create a new virtual MCP server.
 
@@ -429,6 +431,7 @@ async def update_virtual_server(
     request: UpdateVirtualServerRequest,
     user_context: Annotated[dict, Depends(nginx_proxied_auth)],
     vs_path: str = Path(..., description="Virtual server path"),
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ) -> VirtualServerConfig:
     """Update an existing virtual MCP server.
 
@@ -489,6 +492,7 @@ async def delete_virtual_server(
     http_request: Request,
     user_context: Annotated[dict, Depends(nginx_proxied_auth)],
     vs_path: str = Path(..., description="Virtual server path"),
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ) -> None:
     """Delete a virtual MCP server.
 

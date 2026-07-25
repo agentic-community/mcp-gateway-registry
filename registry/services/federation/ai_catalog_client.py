@@ -27,6 +27,7 @@ from urllib.parse import urljoin, urlparse
 import httpx
 from pydantic import ValidationError
 
+from ...common.log_redaction import redact_url
 from ...exceptions import UrlValidationError
 from ...schemas.ard_models import AICatalogManifest
 from ...utils.url_guard import SKILL_PROFILE, guarded_client
@@ -98,7 +99,7 @@ class AiCatalogFederationClient:
         if depth > self.max_depth:
             return
         if url in visited:
-            logger.debug("ARD ingestion: skipping already-visited catalog URL %s", url)
+            logger.debug("ARD ingestion: skipping already-visited catalog URL %s", redact_url(url))
             return
         visited.add(url)
 
@@ -109,7 +110,9 @@ class AiCatalogFederationClient:
         try:
             manifest = self._fetch_one(url, root_domain)
         except Exception as e:
-            logger.warning("ARD ingestion: skipping catalog URL %s after error: %s", url, e)
+            logger.warning(
+                "ARD ingestion: skipping catalog URL %s after error: %s", redact_url(url), e
+            )
             return
         if manifest is None:
             return
@@ -132,7 +135,7 @@ class AiCatalogFederationClient:
         try:
             assert_fetchable(url, allowed)
         except ArdValidationError as e:
-            logger.warning("ARD ingestion: refusing catalog URL %s: %s", url, e)
+            logger.warning("ARD ingestion: refusing catalog URL %s: %s", redact_url(url), e)
             return None
 
         if self.polite_interval_ms:
@@ -153,7 +156,7 @@ class AiCatalogFederationClient:
                 if 300 <= response.status_code < 400:
                     logger.warning(
                         "ARD ingestion: catalog %s returned redirect status %d, skipping",
-                        url,
+                        redact_url(url),
                         response.status_code,
                     )
                     return None
@@ -161,7 +164,7 @@ class AiCatalogFederationClient:
                 if declared and declared.isdigit() and int(declared) > _MAX_BYTES:
                     logger.warning(
                         "ARD ingestion: catalog %s Content-Length %s exceeds %d cap, skipping",
-                        url,
+                        redact_url(url),
                         declared,
                         _MAX_BYTES,
                     )
@@ -173,7 +176,7 @@ class AiCatalogFederationClient:
                     if total > _MAX_BYTES:
                         logger.warning(
                             "ARD ingestion: catalog %s exceeds %d byte cap, aborting",
-                            url,
+                            redact_url(url),
                             _MAX_BYTES,
                         )
                         return None
@@ -184,16 +187,18 @@ class AiCatalogFederationClient:
             # at connect time (and on every redirect hop). A hostname that
             # passed assert_fetchable() but rebinds to a private/metadata IP
             # before the connect is blocked here — skip and log, never fatal.
-            logger.warning("ARD ingestion: refusing rebound/unsafe catalog URL %s: %s", url, e)
+            logger.warning(
+                "ARD ingestion: refusing rebound/unsafe catalog URL %s: %s", redact_url(url), e
+            )
             return None
         except httpx.HTTPError as e:
-            logger.warning("ARD ingestion: fetch failed for %s: %s", url, e)
+            logger.warning("ARD ingestion: fetch failed for %s: %s", redact_url(url), e)
             return None
 
         try:
             payload = json.loads(content)
         except (ValueError, UnicodeDecodeError) as e:
-            logger.warning("ARD ingestion: catalog %s is not valid JSON: %s", url, e)
+            logger.warning("ARD ingestion: catalog %s is not valid JSON: %s", redact_url(url), e)
             return None
 
         try:

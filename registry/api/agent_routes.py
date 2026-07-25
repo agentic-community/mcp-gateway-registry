@@ -29,11 +29,13 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ValidationError
 
 from ..audit import set_audit_action
+from ..auth.asset_permissions import user_has_asset_permission
 from ..auth.csrf import verify_csrf_token_flexible
 from ..auth.dependencies import nginx_proxied_auth
-from ..common.log_redaction import redact_headers, redact_mapping
+from ..common.log_redaction import redact_headers, redact_mapping, redact_url
 from ..core.config import settings
-from ..exceptions import UrlValidationError
+from ..core.metrics import ASSET_ID_SUPPLIED_TOTAL
+from ..exceptions import AssetIdConflictError, UrlValidationError
 from ..repositories.factory import get_search_repository
 from ..repositories.interfaces import SearchRepositoryBase
 from ..schemas.agent_models import (
@@ -51,6 +53,11 @@ from ..schemas.agent_models import (
 from ..schemas.duplicate_check_models import (
     AgentDuplicateCheckRequest,
     DuplicateCheckResult,
+)
+from ..services._asset_id import (
+    InvalidAssetIdError,
+    check_caller_supplied_id_allowed,
+    resolve_asset_id,
 )
 from ..services.agent_batch_service import (
     ConcurrentJobLimitError,
@@ -282,24 +289,30 @@ async def _probe_agent_backend_health(
             if response.status_code == 200:
                 status_label = "healthy"
                 detail = None
-                logger.info(f"Agent health check for {path} succeeded via GET on {url}")
+                logger.info(f"Agent health check for {path} succeeded via GET on {redact_url(url)}")
                 break
             detail = f"Agent responded with HTTP {response.status_code}"
-            logger.debug(f"Agent health check for {path} got HTTP {response.status_code} on {url}")
+            logger.debug(
+                f"Agent health check for {path} got HTTP {response.status_code} on {redact_url(url)}"
+            )
         except httpx.TimeoutException:
             detail = f"Health check timed out on {url}"
-            logger.debug(f"Agent health check for {path} timed out on {url}")
+            logger.debug(f"Agent health check for {path} timed out on {redact_url(url)}")
         except httpx.HTTPError as exc:
             detail = f"Health check failed on {url}"
-            logger.debug(f"Agent health check for {path} failed on {url}: {exc}")
+            logger.debug(f"Agent health check for {path} failed on {redact_url(url)}: {exc}")
         except Exception as exc:
             detail = f"Unexpected health check error on {url}"
-            logger.debug(f"Agent health check for {path} unexpected error on {url}: {exc}")
+            logger.debug(
+                f"Agent health check for {path} unexpected error on {redact_url(url)}: {exc}"
+            )
 
     # Fallback: if GET-based checks failed, try HEAD on the base URL. A
     # non-connection-error response (even 401/403) means the server is reachable.
     if status_label == "unhealthy":
-        logger.info(f"Agent {path} GET checks failed, falling back to HEAD ping on {base_url}")
+        logger.info(
+            f"Agent {path} GET checks failed, falling back to HEAD ping on {redact_url(base_url)}"
+        )
         try:
             start_time = datetime.now(UTC)
             async with guarded_async_client(
@@ -316,11 +329,13 @@ async def _probe_agent_backend_health(
                 f"(HTTP {response.status_code})"
             )
         except httpx.TimeoutException:
-            logger.debug(f"Agent {path} HEAD ping timed out on {base_url}")
+            logger.debug(f"Agent {path} HEAD ping timed out on {redact_url(base_url)}")
         except httpx.HTTPError as exc:
-            logger.debug(f"Agent {path} HEAD ping failed on {base_url}: {exc}")
+            logger.debug(f"Agent {path} HEAD ping failed on {redact_url(base_url)}: {exc}")
         except Exception as exc:
-            logger.debug(f"Agent {path} HEAD ping unexpected error on {base_url}: {exc}")
+            logger.debug(
+                f"Agent {path} HEAD ping unexpected error on {redact_url(base_url)}: {exc}"
+            )
 
     last_checked = datetime.now(UTC)
     return {
@@ -743,35 +758,38 @@ def _hash_items(items: list[AgentBatchItem]) -> str:
 
 
 def _check_agent_permission(
-    permission: str,
+    action: str,
     agent_name: str,
     user_context: dict[str, Any],
 ) -> None:
     """
-    Check if user has permission for agent operation.
+    Check if user has permission for an agent operation.
+
+    Takes a logical ACTION (list/get/create/modify/delete/toggle) and resolves
+    it to the correct agent scope via the canonical asset-permission map. This
+    replaces the previous raw-scope-string argument, which had let agent toggle
+    and modify be gated on the SERVER scopes ``toggle_service`` / ``modify_service``
+    (a cross-asset privilege bleed: a server grant leaked agent control, and the
+    intended ``modify_agent`` grant was ignored). Passing an action keeps the
+    enforced scope in lockstep with the family so this cannot recur.
 
     Args:
-        permission: Permission to check
-        agent_name: Name of the agent
-        user_context: User context from auth
+        action: Logical agent action (e.g. "modify", "toggle", "delete").
+        agent_name: Name of the agent (used for the 403 detail and per-resource
+            grant match).
+        user_context: User context from auth.
 
     Raises:
-        HTTPException: If user lacks permission
+        HTTPException: 403 if the user lacks the permission.
     """
-    from ..auth.dependencies import user_has_ui_permission_for_service
-
-    if not user_has_ui_permission_for_service(
-        permission,
-        agent_name,
-        user_context.get("ui_permissions", {}),
-    ):
+    if not user_has_asset_permission("agent", action, agent_name, user_context):
         logger.warning(
-            f"User {user_context['username']} attempted to perform {permission} "
-            f"on agent {agent_name} without permission"
+            f"User {user_context['username']} attempted to {action} "
+            f"agent {agent_name} without permission"
         )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"You do not have permission to {permission} for {agent_name}",
+            detail=f"You do not have permission to {action} agent {agent_name}",
         )
 
 
@@ -808,45 +826,6 @@ def _check_agent_lifecycle_status_permission(
             f"permission, which is typically granted to admins."
         ),
     )
-
-
-def _has_delete_agent_permission(user_context: dict[str, Any], agent_path: str) -> bool:
-    """
-    Check if user has permission to delete an agent.
-
-    Permission hierarchy:
-    1. Admin users can delete any agent
-    2. Users with delete_agent UI permission for "all" can delete any agent
-    3. Users with delete_agent UI permission for the specific agent path can delete it
-
-    Note: Agent ownership is checked separately in the delete endpoint.
-
-    Args:
-        user_context: User context from auth containing is_admin and ui_permissions
-        agent_path: Path of the agent to delete (e.g., "/code-reviewer")
-
-    Returns:
-        bool: True if user has delete permission, False otherwise
-    """
-    # Admin users can delete any agent
-    if user_context.get("is_admin", False):
-        return True
-
-    # Check delete_agent UI permission
-    ui_permissions = user_context.get("ui_permissions", {})
-    delete_perms = ui_permissions.get("delete_agent", [])
-
-    # "all" grants permission to delete any agent
-    if "all" in delete_perms:
-        return True
-
-    # Check if user has permission for this specific agent path
-    # Normalize path for comparison (remove leading slash if present)
-    normalized_path = agent_path.lstrip("/")
-    if agent_path in delete_perms or normalized_path in delete_perms:
-        return True
-
-    return False
 
 
 def _filter_agents_by_access(
@@ -948,6 +927,7 @@ async def register_agent(
     http_request: Request,
     request: AgentRegistrationRequest,
     user_context: Annotated[dict, Depends(nginx_proxied_auth)],
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ):
     """
     Register a new A2A agent in the registry.
@@ -986,7 +966,7 @@ async def register_agent(
         )
 
     logger.info(f"Agent registration request from user '{user_context['username']}'")
-    logger.info(f"Name: {request.name}, Path: {request.path}, URL: {request.url}")
+    logger.info(f"Name: {request.name}, Path: {request.path}, URL: {redact_url(request.url)}")
 
     path = _normalize_path(request.path, request.name)
 
@@ -1069,12 +1049,24 @@ async def register_agent(
                 detail=str(e),
             )
 
+        # Feature-flag gate (#1276): reject a caller-supplied id when the flag is
+        # off (fail-closed). Charset/length are already validated by the request
+        # model. Federation is not gated here (it does not use this route).
+        try:
+            check_caller_supplied_id_allowed(request.id, settings.allow_caller_supplied_asset_id)
+        except InvalidAssetIdError as e:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Invalid asset id: {e}",
+            )
+
         agent_card = AgentCard(
             protocol_version=request.protocol_version,
             name=request.name,
             description=request.description,
             url=request.url,
             path=path,
+            id=resolve_asset_id(request.id),
             version=request.version,
             status=effective_status or request.status,
             provider=provider_obj,
@@ -1148,7 +1140,19 @@ async def register_agent(
             detail=f"Registration denied by policy gate: {gate_result.error_message}",
         )
 
-    success = await agent_service.register_agent(agent_card)
+    try:
+        success = await agent_service.register_agent(agent_card)
+        if success and request.id is not None:
+            ASSET_ID_SUPPLIED_TOTAL.labels(asset_type="agent").inc()
+    except AssetIdConflictError as e:
+        logger.warning(f"Agent registration id conflict: {e}")
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content={
+                "detail": f"Agent with id '{e.asset_id}' already exists",
+                "suggestion": "Use a different id or omit it to auto-generate one",
+            },
+        )
 
     if not success:
         return JSONResponse(
@@ -1431,6 +1435,7 @@ async def list_agents(
 async def check_agent_health(
     path: str,
     user_context: Annotated[dict, Depends(nginx_proxied_auth)],
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ):
     """Perform a health check against an A2A agent.
 
@@ -1501,6 +1506,7 @@ async def rate_agent(
     path: str,
     rating_request: RatingRequest,
     user_context: Annotated[dict, Depends(nginx_proxied_auth)],
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ):
     """Save integer ratings to agent card."""
     # Set audit action for agent rating
@@ -1619,7 +1625,7 @@ async def toggle_agent(
             detail=f"Agent not found at path '{path}'",
         )
 
-    _check_agent_permission("toggle_service", agent_card.name, user_context)
+    _check_agent_permission("toggle", agent_card.name, user_context)
 
     # Per-resource access check for non-admins, mirroring the server toggle
     # (POST /api/servers/toggle). Having toggle_service permission is not
@@ -1744,6 +1750,7 @@ async def get_agent_security_scan(
 async def rescan_agent(
     path: str,
     user_context: Annotated[dict, Depends(nginx_proxied_auth)],
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ):
     """
     Trigger a manual security scan for an A2A agent.
@@ -1842,6 +1849,7 @@ async def submit_agent_batch(
     body: AgentBatchRequest,
     response: Response,
     user_context: Annotated[dict, Depends(nginx_proxied_auth)],
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ):
     """Submit an asynchronous batch of agent register/patch/replace/delete ops.
 
@@ -1921,6 +1929,7 @@ async def pull_agent_card(
     path: str,
     user_context: Annotated[dict, Depends(nginx_proxied_auth)],
     dry_run: bool = Query(True, description="Preview changes without applying"),
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ):
     """Pull the latest A2A agent card from the remote endpoint.
 
@@ -1969,7 +1978,7 @@ async def pull_agent_card(
         )
 
     # 2. Check permissions (modify_service + owner or admin)
-    _check_agent_permission("modify_service", existing_agent.name, user_context)
+    _check_agent_permission("modify", existing_agent.name, user_context)
 
     if not user_context["is_admin"] and existing_agent.registered_by != user_context["username"]:
         raise HTTPException(
@@ -2186,6 +2195,7 @@ async def update_agent(
     path: str,
     request: AgentRegistrationRequest,
     user_context: Annotated[dict, Depends(nginx_proxied_auth)],
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ):
     """
     Update an existing agent card.
@@ -2222,7 +2232,7 @@ async def update_agent(
             detail=f"Agent not found at path '{path}'",
         )
 
-    _check_agent_permission("modify_service", existing_agent.name, user_context)
+    _check_agent_permission("modify", existing_agent.name, user_context)
 
     if not user_context["is_admin"] and existing_agent.registered_by != user_context["username"]:
         logger.warning(
@@ -2356,6 +2366,7 @@ async def patch_agent(
     response: Response,
     user_context: Annotated[dict, Depends(nginx_proxied_auth)],
     if_match: Annotated[str | None, Header(alias="If-Match")] = None,
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ):
     """Apply an RFC 7396 JSON Merge Patch to an agent card.
 
@@ -2407,7 +2418,7 @@ async def patch_agent(
         )
 
     # Authorization (parity with PUT)
-    _check_agent_permission("modify_service", existing_agent.name, user_context)
+    _check_agent_permission("modify", existing_agent.name, user_context)
     if not user_context["is_admin"] and existing_agent.registered_by != user_context["username"]:
         logger.warning(
             f"User {user_context['username']} attempted to patch agent {path} "
@@ -2529,11 +2540,13 @@ async def delete_agent(
     request: Request,
     path: str,
     user_context: Annotated[dict, Depends(nginx_proxied_auth)],
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ):
     """
     Delete an agent from the registry.
 
-    Requires admin permission, delete_agent UI permission, or agent ownership.
+    Requires the delete_agent UI permission AND (admin OR agent ownership) --
+    uniform with server/skill/custom-entity delete. Admins bypass both checks.
 
     Args:
         path: Agent path
@@ -2573,17 +2586,26 @@ async def delete_agent(
             f"Delete this agent from its source registry, or remove the peer federation.",
         )
 
-    # Check delete permission: admin, delete_agent permission, or owner
+    # Strict dual gate, uniform with server/skill/custom-entity delete: the caller
+    # must hold the delete_agent scope AND be an admin or the agent's owner.
+    # Previously ownership alone sufficed (scope OR owner), letting an owner delete
+    # without the delete_agent grant -- the lone outlier among the asset families.
+    # The scope half routes through the canonical helper keyed on the agent NAME
+    # (matching modify/toggle and the batch path); the ownership check below
+    # (skipped for admins) supplies the AND-owner half.
+    _check_agent_permission("delete", existing_agent.name, user_context)
+
     if (
-        not _has_delete_agent_permission(user_context, path)
+        not user_context.get("is_admin", False)
         and existing_agent.registered_by != user_context["username"]
     ):
         logger.warning(
-            f"User {user_context['username']} attempted to delete agent {path} without permission"
+            f"User {user_context['username']} attempted to delete agent {path} "
+            f"owned by {existing_agent.registered_by}"
         )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admins, agent owners, or users with delete_agent permission can delete agents",
+            detail="You can only delete agents you registered",
         )
 
     success = await agent_service.remove_agent(path)

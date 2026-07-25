@@ -118,11 +118,12 @@ module "mcp_gateway" {
   keycloak_admin_password = var.keycloak_admin_password
 
   # Session cookie security configuration
-  session_cookie_secure  = var.session_cookie_secure
-  session_cookie_domain  = var.session_cookie_domain
-  cors_allowed_origins   = var.cors_allowed_origins
-  trusted_proxy_hops     = var.trusted_proxy_hops
-  trusted_external_hosts = var.trusted_external_hosts
+  session_cookie_secure        = var.session_cookie_secure
+  session_cookie_domain        = var.session_cookie_domain
+  oauth2_allowed_redirect_uris = var.oauth2_allowed_redirect_uris
+  cors_allowed_origins         = var.cors_allowed_origins
+  trusted_proxy_hops           = var.trusted_proxy_hops
+  trusted_external_hosts       = var.trusted_external_hosts
   # ECS is always behind an ALB, so default the nginx realip trust to the VPC CIDR
   # when the operator has not set it explicitly. This makes the inbound rate-limit
   # zones (which key on the connection peer) throttle per real client IP instead of
@@ -143,6 +144,7 @@ module "mcp_gateway" {
   rate_limiting_enabled                    = var.rate_limiting_enabled
   rate_limit_backend                       = var.rate_limit_backend
   rate_limit_fail_open                     = var.rate_limit_fail_open
+  rate_limit_quarantine_fail_closed        = var.rate_limit_quarantine_fail_closed
   rate_limit_definitions_cache_ttl_seconds = var.rate_limit_definitions_cache_ttl_seconds
   rate_limit_backend_timeout_ms            = var.rate_limit_backend_timeout_ms
   rate_limit_user_floor_per_min            = var.rate_limit_user_floor_per_min
@@ -253,6 +255,9 @@ module "mcp_gateway" {
   batch_max_request_bytes              = var.batch_max_request_bytes
   batch_worker_lease_ttl_seconds       = var.batch_worker_lease_ttl_seconds
   batch_worker_lease_heartbeat_seconds = var.batch_worker_lease_heartbeat_seconds
+
+  # Caller-supplied asset id (issue #1276)
+  allow_caller_supplied_asset_id = var.allow_caller_supplied_asset_id
 
   # Registration gate / admission control (issue #809)
   registration_gate_enabled              = var.registration_gate_enabled

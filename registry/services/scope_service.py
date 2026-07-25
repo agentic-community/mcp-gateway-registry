@@ -51,17 +51,22 @@ STANDARD_METHODS: list[str] = [
 def _grants_all(granted_resources: object) -> bool:
     """Return True if a ui_permission value grants access to "all" resources.
 
-    Mirrors the ``"all" in resources`` test in
-    ``registry.auth.dependencies._user_is_admin`` exactly, including its
-    behaviour for BOTH shapes the value can take:
+    Detects the ``"all"`` grant in BOTH shapes the value can take:
 
     - ``["all"]`` (list) -> membership check
     - ``"all"`` (bare string) -> equality (the string case ``_user_is_admin``
       accepts via substring matching; we accept it explicitly here)
 
-    Keeping this aligned with ``_user_is_admin`` is the whole point of the guard:
-    if the admin-derivation rule treats a value as admin-conferring, the guard
-    must treat the same value as privileged, regardless of list-vs-string shape.
+    NOTE: this service-layer write guard is intentionally BROADER than the
+    admin-derivation rule (``is_admin_conferring_action`` / ``_user_is_admin``).
+    It flags ANY ``"all"`` grant on ANY action -- including actions that are NOT
+    admin-conferring (per-type custom-entity scopes, and skill-management scopes
+    like ``modify_skill``). Those are excluded from admin derivation but still
+    require an admin to AUTHOR the group that carries them. So the guard being
+    over-inclusive here is deliberate and fail-safe: it can over-restrict a write
+    (an admin must create such a group) but never under-restricts. Do not
+    "tighten" it to match ``is_admin_conferring_action`` -- that would let a
+    non-admin author a skill-manager / entity-manager group.
     """
     if isinstance(granted_resources, str):
         return granted_resources == "all"
@@ -100,10 +105,12 @@ def _import_touches_privileged_scope(
         if mapped in PRIVILEGED_SCOPE_NAMES:
             return True
 
-    # A scope that grants any permission to "all" resources is admin-equivalent
-    # (see _user_is_admin, which confers admin on any mutating-prefix action with
-    # "all"). _grants_all handles both the list (["all"]) and bare-string ("all")
-    # shapes so a string-shaped grant cannot slip past this last line of defense.
+    # Any permission granting "all" resources requires an admin to author the
+    # group. This is intentionally broader than admin-derivation: it also trips on
+    # non-conferring "all" grants (per-type entity scopes, skill-management
+    # scopes) -- see _grants_all. Fail-safe: over-restricts the WRITE (admin-only
+    # authoring), never under-restricts. _grants_all handles both the list
+    # (["all"]) and bare-string ("all") shapes so neither slips past this guard.
     for granted_resources in (ui_permissions or {}).values():
         if _grants_all(granted_resources):
             return True

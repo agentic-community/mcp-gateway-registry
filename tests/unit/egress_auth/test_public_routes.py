@@ -228,6 +228,38 @@ class TestCallback:
         assert svc.handle_callback.await_count == 1
         state_codec.reset_cipher_for_tests()
 
+    def test_callback_store_write_failure_returns_503_not_success(self, client, monkeypatch):
+        # The code exchange succeeds but persisting the token to the secret store
+        # (Vault/OpenBao) fails even after the store's own transient retries. The
+        # route MUST surface a retryable 503 "Connection not saved" page and MUST
+        # NOT fall through to the success page -- otherwise the user is told
+        # "Connected" while no token was vaulted, i.e. a silent "0 tools".
+        monkeypatch.setenv("SECRET_KEY", "test-secret-key-for-testing-only-do-not-use")
+        from registry.egress_auth import state_codec
+        from registry.egress_auth.schemas import OAuthState
+        from registry.secrets.interfaces import SecretStoreError
+
+        state_codec.reset_cipher_for_tests()
+        blob = state_codec.encode_state(
+            OAuthState(
+                user_id="alice",
+                auth_method="oauth2",
+                provider="github",
+                server_path="/github-mcp",
+                nonce="n1",
+                issued_at="2026-06-19T00:00:00+00:00",
+            )
+        )
+        svc = AsyncMock()
+        svc.handle_callback = AsyncMock(side_effect=SecretStoreError("vault write failed"))
+        c = client(USER, server=_server(), svc=svc)
+        r = c.get("/api/oauth2/egress/callback", params={"code": "the-code", "state": blob})
+        assert r.status_code == 503
+        assert "Connection not saved" in r.text
+        assert "Connected github" not in r.text
+        assert svc.handle_callback.await_count == 1
+        state_codec.reset_cipher_for_tests()
+
     def test_callback_success_page_escapes_server_path(self, client, monkeypatch):
         # server_path is admin-registrant-supplied; validate_server_path blocks
         # nginx metacharacters but not '<'/'>', so the success HTML must escape it

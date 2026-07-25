@@ -125,6 +125,26 @@ class TestGenerateVirtualServerBlocks:
         assert "error_page 403 = @forbidden_error" in result
 
     @pytest.mark.asyncio
+    async def test_location_normalised_to_trailing_slash(self, mock_virtual_server_repository):
+        """Issue #1501: the virtual-server location must render with a trailing
+        slash so nginx does a subtree prefix match (`/virtual/dev/`) instead of
+        hijacking any URL that merely starts with the path (`/virtual/dev` would
+        otherwise prefix-match `/virtual/devtools`)."""
+        vs = _make_vs_config(path="/virtual/dev", server_name="Dev")
+        mock_virtual_server_repository.list_enabled.return_value = [vs]
+
+        from registry.core.nginx_service import NginxConfigService
+
+        service = NginxConfigService()
+        result = await service._generate_virtual_server_blocks()
+
+        # The location directive is normalised to end with a slash ...
+        assert "location {{ROOT_PATH}}/virtual/dev/ {" in result
+        # ... and must NOT emit the bare-path form that prefix-matches
+        # /virtual/devtools, /virtual/development, etc.
+        assert "location {{ROOT_PATH}}/virtual/dev {" not in result
+
+    @pytest.mark.asyncio
     async def test_multiple_virtual_servers(self, mock_virtual_server_repository):
         """Test that multiple virtual servers produce multiple location blocks."""
         vs1 = _make_vs_config(path="/virtual/dev", server_name="Dev")

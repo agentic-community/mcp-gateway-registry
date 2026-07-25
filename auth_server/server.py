@@ -21,6 +21,7 @@ import uuid
 from collections.abc import Mapping
 from contextlib import asynccontextmanager
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 from string import Template
 from typing import Any
@@ -47,9 +48,12 @@ from jwt.api_jwk import PyJWK
 from metrics_middleware import add_auth_metrics_middleware
 
 try:
-    from observability.meters import token_mint_total
+    from observability.meters import redirect_rejected_total, token_mint_total
 except ImportError:
-    from auth_server.observability.meters import token_mint_total
+    from auth_server.observability.meters import (
+        redirect_rejected_total,
+        token_mint_total,
+    )
 
 try:
     from egress_obo import (
@@ -121,6 +125,17 @@ _USER_JWT_AUDIENCE: str = "mcp-registry"
 
 MAX_TOKEN_LIFETIME_HOURS = 24
 DEFAULT_TOKEN_LIFETIME_HOURS = 8
+
+# Maximum length (in characters) of the full Entra logout URL before we drop the
+# optional id_token_hint. Entra ID rejects overly long logout requests with the
+# documented error AADSTS90015 ("QueryStringTooLong"), which happens for users in
+# many groups whose ID token JWT is large. Entra rejects against the entire
+# request URL, so we measure scheme+host+path+query, not the query string alone.
+# Microsoft does not publish the exact threshold, so this is a conservative
+# empirical value chosen to stay well under observed failures. Entra still
+# processes the logout without the hint (the only difference is a possible
+# account-selection prompt for multi-account users).
+MAX_LOGOUT_URL_LENGTH: int = 2000
 
 # Trailing path segments that are MCP transport endpoints, not part of the
 # registered server name. Used when deriving the scope key from a proxied path
@@ -281,16 +296,39 @@ def _canonical_egress_user(validation_result: dict) -> str:
     client's bearer access token (lacks it) would otherwise key differently.
 
     Resolution (first hit wins):
-      1. ``data.sub`` -- the raw IdP subject. Bearer paths expose the verified
+      1. ``data.egress_user`` -- the explicit canonical egress id stamped onto a
+         gateway-issued self-signed USER token (see ``generate_user_token``). That
+         token's ``sub`` is the login username -- NOT the OIDC sub -- so without
+         this claim a Cursor/Claude bearer minted from a browser login would key
+         the vault on the username while the cookie-consent path keyed on the OIDC
+         sub, and the vend would miss the vaulted token ("0 tools"). Checked FIRST
+         so it wins over the self-signed token's username ``sub`` -- but ONLY when
+         the token is ``self_signed`` (minted by this gateway); it is ignored on
+         any other method so an external issuer cannot inject a vault key.
+      2. ``data.sub`` -- the raw IdP subject. Bearer paths expose the verified
          claims here; the cookie path carries the sub persisted into the session
          at login (see create_session ``subject``).
-      2. top-level ``sub`` -- direct-token paths that surface it there.
-      3. ``username`` -- fallback for callers with no sub (keeps pre-existing
+      3. ``data.subject`` -- the cookie session's persisted OIDC sub.
+      4. top-level ``sub`` -- direct-token paths that surface it there.
+      5. ``username`` -- fallback for callers with no sub (keeps pre-existing
          non-OIDC behavior unchanged; only OIDC callers change bucket).
     """
     data = validation_result.get("data") or {}
+    # ``egress_user`` is an identity-keying claim -- it selects which per-user
+    # egress-vault bucket the vend reads. Only trust it from a token THIS gateway
+    # minted itself (``self_signed``), where the claim's provenance is guaranteed.
+    # A JWT / M2M / other-issuer token could otherwise carry an attacker-chosen
+    # ``egress_user`` and key the vault on a victim's id -> a cross-user egress
+    # token vend. Gateway-built paths (session cookie, federation, network-trusted)
+    # never set ``egress_user``, so gating it here is a no-op for them and keeps
+    # the consent-write path resolving on ``sub``/``subject`` unchanged.
+    if validation_result.get("method") == AUTH_METHOD_SELF_SIGNED:
+        egress_user = data.get("egress_user")
+    else:
+        egress_user = None
     return (
-        data.get("sub")
+        egress_user
+        or data.get("sub")
         or data.get("subject")
         or validation_result.get("sub")
         or validation_result.get("username")
@@ -925,6 +963,158 @@ def mask_token(token: str) -> str:
     return "***MASKED***"
 
 
+def _normalize_redirect_uri(url: str) -> str:
+    """Normalize an absolute redirect URI for exact-match comparison.
+
+    Lower-cases the scheme and host, drops a default port, and strips a
+    trailing slash from the path so that cosmetically different but equivalent
+    URIs compare equal. Query and fragment are preserved as-is because they can
+    be security-relevant. Returns the input unchanged when it is not an
+    absolute http(s) URL (nothing to normalize).
+    """
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        return url
+    host = parsed.hostname.lower()
+    default_port = 443 if parsed.scheme == "https" else 80
+    if parsed.port and parsed.port != default_port:
+        netloc = f"{host}:{parsed.port}"
+    else:
+        netloc = host
+    path = parsed.path.rstrip("/")
+    normalized = f"{parsed.scheme.lower()}://{netloc}{path}"
+    if parsed.query:
+        normalized = f"{normalized}?{parsed.query}"
+    if parsed.fragment:
+        normalized = f"{normalized}#{parsed.fragment}"
+    return normalized
+
+
+@lru_cache(maxsize=8)
+def _parse_allowed_redirect_uris(raw: str) -> frozenset[str]:
+    """Parse+normalize a raw allowlist string into a frozenset (cached by input).
+
+    Keyed on the raw string so repeated calls with the same value skip
+    re-parsing. Because ``_get_allowed_redirect_uris`` re-reads the environment
+    on every call and passes the current value as the cache key, a runtime
+    change to OAUTH2_ALLOWED_REDIRECT_URIS is a cache miss that recomputes from
+    the new value -- the stale entry is never looked up again, so no explicit
+    cache invalidation (``cache_clear``) is needed. ``maxsize`` only bounds the
+    number of distinct raw strings ever seen (one in practice). An empty/blank
+    string yields an empty set.
+    """
+    stripped = raw.strip()
+    if not stripped:
+        return frozenset()
+    return frozenset(
+        _normalize_redirect_uri(entry.strip()) for entry in stripped.split(",") if entry.strip()
+    )
+
+
+def _get_allowed_redirect_uris() -> frozenset[str]:
+    """Return the configured exact-match redirect URI allowlist.
+
+    Read from OAUTH2_ALLOWED_REDIRECT_URIS (comma-separated absolute URIs).
+    Each entry is normalized so comparison is stable. An empty/unset value
+    yields an empty set, which signals the caller to fall back to the weaker
+    cookie-domain heuristic (documented as the non-hardened mode).
+    """
+    return _parse_allowed_redirect_uris(os.environ.get("OAUTH2_ALLOWED_REDIRECT_URIS", ""))
+
+
+def _evaluate_redirect(
+    url: str,
+    request: Request | None = None,
+) -> tuple[bool, str]:
+    """Decide whether a login/logout redirect target is safe, with a reason.
+
+    Single source of truth for the redirect decision. Returns
+    ``(allowed, reason)`` where ``reason`` is a short, low-cardinality label
+    suitable for a metric and for a redacted log line:
+      - ``empty``            -- no URL supplied
+      - ``backslash``        -- contains a backslash (legacy-browser bypass)
+      - ``protocol_relative``-- ``//host`` off-site redirect
+      - ``relative``         -- same-origin relative path (ALLOWED)
+      - ``scheme``           -- non-http(s) absolute scheme
+      - ``allowlist_match``  -- exact match against the allowlist (ALLOWED)
+      - ``not_in_allowlist`` -- allowlist configured, no match
+      - ``cookie_domain``    -- legacy cookie-domain heuristic decision
+
+    Precedence (fail closed):
+      1. Relative URLs (no scheme and no netloc) are always safe -- they are
+         same-origin by construction.
+      2. Non-http(s) absolute URLs are always rejected.
+      3. If an exact-match allowlist is configured
+         (OAUTH2_ALLOWED_REDIRECT_URIS), the absolute URL is permitted ONLY
+         when it exactly matches a normalized allowlist entry. This is the
+         hardened path: a subdomain of the cookie domain that is not on the
+         list is rejected.
+      4. If no allowlist is configured, fall back to the legacy cookie-domain
+         heuristic for backward compatibility. This is the weaker mode;
+         configuring the allowlist is the recommended posture.
+    """
+    if not url:
+        return False, "empty"
+    # A backslash is not a valid path separator, but some legacy browsers
+    # rewrite it to "/" before following a redirect, turning "/\evil.com" into
+    # the protocol-relative "//evil.com" (an off-site redirect). urlparse treats
+    # it as a relative path, so reject it explicitly before the same-origin
+    # shortcut below (fail closed).
+    if "\\" in url:
+        return False, "backslash"
+    # Reject protocol-relative ("//evil.com") before urlparse: a browser follows
+    # it off-site. urlparse classifies it as netloc (not path), so catching it
+    # here also gives an accurate reason label instead of the generic "scheme".
+    if url.startswith("//"):
+        return False, "protocol_relative"
+    parsed = urlparse(url)
+    if not parsed.scheme and not parsed.netloc:
+        return True, "relative"
+    if parsed.scheme not in ("http", "https"):
+        return False, "scheme"
+
+    allowlist = _get_allowed_redirect_uris()
+    if allowlist:
+        if _normalize_redirect_uri(url) in allowlist:
+            return True, "allowlist_match"
+        return False, "not_in_allowlist"
+
+    cookie_domain = os.environ.get("SESSION_COOKIE_DOMAIN", "").strip()
+    allowed = _is_redirect_within_cookie_domain(url, cookie_domain, request)
+    return allowed, "cookie_domain"
+
+
+def _redact_redirect_uri(url: str) -> str:
+    """Reduce a (rejected, untrusted) redirect URL to scheme+host for logging.
+
+    A rejected redirect_uri is untrusted and its path/query/fragment may carry
+    tokens or PII, so never log it whole. Returns just ``scheme://host`` for an
+    absolute http(s) URL, or a coarse placeholder otherwise.
+    """
+    try:
+        parsed = urlparse(url)
+    except Exception:  # pragma: no cover - urlparse is very tolerant
+        return "<unparseable>"
+    if parsed.scheme in ("http", "https") and parsed.hostname:
+        return f"{parsed.scheme}://{parsed.hostname}"
+    if url.startswith("//"):
+        return "//<host>"
+    return "<non-absolute>"
+
+
+def _is_redirect_uri_allowed(
+    url: str,
+    request: Request | None = None,
+) -> bool:
+    """Return whether a login/logout redirect target is safe.
+
+    Thin bool wrapper over ``_evaluate_redirect`` (the single source of truth),
+    kept for call sites and tests that only need the yes/no decision.
+    """
+    allowed, _reason = _evaluate_redirect(url, request)
+    return allowed
+
+
 def _is_redirect_within_cookie_domain(
     url: str,
     cookie_domain: str,
@@ -953,14 +1143,55 @@ def _is_redirect_within_cookie_domain(
         forwarded_proto = request.headers.get("x-forwarded-proto", "").split(",")[0].strip()
         forwarded_host = request.headers.get("x-forwarded-host", "").split(",")[0].strip()
         request_scheme = forwarded_proto or request.url.scheme
-        request_host = (forwarded_host or request.url.hostname or "").lower()
+        # Compare hostnames only, never host:port. urlparse(url).hostname above
+        # already strips the port, and request.url.hostname is port-less too, but
+        # a raw X-Forwarded-Host may carry a port (e.g. "localhost:7860" from the
+        # registry's server-to-server logout hop). Normalize the forwarded value
+        # the same way so a same-origin redirect isn't falsely rejected.
+        if forwarded_host:
+            request_host = (urlparse(f"//{forwarded_host}").hostname or "").lower()
+        else:
+            request_host = (request.url.hostname or "").lower()
         if request_host and parsed.scheme == request_scheme and hostname == request_host:
             return True
+
+    # Trust the deployment's own configured external host. On the internal
+    # server-to-server logout hop (issue #1503), the registry reaches auth-server
+    # over the cluster network, so the request origin auth-server reconstructs is
+    # the internal scheme/host (e.g. http/loopback), NOT the public URL — the
+    # same-origin match above then fails for a legitimate https public
+    # redirect_uri and the redirect is wrongly dropped (Cognito then rejects the
+    # logout with "Required parameters missing"). The redirect_uri's host being
+    # the deployment's OWN declared public host is safe by definition (it is not
+    # user-controlled here; it is derived from the registry's trusted-host
+    # allowlist), so accept it regardless of the reconstructed request scheme.
+    configured_host = _configured_external_host()
+    if configured_host and hostname == configured_host:
+        return True
 
     if not cookie_domain:
         return False
     apex = cookie_domain.lstrip(".").lower()
     return hostname == apex or hostname.endswith(f".{apex}")
+
+
+def _configured_external_host() -> str:
+    """Return the deployment's own public host from configured external URLs.
+
+    Prefers ``AUTH_SERVER_EXTERNAL_URL`` (the public URL, distinct from the
+    internal ``registry_url``/service URL), falling back to ``REGISTRY_URL``.
+    Returns a lower-cased hostname (no scheme/port) or "" if none is configured.
+    This is the deployment's own declared host, used to approve a same-origin
+    redirect_uri even when the request reaches auth-server over the internal
+    network (where the reconstructed request scheme/host is not the public one).
+    """
+    for env_name in ("AUTH_SERVER_EXTERNAL_URL", "REGISTRY_URL"):
+        raw = os.environ.get(env_name, "").strip()
+        if raw:
+            host = (urlparse(raw).hostname or "").lower()
+            if host:
+                return host
+    return ""
 
 
 def _is_safe_redirect_url(
@@ -1407,6 +1638,14 @@ async def _enforce_rate_limit(
         return
 
     if not decision.allowed:
+        if decision.quarantined:
+            # A hard quarantine block, NOT a throttle: return a plain 403 with NO
+            # X-RateLimit-Throttled marker, so nginx @forbidden_error returns a plain
+            # 403 (never a 429 rewrite). Quarantine is an access decision, not a rate.
+            raise HTTPException(
+                status_code=403,
+                detail={"error": "quarantined", "axis": decision.axis},
+            )
         # NOTE: /validate is nginx's internal auth_request subrequest, never a
         # client-facing endpoint. nginx's auth_request module only forwards 401
         # and 403 from the subrequest; any other status (including 429) is turned
@@ -1511,45 +1750,49 @@ async def validate_server_tool_access(
         True if access is allowed, False otherwise
     """
     try:
-        # Verbose logging: Print input parameters
-        logger.info("=== VALIDATE_SERVER_TOOL_ACCESS START ===")
-        logger.info(f"Requested server: '{server_name}'")
-        logger.info(f"Requested method: '{method}'")
-        logger.info(f"Requested tool: '{tool_name}'")
-        logger.info(f"User scopes: {user_scopes}")
+        # Verbose per-request trace. Kept at DEBUG (never INFO): this runs on the
+        # hot /validate path for every MCP proxy request, and user_scopes /
+        # scope_config carry the full authorization policy. The single audit
+        # record is the one INFO "Access granted/denied" line emitted at each
+        # return point below.
+        logger.debug("=== VALIDATE_SERVER_TOOL_ACCESS START ===")
+        logger.debug(f"Requested server: '{server_name}'")
+        logger.debug(f"Requested method: '{method}'")
+        logger.debug(f"Requested tool: '{tool_name}'")
+        logger.debug(f"User scopes: {user_scopes}")
 
         # Query DocumentDB directly for server access rules
         scope_repo = get_scope_repository()
 
         # Check each user scope to see if it grants access
         for scope in user_scopes:
-            logger.info(f"--- Checking scope: '{scope}' ---")
+            logger.debug(f"--- Checking scope: '{scope}' ---")
 
             # Query DocumentDB for this scope's server access rules
             scope_config = await scope_repo.get_server_scopes(scope)
 
             if not scope_config:
-                logger.info(f"Scope '{scope}' not found in DocumentDB")
+                logger.debug(f"Scope '{scope}' not found in DocumentDB")
                 continue
 
-            logger.info(f"Scope '{scope}' config: {scope_config}")
+            logger.debug(f"Scope '{scope}' config: {scope_config}")
 
             # The scope_config is directly a list of server configurations
             # since the permission type is already encoded in the scope name
             for server_config in scope_config:
-                logger.info(f"  Examining server config: {server_config}")
+                logger.debug(f"  Examining server config: {server_config}")
                 server_config_name = server_config.get("server")
-                logger.info(
+                logger.debug(
                     f"  Server name in config: '{server_config_name}' vs requested: '{server_name}'"
                 )
 
                 if _server_names_match(server_config_name, server_name):
-                    logger.info("  ✓ Server name matches!")
+                    logger.debug("  Server name matches")
 
                     # Check methods first
                     allowed_methods = server_config.get("methods", [])
-                    logger.info(f"  Allowed methods for server '{server_name}': {allowed_methods}")
-                    logger.info(f"  Checking if method '{method}' is in allowed methods...")
+                    logger.debug(f"  Allowed methods for server '{server_name}': {allowed_methods}")
+                    logger.debug(f"  Checking if method '{method}' is in allowed methods...")
 
                     # Check if all methods are allowed (wildcard support)
                     has_wildcard_methods = "all" in allowed_methods or "*" in allowed_methods
@@ -1560,58 +1803,60 @@ async def validate_server_tool_access(
                     if (
                         method in allowed_methods or has_wildcard_methods
                     ) and method != "tools/call":
-                        logger.info(f"  ✓ Method '{method}' found in allowed methods!")
+                        logger.debug(f"  Method '{method}' found in allowed methods")
+                        logger.debug(f"scope '{scope}' allows access to {server_name}.{method}")
                         logger.info(
-                            f"Access granted: scope '{scope}' allows access to {server_name}.{method}"
+                            f"Access granted: server='{server_name}' method='{method}' "
+                            f"tool='{tool_name}'"
                         )
-                        logger.info("=== VALIDATE_SERVER_TOOL_ACCESS END: GRANTED ===")
                         return True
 
                     # Check tools if method not found in methods
                     allowed_tools = server_config.get("tools", [])
-                    logger.info(f"  Allowed tools for server '{server_name}': {allowed_tools}")
+                    logger.debug(f"  Allowed tools for server '{server_name}': {allowed_tools}")
 
                     # Check if all tools are allowed (wildcard support)
                     has_wildcard_tools = "all" in allowed_tools or "*" in allowed_tools
 
                     # For tools/call, check if the specific tool is allowed
                     if method == "tools/call" and tool_name:
-                        logger.info(
+                        logger.debug(
                             f"  Checking if tool '{tool_name}' is in allowed tools for tools/call..."
                         )
                         if tool_name in allowed_tools or has_wildcard_tools:
-                            logger.info(f"  ✓ Tool '{tool_name}' found in allowed tools!")
-                            logger.info(
-                                f"Access granted: scope '{scope}' allows access to {server_name}.{method} for tool {tool_name}"
+                            logger.debug(f"  Tool '{tool_name}' found in allowed tools")
+                            logger.debug(
+                                f"scope '{scope}' allows access to {server_name}.{method} for tool {tool_name}"
                             )
-                            logger.info("=== VALIDATE_SERVER_TOOL_ACCESS END: GRANTED ===")
+                            logger.info(
+                                f"Access granted: server='{server_name}' method='{method}' "
+                                f"tool='{tool_name}'"
+                            )
                             return True
                         else:
-                            logger.info(f"  ✗ Tool '{tool_name}' NOT found in allowed tools")
+                            logger.debug(f"  Tool '{tool_name}' NOT found in allowed tools")
                     else:
                         # For other methods, check if method is in tools list (backward compatibility)
-                        logger.info(f"  Checking if method '{method}' is in allowed tools...")
+                        logger.debug(f"  Checking if method '{method}' is in allowed tools...")
                         if method in allowed_tools or has_wildcard_tools:
-                            logger.info(f"  ✓ Method '{method}' found in allowed tools!")
+                            logger.debug(f"  Method '{method}' found in allowed tools")
+                            logger.debug(f"scope '{scope}' allows access to {server_name}.{method}")
                             logger.info(
-                                f"Access granted: scope '{scope}' allows access to {server_name}.{method}"
+                                f"Access granted: server='{server_name}' method='{method}' "
+                                f"tool='{tool_name}'"
                             )
-                            logger.info("=== VALIDATE_SERVER_TOOL_ACCESS END: GRANTED ===")
                             return True
                         else:
-                            logger.info(f"  ✗ Method '{method}' NOT found in allowed tools")
+                            logger.debug(f"  Method '{method}' NOT found in allowed tools")
                 else:
-                    logger.info("  ✗ Server name does not match")
+                    logger.debug("  Server name does not match")
 
-        logger.warning(
-            f"Access denied: no scope allows access to {server_name}.{method} (tool: {tool_name}) for user scopes: {user_scopes}"
-        )
-        logger.info("=== VALIDATE_SERVER_TOOL_ACCESS END: DENIED ===")
+        logger.info(f"Access denied: server='{server_name}' method='{method}' tool='{tool_name}'")
         return False
 
     except Exception as e:
         logger.error(f"Error validating server/tool access: {e}")
-        logger.info("=== VALIDATE_SERVER_TOOL_ACCESS END: ERROR ===")
+        logger.info(f"Access denied: server='{server_name}' method='{method}' tool='{tool_name}'")
         return False  # Deny access on error
 
 
@@ -1758,9 +2003,29 @@ async def lifespan(app: FastAPI):
         # Fall back to empty config
         SCOPES_CONFIG = {"group_mappings": {}}
 
+    # Surface the redirect-validation posture once at startup so operators can
+    # tell whether the hardened exact-match allowlist is active (PR #1475).
+    if _get_allowed_redirect_uris():
+        logger.info("OAuth redirect validation: exact-match allowlist active")
+    else:
+        logger.info(
+            "OAUTH2_ALLOWED_REDIRECT_URIS not set; using legacy cookie-domain "
+            "redirect validation. Configure the allowlist for the hardened posture."
+        )
+
     # Build multi-key static token map (Issue #779).
     # Runs after scopes are loaded so map_groups_to_scopes can resolve groups.
     await _build_static_token_map()
+
+    # Run the legacy-scope audit. This used to be registered via the
+    # deprecated @app.on_event("startup") API, but FastAPI/Starlette never
+    # invokes on_event handlers once a custom `lifespan` is passed to
+    # FastAPI() (as above) -- it was silently dead code, so this audit never
+    # actually ran on boot.
+    try:
+        await _audit_legacy_scopes_on_startup()
+    except Exception as exc:
+        logger.error(f"Legacy scope audit errored during startup: {exc}", exc_info=True)
 
     # Prime the MCP/token-mint audit logger at startup so the durable-sink
     # guard runs at boot. Without this the guard would only fire lazily on the
@@ -1823,19 +2088,6 @@ internal_router = APIRouter(
     prefix="/internal",
     dependencies=[Depends(validate_internal_auth)],
 )
-
-
-@app.on_event("startup")
-async def startup_event():
-    """Load scopes configuration on startup."""
-    global SCOPES_CONFIG
-    try:
-        SCOPES_CONFIG = await reload_scopes_config()
-        _log_scopes_loaded(SCOPES_CONFIG)
-    except Exception as e:
-        logger.error(f"Failed to load scopes configuration on startup: {e}", exc_info=True)
-        # Fall back to empty config
-        SCOPES_CONFIG = {"group_mappings": {}}
 
 
 # Add metrics collection middleware
@@ -2435,7 +2687,9 @@ async def validate_a2a_agent_access(
     try:
         scope_rules = await scope_repo.get_server_scopes_bulk(user_scopes)
     except Exception as exc:
-        logger.warning(f"A2A access: failed to resolve scopes {user_scopes}: {exc}")
+        # Log the scope COUNT, not the scope list: the user's scopes are the
+        # caller's full authorization policy and must not land in logs.
+        logger.warning(f"A2A access: failed to resolve {len(user_scopes)} scope(s): {exc}")
         return False
 
     for scope_config in scope_rules.values():
@@ -3984,7 +4238,7 @@ def _validate_context_group_scope_shape(
 
 async def _reconcile_context_against_session(
     user_context: dict[str, Any],
-) -> tuple[list[str], list[str]]:
+) -> tuple[list[str], list[str], str]:
     """Reconcile a mint request's groups/scopes against the authoritative session.
 
     The mint endpoint receives the caller-supplied ``user_context`` in the
@@ -4003,7 +4257,12 @@ async def _reconcile_context_against_session(
     internal signing key.
 
     Returns:
-        Tuple ``(groups, scopes)`` to stamp into the token.
+        Tuple ``(groups, scopes, subject)`` to stamp into the token. ``subject``
+        is the session's canonical OIDC ``sub`` (persisted at login), stamped as
+        the token's ``egress_user`` claim so the vend keys the egress vault on the
+        SAME id the browser-consent path wrote (see ``_canonical_egress_user``).
+        Empty when there is no session-backed source or the session predates
+        subject persistence.
 
     Raises:
         HTTPException: 403 if the body claims a privileged group the resolved
@@ -4016,7 +4275,10 @@ async def _reconcile_context_against_session(
     if not session_id:
         # No authoritative session-backed source for this caller. Trust boundary
         # is the internal-JWT gate + validate_scope_subset; use the body as-is.
-        return body_groups, body_scopes
+        # A non-session caller may still assert its canonical egress id in the
+        # body (explicit trust boundary); absent that there is no OIDC sub to key.
+        body_subject = user_context.get("egress_user") or user_context.get("subject") or ""
+        return body_groups, body_scopes, body_subject
 
     from session_store import resolve_session
 
@@ -4054,7 +4316,10 @@ async def _reconcile_context_against_session(
     else:
         reconciled_groups = session_groups
     reconciled_scopes = await map_groups_to_scopes(reconciled_groups)
-    return reconciled_groups, reconciled_scopes
+    # The session's OIDC sub is the authoritative canonical egress id; the vend
+    # and the browser-consent path must key the vault on this one value.
+    session_subject = session_data.get("subject") or ""
+    return reconciled_groups, reconciled_scopes, session_subject
 
 
 @internal_router.post("/tokens", response_model=GenerateTokenResponse)
@@ -4179,7 +4444,9 @@ async def generate_user_token(
         # session store when a session_id is present, so a forged body cannot
         # inject groups/scopes the session never granted. When no session_id is
         # present the body is used as-is (explicit, documented trust boundary).
-        user_groups, reconciled_scopes = await _reconcile_context_against_session(user_context)
+        user_groups, reconciled_scopes, egress_user = await _reconcile_context_against_session(
+            user_context
+        )
         # Re-narrow the requested scopes to what the reconciled context allows so
         # a session-backed mint can never exceed the session's granted scopes.
         requested_scopes = [s for s in requested_scopes if s in set(reconciled_scopes)]
@@ -4233,6 +4500,15 @@ async def generate_user_token(
                     TokenKind.RESOURCE.value if request.resource else TokenKind.USER.value
                 ),
             }
+
+            # Canonical egress vault id (the session's OIDC sub). This token's
+            # ``sub`` is the login username, which is NOT what the egress vault
+            # keys on; stamp the OIDC sub as ``egress_user`` so a bearer minted
+            # here vends against the SAME id the browser-consent path wrote (see
+            # _canonical_egress_user). Omitted when there is no OIDC sub (non-
+            # session / legacy callers) -- the vend then falls back to username.
+            if egress_user:
+                jwt_claims["egress_user"] = egress_user
 
             # For resource-bound tokens, add resource_type and resource_id
             # claims. Authorization that the user can reach this resource is
@@ -5444,15 +5720,19 @@ async def oauth2_callback(
             "redirect_uri", OAUTH2_CONFIG.get("registry", {}).get("success_redirect", "/")
         )
         # Validate redirect_url to prevent open redirect attacks. Relative URLs
-        # are always safe; absolute URLs must be same-origin with the inbound
-        # request or within SESSION_COOKIE_DOMAIN when that is configured.
-        cookie_domain = os.environ.get("SESSION_COOKIE_DOMAIN", "").strip()
-        redirect_parsed = urlparse(redirect_url)
-        redirect_is_safe = (
-            not redirect_parsed.scheme and not redirect_parsed.netloc
-        ) or _is_redirect_within_cookie_domain(redirect_url, cookie_domain, request)
-        if not redirect_is_safe:
-            logger.warning(f"Blocked unsafe redirect URL: {redirect_url}, falling back to /")
+        # are always safe. Absolute URLs must exactly match a registered entry
+        # in the OAUTH2_ALLOWED_REDIRECT_URIS allowlist when it is configured
+        # (the hardened path). When the allowlist is unset, this falls back to
+        # the weaker same-origin / cookie-domain heuristic for backward
+        # compatibility. Fail closed: anything else is rejected to a safe path.
+        allowed, reason = _evaluate_redirect(redirect_url, request)
+        if not allowed:
+            # Redact: a rejected redirect_uri is untrusted; log scheme+host only.
+            logger.warning(
+                f"Blocked unsafe login redirect (reason={reason}): "
+                f"{_redact_redirect_uri(redirect_url)}, falling back to /"
+            )
+            redirect_rejected_total.add(1, {"flow": "login", "reason": reason})
             redirect_url = "/"
         response = RedirectResponse(url=redirect_url, status_code=302)
 
@@ -5468,6 +5748,12 @@ async def oauth2_callback(
         # Secure Set-Cookie sent over plain HTTP.
         cookie_secure_config = OAUTH2_CONFIG.get("session", {}).get("secure", True)
         cookie_secure = cookie_secure_config and is_https
+        # SameSite MUST remain "lax" for the OAuth login flow. The session
+        # cookie is set on the callback response, which is reached via a
+        # top-level cross-site navigation from the IdP. A "strict" cookie is
+        # NOT sent on such cross-site navigations, so the browser would drop it
+        # and login would silently fail. Do not "harden" this to Strict; CSRF
+        # is defended separately by the CSRF token, not by SameSite=Strict.
         cookie_samesite = OAUTH2_CONFIG.get("session", {}).get("samesite", "lax")
         cookie_domain = OAUTH2_CONFIG.get("session", {}).get("domain", "")
 
@@ -5633,19 +5919,24 @@ async def oauth2_logout(
         if provider not in OAUTH2_CONFIG.get("providers", {}):
             raise HTTPException(status_code=404, detail=f"Provider {provider} not found")
 
-        # Reject absolute redirect_uri that escapes the
-        # deployment's cookie domain before forwarding it to the IdP. The IdP's
-        # post_logout_redirect_uri allow-list is the authoritative check, but
+        # Validate an absolute redirect_uri before forwarding it to the IdP.
+        # When OAUTH2_ALLOWED_REDIRECT_URIS is configured, the URI must exactly
+        # match a registered entry (hardened path); otherwise this falls back
+        # to the weaker cookie-domain heuristic. The IdP's
+        # post_logout_redirect_uri allow-list remains the authoritative check;
         # this guards against misconfigured IdP clients and makes the intent
-        # explicit at our boundary.
+        # explicit at our boundary. Relative URIs are same-origin and allowed.
         if redirect_uri:
             parsed = urlparse(redirect_uri)
             if parsed.scheme or parsed.netloc:
-                cookie_domain = os.environ.get("SESSION_COOKIE_DOMAIN", "").strip()
-                if not _is_redirect_within_cookie_domain(redirect_uri, cookie_domain, request):
+                allowed, reason = _evaluate_redirect(redirect_uri, request)
+                if not allowed:
+                    # Redact: log scheme+host only, never the raw redirect_uri.
                     logger.warning(
-                        f"Blocked unsafe logout redirect_uri for {provider}: {redirect_uri}"
+                        f"Blocked unsafe logout redirect_uri for {provider} "
+                        f"(reason={reason}): {_redact_redirect_uri(redirect_uri)}"
                     )
+                    redirect_rejected_total.add(1, {"flow": "logout", "reason": reason})
                     redirect_uri = None
 
         provider_config = OAUTH2_CONFIG["providers"][provider]
@@ -5694,9 +5985,26 @@ async def oauth2_logout(
             logout_params = {
                 "post_logout_redirect_uri": full_redirect_uri,
             }
+            # Guard against AADSTS90015: only attach id_token_hint if the full
+            # logout URL stays under the safe length. Entra rejects against the
+            # entire request URL, so measure scheme+host+path+query, not the query
+            # string alone. Large ID tokens (users in many groups) otherwise
+            # breach Entra's limit and the logout is rejected, leaving a dangling
+            # IdP session.
             if id_token_hint:
-                logout_params["id_token_hint"] = id_token_hint
-            logger.debug(f"Entra ID logout params built: has_id_token_hint={bool(id_token_hint)}")
+                candidate_params = {**logout_params, "id_token_hint": id_token_hint}
+                candidate_url_len = len(f"{logout_url}?{urllib.parse.urlencode(candidate_params)}")
+                if candidate_url_len <= MAX_LOGOUT_URL_LENGTH:
+                    logout_params["id_token_hint"] = id_token_hint
+                else:
+                    logger.debug(
+                        f"Entra ID logout: dropping id_token_hint, logout URL would be "
+                        f"{candidate_url_len} chars (limit {MAX_LOGOUT_URL_LENGTH})"
+                    )
+            logger.debug(
+                f"Entra ID logout params built: "
+                f"has_id_token_hint={'id_token_hint' in logout_params}"
+            )
         elif "okta" in provider.lower() or (
             logout_hostname and logout_hostname.endswith(".okta.com")
         ):
@@ -6051,6 +6359,46 @@ def _obo_error_response(req_id: object, detail: str):
                 "code": -32001,
                 "message": "obo_exchange_failed",
                 "data": {"detail": detail},
+            },
+        },
+    )
+
+
+def _pat_missing_response(
+    server_name: str,
+    incoming_method: str | None,
+    req_id: object,
+):
+    """Terminal tool result for a ``pat`` server with no usable PAT.
+
+    Unlike the ``oauth_user`` consent path there is no interactive flow the
+    gateway can initiate for a PAT (the user must generate one at the provider),
+    so a miss (never submitted OR expired) is TERMINAL. We return a SUCCESSFUL
+    JSON-RPC result with ``isError=true`` (works on every MCP client, no -32042
+    URL elicitation) whose text tells the human where to submit a PAT.
+    """
+    logger.info(
+        "mcp_proxy: pat server=%s method=%s has no usable PAT; returning terminal "
+        "isError=true tool result (submit via Connected Accounts)",
+        server_name,
+        incoming_method,
+    )
+    return JSONResponse(
+        status_code=200,
+        content={
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "result": {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            "No PAT configured for this server. Submit one via the "
+                            "Registry Connected Accounts page, then retry."
+                        ),
+                    }
+                ],
+                "isError": True,
             },
         },
     )
@@ -6638,13 +6986,33 @@ async def mcp_proxy(
             elif vend and vend.get("access_token"):
                 # Token is vaulted (consent done): strip the user's gateway
                 # credentials/identity and inject the vaulted upstream token.
+                # oauth_user/obo use "Authorization: Bearer"; a pat server may
+                # override the header name + value prefix (e.g. GitLab
+                # "PRIVATE-TOKEN: <t>" bare, or "X-API-Key: <t>"). Defaults
+                # reproduce "Authorization: Bearer <t>".
+                inject_header = vend.get("pat_header_name") or "Authorization"
+                inject_prefix = (
+                    vend["pat_value_prefix"]
+                    if vend.get("pat_value_prefix") is not None
+                    else "Bearer "
+                )
                 forward_headers = {
                     k: v
                     for k, v in forward_headers.items()
-                    if k.lower() not in _EGRESS_STRIP_HEADERS
+                    # Drop the standard ingress creds AND, for a custom pat header,
+                    # any client-supplied copy of that exact header so only the
+                    # gateway-injected value reaches the upstream.
+                    if k.lower() not in _EGRESS_STRIP_HEADERS and k.lower() != inject_header.lower()
                 }
-                forward_headers["Authorization"] = f"Bearer {vend['access_token']}"
+                forward_headers[inject_header] = f"{inject_prefix}{vend['access_token']}"
                 egress_token_injected = True
+            elif vend and vend.get("mode") == "pat":
+                # pat miss (no access_token): never submitted OR expired. There is
+                # no interactive flow to offer (unlike oauth_user), so this is
+                # terminal -- return the actionable "no PAT configured" message
+                # rather than forwarding stripped credentials to a 401ing upstream.
+                req_id = incoming_payload.get("id") if isinstance(incoming_payload, dict) else None
+                return _pat_missing_response(server_name, incoming_method, req_id)
             elif vend and (vend.get("connect_url") or vend.get("authorize_url")):
                 # Egress is configured for this server but the user has no usable
                 # token, and the upstream is itself an OAuth resource server that
@@ -6930,15 +7298,3 @@ async def _audit_legacy_scopes_on_startup() -> int:
     else:
         logger.info("Legacy scope audit: no issues found.")
     return warnings_emitted
-
-
-@app.on_event("startup")
-async def _run_legacy_scope_audit_on_startup() -> None:
-    """Run the legacy-scope audit once during auth_server boot."""
-    try:
-        await _audit_legacy_scopes_on_startup()
-    except Exception as exc:
-        logger.error(
-            f"Legacy scope audit errored during startup: {exc}",
-            exc_info=True,
-        )

@@ -1,5 +1,6 @@
 """Unit tests for UUID fields in all card models."""
 
+import uuid
 from uuid import UUID
 
 import pytest
@@ -84,7 +85,8 @@ class TestServerInfoUUID:
             proxy_pass_url="http://test",
         )
 
-        assert isinstance(server.id, UUID)
+        assert isinstance(server.id, str)
+        assert UUID(server.id).version == 4
         assert server.id is not None
 
     def test_uuid_unique_per_instance(self):
@@ -133,7 +135,8 @@ class TestAgentCardUUID:
             description="Test agent",
         )
 
-        assert isinstance(agent.id, UUID)
+        assert isinstance(agent.id, str)
+        assert uuid.UUID(agent.id).version == 4
         assert agent.id is not None
 
     def test_uuid_unique_per_instance(self):
@@ -189,7 +192,8 @@ class TestSkillCardUUID:
             skill_md_url=HttpUrl("https://example.com/SKILL.md"),
         )
 
-        assert isinstance(skill.id, UUID)
+        assert isinstance(skill.id, str)
+        assert uuid.UUID(skill.id).version == 4
         assert skill.id is not None
 
     def test_uuid_unique_per_instance(self):
@@ -242,7 +246,8 @@ class TestUUIDBackwardsCompatibility:
         # Should auto-generate UUID
         server = ServerInfo(**old_data)
 
-        assert isinstance(server.id, UUID)
+        assert isinstance(server.id, str)
+        assert UUID(server.id).version == 4
         assert server.id is not None
 
     def test_agentcard_without_uuid(self):
@@ -259,7 +264,8 @@ class TestUUIDBackwardsCompatibility:
         # Should auto-generate UUID
         agent = AgentCard(**old_data)
 
-        assert isinstance(agent.id, UUID)
+        assert isinstance(agent.id, str)
+        assert uuid.UUID(agent.id).version == 4
         assert agent.id is not None
 
     def test_skillcard_without_uuid(self):
@@ -274,5 +280,6 @@ class TestUUIDBackwardsCompatibility:
         # Should auto-generate UUID
         skill = SkillCard(**old_data)
 
-        assert isinstance(skill.id, UUID)
+        assert isinstance(skill.id, str)
+        assert uuid.UUID(skill.id).version == 4
         assert skill.id is not None

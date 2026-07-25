@@ -20,6 +20,7 @@ from pydantic import (
 )
 
 from ..audit import set_audit_action
+from ..auth.csrf import verify_csrf_token_flexible
 from ..auth.dependencies import nginx_proxied_auth
 from ..repositories.documentdb.custom_entity_repository import DocumentDBCustomEntityRepository
 from ..repositories.documentdb.custom_type_repository import DocumentDBCustomTypeRepository
@@ -75,6 +76,7 @@ async def record_export_audit_event(
     request: Request,
     body: ExportAuditRequest,
     user_context: Annotated[dict, Depends(_require_admin)],
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ) -> dict[str, str]:
     """Record an audit event for a data export action.
 

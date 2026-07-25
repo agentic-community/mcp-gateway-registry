@@ -55,7 +55,8 @@
   "ui_permissions": {
     "list_service": ["all"],
     "list_agents": ["/flight-booking", "/flight-booking-agent"],
-    "get_agent": ["/flight-booking", "/flight-booking-agent"]
+    "get_agent": ["/flight-booking", "/flight-booking-agent"],
+    "list_skills": ["all"]
   },
   "create_in_idp": true
 }

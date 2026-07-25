@@ -1366,3 +1366,88 @@ class TestLocalOverrideIntegration:
                     assert stored_count == 0
                     mock_server_service.update_server.assert_not_called()
                     mock_server_service.register_server.assert_not_called()
+
+
+@pytest.mark.unit
+class TestFederationIdConflict:
+    """Federation id-collision policy: log + skip one asset, continue batch (#1276)."""
+
+    @pytest.mark.asyncio
+    async def test_store_synced_servers_skips_id_conflict(
+        self, mock_repository, mock_server_service, mock_agent_service
+    ):
+        mock_server_service.register_server = AsyncMock(
+            side_effect=[
+                {"success": False, "error_type": "id_conflict"},
+                {"success": True},
+            ]
+        )
+        with (
+            patch(
+                "registry.services.peer_federation_service.get_peer_federation_repository",
+                return_value=mock_repository,
+            ),
+            patch(
+                "registry.services.peer_federation_service.server_service",
+                mock_server_service,
+            ),
+            patch(
+                "registry.services.peer_federation_service.agent_service",
+                mock_agent_service,
+            ),
+        ):
+            service = PeerFederationService()
+            with patch.object(service, "_index_server_for_search", new=AsyncMock()):
+                stored = await service._store_synced_servers(
+                    "peer-x",
+                    [
+                        {"path": "/s1", "server_name": "S1", "id": "arn:dup"},
+                        {"path": "/s2", "server_name": "S2", "id": "arn:ok"},
+                    ],
+                )
+        assert stored == 1
+        assert mock_server_service.register_server.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_store_synced_agents_skips_id_conflict(
+        self, mock_repository, mock_server_service, mock_agent_service
+    ):
+        from registry.exceptions import AssetIdConflictError
+
+        mock_agent_service.register_agent = AsyncMock(
+            side_effect=[
+                AssetIdConflictError(asset_type="agent", asset_id="arn:dup"),
+                MagicMock(spec=AgentCard),
+            ]
+        )
+        agent_fields = {
+            "name": "A",
+            "version": "1.0.0",
+            "description": "d",
+            "url": "https://example.com/a",
+        }
+        with (
+            patch(
+                "registry.services.peer_federation_service.get_peer_federation_repository",
+                return_value=mock_repository,
+            ),
+            patch(
+                "registry.services.peer_federation_service.server_service",
+                mock_server_service,
+            ),
+            patch(
+                "registry.services.peer_federation_service.agent_service",
+                mock_agent_service,
+            ),
+        ):
+            service = PeerFederationService()
+            with patch.object(service, "_index_agent_for_search", new=AsyncMock()):
+                stored = await service._store_synced_agents(
+                    "peer-x",
+                    [
+                        {"path": "/a1", "id": "arn:dup", **agent_fields},
+                        {"path": "/a2", "id": "arn:ok", **agent_fields},
+                    ],
+                )
+        assert stored == 1
+        assert mock_agent_service.register_agent.await_count == 2

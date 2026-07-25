@@ -76,6 +76,7 @@ def mock_skill_repository():
     mock_repo.ensure_indexes = AsyncMock()
     mock_repo.create = AsyncMock()
     mock_repo.get = AsyncMock(return_value=None)
+    mock_repo.find_by_id = AsyncMock(return_value=None)
     mock_repo.list_all = AsyncMock(return_value=[])
     mock_repo.list_filtered = AsyncMock(return_value=[])
     mock_repo.update = AsyncMock()
@@ -135,7 +136,7 @@ class TestSkillModels:
         from uuid import uuid4
 
         info = SkillInfo(
-            id=uuid4(),
+            id=str(uuid4()),
             path=skill.path,
             name=skill.name,
             description=skill.description,
@@ -184,6 +185,64 @@ class TestSkillService:
         assert result.name == "test-skill"
         assert result.path == "/skills/test-skill"
         mock_skill_repository.create.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_register_skill_honors_supplied_id(
+        self,
+        skill_data,
+        mock_url_validation,
+        mock_skill_repository,
+        mock_search_repository,
+    ):
+        """A caller-supplied id reaches the built SkillCard verbatim (#1276)."""
+        from registry.schemas.skill_models import SkillRegistrationRequest
+        from registry.services.skill_service import SkillService
+
+        supplied_id = "arn:aws:bedrock:us-east-1:123456789012:skill/my-skill"
+
+        # Echo back whatever card the service builds, so create() doesn't mask it
+        mock_skill_repository.create.side_effect = lambda card: card
+
+        service = SkillService()
+        service._repo = mock_skill_repository
+        service._search_repo = mock_search_repository
+
+        request = SkillRegistrationRequest(**{**skill_data, "id": supplied_id})
+        result = await service.register_skill(request, owner="testuser")
+
+        # The card handed to the repository carries the supplied id...
+        created_card = mock_skill_repository.create.call_args.args[0]
+        assert created_card.id == supplied_id
+        # ...and so does what the service returns
+        assert result.id == supplied_id
+
+    @pytest.mark.asyncio
+    async def test_register_skill_rejects_duplicate_id(
+        self,
+        skill_data,
+        mock_url_validation,
+        mock_skill_repository,
+        mock_search_repository,
+    ):
+        """A caller-supplied id colliding with an existing skill raises (#1276)."""
+        from registry.exceptions import AssetIdConflictError
+        from registry.schemas.skill_models import SkillRegistrationRequest
+        from registry.services.skill_service import SkillService
+
+        mock_skill_repository.find_by_id.return_value = {
+            "path": "/other",
+            "id": "arn:aws:x",
+        }
+
+        service = SkillService()
+        service._repo = mock_skill_repository
+        service._search_repo = mock_search_repository
+
+        request = SkillRegistrationRequest(**{**skill_data, "id": "arn:aws:x"})
+        with pytest.raises(AssetIdConflictError):
+            await service.register_skill(request, owner="testuser")
+
+        mock_skill_repository.create.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_get_skill(self, mock_skill_repository, mock_search_repository):
@@ -282,12 +341,19 @@ class TestSkillVisibility:
     """Test skill visibility filtering."""
 
     @pytest.mark.asyncio
-    async def test_public_skill_visible_to_anonymous(
+    async def test_anonymous_sees_no_skills_without_list_scope(
         self,
         mock_skill_repository,
         mock_search_repository,
     ):
-        """Test that public skills are visible to anonymous users."""
+        """Anonymous users see NO skills — including public ones.
+
+        Skills now have a list_skills discovery gate (parity with list_service /
+        list_agents): a caller with no list_skills grant discovers zero skills
+        before the per-record visibility check. Anonymous (user_context=None)
+        holds no grant, so even a public skill is hidden. This is the intended
+        behavior change; see scripts/backfill-skill-list-scope.py.
+        """
         from registry.schemas.skill_models import SkillCard, VisibilityEnum
         from registry.services.skill_service import SkillService
 
@@ -305,8 +371,7 @@ class TestSkillVisibility:
         service._search_repo = mock_search_repository
 
         result = await service.list_skills_for_user(user_context=None)
-        assert len(result) == 1
-        assert result[0].name == "public"
+        assert result == []
 
     @pytest.mark.asyncio
     async def test_private_skill_hidden_from_others(

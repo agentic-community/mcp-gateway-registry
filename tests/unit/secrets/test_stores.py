@@ -360,3 +360,120 @@ class TestOverflowStaleReadRetry:
             assert pairs == [("github", "/github"), ("slack", "/slack")]
         finally:
             ctx.stop()
+
+
+# --------------------------------------------------------------------------- #
+# OpenBao transient-unavailability retry (HA leader election / pod restart)
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.unit
+class TestOpenBaoTransientRetry:
+    """Regression: a Vault/OpenBao HA cluster briefly rejects requests while it
+    (re-)elects a leader after a pod restart (eviction / rollout / spot reclaim).
+    A consent's token WRITE that lands in that window used to bubble a hard
+    SecretStoreError -> the user saw "Connected" (or a 500) but no token was
+    vaulted -> a silent "0 tools". The store MUST ride out the blip with a
+    bounded backoff retry. Backoff is shrunk to 0 here so the test is instant."""
+
+    @pytest.fixture(autouse=True)
+    def _no_backoff(self, monkeypatch):
+        import registry.secrets.openbao.store as store_mod
+
+        monkeypatch.setattr(store_mod, "_TRANSIENT_BACKOFF_BASE", 0.0)
+
+    def _store(self):
+        kv = _FakeKvV2()
+        client = _FakeHvacClient()
+        client.secrets.kv.v2 = kv
+        return OpenBaoStore(client=client, mount_point="secret", prefix="mcp/egress"), kv
+
+    async def test_write_retries_through_transient_then_persists(self):
+        store, kv = self._store()
+        real_write = kv.create_or_update_secret
+        calls = {"n": 0}
+
+        def flaky_write(path, secret, mount_point):
+            calls["n"] += 1
+            if calls["n"] < 3:  # fail twice (leader election), then succeed
+                raise Exception("local node not active but active cluster node not found")
+            return real_write(path, secret, mount_point)
+
+        kv.create_or_update_secret = flaky_write
+        await store.put_token("oauth2", "alice", "github", "/github-mcp", _token("a1"))
+        assert calls["n"] == 3
+        got = await store.get_token("oauth2", "alice", "github", "/github-mcp")
+        assert got is not None and got.access_token == "a1"
+
+    async def test_read_retries_through_connection_refused(self):
+        store, kv = self._store()
+        await store.put_token("oauth2", "alice", "github", "/github-mcp", _token("a1"))
+        real_read = kv.read_secret_version
+        calls = {"n": 0}
+
+        def flaky_read(path, mount_point, raise_on_deleted_version=False):
+            calls["n"] += 1
+            if calls["n"] < 2:
+                raise Exception(
+                    "HTTPConnectionPool: Max retries exceeded ... [Errno 111] Connection refused"
+                )
+            return real_read(path, mount_point, raise_on_deleted_version)
+
+        kv.read_secret_version = flaky_read
+        got = await store.get_token("oauth2", "alice", "github", "/github-mcp")
+        assert got is not None and got.access_token == "a1"
+
+    async def test_persistent_transient_raises_after_bounded_retries(self):
+        import registry.secrets.openbao.store as store_mod
+        from registry.secrets.interfaces import SecretStoreError
+
+        store, kv = self._store()
+        calls = {"n": 0}
+
+        def always_down(*a, **k):
+            calls["n"] += 1
+            raise Exception("connection refused")
+
+        kv.create_or_update_secret = always_down
+        with pytest.raises(SecretStoreError):
+            await store.put_token("oauth2", "alice", "github", "/github-mcp", _token())
+        # initial attempt + N bounded retries, then give up (no infinite loop)
+        assert calls["n"] == store_mod._TRANSIENT_RETRIES + 1
+
+    async def test_non_transient_error_is_not_retried(self):
+        store, kv = self._store()
+        calls = {"n": 0}
+
+        def bad_write(*a, **k):
+            calls["n"] += 1
+            raise Exception("malformed data: not retryable")
+
+        kv.create_or_update_secret = bad_write
+        from registry.secrets.interfaces import SecretStoreError
+
+        with pytest.raises(SecretStoreError):
+            await store.put_token("oauth2", "alice", "github", "/github-mcp", _token())
+        assert calls["n"] == 1  # raised immediately, no retry
+
+    async def test_write_retries_on_transient_error_type(self):
+        # The other transient tests match by MESSAGE (e.g. "local node not
+        # active"); this one matches by EXCEPTION TYPE NAME. hvac/urllib3 raise
+        # typed errors (ConnectionError, ReadTimeout, ...) whose str() may carry
+        # no recognizable phrase, so _is_transient_error must classify them by
+        # class name alone -- otherwise a leader-election blip surfacing as a bare
+        # ConnectionError would fall straight through as a hard failure.
+        store, kv = self._store()
+        real_write = kv.create_or_update_secret
+        calls = {"n": 0}
+
+        def flaky_write(path, secret, mount_point):
+            calls["n"] += 1
+            if calls["n"] < 2:  # a bare typed transport error, no telltale text
+                raise ConnectionError()
+            return real_write(path, secret, mount_point)
+
+        kv.create_or_update_secret = flaky_write
+        await store.put_token("oauth2", "alice", "github", "/github-mcp", _token("a1"))
+        assert calls["n"] == 2
+        got = await store.get_token("oauth2", "alice", "github", "/github-mcp")
+        assert got is not None and got.access_token == "a1"

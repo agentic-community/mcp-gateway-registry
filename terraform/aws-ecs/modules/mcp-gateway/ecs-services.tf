@@ -308,6 +308,13 @@ module "ecs_service_auth" {
           value = var.session_cookie_domain
         },
         {
+          # Exact-match allowlist of OAuth login/logout redirect URIs
+          # (open-redirect hardening). Empty falls back to the weaker
+          # cookie-domain heuristic.
+          name  = "OAUTH2_ALLOWED_REDIRECT_URIS"
+          value = var.oauth2_allowed_redirect_uris
+        },
+        {
           name  = "TRUSTED_PROXY_HOPS"
           value = tostring(var.trusted_proxy_hops)
         },
@@ -408,6 +415,10 @@ module "ecs_service_auth" {
         {
           name  = "RATE_LIMIT_FAIL_OPEN"
           value = tostring(var.rate_limit_fail_open)
+        },
+        {
+          name  = "RATE_LIMIT_QUARANTINE_FAIL_CLOSED"
+          value = tostring(var.rate_limit_quarantine_fail_closed)
         },
         {
           name  = "RATE_LIMIT_DEFINITIONS_CACHE_TTL_SECONDS"
@@ -1173,6 +1184,10 @@ module "ecs_service_registry" {
           value = tostring(var.rate_limit_fail_open)
         },
         {
+          name  = "RATE_LIMIT_QUARANTINE_FAIL_CLOSED"
+          value = tostring(var.rate_limit_quarantine_fail_closed)
+        },
+        {
           name  = "RATE_LIMIT_DEFINITIONS_CACHE_TTL_SECONDS"
           value = tostring(var.rate_limit_definitions_cache_ttl_seconds)
         },
@@ -1518,6 +1533,11 @@ module "ecs_service_registry" {
         {
           name  = "BATCH_WORKER_LEASE_HEARTBEAT_SECONDS"
           value = tostring(var.batch_worker_lease_heartbeat_seconds)
+        },
+        # Caller-supplied asset id (issue #1276)
+        {
+          name  = "ALLOW_CALLER_SUPPLIED_ASSET_ID"
+          value = tostring(var.allow_caller_supplied_asset_id)
         },
         # Registration gate / admission control (issue #809)
         {

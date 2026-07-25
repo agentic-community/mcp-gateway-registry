@@ -1,11 +1,21 @@
 {
   "scope_name": "read-all-register-new",
   "scope_type": "server_scope",
-  "description": "Non-admin read-write users: can see ALL servers and agents, search, register new servers, and run health checks. Cannot toggle server enabled/disabled state, cannot change lifecycle status, and cannot delete servers. Newly registered servers are visible immediately because access is granted via the '*' wildcard.",
+  "description": "Non-admin read-write users: can see ALL servers and agents in the UI (list_service/list_agents), search, register new servers, and run health checks. Cannot toggle server enabled/disabled state, cannot change lifecycle status, and cannot delete servers. Gateway tool access (server_access) is granted to the shipped demo servers (currenttime, mcpgw, realserverfaketools); grant additional servers explicitly with the add-to-groups admin command as they are registered. A reserved wildcard ('*'/'all') server name in server_access is refused by the import guard, so name each server.",
   "group_mappings": ["read-all-register-new"],
   "server_access": [
     {
-      "server": "*",
+      "server": "/currenttime",
+      "methods": ["initialize", "notifications/initialized", "ping", "tools/list", "tools/call", "resources/list", "resources/templates/list"],
+      "tools": ["*"]
+    },
+    {
+      "server": "/mcpgw",
+      "methods": ["initialize", "notifications/initialized", "ping", "tools/list", "tools/call", "resources/list", "resources/templates/list"],
+      "tools": ["*"]
+    },
+    {
+      "server": "/realserverfaketools",
       "methods": ["initialize", "notifications/initialized", "ping", "tools/list", "tools/call", "resources/list", "resources/templates/list"],
       "tools": ["*"]
     },
@@ -21,7 +31,8 @@
     "get_agent": ["all"],
     "list_virtual_server": ["all"],
     "register_service": ["*"],
-    "health_check_service": ["all"]
+    "health_check_service": ["all"],
+    "list_skills": ["all"]
   },
   "create_in_idp": true
 }

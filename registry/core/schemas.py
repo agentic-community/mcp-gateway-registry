@@ -1,7 +1,7 @@
 import re
 from datetime import datetime
 from typing import Any, Literal, cast
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -529,9 +529,14 @@ class LocalRuntime(BaseModel):
 class ServerInfo(BaseModel):
     """Server information model."""
 
-    id: UUID = Field(
-        default_factory=uuid4,
-        description="Unique identifier (UUID) for this server",
+    id: str = Field(
+        default_factory=lambda: str(uuid4()),
+        min_length=1,
+        max_length=512,
+        description=(
+            "Unique identifier for this server. Any non-empty string "
+            "(UUID, ARN, URN, ...). Auto-generated UUID if not supplied."
+        ),
     )
     server_name: str
     description: str = ""
@@ -796,10 +801,10 @@ class ServerInfo(BaseModel):
           rather than at the first live request.
         """
         mode = self.egress_auth_mode
-        if mode not in ("none", "oauth_user", "obo_exchange"):
+        if mode not in ("none", "oauth_user", "obo_exchange", "pat"):
             raise ValueError(
                 f"invalid egress_auth_mode {mode!r}; expected 'none', 'oauth_user', "
-                "or 'obo_exchange'"
+                "'obo_exchange', or 'pat'"
             )
         if mode == "none":
             return self
@@ -808,6 +813,12 @@ class ServerInfo(BaseModel):
         if mode == "oauth_user":
             if not self.egress_oauth.provider:
                 raise ValueError("egress_auth_mode='oauth_user' requires egress_oauth.provider")
+            return self
+        if mode == "pat":
+            # pat needs a provider only as a vault-namespace/display key; no OAuth
+            # endpoints, client_id, or secret are required.
+            if not self.egress_oauth.provider:
+                raise ValueError("egress_auth_mode='pat' requires egress_oauth.provider")
             return self
         # mode == "obo_exchange"
         target = (self.egress_oauth.target_audience or "").strip()

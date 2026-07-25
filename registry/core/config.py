@@ -296,6 +296,19 @@ class Settings(BaseSettings):
         ),
     )
 
+    # Caller-supplied asset id (Issue #1276)
+    allow_caller_supplied_asset_id: bool = Field(
+        default=False,
+        description=(
+            "Allow callers to supply their own asset 'id' on the public "
+            "server/agent/skill registration routes. Fail-closed: OFF by default, "
+            "so a supplied id is rejected (422) and ids auto-generate as before. "
+            "When true, a supplied id must pass the safe-charset validation and be "
+            "unique. Federation sync is NOT affected by this flag (peer ids are "
+            "governed by the peer allowlist)."
+        ),
+    )
+
     # Registration Gate Configuration (Admission Control, Issue #809)
     registration_gate_enabled: bool = Field(
         default=False,
@@ -1511,6 +1524,14 @@ class Settings(BaseSettings):
     rate_limit_fail_open: bool = Field(
         default=True,
         description="Global fail-open on rate-limit backend error (per-limit fail_closed overrides).",
+    )
+    rate_limit_quarantine_fail_closed: bool = Field(
+        default=False,
+        description=(
+            "Deny (fail closed) on a backend error reading quarantine membership, "
+            "instead of the default fail-open. Best-effort quarantine, not breach "
+            "containment; pair with IdP credential revocation."
+        ),
     )
     rate_limit_definitions_cache_ttl_seconds: int = Field(
         default=30,

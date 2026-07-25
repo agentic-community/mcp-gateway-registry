@@ -25,7 +25,14 @@ REGISTER_CARD = {
     "version": "1.0",
 }
 
-ADMIN_PERMS = {"publish_agent": ["all"], "modify_service": ["all"]}
+# Full agent-management grant set (canonical agent scopes, not the old
+# cross-asset modify_service). Named ADMIN_PERMS for historical reasons; it is
+# just "holds every agent scope for all agents".
+ADMIN_PERMS = {
+    "publish_agent": ["all"],
+    "modify_agent": ["all"],
+    "delete_agent": ["all"],
+}
 
 
 def _item(data):
@@ -70,33 +77,83 @@ class TestAuthorize:
         assert ok is False
         assert "peer-7" in reason
 
-    async def test_patch_requires_modify_permission(self):
+    async def test_patch_requires_modify_agent_permission(self):
+        # Owner of the agent, but no modify_agent grant -> denied (scope half).
         item = _item({"op": "patch", "path": "/agents/existing", "card": {"description": "d"}})
-        existing = _existing()
-        with (
-            patch.object(proc.agent_service, "get_agent_info", AsyncMock(return_value=existing)),
-            patch(
-                "registry.auth.dependencies.user_has_ui_permission_for_service",
-                return_value=False,
-            ),
-        ):
+        existing = _existing(registered_by="alice")
+        with patch.object(proc.agent_service, "get_agent_info", AsyncMock(return_value=existing)):
             ok, reason = await proc._authorize(item, "alice", False, {})
         assert ok is False
-        assert "modify_service" in reason
+        assert "modify_agent" in reason
+
+    async def test_patch_modify_service_does_not_satisfy_agent(self):
+        # The cross-asset bug: a SERVER scope must not authorize an agent patch on
+        # the batch path (it previously did via user_has_ui_permission_for_service).
+        item = _item({"op": "patch", "path": "/agents/existing", "card": {"description": "d"}})
+        existing = _existing(registered_by="alice")
+        with patch.object(proc.agent_service, "get_agent_info", AsyncMock(return_value=existing)):
+            ok, reason = await proc._authorize(
+                item, "alice", False, {"modify_service": ["all"], "toggle_service": ["all"]}
+            )
+        assert ok is False
+        assert "modify_agent" in reason
+
+    async def test_patch_allowed_with_modify_agent_and_ownership(self):
+        item = _item({"op": "patch", "path": "/agents/existing", "card": {"description": "d"}})
+        existing = _existing(registered_by="alice")
+        with patch.object(proc.agent_service, "get_agent_info", AsyncMock(return_value=existing)):
+            ok, reason = await proc._authorize(item, "alice", False, {"modify_agent": ["all"]})
+        assert ok is True
+
+    async def test_delete_requires_delete_agent_permission(self):
+        # The bypass kiro found: batch delete must require delete_agent, not just
+        # ownership. Owner of the agent but no delete_agent grant -> denied. This
+        # is the batch analogue of the single-card owner-without-scope denial.
+        item = _item({"op": "delete", "path": "/agents/existing"})
+        existing = _existing(registered_by="alice")
+        with patch.object(proc.agent_service, "get_agent_info", AsyncMock(return_value=existing)):
+            ok, reason = await proc._authorize(item, "alice", False, {"publish_agent": ["all"]})
+        assert ok is False
+        assert "delete_agent" in reason
+
+    async def test_delete_allowed_with_delete_agent_and_ownership(self):
+        item = _item({"op": "delete", "path": "/agents/existing"})
+        existing = _existing(registered_by="alice")
+        with patch.object(proc.agent_service, "get_agent_info", AsyncMock(return_value=existing)):
+            ok, reason = await proc._authorize(item, "alice", False, {"delete_agent": ["all"]})
+        assert ok is True
+
+    async def test_delete_scope_without_ownership_denied(self):
+        # Non-owner holding delete_agent is still denied (AND-owner half).
+        item = _item({"op": "delete", "path": "/agents/existing"})
+        existing = _existing(registered_by="bob")
+        with patch.object(proc.agent_service, "get_agent_info", AsyncMock(return_value=existing)):
+            ok, reason = await proc._authorize(item, "alice", False, {"delete_agent": ["all"]})
+        assert ok is False
+        assert "only delete agents you registered" in reason
 
     async def test_non_owner_non_admin_denied(self):
+        # Non-owner WITH the delete scope is denied on the ownership half.
         item = _item({"op": "delete", "path": "/agents/existing"})
         existing = _existing(registered_by="bob")
         with patch.object(proc.agent_service, "get_agent_info", AsyncMock(return_value=existing)):
             ok, reason = await proc._authorize(item, "alice", False, ADMIN_PERMS)
         assert ok is False
-        assert "only modify agents you registered" in reason
+        assert "only delete agents you registered" in reason
 
-    async def test_admin_can_modify_any(self):
+    async def test_admin_can_delete_any(self):
         item = _item({"op": "delete", "path": "/agents/existing"})
         existing = _existing(registered_by="bob")
         with patch.object(proc.agent_service, "get_agent_info", AsyncMock(return_value=existing)):
             ok, reason = await proc._authorize(item, "alice", True, ADMIN_PERMS)
+        assert ok is True
+
+    async def test_admin_delete_bypasses_scope_and_ownership(self):
+        # Admin with NO agent scopes at all still deletes (is_admin bypass).
+        item = _item({"op": "delete", "path": "/agents/existing"})
+        existing = _existing(registered_by="bob")
+        with patch.object(proc.agent_service, "get_agent_info", AsyncMock(return_value=existing)):
+            ok, reason = await proc._authorize(item, "alice", True, {})
         assert ok is True
 
 

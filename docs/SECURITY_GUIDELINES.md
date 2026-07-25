@@ -86,7 +86,24 @@ sanitizer that isn't called) is equivalent to no check.
   the standard `error` code + status. (c) **IdP group-name lists** — group names
   are organizational PII (org units, teams, cost centers); log the count, not the
   names. A "masked" token prefix is still a leak — a base64 JWT header/signature
-  fragment is reconstructable; log `<token len=N>`, not `token[:10]`.
+  fragment is reconstructable; log `<token len=N>`, not `token[:10]`. (d) **A
+  registrant/backend URL** (`proxy_pass_url`, an MCP/SSE endpoint, an agent
+  `base_url`, an inbound `request.url`) can carry credentials in userinfo
+  (`user:pass@host`) or a secret in the query (`?access_token=...`); route every
+  such URL through `registry/common/log_redaction.py` `redact_url` (keeps
+  `scheme://host[:port]/path`, drops userinfo/query/fragment, fails closed) at
+  EVERY log site, not just the reported one. (e) **The caller's own authorization
+  policy** (`user_scopes`, `scope_config`, `accessible_services`, `ui_permissions`)
+  is sensitive and must never sit at INFO — especially on a hot per-request path
+  (the `/validate` subrequest, list-servers): keep the verbose policy trace at
+  DEBUG and emit exactly ONE INFO allow/deny audit line carrying only
+  server/method/tool identifiers, at every return including the fail-closed
+  exception branch. Watch for developer traces mislabeled by LEVEL, not just by
+  content — a `logger.info(f"DEBUG: ...")` or `[TRACE]` line is still emitted at
+  INFO in production; the `# TODO: replace with debug` marker means it was never
+  meant to ship at that level. After fixing the reported site, grep the whole
+  package for the same variable/pattern — these leaks travel in packs across
+  health-check, connection, and registration code paths.
 - **Never reflect an exception/stack trace into a response the caller sees**
   (CWE-209, CodeQL `py/stack-trace-exposure`). `HTTPException(detail=str(e))`,
   `return {"error": str(e)}` from a route, and `HTMLResponse(f"...{exc}...")` all
@@ -402,6 +419,27 @@ sanitizer that isn't called) is equivalent to no check.
   the inbound `Host` against an allowlist (or a configured external URL) before
   using it to build an OAuth `redirect_uri` or any external URL; fail closed to
   the configured host on an unexpected `Host`.
+- **Validate an OAuth login/logout `redirect_uri` against an EXACT-MATCH
+  allowlist of registered callbacks, not a domain-suffix / subdomain match.** A
+  "same-origin OR within `SESSION_COOKIE_DOMAIN`" check admits any host inside
+  the cookie domain — including an attacker-controlled subdomain
+  (`evil.example.com` under `.example.com`) — which is an open redirect. Read a
+  configured allowlist of full absolute URIs (normalize scheme+host+port+path)
+  and, when it is set, permit an absolute redirect ONLY if it exactly matches an
+  entry; check it BEFORE any suffix fallback. Relative-path redirects (no
+  scheme/host) are same-origin by construction and stay allowed. Keep the
+  suffix behavior only as an unset-allowlist fallback for backward compat, and
+  document the allowlist as the hardened path. Apply the same check to BOTH the
+  login-success redirect and the logout `redirect_uri`. Fail closed: an absolute
+  URI that is neither relative nor allowlisted nor (fallback) within-domain is
+  rejected to a safe default (`/login` or `/`).
+- **The session cookie's `SameSite` must stay `Lax` for OAuth login to work.**
+  The cookie is set on the OAuth callback response, which is reached via a
+  top-level cross-site navigation from the IdP; a `Strict` cookie is not sent on
+  that navigation, so the browser drops it and login silently fails. `Strict` is
+  NOT a valid "hardening" here — CSRF is defended separately by the CSRF token,
+  not by `SameSite=Strict`. Leave a comment at the `set_cookie` site so a future
+  reader does not "tighten" it and break login.
 - **Bind the OAuth2/OIDC authorization-code flow to the specific login.** A valid
   signature is necessary but not sufficient — a correctly-signed id_token minted
   for a different login can be replayed/injected. Send a per-login `nonce` on the
@@ -454,6 +492,25 @@ sanitizer that isn't called) is equivalent to no check.
   (search, catalog) BEFORE per-record filtering so a caller with no list scope
   sees zero records — including public ones — exactly as the equivalent
   server/agent list scope behaves.
+- **Resolve every per-asset permission through one canonical `(family, action)`
+  map — never pass a raw scope string to a gate.** Each asset family's gate must
+  enforce its OWN family's scope; a hand-typed scope-name argument lets a sibling
+  family's scope be substituted by accident, and admins mask it (their `["all"]`
+  grants + is_admin bypass satisfy any name), so the bleed sits latent. Keep the
+  scope-name convention in ONE typed table keyed by `(family, action)`
+  (`registry/auth/asset_permissions.py`: `asset_scope_name` /
+  `user_has_asset_permission`), and have call sites pass a logical ACTION
+  ("modify", "toggle") — not a scope string — so the family is fixed by the call
+  and the map picks the name. Preserve the EXACT on-disk names in the map
+  (persisted `ui_permissions` keys — do not "normalize" `list_service` vs
+  `list_agents` pluralization; renaming a persisted key is a breaking data
+  migration, not a refactor). After adding a family, grep for gates that bypass
+  the map (a raw `user_has_ui_permission_for_service("..._<otherfamily>"`, an
+  inline `ui_permissions.get("<scope>")`) and confirm each enforces its own
+  family. When a gate starts enforcing a scope that was previously unenforced,
+  provision that scope on EVERY seed surface at once (seed JSONs, the Helm
+  `mongodb-configure` configmap, the IAM UI permission keys) and ship a dry-run
+  backfill — otherwise existing non-admins lose the access on upgrade.
 - **Authorize the exact bytes you act on — never a separately-captured copy.** If
   one component captures a request body for the authz decision and another
   forwards a different copy to the sink, they can diverge (size-triggered
@@ -651,7 +708,17 @@ the drift between copies is the hole.
 - **State-changing endpoint CSRF → `registry/auth/csrf.py`.** Add
   `Depends(verify_csrf_token_flexible)` (or `verify_csrf_token_header_only`) to
   every mutating route. Don't invent per-router CSRF logic; match the dependency
-  every other router uses.
+  every other router uses. **Apply it UNIFORMLY across the ENTIRE session-auth
+  mutation family, not just the reported route** — a per-route dependency is
+  trivial to forget on a new endpoint, so grep the whole family (every
+  `@router.(post|put|patch|delete)` handler that depends on the session-cookie
+  auth dependency — `enhanced_auth` AND `nginx_proxied_auth`, which falls back to
+  the cookie — and mutates state) and close every gap. `verify_csrf_token_flexible`
+  correctly NO-OPS for non-cookie (Bearer/CLI) callers, so it is safe to add to a
+  route even if some callers are non-browser. It reads the token from the
+  `X-CSRF-Token` header OR a `csrf_token` form field, so a JSON-body route works
+  fine via the header. Skip only routes authed purely by `validate_internal_auth`
+  / internal-token (not browser/cookie surfaces).
 - **Internal service-to-service auth → `registry/auth/internal.py`.**
   `generate_internal_token()` to mint, `validate_internal_auth` /
   `validate_internal_session_secret` as the route dependency. Internal tokens are
@@ -676,7 +743,8 @@ the drift between copies is the hole.
   var, never `verify=False`. `guarded_client`/`guarded_async_client` take
   `verify=` and default it to `True`.
 - **Log redaction → `registry/common/log_redaction.py`** (`redact_headers`,
-  `redact_mapping`) and, for OIDC identity, `safe_identity_summary()` in
+  `redact_mapping`, `redact_url` for a single URL string) and, for OIDC identity,
+  `safe_identity_summary()` in
   `auth_server/server.py`. NEVER log a raw header dict, a request/response body
   dict, a `user_context`, `updates`, or decoded id_token claims — route it
   through the redactor (masks any `*token*`/`*secret*`/`*credential*`/auth/cookie

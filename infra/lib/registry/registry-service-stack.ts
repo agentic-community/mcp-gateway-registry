@@ -195,6 +195,10 @@ export class RegistryServiceStack extends cdk.Stack {
       AUTH0_MANAGEMENT_API_TOKEN: config.auth0.managementApiToken,
       SESSION_COOKIE_SECURE: String(config.session.cookieSecure),
       SESSION_COOKIE_DOMAIN: config.session.cookieDomain,
+      // Exact-match allowlist of OAuth login/logout redirect URIs
+      // (open-redirect hardening). Empty falls back to the weaker
+      // cookie-domain heuristic. Read by the auth-server.
+      OAUTH2_ALLOWED_REDIRECT_URIS: config.session.oauth2AllowedRedirectUris,
       OAUTH_STORE_TOKENS_IN_SESSION: String(config.session.oauthStoreTokensInSession),
       REGISTRY_STATIC_TOKEN_AUTH_ENABLED: String(config.staticTokenAuth.registryStaticTokenAuthEnabled),
       REGISTRY_API_TOKEN: config.staticTokenAuth.registryApiToken,
@@ -257,6 +261,12 @@ export class RegistryServiceStack extends cdk.Stack {
       MCP_TELEMETRY_HEARTBEAT_INTERVAL_MINUTES: config.telemetry.heartbeatIntervalMinutes,
       TELEMETRY_DEBUG: config.telemetry.debug,
       DISABLE_AI_REGISTRY_TOOLS_SERVER: config.disableAiRegistryToolsServer,
+      // PRM scopes_supported override. Live registry image advertises group-derived
+      // internal scope names (registry-admins, federation-service, etc.) that
+      // Keycloak DCR does not accept. Force the IdP-universal OIDC scopes so
+      // Claude/MCP client DCR succeeds. Access is still group-derived at token
+      // validation time, so this does not affect authorization.
+      MCP_ADVERTISED_SCOPES: 'openid email profile offline_access',
       SERVICE_CONNECT_NAMESPACE: `${namePrefix}.local`,
       GITHUB_PAT: config.github.pat,
       GITHUB_APP_ID: config.github.appId,
@@ -491,6 +501,7 @@ export class RegistryServiceStack extends cdk.Stack {
       serviceConnectPortName: 'mcpgw',
       environment: {
         PORT: '8003',
+        HOST: '0.0.0.0',
         REGISTRY_BASE_URL: 'http://registry:8080',
         REGISTRY_USERNAME: 'admin',
       },
@@ -512,6 +523,11 @@ export class RegistryServiceStack extends cdk.Stack {
           mcpgwService.securityGroup, ec2.Port.tcp(port), `Port ${port} from mcpgw`,
         );
       }
+      // Auth-server mcp-proxy forwards to mcpgw:8003 (parity with terraform
+      // auth_to_mcpgw rule at terraform/aws-ecs/modules/mcp-gateway/ecs-services.tf:1965)
+      mcpgwService.securityGroup.addIngressRule(
+        authService.securityGroup, ec2.Port.tcp(8003), 'Allow auth-server mcp-proxy to reach mcpgw',
+      );
     }
 
     new McpServerService(this, 'RealServerFakeToolsSvc', {

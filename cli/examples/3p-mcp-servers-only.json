@@ -52,7 +52,8 @@
   ],
   "ui_permissions": {
     "list_service": ["/com-github-github-mcp-server", "/slack", "/figma", "/atlassian"],
-    "health_check_service": ["all"]
+    "health_check_service": ["all"],
+    "list_skills": ["all"]
   },
   "create_in_idp": true
 }

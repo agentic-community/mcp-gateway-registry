@@ -22,6 +22,7 @@ from fastapi import (
 )
 
 from ..audit.context import set_audit_action
+from ..auth.csrf import verify_csrf_token_flexible
 from ..auth.dependencies import nginx_proxied_auth
 from ..schemas.custom_entity_models import CustomTypeDescriptor, CustomTypeUpdate
 from ..services.custom_entity_errors import (
@@ -118,6 +119,7 @@ async def create_custom_type(
     http_request: Request,
     descriptor: CustomTypeDescriptor,
     user_context: Annotated[dict, Depends(nginx_proxied_auth)],
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ) -> CustomTypeDescriptor:
     """Define a new custom entity type. Admin only."""
     _require_admin(user_context)
@@ -189,6 +191,7 @@ async def update_custom_type(
     updates: CustomTypeUpdate,
     user_context: Annotated[dict, Depends(nginx_proxied_auth)],
     name: str = TYPE_PARAM,
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ) -> CustomTypeDescriptor:
     """Update a custom type's display_name/description. Admin only.
 
@@ -232,6 +235,7 @@ async def delete_custom_type(
         False,
         description="Cascade-delete all records of this type. Required when records exist.",
     ),
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ) -> None:
     """Delete a custom type and (with force) cascade-delete its records. Admin only."""
     _require_admin(user_context)

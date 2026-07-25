@@ -65,6 +65,18 @@ from registry.observability.meters import (
     peer_sync_failures_total as PEER_SYNC_FAILURES,
 )
 from registry.observability.meters import (
+    registry_asset_id_conflict_total as ASSET_ID_CONFLICT_TOTAL,
+)
+from registry.observability.meters import (
+    registry_asset_id_federation_conflict_total as ASSET_ID_FEDERATION_CONFLICT_TOTAL,
+)
+from registry.observability.meters import (
+    registry_asset_id_index_build_failed_total as ASSET_ID_INDEX_BUILD_FAILED_TOTAL,
+)
+from registry.observability.meters import (
+    registry_asset_id_supplied_total as ASSET_ID_SUPPLIED_TOTAL,
+)
+from registry.observability.meters import (
     telemetry_sends_total,
 )
 
@@ -108,5 +120,9 @@ __all__ = [
     "NGINX_UPDATES_SKIPPED",
     "PEER_SYNC_DURATION_SECONDS",
     "PEER_SYNC_FAILURES",
+    "ASSET_ID_SUPPLIED_TOTAL",
+    "ASSET_ID_CONFLICT_TOTAL",
+    "ASSET_ID_FEDERATION_CONFLICT_TOTAL",
+    "ASSET_ID_INDEX_BUILD_FAILED_TOTAL",
     "telemetry_sends_total",
 ]

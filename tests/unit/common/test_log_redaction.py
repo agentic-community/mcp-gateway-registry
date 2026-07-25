@@ -10,6 +10,7 @@ from registry.common.log_redaction import (
     REDACTED,
     redact_headers,
     redact_mapping,
+    redact_url,
 )
 
 
@@ -161,3 +162,35 @@ class TestRedactMapping:
         assert redact_mapping("plain") == "plain"
         assert redact_mapping(42) == 42
         assert redact_mapping(None) is None
+
+
+class TestRedactUrl:
+    """redact_url must strip credential-bearing parts from a URL."""
+
+    def test_strips_userinfo_query_and_fragment(self):
+        # user:pass@ userinfo, ?secret query, and #frag must all be dropped;
+        # scheme, host, port, and path are preserved for diagnostics.
+        result = redact_url("https://user:pass@host.example:8443/path?secret=1#frag")
+        assert result == "https://host.example:8443/path"
+        assert "user" not in result
+        assert "pass" not in result
+        assert "secret" not in result
+
+    def test_drops_query_token(self):
+        result = redact_url("https://backend.internal/mcp?access_token=abc123")
+        assert result == "https://backend.internal/mcp"
+        assert "abc123" not in result
+
+    def test_plain_url_unchanged(self):
+        assert redact_url("http://backend.internal:9000/mcp") == "http://backend.internal:9000/mcp"
+
+    def test_empty_and_none_pass_through(self):
+        assert redact_url("") == ""
+        assert redact_url(None) == ""
+
+    def test_unparseable_port_fails_closed(self):
+        # A non-numeric port makes .port raise ValueError -> fail closed to
+        # [REDACTED] rather than logging the raw (possibly credentialed) string.
+        result = redact_url("http://user:pass@host:notaport/path")
+        assert result == REDACTED
+        assert "pass" not in result

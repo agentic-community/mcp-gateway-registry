@@ -10,6 +10,7 @@ from .access_resolver import (
     get_user_accessible_tools,  # noqa: F401 - re-exported for external callers
     resolve_scope_access,
 )
+from .asset_permissions import accessible_resources_for
 from .privileged_constants import ADMIN_ACTION_PREFIXES, is_admin_conferring_action
 from .proxied_token import (
     _api_auth_request_enabled,
@@ -255,23 +256,25 @@ def get_accessible_services_for_user(user_ui_permissions: dict[str, list[str]]) 
     """
     Get list of services the user can see based on their list_service permission.
 
+    Thin wrapper over the canonical ``accessible_resources_for`` so the
+    ``list_service`` discovery projection stays in lockstep with the other
+    families. Kept as a named function for existing callers/tests.
+
     Args:
         user_ui_permissions: User's UI permissions dict from get_ui_permissions_for_user()
 
     Returns:
         List of service names the user can see, or ['all'] if they can see all services
     """
-    list_permissions = user_ui_permissions.get("list_service", [])
-
-    if "all" in list_permissions:
-        return ["all"]
-
-    return list_permissions
+    return accessible_resources_for("server", user_ui_permissions)
 
 
 def get_accessible_agents_for_user(user_ui_permissions: dict[str, list[str]]) -> list[str]:
     """
     Get list of agents the user can see based on their list_agents permission.
+
+    Thin wrapper over the canonical ``accessible_resources_for``. Kept as a named
+    function for existing callers/tests.
 
     Args:
         user_ui_permissions: User's UI permissions dict from get_ui_permissions_for_user()
@@ -279,12 +282,26 @@ def get_accessible_agents_for_user(user_ui_permissions: dict[str, list[str]]) ->
     Returns:
         List of agent paths the user can see, or ['all'] if they can see all agents
     """
-    list_permissions = user_ui_permissions.get("list_agents", [])
+    return accessible_resources_for("agent", user_ui_permissions)
 
-    if "all" in list_permissions:
-        return ["all"]
 
-    return list_permissions
+def get_accessible_skills_for_user(user_ui_permissions: dict[str, list[str]]) -> list[str]:
+    """
+    Get list of skills the user can see based on their list_skills permission.
+
+    Discovery gate for skills, bringing them to parity with servers/agents/custom
+    entities via the canonical ``accessible_resources_for``: a caller with no
+    ``list_skills`` grant discovers zero skills — including public ones — and is
+    layered on top of (not a replacement for) the per-record visibility check in
+    ``list_skills_for_user``.
+
+    Args:
+        user_ui_permissions: User's UI permissions dict from get_ui_permissions_for_user()
+
+    Returns:
+        List of skill names the user can see, or ['all'] if they can see all skills
+    """
+    return accessible_resources_for("skill", user_ui_permissions)
 
 
 def user_can_list_custom_entity_type(
@@ -320,20 +337,21 @@ def user_can_list_custom_entity_type(
     Returns:
         True if the caller may list/search the type (or the given record).
     """
-    from ..services.custom_entity_scopes import (
-        entity_scope,
-        list_grant_allows_type,
-        list_grant_record_paths,
-    )
+    # Custom-entity list is the one per-record discovery gate (three tiers), so
+    # it keeps its own implementation rather than routing through the binary
+    # user_has_asset_permission (which the type-level mutation gates use). The
+    # tier resolution is shared via resolve_list_grant so the search loop and
+    # this gate can never disagree.
+    from ..services.custom_entity_scopes import entity_scope, resolve_list_grant
 
     if user_context.get("is_admin", False):
         return True
     ui_permissions = user_context.get("ui_permissions") or {}
     granted = ui_permissions.get(entity_scope("list", type_name)) or []
 
-    if list_grant_allows_type(type_name, granted):
+    whole_open, record_paths = resolve_list_grant(type_name, granted)
+    if whole_open:
         return True
-    record_paths = list_grant_record_paths(type_name, granted)
     if record_path is not None:
         return record_path in record_paths
     # Discovery pre-check: reachable if the caller holds any specific record.
@@ -410,10 +428,11 @@ def _user_is_admin(
     Mutating actions are identified by prefix: register_, modify_, toggle_,
     delete_, publish_, create_. Read-only actions (list_, get_, health_check_)
     do not grant admin status. Per-type custom-entity mutation scopes
-    (create_/modify_/delete_<type>_entity) are also excluded via
-    is_admin_conferring_action: they gate one custom type's records, not
-    registry administration, so granting a non-admin group such a scope for
-    "all" resources does not silently promote it to admin.
+    (create_/modify_/delete_<type>_entity) AND skill-management scopes
+    (publish_/modify_/delete_/toggle_skill) are also excluded via
+    is_admin_conferring_action: they gate one custom type's records / skill
+    management, not registry administration, so granting a non-admin group such a
+    scope for "all" resources does not silently promote it to admin.
 
     See GitHub issue #663 for the motivation behind this design.
 
@@ -559,6 +578,7 @@ async def _derive_user_context(
             "accessible_tools": {},
             "accessible_services": [],
             "accessible_agents": [],
+            "accessible_skills": [],
             "ui_permissions": {},
             "can_modify_servers": False,
             "is_admin": False,
@@ -589,6 +609,7 @@ async def _derive_user_context(
         "accessible_tools": access.tools,
         "accessible_services": get_accessible_services_for_user(ui_permissions),
         "accessible_agents": get_accessible_agents_for_user(ui_permissions),
+        "accessible_skills": get_accessible_skills_for_user(ui_permissions),
         "ui_permissions": ui_permissions,
         "can_modify_servers": user_can_modify_servers(groups, scopes),
         "is_admin": _user_is_admin(ui_permissions),

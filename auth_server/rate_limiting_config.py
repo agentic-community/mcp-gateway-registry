@@ -57,6 +57,13 @@ RATE_LIMIT_BACKEND: str = os.environ.get("RATE_LIMIT_BACKEND", "documentdb").str
 # Global fail-open on backend error (per-limit fail_closed overrides to closed).
 RATE_LIMIT_FAIL_OPEN: bool = _env_bool("RATE_LIMIT_FAIL_OPEN", "true")
 
+# When true, a backend error reading quarantine membership DENIES (fails closed)
+# instead of the default fail-open. Lets an operator make quarantine a hard block
+# at the cost of denying data-plane traffic during a memberships-store outage.
+# Default false: quarantine is best-effort, NOT breach containment -- pair it with
+# IdP credential revocation.
+RATE_LIMIT_QUARANTINE_FAIL_CLOSED: bool = _env_bool("RATE_LIMIT_QUARANTINE_FAIL_CLOSED", "false")
+
 # In-process definitions cache TTL (seconds).
 RATE_LIMIT_DEFINITIONS_CACHE_TTL_SECONDS: int = _env_int(
     "RATE_LIMIT_DEFINITIONS_CACHE_TTL_SECONDS", 30
@@ -94,11 +101,14 @@ def get_rate_limiter() -> RateLimiter:
             memberships=memberships,
             fail_open=RATE_LIMIT_FAIL_OPEN,
             backend_timeout_seconds=RATE_LIMIT_BACKEND_TIMEOUT_MS / 1000.0,
+            quarantine_fail_closed=RATE_LIMIT_QUARANTINE_FAIL_CLOSED,
         )
         logger.info(
-            "Rate limiter initialized: backend=%s, fail_open=%s, cache_ttl=%ss, timeout=%sms",
+            "Rate limiter initialized: backend=%s, fail_open=%s, quarantine_fail_closed=%s, "
+            "cache_ttl=%ss, timeout=%sms",
             RATE_LIMIT_BACKEND,
             RATE_LIMIT_FAIL_OPEN,
+            RATE_LIMIT_QUARANTINE_FAIL_CLOSED,
             RATE_LIMIT_DEFINITIONS_CACHE_TTL_SECONDS,
             RATE_LIMIT_BACKEND_TIMEOUT_MS,
         )
