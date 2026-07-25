@@ -1,3 +1,5 @@
+[![MCP Toplist](https://mcptoplist.com/badge/mcp.so%2Fmcp-gateway-registry%2Fagentic-community.svg)](https://mcptoplist.com/server/mcp.so%2Fmcp-gateway-registry%2Fagentic-community)
+
 <!-- Budget: 350 lines max (CI-enforced). Feature announcements -> docs/overview/feature-release-highlights.md (top 3 mirrored here). Structure rationale -> docs/design/theory-of-the-system.md#6-how-to-change-this-system-without-breaking-its-theory -->
 <div align="center">
 <img src="docs/img/mcp_gateway_horizontal_white_logo.png" alt="MCP Gateway & Registry Logo" width="100%">
