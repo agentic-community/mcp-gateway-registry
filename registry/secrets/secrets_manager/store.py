@@ -31,6 +31,19 @@ _LEASE_WAIT_SECONDS = 30
 _META_KEY = "_egress"
 _SCHEMA_VERSION = 1
 _HASH_ALGORITHM = "sha256-v1"
+_STALE_READ_RETRIES = 3
+
+
+class _StaleShardError(SecretStoreError):
+    """A required overflow shard was absent mid-read.
+
+    A reader can observe generation G1 in the root, then a concurrent
+    same-principal commit flips the manifest to G2 and cleans up G1's shards
+    before the reader fetches them. That is not corruption: re-reading the root
+    yields the new generation (or an inline/empty layout). Readers translate a
+    missing required shard into this signal and retry the whole read; it is never
+    surfaced to the caller.
+    """
 
 
 class MutationLease(Protocol):
@@ -207,7 +220,11 @@ class SecretsManagerStore(SecretStoreBase):
 
     async def _read_shard(self, root_name: str, meta: dict, bucket: int) -> dict[str, dict]:
         name = self._shard_name(root_name, meta["generation"], bucket)
-        document = await self._call(self._get_document, name, True)
+        # A non-required read distinguishes "shard cleaned up because the manifest
+        # already moved on" (retryable stale read) from a genuinely corrupt layout.
+        document = await self._call(self._get_document, name, False)
+        if document is None:
+            raise _StaleShardError(f"Secrets Manager overflow shard vanished mid-read: {name}")
         return self._decode_shard(document, meta["generation"], bucket, meta["bucket_count"])
 
     async def _load_entries(self, root_name: str, root: dict | None) -> dict[str, dict]:
@@ -424,15 +441,30 @@ class SecretsManagerStore(SecretStoreBase):
         root_name = self._secret_name(auth_method, user_id)
         await self._mutate(root_name, keys.map_key(provider, server_path), token.model_dump())
 
-    async def get_token(
-        self,
-        auth_method: str,
-        user_id: str,
-        provider: str,
-        server_path: str,
-    ) -> StoredToken | None:
-        root_name = self._secret_name(auth_method, user_id)
-        key = keys.map_key(provider, server_path)
+    async def _read_with_retry(self, operation: Callable):
+        """Run a lock-free read, retrying if it races an overflow generation cleanup.
+
+        A same-principal commit can delete the previous generation's shards
+        between a reader observing the old manifest and fetching a shard. That is
+        a transient stale read, not corruption, so re-read the whole root (which
+        now points at the new generation) and try again a bounded number of times.
+        """
+        for attempt in range(_STALE_READ_RETRIES):
+            try:
+                return await operation()
+            except _StaleShardError as exc:
+                if attempt + 1 >= _STALE_READ_RETRIES:
+                    raise SecretStoreError(
+                        "Secrets Manager overflow read kept racing generation cleanup"
+                    ) from exc
+                logger.info(
+                    "Secrets Manager overflow read raced a generation cleanup; "
+                    "re-reading root (attempt %d/%d)",
+                    attempt + 1,
+                    _STALE_READ_RETRIES,
+                )
+
+    async def _get_token_once(self, root_name: str, key: str) -> StoredToken | None:
         root = await self._call(self._get_document, root_name)
         if root is None:
             return None
@@ -444,6 +476,17 @@ class SecretsManagerStore(SecretStoreBase):
             raw = (await self._read_shard(root_name, meta, bucket)).get(key)
         return StoredToken(**raw) if raw is not None else None
 
+    async def get_token(
+        self,
+        auth_method: str,
+        user_id: str,
+        provider: str,
+        server_path: str,
+    ) -> StoredToken | None:
+        root_name = self._secret_name(auth_method, user_id)
+        key = keys.map_key(provider, server_path)
+        return await self._read_with_retry(lambda: self._get_token_once(root_name, key))
+
     async def delete_token(
         self,
         auth_method: str,
@@ -454,12 +497,7 @@ class SecretsManagerStore(SecretStoreBase):
         root_name = self._secret_name(auth_method, user_id)
         await self._mutate(root_name, keys.map_key(provider, server_path), None)
 
-    async def list_for_user(
-        self,
-        auth_method: str,
-        user_id: str,
-    ) -> list[tuple[str, str, StoredToken]]:
-        root_name = self._secret_name(auth_method, user_id)
+    async def _list_for_user_once(self, root_name: str) -> list[tuple[str, str, StoredToken]]:
         root = await self._call(self._get_document, root_name)
         entries = await self._load_entries(root_name, root)
         out: list[tuple[str, str, StoredToken]] = []
@@ -475,3 +513,11 @@ class SecretsManagerStore(SecretStoreBase):
                 )
             )
         return out
+
+    async def list_for_user(
+        self,
+        auth_method: str,
+        user_id: str,
+    ) -> list[tuple[str, str, StoredToken]]:
+        root_name = self._secret_name(auth_method, user_id)
+        return await self._read_with_retry(lambda: self._list_for_user_once(root_name))
