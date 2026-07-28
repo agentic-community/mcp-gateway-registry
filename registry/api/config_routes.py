@@ -273,6 +273,7 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             ("ard_registry_enabled", "ARD Registry Adapter", False),
             ("ard_publisher_domain", "ARD Publisher Domain", False),
             ("ard_catalog_default_namespace", "ARD URN Namespace", False),
+            ("ard_catalog_max_entries_per_type", "ARD Catalog Max Entries Per Type", False),
         ],
     },
     "otel": {
