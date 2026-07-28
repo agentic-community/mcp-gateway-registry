@@ -8396,8 +8396,9 @@ async def _generic_proxy_streaming(
 
     async def _body_iterator():
         try:
-            async for chunk in upstream_response.aiter_bytes(chunk_size=64 * 1024):
-                yield chunk
+            async for chunk in upstream_response.aiter_raw():
+                if chunk:
+                    yield chunk
         finally:
             # Exit the stream context (the BackgroundTask closes the client and
             # releases the semaphore). Errors here are best-effort cleanup.
