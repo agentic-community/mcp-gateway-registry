@@ -108,6 +108,27 @@ class TestServerEgressAuthValidation:
         )
         assert s.egress_oauth.target_audience == "api://outlook-mcp-server"
 
+    def test_pat_requires_provider(self):
+        with pytest.raises(ValidationError, match="requires egress_oauth.provider"):
+            _server(
+                egress_auth_mode="pat",
+                egress_oauth=EgressOAuthConfig(provider=None),
+            )
+
+    def test_pat_requires_egress_oauth_present(self):
+        with pytest.raises(ValidationError, match="requires egress_oauth config"):
+            _server(egress_auth_mode="pat", egress_oauth=None)
+
+    def test_pat_with_provider_accepted(self):
+        s = _server(
+            egress_auth_mode="pat",
+            egress_oauth=EgressOAuthConfig(provider="github"),
+        )
+        assert s.egress_auth_mode == "pat"
+        assert s.egress_oauth.provider == "github"
+        # pat carries no OAuth client material.
+        assert s.egress_oauth.client_secret_encrypted is None
+
 
 @pytest.mark.unit
 @pytest.mark.core

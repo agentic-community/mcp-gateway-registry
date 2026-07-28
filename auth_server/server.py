@@ -87,6 +87,7 @@ sys.path.insert(0, "/app")
 # Import MCP audit logging components
 from registry.audit.mcp_logger import MCPLogger
 from registry.audit.models import Identity, MCPServer, TokenMintAuditRecord
+from registry.audit.request_id import new_audit_request_id, sanitize_correlation_id
 from registry.audit.service import AuditLogger, NonDurableAuditError, enforce_durable_audit_sink
 from registry.audit.sink import emit_audit_event
 from registry.common.scopes_loader import reload_scopes_config
@@ -125,6 +126,17 @@ _USER_JWT_AUDIENCE: str = "mcp-registry"
 
 MAX_TOKEN_LIFETIME_HOURS = 24
 DEFAULT_TOKEN_LIFETIME_HOURS = 8
+
+# Maximum length (in characters) of the full Entra logout URL before we drop the
+# optional id_token_hint. Entra ID rejects overly long logout requests with the
+# documented error AADSTS90015 ("QueryStringTooLong"), which happens for users in
+# many groups whose ID token JWT is large. Entra rejects against the entire
+# request URL, so we measure scheme+host+path+query, not the query string alone.
+# Microsoft does not publish the exact threshold, so this is a conservative
+# empirical value chosen to stay well under observed failures. Entra still
+# processes the logout without the hint (the only difference is a possible
+# account-selection prompt for multi-account users).
+MAX_LOGOUT_URL_LENGTH: int = 2000
 
 # Trailing path segments that are MCP transport endpoints, not part of the
 # registered server name. Used when deriving the scope key from a proxied path
@@ -1132,14 +1144,55 @@ def _is_redirect_within_cookie_domain(
         forwarded_proto = request.headers.get("x-forwarded-proto", "").split(",")[0].strip()
         forwarded_host = request.headers.get("x-forwarded-host", "").split(",")[0].strip()
         request_scheme = forwarded_proto or request.url.scheme
-        request_host = (forwarded_host or request.url.hostname or "").lower()
+        # Compare hostnames only, never host:port. urlparse(url).hostname above
+        # already strips the port, and request.url.hostname is port-less too, but
+        # a raw X-Forwarded-Host may carry a port (e.g. "localhost:7860" from the
+        # registry's server-to-server logout hop). Normalize the forwarded value
+        # the same way so a same-origin redirect isn't falsely rejected.
+        if forwarded_host:
+            request_host = (urlparse(f"//{forwarded_host}").hostname or "").lower()
+        else:
+            request_host = (request.url.hostname or "").lower()
         if request_host and parsed.scheme == request_scheme and hostname == request_host:
             return True
+
+    # Trust the deployment's own configured external host. On the internal
+    # server-to-server logout hop (issue #1503), the registry reaches auth-server
+    # over the cluster network, so the request origin auth-server reconstructs is
+    # the internal scheme/host (e.g. http/loopback), NOT the public URL — the
+    # same-origin match above then fails for a legitimate https public
+    # redirect_uri and the redirect is wrongly dropped (Cognito then rejects the
+    # logout with "Required parameters missing"). The redirect_uri's host being
+    # the deployment's OWN declared public host is safe by definition (it is not
+    # user-controlled here; it is derived from the registry's trusted-host
+    # allowlist), so accept it regardless of the reconstructed request scheme.
+    configured_host = _configured_external_host()
+    if configured_host and hostname == configured_host:
+        return True
 
     if not cookie_domain:
         return False
     apex = cookie_domain.lstrip(".").lower()
     return hostname == apex or hostname.endswith(f".{apex}")
+
+
+def _configured_external_host() -> str:
+    """Return the deployment's own public host from configured external URLs.
+
+    Prefers ``AUTH_SERVER_EXTERNAL_URL`` (the public URL, distinct from the
+    internal ``registry_url``/service URL), falling back to ``REGISTRY_URL``.
+    Returns a lower-cased hostname (no scheme/port) or "" if none is configured.
+    This is the deployment's own declared host, used to approve a same-origin
+    redirect_uri even when the request reaches auth-server over the internal
+    network (where the reconstructed request scheme/host is not the public one).
+    """
+    for env_name in ("AUTH_SERVER_EXTERNAL_URL", "REGISTRY_URL"):
+        raw = os.environ.get(env_name, "").strip()
+        if raw:
+            host = (urlparse(raw).hostname or "").lower()
+            if host:
+                return host
+    return ""
 
 
 def _is_safe_redirect_url(
@@ -1586,6 +1639,14 @@ async def _enforce_rate_limit(
         return
 
     if not decision.allowed:
+        if decision.quarantined:
+            # A hard quarantine block, NOT a throttle: return a plain 403 with NO
+            # X-RateLimit-Throttled marker, so nginx @forbidden_error returns a plain
+            # 403 (never a 429 rewrite). Quarantine is an access decision, not a rate.
+            raise HTTPException(
+                status_code=403,
+                detail={"error": "quarantined", "axis": decision.axis},
+            )
         # NOTE: /validate is nginx's internal auth_request subrequest, never a
         # client-facing endpoint. nginx's auth_request module only forwards 401
         # and 403 from the subrequest; any other status (including 429) is turned
@@ -2794,10 +2855,16 @@ async def validate_request(request: Request):
     """
 
     # Capture start time for MCP audit logging
-    import uuid
-
     start_time = time.perf_counter()
-    request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
+    # The MCP-access audit record's unique key (request_id, log_type) must be
+    # server-controlled. A client that chooses X-Request-ID could pre-seed a
+    # collision so a later request of the same log_type is silently dropped by
+    # the unique-index dedup. Mint a fresh server-side id for the key and keep the
+    # client-supplied value only as a sanitized, NON-key correlation field.
+    request_id = new_audit_request_id()
+    audit_correlation_id = sanitize_correlation_id(
+        request.headers.get("X-Correlation-ID") or request.headers.get("X-Request-ID")
+    )
     mcp_session_id = request.headers.get("Mcp-Session-Id")
 
     try:
@@ -3839,6 +3906,7 @@ async def validate_request(request: Request):
                         client_ip=get_client_ip(request),
                         forwarded_for=request.headers.get("X-Forwarded-For"),
                         user_agent=request.headers.get("User-Agent"),
+                        correlation_id=audit_correlation_id,
                     )
                     logger.debug(f"MCP access logged for {server_name}")
                 except Exception as e:
@@ -3932,6 +4000,7 @@ async def validate_request(request: Request):
                         client_ip=get_client_ip(request),
                         forwarded_for=request.headers.get("X-Forwarded-For"),
                         user_agent=request.headers.get("User-Agent"),
+                        correlation_id=audit_correlation_id,
                     )
                 except Exception as log_err:
                     logger.warning(f"Failed to log MCP access error: {log_err}")
@@ -4300,7 +4369,7 @@ async def generate_user_token(
 
     request = body  # keep the existing variable name used throughout the body
     mint_request_id = str(uuid.uuid4())
-    correlation_id = request.correlation_id
+    correlation_id = sanitize_correlation_id(request.correlation_id)
 
     # Initialize audit context up front so the unexpected-error handler can
     # reference these directly instead of introspecting locals(). They are
@@ -5925,9 +5994,26 @@ async def oauth2_logout(
             logout_params = {
                 "post_logout_redirect_uri": full_redirect_uri,
             }
+            # Guard against AADSTS90015: only attach id_token_hint if the full
+            # logout URL stays under the safe length. Entra rejects against the
+            # entire request URL, so measure scheme+host+path+query, not the query
+            # string alone. Large ID tokens (users in many groups) otherwise
+            # breach Entra's limit and the logout is rejected, leaving a dangling
+            # IdP session.
             if id_token_hint:
-                logout_params["id_token_hint"] = id_token_hint
-            logger.debug(f"Entra ID logout params built: has_id_token_hint={bool(id_token_hint)}")
+                candidate_params = {**logout_params, "id_token_hint": id_token_hint}
+                candidate_url_len = len(f"{logout_url}?{urllib.parse.urlencode(candidate_params)}")
+                if candidate_url_len <= MAX_LOGOUT_URL_LENGTH:
+                    logout_params["id_token_hint"] = id_token_hint
+                else:
+                    logger.debug(
+                        f"Entra ID logout: dropping id_token_hint, logout URL would be "
+                        f"{candidate_url_len} chars (limit {MAX_LOGOUT_URL_LENGTH})"
+                    )
+            logger.debug(
+                f"Entra ID logout params built: "
+                f"has_id_token_hint={'id_token_hint' in logout_params}"
+            )
         elif "okta" in provider.lower() or (
             logout_hostname and logout_hostname.endswith(".okta.com")
         ):
@@ -6282,6 +6368,46 @@ def _obo_error_response(req_id: object, detail: str):
                 "code": -32001,
                 "message": "obo_exchange_failed",
                 "data": {"detail": detail},
+            },
+        },
+    )
+
+
+def _pat_missing_response(
+    server_name: str,
+    incoming_method: str | None,
+    req_id: object,
+):
+    """Terminal tool result for a ``pat`` server with no usable PAT.
+
+    Unlike the ``oauth_user`` consent path there is no interactive flow the
+    gateway can initiate for a PAT (the user must generate one at the provider),
+    so a miss (never submitted OR expired) is TERMINAL. We return a SUCCESSFUL
+    JSON-RPC result with ``isError=true`` (works on every MCP client, no -32042
+    URL elicitation) whose text tells the human where to submit a PAT.
+    """
+    logger.info(
+        "mcp_proxy: pat server=%s method=%s has no usable PAT; returning terminal "
+        "isError=true tool result (submit via Connected Accounts)",
+        server_name,
+        incoming_method,
+    )
+    return JSONResponse(
+        status_code=200,
+        content={
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "result": {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            "No PAT configured for this server. Submit one via the "
+                            "Registry Connected Accounts page, then retry."
+                        ),
+                    }
+                ],
+                "isError": True,
             },
         },
     )
@@ -6869,13 +6995,33 @@ async def mcp_proxy(
             elif vend and vend.get("access_token"):
                 # Token is vaulted (consent done): strip the user's gateway
                 # credentials/identity and inject the vaulted upstream token.
+                # oauth_user/obo use "Authorization: Bearer"; a pat server may
+                # override the header name + value prefix (e.g. GitLab
+                # "PRIVATE-TOKEN: <t>" bare, or "X-API-Key: <t>"). Defaults
+                # reproduce "Authorization: Bearer <t>".
+                inject_header = vend.get("pat_header_name") or "Authorization"
+                inject_prefix = (
+                    vend["pat_value_prefix"]
+                    if vend.get("pat_value_prefix") is not None
+                    else "Bearer "
+                )
                 forward_headers = {
                     k: v
                     for k, v in forward_headers.items()
-                    if k.lower() not in _EGRESS_STRIP_HEADERS
+                    # Drop the standard ingress creds AND, for a custom pat header,
+                    # any client-supplied copy of that exact header so only the
+                    # gateway-injected value reaches the upstream.
+                    if k.lower() not in _EGRESS_STRIP_HEADERS and k.lower() != inject_header.lower()
                 }
-                forward_headers["Authorization"] = f"Bearer {vend['access_token']}"
+                forward_headers[inject_header] = f"{inject_prefix}{vend['access_token']}"
                 egress_token_injected = True
+            elif vend and vend.get("mode") == "pat":
+                # pat miss (no access_token): never submitted OR expired. There is
+                # no interactive flow to offer (unlike oauth_user), so this is
+                # terminal -- return the actionable "no PAT configured" message
+                # rather than forwarding stripped credentials to a 401ing upstream.
+                req_id = incoming_payload.get("id") if isinstance(incoming_payload, dict) else None
+                return _pat_missing_response(server_name, incoming_method, req_id)
             elif vend and (vend.get("connect_url") or vend.get("authorize_url")):
                 # Egress is configured for this server but the user has no usable
                 # token, and the upstream is itself an OAuth resource server that

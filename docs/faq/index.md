@@ -46,6 +46,7 @@ Common questions and answers about the MCP Gateway Registry.
 - [How do I restrict which MCP servers a user can see based on their Entra ID group?](restrict-server-visibility-by-entra-group.md)
 - [How do I create a non-admin group that can register servers and run health checks but cannot toggle, edit, or delete them?](read-write-non-admin-group.md)
 - [How do I set up a self-service workflow for AI assets (draft to review to active)?](self-service-asset-lifecycle-workflow.md)
+- [How do I quarantine a user, an agent, or an MCP server (kill switch)?](quarantine-a-caller-or-target.md)
 
 ## Authentication and API Access
 
@@ -54,3 +55,4 @@ Common questions and answers about the MCP Gateway Registry.
 - [How do I register an M2M client and assign it groups without an IdP Admin API token?](registering-m2m-client-without-idp-admin-token.md)
 - [Registry API Authentication FAQ (static token, IdP JWT, coexistence)](registry-api-auth-faq.md)
 - [How do I pass an M2M token from Entra to the registration gate?](oauth2-token-for-registration-gate.md)
+- [How does an admin seed per-user egress PATs for a `pat` server?](seeding-per-user-egress-pats-as-admin.md)

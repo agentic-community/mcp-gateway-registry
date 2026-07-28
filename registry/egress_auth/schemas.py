@@ -31,6 +31,7 @@ class EgressAuthMode(str, Enum):
     NONE = "none"  # no egress auth
     OAUTH_USER = "oauth_user"  # per-user 3LO token from the vault
     OBO_EXCHANGE = "obo_exchange"  # same-IdP OBO token exchange; stateless, no vault
+    PAT = "pat"  # per-user static PAT/API-key from the vault
 
 
 class TokenEndpointAuthStyle(str, Enum):

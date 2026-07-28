@@ -39,9 +39,13 @@ const AuthSchemeFields: React.FC<AuthSchemeFieldsProps> = ({
 }) => {
   return (
     <div className="border-t border-gray-200 dark:border-gray-700 pt-4 mt-4">
-      <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-3">
+      <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-1">
         Backend Authentication
       </h4>
+      <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
+        The credential the registry uses itself to reach this server for health
+        checks and tool discovery. Per-user egress reuses this header definition.
+      </p>
 
       <div className="space-y-4">
         <FormField label="Authentication Scheme">

@@ -311,6 +311,8 @@ spec:
               value: {{ .Values.app.rateLimiting.backend | default "documentdb" | quote }}
             - name: RATE_LIMIT_FAIL_OPEN
               value: {{ .Values.app.rateLimiting.failOpen | default true | toString | quote }}
+            - name: RATE_LIMIT_QUARANTINE_FAIL_CLOSED
+              value: {{ .Values.app.rateLimiting.quarantineFailClosed | default false | toString | quote }}
             - name: RATE_LIMIT_DEFINITIONS_CACHE_TTL_SECONDS
               value: {{ .Values.app.rateLimiting.definitionsCacheTtlSeconds | default 30 | toString | quote }}
             - name: RATE_LIMIT_BACKEND_TIMEOUT_MS

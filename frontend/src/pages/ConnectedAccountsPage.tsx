@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   LinkIcon,
   TrashIcon,
@@ -15,6 +15,7 @@ import {
   listAvailableServers,
   initiateConsent,
   disconnect,
+  setEgressPat,
   type EgressConnection,
   type AvailableEgressServer,
 } from '../utils/egressAuth';
@@ -28,6 +29,7 @@ import { isSafeUrl } from '../utils/safeUrl';
  */
 const ConnectedAccountsPage: React.FC = () => {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [connections, setConnections] = useState<EgressConnection[]>([]);
   const [available, setAvailable] = useState<AvailableEgressServer[]>([]);
   const [loading, setLoading] = useState(true);
@@ -35,6 +37,16 @@ const ConnectedAccountsPage: React.FC = () => {
   const [serverPath, setServerPath] = useState('');
   const [connecting, setConnecting] = useState(false);
   const [copied, setCopied] = useState(false);
+  // PAT submit form state (used when the selected server is in `pat` mode).
+  const [patSecret, setPatSecret] = useState('');
+  const [patTtlValue, setPatTtlValue] = useState(30);
+  const [patTtlUnit, setPatTtlUnit] = useState('days');
+  const [patExpiresAt, setPatExpiresAt] = useState<string | null>(null);
+  const [submittingPat, setSubmittingPat] = useState(false);
+
+  // The server currently selected in the dropdown, if any.
+  const selectedServer = available.find(s => s.server_path === serverPath);
+  const isPatServer = selectedServer?.egress_auth_mode === 'pat';
 
   // The gateway callback (redirect) URL that must be registered in each
   // third-party OAuth app. Served by this same host through nginx, so it is
@@ -79,6 +91,13 @@ const ConnectedAccountsPage: React.FC = () => {
     void refresh();
   }, [refresh]);
 
+  // Preselect the dropdown when a server is passed via ?server= (from the card
+  // icon / connect-modal callout), so the user lands ready to connect/submit.
+  useEffect(() => {
+    const s = searchParams.get('server');
+    if (s) setServerPath(s);
+  }, [searchParams]);
+
   const handleConnect = async (e: React.FormEvent) => {
     e.preventDefault();
     const path = serverPath.trim();
@@ -100,6 +119,26 @@ const ConnectedAccountsPage: React.FC = () => {
       setError(`Could not start a connection for "${path}". Check the server path.`);
     } finally {
       setConnecting(false);
+    }
+  };
+
+  const handleSubmitPat = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const path = serverPath.trim();
+    const secret = patSecret.trim();
+    if (!path || !secret) return;
+    setSubmittingPat(true);
+    setError('');
+    try {
+      const result = await setEgressPat(path, secret, patTtlValue, patTtlUnit);
+      // Never keep the secret in state after submit; it is write-only.
+      setPatSecret('');
+      setPatExpiresAt(result.expires_at);
+      await refresh();
+    } catch {
+      setError(`Could not submit the token for "${path}". Check the value and try again.`);
+    } finally {
+      setSubmittingPat(false);
     }
   };
 
@@ -161,12 +200,10 @@ const ConnectedAccountsPage: React.FC = () => {
       )}
 
       {/* Connect a new account: pick from the egress-enabled servers the user
-          can access (no need to know/type a raw server path). */}
-      <form
-        onSubmit={handleConnect}
-        className="flex items-end gap-3 mb-8 p-4 rounded-lg bg-gray-50 dark:bg-gray-800"
-      >
-        <div className="flex-1">
+          can access (no need to know/type a raw server path). A `pat`-mode
+          server shows a submit-token form instead of the OAuth Connect button. */}
+      <div className="mb-8 p-4 rounded-lg bg-gray-50 dark:bg-gray-800">
+        <div className="mb-3">
           <label
             htmlFor="egress-server"
             className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
@@ -176,7 +213,12 @@ const ConnectedAccountsPage: React.FC = () => {
           <select
             id="egress-server"
             value={serverPath}
-            onChange={e => setServerPath(e.target.value)}
+            onChange={e => {
+              setServerPath(e.target.value);
+              // Reset the PAT form when the selected server changes.
+              setPatSecret('');
+              setPatExpiresAt(null);
+            }}
             disabled={available.length === 0}
             className="w-full px-3 py-2 rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 disabled:opacity-50"
           >
@@ -192,15 +234,91 @@ const ConnectedAccountsPage: React.FC = () => {
             ))}
           </select>
         </div>
-        <button
-          type="submit"
-          disabled={connecting || !serverPath.trim()}
-          className="flex items-center space-x-2 px-4 py-2 rounded-md bg-purple-600 text-white text-sm font-medium hover:bg-purple-700 disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-purple-500"
-        >
-          <ArrowTopRightOnSquareIcon className="h-4 w-4" />
-          <span>{connecting ? 'Opening…' : 'Connect'}</span>
-        </button>
-      </form>
+
+        {isPatServer ? (
+          <form onSubmit={handleSubmitPat} className="space-y-3">
+            <div>
+              <label
+                htmlFor="egress-pat-secret"
+                className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
+              >
+                Personal access token / API key
+              </label>
+              <input
+                id="egress-pat-secret"
+                type="password"
+                value={patSecret}
+                onChange={e => setPatSecret(e.target.value)}
+                autoComplete="off"
+                placeholder="Paste your token"
+                className="w-full px-3 py-2 rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
+              />
+            </div>
+            <div className="flex items-end gap-3">
+              <div>
+                <label
+                  htmlFor="egress-pat-ttl-value"
+                  className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
+                >
+                  Valid for
+                </label>
+                <input
+                  id="egress-pat-ttl-value"
+                  type="number"
+                  min={1}
+                  value={patTtlValue}
+                  onChange={e => setPatTtlValue(parseInt(e.target.value, 10) || 0)}
+                  className="w-24 px-3 py-2 rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
+                />
+              </div>
+              <div>
+                <label
+                  htmlFor="egress-pat-ttl-unit"
+                  className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
+                >
+                  Unit
+                </label>
+                <select
+                  id="egress-pat-ttl-unit"
+                  value={patTtlUnit}
+                  onChange={e => setPatTtlUnit(e.target.value)}
+                  className="px-3 py-2 rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
+                >
+                  <option value="minutes">Minutes</option>
+                  <option value="hours">Hours</option>
+                  <option value="days">Days</option>
+                </select>
+              </div>
+              <button
+                type="submit"
+                disabled={submittingPat || !patSecret.trim()}
+                className="flex items-center space-x-2 px-4 py-2 rounded-md bg-purple-600 text-white text-sm font-medium hover:bg-purple-700 disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-purple-500"
+              >
+                <span>{submittingPat ? 'Submitting…' : 'Submit token'}</span>
+              </button>
+            </div>
+            <p className="text-xs text-gray-500 dark:text-gray-400">
+              The token is stored write-only and never shown again. Maximum lifetime is 30 days.
+            </p>
+            {patExpiresAt && (
+              <p className="text-xs text-green-600 dark:text-green-400">
+                Token stored. Expires at {patExpiresAt}.
+              </p>
+            )}
+          </form>
+        ) : (
+          <form onSubmit={handleConnect} className="flex items-end gap-3">
+            <button
+              type="submit"
+              disabled={connecting || !serverPath.trim()}
+              className="flex items-center space-x-2 px-4 py-2 rounded-md bg-purple-600 text-white text-sm font-medium hover:bg-purple-700 disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-purple-500"
+            >
+              <ArrowTopRightOnSquareIcon className="h-4 w-4" />
+              <span>{connecting ? 'Opening…' : 'Connect'}</span>
+            </button>
+          </form>
+        )}
+      </div>
 
       {/* Existing connections */}
       {loading ? (

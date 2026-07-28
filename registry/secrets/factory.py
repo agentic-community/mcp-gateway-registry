@@ -40,10 +40,20 @@ def _build_secrets_manager() -> SecretStoreBase:
             "AWS_SECRETS_REGION (or AWS_REGION / AWS_DEFAULT_REGION)."
         )
     client = boto3.client("secretsmanager", region_name=region)
+
+    # Secrets Manager stores every connection for a principal in one JSON document.
+    # Its API has no conditional update, so cross-replica read/modify/write operations
+    # use the existing Mongo operational lease. This repository contains only lease
+    # owner/expiry metadata; credential material remains exclusively in Secrets Manager.
+    from registry.repositories.documentdb.egress_operational_repository import (
+        EgressOperationalRepository,
+    )
+
     return SecretsManagerStore(
         client=client,
         prefix=settings.secrets_manager_path_prefix,
         kms_key_id=settings.secrets_manager_kms_key_id or None,
+        mutation_lease=EgressOperationalRepository(),
     )
 
 

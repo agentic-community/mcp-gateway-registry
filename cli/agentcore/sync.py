@@ -24,6 +24,11 @@ from .models import (
     DEFAULT_TOKEN_FILE,
     _load_token,
 )
+from .security import (
+    EgressSecurityError,
+    require_secure_registry_url,
+    validate_account_ids,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +53,11 @@ def build_parser() -> argparse.ArgumentParser:
             "  REGISTRY_TOKEN_FILE           Path to registry auth token file\n"
             "  AGENTCORE_ACCOUNTS            Comma-separated account IDs (cross-account)\n"
             "  AGENTCORE_ASSUME_ROLE_NAME    Role name to assume (default: AgentCoreSyncRole)\n"
+            "  AGENTCORE_ALLOWED_ACCOUNTS    Comma-separated allowlist bounding which\n"
+            "                                account IDs may be assumed (recommended for\n"
+            "                                cross-account; required unless the opt-in below)\n"
+            "  AGENTCORE_ALLOW_ANY_ACCOUNT   Set 1/true to accept any 12-digit account when\n"
+            "                                no allowlist is set (fail-open, discouraged)\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -170,10 +180,63 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _parse_account_ids(accounts_str: str) -> list[str]:
-    """Parse comma-separated account IDs, stripping whitespace."""
+    """Parse + validate comma-separated cross-account IDs.
+
+    Cross-account AssumeRole widens the blast radius to every listed account, so
+    the set is validated fail-closed at this single chokepoint (feeds both the
+    server sync and token-refresh account loops):
+
+    - An empty/blank value returns ``[]`` (current-account-only sync). This is
+      the default and is unchanged: single-account deployments are unaffected.
+    - Every requested ID must be exactly 12 digits (``validate_account_ids``).
+    - When ``AGENTCORE_ALLOWED_ACCOUNTS`` is set, every requested ID must be a
+      member of that explicit allowlist; an off-list account raises.
+    - When cross-account IDs are requested but NO allowlist is set, this fails
+      CLOSED: it raises unless the operator has set the separate, discouraged
+      ``AGENTCORE_ALLOW_ANY_ACCOUNT`` opt-in (in which case shape-only validation
+      applies and the widened scope is logged at WARNING). NOTE: this is a
+      behavior change from prior releases, which accepted any 12-digit
+      cross-account list unconditionally -- operators who set
+      ``AGENTCORE_ACCOUNTS`` for cross-account sync must now also set
+      ``AGENTCORE_ALLOWED_ACCOUNTS`` (recommended) or the opt-in.
+
+    Raises:
+        EgressSecurityError: On a malformed or off-allowlist account ID, or on a
+            cross-account request with neither an allowlist nor the explicit
+            ``AGENTCORE_ALLOW_ANY_ACCOUNT`` opt-in.
+    """
     if not accounts_str or not accounts_str.strip():
         return []
-    return [a.strip() for a in accounts_str.split(",") if a.strip()]
+    requested = [a.strip() for a in accounts_str.split(",") if a.strip()]
+
+    allowlist_str = os.environ.get("AGENTCORE_ALLOWED_ACCOUNTS", "")
+    allowlist = [a.strip() for a in allowlist_str.split(",") if a.strip()]
+    if not allowlist:
+        # No allowlist configured. Fail CLOSED for cross-account AssumeRole unless
+        # the operator has explicitly acknowledged the widened scope, so an
+        # AGENTCORE_ACCOUNTS value coming from a lower-trust source (a manifest, a
+        # control-plane message, a ticket) cannot silently drive AssumeRole into
+        # arbitrary accounts. The explicit opt-in is a separate env var so it
+        # can't be set by the same injection that sets AGENTCORE_ACCOUNTS by
+        # accident.
+        allow_any = os.environ.get("AGENTCORE_ALLOW_ANY_ACCOUNT", "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        if not allow_any:
+            raise EgressSecurityError(
+                f"Refusing cross-account AssumeRole for {len(requested)} account(s): "
+                "set AGENTCORE_ALLOWED_ACCOUNTS to an explicit comma-separated allowlist "
+                "(recommended), or set AGENTCORE_ALLOW_ANY_ACCOUNT=1 to accept any "
+                "12-digit account (fail-open, discouraged)."
+            )
+        logger.warning(
+            "AGENTCORE_ALLOW_ANY_ACCOUNT is set; accepting %d cross-account target(s) on "
+            "12-digit shape validation only, with no allowlist. Prefer AGENTCORE_ALLOWED_ACCOUNTS.",
+            len(requested),
+        )
+    return validate_account_ids(requested, allowlist=allowlist or None)
 
 
 def _assume_role_session(
@@ -224,6 +287,14 @@ def _assume_role_session(
 
 def cmd_sync(args: argparse.Namespace) -> int:
     """Execute the sync subcommand: discover, register, write manifest."""
+    # Fail fast: the sync sends the registry Bearer token on every call, so
+    # refuse a cleartext-HTTP registry to a non-loopback host before doing work.
+    try:
+        require_secure_registry_url(args.registry_url)
+    except EgressSecurityError as e:
+        logger.error(str(e))
+        return 1
+
     # Load registry token
     try:
         token = _load_token(args.token_file)
@@ -244,8 +315,12 @@ def cmd_sync(args: argparse.Namespace) -> int:
 
     registry = RegistryClient(registry_url=args.registry_url, token=token)
 
-    # Determine accounts to scan
-    account_ids = _parse_account_ids(getattr(args, "accounts", ""))
+    # Determine accounts to scan (fails closed on an unauthorized/malformed set)
+    try:
+        account_ids = _parse_account_ids(getattr(args, "accounts", ""))
+    except EgressSecurityError as e:
+        logger.error(str(e))
+        return 1
     role_name = getattr(args, "assume_role_name", "AgentCoreSyncRole")
 
     # Build list of (label, session_or_none) pairs
@@ -311,8 +386,12 @@ def cmd_list(args: argparse.Namespace) -> int:
     """Execute the list subcommand: discover and display resources."""
     from .discovery import AgentCoreScanner
 
-    # Determine accounts to scan
-    account_ids = _parse_account_ids(getattr(args, "accounts", ""))
+    # Determine accounts to scan (fails closed on an unauthorized/malformed set)
+    try:
+        account_ids = _parse_account_ids(getattr(args, "accounts", ""))
+    except EgressSecurityError as e:
+        logger.error(str(e))
+        return 1
     role_name = getattr(args, "assume_role_name", "AgentCoreSyncRole")
 
     account_sessions: list[tuple[str, object]] = []

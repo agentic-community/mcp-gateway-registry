@@ -1268,6 +1268,7 @@ aws_registry_federation_enabled = true
 # rate_limiting_enabled                    = false
 # rate_limit_backend                       = "documentdb"
 # rate_limit_fail_open                     = true
+# rate_limit_quarantine_fail_closed        = false  # deny on quarantine-read error (default fail-open)
 # rate_limit_definitions_cache_ttl_seconds = 30
 # rate_limit_backend_timeout_ms            = 250
 # Lockout-safeguard floors (registry validates group definitions at config time;

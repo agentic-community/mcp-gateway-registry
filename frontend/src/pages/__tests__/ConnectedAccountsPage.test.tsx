@@ -74,6 +74,63 @@ describe('ConnectedAccountsPage', () => {
     openSpy.mockRestore();
   });
 
+  it('shows the submit-token form (not Connect) for a pat server', async () => {
+    mocked.listConnections.mockResolvedValue([]);
+    mocked.listAvailableServers.mockResolvedValue([
+      {
+        server_path: '/github-mcp',
+        server_name: 'GitHub MCP',
+        provider: 'github',
+        egress_auth_mode: 'pat',
+      },
+    ]);
+
+    renderPage();
+    await screen.findByText('No connected accounts yet.');
+
+    fireEvent.change(screen.getByLabelText('Server requiring per-user authentication'), {
+      target: { value: '/github-mcp' },
+    });
+
+    expect(screen.getByLabelText('Personal access token / API key')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /submit token/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^connect$/i })).not.toBeInTheDocument();
+  });
+
+  it('submits a PAT via setEgressPat and refreshes', async () => {
+    mocked.listConnections.mockResolvedValue([]);
+    mocked.listAvailableServers.mockResolvedValue([
+      {
+        server_path: '/github-mcp',
+        server_name: 'GitHub MCP',
+        provider: 'github',
+        egress_auth_mode: 'pat',
+      },
+    ]);
+    mocked.setEgressPat.mockResolvedValue({
+      configured: true,
+      expires_at: '2026-08-20T00:00:00Z',
+    });
+
+    renderPage();
+    await screen.findByText('No connected accounts yet.');
+
+    fireEvent.change(screen.getByLabelText('Server requiring per-user authentication'), {
+      target: { value: '/github-mcp' },
+    });
+    fireEvent.change(screen.getByLabelText('Personal access token / API key'), {
+      target: { value: 'ghp_secret' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /submit token/i }));
+
+    await waitFor(() =>
+      expect(mocked.setEgressPat).toHaveBeenCalledWith('/github-mcp', 'ghp_secret', 30, 'days')
+    );
+    // The returned expiry is surfaced; the secret is cleared from the input.
+    expect(await screen.findByText(/Expires at 2026-08-20T00:00:00Z/)).toBeInTheDocument();
+    expect(screen.getByLabelText('Personal access token / API key')).toHaveValue('');
+  });
+
   it('disconnects and refreshes', async () => {
     mocked.listConnections
       .mockResolvedValueOnce([

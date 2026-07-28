@@ -411,7 +411,10 @@ class TestRegistrationErrorHandling:
 class TestOIDCMetadata:
     """Tests for OIDC metadata enrichment in gateway registration."""
 
-    def test_custom_jwt_gateway_has_oidc_metadata(self):
+    @patch("cli.agentcore.registration.is_safe_egress_url", return_value=True)
+    def test_custom_jwt_gateway_has_oidc_metadata(self, _mock_safe):
+        # is_safe_egress_url is patched safe (avoids real DNS in unit tests);
+        # a separate test covers the unsafe-URL drop path.
         builder = _make_builder()
         reg = builder.build_gateway_registration(SAMPLE_GATEWAY)
 
@@ -421,6 +424,18 @@ class TestOIDCMetadata:
         )
         assert reg.metadata["allowed_clients"] == ["7kqi2l0n47mnfmhfapsf29ch4h"]
         assert reg.metadata["idp_vendor"] == "cognito"
+
+    @patch("cli.agentcore.registration.is_safe_egress_url", return_value=False)
+    def test_custom_jwt_unsafe_discovery_url_is_dropped(self, _mock_unsafe):
+        # A discovery_url that fails SSRF/scheme validation must NOT be persisted
+        # into the registration metadata (fail closed — no stored credential-fetch
+        # target that resolves to an internal/attacker endpoint).
+        builder = _make_builder()
+        reg = builder.build_gateway_registration(SAMPLE_GATEWAY)
+
+        assert "discovery_url" not in reg.metadata
+        assert "allowed_clients" not in reg.metadata
+        assert "idp_vendor" not in reg.metadata
 
     def test_none_auth_gateway_has_no_oidc_metadata(self):
         builder = _make_builder()
@@ -500,6 +515,23 @@ class TestDetectIdpVendor:
             == "unknown"
         )
 
+    def test_lookalike_vendor_host_is_not_classified(self):
+        # A host that merely CONTAINS a vendor domain as a non-suffix label must
+        # NOT be classified into that vendor — otherwise the vendor's real client
+        # secret would be POSTed to the attacker's look-alike host.
+        from cli.agentcore.registration import _detect_idp_vendor
+
+        assert (
+            _detect_idp_vendor(
+                "https://myorg.auth0.com.attacker.example/.well-known/openid-configuration"
+            )
+            == "unknown"
+        )
+        assert (
+            _detect_idp_vendor("https://cognito-idp.us-east-1.amazonaws.com.evil.example/x")
+            == "unknown"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Manifest collection and writing
@@ -507,9 +539,17 @@ class TestDetectIdpVendor:
 
 
 class TestManifest:
-    """Tests for manifest collection and writing."""
+    """Tests for manifest collection and writing.
 
-    def test_custom_jwt_gateway_collects_manifest_entry(self):
+    ``is_safe_egress_url`` is patched safe in the collection tests: it performs
+    real DNS resolution (``resolve=True``), which would make these unit tests
+    depend on the network and fail in an offline/isolated sandbox. The unsafe
+    path is covered separately by
+    ``TestManifestDiscoveryGuard::test_unsafe_discovery_url_not_collected``.
+    """
+
+    @patch("cli.agentcore.registration.is_safe_egress_url", return_value=True)
+    def test_custom_jwt_gateway_collects_manifest_entry(self, _mock_safe):
         orch, registry, scanner = _make_orchestrator()
         scanner.scan_gateways.return_value = [SAMPLE_GATEWAY]
 
@@ -540,7 +580,8 @@ class TestManifest:
 
         assert len(orch._manifest_entries) == 0
 
-    def test_dry_run_collects_manifest_entries(self):
+    @patch("cli.agentcore.registration.is_safe_egress_url", return_value=True)
+    def test_dry_run_collects_manifest_entries(self, _mock_safe):
         orch, registry, scanner = _make_orchestrator(dry_run=True)
         scanner.scan_gateways.return_value = [SAMPLE_GATEWAY]
 
@@ -548,7 +589,8 @@ class TestManifest:
 
         assert len(orch._manifest_entries) == 1
 
-    def test_write_manifest_creates_file(self, tmp_path):
+    @patch("cli.agentcore.registration.is_safe_egress_url", return_value=True)
+    def test_write_manifest_creates_file(self, _mock_safe, tmp_path):
         manifest_file = tmp_path / "manifest.json"
         orch, registry, scanner = _make_orchestrator()
         orch.manifest_path = str(manifest_file)
@@ -558,10 +600,14 @@ class TestManifest:
         orch.write_manifest()
 
         import json
+        import os
+        import stat
 
         data = json.loads(manifest_file.read_text())
         assert len(data) == 1
         assert data[0]["idp_vendor"] == "cognito"
+        # The manifest carries OIDC discovery URLs; it must be written 0o600.
+        assert stat.S_IMODE(os.stat(manifest_file).st_mode) == 0o600
 
     def test_write_manifest_dry_run_skips(self, tmp_path):
         manifest_file = tmp_path / "manifest.json"
@@ -579,5 +625,19 @@ class TestManifest:
         scanner.scan_runtimes.return_value = [SAMPLE_MCP_RUNTIME]
 
         orch.sync_runtimes()
+
+        assert len(orch._manifest_entries) == 0
+
+
+class TestManifestDiscoveryGuard:
+    """A CUSTOM_JWT gateway whose discoveryUrl fails SSRF/HTTPS validation must
+    not be collected into the refresh manifest (fail closed)."""
+
+    @patch("cli.agentcore.registration.is_safe_egress_url", return_value=False)
+    def test_unsafe_discovery_url_not_collected(self, _mock_unsafe):
+        orch, registry, scanner = _make_orchestrator()
+        scanner.scan_gateways.return_value = [SAMPLE_GATEWAY]
+
+        orch.sync_gateways()
 
         assert len(orch._manifest_entries) == 0

@@ -109,6 +109,24 @@ class TestVariants:
         assert r.failure_reason == "rate_limited"
 
 
+class TestCorrelationIdCap:
+    """The correlation_id field must be length-capped at the model boundary.
+
+    Intent: even if a FUTURE producer forgets to run ``sanitize_correlation_id``,
+    the durable audit record cannot store an unbounded, client-derived value that
+    would bloat records or feed a log/audit-export injection. The cap mirrors the
+    sanitizer's 200-char limit, so the model is a belt-and-suspenders backstop.
+    """
+
+    def test_correlation_id_at_cap_is_accepted(self):
+        value = "a" * 200
+        assert _minimal(correlation_id=value).correlation_id == value
+
+    def test_correlation_id_over_cap_is_rejected(self):
+        with pytest.raises(ValidationError):
+            _minimal(correlation_id="a" * 201)
+
+
 class TestSerialization:
     def test_round_trips_and_omits_raw_token(self):
         r = _minimal(correlation_id="corr-9", requested_scopes=["a", "b"])

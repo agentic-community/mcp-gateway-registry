@@ -16,6 +16,7 @@ import DeleteConfirmation from './DeleteConfirmation';
 import SearchableSelect from './SearchableSelect';
 import ListStateBoundary from './iam/ListStateBoundary';
 import RateLimitGroupsEditor from './iam/RateLimitGroupsEditor';
+import { useAuth } from '../contexts/AuthContext';
 import {
   useRateLimitDefinitions,
   useRateLimitMemberships,
@@ -40,6 +41,8 @@ interface FormErrors {
 }
 
 const IAMUsers: React.FC<IAMUsersProps> = ({ onShowToast }) => {
+  const { user: currentUser } = useAuth();
+  const isAdmin = currentUser?.is_admin ?? false;
   const { users, isLoading, error, refetch } = useIAMUsers();
   const { groups } = useIAMGroups();
   // Rate-limit definitions + memberships fetched ONCE here and passed to each
@@ -49,7 +52,14 @@ const IAMUsers: React.FC<IAMUsersProps> = ({ onShowToast }) => {
   const rlGroupOptions = useMemo(() => {
     const names = new Set<string>();
     for (const d of rlDefinitions) {
-      if (d.axis === 'caller' && d.entity_type === CALLER_ENTITY_TYPE) names.add(d.name);
+      // Both caller and caller_target are caller-side group memberships a user can
+      // join; the limiter matches a caller's groups against both axes.
+      if (
+        (d.axis === 'caller' || d.axis === 'caller_target') &&
+        d.entity_type === CALLER_ENTITY_TYPE
+      ) {
+        names.add(d.name);
+      }
     }
     return Array.from(names).sort().map((n) => ({ value: n, label: n }));
   }, [rlDefinitions]);
@@ -423,6 +433,7 @@ const IAMUsers: React.FC<IAMUsersProps> = ({ onShowToast }) => {
                         memberships={rlMemberships}
                         onSaved={refetchRlMemberships}
                         onShowToast={onShowToast}
+                        isAdmin={isAdmin}
                       />
                     </td>
                     <td className="py-3 px-4 text-right">

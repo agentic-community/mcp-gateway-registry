@@ -1492,7 +1492,13 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
                 # The path is interpolated into a location directive; escape any
                 # nginx-special characters (defense-in-depth over Pydantic path
                 # validation) so it cannot break out of the directive.
-                safe_vs_path = self._sanitize_for_nginx_set(vs.path)
+                # Normalise to a trailing slash for the same reason as real servers
+                # (issue #1501): a bare `location /virtual/dev` prefix-matches
+                # unrelated routes like `/virtual/devtools`, hijacking them into the
+                # /validate auth subrequest. `location /virtual/dev/` only matches the
+                # subtree. The virtual_router.lua content handler receives the full
+                # URI, so the added slash does not affect routing.
+                safe_vs_path = self._sanitize_for_nginx_set(vs.path).rstrip("/") + "/"
 
                 block = f"""
     # Virtual MCP Server: {safe_name}
@@ -2045,7 +2051,24 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
 
     def _generate_transport_location_blocks(self, path: str, server_info: dict[str, Any]) -> list:
         """Generate nginx location blocks for different transport types."""
-        blocks = []
+        blocks: list[str] = []
+
+        # Render-time mirror of validate_server_path (issue #1501). A path that
+        # normalizes to empty (a slashes-only value that bypassed registration
+        # validation -- e.g. legacy data persisted before the guard existed)
+        # would render as a gateway-wide `location /` block, subjecting every URL
+        # to the /validate auth subrequest and shadowing the static catch-all.
+        # Skip it and log, rather than emit a config that hijacks the whole
+        # gateway: fail closed for this one server, keep the rest of the config.
+        if not path or not path.strip("/"):
+            logger.error(
+                "Skipping nginx location block for server with empty/slashes-only "
+                "path %r: it would render as a gateway-wide 'location /' block. "
+                "This path should have been rejected at registration.",
+                path,
+            )
+            return blocks
+
         proxy_pass_url = server_info.get("proxy_pass_url", "")
         supported_transports = server_info.get("supported_transports", ["streamable-http"])
 
@@ -2359,9 +2382,18 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
         proxy_set_header Upgrade $http_upgrade;
         chunked_transfer_encoding off;"""
 
-        # Use the location path exactly as specified in the server configuration
-        # Users have full control over the location path format (with or without trailing slash)
-        location_path = path
+        # Always normalise the location path to end with a trailing slash (issue #1501).
+        # nginx treats `location /a` as a prefix match against ANY URL starting with
+        # `/a` (e.g. /api/, /auth, /about), so a server registered at a short path
+        # would silently hijack unrelated browser/API routes and subject them to
+        # auth_request /validate. `location /a/` only matches /a/ and paths that
+        # literally continue past the slash, so `/api/...` no longer matches. MCP
+        # clients already call `/server-name/mcp` (or /sse), which continue to match.
+        # A bare `GET /a` (no trailing slash) no longer matches this block; nginx does
+        # NOT auto-redirect it to `/a/` for a proxy_pass location, so it falls through
+        # to the catch-all. This is fine because the discovery/connect URLs always
+        # include the `/mcp` (or `/sse`) suffix -- no client connects at the bare path.
+        location_path = path.rstrip("/") + "/"
         logger.info(f"Creating location block for {location_path} with {transport_type} transport")
 
         return f"""

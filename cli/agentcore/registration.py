@@ -29,6 +29,7 @@ from .models import (
     _slugify,
     _validate_https_url,
 )
+from .security import is_safe_egress_url, write_secret_file
 
 # Add parent directory to path for api imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -45,31 +46,16 @@ logger = logging.getLogger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
-IDP_PATTERNS: dict[str, str] = {
-    "cognito-idp": "cognito",
-    "auth0.com": "auth0",
-    "okta.com": "okta",
-    "microsoftonline.com": "entra",
-    "/realms/": "keycloak",
-}
-
-
 # ---------------------------------------------------------------------------
 # Private helper functions
 # ---------------------------------------------------------------------------
 
-
-def _detect_idp_vendor(discovery_url: str) -> str:
-    """Detect IdP vendor from OIDC discovery URL.
-
-    Scans the URL for known identity-provider patterns and returns
-    a short vendor label (e.g. "cognito", "okta").  Returns "unknown"
-    when no pattern matches.
-    """
-    for pattern, vendor in IDP_PATTERNS.items():
-        if pattern in discovery_url:
-            return vendor
-    return "unknown"
+# Re-exported so registration builds the same idp_vendor label the token
+# refresher later keys its secret lookup on. Single hardened implementation
+# (hostname-boundary match, not substring-in-URL) lives in token_refresher —
+# do not reintroduce a local copy, or the two can drift and a look-alike host
+# could be classified into a vendor whose real client secret is then exfiltrated.
+from .token_refresher import _detect_idp_vendor  # noqa: E402
 
 
 def _retry_registry_call(func):
@@ -184,9 +170,22 @@ class RegistrationBuilder:
             allowed_clients = jwt_config.get("allowedClients", [])
 
             if discovery_url:
-                metadata["discovery_url"] = discovery_url
-                metadata["allowed_clients"] = allowed_clients
-                metadata["idp_vendor"] = _detect_idp_vendor(discovery_url)
+                # Validate the Bedrock-metadata-supplied discovery_url through the
+                # canonical SSRF/URL guard before persisting it: a tampered gateway
+                # could point it at an internal/attacker endpoint that the token
+                # refresher would later send client_credentials (incl. the client
+                # secret) to. Reject non-http(s)/private/metadata targets here so a
+                # rogue URL never becomes a stored credential-fetch destination.
+                if not is_safe_egress_url(discovery_url):
+                    logger.warning(
+                        "Skipping OIDC enrichment for %s: discoveryUrl failed SSRF/scheme "
+                        "validation (refusing to persist an unsafe credential-fetch target)",
+                        raw_name,
+                    )
+                else:
+                    metadata["discovery_url"] = discovery_url
+                    metadata["allowed_clients"] = allowed_clients
+                    metadata["idp_vendor"] = _detect_idp_vendor(discovery_url)
 
         return InternalServiceRegistration(
             path=path,
@@ -409,8 +408,9 @@ class SyncOrchestrator:
             logger.info("No CUSTOM_JWT gateways -- skipping manifest")
             return
 
-        with open(self.manifest_path, "w") as f:
-            json.dump(self._manifest_entries, f, indent=2)
+        # The manifest holds OIDC discovery URLs + per-client refresh metadata
+        # used to mint credentials; write it 0o600 atomically, not world-readable.
+        write_secret_file(self.manifest_path, json.dumps(self._manifest_entries, indent=2))
 
         logger.info(f"Wrote {len(self._manifest_entries)} entries to {self.manifest_path}")
 
@@ -485,6 +485,16 @@ class SyncOrchestrator:
         jwt_config = gateway.get("authorizerConfiguration", {}).get("customJWTAuthorizer", {})
         discovery_url = jwt_config.get("discoveryUrl", "")
         if not discovery_url:
+            return
+
+        # Same guard as build_gateway_registration: never persist a discovery_url
+        # into the refresh manifest that fails SSRF/scheme validation, or the
+        # token refresher would later send client_credentials to it.
+        if not is_safe_egress_url(discovery_url):
+            logger.warning(
+                "Skipping manifest entry for %s: discoveryUrl failed SSRF/scheme validation",
+                server_path,
+            )
             return
 
         self._manifest_entries.append(
