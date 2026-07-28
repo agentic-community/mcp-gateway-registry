@@ -150,7 +150,10 @@ async def _load_server_entries(
 ) -> tuple[list[ArdCatalogEntry], int]:
     """Load public + enabled servers and map them. Returns (entries, skipped)."""
     repo = get_server_repository()
-    records = await repo.find_with_filter({"is_enabled": True, "visibility": "public"}, limit=None)
+    records = await repo.find_with_filter(
+        {"is_enabled": True, "visibility": "public"},
+        limit=settings.ard_catalog_max_entries_per_type,
+    )
     namespace = _namespace_for("server")
     entries: list[ArdCatalogEntry] = []
     skipped = 0
@@ -172,7 +175,10 @@ async def _load_agent_entries(
 ) -> tuple[list[ArdCatalogEntry], int]:
     """Load public + enabled agents and map them. Returns (entries, skipped)."""
     repo = get_agent_repository()
-    records = await repo.find_with_filter({"is_enabled": True, "visibility": "public"}, limit=None)
+    records = await repo.find_with_filter(
+        {"is_enabled": True, "visibility": "public"},
+        limit=settings.ard_catalog_max_entries_per_type,
+    )
     namespace = _namespace_for("agent")
     entries: list[ArdCatalogEntry] = []
     skipped = 0
@@ -198,6 +204,7 @@ async def _load_skill_entries(
         include_disabled=False,
         visibility="public",
         registry_name="local",
+        limit=settings.ard_catalog_max_entries_per_type,
     )
     namespace = _namespace_for("skill")
     entries: list[ArdCatalogEntry] = []
