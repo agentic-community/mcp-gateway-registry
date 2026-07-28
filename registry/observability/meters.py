@@ -210,6 +210,45 @@ rate_limit_backend_duration_ms = _meter.create_histogram(
     unit="ms",
 )
 
+rate_limit_quarantine_denied_total = _meter.create_counter(
+    name="mcpgw_rate_limit_quarantine_denied_total",
+    description="Requests dropped because a caller or target is quarantined (kill-switch)",
+    unit="1",
+)
+
+
+def _quarantine_members_callback(options: Any) -> Any:
+    """ObservableGauge: current member count of each reserved quarantine group.
+
+    Runs on the metrics-export cycle (NOT the request path). Each replica reports
+    the same DB-backed ``count_documents`` per reserved group, so the gauge is
+    correct across replicas. Bounded labels (only the fixed group name).
+    """
+    try:
+        from registry.rate_limiting.memberships_repository import (
+            get_shared_memberships_repo,
+        )
+        from registry.rate_limiting.models import (
+            QUARANTINE_CALLER_GROUP,
+            QUARANTINE_TARGET_GROUP,
+        )
+
+        repo = get_shared_memberships_repo()
+        for group in (QUARANTINE_CALLER_GROUP, QUARANTINE_TARGET_GROUP):
+            count = repo.count_group_members_cached(group)
+            yield metrics.Observation(count, {"group": group})
+    except Exception as exc:  # pragma: no cover - defensive; never break export
+        logger.debug(f"quarantine_members callback failed: {exc}")
+        return
+
+
+_meter.create_observable_gauge(
+    name="mcpgw_rate_limit_quarantine_members",
+    callbacks=[_quarantine_members_callback],
+    description="Current members in each rate-limit quarantine (kill-switch) group",
+    unit="1",
+)
+
 
 # =============================================================================
 # Path-3 in-process metrics

@@ -165,12 +165,19 @@ async def egress_connect(
             status_code=403,
         )
 
+    # Bind the consent state to the canonical egress principal (OIDC-sub-based
+    # ``egress_user``, else ``username``) -- the SAME id the vend, the vault, and
+    # the callback account-swap guard use. Using bare ``username`` here would bind
+    # the state to a different id than the callback resolves, so the guard would
+    # reject every callback with "state user mismatch" whenever egress_user is set.
+    egress_user_id = user_context.get("egress_user") or user_context.get("username") or ""
+
     # Provider consent leg, via the existing web Connected-Accounts path: the
     # callback stores the token + shows the close-tab page. No client-side code
     # exchange -- the client just retries the original tool call.
     provider_authorize_url = get_egress_auth_service().build_consent_url(
         auth_method=auth_method,
-        user_id=user_context.get("username") or "",
+        user_id=egress_user_id,
         client_id_audit=user_context.get("client_id") or "",
         session_id=user_context.get("session_id") or "",
         server_path=server_path,
@@ -178,7 +185,7 @@ async def egress_connect(
     )
     logger.info(
         "egress connect: user=%s server=%s -> provider consent",
-        user_context.get("username"),
+        egress_user_id,
         server_path,
     )
     return RedirectResponse(provider_authorize_url, status_code=302)

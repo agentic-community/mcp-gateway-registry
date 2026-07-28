@@ -5,7 +5,8 @@
  * showing results in a dropdown list below.
  */
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { MagnifyingGlassIcon, XMarkIcon } from '@heroicons/react/24/outline';
 
 
@@ -55,6 +56,20 @@ const SearchableSelect: React.FC<SearchableSelectProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  // The dropdown renders in a portal (fixed position) so an ancestor with
+  // overflow (e.g. a table wrapper's overflow-x-auto) cannot clip it. We track
+  // the input's viewport rect to position it.
+  const [menuRect, setMenuRect] = useState<{ top: number; left: number; width: number } | null>(
+    null,
+  );
+
+  const _updateMenuRect = useCallback(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    setMenuRect({ top: r.bottom + 4, left: r.left, width: r.width });
+  }, []);
 
   // Find the selected option to display its label
   const selectedOption = [...specialOptions, ...options].find((o) => o.value === value);
@@ -69,10 +84,15 @@ const SearchableSelect: React.FC<SearchableSelectProps> = ({
     );
   });
 
-  // Close dropdown when clicking outside
+  // Close dropdown when clicking outside. The dropdown lives in a portal, so a
+  // click on an option is NOT inside containerRef; also treat clicks inside the
+  // portaled dropdown as "inside" so selecting an option doesn't close-before-select.
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+      const target = event.target as Node;
+      const inContainer = containerRef.current?.contains(target);
+      const inDropdown = dropdownRef.current?.contains(target);
+      if (!inContainer && !inDropdown) {
         setIsOpen(false);
         setSearchQuery('');
       }
@@ -81,6 +101,20 @@ const SearchableSelect: React.FC<SearchableSelectProps> = ({
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+
+  // While open, keep the portaled dropdown aligned to the input across scroll /
+  // resize (fixed positioning is viewport-relative, so it must follow the input).
+  useEffect(() => {
+    if (!isOpen) return;
+    _updateMenuRect();
+    const onReflow = () => _updateMenuRect();
+    window.addEventListener('scroll', onReflow, true);
+    window.addEventListener('resize', onReflow);
+    return () => {
+      window.removeEventListener('scroll', onReflow, true);
+      window.removeEventListener('resize', onReflow);
+    };
+  }, [isOpen, _updateMenuRect]);
 
   const handleSelect = (optionValue: string) => {
     onChange(optionValue);
@@ -142,10 +176,19 @@ const SearchableSelect: React.FC<SearchableSelectProps> = ({
         )}
       </div>
 
-      {/* Dropdown */}
-      {isOpen && !disabled && (
-        <div className="absolute z-50 w-full mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700
-                        rounded-lg shadow-lg max-h-60 overflow-y-auto">
+      {/* Dropdown (portaled to <body> with fixed positioning so an ancestor's
+          overflow -- e.g. a table wrapper's overflow-x-auto -- cannot clip it). */}
+      {isOpen && !disabled && menuRect && createPortal(
+        <div
+          ref={dropdownRef}
+          style={{
+            position: 'fixed',
+            top: menuRect.top,
+            left: menuRect.left,
+            width: menuRect.width,
+          }}
+          className="z-50 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700
+                     rounded-lg shadow-lg max-h-60 overflow-y-auto">
           {isLoading ? (
             <div className="px-3 py-2 text-sm text-gray-400">Loading...</div>
           ) : (
@@ -203,7 +246,8 @@ const SearchableSelect: React.FC<SearchableSelectProps> = ({
               )}
             </>
           )}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );

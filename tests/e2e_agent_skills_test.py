@@ -54,6 +54,12 @@ TEST_SKILL_NAME = "e2e-test-mcp-builder"
 TEST_SKILL_DESCRIPTION = "E2E Test: Build and configure MCP servers"
 TEST_SKILL_TAGS = ["e2e-test", "mcp", "builder", "automation"]
 
+# The unique tag applied to the test skill. Used to find it via the server-side
+# tag filter (list) and as a substring search term, so the list/search checks
+# pass regardless of how many other skills the registry already holds and match
+# only the test skill rather than unrelated entries.
+TEST_SKILL_UNIQUE_TAG = "e2e-test"
+
 
 class TestStatus(Enum):
     """Test result status."""
@@ -156,7 +162,10 @@ class AgentSkillsE2ETest:
         start_time = time.time()
 
         try:
-            response = self.client.list_skills()
+            # Filter by the test skill's unique tag so the check does not depend
+            # on the test skill landing in the first unsorted page of a large,
+            # already-populated registry.
+            response = self.client.list_skills(tag=TEST_SKILL_UNIQUE_TAG)
             duration_ms = (time.time() - start_time) * 1000
 
             # Check if our test skill is in the list
@@ -534,15 +543,30 @@ class AgentSkillsE2ETest:
         start_time = time.time()
 
         try:
-            response = self.client.search_skills(query="mcp builder")
+            # Skills search is lexical (substring) over name/description/tags,
+            # not semantic. Two things must be true for a deterministic pass:
+            #  1. The query must be a substring of the test skill's name/tags.
+            #     Use the unique tag ("e2e-test"), which is a literal substring
+            #     of neither the display query "mcp builder" nor any other skill.
+            #  2. Newly registered skills default to lifecycle status "draft",
+            #     which search excludes by default. Pass include_draft=True so
+            #     the just-registered test skill is in scope.
+            # Assert the test skill is actually present, not merely that some
+            # skill matched (a populated registry has unrelated matches).
+            response = self.client.search_skills(
+                query=TEST_SKILL_UNIQUE_TAG,
+                include_draft=True,
+            )
             duration_ms = (time.time() - start_time) * 1000
 
-            if response.total_count > 0:
+            # SkillSearchResponse.skills is a list of raw dicts (name key).
+            skill_names = [s.get("name") for s in response.skills]
+            if TEST_SKILL_NAME in skill_names:
                 self._record_result(
                     test_name,
                     TestStatus.PASSED,
                     duration_ms,
-                    f"Found {response.total_count} matching skills",
+                    f"Found {response.total_count} matching skills, test skill present",
                 )
                 return True
             else:
@@ -550,7 +574,7 @@ class AgentSkillsE2ETest:
                     test_name,
                     TestStatus.FAILED,
                     duration_ms,
-                    "No matching skills found",
+                    f"Test skill not found in {response.total_count} search results",
                 )
                 return False
 

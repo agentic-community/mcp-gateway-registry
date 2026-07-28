@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 from fastapi import APIRouter, HTTPException, Request
@@ -19,6 +20,9 @@ from ..services.server_service import server_service
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# Lock to prevent TOCTOU race in registry-card auto-initialization.
+_registry_card_init_lock = asyncio.Lock()
 
 
 # OAuth discovery metadata (RFC 8414 authorization-server and RFC 9728
@@ -60,12 +64,27 @@ async def _auto_initialize_registry_card():
     """
     Auto-initialize registry card from config defaults if it doesn't exist.
 
-    Returns the existing or newly created card.
+    Returns the existing or newly created card.  Uses double-checked locking
+    to prevent the TOCTOU race where concurrent coroutines within
+    the same worker both read None and both write.
+
+    Note: the lock is per-worker (asyncio.Lock is not cross-process). With
+    multiple uvicorn workers starting simultaneously, each may attempt one
+    write. The underlying ``replace_one(..., upsert=True)`` is idempotent,
+    so no data corruption occurs; the lock eliminates redundant writes
+    within a single worker's event loop (the common case under load).
     """
     repo = get_registry_card_repository()
     card = await repo.get()
+    if card is not None:
+        return card
 
-    if card is None:
+    # Slow path: card missing — serialize initialization under the lock.
+    async with _registry_card_init_lock:
+        # Re-read under lock; another coroutine may have initialized.
+        card = await repo.get()
+        if card is not None:
+            return card
         # Auto-initialize from config defaults
         import random
 
@@ -349,7 +368,9 @@ async def get_oauth_protected_resource_for_server(
         logger.exception("Failed to build per-server PRM document")
         raise HTTPException(
             status_code=502,
-            detail=f"Could not build Protected Resource Metadata: {exc}",
+            # Do not reflect internal exception detail on unauthenticated
+            # endpoint; logged above for operators.
+            detail="Could not build Protected Resource Metadata",
         ) from exc
 
     return JSONResponse(content=document, headers=OAUTH_DISCOVERY_CACHE_HEADERS)

@@ -14,13 +14,23 @@ import {
   setRateLimitEnabled,
   definitionId,
   RateLimitDefinition,
+  RateLimitAxis,
+  AXIS_LABELS,
   TARGET_ENTITY_TYPES,
+  TARGET_ENTITY_TYPE_LABELS,
+  SERVER_GROUP_ENTITY_TYPE,
 } from '../hooks/useRateLimits';
 import DeleteConfirmation from './DeleteConfirmation';
 import ListStateBoundary from './iam/ListStateBoundary';
 import SearchableSelect from './SearchableSelect';
+import QuarantinePanel from './iam/QuarantinePanel';
+import { useAuth } from '../contexts/AuthContext';
 import { useServerList } from '../hooks/useToolCatalog';
 import { useAgentList } from '../hooks/useAgentList';
+
+// Group axes (caller + caller_target) share the same "group with per-caller-type
+// limits" form shape. The quarantine axis is not creatable here (seeded only).
+const GROUP_AXES: RateLimitAxis[] = ['caller', 'caller_target'];
 
 interface IAMRateLimitsProps {
   onShowToast: (message: string, type: 'success' | 'error' | 'info') => void;
@@ -50,6 +60,8 @@ const StatTile: React.FC<{ label: string; value: number; hint?: string }> = ({
 );
 
 const IAMRateLimits: React.FC<IAMRateLimitsProps> = ({ onShowToast }) => {
+  const { user: currentUser } = useAuth();
+  const isAdmin = currentUser?.is_admin ?? false;
   const { definitions, isLoading, error, refetch } = useRateLimitDefinitions();
   // Memberships feed the "callers governed" summary tile (users + agents mapped
   // into rate-limit groups). Read-only here; the editor lives on Users/M2M.
@@ -62,15 +74,23 @@ const IAMRateLimits: React.FC<IAMRateLimitsProps> = ({ onShowToast }) => {
 
   // Form state. axis drives which limit fields show.
   const [editingId, setEditingId] = useState<string | null>(null); // non-null => edit mode
-  const [formAxis, setFormAxis] = useState<'caller' | 'target'>('caller');
+  const [formAxis, setFormAxis] = useState<RateLimitAxis>('caller');
   const [formEntityType, setFormEntityType] = useState('group');
   const [formName, setFormName] = useState('');
   const [formWindow, setFormWindow] = useState(60);
   const [formUserMax, setFormUserMax] = useState('');
   const [formAgentMax, setFormAgentMax] = useState('');
   const [formTargetMax, setFormTargetMax] = useState('');
+  // server_group members: the server paths this group covers (each limited
+  // individually to formTargetMax). Only used when isServerGroup.
+  const [formMembers, setFormMembers] = useState<string[]>([]);
   const [formFailClosed, setFormFailClosed] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+
+  // A server_group is a target-axis definition naming a set of servers; each
+  // member gets its own bucket. Drives the member multi-select in the form.
+  const isServerGroup =
+    formAxis === 'target' && formEntityType === SERVER_GROUP_ENTITY_TYPE;
 
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
 
@@ -96,6 +116,7 @@ const IAMRateLimits: React.FC<IAMRateLimitsProps> = ({ onShowToast }) => {
       total: definitions.length,
       enabled: enabled.length,
       caller: definitions.filter((d) => d.axis === 'caller').length,
+      callerTarget: definitions.filter((d) => d.axis === 'caller_target').length,
       target: definitions.filter((d) => d.axis === 'target').length,
       failClosed: definitions.filter((d) => d.fail_closed).length,
       governed: callerSubjects.size,
@@ -121,6 +142,7 @@ const IAMRateLimits: React.FC<IAMRateLimitsProps> = ({ onShowToast }) => {
     setFormUserMax('');
     setFormAgentMax('');
     setFormTargetMax('');
+    setFormMembers([]);
     setFormFailClosed(false);
   }, []);
 
@@ -138,6 +160,7 @@ const IAMRateLimits: React.FC<IAMRateLimitsProps> = ({ onShowToast }) => {
     setFormUserMax(d.user_max_requests != null ? String(d.user_max_requests) : '');
     setFormAgentMax(d.agent_max_requests != null ? String(d.agent_max_requests) : '');
     setFormTargetMax(d.max_requests != null ? String(d.max_requests) : '');
+    setFormMembers(d.members ?? []);
     setFormFailClosed(d.fail_closed);
     setView('form');
   };
@@ -147,16 +170,22 @@ const IAMRateLimits: React.FC<IAMRateLimitsProps> = ({ onShowToast }) => {
       onShowToast('Name is required', 'error');
       return;
     }
+    const isGroup = GROUP_AXES.includes(formAxis);
+    if (isServerGroup && formMembers.length === 0) {
+      onShowToast('Add at least one server to the group', 'error');
+      return;
+    }
     const def: RateLimitDefinition = {
       axis: formAxis,
-      entity_type: formAxis === 'caller' ? 'group' : formEntityType,
+      entity_type: isGroup ? 'group' : formEntityType,
       name: formName.trim(),
       window_seconds: formWindow,
       fail_closed: formFailClosed,
       enabled: true,
       max_requests: formAxis === 'target' && formTargetMax ? Number(formTargetMax) : null,
-      user_max_requests: formAxis === 'caller' && formUserMax ? Number(formUserMax) : null,
-      agent_max_requests: formAxis === 'caller' && formAgentMax ? Number(formAgentMax) : null,
+      user_max_requests: isGroup && formUserMax ? Number(formUserMax) : null,
+      agent_max_requests: isGroup && formAgentMax ? Number(formAgentMax) : null,
+      members: isServerGroup ? formMembers : null,
     };
     setIsSaving(true);
     try {
@@ -193,17 +222,24 @@ const IAMRateLimits: React.FC<IAMRateLimitsProps> = ({ onShowToast }) => {
   // Compact "limit per window" summary for a row.
   const limitSummary = (d: RateLimitDefinition): string => {
     const w = `${d.window_seconds}s`;
-    if (d.axis === 'caller') {
+    if (d.axis === 'quarantine') {
+      return 'kill switch (drops all traffic)';
+    }
+    if (GROUP_AXES.includes(d.axis)) {
       const parts: string[] = [];
       if (d.user_max_requests != null) parts.push(`user ${d.user_max_requests}`);
       if (d.agent_max_requests != null) parts.push(`agent ${d.agent_max_requests}`);
       return `${parts.join(', ')} / ${w}`;
     }
+    if (d.entity_type === SERVER_GROUP_ENTITY_TYPE) {
+      const n = d.members?.length ?? 0;
+      return `${d.max_requests} / ${w} · each of ${n} server${n === 1 ? '' : 's'}`;
+    }
     return `${d.max_requests} / ${w}`;
   };
 
   if (view === 'form') {
-    const isCaller = formAxis === 'caller';
+    const isGroup = GROUP_AXES.includes(formAxis);
     return (
       <div className="space-y-6">
         <div className="flex items-center justify-between">
@@ -225,22 +261,23 @@ const IAMRateLimits: React.FC<IAMRateLimitsProps> = ({ onShowToast }) => {
             <select
               value={formAxis}
               onChange={(e) => {
-                const axis = e.target.value as 'caller' | 'target';
+                const axis = e.target.value as RateLimitAxis;
                 setFormAxis(axis);
                 // Reset entity_type to a valid value for the chosen axis so a
-                // target definition never submits the caller's 'group' type.
-                setFormEntityType(axis === 'caller' ? 'group' : TARGET_ENTITY_TYPES[0]);
+                // target definition never submits the group's 'group' type.
+                setFormEntityType(GROUP_AXES.includes(axis) ? 'group' : TARGET_ENTITY_TYPES[0]);
                 setFormName('');
               }}
               disabled={!!editingId}
               className={inputBase}
             >
-              <option value="caller">caller (a group of users/agents)</option>
-              <option value="target">target (an MCP server / A2A agent)</option>
+              <option value="caller">{AXIS_LABELS.caller} (a group of users/agents, across all targets)</option>
+              <option value="caller_target">{AXIS_LABELS.caller_target} (each member gets an independent quota per target)</option>
+              <option value="target">{AXIS_LABELS.target} (an MCP server, A2A agent, or server group, across all callers)</option>
             </select>
           </div>
 
-          {!isCaller && (
+          {!isGroup && (
             <div>
               <label className="block text-sm text-gray-600 dark:text-gray-400 mb-1">Target type</label>
               <select
@@ -250,7 +287,7 @@ const IAMRateLimits: React.FC<IAMRateLimitsProps> = ({ onShowToast }) => {
                 className={inputBase}
               >
                 {TARGET_ENTITY_TYPES.map((t) => (
-                  <option key={t} value={t}>{t}</option>
+                  <option key={t} value={t}>{TARGET_ENTITY_TYPE_LABELS[t] ?? t}</option>
                 ))}
               </select>
             </div>
@@ -258,15 +295,18 @@ const IAMRateLimits: React.FC<IAMRateLimitsProps> = ({ onShowToast }) => {
 
           <div>
             <label className="block text-sm text-gray-600 dark:text-gray-400 mb-1">
-              {isCaller ? 'Group name' : 'Target name (server path / agent path)'}
+              {isGroup || isServerGroup
+                ? 'Group name'
+                : 'Target name (server path / agent path)'}
             </label>
-            {isCaller ? (
+            {isGroup || isServerGroup ? (
+              // Group name is an arbitrary label (not a registered path).
               <input
                 type="text"
                 value={formName}
                 onChange={(e) => setFormName(e.target.value)}
                 disabled={!!editingId}
-                placeholder="e.g. rate-limited-testers"
+                placeholder={isServerGroup ? 'e.g. fragile-backends' : 'e.g. rate-limited-testers'}
                 className={inputBase}
               />
             ) : editingId ? (
@@ -290,6 +330,50 @@ const IAMRateLimits: React.FC<IAMRateLimitsProps> = ({ onShowToast }) => {
             )}
           </div>
 
+          {isServerGroup && (
+            <div>
+              <label className="block text-sm text-gray-600 dark:text-gray-400 mb-1">
+                Servers in this group
+              </label>
+              {/* Add-a-server typeahead: each pick is appended as a removable chip. */}
+              <SearchableSelect
+                options={targetOptions}
+                value=""
+                onChange={(path) =>
+                  setFormMembers((prev) => (prev.includes(path) ? prev : [...prev, path]))
+                }
+                isLoading={serversLoading}
+                allowCustom
+                placeholder="Add a server path… (e.g. mcpgw)"
+              />
+              {formMembers.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {formMembers.map((m) => (
+                    <span
+                      key={m}
+                      className="inline-flex items-center gap-1 rounded-full bg-blue-100 dark:bg-blue-900/40 px-2.5 py-1 text-xs font-mono text-blue-800 dark:text-blue-200"
+                    >
+                      {m}
+                      <button
+                        type="button"
+                        onClick={() => setFormMembers((prev) => prev.filter((x) => x !== m))}
+                        className="text-blue-500 hover:text-blue-700 dark:hover:text-blue-100"
+                        aria-label={`Remove ${m}`}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+              <p className="mt-2 text-xs text-gray-400">
+                Each server in this group is limited to the Max requests/window below{' '}
+                <strong>individually</strong> (a separate bucket per server). This is NOT a
+                shared or pooled limit across the group.
+              </p>
+            </div>
+          )}
+
           <div>
             <label className="block text-sm text-gray-600 dark:text-gray-400 mb-1">
               Window (seconds) — 1 to 86400
@@ -307,7 +391,7 @@ const IAMRateLimits: React.FC<IAMRateLimitsProps> = ({ onShowToast }) => {
             </p>
           </div>
 
-          {isCaller ? (
+          {isGroup ? (
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm text-gray-600 dark:text-gray-400 mb-1">
@@ -398,9 +482,9 @@ const IAMRateLimits: React.FC<IAMRateLimitsProps> = ({ onShowToast }) => {
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
         <StatTile label="Total limits" value={summary.total} hint="All rate-limit definitions" />
         <StatTile label="Enabled" value={summary.enabled} hint="Definitions currently enforced" />
-        <StatTile label="Caller (group)" value={summary.caller} hint="Per-caller group limits" />
-        <StatTile label="Target" value={summary.target} hint="Per MCP-server / A2A-agent limits" />
-        <StatTile label="Fail-closed" value={summary.failClosed} hint="Deny on backend error" />
+        <StatTile label="Per caller" value={summary.caller} hint="Per-caller group limits (across all targets)" />
+        <StatTile label="Per caller, per target" value={summary.callerTarget} hint="Independent quota per caller per target" />
+        <StatTile label="Per target" value={summary.target} hint="Per MCP-server / A2A-agent limits (across all callers)" />
         <StatTile label="Callers governed" value={summary.governed} hint="Users/agents mapped into a rate-limit group" />
       </div>
 
@@ -438,7 +522,7 @@ const IAMRateLimits: React.FC<IAMRateLimitsProps> = ({ onShowToast }) => {
                 const id = definitionId(d);
                 return (
                   <tr key={id} className="border-b border-gray-100 dark:border-gray-800">
-                    <td className="py-2 pr-4 text-gray-700 dark:text-gray-300">{d.axis}</td>
+                    <td className="py-2 pr-4 text-gray-700 dark:text-gray-300">{AXIS_LABELS[d.axis] ?? d.axis}</td>
                     <td className="py-2 pr-4 text-gray-700 dark:text-gray-300">{d.entity_type}</td>
                     <td className="py-2 pr-4 font-mono text-xs text-gray-900 dark:text-white">{d.name}</td>
                     <td className="py-2 pr-4 text-gray-700 dark:text-gray-300">{limitSummary(d)}</td>
@@ -482,6 +566,10 @@ const IAMRateLimits: React.FC<IAMRateLimitsProps> = ({ onShowToast }) => {
           </table>
         </div>
       </ListStateBoundary>
+
+      {/* Quarantine (kill switch): the two seeded reserved groups with member
+          counts, a global on/off toggle, and per-member remove. */}
+      <QuarantinePanel onShowToast={onShowToast} isAdmin={isAdmin} />
 
       {deleteTarget && (
         <DeleteConfirmation

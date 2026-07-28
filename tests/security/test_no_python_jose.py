@@ -68,21 +68,29 @@ def test_python_jose_absent_from_lock(repo_root: Path, lockfile: str):
 
 def test_no_jose_imports_in_source(repo_root: Path):
     """No source file should import python-jose (the `jose` package)."""
-    offenders: list[str] = []
-    for base in (
-        "auth_server",
-        "registry",
-        "cli",
-        "servers",
-        "agents",
-        "metrics-service",
-        "scripts",
-    ):
-        base_dir = repo_root / base
-        if not base_dir.is_dir():
-            continue
-        for py in base_dir.rglob("*.py"):
-            text = py.read_text(errors="ignore")
-            if "from jose" in text or "import jose" in text:
-                offenders.append(str(py.relative_to(repo_root)))
+    import subprocess  # nosec B404
+
+    result = subprocess.run(  # nosec B603
+        [
+            "grep",
+            "-rl",
+            "--include=*.py",
+            "--exclude-dir=.venv",
+            "--exclude-dir=node_modules",
+            "--exclude-dir=__pycache__",
+            "--exclude-dir=.git",
+            "--exclude-dir=.scratchpad",
+            "--exclude-dir=.agents",
+            "--exclude-dir=.claude",
+            "--exclude-dir=tests",
+            "-E",
+            r"^(from|import) jose\b",
+            str(repo_root),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    offenders = [
+        str(Path(f).relative_to(repo_root)) for f in result.stdout.strip().splitlines() if f
+    ]
     assert not offenders, f"python-jose (`jose`) imported in: {offenders} (SA-13)"

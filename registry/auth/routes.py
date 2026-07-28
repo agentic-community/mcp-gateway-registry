@@ -30,6 +30,12 @@ logger = logging.getLogger(__name__)
 
 _ROOT_PATH: str = os.environ.get("ROOT_PATH", "").rstrip("/")
 
+# Server-to-server logout call to auth-server. The timeout is short because the
+# hop is cluster-internal (loopback/service-discovery); if it can't answer in a
+# few seconds it is down, and the user should not stare at a blank page — the
+# local session is already invalidated by that point, so we fall back to /login.
+_S2S_LOGOUT_TIMEOUT_SECONDS: float = 5.0
+
 
 def _fallback_external_host() -> str:
     """Return the host (host[:port]) to use when the inbound Host is untrusted.
@@ -141,6 +147,29 @@ def _validate_jwt_format(token: str) -> bool:
     """
     jwt_pattern = r"^[A-Za-z0-9-_]+\.[A-Za-z0-9-_]+\.[A-Za-z0-9-_]+$"
     return bool(re.match(jwt_pattern, token))
+
+
+def _is_safe_logout_redirect(url: str) -> bool:
+    """Validate the IdP logout Location before redirecting the browser to it.
+
+    The Location comes from the trusted internal auth-server, but this is a
+    cheap defense-in-depth check so a malformed or unexpected value can never
+    turn into a ``javascript:``/``data:`` redirect. Absolute URLs must use
+    http/https; relative paths are allowed (auth-server falls back to a local
+    path when the provider has no logout URL). Fails closed on anything else.
+
+    Args:
+        url: The Location header value returned by the auth-server.
+
+    Returns:
+        True if the URL is safe to redirect the browser to, False otherwise.
+    """
+    if not url:
+        return False
+    parsed = urllib.parse.urlparse(url)
+    if not parsed.scheme and not parsed.netloc:
+        return True
+    return parsed.scheme in ("http", "https")
 
 
 async def get_oauth2_providers():
@@ -285,36 +314,123 @@ async def logout_handler(
             domain=settings.session_cookie_domain,
         )
 
-        # If user was logged in via OAuth2, redirect to provider logout
+        # If user was logged in via OAuth2, terminate the IdP session too.
+        #
+        # The id_token_hint is a full OIDC JWT (typically 1-3 KB). It must
+        # never travel through a browser-facing URL (issue #1503): WAFs and
+        # reverse proxies routinely block long or JWT-looking query strings
+        # (returning 403 before the auth-server is reached, so logout fails
+        # silently after the local session has already been cleared), and the
+        # token would otherwise leak into browser history and access/proxy
+        # logs while it is being actively revoked.
+        #
+        # Instead the registry calls the auth-server directly over the
+        # internal network (settings.auth_server_url) and redirects the
+        # browser straight to the IdP logout URL returned in the Location
+        # header. The JWT only ever appears on the direct browser->IdP hop,
+        # bypassing the deployment's public infrastructure entirely. This is
+        # the same internal S2S URL already used by get_oauth2_providers(),
+        # so it is configured and reachable in every deployment mode (EKS,
+        # Docker/Compose, ECS, EC2, local).
         if provider:
-            auth_external_url = settings.auth_server_external_url
+            # Post-logout landing page: "/logout" renders the "Successfully Logged
+            # Out" confirmation screen (frontend/src/pages/Logout.tsx), then
+            # auto-redirects to /login after 5s. The IdP returns the browser here
+            # after terminating the session, so this URL MUST be registered as a
+            # valid post-logout / sign-out redirect in the IdP:
+            #   - Cognito: add "<host>/logout" to the app client's Sign-out URLs
+            #     (an unregistered logout_uri is rejected with "Required parameters
+            #     missing" -- issue #1503).
+            #   - Keycloak/Entra/Okta: add "<host>/logout" to the client's valid
+            #     post-logout redirect URIs.
+            # See docs/idp/*.md. If a deployment cannot register "/logout", point
+            # this at a registered page (e.g. "/login") at the cost of the screen.
             redirect_uri = _build_external_url(request, "/logout")
-            logout_url = f"{auth_external_url}/oauth2/logout/{provider}?redirect_uri={redirect_uri}"
+            logout_params: dict[str, str] = {"redirect_uri": redirect_uri}
 
-            # Append id_token_hint for proper SSO session termination if we
-            # have an id_token from the server-side session record.
+            # Include id_token_hint for proper SSO session termination if we
+            # have a well-formed id_token from the server-side session record.
+            #
+            # We deliberately do NOT length-guard the id_token here. The logout
+            # URL-length concern (Entra's AADSTS90015 "QueryStringTooLong") is
+            # owned entirely by auth_server's oauth2_logout, which drops the hint
+            # per-provider when the composed IdP URL exceeds MAX_LOGOUT_URL_LENGTH
+            # (issue #1502 / PR #1508). That guard still runs on this S2S hop, so
+            # adding a second registry-side size check would be a redundant,
+            # divergent mechanism. The id_token also comes from our own AES-
+            # encrypted session store, not user input, so _validate_jwt_format is
+            # the only sanity check needed before forwarding.
             if id_token:
                 if not _validate_jwt_format(id_token):
                     logger.debug("id_token failed JWT format validation, not forwarding")
                     logout_jwt_validation_failed.inc()
                 else:
-                    encoded_token = urllib.parse.quote(id_token, safe="")
-                    logout_url = f"{logout_url}&id_token_hint={encoded_token}"
-
-                    if len(logout_url) > 2000:
-                        logger.debug(
-                            f"Logout URL length ({len(logout_url)}) exceeds recommended limit (2000)"
-                        )
-                        logout_url_length_warning.inc()
-
+                    logout_params["id_token_hint"] = id_token
                     logger.debug("id_token extracted and forwarded, has_id_token=True")
                     logout_id_token_hint_present.inc()
             else:
                 logger.debug("id_token not present in session, has_id_token=False")
                 logout_id_token_hint_missing.inc()
 
-            logger.debug(f"Redirecting to {provider} logout")
-            response = RedirectResponse(url=logout_url, status_code=status.HTTP_303_SEE_OTHER)
+            # Forward X-Forwarded-Host/Proto so auth-server's redirect_uri
+            # same-origin validation (_is_redirect_within_cookie_domain) sees
+            # the real public hostname and approves the post-logout URI. The
+            # host is the same trusted, allowlist-validated value baked into
+            # redirect_uri above, and the proto is derived from it so the two
+            # can never disagree.
+            s2s_url = f"{settings.auth_server_url}/oauth2/logout/{provider}"
+            trusted_host = _resolve_trusted_host(request)
+            x_forwarded_proto = "https" if redirect_uri.startswith("https") else "http"
+
+            idp_redirect_url: str | None = None
+            try:
+                # Bare client (not the SSRF-guarded client) is correct here:
+                # auth_server_url is a deployment-controlled internal service
+                # (loopback/RFC-1918/cluster-internal) that the SSRF guard is
+                # designed to block; it is not a user/registry-supplied URL.
+                async with httpx.AsyncClient(follow_redirects=False) as client:
+                    s2s_resp = await client.get(
+                        s2s_url,
+                        params=logout_params,
+                        headers={
+                            "X-Forwarded-Host": trusted_host,
+                            "X-Forwarded-Proto": x_forwarded_proto,
+                        },
+                        timeout=_S2S_LOGOUT_TIMEOUT_SECONDS,
+                    )
+                if s2s_resp.status_code in (301, 302, 303, 307, 308):
+                    idp_redirect_url = s2s_resp.headers.get("location")
+                    # Observability only — this does NOT drop or truncate the
+                    # URL (auth_server already applies the functional length
+                    # guard, PR #1508). It just surfaces when the final IdP URL
+                    # is unusually long so operators can correlate logout issues.
+                    if idp_redirect_url and len(idp_redirect_url) > 2000:
+                        logger.debug(
+                            f"IdP logout URL length ({len(idp_redirect_url)}) "
+                            "exceeds recommended limit (2000)"
+                        )
+                        logout_url_length_warning.inc()
+                else:
+                    logger.warning(
+                        f"auth-server logout returned status {s2s_resp.status_code}; "
+                        "falling back to local clear"
+                    )
+            except Exception as exc:
+                logger.warning(f"S2S auth-server logout failed: {exc}; falling back to local clear")
+
+            # Redirect the browser to the IdP logout URL when we have a safe
+            # one, else fall back to /login so logout always completes locally
+            # (the server-side session and cookie were already invalidated
+            # above). Only http(s) and relative targets are followed to guard
+            # against a javascript:/data: Location, even though the source is
+            # the trusted internal auth-server.
+            if idp_redirect_url and _is_safe_logout_redirect(idp_redirect_url):
+                redirect_target = idp_redirect_url
+            else:
+                redirect_target = "/login"
+
+            logger.debug(f"Redirecting browser after {provider} logout")
+            response = RedirectResponse(url=redirect_target, status_code=status.HTTP_303_SEE_OTHER)
             response.delete_cookie(
                 settings.session_cookie_name,
                 path="/",

@@ -106,6 +106,9 @@ app:
     enabled: false
     backend: documentdb
     failOpen: true
+    # When true, a backend error reading quarantine membership DENIES (fails
+    # closed) instead of the default fail-open. Best-effort quarantine.
+    quarantineFailClosed: false
     definitionsCacheTtlSeconds: 30
     backendTimeoutMs: 250
 # Authentication Provider Configuration

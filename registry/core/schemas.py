@@ -801,10 +801,10 @@ class ServerInfo(BaseModel):
           rather than at the first live request.
         """
         mode = self.egress_auth_mode
-        if mode not in ("none", "oauth_user", "obo_exchange"):
+        if mode not in ("none", "oauth_user", "obo_exchange", "pat"):
             raise ValueError(
                 f"invalid egress_auth_mode {mode!r}; expected 'none', 'oauth_user', "
-                "or 'obo_exchange'"
+                "'obo_exchange', or 'pat'"
             )
         if mode == "none":
             return self
@@ -813,6 +813,12 @@ class ServerInfo(BaseModel):
         if mode == "oauth_user":
             if not self.egress_oauth.provider:
                 raise ValueError("egress_auth_mode='oauth_user' requires egress_oauth.provider")
+            return self
+        if mode == "pat":
+            # pat needs a provider only as a vault-namespace/display key; no OAuth
+            # endpoints, client_id, or secret are required.
+            if not self.egress_oauth.provider:
+                raise ValueError("egress_auth_mode='pat' requires egress_oauth.provider")
             return self
         # mode == "obo_exchange"
         target = (self.egress_oauth.target_audience or "").strip()

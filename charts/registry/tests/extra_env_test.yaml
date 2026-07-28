@@ -121,10 +121,11 @@ tests:
       # PF_ADMIN_URL/PF_ADMIN_USER (registry-only, always rendered) are
       # env[27]/env[28]; UPDATE_CHECK_ENABLED/UPDATE_CHECK_INTERVAL_HOURS
       # (always rendered) are env[29]/env[30]; AUDIT_LOG_REQUIRE_DURABLE
-      # (always rendered) is env[31]; the seven rate-limiting vars (issue #295,
-      # always rendered) are env[32]-env[38]
+      # (always rendered) is env[31]; the eight rate-limiting vars (issue #295 +
+      # #1504, always rendered) are env[32]-env[39]
       # (RATE_LIMITING_ENABLED, RATE_LIMIT_BACKEND, RATE_LIMIT_FAIL_OPEN,
-      # RATE_LIMIT_DEFINITIONS_CACHE_TTL_SECONDS, RATE_LIMIT_BACKEND_TIMEOUT_MS,
+      # RATE_LIMIT_QUARANTINE_FAIL_CLOSED, RATE_LIMIT_DEFINITIONS_CACHE_TTL_SECONDS,
+      # RATE_LIMIT_BACKEND_TIMEOUT_MS,
       # RATE_LIMIT_USER_FLOOR_PER_MIN, RATE_LIMIT_AGENT_FLOOR_PER_MIN);
       # user extraEnv entries are appended at the end.
       #
@@ -221,13 +222,13 @@ tests:
           path: spec.template.spec.containers[0].env[32].name
           value: RATE_LIMITING_ENABLED
       - equal:
-          path: spec.template.spec.containers[0].env[38].name
+          path: spec.template.spec.containers[0].env[39].name
           value: RATE_LIMIT_AGENT_FLOOR_PER_MIN
       - equal:
-          path: spec.template.spec.containers[0].env[39].name
+          path: spec.template.spec.containers[0].env[40].name
           value: MY_FLAG
       - equal:
-          path: spec.template.spec.containers[0].env[40].name
+          path: spec.template.spec.containers[0].env[41].name
           value: MY_SECRET_VAR
 
   - it: appends extraEnvFrom entries after chart-managed envFrom sources
