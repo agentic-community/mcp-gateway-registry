@@ -5056,13 +5056,24 @@ class RegistryClient:
         logger.info(f"Retrieved skill content: {content_len} characters")
         return SkillContentResponse(**result)
 
-    def search_skills(self, query: str, tags: str | None = None) -> SkillSearchResponse:
+    def search_skills(
+        self,
+        query: str,
+        tags: str | None = None,
+        include_draft: bool = False,
+        include_deprecated: bool = False,
+    ) -> SkillSearchResponse:
         """
         Search for skills by query.
 
         Args:
             query: Search query
             tags: Optional comma-separated tags filter
+            include_draft: Include skills whose lifecycle status is ``draft``
+                (newly registered skills default to ``draft`` and are excluded
+                from search unless this is set)
+            include_deprecated: Include skills whose lifecycle status is
+                ``deprecated``
 
         Returns:
             SkillSearchResponse with matching skills
@@ -5070,11 +5081,18 @@ class RegistryClient:
         Raises:
             requests.HTTPError: If request fails
         """
-        logger.info(f"Searching skills: query='{query}', tags={tags}")
+        logger.info(
+            f"Searching skills: query='{query}', tags={tags}, "
+            f"include_draft={include_draft}, include_deprecated={include_deprecated}"
+        )
 
-        params = {"q": query}
+        params: dict[str, str] = {"q": query}
         if tags:
             params["tags"] = tags
+        if include_draft:
+            params["include_draft"] = "true"
+        if include_deprecated:
+            params["include_deprecated"] = "true"
 
         response = self._make_request(method="GET", endpoint="/api/skills/search", params=params)
 
