@@ -302,9 +302,11 @@ exposition form** (after the OTel exporter appends the unit suffix).
 | `m2m_management_requests_total` | registry | `operation`, `outcome` | Direct M2M client API calls |
 | `mcpgw_registry_metrics_emission_path_total` | registry, auth-server, mcpgw | `path` (`otel`/`legacy`) | Migration self-observability |
 | `mcpgw_registry_deployment_mode_info` (Gauge) | registry | `deployment_mode`, `registry_mode` | Current deployment mode (always 1, observed each cycle) |
-| `mcpgw_rate_limit_checks_total` | auth-server (`/validate`) | `axis` (`clr`/`tgt`), `entity_type`, `window_seconds`, `outcome` (`allow`/`deny`) | Every rate-limit gate evaluation (denominator for a throttle rate) |
-| `mcpgw_rate_limit_throttled_total` | auth-server (`/validate`) | `axis`, `entity_type`, `window_seconds` | Times a gate denied a request (issue #295) |
-| `mcpgw_rate_limit_errors_total` | auth-server (`/validate`) | `axis` | Rate-limit backend errors (counter-store unreachable/timeout → fail-open/closed) |
+| `mcpgw_rate_limit_checks_total` | auth-server (`/validate`) | `axis` (`clr`/`tgt`/`ctg`), `entity_type`, `window_seconds`, `outcome` (`allow`/`deny`) | Every rate-limit gate evaluation (denominator for a throttle rate) |
+| `mcpgw_rate_limit_throttled_total` | auth-server (`/validate`) | `axis` (`clr`/`tgt`/`ctg`), `entity_type`, `window_seconds` | Times a gate denied a request. `ctg` = the per-caller-per-target axis; `clr`/`tgt` are the caller/target axes |
+| `mcpgw_rate_limit_quarantine_denied_total` | auth-server (`/validate`) | `scope` (`caller`/`target`), `entity_type` | Requests dropped because a caller or target is **quarantined** (kill switch) |
+| `mcpgw_rate_limit_quarantine_members` (Gauge) | registry | `group` (`quarantine-callers`/`quarantine-targets`) | Current member count of each kill-switch group, observed each export cycle (correct across replicas) |
+| `mcpgw_rate_limit_errors_total` | auth-server (`/validate`) | `axis` (incl. `qtn` for a quarantine-membership read error) | Rate-limit backend errors (counter-store unreachable/timeout → fail-open/closed) |
 
 ### Histograms
 
@@ -412,17 +414,22 @@ Replace `<TARGET>` with the path you care about (e.g. `/api/servers`,
 | Cloud detection method distribution | `sum by (cloud, method)(mcpgw_registry_cloud_detection_total)` |
 | Telemetry pings success rate | `sum(rate(telemetry_sends_total{status="success"}[5m])) / sum(rate(telemetry_sends_total[5m]))` |
 
-### Rate limiting (issue #295)
+### Rate limiting
 
-Application-level rate limiting runs in the auth-server `/validate` hop. The metrics carry only low-cardinality labels (`axis`, `entity_type`, `window_seconds`) — deliberately **not** the caller's username/client_id, which would be unbounded cardinality. To attribute a throttle to a specific user or client, use the app logs instead (see below).
+Application-level rate limiting runs in the auth-server `/validate` hop. The metrics carry only low-cardinality labels (`axis`, `entity_type`, `window_seconds`, `scope`, `group`) — deliberately **not** the caller's username/client_id, which would be unbounded cardinality. To attribute a throttle or a quarantine deny to a specific user or client, use the app logs instead (see below).
 
 | Goal | Query |
 |---|---|
 | Throttles per second by axis / entity type | `sum by (axis, entity_type)(rate(mcpgw_rate_limit_throttled_total[5m]))` |
+| Per-caller-per-target throttles only (the `ctg` axis) | `sum by (entity_type)(rate(mcpgw_rate_limit_throttled_total{axis="ctg"}[5m]))` |
 | Throttle rate (fraction of checks denied) | `sum(rate(mcpgw_rate_limit_throttled_total[5m])) / sum(rate(mcpgw_rate_limit_checks_total[5m]))` |
-| Backend-error rate (fail-open/closed events) | `sum by (axis)(rate(mcpgw_rate_limit_errors_total[5m]))` |
+| Quarantine denies per second (caller vs target) | `sum by (scope)(rate(mcpgw_rate_limit_quarantine_denied_total[5m]))` |
+| Currently quarantined callers / targets | `mcpgw_rate_limit_quarantine_members` |
+| Backend-error rate (fail-open/closed events; `qtn` = quarantine-read error) | `sum by (axis)(rate(mcpgw_rate_limit_errors_total[5m]))` |
 | Counter-store p95 latency | `histogram_quantile(0.95, sum by (le)(rate(mcpgw_rate_limit_backend_duration_milliseconds_bucket[5m])))` |
 | Counter-store calls exceeding the 250 ms budget | `sum(rate(mcpgw_rate_limit_backend_duration_milliseconds_bucket{le="250"}[5m])) / sum(rate(mcpgw_rate_limit_backend_duration_milliseconds_count[5m]))` (fraction **within** budget; alert when it drops) |
+
+**Quarantine attribution (app logs).** A quarantine deny logs a structured `WARNING` line: `rate-limit quarantine deny: scope=caller entity_type=group caller_username=alice caller_client_id=`. Search the auth-server app logs for `rate-limit quarantine deny` and filter on `caller_username=` / `caller_client_id=`. The metric labels stay bounded (scope only), so a nonzero `mcpgw_rate_limit_quarantine_denied_total` is your signal that quarantine is actively dropping traffic.
 
 **Attributing a throttle to a user / client_id (app logs, not metrics).** On every denial the limiter logs a structured `WARNING` line carrying the validated-token identity, e.g.:
 

@@ -46,7 +46,23 @@ except ImportError:
         tool_execution_total,
     )
 
+from registry.observability.label_bounding import LabelCardinalityLimiter
+
 logger = logging.getLogger(__name__)
+
+# Tool-execution OTel attributes derived from request data (JSON-RPC body /
+# clientInfo) and therefore attacker-influenced. These must be cardinality-
+# bounded before reaching the in-process Prometheus instrument, or a client
+# sending randomized values explodes the time-series count (DoS). server_name is
+# derived from the registry-controlled URI path and success is a boolean, so
+# both are left unbounded.
+_TOOL_EXECUTION_BOUNDED_ATTRS: frozenset[str] = frozenset(
+    {"tool_name", "method", "client_name", "client_version"}
+)
+
+# Shared per-process limiter for this module's OTel-native emission path (mirrors
+# the metrics-service processor's limiter across the deployable boundary).
+_label_limiter = LabelCardinalityLimiter()
 
 # MCP transport endpoints. A data-plane MCP request ends in one of these (e.g.
 # "{server}/mcp", "{server}/sse"); its presence is what distinguishes a genuine
@@ -526,15 +542,21 @@ class AuthMetricsMiddleware(BaseHTTPMiddleware):
                 client_info = stored_client_info
 
         # 1) OTel emission. Cardinality-controlled: drops user_hash, request_id,
-        # server_path (redundant with server_name), and the metadata block.
-        otel_attrs = {
-            "tool_name": str(actual_tool_name or method_name),
-            "server_name": str(server_name),
-            "success": str(success),
-            "method": str(method_name),
-            "client_name": str(client_info.get("name", "unknown")),
-            "client_version": str(client_info.get("version", "unknown")),
-        }
+        # server_path (redundant with server_name), and the metadata block. The
+        # request-derived attributes (tool_name/method/client_name/client_version)
+        # are charset-normalized and distinct-value-capped so a client sending
+        # randomized values cannot explode the Prometheus time-series count.
+        otel_attrs = _label_limiter.bound_attrs(
+            {
+                "tool_name": str(actual_tool_name or method_name),
+                "server_name": str(server_name),
+                "success": str(success),
+                "method": str(method_name),
+                "client_name": str(client_info.get("name", "unknown")),
+                "client_version": str(client_info.get("version", "unknown")),
+            },
+            _TOOL_EXECUTION_BOUNDED_ATTRS,
+        )
         tool_execution_total.add(1, otel_attrs)
         tool_execution_duration_ms.record(duration_ms, otel_attrs)
         record_emission_path("otel")

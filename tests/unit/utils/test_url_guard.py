@@ -302,12 +302,13 @@ class TestNginxMetacharacters:
         url_guard.validate_server_path(path)  # does not raise
 
     @pytest.mark.parametrize("path", ["/", "//", "///"])
-    def test_validate_server_path_allows_root_and_slashes_only(self, path):
-        """A slashes-only path normalizes to an empty server name, which is
-        falsy and grants no access in the resolver, so it is not part of the
-        reserved-wildcard escalation and must stay registerable (the escalation
-        is narrowly about the 'all'/'*' sentinels, not empty names)."""
-        url_guard.validate_server_path(path)  # does not raise
+    def test_validate_server_path_rejects_root_and_slashes_only(self, path):
+        """A slashes-only path normalizes to an empty server name and, after the
+        trailing-slash location normalization (issue #1501), renders as a
+        gateway-wide `location /` block that subjects every URL to the /validate
+        auth subrequest. No real server registers at the root, so reject it."""
+        with pytest.raises(UrlValidationError):
+            url_guard.validate_server_path(path)
 
 
 # ---------------------------------------------------------------------------

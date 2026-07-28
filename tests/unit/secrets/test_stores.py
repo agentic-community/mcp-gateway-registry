@@ -10,9 +10,12 @@ and read back identically on every backend.
   what we test here; a dockerized OpenBao is exercised in integration tests).
 """
 
+import json
+
 import pytest
 
 from registry.egress_auth.schemas import StoredToken
+from registry.secrets import keys
 from registry.secrets.openbao.store import OpenBaoStore
 from registry.secrets.secrets_manager.store import SecretsManagerStore
 
@@ -257,6 +260,106 @@ class TestOpenBaoReauth:
         with pytest.raises(SecretStoreError):
             await store.get_token("oauth2", "alice", "github", "/github-mcp")
         assert logins["n"] == 1  # retried exactly once
+
+
+# --------------------------------------------------------------------------- #
+# Overflow generation-cleanup race (issue found in PR #1520 review)
+# --------------------------------------------------------------------------- #
+
+
+class _RaceOnceClient:
+    """Wrap a Secrets Manager client and, on the FIRST read of an overflow shard,
+    simulate a concurrent same-principal commit that already moved the layout on:
+    rewrite the root to the given ``new_root`` and delete the old shards, all
+    before the caller's shard read returns. This reproduces the reader-vs-cleanup
+    race (a reader holding the old manifest fetches a shard that cleanup just
+    removed). A correct reader re-reads the root -- which now holds ``new_root`` --
+    and succeeds. Exactly one read is sabotaged.
+    """
+
+    def __init__(self, client, root_name: str, new_root: dict) -> None:
+        self._client = client
+        self._root_name = root_name
+        self._new_root = new_root
+        self._sabotaged = False
+
+    def get_secret_value(self, **kwargs):
+        secret_id = kwargs.get("SecretId", "")
+        if "/overflow/" in secret_id and not self._sabotaged:
+            self._sabotaged = True
+            # Flip the root to the new (post-commit) layout, then delete every old
+            # shard -- the concurrent cleanup that races our in-flight read.
+            self._client.put_secret_value(
+                SecretId=self._root_name, SecretString=json.dumps(self._new_root)
+            )
+            token = None
+            while True:
+                page = self._client.list_secrets(
+                    Filters=[{"Key": "name", "Values": [self._root_name + "/overflow/"]}],
+                    **({"NextToken": token} if token else {}),
+                )
+                for entry in page.get("SecretList", []):
+                    self._client.delete_secret(
+                        SecretId=entry["Name"], ForceDeleteWithoutRecovery=True
+                    )
+                token = page.get("NextToken")
+                if not token:
+                    break
+        return self._client.get_secret_value(**kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._client, name)
+
+
+@pytest.mark.unit
+class TestOverflowStaleReadRetry:
+    def _big_token(self, marker: str):
+        # ~4 KiB each: two together exceed the 6 KiB target (forcing overflow to
+        # shards), but either one alone fits comfortably in a single shard.
+        return _token(marker + "x" * 4000)
+
+    async def _sharded_store(self):
+        moto = pytest.importorskip("moto")
+        boto3 = pytest.importorskip("boto3")
+        ctx = moto.mock_aws()
+        ctx.start()
+        client = boto3.client("secretsmanager", region_name="us-east-1")
+        # 6 KiB target: one ~4 KiB token fits per shard, two overflow.
+        store = SecretsManagerStore(client=client, prefix="mcp/egress", target_payload_bytes=6144)
+        tok_a = self._big_token("a")
+        tok_b = self._big_token("b")
+        await store.put_token("oauth2", "alice", "github", "/github", tok_a)
+        await store.put_token("oauth2", "alice", "slack", "/slack", tok_b)
+        # The principal name is encoded; derive the real root secret id from the store.
+        root_name = store._secret_name("oauth2", "alice")
+        # Confirm we are actually in the sharded layout.
+        root = client.get_secret_value(SecretId=root_name)["SecretString"]
+        assert "_egress" in root, "test setup did not reach sharded layout"
+        # The layout a concurrent commit would leave behind (compacted inline map).
+        new_root = {
+            keys.map_key("github", "/github"): tok_a.model_dump(),
+            keys.map_key("slack", "/slack"): tok_b.model_dump(),
+        }
+        return store, client, root_name, new_root, ctx
+
+    async def test_get_token_recovers_from_shard_cleanup_race(self):
+        store, client, root_name, new_root, ctx = await self._sharded_store()
+        try:
+            store._client = _RaceOnceClient(client, root_name, new_root)
+            # The first shard read is sabotaged; the retry must re-read and succeed.
+            got = await store.get_token("oauth2", "alice", "github", "/github")
+            assert got is not None and got.access_token.startswith("a")
+        finally:
+            ctx.stop()
+
+    async def test_list_recovers_from_shard_cleanup_race(self):
+        store, client, root_name, new_root, ctx = await self._sharded_store()
+        try:
+            store._client = _RaceOnceClient(client, root_name, new_root)
+            pairs = sorted((p, s) for p, s, _ in await store.list_for_user("oauth2", "alice"))
+            assert pairs == [("github", "/github"), ("slack", "/slack")]
+        finally:
+            ctx.stop()
 
 
 # --------------------------------------------------------------------------- #

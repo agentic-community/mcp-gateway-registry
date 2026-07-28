@@ -201,6 +201,27 @@ def _get_auth_scheme(authorizer_type: str) -> str:
     return mapping.get(authorizer_type, "none")
 
 
+def _warn_if_world_readable(abs_path: str) -> None:
+    """Log a warning if a credential file is group/other-readable.
+
+    The registry JWT is a long-lived write credential. This adapter only reads
+    the token file (it is written by the credential provider), so it cannot fix
+    the mode at write time here, but it surfaces an over-permissive file so an
+    operator notices a 0o644 token on a shared host. Best-effort: never fails.
+    """
+    try:
+        mode = os.stat(abs_path).st_mode
+        if mode & 0o077:
+            logger.warning(
+                "Token file %s is group/other-accessible (mode %o); a registry JWT "
+                "should be 0o600. Restrict it (chmod 600) to avoid local disclosure.",
+                abs_path,
+                mode & 0o777,
+            )
+    except OSError:
+        pass
+
+
 def _load_token(token_file: str) -> str:
     """Load JWT token from a JSON file.
 
@@ -212,6 +233,7 @@ def _load_token(token_file: str) -> str:
     or missing token field.
     """
     abs_path = os.path.abspath(token_file)
+    _warn_if_world_readable(abs_path)
     try:
         with open(abs_path) as f:
             data = json.load(f)

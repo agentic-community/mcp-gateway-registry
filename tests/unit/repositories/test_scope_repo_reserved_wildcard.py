@@ -59,6 +59,25 @@ class TestAddServerScopeReservedWildcard:
         mock_collection.update_one.assert_not_called()
         assert repo._scopes_cache == {}
 
+    @pytest.mark.parametrize("server_path", ["/", "//", "///", ""])
+    @pytest.mark.asyncio
+    async def test_refuses_empty_server_name_and_does_not_write(
+        self, repo, mock_collection, server_path
+    ):
+        """Issue #1501: an empty/slashes-only server name renders as a
+        gateway-wide `location /` block, so the registration guard rejects it and
+        this mirror must too. Fail closed: no write."""
+        result = await repo.add_server_scope(
+            server_path=server_path,
+            scope_name="mcp-servers-unrestricted/read",
+            methods=["tools/list"],
+            tools=["*"],
+        )
+
+        assert result is False
+        mock_collection.update_one.assert_not_called()
+        assert repo._scopes_cache == {}
+
     @pytest.mark.asyncio
     async def test_allows_adjacent_name_and_writes(self, repo, mock_collection):
         # Arrange
@@ -133,6 +152,33 @@ class TestImportGroupReservedWildcard:
         assert result is False
         mock_collection.replace_one.assert_not_called()
 
+    @pytest.mark.parametrize(
+        "server_rule",
+        [
+            {"server": "", "methods": ["tools/list"], "tools": ["*"]},
+            {"server": "/", "methods": ["tools/list"], "tools": ["*"]},
+            {"server": "//", "methods": ["tools/list"], "tools": ["*"]},
+            # A present-but-degenerate server value coerces to empty and must be
+            # refused (the resolver would grant nothing, but the guard mirrors
+            # validate_server_path which rejects the value outright). str(x or "")
+            # normalizes None / non-string falsy values to "".
+            {"server": None, "methods": ["tools/list"], "tools": ["*"]},
+            {"server": 0, "methods": ["tools/list"], "tools": ["*"]},
+            {"server": [], "methods": ["tools/list"], "tools": ["*"]},
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_empty_server_rule_refused(self, repo, mock_collection, server_rule):
+        """Issue #1501: an empty/slashes-only (or falsy, coercing-to-empty)
+        server rule renders as a gateway-wide `location /` block, so import must
+        refuse it too."""
+        server_access = [{"scope_name": "myscope", "access_rules": [server_rule]}]
+
+        result = await repo.import_group(group_name="myscope", server_access=server_access)
+
+        assert result is False
+        mock_collection.replace_one.assert_not_called()
+
     @pytest.mark.asyncio
     async def test_benign_server_access_imports(self, repo, mock_collection):
         # Arrange: legitimate, non-wildcard server rule imports normally
@@ -150,5 +196,23 @@ class TestImportGroupReservedWildcard:
         result = await repo.import_group(group_name="myscope", server_access=server_access)
 
         # Assert
+        assert result is True
+        mock_collection.replace_one.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_agent_only_rule_imports(self, repo, mock_collection):
+        """An agent rule has no `server` key and must not be caught by the
+        server-rule sink guard (it is inspected by validate_a2a_agent_access,
+        not this scan)."""
+        mock_collection.replace_one.return_value = MagicMock(upserted_id="myscope")
+        server_access = [
+            {
+                "scope_name": "myscope",
+                "access_rules": [{"agent": "flight-booking-agent", "actions": ["message/send"]}],
+            }
+        ]
+
+        result = await repo.import_group(group_name="myscope", server_access=server_access)
+
         assert result is True
         mock_collection.replace_one.assert_awaited_once()

@@ -417,6 +417,10 @@ module "ecs_service_auth" {
           value = tostring(var.rate_limit_fail_open)
         },
         {
+          name  = "RATE_LIMIT_QUARANTINE_FAIL_CLOSED"
+          value = tostring(var.rate_limit_quarantine_fail_closed)
+        },
+        {
           name  = "RATE_LIMIT_DEFINITIONS_CACHE_TTL_SECONDS"
           value = tostring(var.rate_limit_definitions_cache_ttl_seconds)
         },
@@ -1178,6 +1182,10 @@ module "ecs_service_registry" {
         {
           name  = "RATE_LIMIT_FAIL_OPEN"
           value = tostring(var.rate_limit_fail_open)
+        },
+        {
+          name  = "RATE_LIMIT_QUARANTINE_FAIL_CLOSED"
+          value = tostring(var.rate_limit_quarantine_fail_closed)
         },
         {
           name  = "RATE_LIMIT_DEFINITIONS_CACHE_TTL_SECONDS"

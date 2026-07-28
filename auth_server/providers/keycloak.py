@@ -126,17 +126,23 @@ class KeycloakProvider(AuthProvider):
                 f"http://localhost:8080/realms/{self.realm}",  # Localhost URL for development
             ]
 
-            # Accepted audiences:
-            #   - "account"          (Keycloak's default for user tokens)
+            # Accepted audiences: only audiences that identify THIS gateway.
             #   - self.client_id     (the gateway's own pre-defined web client)
             #   - self.m2m_client_id (the gateway's M2M client)
             #   - "mcp-gateway"      (custom audience added by the realm's
             #                         audience mapper on the `basic` scope, which
-            #                         is reliably attached to every DCR'd client.
+            #                         is reliably attached to every DCR'd client
+            #                         as well as the web and M2M clients.
             #                         See keycloak/setup/init-keycloak.sh::
             #                         setup_dcr_audience_mapper.)
+            #
+            # "account" is deliberately NOT accepted. It is Keycloak's default
+            # audience present on EVERY realm user token regardless of which
+            # client requested it, so accepting it would let a token minted for
+            # a different client in the same realm be replayed against the
+            # gateway (a same-realm cross-client confused-deputy). Fail closed:
+            # a token must carry an audience that names this gateway.
             accepted_audiences = [
-                "account",
                 self.client_id,
                 self.m2m_client_id,
                 "mcp-gateway",

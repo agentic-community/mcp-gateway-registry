@@ -52,10 +52,11 @@ tests:
       #   env[6]  = RATE_LIMITING_ENABLED (issue #295, always rendered)
       #   env[7]  = RATE_LIMIT_BACKEND
       #   env[8]  = RATE_LIMIT_FAIL_OPEN
-      #   env[9]  = RATE_LIMIT_DEFINITIONS_CACHE_TTL_SECONDS
-      #   env[10] = RATE_LIMIT_BACKEND_TIMEOUT_MS
-      #   env[11] = MY_FLAG       (extraEnv[0])
-      #   env[12] = MY_SECRET_VAR (extraEnv[1])
+      #   env[9]  = RATE_LIMIT_QUARANTINE_FAIL_CLOSED (issue #1504)
+      #   env[10] = RATE_LIMIT_DEFINITIONS_CACHE_TTL_SECONDS
+      #   env[11] = RATE_LIMIT_BACKEND_TIMEOUT_MS
+      #   env[12] = MY_FLAG       (extraEnv[0])
+      #   env[13] = MY_SECRET_VAR (extraEnv[1])
       - equal:
           path: spec.template.spec.containers[0].env[0].name
           value: ENTRA_CLIENT_SECRET
@@ -69,13 +70,13 @@ tests:
           path: spec.template.spec.containers[0].env[6].name
           value: RATE_LIMITING_ENABLED
       - equal:
-          path: spec.template.spec.containers[0].env[10].name
+          path: spec.template.spec.containers[0].env[11].name
           value: RATE_LIMIT_BACKEND_TIMEOUT_MS
       - equal:
-          path: spec.template.spec.containers[0].env[11].name
+          path: spec.template.spec.containers[0].env[12].name
           value: MY_FLAG
       - equal:
-          path: spec.template.spec.containers[0].env[12].name
+          path: spec.template.spec.containers[0].env[13].name
           value: MY_SECRET_VAR
 
   - it: appends extraEnvFrom entries after chart-managed envFrom sources

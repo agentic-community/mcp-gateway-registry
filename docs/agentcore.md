@@ -253,6 +253,8 @@ uv run python -m cli.agentcore.token_refresher \
 | `KEYCLOAK_CLIENT_SECRET` | -- | Client secret for Keycloak gateways |
 | `AGENTCORE_ACCOUNTS` | -- | Comma-separated AWS account IDs for cross-account scanning |
 | `AGENTCORE_ASSUME_ROLE_NAME` | `AgentCoreSyncRole` | IAM role name to assume in each target account |
+| `AGENTCORE_ALLOWED_ACCOUNTS` | -- | Comma-separated allowlist bounding which account IDs may be assumed. **Recommended** whenever `AGENTCORE_ACCOUNTS` is set: an account not on this list is rejected before any `AssumeRole`. When set it is authoritative and the opt-in below is ignored. |
+| `AGENTCORE_ALLOW_ANY_ACCOUNT` | -- | Set `1`/`true`/`yes` to accept any well-formed (12-digit) account ID when no allowlist is configured. This is a **fail-open opt-in and is discouraged** — prefer `AGENTCORE_ALLOWED_ACCOUNTS`. Without either, cross-account scanning fails closed. |
 
 ### Cross-Account Scanning
 
@@ -276,11 +278,20 @@ uv run python -m cli.agentcore sync
 
 How it works:
 
-1. The CLI parses the `--accounts` flag (or `AGENTCORE_ACCOUNTS` env var) into a list of account IDs.
-2. For each account, it calls `sts:AssumeRole` on `arn:aws:iam::{account_id}:role/{role_name}` to obtain temporary credentials.
-3. A boto3 session is created with those temporary credentials and passed to the scanner and registration builder.
-4. Discovery and registration proceed as normal, scoped to each account's resources.
-5. If `--accounts` is not provided, the CLI scans only the current account (default behavior).
+1. The CLI parses the `--accounts` flag (or `AGENTCORE_ACCOUNTS` env var) into a list of account IDs. Each ID is validated to be exactly 12 digits; a malformed ID is rejected before any AWS call.
+2. Cross-account scanning is **gated fail-closed**: if `AGENTCORE_ACCOUNTS` is non-empty, the run proceeds only when `AGENTCORE_ALLOWED_ACCOUNTS` lists every requested account, or when `AGENTCORE_ALLOW_ANY_ACCOUNT` is explicitly set. Otherwise the CLI refuses and explains how to authorize the accounts. This prevents an `AGENTCORE_ACCOUNTS` value from a lower-trust source (a manifest, a control-plane message) from silently driving `AssumeRole` into arbitrary accounts.
+3. For each authorized account, it calls `sts:AssumeRole` on `arn:aws:iam::{account_id}:role/{role_name}` to obtain temporary credentials.
+4. A boto3 session is created with those temporary credentials and passed to the scanner and registration builder.
+5. Discovery and registration proceed as normal, scoped to each account's resources.
+6. If `--accounts` is not provided, the CLI scans only the current account (default behavior) — the allowlist gate does not apply.
+
+Example with an allowlist (recommended):
+
+```bash
+export AGENTCORE_ACCOUNTS=111111111111,222222222222
+export AGENTCORE_ALLOWED_ACCOUNTS=111111111111,222222222222
+uv run python -m cli.agentcore sync
+```
 
 If `AssumeRole` fails for any account, the CLI stops and reports the error.
 

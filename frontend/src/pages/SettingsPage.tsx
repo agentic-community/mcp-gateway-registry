@@ -12,6 +12,7 @@ import {
   IdentificationIcon,
   DocumentTextIcon,
   ArrowDownTrayIcon,
+  AdjustmentsHorizontalIcon,
 } from '@heroicons/react/24/outline';
 import FederationPeers from '../components/FederationPeers';
 import FederationPeerForm from '../components/FederationPeerForm';
@@ -116,8 +117,15 @@ const SETTINGS_CATEGORIES: SettingsCategory[] = [
       { id: 'groups', label: 'Groups', path: '/settings/iam/groups' },
       { id: 'users', label: 'Users', path: '/settings/iam/users' },
       { id: 'm2m', label: 'M2M Accounts', path: '/settings/iam/m2m' },
-      { id: 'rate-limits', label: 'Rate Limits', path: '/settings/iam/rate-limits' },
       { id: 'user-groups', label: 'User Groups', path: '/settings/iam/user-groups' },
+    ],
+  },
+  {
+    id: 'traffic-management',
+    label: 'Traffic Management',
+    icon: <AdjustmentsHorizontalIcon className="h-5 w-5" />,
+    items: [
+      { id: 'rate-limits', label: 'Rate Limits', path: '/settings/traffic/rate-limits' },
     ],
   },
   {
@@ -342,8 +350,14 @@ const SettingsPage: React.FC = () => {
       return <IAMM2M onShowToast={showToast} />;
     }
 
-    // IAM > Rate Limits (definitions CRUD; issue #295)
-    if (path === '/settings/iam/rate-limits') {
+    // Traffic Management > Rate Limits (definitions CRUD; issue #295). The legacy
+    // /settings/iam/rate-limits path is kept as an alias so old bookmarks/deep
+    // links still resolve after the move out of IAM.
+    if (
+      path === '/settings/traffic/rate-limits' ||
+      path === '/settings/traffic' ||
+      path === '/settings/iam/rate-limits'
+    ) {
       return <IAMRateLimits onShowToast={showToast} />;
     }
 

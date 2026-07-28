@@ -460,6 +460,15 @@ class Settings(BaseSettings):
             "Empty uses the entity type (server/agent/skill)."
         ),
     )
+    ard_catalog_max_entries_per_type: int = Field(
+        default=500,
+        description=(
+            "Maximum number of entries to load per entity type (servers, agents, "
+            "skills) when building the ARD catalog. Caps the DB queries to "
+            "prevent unbounded result sets from exhausting memory or starving "
+            "connections."
+        ),
+    )
 
     # ARD Phase 3 ingestion (issue #1296): all behavior config lives in the DB
     # (FederationConfig.ai_catalog) and is managed via the federation API / External
@@ -1524,6 +1533,14 @@ class Settings(BaseSettings):
     rate_limit_fail_open: bool = Field(
         default=True,
         description="Global fail-open on rate-limit backend error (per-limit fail_closed overrides).",
+    )
+    rate_limit_quarantine_fail_closed: bool = Field(
+        default=False,
+        description=(
+            "Deny (fail closed) on a backend error reading quarantine membership, "
+            "instead of the default fail-open. Best-effort quarantine, not breach "
+            "containment; pair with IdP credential revocation."
+        ),
     )
     rate_limit_definitions_cache_ttl_seconds: int = Field(
         default=30,
