@@ -23,6 +23,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
 from ..audit import set_audit_action
+from ..audit.request_id import sanitize_correlation_id
 from ..auth.asset_permissions import user_has_asset_permission
 from ..auth.csrf import (
     generate_csrf_token,
@@ -3611,7 +3612,7 @@ async def generate_user_token(
             "requested_scopes": requested_scopes,
             "expires_in_hours": expires_in_hours,
             "description": description,
-            "correlation_id": request.headers.get("X-Correlation-ID"),
+            "correlation_id": sanitize_correlation_id(request.headers.get("X-Correlation-ID")),
         }
 
         if resource is not None:

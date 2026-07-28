@@ -87,6 +87,7 @@ sys.path.insert(0, "/app")
 # Import MCP audit logging components
 from registry.audit.mcp_logger import MCPLogger
 from registry.audit.models import Identity, MCPServer, TokenMintAuditRecord
+from registry.audit.request_id import new_audit_request_id, sanitize_correlation_id
 from registry.audit.service import AuditLogger, NonDurableAuditError, enforce_durable_audit_sink
 from registry.audit.sink import emit_audit_event
 from registry.common.scopes_loader import reload_scopes_config
@@ -2854,10 +2855,16 @@ async def validate_request(request: Request):
     """
 
     # Capture start time for MCP audit logging
-    import uuid
-
     start_time = time.perf_counter()
-    request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
+    # The MCP-access audit record's unique key (request_id, log_type) must be
+    # server-controlled. A client that chooses X-Request-ID could pre-seed a
+    # collision so a later request of the same log_type is silently dropped by
+    # the unique-index dedup. Mint a fresh server-side id for the key and keep the
+    # client-supplied value only as a sanitized, NON-key correlation field.
+    request_id = new_audit_request_id()
+    audit_correlation_id = sanitize_correlation_id(
+        request.headers.get("X-Correlation-ID") or request.headers.get("X-Request-ID")
+    )
     mcp_session_id = request.headers.get("Mcp-Session-Id")
 
     try:
@@ -3899,6 +3906,7 @@ async def validate_request(request: Request):
                         client_ip=get_client_ip(request),
                         forwarded_for=request.headers.get("X-Forwarded-For"),
                         user_agent=request.headers.get("User-Agent"),
+                        correlation_id=audit_correlation_id,
                     )
                     logger.debug(f"MCP access logged for {server_name}")
                 except Exception as e:
@@ -3992,6 +4000,7 @@ async def validate_request(request: Request):
                         client_ip=get_client_ip(request),
                         forwarded_for=request.headers.get("X-Forwarded-For"),
                         user_agent=request.headers.get("User-Agent"),
+                        correlation_id=audit_correlation_id,
                     )
                 except Exception as log_err:
                     logger.warning(f"Failed to log MCP access error: {log_err}")
@@ -4360,7 +4369,7 @@ async def generate_user_token(
 
     request = body  # keep the existing variable name used throughout the body
     mint_request_id = str(uuid.uuid4())
-    correlation_id = request.correlation_id
+    correlation_id = sanitize_correlation_id(request.correlation_id)
 
     # Initialize audit context up front so the unexpected-error handler can
     # reference these directly instead of introspecting locals(). They are

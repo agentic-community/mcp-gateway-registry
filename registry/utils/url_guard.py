@@ -104,6 +104,27 @@ _CLOUD_METADATA_IPS: frozenset[str] = frozenset({"169.254.169.254", "fd00:ec2::2
 # low-level util free of a dependency on the auth/repository layers.
 _RESERVED_SERVER_PATH_NAMES: frozenset[str] = frozenset({"all", "*"})
 
+# Server path names that shadow a built-in monitoring / health route. The server
+# management routes embed the registration path in the request URL via
+# {service_path:path}/{path:path} (e.g. POST /api/toggle/<path>,
+# POST /api/servers/<path>/rescan). A server registered under "health" therefore
+# produces management-plane request URLs like /api/toggle/health, which the audit
+# middleware would misclassify as a health check and drop from the audit trail.
+# Reserving these names blocks the shadow at the SOURCE (registration), so no such
+# collision can exist -- defense in depth alongside the exact-match fix in the
+# audit middleware (_is_health_check_path). Unlike _RESERVED_SERVER_PATH_NAMES,
+# these are not wildcard sentinels and are kept in a separate set (they must NOT
+# be added to access_resolver._WILDCARD_VALUES). Compared case-insensitively.
+_RESERVED_MONITORING_PATH_NAMES: frozenset[str] = frozenset(
+    {
+        "health",
+        "healthcheck",
+        "metrics",
+        "well-known",
+        ".well-known",
+    }
+)
+
 # Carrier-grade NAT / shared address space (RFC 6598). Blocked explicitly rather
 # than relying on ipaddress.is_private: is_private only classifies this range as
 # private on newer Python runtimes, so depending on the runtime is fragile -- a
@@ -503,13 +524,20 @@ def validate_server_path(
     and shadows/duplicates the static catch-all. No real server registers at the
     root, so this is a footgun with no legitimate use; fail closed.
 
+    A path that normalizes to a built-in monitoring-route name (``health`` and
+    friends, see :data:`_RESERVED_MONITORING_PATH_NAMES`) is also rejected: the
+    management routes embed the path in the request URL, so such a name would let
+    a mutating admin action masquerade as a health check and be dropped from the
+    audit trail.
+
     Args:
         path: The server path (e.g. ``/github``).
 
     Raises:
         UrlValidationError: If the path is empty, contains disallowed nginx
             metacharacters, normalizes to an empty (slashes-only) path, or
-            normalizes to a reserved cross-server wildcard name.
+            normalizes to a reserved cross-server wildcard or monitoring-route
+            name.
     """
     if not path or not isinstance(path, str):
         raise UrlValidationError(str(path), "server path is empty or not a string")
@@ -535,6 +563,16 @@ def validate_server_path(
         raise UrlValidationError(
             path,
             f"server path '{normalized}' is reserved (collides with the cross-server wildcard)",
+        )
+
+    # Reject names that shadow a built-in monitoring/health route. Such a name
+    # would let a management-plane mutation (e.g. /api/toggle/health) masquerade
+    # as a health check and be dropped from the audit trail. Fail closed at the
+    # source so the collision cannot be created in the first place.
+    if normalized.lower() in _RESERVED_MONITORING_PATH_NAMES:
+        raise UrlValidationError(
+            path,
+            f"server path '{normalized}' is reserved (shadows a built-in monitoring route)",
         )
 
 

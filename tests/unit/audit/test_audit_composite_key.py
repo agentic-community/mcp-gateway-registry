@@ -109,8 +109,13 @@ class TestCompositeKeyInsert:
             assert mock_collection.insert_one.call_count == 2
 
     async def test_true_duplicate_returns_true(self):
-        """DuplicateKeyError is caught for true duplicates
-        (same request_id AND same log_type)."""
+        """DuplicateKeyError never fails the request path.
+
+        The audit key (request_id, log_type) is now server-generated, so a
+        collision is an unexpected audit-integrity event rather than the routine
+        same-request dedup it once was. insert() still returns True so an audit
+        collision cannot fail the request (see
+        test_audit_request_id_integrity.py for the loud-logging assertion)."""
         mock_collection = AsyncMock()
         mock_collection.insert_one.side_effect = DuplicateKeyError("duplicate key error")
 
