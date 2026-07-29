@@ -724,9 +724,10 @@ the drift between copies is the hole.
   `httpx.AsyncClient` (or a third-party SDK client) for such fetches. Use
   `guarded_client(profile=...)` / `guarded_async_client(profile=...)` — they
   validate + pin the resolved public IP inside the transport (rebinding-safe,
-  re-validated per redirect). IP category policy and literal/tunnel unwrapping
-  live in `registry/utils/url_guard.py`; URL identity and safe logging use
-  `normalize_url_identity()` and `sanitized_url_for_log()`. Pick the profile:
+  re-validated per redirect). IP category policy plus literal/tunnel unwrapping
+  live in `registry/utils/url_guard.py`; URL identity uses
+  `normalize_url_identity()`, and safe URL logging uses
+  `registry.common.log_redaction.redact_url()`. Pick the profile:
   `SKILL_PROFILE` (skill/doc fetches), `PROXY_PROFILE` (server/agent targets),
   `FEDERATION_PROFILE` (credentialed federation), or the HTTPS-only empty-
   allowlist `CREDENTIALED_OAUTH_PROFILE` (client-secret/refresh/assertion token

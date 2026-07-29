@@ -146,6 +146,20 @@ class TestDecryptCustomHeaders:
         assert result[0]["name"] == "X-Valid"
         assert result[0]["value"] == "good"
 
+    def test_strict_mode_fails_on_invalid_ciphertext(self, mock_secret_key):
+        with pytest.raises(ValueError, match="failed to decrypt"):
+            decrypt_custom_headers(
+                [{"name": "X-Bad", "value_encrypted": "invalid-ciphertext"}],
+                strict=True,
+            )
+
+    def test_strict_mode_fails_on_malformed_entry(self, mock_secret_key):
+        with pytest.raises(ValueError, match="invalid name"):
+            decrypt_custom_headers(
+                [{"name": "X-Bad\rInjected", "value_encrypted": "ciphertext"}],
+                strict=True,
+            )
+
 
 class TestStripCredentials:
     """Tests that strip_credentials_from_dict removes custom header fields."""

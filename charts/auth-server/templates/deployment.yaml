@@ -8,8 +8,9 @@
 {{- $imgRepository := required "image.repository must be set" .Values.image.repository }}
 {{- $imgTag := default .Values.global.image.tag .Values.image.tag }}
 {{- $imgPullPolicy := default .Values.global.image.pullPolicy .Values.image.pullPolicy }}
-{{- /* Fail-fast validation of user-supplied extraEnv */ -}}
+{{- /* Fail-fast validation of user-supplied extraEnv and proxy egress policy. */ -}}
 {{- include "auth-server.validateExtraEnv" . -}}
+{{- include "auth-server.validateGenericProxyEgress" . -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -255,10 +256,16 @@ spec:
               value: {{ (hasKey .Values.app "gatewayEgressSelfcheckEnabled" | ternary .Values.app.gatewayEgressSelfcheckEnabled true) | toString | quote }}
             - name: GATEWAY_GENERIC_TLS_VERIFY
               value: {{ .Values.app.gatewayGenericTlsVerify | default "true" | quote }}
-            - name: GATEWAY_PROXY_PIN_REFRESH_SECONDS
-              value: {{ .Values.app.gatewayProxyPinRefreshSeconds | default 300 | toString | quote }}
             - name: GATEWAY_GENERIC_MAX_CONCURRENCY
               value: {{ .Values.app.gatewayGenericMaxConcurrency | default 32 | toString | quote }}
+            - name: GATEWAY_GENERIC_STREAM_MAX_CONCURRENCY
+              value: {{ .Values.app.gatewayGenericStreamMaxConcurrency | default 8 | toString | quote }}
+            - name: GATEWAY_GENERIC_ACQUIRE_TIMEOUT_SECONDS
+              value: {{ .Values.app.gatewayGenericAcquireTimeoutSeconds | default 5 | toString | quote }}
+            - name: GATEWAY_GENERIC_STREAM_MAX_DURATION_SECONDS
+              value: {{ .Values.app.gatewayGenericStreamMaxDurationSeconds | default 3600 | toString | quote }}
+            - name: GATEWAY_GENERIC_STREAM_MAX_BYTES
+              value: {{ .Values.app.gatewayGenericStreamMaxBytes | default 104857600 | int64 | quote }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

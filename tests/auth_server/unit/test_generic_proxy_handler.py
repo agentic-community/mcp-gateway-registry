@@ -27,13 +27,16 @@ from auth_server.server import (  # noqa: E402
     _assert_generic_authorization_not_gateway_cred,
     _assert_outbound_host_pinned,
     _build_generic_outbound_url,
+    _effective_ingress_gateway_credential,
     _forward_headers,
     _generic_tls_verify,
     _merge_generic_upstream_headers,
     _run_egress_selfcheck,
+    _select_forwarded_generic_request_headers,
     _select_forwarded_generic_response_headers,
     _strip_generic_internal_headers,
 )
+from registry.common.log_redaction import redact_url  # noqa: E402
 
 pytestmark = pytest.mark.unit
 
@@ -101,6 +104,58 @@ class TestBuildOutboundUrl:
         )
         assert url == "https://backend.example/api/reports/2024"
 
+    def test_registered_query_is_preserved(self):
+        url = _build_generic_outbound_url(
+            "https://backend.example/api?fixed=a%2Fb&blank=",
+            "skills/proxy-demo",
+            "skills/proxy-demo",
+        )
+        assert url == "https://backend.example/api?fixed=a%2Fb&blank="
+
+    def test_subpath_appends_before_registered_query(self):
+        url = _build_generic_outbound_url(
+            "https://backend.example/api?fixed=registered",
+            "skills/proxy-demo/reports/2024",
+            "skills/proxy-demo",
+        )
+        assert url == "https://backend.example/api/reports/2024?fixed=registered"
+
+    def test_caller_query_cannot_conflict_with_registered_fixed_key(self):
+        url = _build_generic_outbound_url(
+            "https://backend.example/api?fixed=registered&token=operator",
+            "skills/proxy-demo",
+            "skills/proxy-demo",
+            [("fixed", "caller"), ("other", "allowed"), ("token", "caller-token")],
+        )
+        assert url == ("https://backend.example/api?fixed=registered&token=operator&other=allowed")
+
+    def test_legacy_semicolon_fixed_key_cannot_be_shadowed(self):
+        url = _build_generic_outbound_url(
+            "https://backend.example/api?fixed=ok;token=operator",
+            "skills/proxy-demo",
+            "skills/proxy-demo",
+            [("token", "attacker"), ("other", "allowed")],
+        )
+        assert url == "https://backend.example/api?fixed=ok;token=operator&other=allowed"
+
+    def test_encoded_and_case_variant_fixed_keys_cannot_be_shadowed(self):
+        url = _build_generic_outbound_url(
+            "https://backend.example/api?To%6Ben=operator",
+            "skills/proxy-demo",
+            "skills/proxy-demo",
+            [("TOKEN", "attacker"), ("other", "allowed")],
+        )
+        assert url == "https://backend.example/api?To%6Ben=operator&other=allowed"
+
+    def test_duplicate_caller_query_values_survive(self):
+        url = _build_generic_outbound_url(
+            "https://backend.example/api?fixed=registered",
+            "skills/proxy-demo",
+            "skills/proxy-demo",
+            [("tag", "one"), ("tag", "two"), ("empty", "")],
+        )
+        assert url == ("https://backend.example/api?fixed=registered&tag=one&tag=two&empty=")
+
     def test_dotdot_segment_rejected(self):
         with pytest.raises(HTTPException) as e:
             _build_generic_outbound_url(
@@ -166,6 +221,27 @@ class TestResponseHeaderAllowlist:
         assert out["Content-Disposition"] == 'attachment; filename="r.pdf"'
         assert out["Accept-Ranges"] == "bytes"
         assert "Cache-Control" in out
+        # Buffered bodies are decoded by httpx, so stale framing is removed.
+        assert "Content-Length" not in out
+
+    def test_buffered_decoded_body_drops_stale_framing(self):
+        upstream = {
+            "Content-Length": "12",
+            "Content-Encoding": "gzip",
+            "Content-Range": "bytes 0-11/12",
+            "Content-Type": "application/json",
+        }
+        out = _select_forwarded_generic_response_headers(upstream)
+        assert out == {"Content-Type": "application/json"}
+
+    def test_raw_stream_may_preserve_matching_framing(self):
+        upstream = {
+            "Content-Length": "12",
+            "Content-Encoding": "gzip",
+            "Content-Range": "bytes 0-11/12",
+        }
+        out = _select_forwarded_generic_response_headers(upstream, preserve_body_framing=True)
+        assert out == upstream
 
     def test_drops_set_cookie_and_security_policy_headers(self):
         upstream = {
@@ -188,7 +264,11 @@ class TestResponseHeaderAllowlist:
         # the restrictive set (locked in so a relaxation is a visible diff).
         assert _GATEWAY_SET_SECURITY_HEADERS["X-Content-Type-Options"] == "nosniff"
         assert _GATEWAY_SET_SECURITY_HEADERS["X-Frame-Options"] == "DENY"
-        assert "frame-ancestors 'none'" in _GATEWAY_SET_SECURITY_HEADERS["Content-Security-Policy"]
+        csp = _GATEWAY_SET_SECURITY_HEADERS["Content-Security-Policy"]
+        assert "default-src 'none'" in csp
+        assert "sandbox" in csp
+        assert "frame-ancestors 'none'" in csp
+        assert "default-src 'self'" not in csp
 
 
 class TestTlsVerifyResolution:
@@ -264,7 +344,7 @@ class TestMergeGenericUpstreamHeaders:
         # Mirror the handler: run the raw request headers through _forward_headers
         # first, then merge. This exercises the real interaction (Authorization /
         # X-Authorization are stripped by _forward_headers before the merge).
-        return _forward_headers(dict(incoming))
+        return _select_forwarded_generic_request_headers(incoming)
 
     def test_fixed_header_overwrites_caller(self):
         incoming = {"X-Api-Key": "caller-key", "Content-Type": "application/json"}
@@ -320,16 +400,36 @@ class TestMergeGenericUpstreamHeaders:
         _merge_generic_upstream_headers(fwd, incoming, {}, overridable_names=["X-Tenant"])
         assert "X-Tenant" not in fwd
 
-    def test_non_registered_caller_header_gains_no_auth_meaning(self):
-        # A caller header that is neither registered-overridable nor operator-set
-        # is not injected by the merge (it may still flow as a benign header via
-        # _forward_headers, but the merge adds nothing for it).
-        incoming = {"X-Random": "whatever"}
+    def test_non_registered_caller_header_is_dropped(self):
+        incoming = {"X-Random": "whatever", "Content-Type": "application/json"}
         fwd = self._base(incoming)
-        before = dict(fwd)
         _merge_generic_upstream_headers(fwd, incoming, {"X-Api-Key": "op"}, overridable_names=[])
-        assert fwd["X-Random"] == before["X-Random"]
+        assert "X-Random" not in fwd
+        assert fwd["Content-Type"] == "application/json"
         assert fwd["X-Api-Key"] == "op"
+
+    def test_every_safe_registered_name_is_readmitted(self):
+        incoming = {"x-tenant": "caller-tenant", "X-Correlation-Id": "cid"}
+        fwd = self._base(incoming)
+        assert fwd == {}
+        _merge_generic_upstream_headers(
+            fwd,
+            incoming,
+            {},
+            overridable_names=["X-Tenant", "X-Correlation-Id"],
+        )
+        assert fwd == {"X-Tenant": "caller-tenant", "X-Correlation-Id": "cid"}
+
+    def test_reserved_registered_name_cannot_be_readmitted(self):
+        incoming = {"X-Internal-Token-Generic": "signed"}
+        fwd = self._base(incoming)
+        _merge_generic_upstream_headers(
+            fwd,
+            incoming,
+            {},
+            overridable_names=["X-Internal-Token-Generic"],
+        )
+        assert fwd == {}
 
     def test_authorization_readmitted_only_when_overridable(self):
         # _forward_headers strips Authorization; it is re-admitted from incoming
@@ -380,6 +480,12 @@ class TestAssertGenericAuthorizationNotGatewayCred:
             _assert_generic_authorization_not_gateway_cred(fwd, "Bearer gwtoken")
         assert e.value.status_code == 401
 
+    def test_rejects_mixed_case_authorization_header(self):
+        fwd = {"aUtHoRiZaTiOn": "Bearer gwtoken"}
+        with pytest.raises(HTTPException) as excinfo:
+            _assert_generic_authorization_not_gateway_cred(fwd, "Bearer gwtoken")
+        assert excinfo.value.status_code == 401
+
     def test_rejects_ignoring_scheme_and_whitespace(self):
         # X-Authorization sent without the Bearer prefix, Authorization with it.
         fwd = {"Authorization": "Bearer gwtoken"}
@@ -396,6 +502,43 @@ class TestAssertGenericAuthorizationNotGatewayCred:
 
     def test_noop_when_no_outbound_auth(self):
         _assert_generic_authorization_not_gateway_cred({}, "Bearer gwtoken")
+
+    def test_standard_authorization_is_effective_gateway_credential(self):
+        incoming = {"Authorization": "Bearer gwtoken"}
+        fwd = _select_forwarded_generic_request_headers(incoming)
+        _merge_generic_upstream_headers(
+            fwd,
+            incoming,
+            {},
+            overridable_names=["Authorization"],
+        )
+        with pytest.raises(HTTPException) as excinfo:
+            _assert_generic_authorization_not_gateway_cred(
+                fwd,
+                _effective_ingress_gateway_credential(incoming),
+            )
+        assert excinfo.value.status_code == 401
+
+    def test_x_authorization_keeps_validate_precedence_for_mixed_casing(self):
+        incoming = {
+            "x-AuThOrIzAtIoN": "Bearer gateway-token",
+            "aUtHoRiZaTiOn": "Bearer upstream-token",
+        }
+        assert _effective_ingress_gateway_credential(incoming) == "Bearer gateway-token"
+
+
+class TestOutboundUrlLogSanitization:
+    def test_drops_userinfo_query_and_fragment(self):
+        sanitized = redact_url(
+            "https://alice:secret@backend.example:8443/api/run?token=secret#fragment"
+        )
+        assert sanitized == "https://backend.example:8443/api/run"
+        assert "alice" not in sanitized
+        assert "secret" not in sanitized
+        assert "?" not in sanitized
+
+    def test_invalid_port_fails_closed(self):
+        assert redact_url("https://backend.example:bad/x?q=1") == "[REDACTED]"
 
 
 class TestEgressSelfCheck:

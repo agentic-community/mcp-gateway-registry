@@ -1390,10 +1390,45 @@ class Settings(BaseSettings):
         default=32,
         ge=1,
         description=(
-            "Semaphore cap on in-flight generic-hop requests (OOM guard). "
+            "Semaphore cap on in-flight buffered generic-hop requests (OOM guard). "
             "Worst-case auth-server heap from buffering approx = "
-            "generic_proxy_max_body_bytes * this. Tune down for memory-"
-            "constrained single-replica deployments. Consumed by the auth-server."
+            "generic_proxy_max_body_bytes * this. Streaming requests use a "
+            "separate pool. Consumed by the auth-server."
+        ),
+    )
+    gateway_generic_stream_max_concurrency: int = Field(
+        default=8,
+        ge=1,
+        description=(
+            "Separate semaphore cap for long-lived generic streaming requests. "
+            "Isolation prevents streams from exhausting buffered request capacity. "
+            "Consumed by the auth-server."
+        ),
+    )
+    gateway_generic_acquire_timeout_seconds: float = Field(
+        default=5.0,
+        gt=0,
+        description=(
+            "Maximum seconds a generic request may wait for its buffered or "
+            "streaming concurrency slot before failing with 503. Consumed by the "
+            "auth-server."
+        ),
+    )
+    gateway_generic_stream_max_duration_seconds: int = Field(
+        default=3600,
+        ge=1,
+        description=(
+            "Absolute lifetime in seconds for one generic streaming response. "
+            "This remains enforced even when chunks continue to arrive. Consumed "
+            "by the auth-server."
+        ),
+    )
+    gateway_generic_stream_max_bytes: int = Field(
+        default=100 * 1024 * 1024,
+        ge=1024,
+        description=(
+            "Maximum raw response bytes forwarded by one generic stream before "
+            "the auth-server terminates it."
         ),
     )
     gateway_generic_stream_read_timeout_seconds: int = Field(

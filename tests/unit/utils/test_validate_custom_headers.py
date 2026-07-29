@@ -176,6 +176,60 @@ def test_non_object_entry_rejected():
         validate_custom_headers(["X-A: v"])
 
 
+@pytest.mark.parametrize(
+    "name",
+    [
+        "X Bad",
+        "X:Bad",
+        "X-Bad\rInjected",
+        "X-Bad\nInjected",
+        "X-Bad\x00Injected",
+        "X-Bad\x1fInjected",
+        "X-Bad\x7fInjected",
+    ],
+)
+def test_header_name_must_be_rfc_token(name):
+    with pytest.raises(ValueError, match="RFC token"):
+        validate_custom_headers([{"name": name, "value": "safe"}])
+
+
+def test_header_name_must_be_string_and_bounded():
+    with pytest.raises(ValueError, match="name must be a string"):
+        validate_custom_headers([{"name": 123, "value": "safe"}])
+    with pytest.raises(ValueError, match="name exceeds 256"):
+        validate_custom_headers([{"name": "X" * 257, "value": "safe"}])
+
+
+def test_header_overridable_must_be_boolean():
+    for invalid in ("true", 1, 0, [], {}):
+        with pytest.raises(ValueError, match="overridable must be a boolean"):
+            validate_custom_headers([{"name": "X-Caller-Only", "overridable": invalid}])
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["bad\rvalue", "bad\nvalue", "bad\x00value", "bad\tvalue", "bad\x7fvalue"],
+)
+def test_header_value_rejects_control_characters(value):
+    with pytest.raises(ValueError, match="control characters"):
+        validate_custom_headers([{"name": "X-Safe", "value": value}])
+
+
+def test_header_value_must_be_string_and_bounded():
+    with pytest.raises(ValueError, match="value must be a string"):
+        validate_custom_headers([{"name": "X-Safe", "value": 123}])
+    with pytest.raises(ValueError, match="value exceeds 4096"):
+        validate_custom_headers([{"name": "X-Safe", "value": "v" * 4097}])
+
+
+def test_valid_rfc_token_and_caller_only_slot_remain_allowed():
+    headers = [
+        {"name": "X-Key!#$%&'*+-.^_`|~09Az", "value": "safe visible value"},
+        {"name": "X-Caller-Only", "overridable": True},
+    ]
+    assert validate_custom_headers(headers) == headers
+
+
 class TestOverridablePolicy:
     """Per-header overridable flag: the three expressible shapes + rejections."""
 
@@ -419,14 +473,35 @@ class TestClearUpstreamHeadersOnRepoint:
         assert upd["custom_header_overridable_names"] == []
         assert upd["custom_headers_updated_at"] is None
 
-    def test_same_host_different_path_preserves(self):
-        # Same scheme+host+port -> same backend; a path/scheme-identical edit must
-        # NOT clear the headers.
+    def test_same_host_different_path_clears_headers(self):
         from registry.schemas.proxy_mixin import clear_upstream_headers_on_repoint
 
         upd = {"proxy_target_url": "https://h.example/v2"}
         clear_upstream_headers_on_repoint(
             upd, existing_target="https://h.example/v1", new_target="https://h.example/v2"
+        )
+        assert upd["custom_headers_encrypted"] is None
+        assert upd["custom_header_names"] == []
+
+    def test_same_path_different_query_clears_headers(self):
+        from registry.schemas.proxy_mixin import clear_upstream_headers_on_repoint
+
+        upd = {"proxy_target_url": "https://h.example/v1?tenant=b"}
+        clear_upstream_headers_on_repoint(
+            upd,
+            existing_target="https://h.example/v1?tenant=a",
+            new_target="https://h.example/v1?tenant=b",
+        )
+        assert upd["custom_headers_encrypted"] is None
+
+    def test_normalization_equivalence_preserves_headers(self):
+        from registry.schemas.proxy_mixin import clear_upstream_headers_on_repoint
+
+        upd: dict = {}
+        clear_upstream_headers_on_repoint(
+            upd,
+            existing_target="HTTPS://H.Example:443/v1?tenant=a",
+            new_target="https://h.example/v1?tenant=a",
         )
         assert "custom_headers_encrypted" not in upd
 

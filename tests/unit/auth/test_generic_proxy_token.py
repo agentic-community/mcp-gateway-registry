@@ -29,11 +29,12 @@ from auth_server.internal_request_token import (
 _SECRET = "test-secret-key-for-testing-only"
 
 
-def _request(headers, entity_type="skill", entity_path="skills/proxy-demo"):
+def _request(headers, entity_type="skill", entity_path="skills/proxy-demo", method="GET"):
     lower = {k.lower(): v for k, v in headers.items()}
     return SimpleNamespace(
         headers=SimpleNamespace(get=lambda k, default=None: lower.get(k.lower(), default)),
         path_params={"entity_type": entity_type, "entity_path": entity_path},
+        method=method,
         state=SimpleNamespace(),
     )
 
@@ -49,6 +50,7 @@ def _token(
     registered_path="skills/proxy-demo",
     upstream="https://backend.example/",
     subject="alice",
+    method="GET",
 ):
     return mint_generic_proxy_token(
         subject=subject,
@@ -56,6 +58,7 @@ def _token(
         entity_type=entity_type,
         registered_path=registered_path,
         upstream_url=upstream,
+        http_method=method,
     )
 
 
@@ -66,6 +69,7 @@ class TestMint:
         assert claims["entity_type"] == "skill"
         assert claims["server"] == "skills/proxy-demo"  # FULL path, not first segment
         assert claims["upstream_url"] == "https://backend.example/"
+        assert claims["method"] == "GET"
         assert claims["token_use"] == GENERIC_PROXY_TOKEN_USE
         assert claims["aud"] == GENERIC_PROXY_AUDIENCE
 
@@ -87,6 +91,7 @@ class TestMint:
             entity_type="custom-llm",
             registered_path="custom-llm/chat",
             upstream_url="https://llm.example/",
+            http_method="GET",
             streaming=True,
         )
         claims = pyjwt.decode(tok, _SECRET, algorithms=["HS256"], audience=GENERIC_PROXY_AUDIENCE)
@@ -106,6 +111,7 @@ class TestMint:
             entity_type="custom-llm",
             registered_path="custom-llm/chat",
             upstream_url="https://llm.example/",
+            http_method="GET",
             has_upstream_auth=True,
         )
         claims = pyjwt.decode(tok, _SECRET, algorithms=["HS256"], audience=GENERIC_PROXY_AUDIENCE)
@@ -124,8 +130,37 @@ class TestVerifyAccept:
         req = _request({"X-Internal-Token-Generic": tok}, entity_path="skills/proxy-demo/sub/x")
         await verify_generic_proxy_token(req)  # sub-resource of the bound entity
 
+    async def test_matching_non_get_method_accepted(self):
+        tok = _token(method="PATCH")
+        req = _request({"X-Internal-Token-Generic": tok}, method="PATCH")
+        await verify_generic_proxy_token(req)
+
 
 class TestVerifyReject:
+    async def test_method_replay_rejected(self):
+        tok = _token(method="GET")
+        req = _request({"X-Internal-Token-Generic": tok}, method="DELETE")
+        with pytest.raises(HTTPException) as excinfo:
+            await verify_generic_proxy_token(req)
+        assert excinfo.value.status_code == 401
+        assert "Method" in excinfo.value.detail
+
+    async def test_missing_method_claim_rejected(self):
+        tok = _mint_internal_token(
+            audience=GENERIC_PROXY_AUDIENCE,
+            subject="alice",
+            scopes=[],
+            extra_claims={
+                "server": "skills/proxy-demo",
+                "upstream_url": "https://b/",
+                "entity_type": "skill",
+                "token_use": GENERIC_PROXY_TOKEN_USE,
+            },
+        )
+        with pytest.raises(HTTPException) as excinfo:
+            await verify_generic_proxy_token(_request({"X-Internal-Token-Generic": tok}))
+        assert excinfo.value.status_code == 401
+
     async def test_missing_token(self):
         with pytest.raises(HTTPException) as e:
             await verify_generic_proxy_token(_request({}))

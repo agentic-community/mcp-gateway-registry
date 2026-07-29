@@ -2,19 +2,20 @@
 
 _assert_egress_allowed is a best-effort STATIC egress check that delegates to the
 canonical registry.utils.url_guard (PROXY_PROFILE, resolve=False), whose inline
-IP classifier is exhaustively tested in tests/unit/utils/test_url_guard.py. It is deliberately
-weaker than the fetch-time pinned transport (it does not resolve DNS); the
-authoritative rebind defense is that transport + the network egress policy. These
-tests confirm the guard is wired into the model edge correctly and rejects
-literal-IP bypasses; they do not claim it is the sole SSRF control. They lock in
-the vectors so a future edit cannot silently weaken it:
+IP classifier is exhaustively tested in tests/unit/utils/test_url_guard.py. It is
+deliberately weaker than the fetch-time pinned transport (it does not resolve
+DNS); the authoritative rebind defense is that transport + the network egress
+policy. These tests confirm the guard is wired into the model edge correctly and
+rejects literal-IP bypasses; they do not claim it is the sole SSRF control. They
+lock in the vectors so a future edit cannot silently weaken it:
 
 - always-denied regardless of the allow-private flag: link-local (incl. the cloud
   metadata IP 169.254.169.254), IPv6 link-local, and the unspecified address
   (0.0.0.0 / ::) which Linux routes to localhost on connect();
 - IPv4-mapped IPv6 (::ffff:169.254.169.254) normalized BEFORE the category check
   so the metadata IP cannot be smuggled past the guard;
-- loopback / private / reserved / multicast denied unless allow-private is set;
+- loopback / private denied unless allow-private is set; reserved / multicast stay
+  hard-denied;
 - hostnames pass the static guard (DNS is resolved downstream; the network-layer
   egress policy is the real rebind defense) — documented best-effort behavior;
 - non-http(s) schemes rejected.

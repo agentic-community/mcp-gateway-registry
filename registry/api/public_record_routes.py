@@ -32,8 +32,26 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# Stored routing, DNS-pin, disable-state, and credential metadata is internal.
+# ``is_proxied`` and ``proxy_client_url`` are intentionally not in this set: they
+# are safe client-facing discovery fields and do not reveal the backend target.
+_PUBLIC_PROXY_INTERNAL_FIELDS = frozenset(
+    {
+        "proxy_target_url",
+        "proxy_streaming",
+        "proxy_resolved_ips",
+        "proxy_target_host",
+        "proxy_disabled_reason",
+        "custom_headers",
+        "custom_headers_encrypted",
+        "custom_header_names",
+        "custom_header_overridable_names",
+        "custom_headers_updated_at",
+    }
+)
+
 # Fields that must never appear in an anonymous agent record body.
-_AGENT_SENSITIVE_FIELDS = frozenset(
+_AGENT_SENSITIVE_FIELDS = _PUBLIC_PROXY_INTERNAL_FIELDS | frozenset(
     {
         "security",
         "security_schemes",
@@ -48,7 +66,7 @@ _AGENT_SENSITIVE_FIELDS = frozenset(
 )
 
 # Fields that must never appear in an anonymous skill record body.
-_SKILL_SENSITIVE_FIELDS = frozenset(
+_SKILL_SENSITIVE_FIELDS = _PUBLIC_PROXY_INTERNAL_FIELDS | frozenset(
     {
         "auth_credential_encrypted",
         "auth_scheme",

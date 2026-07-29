@@ -74,6 +74,13 @@ def _validate_custom_header_value(value: object, *, allow_empty: bool = False) -
 _CALLER_OVERRIDABLE_RESERVED_NAMES: frozenset[str] = frozenset({"authorization"})
 
 
+def _validate_custom_header_overridable(value: object) -> bool:
+    """Require an explicit boolean override flag; reject ambiguous truthy values."""
+    if not isinstance(value, bool):
+        raise ValueError("custom_headers entry overridable must be a boolean")
+    return value
+
+
 def validate_custom_headers(
     raw: list[dict] | None,
     *,
@@ -104,7 +111,7 @@ def validate_custom_headers(
             raise ValueError("custom_headers entry must be an object")
         name = validate_custom_header_name(item.get("name"))
         value = item.get("value")
-        overridable = bool(item.get("overridable", False))
+        overridable = _validate_custom_header_overridable(item.get("overridable", False))
         if value in (None, ""):
             if not overridable and not allow_empty_values:
                 raise ValueError(
@@ -327,7 +334,7 @@ def encrypt_custom_headers_in_server_dict(
     for item in raw:
         name = validate_custom_header_name(item.get("name"))
         value = item.get("value")
-        overridable = bool(item.get("overridable", False))
+        overridable = _validate_custom_header_overridable(item.get("overridable", False))
         if value not in (None, ""):
             value = _validate_custom_header_value(value)
             encrypted_list.append({"name": name, "value_encrypted": encrypt_credential(value)})
@@ -413,7 +420,7 @@ def build_custom_headers_storage_fields(
             raise ValueError("custom_headers entry must be an object")
         name = item.get("name")
         value = item.get("value")
-        overridable = bool(item.get("overridable", False))
+        overridable = _validate_custom_header_overridable(item.get("overridable", False))
         if name and not value:
             prior = existing_by_name.get(name)
             if prior is not None:
@@ -439,13 +446,17 @@ def build_custom_headers_storage_fields(
 
 def decrypt_custom_headers(
     encrypted_list: list[dict] | None,
+    *,
+    strict: bool = False,
 ) -> list[dict]:
-    """Best-effort decrypt safe stored custom headers, skipping bad entries."""
+    """Decrypt safe stored headers, optionally failing closed on any bad entry."""
     from registry.constants import RESERVED_CUSTOM_HEADER_NAMES
 
     if not encrypted_list:
         return []
     if not isinstance(encrypted_list, list):
+        if strict:
+            raise ValueError("custom_headers_encrypted must be a list")
         logger.warning("Stored custom headers are not a list; skipping.")
         return []
 
@@ -453,31 +464,45 @@ def decrypt_custom_headers(
     seen: set[str] = set()
     for item in encrypted_list:
         if not isinstance(item, dict):
+            if strict:
+                raise ValueError("stored custom header entry must be an object")
             logger.warning("Stored custom header entry is not an object; skipping.")
             continue
         try:
             name = validate_custom_header_name(item.get("name"))
         except ValueError:
+            if strict:
+                raise ValueError("stored custom header has an invalid name") from None
             logger.warning("Stored custom header has an invalid name; skipping.")
             continue
         lower = name.lower()
         if lower in RESERVED_CUSTOM_HEADER_NAMES:
+            if strict:
+                raise ValueError(f"stored custom header '{name}' is gateway-managed")
             logger.warning(f"Stored custom header '{name}' is gateway-managed; skipping.")
             continue
         if lower in seen:
+            if strict:
+                raise ValueError(f"stored custom header '{name}' is duplicated")
             logger.warning(f"Stored custom header '{name}' is duplicated; skipping.")
             continue
         encrypted = item.get("value_encrypted")
         if not isinstance(encrypted, str) or not encrypted:
+            if strict:
+                raise ValueError(f"stored custom header '{name}' has no ciphertext")
             logger.warning(f"Stored custom header '{name}' has no ciphertext; skipping.")
             continue
         value = decrypt_credential(encrypted)
         if value is None:
+            if strict:
+                raise ValueError(f"failed to decrypt stored custom header '{name}'")
             logger.warning(f"Failed to decrypt custom header '{name}'; skipping.")
             continue
         try:
             _validate_custom_header_value(value, allow_empty=True)
         except ValueError:
+            if strict:
+                raise ValueError(f"stored custom header '{name}' has an unsafe value") from None
             logger.warning(f"Stored custom header '{name}' has an unsafe value; skipping.")
             continue
         seen.add(lower)

@@ -49,10 +49,12 @@ def _patch_settings(allow_private=False):
         s.ssrf_allowed_cidrs = ""
         with patch.object(url_guard, "settings", s):
             url_guard._proxy_allowlist.cache_clear()
+            url_guard._builtin_airegistry_tools_allowlist.cache_clear()
             try:
                 yield s
             finally:
                 url_guard._proxy_allowlist.cache_clear()
+                url_guard._builtin_airegistry_tools_allowlist.cache_clear()
 
 
 class TestLiteralIpTargets:
@@ -154,3 +156,40 @@ class TestValidateAndPin:
                     await validate_and_pin_proxy_target(
                         "skill", {"is_proxied": True, "proxy_target_url": "https://evil.example/"}
                     )
+
+    @pytest.mark.parametrize(
+        "entity_type,path",
+        [
+            ("skill", "/skills/fake"),
+            ("a2a_agent", "/agents/fake"),
+            ("workflow", "/workflow/fake"),
+        ],
+    )
+    async def test_arbitrary_entity_mcpgw_target_denied(self, entity_type, path):
+        with _patch_settings():
+            with pytest.raises(EgressPolicyError, match="reserved"):
+                await validate_and_pin_proxy_target(
+                    entity_type,
+                    {
+                        "path": path,
+                        "is_proxied": True,
+                        "proxy_target_url": "http://mcpgw-server:8003/",
+                        "url": "http://mcpgw-server:8003/",
+                    },
+                )
+
+    async def test_exact_builtin_airegistry_tools_target_is_resolved_and_pinned(self):
+        with _patch_settings():
+            with patch("socket.getaddrinfo", return_value=_addrinfo("10.0.0.9")):
+                out = await validate_and_pin_proxy_target(
+                    "mcp_server",
+                    {
+                        "path": "/airegistry-tools/",
+                        "is_proxied": True,
+                        "proxy_pass_url": "http://mcpgw-server:8003/",
+                    },
+                )
+        assert out == {
+            "proxy_resolved_ips": ["10.0.0.9"],
+            "proxy_target_host": "mcpgw-server",
+        }

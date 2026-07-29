@@ -146,6 +146,37 @@ class TestFetchFlagGate:
                 result = await _fetch_generic_proxied_resources()
         assert [r["path"] for r in result] == ["/skills/ok"]
 
+    async def test_orphaned_ciphertext_still_forces_strict_vending(self):
+        corrupt = AsyncMock()
+        corrupt.list_proxied.return_value = [
+            {
+                "path": "/skills/corrupt",
+                "is_proxied": True,
+                "proxy_target_url": "https://backend.example/",
+                "custom_header_names": [],
+                "custom_header_overridable_names": [],
+                "custom_headers_encrypted": [
+                    {"name": "X-Api-Key", "value_encrypted": "orphaned-ciphertext"}
+                ],
+            }
+        ]
+        empty = AsyncMock()
+        empty.list_proxied.return_value = []
+        with patch("registry.core.nginx_service.settings") as s:
+            s.gateway_generic_proxy_enabled = True
+            with (
+                patch("registry.repositories.factory.get_agent_repository", return_value=empty),
+                patch("registry.repositories.factory.get_skill_repository", return_value=corrupt),
+                patch(
+                    "registry.repositories.factory.get_custom_entity_repository",
+                    return_value=empty,
+                ),
+            ):
+                result = await _fetch_generic_proxied_resources()
+
+        assert result[0]["path"] == "/skills/corrupt"
+        assert result[0]["has_upstream_auth"] is True
+
 
 # --------------------------------------------------------------------------- #
 # _create_generic_proxy_block — shape
@@ -302,6 +333,17 @@ class TestSafeBlock:
         assert (
             self._safe("skill", "/skills/x", "http://169.254.169.254/", allow_private=True) is None
         )
+
+    @pytest.mark.parametrize(
+        "entity_type,path",
+        [
+            ("skill", "/skills/fake"),
+            ("a2a_agent", "/agents/fake"),
+            ("workflow", "/workflow/fake"),
+        ],
+    )
+    def test_arbitrary_mcpgw_server_target_skipped(self, entity_type, path):
+        assert self._safe(entity_type, path, "http://mcpgw-server:8003/") is None
 
     def test_private_target_skipped_when_flag_false(self):
         assert self._safe("skill", "/skills/x", "http://10.0.0.5/", allow_private=False) is None

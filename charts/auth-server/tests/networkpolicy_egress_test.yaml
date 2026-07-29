@@ -62,3 +62,23 @@ tests:
       - contains:
           path: spec.egress[1].to[0].ipBlock.except
           content: "10.100.5.5/32"
+
+  - it: excludes IPv6 metadata and workload-credential endpoints by default
+    set:
+      egress.networkPolicy.enabled: true
+    asserts:
+      - equal:
+          path: spec.egress[2].to[0].ipBlock.cidr
+          value: "::/0"
+      - contains:
+          path: spec.egress[2].to[0].ipBlock.except
+          content: "fe80::/10"
+      - contains:
+          path: spec.egress[2].to[0].ipBlock.except
+          content: "fd00:ec2::254/128"
+      - contains:
+          path: spec.egress[2].to[0].ipBlock.except
+          content: "fd00:ec2::23/128"
+      - contains:
+          path: spec.egress[2].to[0].ipBlock.except
+          content: "::/128"

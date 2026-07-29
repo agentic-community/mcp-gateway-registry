@@ -293,7 +293,7 @@ app:
   # Gateway generic-proxy feature (registry-consumed). Ships DISABLED. Do NOT
   # enable gatewayGenericProxyEnabled until the network egress policy (SSRF layer 1)
   # is deployed and the registration-time validation + CSRF defenses are in place.
-  # The seven auth-server-consumed knobs live in the auth-server chart.
+  # The eleven auth-server-consumed knobs live in the auth-server chart.
   gatewayGenericProxyEnabled: false # Master switch for generic-proxy nginx blocks
   gatewayCanonicalNamespaceEnabled: false # Emit /entity_type/path canonical aliases
   gatewayProxyAllowPrivateTargets: false # Allow private/loopback proxy targets (metadata always denied)
