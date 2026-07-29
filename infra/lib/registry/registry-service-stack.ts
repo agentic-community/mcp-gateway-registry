@@ -274,6 +274,10 @@ export class RegistryServiceStack extends cdk.Stack {
       ...sharedEnv,
       KEYCLOAK_EXTERNAL_URL: authStack.keycloakUrl,
       KEYCLOAK_M2M_CLIENT_ID: 'mcp-gateway-m2m',
+      // Prevent AWS SDKs from falling back to EC2 IMDS. ECS task-role
+      // credentials remain available through the container credential URI.
+      // Kept in parity with terraform/aws-ecs auth-server env.
+      AWS_EC2_METADATA_DISABLED: 'true',
     };
 
     // Container secrets (registry + auth share most of these)
