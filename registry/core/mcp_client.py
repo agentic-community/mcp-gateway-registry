@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 
 def _assert_mcp_url_fetchable(
     url: str,
+    server_info: dict[str, Any] | None = None,
 ) -> bool:
     """Fail-closed SSRF check before an MCP SDK connection is opened.
 
@@ -43,16 +44,32 @@ def _assert_mcp_url_fetchable(
         True if the URL passed validation and may be connected to, else False.
     """
     from ..exceptions import UrlValidationError
-    from ..utils.url_guard import PROXY_PROFILE, validate_url
+    from ..utils.url_guard import (
+        proxy_profile_for_entity_target,
+        sanitized_url_for_log,
+        validate_url,
+    )
 
+    identity = server_info or {}
+    entity_path = identity.get("path") or identity.get("service_path")
+    registered_target = identity.get("proxy_pass_url")
     try:
-        validate_url(url, profile=PROXY_PROFILE)
+        profile = proxy_profile_for_entity_target("mcp_server", entity_path, registered_target, url)
+        validate_url(url, profile=profile)
         return True
     except UrlValidationError as e:
-        logger.warning("MCP connection blocked by SSRF guard for %s: %s", url, e)
+        logger.warning(
+            "MCP connection blocked by SSRF guard for %s: %s",
+            sanitized_url_for_log(url),
+            e.reason,
+        )
         return False
     except Exception as e:  # pragma: no cover - defensive, fail closed
-        logger.warning("MCP connection blocked (validation error) for %s: %s", url, e)
+        logger.warning(
+            "MCP connection blocked (validation error) for %s: %s",
+            sanitized_url_for_log(url),
+            e,
+        )
         return False
 
 
@@ -159,7 +176,9 @@ def _build_headers_for_server(
                 and server_info.get("auth_credential_encrypted")
             )
         )
-        _destination_safe = bool(destination_url) and _assert_mcp_url_fetchable(destination_url)
+        _destination_safe = bool(destination_url) and _assert_mcp_url_fetchable(
+            destination_url, server_info
+        )
         if _has_secret and not _destination_safe:
             logger.warning(
                 "Not attaching decrypted headers/credential for '%s': destination "
@@ -376,7 +395,7 @@ async def _get_tools_streamable_http(base_url: str, server_info: dict = None) ->
     # target that resolves to a private/metadata address must never receive the
     # server's decrypted backend credentials. Validate the actual endpoint about
     # to be connected to (explicit endpoint if set, else the base URL).
-    if not _assert_mcp_url_fetchable(explicit_endpoint or base_url):
+    if not _assert_mcp_url_fetchable(explicit_endpoint or base_url, server_info):
         return None
 
     # Build headers for the server (destination re-validated inside before any
@@ -398,6 +417,9 @@ async def _get_tools_streamable_http(base_url: str, server_info: dict = None) ->
                 mcp_url += "?instance_id=default"
             elif "instance_id=" not in mcp_url:
                 mcp_url += "&instance_id=default"
+
+        if not _assert_mcp_url_fetchable(mcp_url, server_info):
+            return None
 
         try:
             async with streamablehttp_client(url=mcp_url, headers=headers) as (
@@ -433,6 +455,8 @@ async def _get_tools_streamable_http(base_url: str, server_info: dict = None) ->
             logger.info(f"DEBUG: Not a Strata server, URL unchanged: {mcp_url}")
 
         logger.info(f"DEBUG: About to connect to: {mcp_url}")
+        if not _assert_mcp_url_fetchable(mcp_url, server_info):
+            return None
         try:
             async with streamablehttp_client(url=mcp_url, headers=headers) as (
                 read,
@@ -454,6 +478,8 @@ async def _get_tools_streamable_http(base_url: str, server_info: dict = None) ->
         endpoints_to_try = [base_url.rstrip("/") + "/mcp/", base_url.rstrip("/") + "/"]
 
         for mcp_url in endpoints_to_try:
+            if not _assert_mcp_url_fetchable(mcp_url, server_info):
+                continue
             try:
                 logger.info(f"MCP Client: Trying streamable-http endpoint: {mcp_url}")
                 async with streamablehttp_client(url=mcp_url, headers=headers) as (
@@ -508,7 +534,7 @@ async def _get_tools_sse(base_url: str, server_info: dict = None) -> list[dict] 
     # taken verbatim from the explicit sse_endpoint when one is set, so an
     # sse_endpoint pointing at a private/metadata/loopback address is rejected
     # before any credential is built or attached.
-    if not _assert_mcp_url_fetchable(mcp_server_url):
+    if not _assert_mcp_url_fetchable(mcp_server_url, server_info):
         return None
 
     # Build headers for the server (destination re-validated inside before any
@@ -702,9 +728,9 @@ async def get_mcp_connection_result(
     # fields (mcp_endpoint and sse_endpoint) here because either one can be the
     # actual connection target below depending on the negotiated transport; the
     # SDK client is unpinnable, so this is the fetch-time re-validation.
-    if not _assert_mcp_url_fetchable(explicit_endpoint or base_url):
+    if not _assert_mcp_url_fetchable(explicit_endpoint or base_url, server_info):
         return None
-    if explicit_sse_endpoint and not _assert_mcp_url_fetchable(explicit_sse_endpoint):
+    if explicit_sse_endpoint and not _assert_mcp_url_fetchable(explicit_sse_endpoint, server_info):
         return None
 
     # Use transport-aware detection
@@ -733,6 +759,9 @@ async def get_mcp_connection_result(
             mcp_url += "?instance_id=default"
         elif "instance_id=" not in mcp_url:
             mcp_url += "&instance_id=default"
+
+    if transport == "streamable-http" and not _assert_mcp_url_fetchable(mcp_url, server_info):
+        return None
 
     try:
         if transport == "streamable-http":

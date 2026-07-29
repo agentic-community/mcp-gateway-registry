@@ -162,6 +162,10 @@ class TestPublicSkill:
                 "name": "pdf",
                 "path": "/skills/pdf",
                 "auth_credential_encrypted": "secret",
+                "auth_scheme": "bearer",
+                "auth_header_name": "Authorization",
+                "credential_updated_at": "2026-07-29T00:00:00Z",
+                "_identity_url_normalized": "https://private.example/skill.md",
                 "owner": "alice",
             },
         )
@@ -172,6 +176,10 @@ class TestPublicSkill:
         body = resp.json()
         assert body["name"] == "pdf"
         assert "auth_credential_encrypted" not in body
+        assert "auth_scheme" not in body
+        assert "auth_header_name" not in body
+        assert "credential_updated_at" not in body
+        assert "_identity_url_normalized" not in body
         assert "owner" not in body
 
     def test_missing_skill_404(self):

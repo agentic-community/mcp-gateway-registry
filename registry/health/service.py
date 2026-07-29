@@ -14,7 +14,14 @@ from ..common.log_redaction import redact_headers
 from ..core.config import settings
 from ..core.endpoint_utils import get_endpoint_url_from_server_info
 from ..exceptions import UrlValidationError
-from ..utils.url_guard import PROXY_PROFILE, guarded_async_client, validate_url
+from ..utils.url_guard import (
+    BUILTIN_AIREGISTRY_TOOLS_PROFILE,
+    PROXY_PROFILE,
+    guarded_async_client,
+    proxy_profile_for_entity_target,
+    sanitized_url_for_log,
+    validate_url,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -363,10 +370,16 @@ class HealthMonitoringService:
         HEALTH_CHECK_BATCH_SIZE = 10
         HEALTH_CHECK_BATCH_DELAY_SECONDS = 0.5
 
-        async with guarded_async_client(
-            profile=PROXY_PROFILE,
-            timeout=httpx.Timeout(settings.health_check_timeout_seconds),
-        ) as client:
+        async with (
+            guarded_async_client(
+                profile=PROXY_PROFILE,
+                timeout=httpx.Timeout(settings.health_check_timeout_seconds),
+            ) as client,
+            guarded_async_client(
+                profile=BUILTIN_AIREGISTRY_TOOLS_PROFILE,
+                timeout=httpx.Timeout(settings.health_check_timeout_seconds),
+            ) as builtin_client,
+        ):
             check_tasks = []
             for service_path in enabled_services:
                 server_info = await server_service.get_server_info(
@@ -378,9 +391,15 @@ class HealthMonitoringService:
             # Execute health checks in staggered batches
             for batch_start in range(0, len(check_tasks), HEALTH_CHECK_BATCH_SIZE):
                 batch = check_tasks[batch_start : batch_start + HEALTH_CHECK_BATCH_SIZE]
-                batch_coros = [
-                    self._check_single_service(client, path, info) for path, info in batch
-                ]
+                batch_coros = []
+                for path, info in batch:
+                    profile = proxy_profile_for_entity_target(
+                        "mcp_server", path, info["proxy_pass_url"]
+                    )
+                    selected_client = (
+                        builtin_client if profile is BUILTIN_AIREGISTRY_TOOLS_PROFILE else client
+                    )
+                    batch_coros.append(self._check_single_service(selected_client, path, info))
                 results = await asyncio.gather(*batch_coros, return_exceptions=True)
 
                 for result in results:
@@ -686,12 +705,28 @@ class HealthMonitoringService:
         # for the actual request additionally pins the resolved public IP so the
         # host cannot rebind to a private address after this check.
         try:
-            validate_url(proxy_pass_url, profile=PROXY_PROFILE)
+            entity_path = server_info.get("path") or server_info.get("service_path")
+            registered_target = server_info.get("proxy_pass_url")
+            profile = proxy_profile_for_entity_target(
+                "mcp_server", entity_path, registered_target, proxy_pass_url
+            )
+            validate_url(proxy_pass_url, profile=profile)
+            # A privileged profile selected from the registered built-in base
+            # must not validate a different actual override URL. Check both
+            # optional transports before any credential is decrypted.
+            for field_name in ("mcp_endpoint", "sse_endpoint"):
+                outbound_url = server_info.get(field_name)
+                if not outbound_url:
+                    continue
+                outbound_profile = proxy_profile_for_entity_target(
+                    "mcp_server", entity_path, registered_target, outbound_url
+                )
+                validate_url(outbound_url, profile=outbound_profile)
         except UrlValidationError as e:
             logger.warning(
                 "Health check blocked by SSRF guard for %s: %s (credentials NOT sent)",
-                proxy_pass_url,
-                e,
+                sanitized_url_for_log(proxy_pass_url),
+                e.reason,
             )
             return False, HealthStatus.UNHEALTHY_URL_BLOCKED
 
@@ -1246,8 +1281,9 @@ class HealthMonitoringService:
         self.server_health_status[service_path] = HealthStatus.CHECKING
 
         try:
+            profile = proxy_profile_for_entity_target("mcp_server", service_path, proxy_pass_url)
             async with guarded_async_client(
-                profile=PROXY_PROFILE,
+                profile=profile,
                 timeout=httpx.Timeout(settings.health_check_timeout_seconds),
             ) as client:
                 # Use transport-aware endpoint checking

@@ -469,6 +469,18 @@ def _parse_and_validate_custom_headers(
         seen_names.add(lower)
         validated.append({"name": ch.name, "value": ch.value})
 
+    # Re-run the storage-layer policy here so route validation cannot drift from
+    # defensive validation performed immediately before encryption.
+    from ..utils.credential_encryption import validate_custom_headers
+
+    try:
+        validate_custom_headers(validated, allow_empty_values=allow_empty_values)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid custom header: {exc}",
+        ) from exc
+
     return validated
 
 

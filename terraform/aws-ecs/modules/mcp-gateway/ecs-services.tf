@@ -505,6 +505,12 @@ module "ecs_service_auth" {
           name  = "INTERNAL_TOKEN_LEEWAY_SECONDS"
           value = tostring(var.internal_token_leeway_seconds)
         },
+        # Prevent AWS SDKs from falling back to EC2 IMDS. ECS task-role
+        # credentials remain available through the container credential URI.
+        {
+          name  = "AWS_EC2_METADATA_DISABLED"
+          value = "true"
+        },
         {
           name  = "METRICS_LEGACY_HTTP_POST"
           value = "false"

@@ -1083,3 +1083,67 @@ class TestMcpClientSsrfGuard:
             mock_headers.assert_not_called()
             mock_stream.assert_not_called()
             mock_sse.assert_not_called()
+
+
+class TestBuiltinMcpOutboundIdentityBinding:
+    """The built-in registration cannot lend private-host trust to overrides."""
+
+    _BUILTIN = {
+        "path": "/airegistry-tools/",
+        "service_path": "/airegistry-tools/",
+        "proxy_pass_url": "http://mcpgw-server:8003/",
+        "supported_transports": ["streamable-http"],
+        "headers": [],
+    }
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "actual",
+        [
+            "https://public.example/mcp",
+            "http://mcpgw-server:8004/mcp",
+            "http://mcpgw-server:8003/other",
+            "http://mcpgw-server:8003/mcp?tenant=other",
+        ],
+    )
+    async def test_mcp_endpoint_mismatch_never_builds_headers_or_fetches(self, actual):
+        server_info = {**self._BUILTIN, "mcp_endpoint": actual}
+        with (
+            patch("registry.core.mcp_client._build_headers_for_server") as headers,
+            patch("registry.core.mcp_client.streamablehttp_client") as client,
+        ):
+            result = await _get_tools_streamable_http(server_info["proxy_pass_url"], server_info)
+        assert result is None
+        headers.assert_not_called()
+        client.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_sse_endpoint_mismatch_never_builds_headers_or_fetches(self):
+        server_info = {
+            **self._BUILTIN,
+            "supported_transports": ["sse"],
+            "sse_endpoint": "http://mcpgw-server:8003/sse",
+        }
+        with (
+            patch("registry.core.mcp_client._build_headers_for_server") as headers,
+            patch("registry.core.mcp_client.sse_client") as client,
+        ):
+            result = await _get_tools_sse(server_info["proxy_pass_url"], server_info)
+        assert result is None
+        headers.assert_not_called()
+        client.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_missing_registered_target_cannot_lend_builtin_trust(self):
+        server_info = {
+            key: value for key, value in self._BUILTIN.items() if key != "proxy_pass_url"
+        }
+        server_info["mcp_endpoint"] = "http://mcpgw-server:8003/mcp"
+        with (
+            patch("registry.core.mcp_client._build_headers_for_server") as headers,
+            patch("registry.core.mcp_client.streamablehttp_client") as client,
+        ):
+            result = await _get_tools_streamable_http("http://mcpgw-server:8003/", server_info)
+        assert result is None
+        headers.assert_not_called()
+        client.assert_not_called()

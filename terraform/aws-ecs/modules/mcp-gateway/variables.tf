@@ -1738,10 +1738,17 @@ variable "registry_extra_env" {
 }
 
 variable "auth_server_extra_env" {
-  description = "Extra environment variables for auth-server service. List of objects with 'name' and 'value' string fields. Reserved-name validation is performed at the root module."
+  description = "Extra environment variables for auth-server service. AWS_EC2_METADATA_DISABLED is Terraform-managed and cannot be overridden."
   type        = list(object({ name = string, value = string }))
   default     = []
   sensitive   = true
+
+  validation {
+    condition = alltrue([
+      for entry in var.auth_server_extra_env : upper(trimspace(entry.name)) != "AWS_EC2_METADATA_DISABLED"
+    ])
+    error_message = "auth_server_extra_env must not override Terraform-managed AWS_EC2_METADATA_DISABLED."
+  }
 }
 
 variable "mcpgw_extra_env" {

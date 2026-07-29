@@ -1481,3 +1481,79 @@ async def test_endpoint_check_blocks_unsafe_url_without_sending_credentials(
     client.get.assert_not_called()
     client.head.assert_not_called()
     client.post.assert_not_called()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "field,actual",
+    [
+        ("mcp_endpoint", "https://public.example/mcp"),
+        ("mcp_endpoint", "http://mcpgw-server:8004/mcp"),
+        ("mcp_endpoint", "http://mcpgw-server:8003/other"),
+        ("mcp_endpoint", "http://mcpgw-server:8003/mcp?tenant=other"),
+        ("sse_endpoint", "http://mcpgw-server:8003/sse"),
+    ],
+)
+async def test_builtin_health_override_mismatch_never_builds_headers_or_fetches(
+    health_service, field, actual
+):
+    """A built-in profile is bound to the exact actual outbound identity."""
+    from registry.utils import url_guard
+
+    url_guard._proxy_allowlist.cache_clear()
+    url_guard._builtin_airegistry_tools_allowlist.cache_clear()
+    server_info = {
+        "path": "/airegistry-tools/",
+        "server_name": "AI Registry tools",
+        "proxy_pass_url": "http://mcpgw-server:8003/",
+        "supported_transports": ["streamable-http"],
+        "auth_scheme": "bearer",
+        "auth_credential_encrypted": "must-not-be-decrypted",
+        field: actual,
+    }
+    client = AsyncMock()
+
+    with (
+        patch(
+            "registry.utils.url_guard.socket.getaddrinfo",
+            return_value=[(None, None, None, None, ("10.0.0.9", 8003))],
+        ),
+        patch.object(health_service, "_build_headers_for_server") as build_headers,
+    ):
+        healthy, detail = await health_service._check_server_endpoint_transport_aware(
+            client, server_info["proxy_pass_url"], server_info
+        )
+
+    assert healthy is False
+    assert detail == HealthStatus.UNHEALTHY_URL_BLOCKED
+    build_headers.assert_not_called()
+    client.get.assert_not_called()
+    client.post.assert_not_called()
+    client.head.assert_not_called()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_builtin_health_requires_registered_proxy_target(health_service):
+    server_info = {
+        "path": "/airegistry-tools/",
+        "server_name": "AI Registry tools",
+        "supported_transports": ["streamable-http"],
+        "auth_scheme": "bearer",
+        "auth_credential_encrypted": "must-not-be-decrypted",
+    }
+    supplied_url = "http://mcpgw-server:8003/"
+    client = AsyncMock()
+
+    with patch.object(health_service, "_build_headers_for_server") as build_headers:
+        healthy, detail = await health_service._check_server_endpoint_transport_aware(
+            client, supplied_url, server_info
+        )
+
+    assert healthy is False
+    assert detail == HealthStatus.UNHEALTHY_URL_BLOCKED
+    build_headers.assert_not_called()
+    client.get.assert_not_called()
+    client.post.assert_not_called()
+    client.head.assert_not_called()

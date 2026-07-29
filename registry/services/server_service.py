@@ -10,34 +10,42 @@ from ..utils.credential_encryption import (
     _migrate_auth_type_to_auth_scheme,
     strip_credentials_from_dict,
 )
-from ..utils.url_guard import validate_proxy_pass_url, validate_server_path
+from ..utils.url_guard import (
+    proxy_profile_for_entity_target,
+    validate_proxy_pass_url,
+    validate_server_path,
+    validate_url,
+)
 
 logger = logging.getLogger(__name__)
 
 
 def _validate_endpoint_fields(
     server_info: dict[str, Any],
+    *,
+    server_path: str | None,
+    registered_target_url: str | None,
 ) -> None:
-    """Validate optional override endpoint fields at every write path.
+    """Validate optional endpoint overrides against the registered target.
 
-    ``mcp_endpoint`` and ``sse_endpoint`` are user-supplied alternate targets
-    that are later fetched (health checks, tool discovery, the scanner
-    subprocess) and interpolated into generated nginx config, exactly like
-    ``proxy_pass_url``. They therefore MUST pass the same canonical guard as
-    ``proxy_pass_url`` so an attacker cannot use them to smuggle a
-    private/metadata/loopback target or an nginx metacharacter past the check
-    on the primary URL field. Empty/unset is allowed (they are optional); a
-    present-but-invalid value is rejected with the same error shape as an
-    invalid ``proxy_pass_url`` (fail closed).
-
-    Raises:
-        UrlValidationError: If a present endpoint field fails scheme, host,
-            metacharacter, or private/metadata-IP validation.
+    Ordinary servers use the standard proxy profile. The built-in
+    ``airegistry-tools`` record may use its private-host profile only when the
+    actual override has an exact normalized outbound identity approved by that
+    profile; a different host, port, path, or query is rejected.
     """
     for field_name in ("mcp_endpoint", "sse_endpoint"):
         value = server_info.get(field_name)
-        if value:
-            validate_proxy_pass_url(value)
+        if not value:
+            continue
+        profile = proxy_profile_for_entity_target(
+            "mcp_server", server_path, registered_target_url, value
+        )
+        validate_url(
+            value,
+            profile=profile,
+            reject_nginx_metacharacters=True,
+            resolve=False,
+        )
 
 
 class ServerService:
@@ -103,11 +111,12 @@ class ServerService:
         # target). Raises UrlValidationError -> HTTP 400.
         proxy_pass_url = server_info.get("proxy_pass_url")
         if proxy_pass_url:
-            validate_proxy_pass_url(proxy_pass_url)
+            validate_proxy_pass_url(proxy_pass_url, server_path=path)
 
-        # Alternate/override endpoint fields are fetched and interpolated into
-        # config just like proxy_pass_url, so they go through the SAME guard.
-        _validate_endpoint_fields(server_info)
+        # Alternate endpoints are bound to the registered target identity.
+        _validate_endpoint_fields(
+            server_info, server_path=path, registered_target_url=proxy_pass_url
+        )
 
         # The path is interpolated into nginx location directives; reject any
         # nginx metacharacters so a crafted path cannot inject config.
@@ -219,12 +228,22 @@ class ServerService:
                 payload actually carries a proxy_pass_url, so health-status and
                 tool-list updates are unaffected.
         """
-        # Fail-closed URL validation on edit paths that change the backend URL.
-        if server_info.get("proxy_pass_url"):
-            validate_proxy_pass_url(server_info["proxy_pass_url"])
-
-        # Alternate/override endpoint fields get the same guard on edit paths.
-        _validate_endpoint_fields(server_info)
+        # Validate the merged target state whenever a target-bearing field is
+        # edited. This prevents an existing built-in registration from lending
+        # its privileged profile to a different mcp_endpoint/sse_endpoint.
+        target_fields = ("proxy_pass_url", "mcp_endpoint", "sse_endpoint")
+        if any(field in server_info for field in target_fields):
+            existing = await self._repo.get(path)
+            merged = dict(existing or {})
+            merged.update(server_info)
+            registered_target = merged.get("proxy_pass_url")
+            if registered_target:
+                validate_proxy_pass_url(registered_target, server_path=path)
+            _validate_endpoint_fields(
+                merged,
+                server_path=path,
+                registered_target_url=registered_target,
+            )
 
         result = await self._repo.update(path, server_info)
 
@@ -697,7 +716,7 @@ class ServerService:
         """
         # Fail-closed URL validation before persisting a new version's backend.
         if proxy_pass_url:
-            validate_proxy_pass_url(proxy_pass_url)
+            validate_proxy_pass_url(proxy_pass_url, server_path=path)
 
         # Get active server document
         active_server = await self._repo.get(path)

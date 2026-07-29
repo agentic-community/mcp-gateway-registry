@@ -2201,3 +2201,39 @@ class TestServerVersionManagement:
         # Act & Assert
         with pytest.raises(ValueError, match="Server not found"):
             await server_service.get_server_versions("/nonexistent")
+
+
+class TestBuiltinServerEndpointIdentityBinding:
+    @pytest.mark.asyncio
+    async def test_registration_rejects_mismatched_builtin_mcp_endpoint(
+        self, server_service, mock_server_repository
+    ):
+        record = {
+            "path": "/airegistry-tools/",
+            "server_name": "AI Registry tools",
+            "proxy_pass_url": "http://mcpgw-server:8003/",
+            "mcp_endpoint": "https://public.example/mcp",
+        }
+        from registry.exceptions import UrlValidationError
+
+        with pytest.raises(UrlValidationError, match="exact built-in"):
+            await server_service.register_server(record)
+        mock_server_repository.create.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_update_rejects_mismatched_builtin_query(
+        self, server_service, mock_server_repository
+    ):
+        mock_server_repository.get.return_value = {
+            "path": "/airegistry-tools/",
+            "server_name": "AI Registry tools",
+            "proxy_pass_url": "http://mcpgw-server:8003/",
+        }
+        from registry.exceptions import UrlValidationError
+
+        with pytest.raises(UrlValidationError, match="exact built-in"):
+            await server_service.update_server(
+                "/airegistry-tools/",
+                {"mcp_endpoint": "http://mcpgw-server:8003/mcp?tenant=other"},
+            )
+        mock_server_repository.update.assert_not_called()

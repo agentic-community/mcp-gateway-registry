@@ -12,6 +12,7 @@ key from SECRET_KEY instead of requiring a separate environment variable.
 import base64
 import hashlib
 import logging
+import re
 from datetime import UTC, datetime
 
 from cryptography.fernet import Fernet, InvalidToken
@@ -33,6 +34,75 @@ ENCRYPTED_FIELD: str = "auth_credential_encrypted"
 CUSTOM_HEADERS_PLAINTEXT_FIELD: str = "custom_headers"
 CUSTOM_HEADERS_ENCRYPTED_FIELD: str = "custom_headers_encrypted"
 CUSTOM_HEADER_NAMES_FIELD: str = "custom_header_names"
+
+MAX_CUSTOM_HEADER_NAME_LENGTH: int = 256
+MAX_CUSTOM_HEADER_VALUE_LENGTH: int = 4096
+_RFC_TOKEN_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
+
+
+def validate_custom_header_name(name: object) -> str:
+    """Return a bounded RFC token header name or raise ``ValueError``."""
+    if not isinstance(name, str):
+        raise ValueError("custom_headers entry name must be a string")
+    if not name:
+        raise ValueError("custom_headers entry requires a non-empty name")
+    if len(name) > MAX_CUSTOM_HEADER_NAME_LENGTH:
+        raise ValueError(
+            f"custom_headers entry name exceeds {MAX_CUSTOM_HEADER_NAME_LENGTH} characters"
+        )
+    if not _RFC_TOKEN_RE.fullmatch(name):
+        raise ValueError("custom_headers entry name must be a valid RFC token string")
+    return name
+
+
+def _validate_custom_header_value(value: object, *, allow_empty: bool = False) -> str:
+    """Return a bounded, control-free string header value."""
+    if not isinstance(value, str):
+        raise ValueError("custom_headers entry value must be a string")
+    if not value and not allow_empty:
+        raise ValueError("custom_headers entry requires a non-empty value")
+    if len(value) > MAX_CUSTOM_HEADER_VALUE_LENGTH:
+        raise ValueError(
+            f"custom_headers entry value exceeds {MAX_CUSTOM_HEADER_VALUE_LENGTH} characters"
+        )
+    if any(ord(char) < 0x20 or ord(char) == 0x7F for char in value):
+        raise ValueError("custom_headers entry value cannot contain control characters")
+    return value
+
+
+def validate_custom_headers(
+    raw: list[dict] | None,
+    *,
+    allow_empty_values: bool = False,
+) -> list[dict] | None:
+    """Validate existing MCP custom headers before storage or use."""
+    if raw is None:
+        return None
+
+    from registry.constants import MAX_CUSTOM_HEADERS_PER_SERVER, RESERVED_CUSTOM_HEADER_NAMES
+
+    if not isinstance(raw, list):
+        raise ValueError("custom_headers must be a list")
+    if len(raw) > MAX_CUSTOM_HEADERS_PER_SERVER:
+        raise ValueError(
+            f"Too many custom headers: got {len(raw)}, maximum is {MAX_CUSTOM_HEADERS_PER_SERVER}"
+        )
+
+    seen: set[str] = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            raise ValueError("custom_headers entry must be an object")
+        name = validate_custom_header_name(item.get("name"))
+        _validate_custom_header_value(item.get("value"), allow_empty=allow_empty_values)
+        lower = name.lower()
+        if lower in RESERVED_CUSTOM_HEADER_NAMES:
+            raise ValueError(
+                f"Header '{name}' is managed by the gateway and cannot be set as a custom header"
+            )
+        if lower in seen:
+            raise ValueError(f"Duplicate custom header name: {name}")
+        seen.add(lower)
+    return raw
 
 
 def _derive_fernet_key(
@@ -193,51 +263,29 @@ def strip_credentials_from_dict(
 def encrypt_custom_headers_in_server_dict(
     server_dict: dict,
 ) -> dict:
-    """Encrypt custom_headers values in a server dict before storage.
-
-    Reads server_dict['custom_headers'] (list of {name, value}),
-    encrypts each value, writes server_dict['custom_headers_encrypted']
-    and server_dict['custom_header_names']. Removes the plaintext field.
-
-    Args:
-        server_dict: Server config dictionary.
-
-    Returns:
-        Modified dict with encrypted headers (mutated in place).
-
-    Raises:
-        ValueError: If a value is present but encryption fails.
-    """
-    raw = server_dict.pop(CUSTOM_HEADERS_PLAINTEXT_FIELD, None)
+    """Validate and encrypt custom-header values before storage."""
+    raw = server_dict.get(CUSTOM_HEADERS_PLAINTEXT_FIELD)
     if raw is None:
         return server_dict
-    if not isinstance(raw, list):
-        raise ValueError("custom_headers must be a list")
 
-    encrypted_list = []
-    names = []
-    seen: set[str] = set()
+    validate_custom_headers(raw)
+    encrypted_list: list[dict[str, str]] = []
+    names: list[str] = []
     for item in raw:
-        if not isinstance(item, dict):
-            raise ValueError("custom_headers entry must be an object")
-        name = item.get("name")
-        value = item.get("value")
-        if not name or not value:
-            raise ValueError("custom_headers entry requires non-empty name and value")
-        lower = name.lower()
-        if lower in seen:
-            raise ValueError(f"Duplicate custom header name: {name}")
-        seen.add(lower)
+        name = validate_custom_header_name(item.get("name"))
+        value = _validate_custom_header_value(item.get("value"))
         encrypted_list.append({"name": name, "value_encrypted": encrypt_credential(value)})
         names.append(name)
 
     server_dict[CUSTOM_HEADERS_ENCRYPTED_FIELD] = encrypted_list
     server_dict[CUSTOM_HEADER_NAMES_FIELD] = names
     server_dict["custom_headers_updated_at"] = datetime.now(UTC).isoformat()
+    server_dict.pop(CUSTOM_HEADERS_PLAINTEXT_FIELD, None)
 
     logger.info(
-        f"Custom headers encrypted for storage "
-        f"(path: {server_dict.get('path', 'unknown')}, count: {len(names)})"
+        "Custom headers encrypted for storage (path: %s, count: %d)",
+        server_dict.get("path", "unknown"),
+        len(names),
     )
     return server_dict
 
@@ -245,28 +293,48 @@ def encrypt_custom_headers_in_server_dict(
 def decrypt_custom_headers(
     encrypted_list: list[dict] | None,
 ) -> list[dict]:
-    """Decrypt a list of custom_headers_encrypted entries.
+    """Best-effort decrypt safe stored custom headers, skipping bad entries."""
+    from registry.constants import RESERVED_CUSTOM_HEADER_NAMES
 
-    Args:
-        encrypted_list: Stored list of {name, value_encrypted} objects.
-
-    Returns:
-        List of {name, value} objects. Entries that fail to decrypt are
-        dropped and a warning is logged.
-    """
     if not encrypted_list:
         return []
-    out = []
+    if not isinstance(encrypted_list, list):
+        logger.warning("Stored custom headers are not a list; skipping.")
+        return []
+
+    out: list[dict[str, str]] = []
+    seen: set[str] = set()
     for item in encrypted_list:
-        name = item.get("name")
+        if not isinstance(item, dict):
+            logger.warning("Stored custom header entry is not an object; skipping.")
+            continue
+        try:
+            name = validate_custom_header_name(item.get("name"))
+        except ValueError:
+            logger.warning("Stored custom header has an invalid name; skipping.")
+            continue
+        lower = name.lower()
+        if lower in RESERVED_CUSTOM_HEADER_NAMES:
+            logger.warning("Stored custom header '%s' is gateway-managed; skipping.", name)
+            continue
+        if lower in seen:
+            logger.warning("Stored custom header '%s' is duplicated; skipping.", name)
+            continue
         encrypted = item.get("value_encrypted")
-        if not name or not encrypted:
+        if not isinstance(encrypted, str) or not encrypted:
+            logger.warning("Stored custom header '%s' has no ciphertext; skipping.", name)
             continue
         value = decrypt_credential(encrypted)
-        if value is not None:
-            out.append({"name": name, "value": value})
-        else:
-            logger.warning(f"Failed to decrypt custom header '{name}'; skipping.")
+        if value is None:
+            logger.warning("Failed to decrypt custom header '%s'; skipping.", name)
+            continue
+        try:
+            _validate_custom_header_value(value, allow_empty=True)
+        except ValueError:
+            logger.warning("Stored custom header '%s' has an unsafe value; skipping.", name)
+            continue
+        seen.add(lower)
+        out.append({"name": name, "value": value})
     return out
 
 

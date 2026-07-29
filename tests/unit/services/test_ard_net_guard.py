@@ -34,8 +34,13 @@ class TestAssertFetchable:
             "192.168.1.5",
             "172.16.0.9",
             "169.254.169.254",
+            "169.254.170.2",
+            "169.254.170.23",
             "0.0.0.0",
             "::ffff:10.0.0.1",
+            "64:ff9b::a9fe:a9fe",
+            "2002:a9fe:a9fe::",
+            "100.64.0.1",
         ],
     )
     def test_blocks_private_and_metadata(self, ip):
@@ -54,11 +59,13 @@ class TestAssertFetchable:
             with pytest.raises(ArdValidationError):
                 g.assert_fetchable("https://evil.example/x")
 
-    def test_cgnat_range_pinned_in_blocked_nets(self):
-        """Pin the exact CGNAT range so a runtime-semantics change fails loudly."""
+    def test_cgnat_range_pinned_in_shared_classifier(self):
+        """Pin the exact CGNAT range at its canonical home."""
         import ipaddress
 
-        assert ipaddress.ip_network("100.64.0.0/10") in g._BLOCKED_NETS
+        from registry.utils import ip_guard
+
+        assert ip_guard._CGNAT_NET == ipaddress.ip_network("100.64.0.0/10")
 
     def test_same_domain_allows_subdomain(self):
         with patch.object(g.socket, "getaddrinfo", _resolve_to("93.184.216.34")):

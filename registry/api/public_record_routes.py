@@ -49,8 +49,12 @@ _AGENT_SENSITIVE_FIELDS = frozenset(
 _SKILL_SENSITIVE_FIELDS = frozenset(
     {
         "auth_credential_encrypted",
+        "auth_scheme",
+        "auth_header_name",
+        "credential_updated_at",
         "allowed_groups",
         "owner",
+        "_identity_url_normalized",
     }
 )
 

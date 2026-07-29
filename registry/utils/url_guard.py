@@ -7,11 +7,27 @@ implementations (``skill_service._is_safe_url`` and
 ``ard_net_guard.assert_fetchable``) into one fail-closed guard:
 
 - Only ``http`` / ``https`` schemes are accepted.
-- The host must resolve **exclusively** to public IP addresses. Private,
-  loopback, link-local, reserved, multicast, and unspecified ranges are
-  blocked, along with the cloud metadata endpoint (``169.254.169.254``).
-- IPv4-mapped IPv6 addresses (``::ffff:10.0.0.1``) are unwrapped before the
-  range check so a private target cannot be smuggled through an IPv6 literal.
+- The host must resolve **exclusively** to public IP addresses. IP classification
+  is delegated to the shared ``registry.utils.ip_guard`` (one classifier
+  repo-wide): private, loopback, link-local, reserved, multicast, unspecified, and
+  CGNAT ranges are blocked, along with the cloud metadata endpoints
+  (``169.254.169.254`` AND the IPv6 ``fd00:ec2::254``) which are NEVER reachable —
+  not via the coarse bool nor an explicit CIDR allowlist.
+- Obfuscated IPv4 literals (hex/octal/decimal/trailing-dot) and embedded-IPv4 IPv6
+  transports (mapped ``::ffff:``, NAT64, 6to4, Teredo) are recognized and
+  category-checked, so a private/metadata target cannot be smuggled through a
+  non-canonical spelling.
+- Explicit host/CIDR allowlists can admit private, loopback, and CGNAT targets,
+  but cloud/workload credential endpoints, link-local, unspecified, reserved, and
+  multicast destinations remain hard-denied.
+- Hostname trust (``ssrf_allowed_hosts`` / ``github_extra_hosts``) is a
+  post-resolution relaxation, not a DNS bypass. Trusted names are still resolved,
+  every answer is classified, and the request is pinned to a validated answer.
+  Explicit hostname trust can admit non-credential private/internal addresses,
+  but EC2/ECS/EKS credential endpoints remain hard-denied before that relaxation.
+- The bundled ``mcpgw-server`` name is reserved and is not in ``PROXY_PROFILE``'s
+  global hostname set. A dedicated profile is selected only for the exact built-in
+  MCP entity ``/airegistry-tools/`` with target ``http://mcpgw-server:8003/``.
 - DNS-rebinding is defeated by pinning: the fetch connects only to an IP that
   was validated inside the same transport call, so there is no window between
   the check and the connect for the hostname to rebind to a private address.
@@ -21,8 +37,7 @@ implementations (``skill_service._is_safe_url`` and
 The guard fails closed: any error, resolution failure, or ambiguity results in
 rejection rather than a permissive fallback.
 
-Two validation profiles exist because the registry has two distinct outbound
-surfaces:
+Validation profiles separate the registry's distinct outbound trust surfaces:
 
 - **Skill fetches** (``SKILL_PROFILE``): public-only, with an operator bypass
   allowlist read from ``settings.github_extra_hosts`` so GitHub Enterprise
@@ -38,17 +53,19 @@ surfaces:
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import logging
 import socket
 from dataclasses import dataclass, field
 from functools import lru_cache
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit, urlunsplit
 
 import httpx
 
 from ..core.config import settings
 from ..exceptions import UrlValidationError
+from .ip_guard import coerce_ip_literal, ip_denial_reason
 
 logger = logging.getLogger(__name__)
 
@@ -56,8 +73,11 @@ logger = logging.getLogger(__name__)
 # supply its own. Keeps a hung internal target from tying up a worker.
 _DEFAULT_TIMEOUT_SECONDS: float = 15.0
 
-# The cloud metadata endpoint can never be reached, regardless of allowlists.
-_CLOUD_METADATA_IPS: frozenset[str] = frozenset({"169.254.169.254", "fd00:ec2::254"})
+# NOTE: IP classification (cloud-metadata hard-deny incl. the v6 fd00:ec2::254,
+# CGNAT, obfuscated literals, embedded-IPv4 unwrapping, the private/loopback/
+# reserved/multicast categories, and the two-tier allowlist) lives in the shared
+# ``registry.utils.ip_guard`` module — this file delegates to it via
+# ``_is_blocked_ip`` so there is ONE classifier repo-wide.
 
 # Server path names that collide with the cross-server wildcard sentinels. A
 # registration path like ``/all`` or ``/*`` normalizes (lstrip("/")) to the
@@ -74,30 +94,30 @@ _CLOUD_METADATA_IPS: frozenset[str] = frozenset({"169.254.169.254", "fd00:ec2::2
 # low-level util free of a dependency on the auth/repository layers.
 _RESERVED_SERVER_PATH_NAMES: frozenset[str] = frozenset({"all", "*"})
 
-# Carrier-grade NAT / shared address space (RFC 6598). Blocked explicitly rather
-# than relying on ipaddress.is_private: is_private only classifies this range as
-# private on newer Python runtimes, so depending on the runtime is fragile -- a
-# downgrade or a semantics change would silently re-open it as an SSRF pivot to
-# an internal/CGNAT host. Blocking it here pins the behavior regardless of the
-# interpreter version. It is treated exactly like the other reserved private
-# ranges: an operator CIDR allowlist can re-permit it (same as 10/8 etc.), but
-# it is denied by default.
-_CGNAT_NETS: tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...] = (
-    ipaddress.ip_network("100.64.0.0/10"),
-)
+# Bound DNS work independently of the HTTP connect/read timeout. Async guarded
+# transports use the event loop resolver under this deadline, so a slow or
+# adversarial resolver cannot block the event loop indefinitely.
+_DNS_RESOLUTION_TIMEOUT_SECONDS: float = 5.0
 
-# The gateway's own bundled registry-tools MCP server (airegistry-tools ->
-# mcpgw-server), reached over private container/service DNS (Docker Compose
-# service name, ECS Service Connect alias, Kubernetes service name). This is a
-# first-party component of the gateway itself, not an operator-supplied target,
-# so the SSRF guard trusts it by default -- an operator upgrading to a build with
-# the SSRF guard should not have to hand-configure SSRF_ALLOWED_HOSTS just to
-# keep the built-in registry-tools server healthy. Operator-supplied
-# ssrf_allowed_hosts are UNIONED with this set, never replace it. The cloud
-# metadata endpoint is still never reachable. (The demo servers -- currenttime,
-# realserverfaketools -- are opt-in via enable_demo_servers and are NOT trusted
-# by default; operators who enable them add them to SSRF_ALLOWED_HOSTS.)
-_BUILTIN_PROXY_ALLOWED_HOSTS: frozenset[str] = frozenset({"mcpgw-server"})
+# The only implicit private-host trust in the product: the bundled
+# airegistry-tools MCP server. Trust is selected only when ALL three identity
+# dimensions match (MCP entity type, registered path, normalized full target).
+# The hostname remains reserved in every ordinary profile so a custom entity,
+# skill, agent, or differently named MCP server cannot borrow this exception.
+_BUILTIN_AIREGISTRY_TOOLS_ENTITY_TYPE = "mcp_server"
+_BUILTIN_AIREGISTRY_TOOLS_PATH = "/airegistry-tools/"
+_BUILTIN_AIREGISTRY_TOOLS_TARGET = "http://mcpgw-server:8003/"
+# Exact request identities emitted by current MCP/health clients for the
+# built-in base URL. Query strings are intentionally absent and therefore
+# rejected; path, host, effective port, and query all participate in identity.
+_BUILTIN_AIREGISTRY_TOOLS_OUTBOUND_IDENTITIES: frozenset[str] = frozenset(
+    {
+        _BUILTIN_AIREGISTRY_TOOLS_TARGET,
+        "http://mcpgw-server:8003/mcp",
+        "http://mcpgw-server:8003/mcp/",
+    }
+)
+_RESERVED_BUILTIN_PROXY_HOSTS: frozenset[str] = frozenset({"mcpgw-server"})
 
 # Nginx metacharacters that must never appear in a proxy_pass_url. A valid URL
 # never legitimately contains these; their presence indicates an attempt to
@@ -123,7 +143,13 @@ _NGINX_METACHARACTERS: frozenset[str] = frozenset(
 
 @dataclass(frozen=True)
 class _Allowlist:
-    """A resolved set of hosts/CIDRs that may bypass the private-IP block."""
+    """A resolved set of hosts/CIDRs that relax the IP block.
+
+    ``cidrs`` explicitly permit private, loopback, and CGNAT destinations.
+    ``hosts`` is a post-resolution trust signal with the same limited
+    relaxation. Hard-denied credential, link-local, unspecified, reserved, and
+    multicast categories remain closed in both cases.
+    """
 
     hosts: frozenset[str] = field(default_factory=frozenset)
     cidrs: tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...] = ()
@@ -134,13 +160,6 @@ class _Allowlist:
     ) -> bool:
         """Return True if the hostname is explicitly allowlisted."""
         return hostname_lower in self.hosts
-
-    def allows_ip(
-        self,
-        ip: ipaddress.IPv4Address | ipaddress.IPv6Address,
-    ) -> bool:
-        """Return True if the IP falls inside an allowlisted CIDR."""
-        return any(ip in net for net in self.cidrs)
 
 
 def _parse_hosts(
@@ -166,12 +185,82 @@ def _parse_cidrs(
     return tuple(nets)
 
 
+def normalize_url_identity(url: str) -> str:
+    """Return the canonical full URL used for target identity comparisons.
+
+    Scheme and hostname are lower-cased, IDNs are converted to ASCII, default
+    ports are omitted, an empty path becomes ``/``, and the complete path and
+    query are preserved. Userinfo and fragments are rejected because neither is
+    a legitimate proxy target and both create ambiguous/log-sensitive identities.
+    """
+    if not url or not isinstance(url, str):
+        raise UrlValidationError(str(url), "URL is empty or not a string")
+    try:
+        parsed = urlsplit(url)
+        port = parsed.port  # force validation of malformed/out-of-range ports
+    except (TypeError, ValueError) as exc:
+        raise UrlValidationError(url, f"could not be parsed: {exc}") from exc
+
+    scheme = parsed.scheme.lower()
+    if scheme not in ("http", "https"):
+        raise UrlValidationError(url, f"scheme '{parsed.scheme}' is not allowed")
+    if parsed.username is not None or parsed.password is not None:
+        raise UrlValidationError(url, "URL userinfo is not allowed")
+    if parsed.fragment:
+        raise UrlValidationError(url, "URL fragments are not allowed")
+    hostname = parsed.hostname
+    if not hostname:
+        raise UrlValidationError(url, "URL has no hostname")
+
+    try:
+        normalized_host = hostname.encode("idna").decode("ascii").lower()
+    except UnicodeError as exc:
+        raise UrlValidationError(url, f"hostname is invalid: {exc}") from exc
+    host_for_netloc = f"[{normalized_host}]" if ":" in normalized_host else normalized_host
+    default_port = 443 if scheme == "https" else 80
+    netloc = host_for_netloc if port in (None, default_port) else f"{host_for_netloc}:{port}"
+    return urlunsplit((scheme, netloc, parsed.path or "/", parsed.query, ""))
+
+
+def sanitized_url_for_log(url: str) -> str:
+    """Return a URL safe for logs with userinfo, query, and fragment removed."""
+    try:
+        normalized = normalize_url_identity(url)
+        parsed = urlsplit(normalized)
+        return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+    except Exception:
+        return "[invalid URL]"
+
+
+def _normalized_registered_path(path: str | None) -> str:
+    """Normalize a registry path for exact built-in identity matching."""
+    clean = (path or "").strip("/")
+    return f"/{clean}/" if clean else "/"
+
+
+def is_builtin_airegistry_tools_target(
+    entity_type: str,
+    entity_path: str | None,
+    target_url: str | None,
+) -> bool:
+    """Return whether an entity is the exact bundled airegistry-tools target."""
+    if entity_type != _BUILTIN_AIREGISTRY_TOOLS_ENTITY_TYPE:
+        return False
+    if _normalized_registered_path(entity_path) != _BUILTIN_AIREGISTRY_TOOLS_PATH:
+        return False
+    try:
+        return normalize_url_identity(target_url) == _BUILTIN_AIREGISTRY_TOOLS_TARGET
+    except UrlValidationError:
+        return False
+
+
 @lru_cache(maxsize=1)
 def _skill_allowlist() -> _Allowlist:
     """Return the skill-fetch bypass allowlist (github_extra_hosts only).
 
     Built-in public forge domains are intentionally absent: they get full IP
-    validation. Only operator-configured GHES hosts skip the private-IP block.
+    validation. Only operator-configured GHES hosts may relax private-IP checks,
+    and those hosts are still resolved, classified, and pinned.
     Cached because settings are immutable per-process.
     """
     return _Allowlist(hosts=_parse_hosts(settings.github_extra_hosts))
@@ -179,17 +268,25 @@ def _skill_allowlist() -> _Allowlist:
 
 @lru_cache(maxsize=1)
 def _proxy_allowlist() -> _Allowlist:
-    """Return the server/agent target bypass allowlist.
+    """Return the ordinary server/agent/generic target allowlist.
 
-    Reads ``settings.ssrf_allowed_hosts`` and ``settings.ssrf_allowed_cidrs`` so
-    operators can proxy to internal MCP servers. The bundled first-party MCP
-    server hostnames (_BUILTIN_PROXY_ALLOWED_HOSTS) are always unioned in so an
-    upgrade to an SSRF-guarded build keeps them healthy with zero configuration.
-    Cached because settings are immutable per-process.
+    The bundled ``mcpgw-server`` hostname is intentionally absent. It is reserved
+    and only admitted through ``BUILTIN_AIREGISTRY_TOOLS_PROFILE`` after exact
+    entity/path/full-target matching.
     """
     return _Allowlist(
-        hosts=_BUILTIN_PROXY_ALLOWED_HOSTS | _parse_hosts(settings.ssrf_allowed_hosts),
+        hosts=_parse_hosts(settings.ssrf_allowed_hosts),
         cidrs=_parse_cidrs(settings.ssrf_allowed_cidrs),
+    )
+
+
+@lru_cache(maxsize=1)
+def _builtin_airegistry_tools_allowlist() -> _Allowlist:
+    """Return proxy policy plus the one exact built-in private hostname."""
+    ordinary = _proxy_allowlist()
+    return _Allowlist(
+        hosts=ordinary.hosts | _RESERVED_BUILTIN_PROXY_HOSTS,
+        cidrs=ordinary.cidrs,
     )
 
 
@@ -210,76 +307,96 @@ def _federation_allowlist() -> _Allowlist:
 
 @dataclass(frozen=True)
 class _Profile:
-    """A named validation profile: which allowlist and scheme rules apply."""
+    """A named validation profile and optional exact outbound identities."""
 
     name: str
     allowlist_factory: object  # callable returning _Allowlist
+    allowed_url_identities: frozenset[str] | None = None
 
 
 SKILL_PROFILE = _Profile(name="skill", allowlist_factory=_skill_allowlist)
 PROXY_PROFILE = _Profile(name="proxy", allowlist_factory=_proxy_allowlist)
+BUILTIN_AIREGISTRY_TOOLS_PROFILE = _Profile(
+    name="builtin-airegistry-tools",
+    allowlist_factory=_builtin_airegistry_tools_allowlist,
+    allowed_url_identities=_BUILTIN_AIREGISTRY_TOOLS_OUTBOUND_IDENTITIES,
+)
 FEDERATION_PROFILE = _Profile(name="federation", allowlist_factory=_federation_allowlist)
 
 
-def _unwrap_ip(
-    ip: ipaddress.IPv4Address | ipaddress.IPv6Address,
-) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
-    """Unwrap an IPv4-mapped IPv6 address to its embedded IPv4 address."""
-    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
-        return ip.ipv4_mapped
-    return ip
+def proxy_profile_for_entity_target(
+    entity_type: str,
+    entity_path: str | None,
+    registered_target_url: str | None,
+    outbound_url: str | None = None,
+) -> _Profile:
+    """Select trust using the registered identity and exact outbound identity.
 
+    A record whose registered target is the built-in base may use only the
+    small, explicit set of URLs emitted by the MCP and health clients. A
+    different override URL fails closed instead of silently falling back to the
+    ordinary profile, even when that different URL is otherwise public.
+    """
+    if not is_builtin_airegistry_tools_target(entity_type, entity_path, registered_target_url):
+        return PROXY_PROFILE
 
-def _is_metadata_ip(
-    ip: ipaddress.IPv4Address | ipaddress.IPv6Address,
-) -> bool:
-    """Return True for cloud metadata endpoints (never allowlistable)."""
-    return str(ip) in _CLOUD_METADATA_IPS
+    candidate = outbound_url or registered_target_url
+    normalized = normalize_url_identity(candidate)
+    if normalized not in _BUILTIN_AIREGISTRY_TOOLS_OUTBOUND_IDENTITIES:
+        raise UrlValidationError(
+            candidate,
+            "outbound URL does not match the exact built-in airegistry-tools identity",
+        )
+    return BUILTIN_AIREGISTRY_TOOLS_PROFILE
 
 
 def _is_blocked_ip(
     ip_str: str,
     allowlist: _Allowlist,
+    *,
+    trusted_hostname: bool = False,
 ) -> bool:
     """Return True if an IP must not be the target of a server-side fetch.
 
-    Blocks private, loopback, link-local, reserved, multicast, and unspecified
-    ranges. The cloud metadata endpoint is always blocked. An operator CIDR
-    allowlist can re-permit private ranges (but never the metadata endpoint).
-    Any unparseable address is treated as blocked (fail closed).
-
-    Args:
-        ip_str: IP address string to check.
-        allowlist: The profile allowlist (CIDRs that re-permit private ranges).
-
-    Returns:
-        True if the IP is unsafe to connect to, False if it is acceptable.
+    ``trusted_hostname`` represents an explicit operator hostname allowlist or
+    the exact built-in profile. It preserves the old ability to reach internal
+    addresses, but only *after* DNS resolution and canonical classification. The
+    resolved address is added as an exact CIDR, so ``ip_denial_reason`` still
+    executes its cloud/workload credential hard-deny before the relaxation.
     """
-    try:
-        ip = _unwrap_ip(ipaddress.ip_address(ip_str))
-    except ValueError:
+    ip = coerce_ip_literal(ip_str)
+    if ip is None:
         return True
-
-    # The metadata endpoint is never reachable, even via an allowlist.
-    if _is_metadata_ip(ip):
-        return True
-
-    is_dangerous = (
-        ip.is_private
-        or ip.is_loopback
-        or ip.is_link_local
-        or ip.is_reserved
-        or ip.is_multicast
-        or ip.is_unspecified
-        # Explicit CGNAT (RFC 6598) block so this does not depend on the Python
-        # runtime's is_private semantics for the 100.64.0.0/10 range.
-        or any(ip in net for net in _CGNAT_NETS)
+    allowed_cidrs = allowlist.cidrs
+    if trusted_hostname:
+        allowed_cidrs = (*allowed_cidrs, ipaddress.ip_network(f"{ip}/{ip.max_prefixlen}"))
+    return (
+        ip_denial_reason(
+            ip,
+            allow_private=False,
+            allowed_cidrs=allowed_cidrs,
+        )
+        is not None
     )
-    if not is_dangerous:
-        return False
 
-    # Dangerous range: only acceptable if an operator CIDR allowlist re-permits.
-    return not allowlist.allows_ip(ip)
+
+def _validate_resolved_ips(
+    hostname: str,
+    addr_info: list[tuple],
+    allowlist: _Allowlist,
+) -> list[str]:
+    """Validate every resolver answer and return a de-duplicated IP list."""
+    trusted_hostname = allowlist.allows_host(hostname.lower())
+    ips: list[str] = []
+    for _family, _socktype, _proto, _canonname, sockaddr in addr_info:
+        ip_str = str(sockaddr[0])
+        if _is_blocked_ip(ip_str, allowlist, trusted_hostname=trusted_hostname):
+            raise UrlValidationError(hostname, f"resolves to blocked/private IP {ip_str}")
+        if ip_str not in ips:
+            ips.append(ip_str)
+    if not ips:
+        raise UrlValidationError(hostname, "resolved to no addresses")
+    return ips
 
 
 def _resolve_public_ips(
@@ -287,42 +404,31 @@ def _resolve_public_ips(
     port: int,
     allowlist: _Allowlist,
 ) -> list[str]:
-    """Resolve a hostname and require all IPs to be acceptable.
-
-    Args:
-        hostname: The host to resolve.
-        port: The destination port (passed to ``getaddrinfo``).
-        allowlist: The profile allowlist (CIDRs re-permitting private ranges).
-
-    Returns:
-        The list of resolved IP address strings (all validated).
-
-    Raises:
-        UrlValidationError: If resolution fails or any resolved IP is blocked.
-    """
+    """Synchronously resolve, classify, and return every destination IP."""
     try:
-        addr_info = socket.getaddrinfo(
-            hostname,
-            port,
-            proto=socket.IPPROTO_TCP,
+        addr_info = socket.getaddrinfo(hostname, port, proto=socket.IPPROTO_TCP)
+    except socket.gaierror as exc:
+        raise UrlValidationError(hostname, f"DNS resolution failed: {exc}") from exc
+    return _validate_resolved_ips(hostname, addr_info, allowlist)
+
+
+async def _resolve_public_ips_async(
+    hostname: str,
+    port: int,
+    allowlist: _Allowlist,
+) -> list[str]:
+    """Resolve without blocking the event loop, under a fixed DNS deadline."""
+    loop = asyncio.get_running_loop()
+    try:
+        addr_info = await asyncio.wait_for(
+            loop.getaddrinfo(hostname, port, proto=socket.IPPROTO_TCP),
+            timeout=_DNS_RESOLUTION_TIMEOUT_SECONDS,
         )
-    except socket.gaierror as e:
-        raise UrlValidationError(hostname, f"DNS resolution failed: {e}") from e
-
-    ips: list[str] = []
-    for _family, _socktype, _proto, _canonname, sockaddr in addr_info:
-        ip_str = str(sockaddr[0])
-        if _is_blocked_ip(ip_str, allowlist):
-            raise UrlValidationError(
-                hostname,
-                f"resolves to blocked/private IP {ip_str}",
-            )
-        ips.append(ip_str)
-
-    if not ips:
-        raise UrlValidationError(hostname, "resolved to no addresses")
-
-    return ips
+    except TimeoutError as exc:
+        raise UrlValidationError(hostname, "DNS resolution timed out") from exc
+    except socket.gaierror as exc:
+        raise UrlValidationError(hostname, f"DNS resolution failed: {exc}") from exc
+    return _validate_resolved_ips(hostname, addr_info, allowlist)
 
 
 def contains_nginx_metacharacters(
@@ -372,8 +478,8 @@ def validate_url(
             live DNS lookup would be a fragile, network-dependent TOCTOU.
 
     Returns:
-        The list of validated IP strings the host resolves to. Empty list when
-        the host is allowlisted or when ``resolve`` is False (no pinning info).
+        The list of validated IP strings the host resolves to. Empty only when
+        ``resolve`` is False (no pinning information).
 
     Raises:
         UrlValidationError: On any validation failure (fails closed).
@@ -384,17 +490,20 @@ def validate_url(
     if reject_nginx_metacharacters and contains_nginx_metacharacters(url):
         raise UrlValidationError(url, "contains disallowed nginx metacharacters")
 
-    try:
-        parsed = urlparse(url)
-    except Exception as e:  # pragma: no cover - urlparse rarely raises
-        raise UrlValidationError(url, f"could not be parsed: {e}") from e
+    normalized = normalize_url_identity(url)
+    if (
+        profile.allowed_url_identities is not None
+        and normalized not in profile.allowed_url_identities
+    ):
+        raise UrlValidationError(url, "URL does not match the selected exact outbound identity")
+    parsed = urlparse(normalized)
 
     allowed_schemes = ("https",) if require_https else ("http", "https")
     if parsed.scheme not in allowed_schemes:
         raise UrlValidationError(url, f"scheme '{parsed.scheme}' is not allowed")
 
     hostname = parsed.hostname
-    if not hostname:
+    if not hostname:  # normalize_url_identity already enforces this; defensive
         raise UrlValidationError(url, "URL has no hostname")
 
     hostname_lower = hostname.lower()
@@ -403,26 +512,38 @@ def validate_url(
     # A hostname that is itself a literal IP must still pass the range check
     # (this is always enforced, even when resolve=False, because it needs no
     # network and catches the most direct SSRF payloads like the metadata IP).
-    try:
-        literal = ipaddress.ip_address(hostname)
-    except ValueError:
-        literal = None
+    # Use coerce_ip_literal (not ipaddress.ip_address) so obfuscated spellings
+    # (hex/octal/decimal/embedded-v4) are recognized as IPs and category-checked,
+    # not mistaken for opaque hostnames.
+    literal = coerce_ip_literal(hostname)
     if literal is not None:
         if _is_blocked_ip(hostname, allowlist):
             raise UrlValidationError(url, f"targets blocked/private IP {hostname}")
         return [str(literal)]
 
-    # Host explicitly allowlisted by the operator (e.g. GHES, or an internal
-    # MCP-server host): skip the IP block. We do not pin these (the transport
-    # falls back to normal DNS for them).
-    if allowlist.allows_host(hostname_lower):
-        logger.debug("URL guard[%s]: host '%s' is allowlisted", profile.name, hostname_lower)
-        return []
+    # ``mcpgw-server`` is a first-party internal identity, not a globally trusted
+    # destination. Ordinary entities are rejected even before DNS; only the
+    # exact airegistry-tools entity/path/full-target selector receives the
+    # dedicated profile that can admit it.
+    if (
+        hostname_lower in _RESERVED_BUILTIN_PROXY_HOSTS
+        and profile is not BUILTIN_AIREGISTRY_TOOLS_PROFILE
+    ):
+        raise UrlValidationError(
+            url, "hostname is reserved for the built-in airegistry-tools server"
+        )
 
     if not resolve:
-        # Registration-time structural validation only. The pinned transport
-        # performs the authoritative resolve-and-block at fetch time.
+        # Registration-time structural validation only. The DNS-aware service
+        # check and pinned transport perform authoritative resolution.
         return []
+
+    # Explicitly trusted hostnames are still resolved and classified. Their
+    # resolved non-credential addresses are relaxed in _validate_resolved_ips,
+    # then returned for connection pinning; cloud/workload credential endpoints
+    # remain hard-denied before that relaxation.
+    if allowlist.allows_host(hostname_lower):
+        logger.debug("URL guard[%s]: resolving trusted host '%s'", profile.name, hostname_lower)
 
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
     return _resolve_public_ips(hostname, port, allowlist)
@@ -430,6 +551,8 @@ def validate_url(
 
 def validate_proxy_pass_url(
     url: str,
+    *,
+    server_path: str | None = None,
 ) -> None:
     """Validate a server ``proxy_pass_url`` at registration time (fail closed).
 
@@ -441,9 +564,10 @@ def validate_proxy_pass_url(
     Raises:
         UrlValidationError: On any validation failure.
     """
+    profile = proxy_profile_for_entity_target("mcp_server", server_path, url)
     validate_url(
         url,
-        profile=PROXY_PROFILE,
+        profile=profile,
         reject_nginx_metacharacters=True,
         resolve=False,
     )
@@ -509,65 +633,67 @@ def validate_agent_url(
 
 
 class _PinnedResolverMixin:
-    """Shared logic for pinning a request to a validated IP.
-
-    Rewrites the outgoing request so httpx connects only to an IP that this
-    transport just validated, preserving the original Host header and TLS SNI.
-    Because the resolve+validate+connect all happen inside the transport call
-    for every request (including each redirect hop), there is no rebinding
-    window and no bypassable pre-check.
-    """
+    """Shared validate-and-pin logic for sync and async guarded transports."""
 
     _guard_profile: _Profile = SKILL_PROFILE
 
-    def _pin_request(
+    def _request_target(
         self,
         request: httpx.Request,
-    ) -> httpx.Request:
-        """Validate the request host and rewrite it to a pinned IP.
-
-        Raises:
-            UrlValidationError: If the target host is unsafe (fails closed).
-        """
+    ) -> tuple[httpx.URL, str, str, int, _Allowlist]:
+        """Perform structural checks and return normalized pinning inputs."""
         url = request.url
+        # Reuse canonical validation for scheme/host/userinfo/fragment/reserved
+        # built-in checks, but deliberately leave DNS to the transport-specific
+        # resolver below.
+        validate_url(str(url), profile=self._guard_profile, resolve=False)
         scheme = url.scheme
-        if scheme not in ("http", "https"):
-            raise UrlValidationError(str(url), f"scheme '{scheme}' is not allowed")
-
         hostname = url.host
-        if not hostname:
+        if not hostname:  # validate_url already enforces this; defensive
             raise UrlValidationError(str(url), "URL has no hostname")
-
-        hostname_lower = hostname.lower()
-        allowlist: _Allowlist = self._guard_profile.allowlist_factory()  # type: ignore[operator]
-
-        # Literal-IP host: validate directly, no rewrite needed.
-        try:
-            ipaddress.ip_address(hostname)
-            is_literal = True
-        except ValueError:
-            is_literal = False
-
-        if is_literal:
-            if _is_blocked_ip(hostname, allowlist):
-                raise UrlValidationError(str(url), f"targets blocked/private IP {hostname}")
-            return request
-
-        # Allowlisted host: do not pin (resolve normally).
-        if allowlist.allows_host(hostname_lower):
-            return request
-
         port = url.port or (443 if scheme == "https" else 80)
-        pinned_ips = _resolve_public_ips(hostname, port, allowlist)
-        pinned_ip = pinned_ips[0]
+        allowlist: _Allowlist = self._guard_profile.allowlist_factory()  # type: ignore[operator]
+        return url, scheme, hostname, port, allowlist
 
-        # Rewrite the connection target to the validated IP while preserving the
-        # original hostname for the Host header and TLS SNI.
+    @staticmethod
+    def _rewrite_to_pinned_ip(
+        request: httpx.Request,
+        url: httpx.URL,
+        hostname: str,
+        pinned_ip: str,
+    ) -> httpx.Request:
+        """Rewrite only the connect host, retaining Host and TLS SNI identity."""
         request.url = url.copy_with(host=pinned_ip)
         request.headers["Host"] = hostname if url.port is None else f"{hostname}:{url.port}"
         request.extensions = dict(request.extensions)
         request.extensions["sni_hostname"] = hostname
         return request
+
+    def _pin_request(
+        self,
+        request: httpx.Request,
+    ) -> httpx.Request:
+        """Synchronously validate, resolve, and pin a request."""
+        url, _scheme, hostname, port, allowlist = self._request_target(request)
+        if coerce_ip_literal(hostname) is not None:
+            if _is_blocked_ip(hostname, allowlist):
+                raise UrlValidationError(str(url), f"targets blocked/private IP {hostname}")
+            return request
+        pinned_ip = _resolve_public_ips(hostname, port, allowlist)[0]
+        return self._rewrite_to_pinned_ip(request, url, hostname, pinned_ip)
+
+    async def _pin_request_async(
+        self,
+        request: httpx.Request,
+    ) -> httpx.Request:
+        """Asynchronously validate, resolve under deadline, and pin a request."""
+        url, _scheme, hostname, port, allowlist = self._request_target(request)
+        if coerce_ip_literal(hostname) is not None:
+            if _is_blocked_ip(hostname, allowlist):
+                raise UrlValidationError(str(url), f"targets blocked/private IP {hostname}")
+            return request
+        pinned_ip = (await _resolve_public_ips_async(hostname, port, allowlist))[0]
+        return self._rewrite_to_pinned_ip(request, url, hostname, pinned_ip)
 
 
 class GuardedTransport(_PinnedResolverMixin, httpx.HTTPTransport):
@@ -606,7 +732,7 @@ class GuardedAsyncTransport(_PinnedResolverMixin, httpx.AsyncHTTPTransport):
         self,
         request: httpx.Request,
     ) -> httpx.Response:
-        request = self._pin_request(request)
+        request = await self._pin_request_async(request)
         return await super().handle_async_request(request)
 
 
@@ -614,7 +740,7 @@ def guarded_client(
     *,
     profile: _Profile = SKILL_PROFILE,
     timeout: float | httpx.Timeout | None = None,
-    verify: bool = True,
+    verify: bool | str = True,
     **kwargs: object,
 ) -> httpx.Client:
     """Return a sync httpx.Client that is SSRF/rebinding-safe.
@@ -635,7 +761,7 @@ def guarded_async_client(
     *,
     profile: _Profile = SKILL_PROFILE,
     timeout: float | httpx.Timeout | None = None,
-    verify: bool = True,
+    verify: bool | str = True,
     **kwargs: object,
 ) -> httpx.AsyncClient:
     """Return an async httpx.AsyncClient that is SSRF/rebinding-safe.
