@@ -1897,9 +1897,7 @@ class TestScopeConfigValidation:
         ):
             response = client.patch(
                 "/api/management/iam/groups/partial-upd",
-                json={
-                    "scope_config": {"ui_permissions": {"list_service": ["api"]}}
-                },
+                json={"scope_config": {"ui_permissions": {"list_service": ["api"]}}},
             )
 
         assert response.status_code == 200

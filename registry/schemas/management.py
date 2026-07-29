@@ -67,7 +67,7 @@ class ServerAccessRule(BaseModel):
         description="Allowed MCP methods (e.g. tools/call). Empty means none.",
     )
     tools: list[str] | str = Field(
-        default_factory=list,
+        default_factory=list[str],
         description='Allowed tool names, or "*" for all tools on this server.',
     )
 
