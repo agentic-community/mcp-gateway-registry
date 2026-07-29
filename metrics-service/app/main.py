@@ -32,6 +32,31 @@ async def lifespan(app: FastAPI):
         logger.error(f"Refusing to start: {e}")
         raise
 
+    # Declare the admin-surface posture LOUDLY at startup. Requiring
+    # METRICS_ADMIN_API_KEY is a breaking change: without it, every /admin/*
+    # endpoint (retention policy changes, cleanup, database stats) returns 503.
+    # This is intentionally NON-fatal -- ingest (POST /metrics, /flush) and the
+    # in-process daily cleanup keep working -- so ingest-only deployments that
+    # never call /admin/* still start. But an operator who upgrades must not
+    # discover the admin surface is disabled only when a runbook later gets a
+    # 503, so we log the posture once here: a WARNING when /admin/* is disabled,
+    # an INFO when it is enabled.
+    try:
+        settings.get_admin_api_key()
+        logger.info(
+            "Admin API key configured: /admin/* endpoints are ENABLED "
+            "(ingest keys remain rejected on /admin/*)."
+        )
+    except ValueError as e:
+        logger.warning(
+            "METRICS_ADMIN_API_KEY is not configured or is too weak: /admin/* "
+            "endpoints (retention policy changes, cleanup, database stats) are "
+            "DISABLED and will return 503. Ingest and the in-process daily "
+            "cleanup are unaffected. Set a strong, distinct admin key "
+            "(openssl rand -hex 32) to enable the admin surface. Detail: %s",
+            e,
+        )
+
     # Wait for database container to be ready
     logger.info("Waiting for database container...")
     await wait_for_database()
