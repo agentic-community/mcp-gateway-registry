@@ -1,11 +1,11 @@
-"""Unit tests for the shared IP-category SSRF guard (registry.utils.ip_guard).
+"""Unit tests for the url_guard IP-category SSRF classifier (registry.utils.url_guard).
 
 These lock in the two properties the whole gateway-proxy egress control rests on:
 1. ``coerce_ip_literal`` recognizes every spelling of an IPv4 literal that
    inet_aton/glibc/nginx would (decimal/octal/hex/short-form/trailing-dot), so an
    obfuscated metadata IP is category-checked, not treated as an opaque hostname;
    and it falls back to "hostname" (None) for overflow / genuine names.
-2. ``ip_denial_reason`` denies the metadata endpoint via every wrapper (mapped,
+2. ``_ip_denial_reason`` denies the metadata endpoint via every wrapper (mapped,
    NAT64) and keeps link-local/unspecified/reserved/multicast denied regardless
    of the allow-private flag, which relaxes ONLY loopback/private-unicast.
 """
@@ -14,7 +14,7 @@ import ipaddress
 
 import pytest
 
-from registry.utils.ip_guard import coerce_ip_literal, ip_denial_reason
+from registry.utils.url_guard import _ip_denial_reason, coerce_ip_literal
 
 _METADATA = ipaddress.ip_address("169.254.169.254")
 _LOOPBACK = ipaddress.ip_address("127.0.0.1")
@@ -61,7 +61,7 @@ class TestCoerceIpLiteralShortForms:
         # coercion + classification together: the decimal loopback form is denied.
         ip = coerce_ip_literal("2130706433")
         assert ip is not None
-        assert ip_denial_reason(ip, allow_private=False) is not None
+        assert _ip_denial_reason(ip, allow_private=False) is not None
 
 
 @pytest.mark.unit
@@ -144,7 +144,7 @@ class TestIpDenialReasonAlwaysDenied:
         ],
     )
     def test_always_denied(self, allow_private, ip):
-        assert ip_denial_reason(ipaddress.ip_address(ip), allow_private=allow_private) is not None
+        assert _ip_denial_reason(ipaddress.ip_address(ip), allow_private=allow_private) is not None
 
 
 @pytest.mark.unit
@@ -162,16 +162,16 @@ class TestIpDenialReasonPrivateGate:
 
     @pytest.mark.parametrize("ip", _RELAXABLE)
     def test_denied_by_default(self, ip):
-        assert ip_denial_reason(ipaddress.ip_address(ip), allow_private=False) is not None
+        assert _ip_denial_reason(ipaddress.ip_address(ip), allow_private=False) is not None
 
     @pytest.mark.parametrize("ip", _RELAXABLE)
     def test_allowed_when_flag_set(self, ip):
-        assert ip_denial_reason(ipaddress.ip_address(ip), allow_private=True) is None
+        assert _ip_denial_reason(ipaddress.ip_address(ip), allow_private=True) is None
 
     def test_reserved_stays_denied_even_with_flag(self):
         # blast-radius check: allow_private must NOT open reserved/multicast
-        assert ip_denial_reason(ipaddress.ip_address("240.0.0.1"), allow_private=True) is not None
-        assert ip_denial_reason(ipaddress.ip_address("224.0.0.1"), allow_private=True) is not None
+        assert _ip_denial_reason(ipaddress.ip_address("240.0.0.1"), allow_private=True) is not None
+        assert _ip_denial_reason(ipaddress.ip_address("224.0.0.1"), allow_private=True) is not None
 
 
 @pytest.mark.unit
@@ -180,25 +180,25 @@ class TestIpDenialReasonWrappedRelaxation:
 
     def test_mapped_private_relaxable(self):
         ip = ipaddress.ip_address("::ffff:10.0.0.1")
-        assert ip_denial_reason(ip, allow_private=False) is not None
-        assert ip_denial_reason(ip, allow_private=True) is None
+        assert _ip_denial_reason(ip, allow_private=False) is not None
+        assert _ip_denial_reason(ip, allow_private=True) is None
 
     def test_nat64_private_relaxable(self):
         # 64:ff9b::0a00:0001 embeds 10.0.0.1
         ip = ipaddress.ip_address("64:ff9b::0a00:0001")
-        assert ip_denial_reason(ip, allow_private=False) is not None
-        assert ip_denial_reason(ip, allow_private=True) is None
+        assert _ip_denial_reason(ip, allow_private=False) is not None
+        assert _ip_denial_reason(ip, allow_private=True) is None
 
     def test_6to4_private_relaxable(self):
         # 2002:0a00:0001:: embeds 10.0.0.1
         ip = ipaddress.ip_address("2002:0a00:0001::")
-        assert ip_denial_reason(ip, allow_private=False) is not None
-        assert ip_denial_reason(ip, allow_private=True) is None
+        assert _ip_denial_reason(ip, allow_private=False) is not None
+        assert _ip_denial_reason(ip, allow_private=True) is None
 
     def test_mapped_public_allowed_both(self):
         ip = ipaddress.ip_address("::ffff:8.8.8.8")
-        assert ip_denial_reason(ip, allow_private=False) is None
-        assert ip_denial_reason(ip, allow_private=True) is None
+        assert _ip_denial_reason(ip, allow_private=False) is None
+        assert _ip_denial_reason(ip, allow_private=True) is None
 
 
 @pytest.mark.unit
@@ -208,7 +208,7 @@ class TestIpDenialReasonPublicAllowed:
     @pytest.mark.parametrize("allow_private", [False, True])
     @pytest.mark.parametrize("ip", ["93.184.216.34", "8.8.8.8", "2606:4700:4700::1111"])
     def test_public_allowed(self, allow_private, ip):
-        assert ip_denial_reason(ipaddress.ip_address(ip), allow_private=allow_private) is None
+        assert _ip_denial_reason(ipaddress.ip_address(ip), allow_private=allow_private) is None
 
 
 @pytest.mark.unit
@@ -228,7 +228,7 @@ class TestCredentialEndpointsCannotBeRelaxed:
     )
     def test_allow_private_and_cidr_do_not_override(self, ip, cidr):
         assert (
-            ip_denial_reason(
+            _ip_denial_reason(
                 ipaddress.ip_address(ip),
                 allow_private=True,
                 allowed_cidrs=(ipaddress.ip_network(cidr),),
@@ -250,7 +250,7 @@ class TestHardDeniedCategoriesCannotBeRelaxed:
     )
     def test_allow_private_and_cidr_do_not_override(self, ip, cidr):
         assert (
-            ip_denial_reason(
+            _ip_denial_reason(
                 ipaddress.ip_address(ip),
                 allow_private=True,
                 allowed_cidrs=(ipaddress.ip_network(cidr),),
@@ -265,7 +265,7 @@ class TestAlibabaMetadataPrecision:
 
     @pytest.mark.parametrize("ip", ["100.100.100.199", "100.100.100.201", "100.63.255.255"])
     def test_adjacent_addresses_are_not_hard_denied_as_metadata(self, ip):
-        reason = ip_denial_reason(
+        reason = _ip_denial_reason(
             ipaddress.ip_address(ip),
             allow_private=True,
             allowed_cidrs=(ipaddress.ip_network("100.64.0.0/10"),),

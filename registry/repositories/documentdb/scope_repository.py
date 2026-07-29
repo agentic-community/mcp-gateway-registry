@@ -143,37 +143,45 @@ def _flatten_server_access(
     return all_rules
 
 
-def _server_access_has_reserved_wildcard(
+def _server_access_has_invalid_server_rule(
     server_access: list[dict[str, Any]] | None,
 ) -> bool:
-    """Return True if any rule's ``server`` value is a reserved wildcard name.
+    """Return True if any server rule has a reserved-wildcard or empty ``server``.
 
     ``import_group`` writes ``server_access`` straight to the collection with
     ``replace_one`` and never routes through :meth:`add_server_scope`, so its
     sink guard does not apply. This scans the imported rules (in both the
     grouped ``access_rules`` shape and the direct ``server`` rule shape) so a
-    group import cannot inject a ``server: "all"`` / ``server: "*"`` rule that
-    the resolver would promote to a cross-server wildcard. The compare
-    normalizes the same way the resolver's write path does (``lstrip("/")`` +
-    trailing-slash strip + case-fold).
+    group import cannot inject a degenerate server rule that
+    :func:`registry.utils.validate_server_path` would have rejected at
+    registration. Two cases are refused, mirroring that guard:
+
+    1. ``server: "all"`` / ``server: "*"`` -- the resolver promotes these to a
+       cross-server wildcard, granting access to every server.
+    2. ``server: ""`` (or slashes-only) -- grants no access in the resolver, but
+       the same path renders as a gateway-wide ``location /`` nginx block
+       (issue #1501); reject it so this mirror stays in sync with the guard.
+
+    The compare normalizes the same way the resolver's write path does
+    (``lstrip("/")`` + trailing-slash strip + case-fold). Only rules that
+    actually carry a ``server`` key are inspected; agent rules (which have an
+    ``agent`` key and no ``server`` key) are left alone.
 
     Args:
         server_access: The ``server_access`` list from a group import.
 
     Returns:
-        True if any server rule collides with a reserved wildcard name.
+        True if any server rule is a reserved wildcard or empty/slashes-only.
     """
     for rule in _flatten_server_access(server_access or []):
-        if not isinstance(rule, dict):
-            continue
-        server_name = rule.get("server")
-        if not server_name:
+        if not isinstance(rule, dict) or "server" not in rule:
             continue
         # Coerce with str() exactly as the resolver does
         # (access_resolver.py: `str(server_name) in _WILDCARD_VALUES`) so the
         # scan cannot be blind to a non-string value the resolver would still
         # promote to a wildcard.
-        if str(server_name).strip("/").lower() in _RESERVED_SERVER_PATH_NAMES:
+        normalized = str(rule.get("server") or "").strip("/").lower()
+        if not normalized or normalized in _RESERVED_SERVER_PATH_NAMES:
             return True
     return False
 
@@ -472,11 +480,26 @@ class DocumentDBScopeRepository(ScopeRepositoryBase):
             collection = await self._get_collection()
             server_name = server_path.lstrip("/")
 
-            # Last line of defense against the reserved-wildcard escalation:
-            # refuse to write a scope row whose server name collides with the
-            # cross-server wildcard sentinel, even if a caller bypassed
-            # validate_server_path. Fail closed (return False + log, per this
-            # method's error convention).
+            # Last line of defense against writing a degenerate server path, even
+            # if a caller bypassed validate_server_path. Fail closed (return
+            # False + log, per this method's error convention).
+            #
+            # An empty/slashes-only server name is rejected too: it grants no
+            # access in the resolver (falsy), but the same path renders as a
+            # gateway-wide `location /` nginx block (issue #1501), so the
+            # registration guard now rejects it and this mirror stays in sync.
+            if not server_name.strip("/"):
+                logger.error(
+                    "Refusing to add server scope for empty/slashes-only server "
+                    "name (from path '%s'): degenerate path, rejected at "
+                    "registration",
+                    server_path,
+                )
+                return False
+
+            # Refuse to write a scope row whose server name collides with the
+            # cross-server wildcard sentinel: it would grant access to every
+            # server in the registry.
             if server_name.rstrip("/").lower() in _RESERVED_SERVER_PATH_NAMES:
                 logger.error(
                     "Refusing to add server scope for reserved wildcard name "
@@ -1078,17 +1101,17 @@ class DocumentDBScopeRepository(ScopeRepositoryBase):
                 )
                 return False
 
-            # Reserved-wildcard sink guard for the import path. Unlike
+            # Degenerate-server-rule sink guard for the import path. Unlike
             # add_server_scope, import_group writes server_access directly, so
-            # it needs its own check. A server rule named "all"/"*" is never
-            # legitimate (it would grant cross-server access via the resolver's
-            # wildcard promotion), so this is refused unconditionally -- an
-            # admin cannot opt into it either. Fail closed (return False + log).
-            if _server_access_has_reserved_wildcard(server_access):
+            # it needs its own check. A server rule named "all"/"*" (cross-server
+            # wildcard) or "" (renders as a gateway-wide `location /`, issue
+            # #1501) is never legitimate, so this is refused unconditionally --
+            # an admin cannot opt into it either. Fail closed (return False + log).
+            if _server_access_has_invalid_server_rule(server_access):
                 logger.error(
                     f"Refusing to import group '{group_name}': server_access "
-                    "contains a reserved wildcard server name ('all'/'*') that "
-                    "would grant cross-server access"
+                    "contains a reserved wildcard ('all'/'*') or empty server "
+                    "name that would grant cross-server access or hijack the gateway"
                 )
                 return False
 

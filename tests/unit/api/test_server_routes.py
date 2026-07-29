@@ -1556,6 +1556,75 @@ class TestInternalRegister:
             assert "internal-registration-plaintext" not in serialized
             mock_server_service.register_server.assert_called_once()
 
+    def test_internal_register_does_not_log_proxy_url_at_info_or_warning(
+        self,
+        test_client_no_auth,
+        mock_server_service,
+        mock_nginx_service,
+        mock_health_service,
+        caplog,
+    ):
+        """The internal-register trace lines are DEBUG, and any URL is redacted.
+
+        The developer trace lines (previously WARNING with a TODO marker) must
+        not emit the backend proxy_pass_url at INFO/WARNING, and where the URL
+        is logged at DEBUG its credential userinfo and query secret must be
+        stripped.
+        """
+        mock_server_service.register_server.return_value = {
+            "success": True,
+            "message": "Server registered successfully",
+            "is_new_version": False,
+        }
+
+        # userinfo credentials + a query-string secret that must never be logged.
+        proxy_url = "http://user:s3cr3t@backend.internal:9000/mcp?token=leakme"
+
+        with (
+            patch.dict("os.environ", {"SECRET_KEY": "testpass"}),
+            patch("registry.utils.scopes_manager.update_server_scopes", new_callable=AsyncMock),
+        ):
+            token = generate_internal_token(subject="test-service", purpose="test")
+            caplog.set_level(logging.DEBUG, logger="registry.api.server_routes")
+            response = test_client_no_auth.post(
+                "/api/internal/register",
+                data={
+                    "name": "Internal Server",
+                    "description": "Registered internally",
+                    "path": "/internal-server",
+                    "proxy_pass_url": proxy_url,
+                    "tags": "internal",
+                    "num_tools": 3,
+                },
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+        assert response.status_code == 201
+
+        higher_records = [
+            r
+            for r in caplog.records
+            if r.name == "registry.api.server_routes" and r.levelno >= logging.INFO
+        ]
+        higher_text = "\n".join(r.getMessage() for r in higher_records)
+        # The raw URL, its userinfo, and its query secret must never surface at
+        # INFO or WARNING.
+        assert proxy_url not in higher_text
+        assert "s3cr3t" not in higher_text
+        assert "leakme" not in higher_text
+
+        # At DEBUG the URL may appear, but only in redacted form: scheme://host/path,
+        # with no credentials or query string.
+        debug_records = [
+            r
+            for r in caplog.records
+            if r.name == "registry.api.server_routes" and r.levelno == logging.DEBUG
+        ]
+        debug_text = "\n".join(r.getMessage() for r in debug_records)
+        assert "s3cr3t" not in debug_text
+        assert "leakme" not in debug_text
+        assert "http://backend.internal:9000/mcp" in debug_text
+
     def test_internal_register_missing_auth_header(self, test_client_no_auth):
         """Test internal registration fails without Authorization header."""
         # Act

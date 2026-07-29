@@ -16,11 +16,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from ..common.log_redaction import redact_url
 from ..core.config import settings
 from ..core.endpoint_utils import get_endpoint_url
 from ..repositories.factory import get_security_scan_repository
 from ..schemas.security import SecurityScanConfig, SecurityScanResult
-from ..utils.url_guard import sanitized_url_for_log
 
 logger = logging.getLogger(__name__)
 
@@ -225,7 +225,7 @@ class SecurityScannerService:
             mcp_endpoint=mcp_endpoint,
         )
 
-        safe_server_url = sanitized_url_for_log(server_url)
+        safe_server_url = redact_url(server_url)
         logger.info(
             "Starting security scan endpoint=%s analyzers=%s",
             safe_server_url,
@@ -390,7 +390,7 @@ class SecurityScannerService:
             ValueError: If headers are invalid or output cannot be parsed
             RuntimeError: If scan fails for other reasons
         """
-        logger.info("Running security scan endpoint=%s", sanitized_url_for_log(server_url))
+        logger.info("Running security scan endpoint=%s", redact_url(server_url))
         logger.info("Using analyzers: %s", analyzers)
 
         # Build command

@@ -18,6 +18,7 @@ from urllib.parse import urlparse
 
 import httpx
 
+from ..common.log_redaction import redact_url
 from ..core.config import settings
 from ..core.metrics import ASSET_ID_CONFLICT_TOTAL
 from ..exceptions import (
@@ -359,7 +360,8 @@ async def _discover_skill_resources(
     tree_info = _resolve_tree_api(skill_md_url)
     if not tree_info:
         logger.debug(
-            "Cannot derive tree API URL from %s — skipping resource discovery", skill_md_url
+            "Cannot derive tree API URL from %s — skipping resource discovery",
+            redact_url(skill_md_url),
         )
         return None
 
@@ -380,7 +382,9 @@ async def _discover_skill_resources(
             resp = await client.get(tree_url, headers=merged_headers)
             if resp.status_code >= 400:
                 logger.warning(
-                    "Resource discovery failed: HTTP %s for %s", resp.status_code, tree_url
+                    "Resource discovery failed: HTTP %s for %s",
+                    resp.status_code,
+                    redact_url(tree_url),
                 )
                 return None
             payload = resp.json()
@@ -408,7 +412,7 @@ async def _discover_skill_resources(
                         tree_url,
                     )
     except Exception as e:
-        logger.warning("Resource discovery error for %s: %s", tree_url, e)
+        logger.warning("Resource discovery error for %s: %s", redact_url(tree_url), e)
         return None
 
     # GitHub's Trees API returns {"sha": ..., "url": ..., "tree": [...], "truncated": bool}.
@@ -540,7 +544,7 @@ async def _validate_skill_md_url(
             final_url = str(response.url)
             if final_url != fetch_url and not _is_safe_url(final_url):
                 logger.warning(
-                    f"SSRF protection: Blocked redirect from {url} to unsafe URL {final_url}"
+                    f"SSRF protection: Blocked redirect from {redact_url(url)} to unsafe URL {redact_url(final_url)}"
                 )
                 raise SkillUrlValidationError(url, f"Redirect to unsafe URL blocked: {final_url}")
 
@@ -638,7 +642,7 @@ async def _parse_skill_md_content(
             final_url = str(response.url)
             if final_url != str(raw_url) and not _is_safe_url(final_url):
                 logger.warning(
-                    f"SSRF protection: Blocked redirect from {raw_url} to unsafe URL {final_url}"
+                    f"SSRF protection: Blocked redirect from {redact_url(raw_url)} to unsafe URL {redact_url(final_url)}"
                 )
                 raise SkillUrlValidationError(url, f"Redirect to unsafe URL blocked: {final_url}")
 
@@ -764,7 +768,7 @@ async def _parse_skill_md_content(
                 result["name_slug"] = name_slug
 
             logger.info(
-                f"Parsed SKILL.md from {user_url} (raw: {raw_url}): "
+                f"Parsed SKILL.md from {redact_url(user_url)} (raw: {redact_url(raw_url)}): "
                 f"name={result.get('name')}, has_description={bool(result.get('description'))}"
             )
             return result
@@ -834,7 +838,7 @@ async def _check_skill_health(
             final_url = str(response.url)
             if final_url != str(url) and not _is_safe_url(final_url):
                 logger.warning(
-                    f"SSRF protection: Blocked redirect from {url} to unsafe URL {final_url}"
+                    f"SSRF protection: Blocked redirect from {redact_url(url)} to unsafe URL {redact_url(final_url)}"
                 )
                 response_time_ms = (time.perf_counter() - start_time) * 1000
                 return {
@@ -854,7 +858,9 @@ async def _check_skill_health(
             }
 
     except UrlValidationError as e:
-        logger.warning("Skill health check blocked by SSRF guard for URL %s: %s", url, e)
+        logger.warning(
+            "Skill health check blocked by SSRF guard for URL %s: %s", redact_url(url), e
+        )
         response_time_ms = (time.perf_counter() - start_time) * 1000
         return {
             "healthy": False,
@@ -864,7 +870,7 @@ async def _check_skill_health(
         }
     except httpx.RequestError as e:
         # Log detailed exception on the server, but return a generic message to the client
-        logger.error("Error while checking skill health for URL %s: %s", url, e)
+        logger.error("Error while checking skill health for URL %s: %s", redact_url(url), e)
         response_time_ms = (time.perf_counter() - start_time) * 1000
         return {
             "healthy": False,
@@ -1035,10 +1041,10 @@ async def _fetch_authenticated_content(
 
             return response
     except UrlValidationError as e:
-        logger.warning("Skill content fetch blocked by SSRF guard for %s: %s", url, e)
+        logger.warning("Skill content fetch blocked by SSRF guard for %s: %s", redact_url(url), e)
         raise SkillContentSSRFError(url) from e
     except httpx.RequestError as e:
-        logger.error("Failed to fetch from %s: %s", url, e)
+        logger.error("Failed to fetch from %s: %s", redact_url(url), e)
         raise SkillContentFetchError(url, str(e))
 
 

@@ -261,6 +261,12 @@ export class RegistryServiceStack extends cdk.Stack {
       MCP_TELEMETRY_HEARTBEAT_INTERVAL_MINUTES: config.telemetry.heartbeatIntervalMinutes,
       TELEMETRY_DEBUG: config.telemetry.debug,
       DISABLE_AI_REGISTRY_TOOLS_SERVER: config.disableAiRegistryToolsServer,
+      // PRM scopes_supported override. Live registry image advertises group-derived
+      // internal scope names (registry-admins, federation-service, etc.) that
+      // Keycloak DCR does not accept. Force the IdP-universal OIDC scopes so
+      // Claude/MCP client DCR succeeds. Access is still group-derived at token
+      // validation time, so this does not affect authorization.
+      MCP_ADVERTISED_SCOPES: 'openid email profile offline_access',
       SERVICE_CONNECT_NAMESPACE: `${namePrefix}.local`,
       GITHUB_PAT: config.github.pat,
       GITHUB_APP_ID: config.github.appId,
@@ -499,6 +505,7 @@ export class RegistryServiceStack extends cdk.Stack {
       serviceConnectPortName: 'mcpgw',
       environment: {
         PORT: '8003',
+        HOST: '0.0.0.0',
         REGISTRY_BASE_URL: 'http://registry:8080',
         REGISTRY_USERNAME: 'admin',
       },
@@ -520,6 +527,11 @@ export class RegistryServiceStack extends cdk.Stack {
           mcpgwService.securityGroup, ec2.Port.tcp(port), `Port ${port} from mcpgw`,
         );
       }
+      // Auth-server mcp-proxy forwards to mcpgw:8003 (parity with terraform
+      // auth_to_mcpgw rule at terraform/aws-ecs/modules/mcp-gateway/ecs-services.tf:1965)
+      mcpgwService.securityGroup.addIngressRule(
+        authService.securityGroup, ec2.Port.tcp(8003), 'Allow auth-server mcp-proxy to reach mcpgw',
+      );
     }
 
     new McpServerService(this, 'RealServerFakeToolsSvc', {
@@ -601,6 +613,7 @@ export class RegistryServiceStack extends cdk.Stack {
       appSecretsKmsKey: this.appSecretsKmsKey,
       metricsApiKeySecret: secretsBundle.metricsApiKey,
       metricsKeyPepperSecret: secretsBundle.metricsKeyPepper,
+      metricsAdminApiKeySecret: secretsBundle.metricsAdminApiKey,
       otlpExporterHeadersSecret: secretsBundle.otlpExporterHeaders,
       grafanaAdminPasswordSecret: secretsBundle.grafanaAdminPassword,
       secretsAccessStatements,

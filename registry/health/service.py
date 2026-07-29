@@ -10,6 +10,7 @@ from fastapi import WebSocket
 
 from registry.constants import DeploymentType, HealthStatus
 
+from ..common.log_redaction import redact_url
 from ..core.config import settings
 from ..core.endpoint_utils import get_endpoint_url_from_server_info
 from ..exceptions import UrlValidationError
@@ -18,7 +19,6 @@ from ..utils.url_guard import (
     PROXY_PROFILE,
     guarded_async_client,
     proxy_profile_for_entity_target,
-    sanitized_url_for_log,
     validate_url,
 )
 
@@ -547,14 +547,14 @@ class HealthMonitoringService:
             logger.warning(
                 "Health server headers withheld service=%s destination=%s reason=security policy",
                 entity_path or "unknown",
-                sanitized_url_for_log(destination_url),
+                redact_url(destination_url),
             )
             return headers
         except Exception as exc:  # pragma: no cover - defensive fail-closed
             logger.warning(
                 "Health server headers withheld service=%s destination=%s validation_type=%s",
                 entity_path or "unknown",
-                sanitized_url_for_log(destination_url),
+                redact_url(destination_url),
                 type(exc).__name__,
             )
             return headers
@@ -645,7 +645,7 @@ class HealthMonitoringService:
             if response.status_code not in [200, 201]:
                 logger.warning(
                     "MCP initialize failed endpoint=%s status=%s",
-                    sanitized_url_for_log(endpoint),
+                    redact_url(endpoint),
                     response.status_code,
                 )
                 return None
@@ -667,7 +667,7 @@ class HealthMonitoringService:
 
         except Exception as e:
             logger.warning(
-                f"MCP initialize failed for {sanitized_url_for_log(endpoint)} type={type(e).__name__}"
+                f"MCP initialize failed for {redact_url(endpoint)} type={type(e).__name__}"
             )
             return None
 
@@ -705,18 +705,18 @@ class HealthMonitoringService:
             # Check if we get any valid response (even auth errors indicate server is up)
             if response.status_code in [200, 400, 401, 403]:
                 logger.info(
-                    f"Ping without auth succeeded for {sanitized_url_for_log(endpoint)} - server is reachable but auth may have expired"
+                    f"Ping without auth succeeded for {redact_url(endpoint)} - server is reachable but auth may have expired"
                 )
                 return True
             else:
                 logger.warning(
-                    f"Ping without auth failed for {sanitized_url_for_log(endpoint)}: Status {response.status_code}"
+                    f"Ping without auth failed for {redact_url(endpoint)}: Status {response.status_code}"
                 )
                 return False
 
         except Exception as e:
             logger.warning(
-                f"Ping without auth failed for {sanitized_url_for_log(endpoint)}: {type(e).__name__}"
+                f"Ping without auth failed for {redact_url(endpoint)}: {type(e).__name__}"
             )
             return False
 
@@ -758,7 +758,7 @@ class HealthMonitoringService:
         except UrlValidationError:
             logger.warning(
                 "Health check blocked by SSRF guard for %s (credentials NOT sent)",
-                sanitized_url_for_log(proxy_pass_url),
+                redact_url(proxy_pass_url),
             )
             return False, HealthStatus.UNHEALTHY_URL_BLOCKED
 
@@ -775,9 +775,7 @@ class HealthMonitoringService:
         )
 
         if has_transport_in_url and "streamable-http" not in supported_transports:
-            logger.info(
-                f"[TRACE] Found transport endpoint in URL: {sanitized_url_for_log(proxy_pass_url)}"
-            )
+            logger.info(f"[TRACE] Found transport endpoint in URL: {redact_url(proxy_pass_url)}")
             logger.info(
                 f"[TRACE] URL contains /mcp: {'/mcp' in proxy_pass_url}, URL contains /sse: {'/sse' in proxy_pass_url}"
             )
@@ -801,19 +799,19 @@ class HealthMonitoringService:
                     except (TimeoutError, httpx.TimeoutException) as e:
                         # For SSE endpoints, timeout while reading streaming response is normal after getting 200 OK
                         logger.debug(
-                            f"SSE endpoint {sanitized_url_for_log(proxy_pass_url)} timed out while streaming (expected) type={type(e).__name__}"
+                            f"SSE endpoint {redact_url(proxy_pass_url)} timed out while streaming (expected) type={type(e).__name__}"
                         )
                         # If we can extract status code from response, check if it was 200
                         if hasattr(e, "response") and e.response and e.response.status_code == 200:
                             logger.debug(
-                                f"SSE endpoint {sanitized_url_for_log(proxy_pass_url)} returned 200 OK before timeout - considering healthy"
+                                f"SSE endpoint {redact_url(proxy_pass_url)} returned 200 OK before timeout - considering healthy"
                             )
                             return True, HealthStatus.HEALTHY
                         # For SSE, timeout after initial connection usually means server is responding
                         return True, HealthStatus.HEALTHY
                     except Exception as e:
                         logger.warning(
-                            f"SSE endpoint {sanitized_url_for_log(proxy_pass_url)} failed with exception: {type(e).__name__}"
+                            f"SSE endpoint {redact_url(proxy_pass_url)} failed with exception: {type(e).__name__}"
                         )
                         return False, f"unhealthy: {type(e).__name__}"
                 else:
@@ -830,7 +828,7 @@ class HealthMonitoringService:
                             "[TRACE] Auth failure detected status=%s endpoint=%s; "
                             "trying ping without auth",
                             response.status_code,
-                            sanitized_url_for_log(proxy_pass_url),
+                            redact_url(proxy_pass_url),
                         )
                         if await self._try_ping_without_auth(client, proxy_pass_url):
                             return True, HealthStatus.HEALTHY
@@ -843,21 +841,19 @@ class HealthMonitoringService:
                         return False, f"unhealthy: status {response.status_code}"
             except Exception as e:
                 logger.warning(
-                    f"Health check failed for {sanitized_url_for_log(proxy_pass_url)}: {type(e).__name__}"
+                    f"Health check failed for {redact_url(proxy_pass_url)}: {type(e).__name__}"
                 )
                 return False, f"unhealthy: {type(e).__name__}"
 
         # Skip health checks for stdio transport (as requested)
         if supported_transports == ["stdio"]:
             logger.info(
-                f"[TRACE] Skipping health check for stdio transport: {sanitized_url_for_log(proxy_pass_url)}"
+                f"[TRACE] Skipping health check for stdio transport: {redact_url(proxy_pass_url)}"
             )
             return True, HealthStatus.UNKNOWN
 
         # Try endpoints based on supported transports, prioritizing streamable-http
-        logger.info(
-            f"[TRACE] No transport endpoint in URL: {sanitized_url_for_log(proxy_pass_url)}"
-        )
+        logger.info(f"[TRACE] No transport endpoint in URL: {redact_url(proxy_pass_url)}")
         logger.info(f"[TRACE] Supported transports: {supported_transports}")
 
         # Try streamable-http first (default preference)
@@ -873,14 +869,12 @@ class HealthMonitoringService:
                 destination_url=endpoint,
                 include_session_id=False,
             )
-            logger.info(
-                f"[TRACE] Resolved streamable-http endpoint: {sanitized_url_for_log(endpoint)}"
-            )
+            logger.info(f"[TRACE] Resolved streamable-http endpoint: {redact_url(endpoint)}")
 
             try:
                 # Step 1: Initialize session to get session ID
                 logger.info(
-                    f"[TRACE] Initializing MCP session for endpoint: {sanitized_url_for_log(endpoint)}"
+                    f"[TRACE] Initializing MCP session for endpoint: {redact_url(endpoint)}"
                 )
                 session_id = await self._initialize_mcp_session(client, endpoint, headers)
 
@@ -888,7 +882,7 @@ class HealthMonitoringService:
                 # Try ping without auth before giving up
                 if not session_id:
                     logger.warning(
-                        f"Failed to initialize MCP session for {sanitized_url_for_log(endpoint)}, trying ping without auth"
+                        f"Failed to initialize MCP session for {redact_url(endpoint)}, trying ping without auth"
                     )
                     if await self._try_ping_without_auth(client, endpoint):
                         return True, HealthStatus.HEALTHY
@@ -902,7 +896,7 @@ class HealthMonitoringService:
                 headers["Mcp-Session-Id"] = session_id
                 ping_payload = '{ "jsonrpc": "2.0", "id": "0", "method": "ping" }'
 
-                logger.info(f"[TRACE] Sending ping to endpoint: {sanitized_url_for_log(endpoint)}")
+                logger.info(f"[TRACE] Sending ping to endpoint: {redact_url(endpoint)}")
                 logger.debug("Health request header names=%s", sorted(headers))
                 response = await client.post(
                     endpoint, headers=headers, content=ping_payload, follow_redirects=True
@@ -912,7 +906,7 @@ class HealthMonitoringService:
                 # Check for auth failures first
                 if response.status_code in [401, 403]:
                     logger.info(
-                        f"[TRACE] Auth failure detected ({response.status_code}) for {sanitized_url_for_log(endpoint)}, trying ping without auth"
+                        f"[TRACE] Auth failure detected ({response.status_code}) for {redact_url(endpoint)}, trying ping without auth"
                     )
                     if await self._try_ping_without_auth(client, endpoint):
                         # ============================================================================
@@ -944,17 +938,17 @@ class HealthMonitoringService:
 
                 # Check normal health status
                 if self._is_mcp_endpoint_healthy_streamable(response):
-                    logger.info(f"Health check succeeded at {sanitized_url_for_log(endpoint)}")
+                    logger.info(f"Health check succeeded at {redact_url(endpoint)}")
                     return True, HealthStatus.HEALTHY
                 else:
                     logger.warning(
-                        f"Health check failed for {sanitized_url_for_log(endpoint)}: status={response.status_code}"
+                        f"Health check failed for {redact_url(endpoint)}: status={response.status_code}"
                     )
                     return False, f"unhealthy: status {response.status_code}"
 
             except Exception as e:
                 logger.warning(
-                    f"Health check failed for {sanitized_url_for_log(endpoint)}: {type(e).__name__}"
+                    f"Health check failed for {redact_url(endpoint)}: {type(e).__name__}"
                 )
                 return False, f"unhealthy: {type(e).__name__}"
 
@@ -965,7 +959,7 @@ class HealthMonitoringService:
                 # Resolve SSE endpoint URL using centralized utility
                 # Priority: explicit sse_endpoint > URL detection > append /sse
                 sse_endpoint = get_endpoint_url_from_server_info(server_info, transport_type="sse")
-                logger.info(f"[TRACE] Resolved SSE endpoint: {sanitized_url_for_log(sse_endpoint)}")
+                logger.info(f"[TRACE] Resolved SSE endpoint: {redact_url(sse_endpoint)}")
                 # Build headers including server-specific headers
                 headers = self._build_headers_for_server(
                     server_info,
@@ -981,19 +975,19 @@ class HealthMonitoringService:
             except (TimeoutError, httpx.TimeoutException) as e:
                 # For SSE endpoints, timeout while reading streaming response is normal after getting 200 OK
                 logger.info(
-                    f"SSE endpoint {sanitized_url_for_log(sse_endpoint)} timed out while streaming (expected) type={type(e).__name__}"
+                    f"SSE endpoint {redact_url(sse_endpoint)} timed out while streaming (expected) type={type(e).__name__}"
                 )
                 # If we can extract status code from response, check if it was 200
                 if hasattr(e, "response") and e.response and e.response.status_code == 200:
                     logger.info(
-                        f"SSE endpoint {sanitized_url_for_log(sse_endpoint)} returned 200 OK before timeout - considering healthy"
+                        f"SSE endpoint {redact_url(sse_endpoint)} returned 200 OK before timeout - considering healthy"
                     )
                     return True, HealthStatus.HEALTHY
                 # For SSE, timeout after initial connection usually means server is responding
                 return True, "healthy"
             except Exception as e:
                 logger.error(
-                    f"SSE endpoint {sanitized_url_for_log(sse_endpoint)} failed with exception: {type(e).__name__}"
+                    f"SSE endpoint {redact_url(sse_endpoint)} failed with exception: {type(e).__name__}"
                 )
                 pass
 
@@ -1009,28 +1003,28 @@ class HealthMonitoringService:
                 destination_url=endpoint,
             )
             logger.info(
-                f"[TRACE] Resolved default streamable-http endpoint: {sanitized_url_for_log(endpoint)}"
+                f"[TRACE] Resolved default streamable-http endpoint: {redact_url(endpoint)}"
             )
             ping_payload = '{ "jsonrpc": "2.0", "id": "0", "method": "ping" }'
 
             try:
-                logger.info(f"[TRACE] Trying default endpoint: {sanitized_url_for_log(endpoint)}")
+                logger.info(f"[TRACE] Trying default endpoint: {redact_url(endpoint)}")
                 logger.debug("Health request header names=%s", sorted(headers))
                 response = await client.post(
                     endpoint, headers=headers, content=ping_payload, follow_redirects=True
                 )
                 logger.info(f"[TRACE] Response status: {response.status_code}")
                 if self._is_mcp_endpoint_healthy_streamable(response):
-                    logger.info(f"Health check succeeded at {sanitized_url_for_log(endpoint)}")
+                    logger.info(f"Health check succeeded at {redact_url(endpoint)}")
                     return True, HealthStatus.HEALTHY
                 else:
                     logger.warning(
-                        f"Health check failed for {sanitized_url_for_log(endpoint)}: status={response.status_code}"
+                        f"Health check failed for {redact_url(endpoint)}: status={response.status_code}"
                     )
                     return False, f"unhealthy: status {response.status_code}"
             except Exception as e:
                 logger.warning(
-                    f"Health check failed for {sanitized_url_for_log(endpoint)}: {type(e).__name__}"
+                    f"Health check failed for {redact_url(endpoint)}: {type(e).__name__}"
                 )
 
             try:
@@ -1038,7 +1032,7 @@ class HealthMonitoringService:
                 sse_endpoint = get_endpoint_url_from_server_info(server_info, transport_type="sse")
                 logger.info(
                     "[TRACE] Resolved default SSE endpoint: %s",
-                    sanitized_url_for_log(sse_endpoint),
+                    redact_url(sse_endpoint),
                 )
                 # Build headers including server-specific headers
                 headers = self._build_headers_for_server(
@@ -1055,19 +1049,19 @@ class HealthMonitoringService:
             except (TimeoutError, httpx.TimeoutException) as e:
                 # For SSE endpoints, timeout while reading streaming response is normal after getting 200 OK
                 logger.info(
-                    f"SSE endpoint {sanitized_url_for_log(sse_endpoint)} timed out while streaming (expected) type={type(e).__name__}"
+                    f"SSE endpoint {redact_url(sse_endpoint)} timed out while streaming (expected) type={type(e).__name__}"
                 )
                 # If we can extract status code from response, check if it was 200
                 if hasattr(e, "response") and e.response and e.response.status_code == 200:
                     logger.info(
-                        f"SSE endpoint {sanitized_url_for_log(sse_endpoint)} returned 200 OK before timeout - considering healthy"
+                        f"SSE endpoint {redact_url(sse_endpoint)} returned 200 OK before timeout - considering healthy"
                     )
                     return True, HealthStatus.HEALTHY
                 # For SSE, timeout after initial connection usually means server is responding
                 return True, "healthy"
             except Exception as e:
                 logger.error(
-                    f"SSE endpoint {sanitized_url_for_log(sse_endpoint)} failed with exception: {type(e).__name__}"
+                    f"SSE endpoint {redact_url(sse_endpoint)} failed with exception: {type(e).__name__}"
                 )
                 pass
 
@@ -1182,9 +1176,7 @@ class HealthMonitoringService:
             server_info = await server_service.get_server_info(
                 service_path, include_credentials=True
             )
-            logger.info(
-                f"Fetching tools from {sanitized_url_for_log(proxy_pass_url)} for {service_path}"
-            )
+            logger.info(f"Fetching tools from {redact_url(proxy_pass_url)} for {service_path}")
 
             # Use the new connection result function to get both tools and server info
             connection_result = await mcp_client_service.get_mcp_connection_result(
@@ -1327,7 +1319,7 @@ class HealthMonitoringService:
 
         # Set status to 'checking' before performing the check
         logger.info(
-            f"Setting status to '{HealthStatus.CHECKING}' for {service_path} ({sanitized_url_for_log(proxy_pass_url)})..."
+            f"Setting status to '{HealthStatus.CHECKING}' for {service_path} ({redact_url(proxy_pass_url)})..."
         )
         previous_status = self.server_health_status.get(service_path, HealthStatus.UNKNOWN)
         self.server_health_status[service_path] = HealthStatus.CHECKING
@@ -1346,7 +1338,7 @@ class HealthMonitoringService:
                 if is_healthy:
                     current_status = status_detail  # Could be "healthy" or "healthy-auth-expired"
                     logger.info(
-                        f"Health check successful for {service_path} ({sanitized_url_for_log(proxy_pass_url)}): {status_detail}"
+                        f"Health check successful for {service_path} ({redact_url(proxy_pass_url)}): {status_detail}"
                     )
 
                     # Schedule tool list fetch in background only for fully healthy status
@@ -1372,7 +1364,7 @@ class HealthMonitoringService:
                 else:
                     current_status = status_detail  # Detailed error from transport check
                     logger.info(
-                        f"Health check failed for {service_path} ({sanitized_url_for_log(proxy_pass_url)}): {status_detail}"
+                        f"Health check failed for {service_path} ({redact_url(proxy_pass_url)}): {status_detail}"
                     )
 
         except httpx.TimeoutException:

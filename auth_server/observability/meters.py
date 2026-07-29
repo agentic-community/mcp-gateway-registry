@@ -146,6 +146,21 @@ token_mint_total = _meter.create_counter(
 
 
 # =============================================================================
+# Redirect-validation metrics (open-redirect hardening, PR #1475 follow-up)
+# =============================================================================
+
+redirect_rejected_total = _meter.create_counter(
+    name="mcpgw_registry_redirect_rejected_total",
+    description=(
+        "Login/logout redirect URIs rejected by the allowlist, labeled by flow "
+        "(login | logout) and reason (backslash | protocol_relative | scheme | "
+        "not_in_allowlist | cookie_domain | empty)"
+    ),
+    unit="1",
+)
+
+
+# =============================================================================
 # Self-observability of the migration itself
 # =============================================================================
 

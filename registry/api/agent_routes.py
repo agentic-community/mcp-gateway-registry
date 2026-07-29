@@ -29,10 +29,11 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ValidationError
 
 from ..audit import set_audit_action
+from ..audit.request_id import sanitize_correlation_id
 from ..auth.asset_permissions import user_has_asset_permission
 from ..auth.csrf import verify_csrf_token_flexible
 from ..auth.dependencies import nginx_proxied_auth
-from ..common.log_redaction import redact_headers, redact_mapping
+from ..common.log_redaction import redact_headers, redact_mapping, redact_url
 from ..core.config import settings
 from ..core.metrics import ASSET_ID_SUPPLIED_TOTAL
 from ..exceptions import AssetIdConflictError, UrlValidationError
@@ -289,24 +290,30 @@ async def _probe_agent_backend_health(
             if response.status_code == 200:
                 status_label = "healthy"
                 detail = None
-                logger.info(f"Agent health check for {path} succeeded via GET on {url}")
+                logger.info(f"Agent health check for {path} succeeded via GET on {redact_url(url)}")
                 break
             detail = f"Agent responded with HTTP {response.status_code}"
-            logger.debug(f"Agent health check for {path} got HTTP {response.status_code} on {url}")
+            logger.debug(
+                f"Agent health check for {path} got HTTP {response.status_code} on {redact_url(url)}"
+            )
         except httpx.TimeoutException:
             detail = f"Health check timed out on {url}"
-            logger.debug(f"Agent health check for {path} timed out on {url}")
+            logger.debug(f"Agent health check for {path} timed out on {redact_url(url)}")
         except httpx.HTTPError as exc:
             detail = f"Health check failed on {url}"
-            logger.debug(f"Agent health check for {path} failed on {url}: {exc}")
+            logger.debug(f"Agent health check for {path} failed on {redact_url(url)}: {exc}")
         except Exception as exc:
             detail = f"Unexpected health check error on {url}"
-            logger.debug(f"Agent health check for {path} unexpected error on {url}: {exc}")
+            logger.debug(
+                f"Agent health check for {path} unexpected error on {redact_url(url)}: {exc}"
+            )
 
     # Fallback: if GET-based checks failed, try HEAD on the base URL. A
     # non-connection-error response (even 401/403) means the server is reachable.
     if status_label == "unhealthy":
-        logger.info(f"Agent {path} GET checks failed, falling back to HEAD ping on {base_url}")
+        logger.info(
+            f"Agent {path} GET checks failed, falling back to HEAD ping on {redact_url(base_url)}"
+        )
         try:
             start_time = datetime.now(UTC)
             async with guarded_async_client(
@@ -323,11 +330,13 @@ async def _probe_agent_backend_health(
                 f"(HTTP {response.status_code})"
             )
         except httpx.TimeoutException:
-            logger.debug(f"Agent {path} HEAD ping timed out on {base_url}")
+            logger.debug(f"Agent {path} HEAD ping timed out on {redact_url(base_url)}")
         except httpx.HTTPError as exc:
-            logger.debug(f"Agent {path} HEAD ping failed on {base_url}: {exc}")
+            logger.debug(f"Agent {path} HEAD ping failed on {redact_url(base_url)}: {exc}")
         except Exception as exc:
-            logger.debug(f"Agent {path} HEAD ping unexpected error on {base_url}: {exc}")
+            logger.debug(
+                f"Agent {path} HEAD ping unexpected error on {redact_url(base_url)}: {exc}"
+            )
 
     last_checked = datetime.now(UTC)
     return {
@@ -958,7 +967,7 @@ async def register_agent(
         )
 
     logger.info(f"Agent registration request from user '{user_context['username']}'")
-    logger.info(f"Name: {request.name}, Path: {request.path}, URL: {request.url}")
+    logger.info(f"Name: {request.name}, Path: {request.path}, URL: {redact_url(request.url)}")
 
     path = _normalize_path(request.path, request.name)
 
@@ -1878,7 +1887,7 @@ async def submit_agent_batch(
             submitted_body_hash=_hash_items(body.items),
             submitter_is_admin=user_context.get("is_admin", False),
             submitter_ui_permissions=user_context.get("ui_permissions", {}),
-            request_id=http_request.headers.get("x-request-id"),
+            request_id=sanitize_correlation_id(http_request.headers.get("x-request-id")),
         )
     except ConcurrentJobLimitError as e:
         raise HTTPException(status_code=429, detail=str(e)) from e

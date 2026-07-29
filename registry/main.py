@@ -535,6 +535,18 @@ async def lifespan(app: FastAPI):
                 audit_exc,
             )
 
+        # Seed the reserved quarantine groups (idempotent; visible in API/UI even
+        # when empty and regardless of RATE_LIMITING_ENABLED). Non-fatal on error.
+        try:
+            from registry.rate_limiting.definitions_repository import DefinitionsRepository
+
+            await DefinitionsRepository().seed_reserved_groups()
+        except Exception as seed_exc:
+            logger.warning(
+                "Reserved quarantine group seeding failed (non-fatal, continuing startup): %s",
+                seed_exc,
+            )
+
         # Initialize services in order
         logger.info("📚 Loading server definitions and state...")
         await server_service.load_servers_and_state()

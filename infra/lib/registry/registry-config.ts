@@ -411,7 +411,7 @@ export const DEFAULT_REGISTRY_CONFIG: RegistryConfig = {
   deploymentMode: 'with-gateway',
   registryMode: 'full',
   enableObservability: true,
-  enableWaf: false,
+  enableWaf: true,
   createCodebuild: false,
   idpGroupFilterPrefix: '',
   disableAiRegistryToolsServer: 'false',

@@ -8,8 +8,9 @@ implementations (``skill_service._is_safe_url`` and
 
 - Only ``http`` / ``https`` schemes are accepted.
 - The host must resolve **exclusively** to public IP addresses. IP classification
-  is delegated to the shared ``registry.utils.ip_guard`` (one classifier
-  repo-wide): private, loopback, link-local, reserved, multicast, unspecified, and
+  lives in this module (the ``coerce_ip_literal`` / ``_ip_denial_reason`` pair,
+  the one classifier repo-wide): private, loopback, link-local, reserved,
+  multicast, unspecified, and
   CGNAT ranges are blocked, along with the cloud metadata endpoints
   (including AWS endpoints, IPv6 ``fd00:ec2::*``, and Alibaba
   ``100.100.100.200``) which are NEVER reachable —
@@ -65,25 +66,238 @@ import logging
 import socket
 from dataclasses import dataclass, field
 from functools import lru_cache
+from typing import TYPE_CHECKING
 from urllib.parse import urlparse, urlsplit, urlunsplit
 
 import httpx
 
-from ..core.config import settings
 from ..exceptions import UrlValidationError
-from .ip_guard import coerce_ip_literal, ip_denial_reason
+
+if TYPE_CHECKING:
+    from ..core.config import Settings
 
 logger = logging.getLogger(__name__)
+
+
+# Registry settings are bound lazily on first use rather than imported at module
+# load: importing ``registry.core.config`` eagerly builds the full ``Settings()``
+# (SECRET_KEY, DocumentDB, etc.), which a standalone tool that only needs the
+# SSRF/URL guard (e.g. the AgentCore sync sidecar in ``cli/agentcore``) must not
+# require. This stays ``None`` until an allowlist factory actually needs operator
+# config, so ``import registry.utils.url_guard`` — and ``validate_url`` /
+# ``guarded_*`` with the default (empty) allowlist, e.g. FEDERATION_PROFILE —
+# work with zero registry server configuration. Tests patch this attribute
+# directly (``patch("registry.utils.url_guard.settings", ...)``).
+settings: Settings | None = None
+
+
+def _get_settings() -> Settings:
+    """Return the registry settings object, binding it lazily on first use.
+
+    Honors a caller/test-supplied module-level ``settings`` (patched in tests);
+    otherwise imports ``registry.core.config.settings`` on first access so the
+    heavy config is never built merely by importing this module.
+    """
+    if settings is not None:
+        return settings
+    from ..core.config import settings as _resolved
+
+    return _resolved
+
 
 # Default connect/read timeout applied to guarded fetches when a caller does not
 # supply its own. Keeps a hung internal target from tying up a worker.
 _DEFAULT_TIMEOUT_SECONDS: float = 15.0
 
-# NOTE: IP classification (cloud-metadata hard-deny incl. the v6 fd00:ec2::254,
-# CGNAT, obfuscated literals, embedded-IPv4 unwrapping, the private/loopback/
-# reserved/multicast categories, and the two-tier allowlist) lives in the shared
-# ``registry.utils.ip_guard`` module — this file delegates to it via
-# ``_is_blocked_ip`` so there is ONE classifier repo-wide.
+# IP-category SSRF classification. This is the ONE place in the project that
+# knows about the bypass tricks — obfuscated IPv4 literal encodings
+# (decimal/octal/hex/short-form), IPv6 transports that embed an IPv4 address
+# (IPv4-mapped ::ffff:0:0/96, NAT64 64:ff9b::/96, 6to4 2002::/16, Teredo
+# 2001::/32), and the always-deny categories (link-local/metadata, unspecified,
+# reserved, multicast). Every outbound-guard call site funnels through
+# ``_is_blocked_ip`` (literal targets) or ``_resolve_public_ips`` (hostnames),
+# both of which delegate to ``coerce_ip_literal`` + ``_ip_denial_reason`` below.
+#
+# Scope caveat: default-mode completeness (``allow_private=False``) relies on
+# CPython's ``ipaddress`` category flags, whose treatment of special-purpose
+# ranges can evolve between Python releases. The repo pins Python 3.14 and the
+# tests pin the security-relevant ranges so a downgrade or semantic change fails
+# loudly.
+
+# IPv6 transports that embed an IPv4 address. Each carries a reachable IPv4 in
+# its bits, but Python classifies the wrapper as neither link-local nor private
+# (except where it happens to fall in ::/8), so without explicit unwrapping a URL
+# like http://[64:ff9b::a9fe:a9fe]/ or http://[2002:a9fe:a9fe::]/ would reach the
+# IPv4 metadata endpoint. We extract and category-check the embedded v4.
+_NAT64_PREFIX = ipaddress.ip_network("64:ff9b::/96")  # RFC 6052
+_6TO4_PREFIX = ipaddress.ip_network("2002::/16")  # RFC 3056: 2002:V4:V4::/48
+_TEREDO_PREFIX = ipaddress.ip_network("2001::/32")  # RFC 4380: client v4 in low 32 bits, XOR'd
+
+# CGNAT shared address space (RFC 6598). CPython's is_private does NOT flag this
+# range, but it is internally routable (carrier NAT / on-cluster overlays), so we
+# treat it like private-unicast: denied by default, relaxable with allow_private.
+_CGNAT_NET = ipaddress.ip_network("100.64.0.0/10")
+
+# Cloud metadata and workload-identity credential endpoints. NEVER reachable:
+# not relaxable by ``allow_private`` NOR by an explicit CIDR/hostname allowlist.
+# Checked as an explicit set BEFORE any category logic because several addresses
+# are private/link-local and would otherwise be reopened by a relaxation:
+# - EC2 IMDS: 169.254.169.254 / fd00:ec2::254
+# - ECS task credentials: 169.254.170.2
+# - EKS Pod Identity: 169.254.170.23 / fd00:ec2::23
+# - Alibaba Cloud ECS metadata: 100.100.100.200
+_CREDENTIAL_ENDPOINT_IPS: frozenset[str] = frozenset(
+    {
+        "169.254.169.254",
+        "fd00:ec2::254",
+        "169.254.170.2",
+        "169.254.170.23",
+        "fd00:ec2::23",
+        "100.100.100.200",
+    }
+)
+
+
+def _parse_inet_aton_part(part: str) -> int | None:
+    """Parse one IPv4 part with inet_aton radix rules, or None if not numeric.
+
+    inet_aton reads ``0x``-prefixed parts as hex, other leading-``0`` parts as
+    OCTAL (so ``0251`` == 169, not 251), and the rest as decimal. Python's
+    ``int(x, 0)`` rejects bare leading-zero octal (``0251``), so we handle the
+    radices explicitly to match glibc/nginx exactly.
+    """
+    if part == "":
+        return None
+    low = part.lower()
+    try:
+        if low.startswith("0x"):
+            return int(part, 16)
+        if part.startswith("0") and part != "0":
+            return int(part, 8)
+        return int(part, 10)
+    except ValueError:
+        return None
+
+
+def coerce_ip_literal(
+    host: str,
+) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    """Parse a host as an IP, including non-canonical IPv4 spellings.
+
+    ``ipaddress.ip_address`` only accepts canonical dotted-quad / hex-IPv6, so an
+    attacker could smuggle the metadata IP past a naive check as a decimal
+    (``2852039166``), octal (``0251.0376.0251.0376``), hex (``0xA9FEA9FE``), or
+    trailing-dot (``169.254.169.254.``) literal — all of which ``inet_aton`` (and
+    therefore glibc's resolver and nginx) interpret as a real IPv4 address. We
+    match inet_aton for all realistic literal spellings; Python's ``int()`` is a
+    lenient superset on exotic inputs (underscores, ``0o`` prefixes), but only in
+    the safe direction — those parse to a number and get category-checked (more
+    denial), never fewer.
+
+    Args:
+        host: The host portion of a URL (brackets already stripped).
+
+    Returns:
+        The parsed address (IPv4 or IPv6), or None if ``host`` is a genuine
+        hostname that must be resolved downstream before it can be checked.
+    """
+    # Canonical parse first (covers all IPv6 and canonical dotted-quad IPv4).
+    try:
+        return ipaddress.ip_address(host)
+    except ValueError:
+        pass
+
+    # inet_aton-style IPv4: 1-4 parts, tolerating a single trailing dot.
+    candidate = host[:-1] if host.endswith(".") else host
+    parts = candidate.split(".")
+    if not (1 <= len(parts) <= 4):
+        return None
+    parsed = [_parse_inet_aton_part(p) for p in parts]
+    if any(v is None or v < 0 for v in parsed):
+        return None
+    values = [v for v in parsed if v is not None]  # None/negative ruled out above
+
+    # inet_aton packing: the last part absorbs all remaining low-order bytes;
+    # earlier parts are one byte each.
+    packed = 0
+    for i, v in enumerate(values):
+        if i == len(values) - 1:
+            max_val = 1 << (8 * (4 - i))
+            if v >= max_val:
+                return None
+            packed |= v
+        elif v > 0xFF:
+            return None
+        else:
+            packed |= v << (8 * (3 - i))
+    return ipaddress.IPv4Address(packed)
+
+
+def _unwrap_embedded_ipv4(
+    ip: ipaddress.IPv4Address | ipaddress.IPv6Address,
+) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
+    """Return the embedded IPv4 for mapped/NAT64/compat forms, else ``ip``.
+
+    is_link_local/is_private return False for these IPv6 wrappers, so the
+    embedded IPv4 must be category-checked instead of the wrapper.
+    """
+    if not isinstance(ip, ipaddress.IPv6Address):
+        return ip
+
+    # Scope identifiers (for example ``%eth0`` or the URL-encoded ``%25eth0``)
+    # are routing hints, not part of the address identity.  ``str(ip)`` retains
+    # them, which would make an exact credential-endpoint comparison miss
+    # ``fd00:ec2::254%eth0`` and let a private/CIDR relaxation reopen IMDS.
+    # Reconstructing from the integer strips the scope before every category,
+    # embedded-IPv4, and hard-denial check below.
+    if ip.scope_id is not None:
+        ip = ipaddress.IPv6Address(int(ip))
+
+    if ip.ipv4_mapped is not None:  # ::ffff:0:0/96
+        return ip.ipv4_mapped
+    if ip in _NAT64_PREFIX:  # 64:ff9b::/96 — embedded v4 in the low 32 bits
+        return ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF)
+    if ip in _6TO4_PREFIX:  # 2002:V4:V4::/48 — embedded v4 in bits [16, 48)
+        return ipaddress.IPv4Address((int(ip) >> 80) & 0xFFFFFFFF)
+    if ip in _TEREDO_PREFIX:  # 2001:0::/32 — client v4 in the low 32 bits, XOR'd
+        return ipaddress.IPv4Address((int(ip) & 0xFFFFFFFF) ^ 0xFFFFFFFF)
+    return ip
+
+
+def _ip_denial_reason(
+    ip: ipaddress.IPv4Address | ipaddress.IPv6Address,
+    allow_private: bool,
+    allowed_cidrs: tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...] = (),
+) -> str | None:
+    """Return a denial reason if ``ip`` is an unsafe egress target.
+
+    Embedded IPv4 forms are unwrapped first. Cloud/workload credential
+    endpoints, link-local, unspecified, multicast, and reserved destinations
+    are hard-denied before any relaxation. ``allow_private`` and explicit CIDRs
+    may relax only loopback, private-unicast, and CGNAT destinations.
+    """
+    ip = _unwrap_embedded_ipv4(ip)
+
+    if str(ip) in _CREDENTIAL_ENDPOINT_IPS:
+        return "cloud/workload credential endpoint"
+    if ip.is_link_local:
+        return "link-local"
+    if ip.is_unspecified:
+        return "unspecified address"
+    if ip.is_multicast:
+        return "multicast"
+
+    explicitly_allowed = any(ip in net for net in allowed_cidrs)
+
+    # IPv6 loopback is also classified as reserved, so handle it first.
+    if ip.is_loopback:
+        return None if allow_private or explicitly_allowed else "loopback"
+    if ip.is_reserved:
+        return "reserved"
+    if ip.is_private or (isinstance(ip, ipaddress.IPv4Address) and ip in _CGNAT_NET):
+        return None if allow_private or explicitly_allowed else "private"
+    return None
+
 
 # Server path names that collide with the cross-server wildcard sentinels. A
 # registration path like ``/all`` or ``/*`` normalizes (lstrip("/")) to the
@@ -104,6 +318,27 @@ _RESERVED_SERVER_PATH_NAMES: frozenset[str] = frozenset({"all", "*"})
 # transports use the event loop resolver under this deadline, so a slow or
 # adversarial resolver cannot block the event loop indefinitely.
 _DNS_RESOLUTION_TIMEOUT_SECONDS: float = 5.0
+
+# Server path names that shadow a built-in monitoring / health route. The server
+# management routes embed the registration path in the request URL via
+# {service_path:path}/{path:path} (e.g. POST /api/toggle/<path>,
+# POST /api/servers/<path>/rescan). A server registered under "health" therefore
+# produces management-plane request URLs like /api/toggle/health, which the audit
+# middleware would misclassify as a health check and drop from the audit trail.
+# Reserving these names blocks the shadow at the SOURCE (registration), so no such
+# collision can exist -- defense in depth alongside the exact-match fix in the
+# audit middleware (_is_health_check_path). Unlike _RESERVED_SERVER_PATH_NAMES,
+# these are not wildcard sentinels and are kept in a separate set (they must NOT
+# be added to access_resolver._WILDCARD_VALUES). Compared case-insensitively.
+_RESERVED_MONITORING_PATH_NAMES: frozenset[str] = frozenset(
+    {
+        "health",
+        "healthcheck",
+        "metrics",
+        "well-known",
+        ".well-known",
+    }
+)
 
 # The only implicit private-host trust in the product: the bundled
 # airegistry-tools MCP server. Trust is selected only when ALL three identity
@@ -228,16 +463,6 @@ def normalize_url_identity(url: str) -> str:
     return urlunsplit((scheme, netloc, parsed.path or "/", parsed.query, ""))
 
 
-def sanitized_url_for_log(url: str) -> str:
-    """Return a URL safe for logs with userinfo, query, and fragment removed."""
-    try:
-        normalized = normalize_url_identity(url)
-        parsed = urlsplit(normalized)
-        return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
-    except Exception:
-        return "[invalid URL]"
-
-
 def _normalized_registered_path(path: str | None) -> str:
     """Normalize a registry path for exact built-in identity matching."""
     clean = (path or "").strip("/")
@@ -269,7 +494,7 @@ def _skill_allowlist() -> _Allowlist:
     and those hosts are still resolved, classified, and pinned.
     Cached because settings are immutable per-process.
     """
-    return _Allowlist(hosts=_parse_hosts(settings.github_extra_hosts))
+    return _Allowlist(hosts=_parse_hosts(_get_settings().github_extra_hosts))
 
 
 @lru_cache(maxsize=1)
@@ -280,9 +505,10 @@ def _proxy_allowlist() -> _Allowlist:
     and only admitted through ``BUILTIN_AIREGISTRY_TOOLS_PROFILE`` after exact
     entity/path/full-target matching.
     """
+    _settings = _get_settings()
     return _Allowlist(
-        hosts=_parse_hosts(settings.ssrf_allowed_hosts),
-        cidrs=_parse_cidrs(settings.ssrf_allowed_cidrs),
+        hosts=_parse_hosts(_settings.ssrf_allowed_hosts),
+        cidrs=_parse_cidrs(_settings.ssrf_allowed_cidrs),
     )
 
 
@@ -383,7 +609,7 @@ def _is_blocked_ip(
     ``trusted_hostname`` represents an explicit operator hostname allowlist or
     the exact built-in profile. It preserves the old ability to reach internal
     addresses, but only *after* DNS resolution and canonical classification. The
-    resolved address is added as an exact CIDR, so ``ip_denial_reason`` still
+    resolved address is added as an exact CIDR, so ``_ip_denial_reason`` still
     executes its cloud/workload credential hard-deny before the relaxation.
     """
     ip = coerce_ip_literal(ip_str)
@@ -393,7 +619,7 @@ def _is_blocked_ip(
     if trusted_hostname:
         allowed_cidrs = (*allowed_cidrs, ipaddress.ip_network(f"{ip}/{ip.max_prefixlen}"))
     return (
-        ip_denial_reason(
+        _ip_denial_reason(
             ip,
             allow_private=False,
             allowed_cidrs=allowed_cidrs,
@@ -611,12 +837,26 @@ def validate_server_path(
     ``*``) is rejected: such a value would silently grant access to every server
     in the registry (see :data:`_RESERVED_SERVER_PATH_NAMES`).
 
+    A path that normalizes to empty (e.g. ``/``, ``//``) is also rejected: the
+    nginx location for a server is rendered with a trailing slash (issue #1501),
+    so a slashes-only path becomes ``location /`` -- a root prefix match that
+    subjects every URL on the gateway to the ``auth_request /validate`` subrequest
+    and shadows/duplicates the static catch-all. No real server registers at the
+    root, so this is a footgun with no legitimate use; fail closed.
+
+    A path that normalizes to a built-in monitoring-route name (``health`` and
+    friends, see :data:`_RESERVED_MONITORING_PATH_NAMES`) is also rejected: the
+    management routes embed the path in the request URL, so such a name would let
+    a mutating admin action masquerade as a health check and be dropped from the
+    audit trail.
+
     Args:
         path: The server path (e.g. ``/github``).
 
     Raises:
         UrlValidationError: If the path is empty, contains disallowed nginx
-            metacharacters, or normalizes to a reserved cross-server wildcard
+            metacharacters, normalizes to an empty (slashes-only) path, or
+            normalizes to a reserved cross-server wildcard or monitoring-route
             name.
     """
     if not path or not isinstance(path, str):
@@ -627,14 +867,32 @@ def validate_server_path(
     # Normalize the same way the scope layer does (add_server_scope does
     # server_path.lstrip("/")), then also drop trailing slashes so "/all/" and
     # "//all//" collapse to the same reserved name. Compare case-insensitively.
-    # A path that normalizes to empty (e.g. "/") is left to existing handling:
-    # an empty server name is falsy and grants no access in the resolver, so it
-    # is not part of this escalation and must stay registerable.
     normalized = path.strip("/")
+
+    # A slashes-only path normalizes to empty. It renders as `location /` after
+    # the trailing-slash normalization (issue #1501), hijacking the whole gateway
+    # into /validate. Reject it: fail closed.
+    if not normalized:
+        raise UrlValidationError(
+            path,
+            "server path must have a non-empty segment (a root/slashes-only path "
+            "would render as a gateway-wide 'location /' block)",
+        )
+
     if normalized.lower() in _RESERVED_SERVER_PATH_NAMES:
         raise UrlValidationError(
             path,
             f"server path '{normalized}' is reserved (collides with the cross-server wildcard)",
+        )
+
+    # Reject names that shadow a built-in monitoring/health route. Such a name
+    # would let a management-plane mutation (e.g. /api/toggle/health) masquerade
+    # as a health check and be dropped from the audit trail. Fail closed at the
+    # source so the collision cannot be created in the first place.
+    if normalized.lower() in _RESERVED_MONITORING_PATH_NAMES:
+        raise UrlValidationError(
+            path,
+            f"server path '{normalized}' is reserved (shadows a built-in monitoring route)",
         )
 
 

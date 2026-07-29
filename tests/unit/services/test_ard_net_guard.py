@@ -67,9 +67,9 @@ class TestAssertFetchable:
         """Pin the exact CGNAT range at its canonical home."""
         import ipaddress
 
-        from registry.utils import ip_guard
+        from registry.utils import url_guard
 
-        assert ip_guard._CGNAT_NET == ipaddress.ip_network("100.64.0.0/10")
+        assert url_guard._CGNAT_NET == ipaddress.ip_network("100.64.0.0/10")
 
     def test_same_domain_allows_subdomain(self):
         with patch("registry.utils.url_guard.socket.getaddrinfo", _resolve_to("93.184.216.34")):

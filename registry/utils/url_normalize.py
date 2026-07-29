@@ -10,6 +10,8 @@ import logging
 from typing import Literal
 from urllib.parse import urlparse
 
+from registry.common.log_redaction import redact_url
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_PORTS: dict[str, int] = {"http": 80, "https": 443}
@@ -50,7 +52,7 @@ def _parse_url(
     try:
         parsed = urlparse(url.strip())
     except Exception as exc:
-        logger.debug("Failed to parse url for normalization: %s (%s)", url, exc)
+        logger.debug("Failed to parse url for normalization: %s (%s)", redact_url(url), exc)
         return None
     if not parsed.scheme or not parsed.hostname:
         return None

@@ -11,9 +11,11 @@ used for backward compatibility. Relative paths are always allowed.
 import pytest
 
 from auth_server.server import (
+    _evaluate_redirect,
     _get_allowed_redirect_uris,
     _is_redirect_uri_allowed,
     _normalize_redirect_uri,
+    _redact_redirect_uri,
 )
 
 
@@ -138,3 +140,63 @@ class TestRedirectFallbackWhenAllowlistUnset:
 
     def test_empty_rejected(self):
         assert _is_redirect_uri_allowed("") is False
+
+
+@pytest.mark.unit
+class TestEvaluateRedirectReason:
+    """`_evaluate_redirect` returns a low-cardinality reason for metrics/logs."""
+
+    @pytest.fixture(autouse=True)
+    def _configure(self, monkeypatch):
+        monkeypatch.setenv("OAUTH2_ALLOWED_REDIRECT_URIS", "https://registry.example.com/")
+        monkeypatch.delenv("SESSION_COOKIE_DOMAIN", raising=False)
+
+    def test_relative_allowed_reason(self):
+        assert _evaluate_redirect("/dashboard") == (True, "relative")
+
+    def test_allowlist_match_reason(self):
+        assert _evaluate_redirect("https://registry.example.com/") == (
+            True,
+            "allowlist_match",
+        )
+
+    def test_not_in_allowlist_reason(self):
+        allowed, reason = _evaluate_redirect("https://evil.example.com/steal")
+        assert allowed is False
+        assert reason == "not_in_allowlist"
+
+    def test_backslash_reason(self):
+        assert _evaluate_redirect("/\\evil.com") == (False, "backslash")
+
+    def test_protocol_relative_reason(self):
+        assert _evaluate_redirect("//evil.com") == (False, "protocol_relative")
+
+    def test_scheme_reason(self):
+        assert _evaluate_redirect("javascript:alert(1)") == (False, "scheme")
+
+    def test_empty_reason(self):
+        assert _evaluate_redirect("") == (False, "empty")
+
+    def test_bool_wrapper_matches_evaluate(self):
+        # The thin bool wrapper must agree with the source-of-truth function.
+        for url in ("/ok", "https://registry.example.com/", "https://evil.test/x"):
+            assert _is_redirect_uri_allowed(url) is _evaluate_redirect(url)[0]
+
+
+@pytest.mark.unit
+class TestRedactRedirectUri:
+    """A rejected redirect_uri is untrusted; only scheme+host may be logged."""
+
+    def test_strips_path_query_fragment(self):
+        redacted = _redact_redirect_uri("https://evil.example.com/steal?token=secret123#frag")
+        assert redacted == "https://evil.example.com"
+        # The sensitive parts must not survive.
+        assert "steal" not in redacted
+        assert "secret123" not in redacted
+        assert "frag" not in redacted
+
+    def test_protocol_relative_has_no_host_leak(self):
+        assert _redact_redirect_uri("//evil.com/path") == "//<host>"
+
+    def test_non_absolute_is_coarse(self):
+        assert _redact_redirect_uri("/dashboard") == "<non-absolute>"

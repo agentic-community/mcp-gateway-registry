@@ -609,6 +609,8 @@ kubectl apply -f k8s/
 | `BATCH_SIZE` | `100` | Metrics batch size |
 | `FLUSH_INTERVAL_SECONDS` | `30` | Buffer flush interval |
 | `MAX_REQUEST_SIZE` | `10MB` | Maximum request size |
+| `METRICS_MAX_LABEL_CARDINALITY` | `150` | Max distinct values a bounded (attacker-influenced) Prometheus label may take per process before further values collapse to the `_other` overflow bucket. Guards against a label-cardinality DoS. A missing, non-integer, or non-positive value falls back to the default (fail-bounded). |
+| `METRICS_MAX_LABEL_LENGTH` | `64` | Max characters of a bounded label value before truncation. Same fail-bounded fallback as above. |
 
 ### Environment-Specific Configurations
 

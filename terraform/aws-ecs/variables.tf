@@ -550,6 +550,12 @@ variable "rate_limit_fail_open" {
   default     = true
 }
 
+variable "rate_limit_quarantine_fail_closed" {
+  description = "Deny (fail closed) on a backend error reading quarantine membership (default fail-open)"
+  type        = bool
+  default     = false
+}
+
 variable "rate_limit_definitions_cache_ttl_seconds" {
   description = "In-process cache TTL (seconds) for rate-limit definition reads"
   type        = number

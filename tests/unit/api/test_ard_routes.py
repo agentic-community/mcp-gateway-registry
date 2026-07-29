@@ -49,7 +49,7 @@ class TestCatalogRoute:
                 AsyncMock(return_value=_manifest()),
             ),
         ):
-            resp = _client().get("/.well-known/ai-catalog.json")
+            resp = _client().get("/.well-known/ai-catalog.json", headers={"X-Real-IP": "192.0.2.1"})
         assert resp.status_code == 200
         body = resp.json()
         assert body["specVersion"] == "1.0"

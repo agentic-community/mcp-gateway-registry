@@ -10,6 +10,7 @@ from typing import Any
 
 import httpx
 
+from ...common.log_redaction import redact_url
 from ...utils.url_guard import FEDERATION_PROFILE, guarded_client
 
 logging.basicConfig(
@@ -116,13 +117,14 @@ class BaseFederationClient(ABC):
         try:
             validate_url(url, profile=FEDERATION_PROFILE)
         except UrlValidationError as exc:
-            logger.error(f"Refusing federation request to unsafe URL {url!r}: {exc}")
+            logger.error(f"Refusing federation request to unsafe URL {redact_url(url)}: {exc}")
             return None
 
         for attempt in range(self.retry_attempts):
             try:
                 logger.debug(
-                    f"Making {method} request to {url} (attempt {attempt + 1}/{self.retry_attempts})"
+                    f"Making {method} request to {redact_url(url)} "
+                    f"(attempt {attempt + 1}/{self.retry_attempts})"
                 )
 
                 response = self.client.request(
@@ -133,7 +135,7 @@ class BaseFederationClient(ABC):
                 return response.json()
 
             except httpx.HTTPStatusError as e:
-                logger.error(f"HTTP error {e.response.status_code} for {url}: {e}")
+                logger.error(f"HTTP error {e.response.status_code} for {redact_url(url)}: {e}")
                 if e.response.status_code in [404, 401, 403]:
                     # Don't retry for these errors
                     return None
@@ -141,12 +143,12 @@ class BaseFederationClient(ABC):
                     return None
 
             except httpx.RequestError as e:
-                logger.error(f"Request error for {url}: {e}")
+                logger.error(f"Request error for {redact_url(url)}: {e}")
                 if attempt == self.retry_attempts - 1:
                     return None
 
             except Exception as e:
-                logger.error(f"Unexpected error for {url}: {e}")
+                logger.error(f"Unexpected error for {redact_url(url)}: {e}")
                 if attempt == self.retry_attempts - 1:
                     return None
 

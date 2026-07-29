@@ -23,6 +23,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
 from ..audit import set_audit_action
+from ..audit.request_id import sanitize_correlation_id
 from ..auth.asset_permissions import user_has_asset_permission
 from ..auth.csrf import (
     generate_csrf_token,
@@ -32,7 +33,7 @@ from ..auth.csrf import (
 from ..auth.dependencies import enhanced_auth, nginx_proxied_auth
 from ..auth.internal import validate_internal_auth
 from ..auth.tool_filter import filter_tools_for_user
-from ..common.log_redaction import redact_mapping
+from ..common.log_redaction import redact_mapping, redact_url
 from ..constants import VALID_AUTH_SCHEMES, DeploymentType, HealthStatus
 from ..core.config import DeploymentMode, settings
 from ..core.metrics import ASSET_ID_SUPPLIED_TOTAL
@@ -68,7 +69,6 @@ from ..utils.credential_encryption import (
     strip_credentials_from_dict,
 )
 from ..utils.metadata import flatten_metadata_to_text
-from ..utils.url_guard import sanitized_url_for_log
 from ._etag_utils import parse_if_match, updated_ms, weak_etag_for_timestamp
 
 logger = logging.getLogger(__name__)
@@ -644,13 +644,14 @@ async def read_root(
     accessible_services = user_context.get("accessible_services", [])
     # Normalize accessible_services by stripping slashes for comparison
     normalized_accessible_services = [s.strip("/") for s in accessible_services]
-    logger.info(
-        f"DEBUG: User {user_context['username']} accessible_services: {accessible_services}"
+    # Per-user authorization policy (accessible services, UI permissions, scopes)
+    # is a verbose trace, kept at DEBUG: this runs on the list-servers path and
+    # dumps the caller's full authz policy, which must not land in logs at INFO.
+    logger.debug(f"User {user_context['username']} accessible_services: {accessible_services}")
+    logger.debug(
+        f"User {user_context['username']} ui_permissions: {user_context.get('ui_permissions', {})}"
     )
-    logger.info(
-        f"DEBUG: User {user_context['username']} ui_permissions: {user_context.get('ui_permissions', {})}"
-    )
-    logger.info(f"DEBUG: User {user_context['username']} scopes: {user_context.get('scopes', [])}")
+    logger.debug(f"User {user_context['username']} scopes: {user_context.get('scopes', [])}")
 
     for path in sorted_server_paths:
         server_info = all_servers[path]
@@ -1711,26 +1712,25 @@ async def internal_register_service(
     allowed_groups: Annotated[str | None, Form()] = None,
 ):
     """Internal service registration endpoint for mcpgw-server (requires admin authentication)."""
-    logger.warning(
-        "INTERNAL REGISTER: Function called - starting execution"
-    )  # TODO: replace with debug
+    logger.debug("INTERNAL REGISTER: Function called - starting execution")
 
     from ..health.service import health_service
 
-    logger.warning(
-        f"INTERNAL REGISTER: Request parameters - name={name}, path={path}, proxy_pass_url={proxy_pass_url}"
-    )  # TODO: replace with debug
+    logger.debug(
+        f"INTERNAL REGISTER: Request parameters - name={name}, path={path}, "
+        f"proxy_pass_url={redact_url(proxy_pass_url)}"
+    )
 
     logger.info(f"Internal service registration request from caller '{caller}'")
 
     # Validate path format
     if not path.startswith("/"):
         path = "/" + path
-    logger.warning(f"INTERNAL REGISTER: Validated path: {path}")  # TODO: replace with debug
+    logger.debug(f"INTERNAL REGISTER: Validated path: {path}")
 
     # Process tags
     tag_list = [tag.strip() for tag in tags.split(",") if tag.strip()] if tags else []
-    logger.warning(f"INTERNAL REGISTER: Processed tags: {tag_list}")  # TODO: replace with debug
+    logger.debug(f"INTERNAL REGISTER: Processed tags: {tag_list}")
 
     # Process supported_transports
     if supported_transports:
@@ -1877,19 +1877,13 @@ async def internal_register_service(
                 content={"error": "Failed to encrypt custom headers"},
             )
 
-    logger.warning(
-        f"INTERNAL REGISTER: Created server entry for path: {path}"
-    )  # TODO: replace with debug
-    logger.warning(
-        f"INTERNAL REGISTER: Overwrite parameter: {overwrite}"
-    )  # TODO: replace with debug
+    logger.debug(f"INTERNAL REGISTER: Created server entry for path: {path}")
+    logger.debug(f"INTERNAL REGISTER: Overwrite parameter: {overwrite}")
 
     # Check if server exists and handle overwrite logic
     existing_server = await server_service.get_server_info(path)
     if existing_server and not overwrite:
-        logger.warning(
-            f"INTERNAL REGISTER: Server exists and overwrite=False for path {path}"
-        )  # TODO: replace with debug
+        logger.debug(f"INTERNAL REGISTER: Server exists and overwrite=False for path {path}")
         return JSONResponse(
             status_code=409,  # Conflict status code for existing resource
             content={
@@ -1900,13 +1894,9 @@ async def internal_register_service(
         )
 
     # Register the server (this will overwrite if server exists and overwrite=True)
-    logger.warning(
-        "INTERNAL REGISTER: Calling server_service.register_server"
-    )  # TODO: replace with debug
+    logger.debug("INTERNAL REGISTER: Calling server_service.register_server")
     if existing_server and overwrite:
-        logger.warning(
-            f"INTERNAL REGISTER: Overwriting existing server at path {path}"
-        )  # TODO: replace with debug
+        logger.debug(f"INTERNAL REGISTER: Overwriting existing server at path {path}")
         success = await server_service.update_server(path, server_entry)
         is_new_version = False
     else:
@@ -1927,9 +1917,7 @@ async def internal_register_service(
             },
         )
 
-    logger.warning(
-        "INTERNAL REGISTER: Auto-enabling newly registered server"
-    )  # TODO: replace with debug
+    logger.debug("INTERNAL REGISTER: Auto-enabling newly registered server")
 
     # Automatically enable the newly registered server before search indexing
     try:
@@ -1942,9 +1930,7 @@ async def internal_register_service(
         logger.error(f"Error auto-enabling server {path}: {e}")
         # Non-fatal error - server is registered but not enabled
 
-    logger.warning(
-        "INTERNAL REGISTER: Server registered successfully, updating search index"
-    )  # TODO: replace with debug
+    logger.debug("INTERNAL REGISTER: Server registered successfully, updating search index")
 
     # Index in DocumentDB search with current enabled state (should be True after auto-enable)
     is_enabled = await server_service.is_service_enabled(path)
@@ -1961,14 +1947,12 @@ async def internal_register_service(
 
     nginx_reload_scheduler.mark_dirty()
 
-    logger.warning(
-        "INTERNAL REGISTER: Broadcasting health status update"
-    )  # TODO: replace with debug
+    logger.debug("INTERNAL REGISTER: Broadcasting health status update")
 
     # Broadcast health status update to WebSocket clients
     await health_service.broadcast_health_update(path)
 
-    logger.warning("INTERNAL REGISTER: Updating scopes for new server")  # TODO: replace with debug
+    logger.debug("INTERNAL REGISTER: Updating scopes for new server")
 
     # Update scopes with the new server's tools
     from ..services.scope_service import update_server_scopes
@@ -1994,9 +1978,7 @@ async def internal_register_service(
         _perform_security_scan_on_registration(path, proxy_pass_url, server_entry, headers_list)
     )
 
-    logger.warning(
-        "INTERNAL REGISTER: Registration complete, returning success response"
-    )  # TODO: replace with debug
+    logger.debug("INTERNAL REGISTER: Registration complete, returning success response")
     logger.info(
         f"New service registered via internal endpoint: '{name}' at path '{path}' by caller '{caller}'"
     )
@@ -2083,9 +2065,7 @@ async def internal_remove_service(
     """Internal service removal endpoint for mcpgw-server (requires admin authentication)."""
     from ..health.service import health_service
 
-    logger.warning(
-        "INTERNAL REMOVE: Function called - starting execution"
-    )  # TODO: replace with debug
+    logger.debug("INTERNAL REMOVE: Function called - starting execution")
 
     logger.info(
         f"Internal service removal request from caller '{caller}' for service '{service_path}'"
@@ -2095,16 +2075,12 @@ async def internal_remove_service(
     if not service_path.startswith("/"):
         service_path = "/" + service_path
 
-    logger.warning(
-        f"INTERNAL REMOVE: Normalized service path: {service_path}"
-    )  # TODO: replace with debug
+    logger.debug(f"INTERNAL REMOVE: Normalized service path: {service_path}")
 
     # Check if server exists
     server_info = await server_service.get_server_info(service_path)
     if not server_info:
-        logger.warning(
-            f"INTERNAL REMOVE: Service not found at path '{service_path}'"
-        )  # TODO: replace with debug
+        logger.debug(f"INTERNAL REMOVE: Service not found at path '{service_path}'")
         return JSONResponse(
             status_code=404,
             content={
@@ -2114,17 +2090,13 @@ async def internal_remove_service(
             },
         )
 
-    logger.warning(
-        "INTERNAL REMOVE: Service found, proceeding with removal"
-    )  # TODO: replace with debug
+    logger.debug("INTERNAL REMOVE: Service found, proceeding with removal")
 
     # Remove the server
     success = await server_service.remove_server(service_path)
 
     if not success:
-        logger.warning(
-            f"INTERNAL REMOVE: Failed to remove service at path '{service_path}'"
-        )  # TODO: replace with debug
+        logger.debug(f"INTERNAL REMOVE: Failed to remove service at path '{service_path}'")
         return JSONResponse(
             status_code=500,
             content={
@@ -2134,9 +2106,7 @@ async def internal_remove_service(
             },
         )
 
-    logger.warning(
-        "INTERNAL REMOVE: Service removed successfully, updating search index"
-    )  # TODO: replace with debug
+    logger.debug("INTERNAL REMOVE: Service removed successfully, updating search index")
 
     # Remove from DocumentDB search index
     try:
@@ -2147,7 +2117,7 @@ async def internal_remove_service(
     except Exception as e:
         logger.warning(f"Failed to remove search index for {service_path}: {e}")
 
-    logger.warning("INTERNAL REMOVE: Regenerating Nginx configuration")  # TODO: replace with debug
+    logger.debug("INTERNAL REMOVE: Regenerating Nginx configuration")
 
     # Flush nginx config immediately (delete must take effect before response)
     from ..core.nginx_service import nginx_reload_scheduler
@@ -2155,12 +2125,12 @@ async def internal_remove_service(
     nginx_reload_scheduler.mark_dirty()
     await nginx_reload_scheduler.flush_now()
 
-    logger.warning("INTERNAL REMOVE: Broadcasting health status update")  # TODO: replace with debug
+    logger.debug("INTERNAL REMOVE: Broadcasting health status update")
 
     # Broadcast health status update to WebSocket clients
     await health_service.broadcast_health_update(service_path)
 
-    logger.warning("INTERNAL REMOVE: Removing server from scopes")  # TODO: replace with debug
+    logger.debug("INTERNAL REMOVE: Removing server from scopes")
 
     # Remove server from scopes and reload auth server
     from ..services.scope_service import remove_server_scopes
@@ -2172,9 +2142,7 @@ async def internal_remove_service(
         logger.error(f"Failed to remove server {service_path} from scopes: {e}")
         # Non-fatal error - server is removed but scopes not updated
 
-    logger.warning(
-        "INTERNAL REMOVE: Removal complete, returning success response"
-    )  # TODO: replace with debug
+    logger.debug("INTERNAL REMOVE: Removal complete, returning success response")
     logger.info(f"Service removed via internal endpoint: '{service_path}' by caller '{caller}'")
 
     return JSONResponse(
@@ -2195,9 +2163,7 @@ async def internal_toggle_service(
     """Internal service toggle endpoint for mcpgw-server (requires admin authentication)."""
     from ..health.service import health_service
 
-    logger.warning(
-        "INTERNAL TOGGLE: Function called - starting execution"
-    )  # TODO: replace with debug
+    logger.debug("INTERNAL TOGGLE: Function called - starting execution")
 
     # Ensure service_path starts with /
     if not service_path.startswith("/"):
@@ -2206,9 +2172,7 @@ async def internal_toggle_service(
     # Check if server exists
     server_info = await server_service.get_server_info(service_path)
     if not server_info:
-        logger.warning(
-            f"INTERNAL TOGGLE: Service not found at path '{service_path}'"
-        )  # TODO: replace with debug
+        logger.debug(f"INTERNAL TOGGLE: Service not found at path '{service_path}'")
         return JSONResponse(
             status_code=404,
             content={
@@ -2218,9 +2182,7 @@ async def internal_toggle_service(
             },
         )
 
-    logger.warning(
-        "INTERNAL TOGGLE: Service found, proceeding with toggle"
-    )  # TODO: replace with debug
+    logger.debug("INTERNAL TOGGLE: Service found, proceeding with toggle")
 
     # Get current state and toggle it
     current_state = await server_service.is_service_enabled(service_path)
@@ -2228,9 +2190,7 @@ async def internal_toggle_service(
     success = await server_service.toggle_service(service_path, new_state)
 
     if not success:
-        logger.warning(
-            f"INTERNAL TOGGLE: Failed to toggle service at path '{service_path}'"
-        )  # TODO: replace with debug
+        logger.debug(f"INTERNAL TOGGLE: Failed to toggle service at path '{service_path}'")
         return JSONResponse(
             status_code=500,
             content={
@@ -2280,9 +2240,7 @@ async def internal_toggle_service(
     # Broadcast health status update to WebSocket clients
     await health_service.broadcast_health_update(service_path)
 
-    logger.warning(
-        "INTERNAL TOGGLE: Toggle complete, returning success response"
-    )  # TODO: replace with debug
+    logger.debug("INTERNAL TOGGLE: Toggle complete, returning success response")
     return JSONResponse(
         status_code=200,
         content={
@@ -2304,9 +2262,7 @@ async def internal_healthcheck(
     """Internal health check endpoint for mcpgw-server (requires admin authentication)."""
     from ..health.service import health_service
 
-    logger.warning(
-        "INTERNAL HEALTHCHECK: Function called - starting execution"
-    )  # TODO: replace with debug
+    logger.debug("INTERNAL HEALTHCHECK: Function called - starting execution")
 
     logger.info(f"Internal healthcheck request from caller '{caller}'")
 
@@ -2976,11 +2932,7 @@ async def get_service_tools(
     if not proxy_pass_url:
         raise HTTPException(status_code=500, detail="Service has no proxy URL configured")
 
-    logger.info(
-        "Fetching live tools for %s endpoint=%s",
-        service_path,
-        sanitized_url_for_log(proxy_pass_url),
-    )
+    logger.info(f"Fetching live tools for {service_path} from {redact_url(proxy_pass_url)}")
 
     try:
         # Call MCP client to fetch fresh tools using server configuration
@@ -3136,7 +3088,8 @@ async def refresh_service(
         raise HTTPException(status_code=500, detail="Service has no proxy URL configured")
 
     logger.info(
-        f"Refreshing service {service_path} at {proxy_pass_url} by user '{user_context['username']}'"
+        f"Refreshing service {service_path} at {redact_url(proxy_pass_url)} "
+        f"by user '{user_context['username']}'"
     )
 
     try:
@@ -3321,16 +3274,14 @@ async def internal_list_services(
     caller: Annotated[str, Depends(validate_internal_auth)],
 ):
     """Internal service listing endpoint for mcpgw-server (requires admin authentication)."""
-    logger.warning(
-        "INTERNAL LIST: Function called - starting execution"
-    )  # TODO: replace with debug
+    logger.debug("INTERNAL LIST: Function called - starting execution")
 
     logger.info(f"Internal service list request from caller '{caller}'")
 
     # Get all servers (admin access - no permission filtering)
     all_servers = await server_service.get_all_servers()
 
-    logger.warning(f"INTERNAL LIST: Found {len(all_servers)} servers")  # TODO: replace with debug
+    logger.debug(f"INTERNAL LIST: Found {len(all_servers)} servers")
 
     # Transform the data to include enabled status and health information
     services = []
@@ -3361,7 +3312,7 @@ async def internal_list_services(
         }
         services.append(service_data)
 
-    logger.warning(f"INTERNAL LIST: Returning {len(services)} services")  # TODO: replace with debug
+    logger.debug(f"INTERNAL LIST: Returning {len(services)} services")
     logger.info(
         f"Internal service list completed for caller '{caller}' - returned {len(services)} services"
     )
@@ -3679,7 +3630,7 @@ async def generate_user_token(
             "requested_scopes": requested_scopes,
             "expires_in_hours": expires_in_hours,
             "description": description,
-            "correlation_id": request.headers.get("X-Correlation-ID"),
+            "correlation_id": sanitize_correlation_id(request.headers.get("X-Correlation-ID")),
         }
 
         if resource is not None:
@@ -5724,7 +5675,7 @@ async def rescan_server(
         "Manual security scan requested by user=%s server=%s endpoint=%s",
         user_context.get("username"),
         path,
-        sanitized_url_for_log(server_url),
+        redact_url(server_url),
     )
 
     try:

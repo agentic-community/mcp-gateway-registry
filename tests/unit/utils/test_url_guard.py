@@ -96,13 +96,6 @@ class TestScheme:
             == "https://example.com/v1/resource?tenant=a&mode=full"
         )
 
-    def test_log_url_drops_query_entirely(self):
-        safe = url_guard.sanitized_url_for_log("https://example.com/v1?api_key=secret&tenant=acme")
-        assert safe == "https://example.com/v1"
-        assert "secret" not in safe
-        assert "acme" not in safe
-        assert "?" not in safe
-
 
 # ---------------------------------------------------------------------------
 # Private / metadata blocking
@@ -205,16 +198,10 @@ class TestCgnatBlock:
         assert url_guard._is_blocked_ip(ip, url_guard._Allowlist()) is False
 
     def test_cgnat_range_pinned_exactly(self):
-        """The pinned network must be exactly 100.64.0.0/10 (RFC 6598).
-
-        CGNAT classification now lives in the shared ip_guard classifier that
-        url_guard delegates to, so assert the pin at its canonical home.
-        """
+        """The pinned network must be exactly 100.64.0.0/10 (RFC 6598)."""
         import ipaddress
 
-        from registry.utils import ip_guard
-
-        assert ip_guard._CGNAT_NET == ipaddress.ip_network("100.64.0.0/10")
+        assert url_guard._CGNAT_NET == ipaddress.ip_network("100.64.0.0/10")
 
     def test_cgnat_literal_host_rejected(self):
         with patch.object(url_guard, "settings", _settings()):
@@ -359,12 +346,13 @@ class TestNginxMetacharacters:
         url_guard.validate_server_path(path)  # does not raise
 
     @pytest.mark.parametrize("path", ["/", "//", "///"])
-    def test_validate_server_path_allows_root_and_slashes_only(self, path):
-        """A slashes-only path normalizes to an empty server name, which is
-        falsy and grants no access in the resolver, so it is not part of the
-        reserved-wildcard escalation and must stay registerable (the escalation
-        is narrowly about the 'all'/'*' sentinels, not empty names)."""
-        url_guard.validate_server_path(path)  # does not raise
+    def test_validate_server_path_rejects_root_and_slashes_only(self, path):
+        """A slashes-only path normalizes to an empty server name and, after the
+        trailing-slash location normalization (issue #1501), renders as a
+        gateway-wide `location /` block that subjects every URL to the /validate
+        auth subrequest. No real server registers at the root, so reject it."""
+        with pytest.raises(UrlValidationError):
+            url_guard.validate_server_path(path)
 
 
 # ---------------------------------------------------------------------------

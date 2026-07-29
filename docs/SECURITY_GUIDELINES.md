@@ -86,7 +86,24 @@ sanitizer that isn't called) is equivalent to no check.
   the standard `error` code + status. (c) **IdP group-name lists** — group names
   are organizational PII (org units, teams, cost centers); log the count, not the
   names. A "masked" token prefix is still a leak — a base64 JWT header/signature
-  fragment is reconstructable; log `<token len=N>`, not `token[:10]`.
+  fragment is reconstructable; log `<token len=N>`, not `token[:10]`. (d) **A
+  registrant/backend URL** (`proxy_pass_url`, an MCP/SSE endpoint, an agent
+  `base_url`, an inbound `request.url`) can carry credentials in userinfo
+  (`user:pass@host`) or a secret in the query (`?access_token=...`); route every
+  such URL through `registry/common/log_redaction.py` `redact_url` (keeps
+  `scheme://host[:port]/path`, drops userinfo/query/fragment, fails closed) at
+  EVERY log site, not just the reported one. (e) **The caller's own authorization
+  policy** (`user_scopes`, `scope_config`, `accessible_services`, `ui_permissions`)
+  is sensitive and must never sit at INFO — especially on a hot per-request path
+  (the `/validate` subrequest, list-servers): keep the verbose policy trace at
+  DEBUG and emit exactly ONE INFO allow/deny audit line carrying only
+  server/method/tool identifiers, at every return including the fail-closed
+  exception branch. Watch for developer traces mislabeled by LEVEL, not just by
+  content — a `logger.info(f"DEBUG: ...")` or `[TRACE]` line is still emitted at
+  INFO in production; the `# TODO: replace with debug` marker means it was never
+  meant to ship at that level. After fixing the reported site, grep the whole
+  package for the same variable/pattern — these leaks travel in packs across
+  health-check, connection, and registration code paths.
 - **Never reflect an exception/stack trace into a response the caller sees**
   (CWE-209, CodeQL `py/stack-trace-exposure`). `HTTPException(detail=str(e))`,
   `return {"error": str(e)}` from a route, and `HTMLResponse(f"...{exc}...")` all
@@ -194,6 +211,26 @@ sanitizer that isn't called) is equivalent to no check.
   via an explicit CA bundle env var (fail closed if the configured bundle is
   missing); any insecure escape hatch must be explicit opt-in, logged, default
   off.
+- **The same TLS-verify rule applies to nginx reverse-proxy hops, not just Python
+  clients.** An `nginx` `location` that reverse-proxies an IdP front-channel
+  (token exchange, JWKS, OIDC discovery) over https MUST carry `proxy_ssl_verify
+  on` plus `proxy_ssl_trusted_certificate <CA bundle>` and hostname pinning
+  (`proxy_ssl_server_name on` + `proxy_ssl_name <upstream host>`). `proxy_ssl_verify
+  off` there is a MITM/auth-bypass hole: an on-path attacker can substitute JWKS
+  (forge tokens) or intercept the token exchange. nginx does NOT consult a system
+  trust store for `proxy_ssl`, so a CA bundle is always required — drive the path
+  from an operator env var (e.g. `PINGFEDERATE_CA_BUNDLE`), fail closed (verify
+  stays on; a missing bundle makes nginx reject the cert). When the same block is
+  duplicated across templates (http-only vs http+https, per-listener copies), fix
+  and guard EVERY copy — a grep-based test asserting no PingFederate/IdP location
+  contains `proxy_ssl_verify off` keeps the two files from drifting. Note that
+  OMITTING `proxy_ssl_verify` is just as dangerous as `off`: nginx's default is
+  OFF, so a location that reverse-proxies an https IdP without the directive (as
+  the Keycloak `/keycloak/`, `/realms/`, `/resources/` blocks did) has the
+  identical hole even though no `off` literal appears. Render the directive from
+  the same fail-closed helper for every IdP upstream (PingFederate via
+  `PINGFEDERATE_CA_BUNDLE`, Keycloak via `KEYCLOAK_CA_BUNDLE`) — verify on for
+  https, comment-only for a plaintext in-cluster default, never `off`.
 - **Every alternate/override URL field is a bypass — validate the whole family,
   not just the primary field.** A server record often carries a main backend URL
   (`proxy_pass_url`) plus optional override endpoints (`mcp_endpoint`,
@@ -743,7 +780,8 @@ the drift between copies is the hole.
   var, never `verify=False`. `guarded_client`/`guarded_async_client` take
   `verify=` and default it to `True`.
 - **Log redaction → `registry/common/log_redaction.py`** (`redact_headers`,
-  `redact_mapping`) and, for OIDC identity, `safe_identity_summary()` in
+  `redact_mapping`, `redact_url` for a single URL string) and, for OIDC identity,
+  `safe_identity_summary()` in
   `auth_server/server.py`. NEVER log a raw header dict, a request/response body
   dict, a `user_context`, `updates`, or decoded id_token claims — route it
   through the redactor (masks any `*token*`/`*secret*`/`*credential*`/auth/cookie

@@ -2,7 +2,7 @@
 
 How the MCP Gateway lets a user reach an authentication-protected ("auth-based") third-party MCP server — GitHub, Slack, Atlassian, etc. — **as themselves**, without the coding assistant ever handling the third-party token.
 
-- Status of the modes: **`none` (no egress auth), `vault-oauth` (3LO), and `token-exchange` (OBO) are implemented today** (OBO via Microsoft Entra `jwt-bearer`; Keycloak RFC 8693 is the next phase); **`vault-pat` (PAT)** and a **custom-header** egress mode are designed but not yet built (placeholders below).
+- Status of the modes: **`none` (no egress auth), `vault-oauth` (3LO), `token-exchange` (OBO), and `vault-pat` (PAT) are implemented today** (OBO via Microsoft Entra `jwt-bearer`; Keycloak RFC 8693 is the next phase); a **custom-header** egress mode is designed but not yet built (placeholder below).
 - Authoritative implementation references: `registry/egress_auth/`, `registry/secrets/`, `registry/api/egress_auth_routes.py`, `auth_server/server.py` (`mcp_proxy`, `_vend_egress_token`, `_forward_headers`).
 
 ---
@@ -230,14 +230,14 @@ Wire the chosen value on the **registry** container across your deployment surfa
 
 ## The egress modes
 
-`egress_auth_mode` on the server entry selects how the gateway obtains the outbound credential. Today the **no-auth** and **vault-OAuth (3LO)** paths are implemented; the others are designed and reserved.
+`egress_auth_mode` on the server entry selects how the gateway obtains the outbound credential. Today the **no-auth**, **vault-OAuth (3LO)**, **token-exchange (OBO)**, and **vault-PAT** paths are implemented; the **custom-header** mode is designed and reserved.
 
 | Mode | Vault used? | How the egress credential is obtained | Status |
 |------|-------------|----------------------------------------|--------|
 | **`none` (no egress auth)** | No | The server needs no upstream credential. All client auth headers are stripped on egress; nothing is injected. The default for every server. | **Implemented** (`egress_auth_mode = "none"`) |
 | **`vault-oauth` (3LO)** | Yes | User completes provider OAuth (3LO) out of band; the gateway vaults the per-user token and injects it. This document's main flow. | **Implemented** (`egress_auth_mode = "oauth_user"`) |
 | **`token-exchange` (OBO)** | No | For same-trust-domain backends, the gateway exchanges the user's ingress token for a backend-audience token (Entra `jwt-bearer` / Keycloak RFC 8693). `sub` preserved; nothing stored. | **Implemented** (`egress_auth_mode = "obo_exchange"`; Entra `jwt-bearer` today, Keycloak RFC 8693 next) |
-| **`vault-pat` (PAT)** | Yes | A per-user static Personal Access Token / API key is stored in the vault and injected. No OAuth dance. | **Placeholder — not implemented** |
+| **`vault-pat` (PAT)** | Yes | A per-user static Personal Access Token / API key is stored in the vault (bounded TTL) and injected into the same header the server's backend auth uses. No OAuth dance. Admin seed-on-behalf supported. | **Implemented** (`egress_auth_mode = "pat"`) |
 | **custom-header** | Yes | A per-user credential the operator specifies by header **name + value**, stored in the vault and injected verbatim on egress. For backends with a bespoke/out-of-band auth scheme. Generalizes `vault-pat`. | **Placeholder — not implemented (planned with PAT)** |
 
 > **Internal relay (not a configurable mode).** The built-in `airegistry-tools` server receives the relayed ingress `Authorization` via a hardcoded constant (see "First principle" above). It is not an `egress_auth_mode` value and is not selectable per server — external servers that need an upstream credential use the vault modes above.
@@ -256,13 +256,24 @@ The flow described throughout this document. `egress_auth_mode = "oauth_user"` o
 
 Provider support: **Microsoft Entra `jwt-bearer`** (the ingress token is the assertion, requesting the backend app audience) is implemented today. **Keycloak RFC 8693 token exchange** (ingress token as the subject token, backend as the audience) is the next phase and currently raises a not-implemented error. The exchange reuses the auth-server's configured IdP token endpoint and client credentials, runs on the async egress path, and logs no token material. Implementation: `auth_server/egress_obo.py` (`obo_exchange`) and the `mcp_proxy` egress hop in `auth_server/server.py`.
 
-### `vault-pat` (PAT) — placeholder
+### `vault-pat` (PAT) — implemented
 
-> Not yet implemented. Design intent: for backends that only accept a static Personal Access Token / API key, store a per-user PAT in the same vault (keyed by the same 4-tuple) and inject it on egress, skipping the OAuth dance. Admin seed-on-behalf is planned (an admin may seed a PAT for another user, audit-logged). Same "token never on the laptop" property as 3LO.
+`egress_auth_mode = "pat"`. For backends that only accept a static Personal Access Token / API key, each user submits their own PAT out of band on the **Connected Accounts** page; the gateway stores it in the same vault (keyed by the same `(auth_method, user_id, provider, server_path)` 4-tuple) and injects it on egress, skipping the OAuth dance. Same "token never on the laptop" property as 3LO.
 
-### custom-header — placeholder (planned with PAT)
+Key properties:
 
-> Not yet implemented. Design intent: the replacement for "I did the auth out of band and just want to send a token to this upstream." The operator specifies the header **name** and **value** in the registry UI/API; the value is stored in the same secrets vault (keyed by the 4-tuple) and injected verbatim under that header name on egress — like `vault-pat`, but for a backend whose scheme is a non-`Authorization` header or a bespoke format. This is the sanctioned way to reach a custom-auth upstream now that client-header relay is ingress-only; it is expected to land as part of the `vault-pat` work, not as a relay feature.
+- **Write-only secret.** The PAT is stored, never returned or logged; status endpoints report presence + expiry only.
+- **Mandatory bounded lifetime.** The submit takes `ttl_value` + `ttl_unit` (minutes/hours/days, capped at 30 days) — there is no "never expires". Expiry is re-checked at vend, so a stale PAT is a miss (fail-closed).
+- **Header inherited from backend auth.** The PAT is injected into the SAME header the server's Backend Authentication uses (`bearer` → `Authorization: Bearer <PAT>`; `api_key` → the configured header with a bare token; default `Authorization: Bearer`). The operator configures the header once, in Backend Authentication — there is no separate egress header config.
+- **Per-user identity, admin gated.** `sub` comes from the verified ingress identity; only an admin may seed a PAT for another user, and an on-behalf write must also state the target's ingress `auth_method` (the vault partition the target vends from), failing closed otherwise.
+- **CSRF-protected mutations.** Submit (PUT) and delete (DELETE) require CSRF; status (GET) does not. The vend path re-checks the bound upstream against the registered set and strips any client-supplied copy of the inject header, so only the gateway-injected value reaches the upstream.
+- **Miss is terminal.** Unlike 3LO there is no interactive flow to offer; a miss (never submitted or expired) returns an actionable "submit a PAT on Connected Accounts" tool result rather than looping.
+
+Endpoints: `PUT`/`GET`/`DELETE /servers/{path}/egress-pat` (registry). Vend: a `pat` branch in `/internal/egress-token` placed before `oauth_user` so a PAT server (stored with `client_id=None`) never routes through the OAuth refresh path.
+
+### custom-header — placeholder (planned)
+
+> Not yet implemented. Design intent: the replacement for "I did the auth out of band and just want to send a token to this upstream" where the header is not derivable from the server's backend-auth scheme. The operator specifies the header **name** and **value** in the registry UI/API; the value is stored in the same secrets vault (keyed by the 4-tuple) and injected verbatim under that header name on egress — like `vault-pat`, but for a backend whose scheme is a fully bespoke format the backend-auth inheritance cannot express. This is the sanctioned way to reach a custom-auth upstream now that client-header relay is ingress-only; it is a relay-free follow-on to the shipped `vault-pat` mode.
 
 ---
 

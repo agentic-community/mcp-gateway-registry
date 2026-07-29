@@ -1668,7 +1668,13 @@ class TestEdgeCasesAndErrorHandling:
         mock_server_repository,
         mock_search_repository,
     ):
-        """Test handling empty or root path."""
+        """A root/slashes-only path is rejected (issue #1501).
+
+        After the trailing-slash location normalisation, a slashes-only path
+        would render as a gateway-wide ``location /`` block, so
+        ``validate_server_path`` rejects it and registration must fail closed
+        without writing anything.
+        """
         # Arrange
         root_server = {
             "path": "/",
@@ -1679,12 +1685,13 @@ class TestEdgeCasesAndErrorHandling:
         mock_server_repository.create.return_value = True
         mock_server_repository.get_state.return_value = False
 
-        # Act
-        result = await server_service.register_server(root_server)
+        from registry.exceptions import UrlValidationError
 
-        # Assert - result is now a dict
-        assert result["success"] is True
-        mock_server_repository.create.assert_called_once()
+        # Act / Assert - registration fails closed, nothing is persisted
+        with pytest.raises(UrlValidationError):
+            await server_service.register_server(root_server)
+
+        mock_server_repository.create.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_long_path_handling(

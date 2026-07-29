@@ -73,11 +73,15 @@ class TestCanonicalAuthMethod:
 
 
 @pytest.mark.unit
-class TestCanonicalEgressUser:
+class TestCanonicalEgressUserPaths:
     """The per-user egress vault id must resolve identically on the consent-write
     (cookie) and vend (bearer) paths, or the vaulted token is written under one
     id and looked up under another (permanent vend miss). It keys on the OIDC
     ``sub``, which is present in both id_tokens and access tokens across providers.
+
+    NOTE: previously this class was also named ``TestCanonicalEgressUser`` -- the
+    same name as the class further down -- so it was shadowed at import time and
+    silently NOT collected. Renamed so both suites run.
     """
 
     def test_bearer_uses_data_sub(self):
@@ -117,6 +121,36 @@ class TestCanonicalEgressUser:
 
     def test_empty_when_nothing_present(self):
         assert server._canonical_egress_user({}) == ""
+
+    def test_egress_user_honored_only_for_self_signed(self):
+        # The gateway stamps egress_user (the OIDC sub) onto its OWN self_signed
+        # USER token; there it wins over the token's username sub.
+        vr = {
+            "method": server.AUTH_METHOD_SELF_SIGNED,
+            "username": "alice@example.com",
+            "data": {"egress_user": "00000000-sub-alice", "sub": "alice@example.com"},
+        }
+        assert server._canonical_egress_user(vr) == "00000000-sub-alice"
+
+    def test_egress_user_ignored_for_non_self_signed_token(self):
+        # Trust boundary: egress_user is an identity-keying claim. From any token
+        # this gateway did NOT mint (e.g. a raw IdP jwt), it must be ignored so an
+        # external issuer cannot inject the vault key and vend a victim's token.
+        # Resolution falls through to the token's real subject instead.
+        vr = {
+            "method": "jwt",
+            "username": "attacker@example.com",
+            "data": {"egress_user": "00000000-sub-victim", "sub": "00000000-sub-attacker"},
+        }
+        assert server._canonical_egress_user(vr) == "00000000-sub-attacker"
+
+    def test_egress_user_ignored_when_method_absent(self):
+        # No method marker -> not provably gateway-minted -> egress_user ignored.
+        vr = {
+            "username": "attacker@example.com",
+            "data": {"egress_user": "00000000-sub-victim", "sub": "00000000-sub-attacker"},
+        }
+        assert server._canonical_egress_user(vr) == "00000000-sub-attacker"
 
 
 @pytest.mark.unit
@@ -276,3 +310,36 @@ class TestAttachMcpProxyTokenMarker:
         )
         claims = _decode(resp.headers["X-Internal-Token"])
         assert claims["egress_user"] == "00000000-sub-alice"
+
+
+@pytest.mark.unit
+class TestCanonicalEgressUser:
+    """The vault-keying id must agree between the consent-write and vend paths."""
+
+    def test_explicit_egress_user_claim_wins_over_username_sub(self):
+        # A gateway-issued self-signed USER token carries sub=username but stamps
+        # the OIDC sub as egress_user. Without egress_user winning, a Cursor/Claude
+        # bearer would key the vault on the username and miss the browser-consented
+        # token (the "0 tools" bug). egress_user MUST take precedence over sub --
+        # but only on a self_signed token (a claim minted by this gateway); see
+        # test_egress_user_ignored_for_non_self_signed_token for the trust boundary.
+        vr = {
+            "method": server.AUTH_METHOD_SELF_SIGNED,
+            "data": {"egress_user": "oidc-sub-xyz", "sub": "alice@example.com"},
+        }
+        assert server._canonical_egress_user(vr) == "oidc-sub-xyz"
+
+    def test_cookie_session_subject_used_when_no_egress_user(self):
+        # Cookie path: session_data has no sub/egress_user, only the persisted
+        # OIDC subject -> that is the canonical id.
+        vr = {"data": {"subject": "oidc-sub-abc"}, "username": "alice@example.com"}
+        assert server._canonical_egress_user(vr) == "oidc-sub-abc"
+
+    def test_bearer_sub_used_when_no_egress_user(self):
+        # OIDC bearer path: verified claims expose sub directly.
+        vr = {"data": {"sub": "oidc-sub-idp"}}
+        assert server._canonical_egress_user(vr) == "oidc-sub-idp"
+
+    def test_username_fallback_preserves_non_oidc_behavior(self):
+        vr = {"data": {}, "username": "svc-account"}
+        assert server._canonical_egress_user(vr) == "svc-account"

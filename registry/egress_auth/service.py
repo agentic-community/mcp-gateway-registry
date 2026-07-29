@@ -224,6 +224,19 @@ class EgressAuthService:
         remaining = (exp - datetime.now(UTC)).total_seconds()
         return remaining <= self._skew
 
+    @staticmethod
+    def _is_expired(expires_at_iso: str) -> bool:
+        """True if the ISO8601 timestamp is in the past (fail-closed on malformed).
+
+        Used by the ``pat`` sink check: an unparsable or past ``expires_at`` is
+        treated as expired so a stale/garbled credential is never vended.
+        """
+        try:
+            exp = datetime.fromisoformat(expires_at_iso)
+        except ValueError:
+            return True
+        return (exp - datetime.now(UTC)).total_seconds() <= 0
+
     # -- consent -------------------------------------------------------------- #
 
     def build_consent_url(
@@ -450,4 +463,77 @@ class EgressAuthService:
         server_path: str,
     ) -> None:
         """Delete the vault entry (idempotent). Provider-side revoke is a future follow-on."""
+        await self._store.delete_token(auth_method, user_id, provider, server_path)
+
+    # -- pat (static per-user PAT / API-key) ---------------------------------- #
+
+    async def get_pat(
+        self,
+        auth_method: str,
+        user_id: str,
+        provider: str,
+        server_path: str,
+    ) -> str | None:
+        """Vend a stored per-user PAT, enforcing the bounded lifetime. None on miss.
+
+        Deliberately does NOT touch the OAuth refresh/lease machinery: a PAT is
+        static (no refresh token) and stores ``client_id=None`` (which the OAuth
+        vend path would reject). A PAT with no ``expires_at`` or one in the past is
+        treated as a MISS so a stale credential can never linger.
+
+        Args:
+            auth_method: The caller's canonical per-user auth method.
+            user_id: The vault principal (verified egress user).
+            provider: The provider namespace key for this server.
+            server_path: The slash-prefixed server path.
+
+        Returns:
+            The stored PAT string, or None on a miss (never submitted, expired,
+            or a non-per-user caller).
+        """
+        if not is_per_user_auth_method(auth_method):
+            return None
+        token = await self._store.get_token(auth_method, user_id, provider, server_path)
+        if token is None:
+            return None
+        # Enforce the bounded lifetime at the sink: an expired PAT is a MISS.
+        if not token.expires_at or self._is_expired(token.expires_at):
+            return None
+        return token.access_token
+
+    async def set_pat(
+        self,
+        auth_method: str,
+        user_id: str,
+        provider: str,
+        server_path: str,
+        token: StoredToken,
+    ) -> None:
+        """Store a per-user PAT (thin wrapper over the SecretStore)."""
+        await self._store.put_token(auth_method, user_id, provider, server_path, token)
+
+    async def get_pat_status(
+        self,
+        auth_method: str,
+        user_id: str,
+        provider: str,
+        server_path: str,
+    ) -> StoredToken | None:
+        """Read the stored PAT entry for status (presence + expiry only).
+
+        The caller MUST NOT return ``access_token`` from this to any API
+        consumer; the PAT is write-only. Returns None on a miss.
+        """
+        if not is_per_user_auth_method(auth_method):
+            return None
+        return await self._store.get_token(auth_method, user_id, provider, server_path)
+
+    async def delete_pat(
+        self,
+        auth_method: str,
+        user_id: str,
+        provider: str,
+        server_path: str,
+    ) -> None:
+        """Delete the caller's stored PAT (idempotent)."""
         await self._store.delete_token(auth_method, user_id, provider, server_path)

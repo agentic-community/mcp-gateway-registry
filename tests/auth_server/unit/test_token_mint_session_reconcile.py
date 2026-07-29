@@ -49,9 +49,19 @@ class TestSessionReconciliation:
     @pytest.mark.asyncio
     async def test_no_session_id_uses_body_as_is(self):
         ctx = {"groups": ["developers"], "scopes": ["srv/read"]}
-        groups, scopes = await _reconcile_context_against_session(ctx)
+        groups, scopes, subject = await _reconcile_context_against_session(ctx)
         assert groups == ["developers"]
         assert scopes == ["srv/read"]
+        # No session-backed source and no body-asserted egress id -> empty.
+        assert subject == ""
+
+    @pytest.mark.asyncio
+    async def test_no_session_id_uses_body_asserted_egress_id(self):
+        # A non-session caller may still assert its canonical egress id in the
+        # body; it flows through as the subject (explicit trust boundary).
+        ctx = {"groups": [], "scopes": [], "egress_user": "oidc-sub-123"}
+        _, _, subject = await _reconcile_context_against_session(ctx)
+        assert subject == "oidc-sub-123"
 
     @pytest.mark.asyncio
     async def test_session_id_that_does_not_resolve_fails_closed(self):
@@ -83,6 +93,25 @@ class TestSessionReconciliation:
             "scopes": [],
             "session_id": "s1",
         }
+        session = {"username": "alice", "groups": ["developers"], "subject": "oidc-sub-abc"}
+        with (
+            patch("session_store.resolve_session", AsyncMock(return_value=session)),
+            patch(
+                "auth_server.server.map_groups_to_scopes",
+                AsyncMock(return_value=["srv/read"]),
+            ),
+        ):
+            groups, scopes, subject = await _reconcile_context_against_session(ctx)
+        assert groups == ["developers"]
+        assert scopes == ["srv/read"]
+        # The session's OIDC sub is returned as the canonical egress id.
+        assert subject == "oidc-sub-abc"
+
+    @pytest.mark.asyncio
+    async def test_session_without_subject_returns_empty_subject(self):
+        # A session predating subject persistence yields no canonical egress id;
+        # the vend then falls back to username (pre-existing behavior).
+        ctx = {"groups": [], "scopes": [], "session_id": "s1"}
         session = {"username": "alice", "groups": ["developers"]}
         with (
             patch("session_store.resolve_session", AsyncMock(return_value=session)),
@@ -91,9 +120,8 @@ class TestSessionReconciliation:
                 AsyncMock(return_value=["srv/read"]),
             ),
         ):
-            groups, scopes = await _reconcile_context_against_session(ctx)
-        assert groups == ["developers"]
-        assert scopes == ["srv/read"]
+            _, _, subject = await _reconcile_context_against_session(ctx)
+        assert subject == ""
 
     @pytest.mark.asyncio
     async def test_privileged_group_allowed_when_session_holds_it(self):
@@ -110,7 +138,7 @@ class TestSessionReconciliation:
                 AsyncMock(return_value=["admin/all"]),
             ),
         ):
-            groups, scopes = await _reconcile_context_against_session(ctx)
+            groups, scopes, _ = await _reconcile_context_against_session(ctx)
         assert groups == ["registry-admins"]
         assert scopes == ["admin/all"]
 
@@ -125,6 +153,6 @@ class TestSessionReconciliation:
                 AsyncMock(return_value=["srv/read"]),
             ),
         ):
-            groups, scopes = await _reconcile_context_against_session(ctx)
+            groups, scopes, _ = await _reconcile_context_against_session(ctx)
         assert groups == ["developers"]
         assert scopes == ["srv/read"]

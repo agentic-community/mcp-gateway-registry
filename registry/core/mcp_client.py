@@ -18,7 +18,7 @@ from mcp import ClientSession
 from mcp.client.sse import sse_client
 from mcp.client.streamable_http import streamablehttp_client
 
-from ..utils.url_guard import sanitized_url_for_log
+from ..common.log_redaction import redact_url
 
 logger = logging.getLogger(__name__)
 
@@ -61,13 +61,13 @@ def _assert_mcp_url_fetchable(
     except UrlValidationError:
         logger.warning(
             "MCP connection blocked by SSRF guard for %s",
-            sanitized_url_for_log(url),
+            redact_url(url),
         )
         return False
     except Exception as exc:  # pragma: no cover - defensive, fail closed
         logger.warning(
             "MCP connection blocked for %s validation_type=%s",
-            sanitized_url_for_log(url),
+            redact_url(url),
             type(exc).__name__,
         )
         return False
@@ -156,7 +156,7 @@ def _build_headers_for_server(
         logger.warning(
             "MCP headers withheld service=%s destination=%s reason=URL validation failed",
             server_info.get("service_path") or server_info.get("path") or "unknown",
-            sanitized_url_for_log(destination_url or ""),
+            redact_url(destination_url or ""),
         )
         return headers
 
@@ -232,8 +232,8 @@ def normalize_sse_endpoint_url_for_request(url_str: str) -> str:
         normalized = f"{base_url}{messages_path}"
         logger.debug(
             "Normalized MCP request URL from=%s to=%s",
-            sanitized_url_for_log(url_str),
-            sanitized_url_for_log(normalized),
+            redact_url(url_str),
+            redact_url(normalized),
         )
         return normalized
 
@@ -254,10 +254,10 @@ async def detect_server_transport_aware(base_url: str, server_info: dict = None)
     """
     # If URL already has a transport endpoint, detect from it
     if base_url.endswith("/sse") or "/sse/" in base_url:
-        logger.debug("Server URL %s already has SSE endpoint", sanitized_url_for_log(base_url))
+        logger.debug("Server URL %s already has SSE endpoint", redact_url(base_url))
         return "sse"
     elif base_url.endswith("/mcp") or "/mcp/" in base_url:
-        logger.debug("Server URL %s already has MCP endpoint", sanitized_url_for_log(base_url))
+        logger.debug("Server URL %s already has MCP endpoint", redact_url(base_url))
         return "streamable-http"
 
     # Use server configuration if available
@@ -291,10 +291,10 @@ async def detect_server_transport(base_url: str) -> str:
     """
     # If URL already has a transport endpoint, detect from it
     if base_url.endswith("/sse") or "/sse/" in base_url:
-        logger.debug("Server URL %s already has SSE endpoint", sanitized_url_for_log(base_url))
+        logger.debug("Server URL %s already has SSE endpoint", redact_url(base_url))
         return "sse"
     elif base_url.endswith("/mcp") or "/mcp/" in base_url:
-        logger.debug("Server URL %s already has MCP endpoint", sanitized_url_for_log(base_url))
+        logger.debug("Server URL %s already has MCP endpoint", redact_url(base_url))
         return "streamable-http"
 
     # Fail closed on SSRF before probing the target with the (unpinnable) SDK
@@ -307,14 +307,12 @@ async def detect_server_transport(base_url: str) -> str:
     try:
         mcp_url = base_url.rstrip("/") + "/mcp/"
         async with streamablehttp_client(url=mcp_url) as connection:
-            logger.debug(
-                "Server at %s supports streamable-http transport", sanitized_url_for_log(base_url)
-            )
+            logger.debug("Server at %s supports streamable-http transport", redact_url(base_url))
             return "streamable-http"
     except Exception as e:
         logger.debug(
             "Streamable-HTTP probe failed endpoint=%s type=%s",
-            sanitized_url_for_log(base_url),
+            redact_url(base_url),
             type(e).__name__,
         )
 
@@ -322,19 +320,19 @@ async def detect_server_transport(base_url: str) -> str:
     try:
         sse_url = base_url.rstrip("/") + "/sse"
         async with sse_client(sse_url) as connection:
-            logger.debug("Server at %s supports SSE transport", sanitized_url_for_log(base_url))
+            logger.debug("Server at %s supports SSE transport", redact_url(base_url))
             return "sse"
     except Exception as e:
         logger.debug(
             "SSE probe failed endpoint=%s type=%s",
-            sanitized_url_for_log(base_url),
+            redact_url(base_url),
             type(e).__name__,
         )
 
     # Default to streamable-http if detection fails
     logger.warning(
         "Could not detect transport endpoint=%s; defaulting to streamable-http",
-        sanitized_url_for_log(base_url),
+        redact_url(base_url),
     )
     return "streamable-http"
 
@@ -362,7 +360,7 @@ async def get_tools_from_server_with_transport(
 
     logger.info(
         "Attempting MCP connection endpoint=%s transport=%s",
-        sanitized_url_for_log(base_url),
+        redact_url(base_url),
         transport,
     )
 
@@ -377,7 +375,7 @@ async def get_tools_from_server_with_transport(
 
     except Exception as e:
         logger.error(
-            f"MCP Check Error: Failed to get tool list from {sanitized_url_for_log(base_url)} with {transport}: {type(e).__name__}"
+            f"MCP Check Error: Failed to get tool list from {redact_url(base_url)} with {transport}: {type(e).__name__}"
         )
         return None
 
@@ -394,7 +392,7 @@ async def _get_tools_streamable_http(base_url: str, server_info: dict = None) ->
     # If explicit endpoint is provided, use it directly (single attempt)
     if explicit_endpoint:
         mcp_url = explicit_endpoint
-        logger.info("MCP client using explicit endpoint=%s", sanitized_url_for_log(mcp_url))
+        logger.info("MCP client using explicit endpoint=%s", redact_url(mcp_url))
 
         # Handle servers imported from anthropic by adding required query parameter
         if (
@@ -425,7 +423,7 @@ async def _get_tools_streamable_http(base_url: str, server_info: dict = None) ->
         except Exception as e:
             logger.error(
                 "Streamable-HTTP connection failed endpoint=%s type=%s",
-                sanitized_url_for_log(mcp_url),
+                redact_url(mcp_url),
                 type(e).__name__,
             )
             return None
@@ -446,9 +444,9 @@ async def _get_tools_streamable_http(base_url: str, server_info: dict = None) ->
             elif "instance_id=" not in mcp_url:
                 mcp_url += "&instance_id=default"
         else:
-            logger.debug("MCP endpoint unchanged=%s", sanitized_url_for_log(mcp_url))
+            logger.debug("MCP endpoint unchanged=%s", redact_url(mcp_url))
 
-        logger.debug("MCP connection starting endpoint=%s", sanitized_url_for_log(mcp_url))
+        logger.debug("MCP connection starting endpoint=%s", redact_url(mcp_url))
         if not _assert_mcp_url_fetchable(mcp_url, server_info):
             return None
         headers = _build_headers_for_server(server_info, destination_url=mcp_url)
@@ -467,7 +465,7 @@ async def _get_tools_streamable_http(base_url: str, server_info: dict = None) ->
         except Exception as e:
             logger.error(
                 "Streamable-HTTP connection failed endpoint=%s type=%s",
-                sanitized_url_for_log(base_url),
+                redact_url(base_url),
                 type(e).__name__,
             )
 
@@ -481,7 +479,7 @@ async def _get_tools_streamable_http(base_url: str, server_info: dict = None) ->
                 continue
             headers = _build_headers_for_server(server_info, destination_url=mcp_url)
             try:
-                logger.info("Trying streamable-http endpoint=%s", sanitized_url_for_log(mcp_url))
+                logger.info("Trying streamable-http endpoint=%s", redact_url(mcp_url))
                 async with streamablehttp_client(url=mcp_url, headers=headers) as (
                     read,
                     write,
@@ -491,22 +489,20 @@ async def _get_tools_streamable_http(base_url: str, server_info: dict = None) ->
                         await asyncio.wait_for(session.initialize(), timeout=10.0)
                         tools_response = await asyncio.wait_for(session.list_tools(), timeout=15.0)
 
-                        logger.info(
-                            "MCP connection succeeded endpoint=%s", sanitized_url_for_log(mcp_url)
-                        )
+                        logger.info("MCP connection succeeded endpoint=%s", redact_url(mcp_url))
                         return _extract_tool_details(tools_response)
 
             except TimeoutError:
                 logger.error(
                     "MCP streamable-http timeout endpoint=%s",
-                    sanitized_url_for_log(mcp_url),
+                    redact_url(mcp_url),
                 )
                 if mcp_url == endpoints_to_try[0]:
                     continue
                 return None
             except Exception as e:
                 logger.error(
-                    f"MCP Check Error: Streamable-HTTP connection failed to {sanitized_url_for_log(mcp_url)}: {type(e).__name__}"
+                    f"MCP Check Error: Streamable-HTTP connection failed to {redact_url(mcp_url)}: {type(e).__name__}"
                 )
                 if mcp_url == endpoints_to_try[0]:
                     continue
@@ -523,7 +519,7 @@ async def _get_tools_sse(base_url: str, server_info: dict = None) -> list[dict] 
     # Resolve SSE endpoint URL
     if explicit_endpoint:
         sse_url = explicit_endpoint
-        logger.info("MCP client using explicit SSE endpoint=%s", sanitized_url_for_log(sse_url))
+        logger.info("MCP client using explicit SSE endpoint=%s", redact_url(sse_url))
     elif base_url.endswith("/sse") or "/sse/" in base_url:
         sse_url = base_url
     else:
@@ -570,13 +566,13 @@ async def _get_tools_sse(base_url: str, server_info: dict = None) -> list[dict] 
     except TimeoutError:
         logger.error(
             "MCP timeout during SSE session endpoint=%s",
-            sanitized_url_for_log(base_url),
+            redact_url(base_url),
         )
         return None
     except Exception as e:
         logger.error(
             "SSE connection failed endpoint=%s type=%s",
-            sanitized_url_for_log(base_url),
+            redact_url(base_url),
             type(e).__name__,
         )
         return None
@@ -683,7 +679,7 @@ async def get_tools_from_server_with_server_info(
 
     logger.info(
         "Attempting MCP connection endpoint=%s transport=%s server_info=true",
-        sanitized_url_for_log(base_url),
+        redact_url(base_url),
         transport,
     )
 
@@ -698,7 +694,7 @@ async def get_tools_from_server_with_server_info(
 
     except Exception as e:
         logger.error(
-            f"MCP Check Error: Failed to get tool list from {sanitized_url_for_log(base_url)} with {transport}: {type(e).__name__}"
+            f"MCP Check Error: Failed to get tool list from {redact_url(base_url)} with {transport}: {type(e).__name__}"
         )
         return None
 
@@ -743,7 +739,7 @@ async def get_mcp_connection_result(
 
     logger.info(
         "Getting MCP connection result endpoint=%s transport=%s",
-        sanitized_url_for_log(base_url),
+        redact_url(base_url),
         transport,
     )
 
@@ -798,7 +794,7 @@ async def get_mcp_connection_result(
 
                     if mcp_server_info:
                         logger.info(
-                            f"MCP Server Info from {sanitized_url_for_log(base_url)}: "
+                            f"MCP Server Info from {redact_url(base_url)}: "
                             f"name={mcp_server_info.get('name')}, "
                             f"version={mcp_server_info.get('version')}"
                         )
@@ -838,7 +834,7 @@ async def get_mcp_connection_result(
 
                     if mcp_server_info:
                         logger.info(
-                            f"MCP Server Info from {sanitized_url_for_log(base_url)}: "
+                            f"MCP Server Info from {redact_url(base_url)}: "
                             f"name={mcp_server_info.get('name')}, "
                             f"version={mcp_server_info.get('version')}"
                         )
@@ -850,12 +846,12 @@ async def get_mcp_connection_result(
             return None
 
     except TimeoutError:
-        logger.error("MCP connection timeout endpoint=%s", sanitized_url_for_log(mcp_url))
+        logger.error("MCP connection timeout endpoint=%s", redact_url(mcp_url))
         return None
     except Exception as e:
         logger.error(
             "MCP connection-result failure endpoint=%s type=%s",
-            sanitized_url_for_log(base_url),
+            redact_url(base_url),
             type(e).__name__,
         )
         return None

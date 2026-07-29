@@ -139,7 +139,7 @@ One Secrets Manager entry is created (`cognito_client_secret`) and the registry/
 Two separate URL lists on the App Client must be configured, and Cognito rejects any value not present in the matching list:
 
 - **Allowed callback URLs** — the auth-server sends `redirect_uri = <registry-external-url>/oauth2/callback/cognito` during login.
-- **Allowed sign-out URLs** — the auth-server sends `logout_uri = <registry-external-url>/login` during logout. This is easy to miss; if only the callback is registered, login works but logout fails with a Cognito error page (`Required String parameter 'redirect_uri' is not present` or a sign-out URL mismatch).
+- **Allowed sign-out URLs** — the auth-server sends `logout_uri = <registry-external-url>/logout` during logout (`/logout` renders the "Successfully Logged Out" confirmation screen, then auto-redirects to `/login`). This is easy to miss; if only the callback is registered, login works but logout fails with a Cognito error page (`error=Required+parameters+missing` / a sign-out URL mismatch). Cognito requires an EXACT match (no wildcards), so the exact `/logout` URL must be registered.
 
 The registry does NOT configure Cognito for you (it is bring-your-own), so this is a manual step.
 
@@ -156,13 +156,13 @@ When you use a custom domain (`enable_route53_dns = true`), you know the registr
 
 2. On the App Client, set:
    - **Allowed callback URLs:** `<that URL>/oauth2/callback/cognito`
-   - **Allowed sign-out URLs:** `<that URL>/login`
+   - **Allowed sign-out URLs:** `<that URL>/logout`
 
    **From the AWS console:**
    - Open the Cognito console, select your User Pool.
    - Go to **App integration** -> **App clients** -> select your app client.
    - Under **Hosted UI** (or **Login pages**), click **Edit**.
-   - Add the callback URL to **Allowed callback URLs** and the `/login` URL to **Allowed sign-out URLs** (keep any existing entries, e.g. the localhost ones for local testing), then **Save changes**.
+   - Add the callback URL to **Allowed callback URLs** and the `/logout` URL to **Allowed sign-out URLs** (keep any existing entries, e.g. the localhost ones for local testing), then **Save changes**.
 
    **From the CLI** (note: `update-user-pool-client` replaces the full lists, so include every URL you want to keep):
 
@@ -175,8 +175,8 @@ When you use a custom domain (`enable_route53_dns = true`), you know the registr
        "https://<your-registry-domain>/oauth2/callback/cognito" \
        "http://localhost:8888/oauth2/callback/cognito" \
      --logout-urls \
-       "https://<your-registry-domain>/login" \
-       "http://localhost:8888/login" \
+       "https://<your-registry-domain>/logout" \
+       "http://localhost:8888/logout" \
      --allowed-o-auth-flows code \
      --allowed-o-auth-scopes openid email profile aws.cognito.signin.user.admin \
      --allowed-o-auth-flows-user-pool-client \
@@ -364,9 +364,9 @@ A common cause on Terraform/ECS CloudFront-only deployments: a `terraform apply`
 
 ### Logout fails with a Cognito error page
 
-**Symptom:** Login works, but clicking logout lands on a Cognito error page (e.g. `Required String parameter 'redirect_uri' is not present`), with a URL like `.../error?...&logout_uri=https%3A%2F%2F<domain>%2Flogin`.
+**Symptom:** Login works, but clicking logout lands on a Cognito error page (e.g. `error=Required+parameters+missing`), with a URL like `.../error?...&client_id=<id>` (note the missing/rejected `logout_uri`).
 
-**Fix:** The App Client's **Allowed sign-out URLs** must include `<registry-external-url>/login` — this is a separate list from the callback URLs, and is easy to miss. The auth-server sends `logout_uri = <registry-external-url>/login` on logout; Cognito rejects it if it is not registered. Add it (see [Mode 2, Step 4](#step-4-register-the-callback-and-sign-out-urls-on-the-app-client-post-deployment)). The `logout_uri` echoed in the error page URL is the value Cognito rejected, not a separate problem.
+**Fix:** The App Client's **Allowed sign-out URLs** must include `<registry-external-url>/logout` — this is a separate list from the callback URLs, and is easy to miss. The auth-server sends `logout_uri = <registry-external-url>/logout` on logout (the `/logout` page shows the "Successfully Logged Out" confirmation, then redirects to `/login`); Cognito requires an exact match and rejects it if not registered. Add it (see [Mode 2, Step 4](#step-4-register-the-callback-and-sign-out-urls-on-the-app-client-post-deployment)). Unlike Keycloak (whose `post.logout.redirect.uris="+"` accepts any registered redirect URI, so `/logout` works with no extra config), Cognito has no wildcard — register the exact `/logout` URL.
 
 ### Empty groups after login
 

@@ -11,11 +11,14 @@ from app.core.retention import (
     RetentionManager,
     ALLOWED_TABLE_NAMES,
     ALLOWED_TIMESTAMP_COLUMNS,
+    MIN_RETENTION_DAYS,
+    MAX_RETENTION_DAYS,
     _enable_test_tables,
     _disable_test_tables,
     _validate_table_name,
     _validate_timestamp_column,
     _validate_identifier,
+    _validate_retention_days,
 )
 from app.storage.database import MetricsStorage
 from app.storage.migrations import MigrationManager
@@ -529,3 +532,268 @@ class TestAllowlistConfiguration:
         """Test that the allowlist is a set (for O(1) lookups)."""
         assert isinstance(ALLOWED_TABLE_NAMES, set)
         assert isinstance(ALLOWED_TIMESTAMP_COLUMNS, set)
+
+
+class TestRetentionDaysBounds:
+    """Invariant: a retention window can never produce a future/all-rows cutoff.
+
+    A negative retention_days would set the cleanup cutoff in the future so that
+    ``DELETE ... WHERE created_at < <cutoff>`` matches every row and destroys the
+    table. Zero is equally destructive. These tests assert the guard holds at the
+    domain layer (the real fix) and that legitimate values still work.
+    """
+
+    def test_negative_retention_days_rejected_by_validator(self):
+        """A negative day count must be rejected outright."""
+        with pytest.raises(ValueError, match="at least"):
+            _validate_retention_days(-1)
+
+    def test_zero_retention_days_rejected_by_validator(self):
+        """Zero days deletes everything older than 'now' and is not a valid policy."""
+        with pytest.raises(ValueError, match="at least"):
+            _validate_retention_days(0)
+
+    def test_min_retention_days_accepted(self):
+        """The floor value (1 day) is a valid, accepted policy."""
+        assert _validate_retention_days(MIN_RETENTION_DAYS) == MIN_RETENTION_DAYS
+
+    def test_absurdly_large_retention_days_rejected(self):
+        """A value above the sanity ceiling is rejected as a likely mistake."""
+        with pytest.raises(ValueError, match="not exceed"):
+            _validate_retention_days(MAX_RETENTION_DAYS + 1)
+
+    def test_boolean_retention_days_rejected(self):
+        """A bool must not slip through as 1/0 (bool is an int subclass)."""
+        with pytest.raises(ValueError, match="must be an integer"):
+            _validate_retention_days(True)
+
+    def test_policy_constructor_rejects_negative_days(self):
+        """RetentionPolicy refuses to hold an unsafe negative window."""
+        with pytest.raises(ValueError, match="at least"):
+            RetentionPolicy(table_name="metrics", retention_days=-30)
+
+    def test_policy_constructor_rejects_zero_days(self):
+        """RetentionPolicy refuses to hold a zero-day (delete-all) window."""
+        with pytest.raises(ValueError, match="at least"):
+            RetentionPolicy(table_name="metrics", retention_days=0)
+
+    def test_legitimate_positive_days_produces_past_cutoff(self):
+        """A sensible window (90 days) yields a cutoff safely in the past."""
+        policy = RetentionPolicy(table_name="metrics", retention_days=90)
+        cutoff = policy._cutoff()
+        now = datetime.now()
+
+        assert cutoff < now
+        # Roughly 90 days ago (allow a wide slack for test runtime).
+        expected = now - timedelta(days=90)
+        assert abs((cutoff - expected).total_seconds()) < 60
+
+    def test_cutoff_clamped_to_past_floor_even_if_days_mutated(self):
+        """Belt-and-suspenders: a corrupted window clamps to a PAST floor.
+
+        Clamping the cutoff to ``now`` would be useless -- ``created_at < now``
+        still matches every already-arrived (real) row. The clamp must instead
+        pin the cutoff to ``now - MIN_RETENTION_DAYS`` so the predicate can only
+        ever reach rows older than the minimum retention window, even if
+        ``retention_days`` is mutated in place past validation.
+        """
+        policy = RetentionPolicy(table_name="metrics", retention_days=1)
+        # Bypass validation to simulate a corrupted in-memory value.
+        policy.retention_days = -365
+
+        before = datetime.now()
+        cutoff = policy._cutoff()
+
+        expected_floor = before - timedelta(days=MIN_RETENTION_DAYS)
+        # The cutoff sits at the floor (within a small slack for test runtime),
+        # NOT at now.
+        assert abs((cutoff - expected_floor).total_seconds()) < 60
+        assert cutoff < before - timedelta(days=MIN_RETENTION_DAYS) + timedelta(seconds=60)
+
+    def test_cleanup_query_cutoff_clamped_to_floor_for_bad_value(self):
+        """The DELETE query's cutoff param is clamped to the past floor.
+
+        A corrupted negative window must not yield a cutoff at/after ``now``
+        (which would match every row); it must be pinned to
+        ``now - MIN_RETENTION_DAYS``.
+        """
+        policy = RetentionPolicy(table_name="metrics", retention_days=1)
+        policy.retention_days = -100  # corrupt past validation
+
+        _query, params = policy.get_cleanup_query()
+        cutoff_str = params[0]
+        cutoff = datetime.fromisoformat(cutoff_str)
+
+        expected_floor = datetime.now() - timedelta(days=MIN_RETENTION_DAYS)
+        assert abs((cutoff - expected_floor).total_seconds()) < 60
+
+    @pytest.mark.asyncio
+    async def test_update_policy_rejects_negative_days(self, temp_db):
+        """update_policy fails closed on a negative window (no persistence)."""
+        manager = RetentionManager()
+        manager.storage.db_path = temp_db
+
+        original = manager.policies["metrics"].retention_days
+        with pytest.raises(ValueError, match="at least"):
+            await manager.update_policy("metrics", retention_days=-5)
+
+        # The existing safe policy must be untouched.
+        assert manager.policies["metrics"].retention_days == original
+
+    @pytest.mark.asyncio
+    async def test_update_policy_rejects_zero_days(self, temp_db):
+        """update_policy fails closed on a zero-day window."""
+        manager = RetentionManager()
+        manager.storage.db_path = temp_db
+
+        with pytest.raises(ValueError, match="at least"):
+            await manager.update_policy("metrics", retention_days=0)
+
+    @pytest.mark.asyncio
+    async def test_update_policy_accepts_positive_days(self, temp_db):
+        """The legitimate path: a positive window is accepted and stored."""
+        manager = RetentionManager()
+        manager.storage.db_path = temp_db
+
+        await manager.update_policy("metrics", retention_days=45)
+        assert manager.policies["metrics"].retention_days == 45
+
+    @pytest.mark.asyncio
+    async def test_corrupted_retention_days_cannot_delete_within_retention_window(self, temp_db):
+        """End-to-end: a corrupted negative policy cannot wipe retained data.
+
+        The real invariant: an in-memory-corrupted ``retention_days`` must not
+        be able to delete real, recently-written rows. The original bug pushed
+        the cutoff into the FUTURE so ``created_at < <future>`` matched EVERY
+        row. Merely clamping the cutoff to ``now`` would NOT fix that -- every
+        already-arrived past row still satisfies ``created_at < now``. Clamping
+        the effective window to ``MIN_RETENTION_DAYS`` is what protects the data:
+        rows inside the retention window (recent/now-dated, and rows only a few
+        days old) must survive; only rows older than the floor may be reaped.
+        """
+        manager = RetentionManager()
+        manager.storage.db_path = temp_db
+
+        now = datetime.now()
+        # Legitimate retained rows spanning the retention window. With a bug that
+        # clamps the cutoff to ``now`` (or leaves it in the future), all of these
+        # get deleted. With the correct past-floor clamp they must all survive
+        # because they are newer than ``now - MIN_RETENTION_DAYS``.
+        recent_values = [10.0, 11.0, 12.0, 13.0]
+        recent_timestamps = [
+            now.isoformat(),  # exactly now
+            (now - timedelta(hours=1)).isoformat(),
+            (now - timedelta(minutes=5)).isoformat(),
+            now.isoformat(),
+        ]
+        # One genuinely old row (well past the floor) that SHOULD be reaped.
+        old_ts = (now - timedelta(days=500)).isoformat()
+
+        async with aiosqlite.connect(temp_db) as db:
+            for ts, val in zip(recent_timestamps, recent_values, strict=False):
+                await db.execute(
+                    "INSERT INTO test_metrics (created_at, value) VALUES (?, ?)",
+                    (ts, val),
+                )
+            await db.execute(
+                "INSERT INTO test_metrics (created_at, value) VALUES (?, ?)",
+                (old_ts, 99.0),
+            )
+            await db.commit()
+
+        # Point a policy at test_metrics and corrupt its window past validation.
+        manager.policies["test_metrics"] = RetentionPolicy(
+            table_name="test_metrics", retention_days=1
+        )
+        manager.policies["test_metrics"].retention_days = -365
+
+        await manager.cleanup_table("test_metrics", dry_run=False)
+
+        async with aiosqlite.connect(temp_db) as db:
+            cursor = await db.execute(
+                "SELECT COUNT(*) FROM test_metrics WHERE value IN (10.0, 11.0, 12.0, 13.0)"
+            )
+            surviving_recent = (await cursor.fetchone())[0]
+            cursor = await db.execute("SELECT COUNT(*) FROM test_metrics WHERE value = 99.0")
+            surviving_old = (await cursor.fetchone())[0]
+
+        assert surviving_recent == len(recent_values), (
+            "a corrupted retention window must NOT delete rows inside the retention window"
+        )
+        # Sanity: the clamp still permits deleting rows older than the floor, so
+        # the test proves survival of retained data rather than a no-op cleanup.
+        assert surviving_old == 0, "rows older than the safe floor should still be reaped"
+
+    @pytest.mark.asyncio
+    async def test_load_policies_skips_unsafe_db_value(self, temp_db):
+        """A persisted unsafe retention_days is ignored, keeping the safe default.
+
+        Simulates an older vulnerable build having written a negative window to
+        the retention_policies table. The loader must fail closed and not adopt it.
+        """
+        manager = RetentionManager()
+        manager.storage.db_path = temp_db
+        default_metrics_days = manager.policies["metrics"].retention_days
+
+        # Persist a poisoned row directly.
+        async with aiosqlite.connect(temp_db) as db:
+            await db.execute(
+                "INSERT OR REPLACE INTO retention_policies "
+                "(table_name, retention_days, is_active, updated_at) "
+                "VALUES (?, ?, 1, datetime('now'))",
+                ("metrics", -999),
+            )
+            await db.commit()
+
+        await manager.load_policies_from_database()
+
+        # The poisoned value must NOT have been adopted.
+        assert manager.policies["metrics"].retention_days == default_metrics_days
+        assert manager.policies["metrics"].retention_days >= MIN_RETENTION_DAYS
+
+
+class TestRetentionRouteValidation:
+    """Invariant: the PUT retention endpoint rejects an unsafe day count (4xx)."""
+
+    @pytest.fixture
+    def client(self):
+        """Test client with admin auth stubbed.
+
+        These tests target the retention_days RANGE validation, not
+        authorization, so the admin dependency is overridden to a static
+        principal. The privilege-separation behavior of that dependency is
+        covered in test_admin_authorization.py.
+        """
+        from fastapi.testclient import TestClient
+        from app.main import app
+        from app.api.auth import verify_admin_api_key
+
+        app.dependency_overrides[verify_admin_api_key] = lambda: "admin"
+        try:
+            yield TestClient(app)
+        finally:
+            app.dependency_overrides.pop(verify_admin_api_key, None)
+
+    def test_route_rejects_negative_retention_days(self, client):
+        """PUT with negative retention_days returns a 4xx, never mutating state."""
+        response = client.put(
+            "/admin/retention/policies/metrics",
+            params={"retention_days": -1},
+        )
+        assert response.status_code == 422
+
+    def test_route_rejects_zero_retention_days(self, client):
+        """PUT with zero retention_days returns a 4xx."""
+        response = client.put(
+            "/admin/retention/policies/metrics",
+            params={"retention_days": 0},
+        )
+        assert response.status_code == 422
+
+    def test_route_rejects_absurdly_large_retention_days(self, client):
+        """PUT with a window above the sanity ceiling returns a 4xx."""
+        response = client.put(
+            "/admin/retention/policies/metrics",
+            params={"retention_days": MAX_RETENTION_DAYS + 1},
+        )
+        assert response.status_code == 422

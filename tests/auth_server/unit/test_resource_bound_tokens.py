@@ -135,6 +135,55 @@ class TestMintResourceBoundToken:
         assert "resource_type" not in claims
         assert "resource_id" not in claims
 
+    def test_user_token_stamps_egress_user_from_session_subject(self, auth_env_vars):
+        # A session-backed mint stamps the session's OIDC sub as egress_user so
+        # the vend keys the vault on the SAME id the browser-consent path wrote.
+        # The token's `sub` stays the login username (unchanged).
+        from unittest.mock import AsyncMock
+        from unittest.mock import patch as _patch
+
+        from fastapi.testclient import TestClient
+
+        import auth_server.server as server_module
+
+        server_module.user_token_generation_counts.clear()
+        client = TestClient(server_module.app)
+        body = {
+            "user_context": {
+                "username": "alice",
+                "scopes": ["mcp-servers/read"],
+                "groups": ["mcp-registry-user"],
+                "auth_method": "oauth2",
+                "provider": "keycloak",
+                "session_id": "s1",
+            },
+            "requested_scopes": ["mcp-servers/read"],
+            "expires_in_hours": 1,
+            "description": "test",
+        }
+        session = {
+            "username": "alice",
+            "groups": ["mcp-registry-user"],
+            "subject": "oidc-sub-uuid",
+        }
+        with (
+            _patch("session_store.resolve_session", AsyncMock(return_value=session)),
+            _patch(
+                "auth_server.server.map_groups_to_scopes",
+                AsyncMock(return_value=["mcp-servers/read"]),
+            ),
+        ):
+            response = client.post("/internal/tokens", json=body, headers=_internal_auth_headers())
+        assert response.status_code == 200, response.text
+        claims = jwt.decode(
+            response.json()["access_token"],
+            server_module.SECRET_KEY,
+            algorithms=["HS256"],
+            audience="mcp-registry",
+        )
+        assert claims["egress_user"] == "oidc-sub-uuid"
+        assert claims["sub"] == "alice"
+
     def test_resource_token_has_claims(self, auth_env_vars):
         response, secret = self._mint(
             resource={"type": "server", "id": "/cloudflare-docs"},

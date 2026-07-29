@@ -50,7 +50,7 @@ registry:
   deploymentMode: with-gateway
   registryMode: full
   enableObservability: true
-  enableWaf: false
+  enableWaf: true
   createCodebuild: false
   disableAiRegistryToolsServer: "false"
 
@@ -86,7 +86,7 @@ registry:
     authServer: "mcpgateway/auth-server:latest"
     keycloak: "quay.io/keycloak/keycloak:26.2.4"
     currenttime: ""
-    mcpgw: ""
+    mcpgw: "public.ecr.aws/p3v1o3c6/mcpgw:1.26.0"
     realserverfaketools: ""
     flightBookingAgent: ""
     travelAssistantAgent: ""

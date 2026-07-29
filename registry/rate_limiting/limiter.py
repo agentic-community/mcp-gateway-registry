@@ -22,6 +22,7 @@ import time
 from ..observability.meters import (
     rate_limit_checks_total,
     rate_limit_errors_total,
+    rate_limit_quarantine_denied_total,
     rate_limit_throttled_total,
 )
 from .backend import RateLimiterBackend
@@ -31,6 +32,9 @@ from .models import (
     AXIS_ABBREVIATION,
     CALLER_TYPE_AGENT,
     CALLER_TYPE_USER,
+    QUARANTINE_CALLER_GROUP,
+    QUARANTINE_TARGET_GROUP,
+    RESERVED_GROUP_NAMES,
     RateLimitDecision,
     RateLimitDefinition,
 )
@@ -106,12 +110,17 @@ class RateLimiter:
         memberships: "MembershipsRepository",
         fail_open: bool = True,
         backend_timeout_seconds: float = DEFAULT_BACKEND_TIMEOUT_SECONDS,
+        quarantine_fail_closed: bool = False,
     ) -> None:
         self._backend = backend
         self._definitions = definitions
         self._memberships = memberships
         self._fail_open = fail_open
         self._backend_timeout_seconds = backend_timeout_seconds
+        # When true, a backend error reading quarantine membership DENIES (fails
+        # closed) instead of the default fail-open. A stricter block at the cost of
+        # denying data-plane traffic during a memberships-store outage.
+        self._quarantine_fail_closed = quarantine_fail_closed
 
     async def _build_caller_gates(
         self,
@@ -180,6 +189,111 @@ class RateLimiter:
             )
         return gates
 
+    async def _build_caller_target_gates(
+        self,
+        identity: str,
+        groups: list[str],
+        caller_type: str,
+        target_entity_type: str | None,
+        target_name: str | None,
+    ) -> list[_Gate]:
+        """Build per-caller-per-target gates: one per window, keyed on (caller, target).
+
+        Mirrors ``_build_caller_gates`` but (a) returns ``[]`` when no target is
+        classified, and (b) sets the counter subject to the COMPOSITE of the caller
+        identity and the target, so each caller gets an independent quota per target.
+        The ``|`` delimiter separates the two halves unambiguously (the caller
+        identity is defensively stripped of ``|``); the target half keeps the
+        existing ``<entity_type>:<name>`` shape.
+        """
+        if not groups or not target_entity_type or not target_name:
+            return []
+        group_defs = await self._definitions.list_caller_target_limits("group", groups)
+        by_window: dict[int, list[tuple[int, RateLimitDefinition]]] = {}
+        for definition in group_defs:
+            limit = definition.limit_for_caller_type(caller_type)
+            if limit is None:
+                continue
+            by_window.setdefault(definition.window_seconds, []).append((limit, definition))
+
+        safe_identity = identity.replace("|", "_")
+        subject = f"{safe_identity}|{target_entity_type}:{target_name}"
+        gates: list[_Gate] = []
+        for window, candidates in by_window.items():
+            # Most-restrictive within the window for this caller type.
+            limit, definition = min(candidates, key=lambda pair: pair[0])
+            gates.append(
+                _Gate(
+                    AXIS_ABBREVIATION["caller_target"],
+                    "group",
+                    subject,
+                    window,
+                    limit,
+                    definition.fail_closed,
+                )
+            )
+        return gates
+
+    async def _is_target_quarantined(
+        self,
+        target_entity_type: str | None,
+        target_name: str | None,
+    ) -> bool:
+        """Target quarantine check, honoring the global off-switch + fail policy.
+
+        A read error follows the quarantine fail policy: fail-open (allow => not
+        quarantined) by default, or deny (=> quarantined) when
+        ``quarantine_fail_closed``. The reserved group's own ``enabled`` flag is the
+        operator's global off-toggle.
+        """
+        if not target_entity_type or not target_name:
+            return False
+        try:
+            if not await self._definitions.is_quarantine_group_enabled(QUARANTINE_TARGET_GROUP):
+                return False
+            return await asyncio.wait_for(
+                self._memberships.is_target_quarantined(target_entity_type, target_name),
+                timeout=self._backend_timeout_seconds,
+            )
+        except Exception as exc:
+            logger.warning(f"quarantine target read error ({target_name}): {exc}")
+            rate_limit_errors_total.add(1, {"axis": "qtn"})
+            return self._quarantine_fail_closed
+
+    async def _is_caller_quarantined(
+        self,
+        groups: list[str],
+    ) -> bool:
+        """Caller quarantine check on the already-fetched group list (honors global off-switch).
+
+        No new query: ``groups`` is the list ``get_groups_for`` already returned on
+        the hot path. Only the global-enabled lookup may touch the (cached) defs.
+        """
+        if QUARANTINE_CALLER_GROUP not in groups:
+            return False
+        try:
+            return await self._definitions.is_quarantine_group_enabled(QUARANTINE_CALLER_GROUP)
+        except Exception as exc:
+            logger.warning(f"quarantine caller enabled-read error: {exc}")
+            rate_limit_errors_total.add(1, {"axis": "qtn"})
+            # Membership already says quarantined; fail policy decides on a defs error.
+            return not self._fail_open or self._quarantine_fail_closed
+
+    def _emit_quarantine(
+        self,
+        scope: str,
+        entity_type: str,
+        caller_username: str | None,
+        caller_client_id: str | None,
+    ) -> None:
+        """Count + log a quarantine deny (attributable, bounded metric labels)."""
+        rate_limit_quarantine_denied_total.add(1, {"scope": scope, "entity_type": entity_type})
+        logger.warning(
+            f"rate-limit quarantine deny: scope={scope} entity_type={entity_type} "
+            f"caller_username={caller_username or ''} "
+            f"caller_client_id={caller_client_id or ''}"
+        )
+
     async def check(
         self,
         *,
@@ -214,12 +328,33 @@ class RateLimiter:
         # Per-caller counter subject: prefer client_id (agents), else username.
         identity = client_id or username or ""
 
-        caller_gates: list[_Gate] = []
+        # --- Quarantine short-circuit (before any counter work) ---
+        # Target quarantine applies to EVERYONE (even admins): a target taken out of
+        # rotation must be unreachable. It is checked first, before the admin bypass.
+        if await self._is_target_quarantined(target_entity_type, target_name):
+            self._emit_quarantine("target", target_entity_type or "", username, client_id)
+            return RateLimitDecision.quarantine_deny("tgt", target_entity_type or "")
+
+        groups: list[str] = []
         if not is_admin:
             groups = await self._memberships.get_groups_for(username, client_id)
-            caller_gates = await self._build_caller_gates(identity, groups, caller_type)
+            # Caller quarantine, like caller gates, is bypassed for admins (no self-lockout).
+            if await self._is_caller_quarantined(groups):
+                self._emit_quarantine("caller", "group", username, client_id)
+                return RateLimitDecision.quarantine_deny("clr", "group")
+
+        # A reserved quarantine group name is a sentinel, not a rate definition, so it
+        # never builds a gate. Drop reserved names before gate building for clarity.
+        rate_groups = [g for g in groups if g not in RESERVED_GROUP_NAMES]
+        caller_gates: list[_Gate] = []
+        caller_target_gates: list[_Gate] = []
+        if not is_admin:
+            caller_gates = await self._build_caller_gates(identity, rate_groups, caller_type)
+            caller_target_gates = await self._build_caller_target_gates(
+                identity, rate_groups, caller_type, target_entity_type, target_name
+            )
         target_gates = await self._build_target_gates(target_entity_type, target_name)
-        gates = caller_gates + target_gates
+        gates = caller_gates + caller_target_gates + target_gates
         if not gates:
             return RateLimitDecision.allow()
 

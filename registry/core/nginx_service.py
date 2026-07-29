@@ -59,6 +59,207 @@ MIN_TRUSTED_REAL_IP_PREFIXLEN_V4: int = 8
 MIN_TRUSTED_REAL_IP_PREFIXLEN_V6: int = 32
 
 
+# TLS trust for the nginx -> IdP runtime reverse proxies.
+#
+# The gateway reverse-proxies IdP front-channel endpoints (PingFederate's /as/,
+# /pf/, /ext/, /idp/, /assets/, /.well-known/openid-configuration; Keycloak's
+# /keycloak/, /realms/, /resources/) that carry the token exchange, JWKS, and
+# OIDC discovery. When the upstream URL is https, upstream certificate
+# verification MUST be ON (fail closed): a MITM between nginx and the IdP that
+# could present an untrusted cert would be able to substitute JWKS (forge
+# tokens) or intercept the token exchange, an authentication bypass for every
+# user of that IdP. A private/self-signed IdP runtime certificate is trusted
+# explicitly by pointing the IdP's CA-bundle env var at the PEM file that signed
+# it, NOT by disabling verification. The default path lives under the certs
+# mount so a private-CA deployment only has to drop the bundle in place. This
+# code path NEVER emits ``proxy_ssl_verify off``.
+_PINGFEDERATE_CA_BUNDLE_ENV: str = "PINGFEDERATE_CA_BUNDLE"
+_PINGFEDERATE_CA_BUNDLE_DEFAULT: str = "/etc/nginx/certs/pingfederate-ca.pem"
+
+_KEYCLOAK_CA_BUNDLE_ENV: str = "KEYCLOAK_CA_BUNDLE"
+_KEYCLOAK_CA_BUNDLE_DEFAULT: str = "/etc/nginx/certs/keycloak-ca.pem"
+
+# Depth of the certificate chain nginx will verify for an IdP upstream.
+# 2 accommodates a leaf signed by an intermediate under the supplied root.
+_IDP_SSL_VERIFY_DEPTH: int = 2
+
+
+def _resolve_ca_bundle(
+    env_var: str,
+    default_path: str,
+) -> str:
+    """Resolve a CA bundle path used to verify an IdP upstream certificate.
+
+    Reads ``env_var`` and falls back to a documented default under the nginx
+    certs mount. The value is only consumed when the IdP upstream scheme is
+    https; it is not validated for existence here because the file lives in the
+    nginx container's filesystem (a different mount than the registry process),
+    and ``nginx -t`` / nginx startup is the authoritative check. Verification
+    stays ON regardless, so a missing/unreadable bundle makes nginx reject the
+    upstream cert (fail closed) rather than trusting anything.
+
+    Args:
+        env_var: Environment variable naming the PEM CA bundle path.
+        default_path: Fallback path used when the env var is unset/empty.
+
+    Returns:
+        Absolute path to the PEM CA bundle for the IdP upstream.
+    """
+    configured = os.environ.get(env_var, "").strip()
+    return configured or default_path
+
+
+def _render_idp_proxy_ssl(
+    idp_label: str,
+    base_url_env: str,
+    scheme: str,
+    host: str,
+    ca_bundle: str,
+) -> str:
+    """Render an IdP reverse-proxy ``proxy_ssl`` directive block (fail closed).
+
+    Shared renderer for every IdP upstream ``{{*_PROXY_SSL}}`` placeholder.
+    Behavior is gated on the upstream scheme:
+
+    - https: emit fail-closed TLS verification -- ``proxy_ssl_verify on`` plus a
+      trusted CA bundle, verify depth, and SNI/hostname pinning against the
+      configured upstream host. This is what closes the MITM/auth-bypass hole;
+      the result is NEVER ``proxy_ssl_verify off``.
+    - http: there is no TLS to verify, so emit only an explanatory comment. Note
+      that plaintext to the IdP is itself an insecure-transport concern
+      (documented for operators), but this function must not silently weaken the
+      https path to accommodate it.
+
+    Args:
+        idp_label: Human-readable IdP name for log/comment text (e.g. "Keycloak").
+        base_url_env: Name of the env var that supplies the upstream URL, used in
+            the plaintext-warning remediation hint.
+        scheme: Upstream scheme parsed from the IdP base URL.
+        host: Upstream hostname parsed from the IdP base URL, used for SNI and
+            certificate hostname verification.
+        ca_bundle: PEM CA bundle path nginx trusts for the upstream cert.
+
+    Returns:
+        The nginx directive text (indented to sit inside a ``location`` block)
+        that replaces the corresponding ``{{*_PROXY_SSL}}`` placeholder.
+    """
+    if scheme != "https":
+        logger.warning(
+            "%s upstream scheme is '%s' (not https); nginx will proxy the IdP "
+            "token/JWKS/discovery traffic in plaintext. TLS verification does not "
+            "apply. Set %s to an https:// URL to secure this hop.",
+            idp_label,
+            scheme,
+            base_url_env,
+        )
+        # http upstream: nothing to verify. Keep a placeholder line so the
+        # rendered location block stays syntactically valid.
+        return f"# proxy_ssl_verify not applicable: {idp_label} upstream is http (plaintext)"
+
+    logger.info(
+        "%s upstream is https; enforcing proxy_ssl_verify on with CA bundle '%s' "
+        "and hostname pinning to '%s'.",
+        idp_label,
+        ca_bundle,
+        host,
+    )
+    return (
+        "proxy_ssl_verify on;\n"
+        f"        proxy_ssl_verify_depth {_IDP_SSL_VERIFY_DEPTH};\n"
+        f"        proxy_ssl_trusted_certificate {ca_bundle};\n"
+        "        proxy_ssl_server_name on;\n"
+        f"        proxy_ssl_name {host};"
+    )
+
+
+def _resolve_pingfederate_ca_bundle() -> str:
+    """Resolve the CA bundle path used to verify the PingFederate upstream cert.
+
+    Reads ``PINGFEDERATE_CA_BUNDLE`` and falls back to a documented default under
+    the nginx certs mount. See :func:`_resolve_ca_bundle` for the fail-closed
+    rationale.
+
+    Returns:
+        Absolute path to the PEM CA bundle for the PingFederate upstream.
+    """
+    return _resolve_ca_bundle(_PINGFEDERATE_CA_BUNDLE_ENV, _PINGFEDERATE_CA_BUNDLE_DEFAULT)
+
+
+def _resolve_keycloak_ca_bundle() -> str:
+    """Resolve the CA bundle path used to verify the Keycloak upstream cert.
+
+    Reads ``KEYCLOAK_CA_BUNDLE`` and falls back to a documented default under the
+    nginx certs mount. See :func:`_resolve_ca_bundle` for the fail-closed
+    rationale.
+
+    Returns:
+        Absolute path to the PEM CA bundle for the Keycloak upstream.
+    """
+    return _resolve_ca_bundle(_KEYCLOAK_CA_BUNDLE_ENV, _KEYCLOAK_CA_BUNDLE_DEFAULT)
+
+
+def _render_pingfederate_proxy_ssl(
+    pf_scheme: str,
+    pf_host: str,
+) -> str:
+    """Render the ``{{PINGFEDERATE_PROXY_SSL}}`` directive block (fail closed).
+
+    Thin wrapper over :func:`_render_idp_proxy_ssl` for the PingFederate
+    front-channel locations. For an https upstream it enforces
+    ``proxy_ssl_verify on`` with a trusted CA bundle and SNI/hostname pinning;
+    for an http upstream it emits only a comment and never
+    ``proxy_ssl_verify off``.
+
+    Args:
+        pf_scheme: Upstream scheme parsed from ``PINGFEDERATE_BASE_URL``.
+        pf_host: Upstream hostname parsed from ``PINGFEDERATE_BASE_URL``, used for
+            SNI and certificate hostname verification.
+
+    Returns:
+        The nginx directive text that replaces every ``{{PINGFEDERATE_PROXY_SSL}}``
+        placeholder.
+    """
+    return _render_idp_proxy_ssl(
+        idp_label="PingFederate",
+        base_url_env="PINGFEDERATE_BASE_URL",
+        scheme=pf_scheme,
+        host=pf_host,
+        ca_bundle=_resolve_pingfederate_ca_bundle(),
+    )
+
+
+def _render_keycloak_proxy_ssl(
+    keycloak_scheme: str,
+    keycloak_host: str,
+) -> str:
+    """Render the ``{{KEYCLOAK_PROXY_SSL}}`` directive block (fail closed).
+
+    Thin wrapper over :func:`_render_idp_proxy_ssl` for the Keycloak
+    reverse-proxy locations (``/keycloak/``, ``/realms/``, ``/resources/``) that
+    carry Keycloak's JWKS, token, and OIDC discovery traffic. The shipped default
+    upstream is in-cluster ``http://keycloak:8080`` (plaintext, no verification
+    to perform), but when an operator points ``KEYCLOAK_URL`` at an https endpoint
+    this enforces ``proxy_ssl_verify on`` with a trusted CA bundle and
+    SNI/hostname pinning. It never emits ``proxy_ssl_verify off``.
+
+    Args:
+        keycloak_scheme: Upstream scheme parsed from ``KEYCLOAK_URL``.
+        keycloak_host: Upstream hostname parsed from ``KEYCLOAK_URL``, used for SNI
+            and certificate hostname verification.
+
+    Returns:
+        The nginx directive text that replaces every ``{{KEYCLOAK_PROXY_SSL}}``
+        placeholder.
+    """
+    return _render_idp_proxy_ssl(
+        idp_label="Keycloak",
+        base_url_env="KEYCLOAK_URL",
+        scheme=keycloak_scheme,
+        host=keycloak_host,
+        ca_bundle=_resolve_keycloak_ca_bundle(),
+    )
+
+
 def _resolve_mcp_proxy_read_timeout_seconds() -> int:
     """Resolve nginx's proxy_read_timeout (seconds) for MCP location blocks.
 
@@ -955,39 +1156,44 @@ class NginxConfigService:
             # This always runs so the Keycloak template placeholders are filled even
             # when another provider is active (the location blocks are stripped above).
             keycloak_url = os.environ.get("KEYCLOAK_URL", "http://keycloak:8080")
-            try:
-                parsed_keycloak = urlparse(keycloak_url)
-                keycloak_scheme = parsed_keycloak.scheme or "http"
-                keycloak_host = parsed_keycloak.hostname or "keycloak"
-                # Use default port based on scheme if not specified
-                if parsed_keycloak.port:
-                    keycloak_port = str(parsed_keycloak.port)
-                else:
-                    keycloak_port = "443" if keycloak_scheme == "https" else "8080"
+            # Parse scheme and host FIRST so that a downstream port-parse failure
+            # (urlparse raises ValueError on an out-of-range port) can never
+            # silently downgrade an intended https upstream to http. Downgrading
+            # to http would drop the fail-closed proxy_ssl_verify block, so we
+            # preserve the intended scheme and let nginx -t reject a genuinely
+            # malformed URL rather than trust an unverified https hop.
+            parsed_keycloak = urlparse(keycloak_url)
+            keycloak_scheme = parsed_keycloak.scheme or "http"
+            keycloak_host = parsed_keycloak.hostname or "keycloak"
 
-                # Validate that we can actually resolve the hostname
-                if not keycloak_host or keycloak_host == "keycloak":
-                    # If we end up with just 'keycloak', use the full URL's netloc instead
-                    keycloak_host = (
-                        parsed_keycloak.netloc.split(":")[0]
-                        if parsed_keycloak.netloc
-                        else "keycloak"
-                    )
-                    logger.warning(
-                        f"Keycloak hostname is 'keycloak', using netloc instead: {keycloak_host}"
-                    )
-
-                logger.info(
-                    f"Using Keycloak configuration from KEYCLOAK_URL '{keycloak_url}': "
-                    f"{keycloak_scheme}://{keycloak_host}:{keycloak_port}"
+            # Validate that we can actually resolve the hostname
+            if not keycloak_host or keycloak_host == "keycloak":
+                # If we end up with just 'keycloak', use the full URL's netloc instead
+                keycloak_host = (
+                    parsed_keycloak.netloc.split(":")[0] if parsed_keycloak.netloc else "keycloak"
                 )
-            except Exception as e:
                 logger.warning(
-                    f"Failed to parse KEYCLOAK_URL '{keycloak_url}': {e}. Using defaults."
+                    f"Keycloak hostname is 'keycloak', using netloc instead: {keycloak_host}"
                 )
-                keycloak_scheme = "http"
-                keycloak_host = "keycloak"
-                keycloak_port = "8080"
+
+            # Resolve the port separately. Only ``.port`` can raise (bad port);
+            # on failure fall back to the scheme default WITHOUT touching the
+            # already-parsed scheme, so an https URL stays https (verify on).
+            try:
+                keycloak_port = str(parsed_keycloak.port or "")
+            except ValueError as e:
+                logger.warning(
+                    f"Invalid port in KEYCLOAK_URL '{keycloak_url}': {e}. "
+                    f"Using scheme default (scheme '{keycloak_scheme}' preserved)."
+                )
+                keycloak_port = ""
+            if not keycloak_port:
+                keycloak_port = "443" if keycloak_scheme == "https" else "8080"
+
+            logger.info(
+                f"Using Keycloak configuration from KEYCLOAK_URL '{keycloak_url}': "
+                f"{keycloak_scheme}://{keycloak_host}:{keycloak_port}"
+            )
 
             # Generate version map for multi-version servers
             # In registry-only mode, skip version map generation (use empty string)
@@ -1015,25 +1221,50 @@ class NginxConfigService:
             config_content = config_content.replace("{{KEYCLOAK_SCHEME}}", keycloak_scheme)
             config_content = config_content.replace("{{KEYCLOAK_HOST}}", keycloak_host)
             config_content = config_content.replace("{{KEYCLOAK_PORT}}", keycloak_port)
+            # Render the per-location TLS trust block for the Keycloak upstream.
+            # Fail closed on https: proxy_ssl_verify stays ON so a MITM cannot
+            # substitute JWKS or intercept the token exchange to a BYO-https
+            # Keycloak. The in-cluster default (http://keycloak:8080) is plaintext,
+            # so this emits a comment only for that case and never verify-off.
+            config_content = config_content.replace(
+                "{{KEYCLOAK_PROXY_SSL}}",
+                _render_keycloak_proxy_ssl(keycloak_scheme, keycloak_host),
+            )
 
             # Parse PingFederate configuration, falling back to defaults on any error
             # so a malformed PINGFEDERATE_BASE_URL never breaks config generation.
             pingfederate_url = os.environ.get("PINGFEDERATE_BASE_URL", "http://pingfederate:9032")
+            # Parse scheme and host FIRST so a downstream port-parse failure
+            # (urlparse raises ValueError on an out-of-range port) can never
+            # silently downgrade an intended https upstream to http and drop the
+            # fail-closed proxy_ssl_verify block. Preserve the intended scheme and
+            # let nginx -t reject a genuinely malformed URL.
+            pf_parsed = urlparse(pingfederate_url)
+            pf_scheme = pf_parsed.scheme or "http"
+            pf_host = pf_parsed.hostname or "pingfederate"
+            # Resolve the port separately; only ``.port`` can raise (bad port).
+            # On failure fall back to the scheme default WITHOUT touching the
+            # already-parsed scheme, so an https URL stays https (verify on).
             try:
-                pf_parsed = urlparse(pingfederate_url)
-                pf_scheme = pf_parsed.scheme or "http"
-                pf_host = pf_parsed.hostname or "pingfederate"
-                pf_port = str(pf_parsed.port or ("443" if pf_scheme == "https" else "9032"))
-            except Exception as e:
+                pf_port = str(pf_parsed.port or "")
+            except ValueError as e:
                 logger.warning(
-                    f"Failed to parse PINGFEDERATE_BASE_URL '{pingfederate_url}': {e}. Using defaults."
+                    f"Invalid port in PINGFEDERATE_BASE_URL '{pingfederate_url}': {e}. "
+                    f"Using scheme default (scheme '{pf_scheme}' preserved)."
                 )
-                pf_scheme = "http"
-                pf_host = "pingfederate"
-                pf_port = "9032"
+                pf_port = ""
+            if not pf_port:
+                pf_port = "443" if pf_scheme == "https" else "9032"
             config_content = config_content.replace("{{PINGFEDERATE_SCHEME}}", pf_scheme)
             config_content = config_content.replace("{{PINGFEDERATE_HOST}}", pf_host)
             config_content = config_content.replace("{{PINGFEDERATE_PORT}}", pf_port)
+            # Render the per-location TLS trust block. Fail closed on https:
+            # proxy_ssl_verify stays ON so a MITM cannot substitute JWKS or
+            # intercept the token exchange to the PingFederate IdP.
+            config_content = config_content.replace(
+                "{{PINGFEDERATE_PROXY_SSL}}",
+                _render_pingfederate_proxy_ssl(pf_scheme, pf_host),
+            )
 
             # Parse AUTH_SERVER_URL so nginx templates can reference the
             # auth-server by its actual hostname/FQDN instead of the
@@ -1492,7 +1723,13 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
                 # The path is interpolated into a location directive; escape any
                 # nginx-special characters (defense-in-depth over Pydantic path
                 # validation) so it cannot break out of the directive.
-                safe_vs_path = self._sanitize_for_nginx_set(vs.path)
+                # Normalise to a trailing slash for the same reason as real servers
+                # (issue #1501): a bare `location /virtual/dev` prefix-matches
+                # unrelated routes like `/virtual/devtools`, hijacking them into the
+                # /validate auth subrequest. `location /virtual/dev/` only matches the
+                # subtree. The virtual_router.lua content handler receives the full
+                # URI, so the added slash does not affect routing.
+                safe_vs_path = self._sanitize_for_nginx_set(vs.path).rstrip("/") + "/"
 
                 block = f"""
     # Virtual MCP Server: {safe_name}
@@ -2045,7 +2282,24 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
 
     def _generate_transport_location_blocks(self, path: str, server_info: dict[str, Any]) -> list:
         """Generate nginx location blocks for different transport types."""
-        blocks = []
+        blocks: list[str] = []
+
+        # Render-time mirror of validate_server_path (issue #1501). A path that
+        # normalizes to empty (a slashes-only value that bypassed registration
+        # validation -- e.g. legacy data persisted before the guard existed)
+        # would render as a gateway-wide `location /` block, subjecting every URL
+        # to the /validate auth subrequest and shadowing the static catch-all.
+        # Skip it and log, rather than emit a config that hijacks the whole
+        # gateway: fail closed for this one server, keep the rest of the config.
+        if not path or not path.strip("/"):
+            logger.error(
+                "Skipping nginx location block for server with empty/slashes-only "
+                "path %r: it would render as a gateway-wide 'location /' block. "
+                "This path should have been rejected at registration.",
+                path,
+            )
+            return blocks
+
         proxy_pass_url = server_info.get("proxy_pass_url", "")
         supported_transports = server_info.get("supported_transports", ["streamable-http"])
 
@@ -2359,9 +2613,18 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
         proxy_set_header Upgrade $http_upgrade;
         chunked_transfer_encoding off;"""
 
-        # Use the location path exactly as specified in the server configuration
-        # Users have full control over the location path format (with or without trailing slash)
-        location_path = path
+        # Always normalise the location path to end with a trailing slash (issue #1501).
+        # nginx treats `location /a` as a prefix match against ANY URL starting with
+        # `/a` (e.g. /api/, /auth, /about), so a server registered at a short path
+        # would silently hijack unrelated browser/API routes and subject them to
+        # auth_request /validate. `location /a/` only matches /a/ and paths that
+        # literally continue past the slash, so `/api/...` no longer matches. MCP
+        # clients already call `/server-name/mcp` (or /sse), which continue to match.
+        # A bare `GET /a` (no trailing slash) no longer matches this block; nginx does
+        # NOT auto-redirect it to `/a/` for a proxy_pass location, so it falls through
+        # to the catch-all. This is fine because the discovery/connect URLs always
+        # include the `/mcp` (or `/sse`) suffix -- no client connects at the bare path.
+        location_path = path.rstrip("/") + "/"
         logger.info(f"Creating location block for {location_path} with {transport_type} transport")
 
         return f"""
