@@ -1657,6 +1657,7 @@ class SkillRepositoryBase(ABC):
         tag: str | None = None,
         visibility: str | None = None,
         registry_name: str | None = None,
+        limit: int | None = None,
     ) -> list[SkillCard]:
         """List skills with database-level filtering."""
         pass

@@ -255,6 +255,7 @@ class DocumentDBSkillRepository(SkillRepositoryBase):
         tag: str | None = None,
         visibility: str | None = None,
         registry_name: str | None = None,
+        limit: int | None = None,
     ) -> list[SkillCard]:
         """List skills with database-level filtering."""
         await self.ensure_indexes()
@@ -276,6 +277,8 @@ class DocumentDBSkillRepository(SkillRepositoryBase):
 
         skills = []
         cursor = collection.find(query)
+        if limit is not None:
+            cursor = cursor.limit(limit)
         async for doc in cursor:
             try:
                 skills.append(_document_to_skill(doc))

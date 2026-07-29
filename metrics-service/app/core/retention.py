@@ -42,6 +42,18 @@ ALLOWED_TIMESTAMP_COLUMNS: Set[str] = {
 # Security: Regex pattern for valid SQL identifiers (alphanumeric and underscore only)
 _VALID_IDENTIFIER_PATTERN = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
+# Security: A retention window must be at least one day. A value of 0 (delete
+# everything older than "now") or a negative value (which would push the cutoff
+# into the FUTURE and match EVERY row) is a data-destruction bug, not a valid
+# policy. We fail closed on anything below this floor.
+MIN_RETENTION_DAYS: int = 1
+
+# Sanity upper bound: ~100 years. Values above this are almost certainly a
+# mistake (e.g. an overflow or a milliseconds-as-days error) and are rejected so
+# the policy set stays comprehensible. This is a guard rail, not a hard product
+# limit -- raise it if a legitimate longer window is ever required.
+MAX_RETENTION_DAYS: int = 36525
+
 # Flag to enable test tables - should only be set in test environments
 _test_tables_enabled: bool = False
 
@@ -116,6 +128,48 @@ def _validate_timestamp_column(column_name: str) -> str:
     return column_name
 
 
+def _validate_retention_days(retention_days: int) -> int:
+    """Validate a retention window (in days) before it can shape a cutoff date.
+
+    A negative value would compute a cutoff in the future, making the cleanup
+    ``DELETE ... WHERE created_at < <cutoff>`` match every row and wipe the
+    table. A value of ``0`` deletes everything older than the current instant,
+    which is equally destructive and never a legitimate policy. We therefore
+    require at least ``MIN_RETENTION_DAYS`` and reject anything above
+    ``MAX_RETENTION_DAYS`` as an obvious mistake. This is the domain-layer
+    guard: it does not trust its caller, so it holds even if a route or other
+    code path forgets to validate first.
+
+    Args:
+        retention_days: The proposed number of days to retain data.
+
+    Returns:
+        The validated retention window.
+
+    Raises:
+        ValueError: If ``retention_days`` is not an integer within
+            ``[MIN_RETENTION_DAYS, MAX_RETENTION_DAYS]``.
+    """
+    # A bool is an int subclass; reject it explicitly so True/False can't slip
+    # through as 1/0.
+    if isinstance(retention_days, bool) or not isinstance(retention_days, int):
+        raise ValueError(f"retention_days must be an integer, got {type(retention_days).__name__}")
+
+    if retention_days < MIN_RETENTION_DAYS:
+        raise ValueError(
+            f"retention_days must be at least {MIN_RETENTION_DAYS} "
+            f"(got {retention_days}); a value below {MIN_RETENTION_DAYS} would "
+            "delete all data in the table."
+        )
+
+    if retention_days > MAX_RETENTION_DAYS:
+        raise ValueError(
+            f"retention_days must not exceed {MAX_RETENTION_DAYS} (got {retention_days})."
+        )
+
+    return retention_days
+
+
 def _validate_identifier(identifier: str) -> str:
     """Validate that an identifier matches safe SQL identifier pattern.
 
@@ -152,19 +206,60 @@ class RetentionPolicy:
         cleanup_query: str | None = None,
         timestamp_column: str = "created_at",
     ):
-        # Security: Validate table_name and timestamp_column against allowlists
+        # Security: Validate table_name and timestamp_column against allowlists,
+        # and reject a retention window that would produce a future/all-rows
+        # cutoff. The policy object refuses to hold an unsafe value even if a
+        # caller skipped validation.
         self.table_name = _validate_table_name(table_name)
         self.timestamp_column = _validate_timestamp_column(timestamp_column)
-        self.retention_days = retention_days
+        self.retention_days = _validate_retention_days(retention_days)
         self.is_active = is_active
         self.cleanup_query = cleanup_query
+
+    def _cutoff(self) -> datetime:
+        """Compute the cleanup cutoff, clamped to a safe past floor.
+
+        Belt-and-suspenders guard: ``retention_days`` is already validated to be
+        ``>= MIN_RETENTION_DAYS`` in ``__init__``, but if a value were ever
+        mutated in place to something bad (in-memory corruption), the cutoff
+        could push into the future or to ``now`` -- and a
+        ``WHERE {column} < <cutoff>`` predicate at or near ``now`` still matches
+        every already-arrived (i.e. every real) row, wiping the table. Clamping
+        the *cutoff to now* only spares not-yet-arrived future-timestamped rows,
+        which barely exist in a metrics store, so it is not a useful net.
+
+        Instead we clamp the effective day count to the ``MIN_RETENTION_DAYS``
+        past floor: the predicate can then only ever match rows strictly older
+        than ``MIN_RETENTION_DAYS``, so a corrupted policy cannot delete data
+        inside the retention window. A warning is logged when the clamp actually
+        triggers, since that indicates in-memory corruption of a value that was
+        validated at construction time.
+
+        Returns:
+            The cutoff datetime, never more recent than
+            ``now - MIN_RETENTION_DAYS``.
+        """
+        now = datetime.now()
+        safe_days = max(self.retention_days, MIN_RETENTION_DAYS)
+        if safe_days != self.retention_days:
+            logger.warning(
+                "Retention window for table '%s' is below the safe floor "
+                "(retention_days=%s < MIN_RETENTION_DAYS=%s); clamping to the "
+                "floor to avoid deleting data inside the retention window. "
+                "This indicates in-memory corruption of a validated value.",
+                self.table_name,
+                self.retention_days,
+                MIN_RETENTION_DAYS,
+            )
+        return now - timedelta(days=safe_days)
 
     def get_cleanup_query(self) -> tuple[str, tuple]:
         """Get the cleanup query and parameters for this policy.
 
         Security note: table_name and timestamp_column are validated
         against allowlists during __init__, preventing SQL injection.
-        The cutoff date is passed as a parameterized value.
+        The cutoff date is passed as a parameterized value and is clamped so it
+        can never exceed the current time (see :meth:`_cutoff`).
 
         Returns:
             Tuple of (query_string, parameters)
@@ -172,7 +267,7 @@ class RetentionPolicy:
         if self.cleanup_query:
             return self.cleanup_query, ()
 
-        cutoff = (datetime.now() - timedelta(days=self.retention_days)).isoformat()
+        cutoff = self._cutoff().isoformat()
         # nosec B608 - table_name and timestamp_column validated against allowlists in __init__
         query = f"DELETE FROM {self.table_name} WHERE {self.timestamp_column} < ?"  # nosec B608
         return query, (cutoff,)
@@ -187,7 +282,7 @@ class RetentionPolicy:
         Returns:
             Tuple of (query_string, parameters)
         """
-        cutoff = (datetime.now() - timedelta(days=self.retention_days)).isoformat()
+        cutoff = self._cutoff().isoformat()
         # nosec B608 - table_name and timestamp_column validated against allowlists in __init__
         query = f"SELECT COUNT(*) FROM {self.table_name} WHERE {self.timestamp_column} < ?"  # nosec B608
         return query, (cutoff,)
@@ -253,21 +348,50 @@ class RetentionManager:
 
                 db_policies = await cursor.fetchall()
 
+                loaded = 0
                 for row in db_policies:
                     table_name, retention_days, is_active = row
+
+                    # Security: persisted rows are not trusted. An older build
+                    # (or direct DB write) could hold an unsafe retention_days
+                    # that would produce a future/all-rows cutoff. Validate every
+                    # value and skip (fail closed) any row that fails, keeping the
+                    # safe in-memory default instead of adopting the bad value.
+                    try:
+                        retention_days = _validate_retention_days(retention_days)
+                    except ValueError as e:
+                        logger.error(
+                            "Ignoring unsafe retention policy for table '%s' "
+                            "loaded from database: %s. Keeping current policy.",
+                            table_name,
+                            e,
+                        )
+                        continue
 
                     # Update existing policy or create new one
                     if table_name in self.policies:
                         self.policies[table_name].retention_days = retention_days
                         self.policies[table_name].is_active = bool(is_active)
                     else:
-                        self.policies[table_name] = RetentionPolicy(
-                            table_name=table_name,
-                            retention_days=retention_days,
-                            is_active=bool(is_active),
-                        )
+                        try:
+                            self.policies[table_name] = RetentionPolicy(
+                                table_name=table_name,
+                                retention_days=retention_days,
+                                is_active=bool(is_active),
+                            )
+                        except ValueError as e:
+                            # table_name not in allowlist, etc. -- skip, fail closed.
+                            logger.error(
+                                "Ignoring invalid retention policy for table "
+                                "'%s' loaded from database: %s",
+                                table_name,
+                                e,
+                            )
+                            continue
 
-                logger.info(f"Loaded {len(db_policies)} retention policies from database")
+                    loaded += 1
+
+                logger.info(f"Loaded {loaded} retention policies from database")
 
         except Exception as e:
             logger.error(f"Failed to load retention policies from database: {e}")
@@ -332,8 +456,11 @@ class RetentionManager:
                     count_result = await cursor.fetchone()
                     records_to_delete = count_result[0] if count_result else 0
 
-                    # Get oldest and newest timestamps that would be deleted
-                    cutoff = (datetime.now() - timedelta(days=policy.retention_days)).isoformat()
+                    # Get oldest and newest timestamps that would be deleted.
+                    # Use the policy's clamped cutoff so preview matches the
+                    # cleanup that would actually run.
+                    cutoff_dt = policy._cutoff()
+                    cutoff = cutoff_dt.isoformat()
                     # nosec B608 - table_name and timestamp_column validated in RetentionPolicy.__init__
                     cursor = await db.execute(
                         f"SELECT MIN({policy.timestamp_column}) as oldest,"  # nosec B608
@@ -360,7 +487,7 @@ class RetentionManager:
                         "total_records": total_records,
                         "oldest_record_to_delete": oldest_record,
                         "newest_record_to_delete": newest_record,
-                        "cutoff_date": datetime.now() - timedelta(days=policy.retention_days),
+                        "cutoff_date": cutoff_dt,
                         "percentage_to_delete": (records_to_delete / total_records * 100)
                         if total_records > 0
                         else 0,
@@ -502,10 +629,14 @@ class RetentionManager:
             is_active: Whether the policy is active.
 
         Raises:
-            ValueError: If table_name is not in the allowlist.
+            ValueError: If table_name is not in the allowlist or retention_days
+                is outside the safe range (see _validate_retention_days).
         """
-        # Security: Validate table_name against allowlist
+        # Security: Validate table_name against allowlist and retention_days
+        # against the safe range BEFORE mutating any policy, so a bad value can
+        # never be persisted or shape a cutoff.
         _validate_table_name(table_name)
+        retention_days = _validate_retention_days(retention_days)
 
         if table_name in self.policies:
             self.policies[table_name].retention_days = retention_days

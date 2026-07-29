@@ -56,6 +56,115 @@ _WEAK_PEPPER_MARKERS: tuple[str, ...] = (
 )
 
 
+# Minimum accepted length (characters, on the stripped value) for the admin API
+# key. The admin key guards destructive/privileged operations (retention policy
+# changes, cleanup, database stats), so a short/guessable value is unacceptable.
+# It uses the SAME floor as the pepper: both are secrets that gate privileged
+# behavior and must not accept a 16-char placeholder like "changemechangeme".
+_MIN_ADMIN_KEY_LENGTH: int = 32
+
+
+def _reject_weak_secret(
+    raw_value: str | None,
+    name: str,
+    min_len: int,
+) -> str:
+    """Validate a required secret, failing closed on missing/weak/short values.
+
+    Shared secret hardening for every high-entropy secret this service loads
+    (the API-key HMAC pepper and the admin API key). A single helper keeps the
+    known-weak literal / placeholder-prefix / embedded-marker denylist in ONE
+    place, so both callers reject the same set of guessable values and a copied
+    ``.env.example`` cannot slip past one validator but not the other.
+
+    The weak-value check runs BEFORE the length check so a known placeholder
+    produces the most actionable error message, matching the invariant
+    "weak-check before length" from the security guidelines.
+
+    Args:
+        raw_value: The raw environment value, or None if unset.
+        name: The environment variable name, used in error messages.
+        min_len: Minimum accepted length of the stripped value.
+
+    Returns:
+        The normalized (stripped) secret string.
+
+    Raises:
+        ValueError: If the value is unset, empty/whitespace, a known-weak
+            literal/placeholder, or shorter than ``min_len``. Denies by default.
+    """
+    if raw_value is None:
+        raise ValueError(
+            f"{name} is required but not set. Set it to a unique, high-entropy "
+            "secret (e.g. `openssl rand -hex 32`). Denies by default until it "
+            "is configured."
+        )
+
+    value = raw_value.strip()
+
+    if not value:
+        raise ValueError(
+            f"{name} is set but empty/whitespace. Set it to a unique, "
+            "high-entropy secret (e.g. `openssl rand -hex 32`)."
+        )
+
+    # Reject exact known-weak literals, known placeholder prefixes, and
+    # placeholder markers appearing anywhere in the value (so editing the middle
+    # of the example does not slip past a start-only check).
+    normalized = value.lower()
+    if (
+        normalized in _WEAK_PEPPER_VALUES
+        or normalized.startswith(_WEAK_PEPPER_PREFIXES)
+        or any(marker in normalized for marker in _WEAK_PEPPER_MARKERS)
+    ):
+        raise ValueError(
+            f"{name} is set to a known-weak/placeholder value. Set it to a "
+            "unique, high-entropy secret (e.g. `openssl rand -hex 32`)."
+        )
+
+    if len(value) < min_len:
+        raise ValueError(
+            f"{name} must be at least {min_len} characters (got {len(value)}). "
+            "Use a high-entropy value such as `openssl rand -hex 32`."
+        )
+
+    return value
+
+
+def _validate_admin_api_key(
+    raw_value: str | None,
+) -> str:
+    """Validate the admin API key, failing closed on missing/weak values.
+
+    Admin operations under ``/admin/*`` (retention policy changes, cleanup,
+    database stats/size) must NOT be reachable with an ordinary ingest key. A
+    distinct, explicitly-configured admin key provides that privilege
+    separation. Because it is the only credential standing between any valid
+    ingest client and destructive operations, it must be present and strong.
+
+    Applies the SAME weak-value / placeholder / length rejection as the pepper
+    (via :func:`_reject_weak_secret`), so an unset, empty, whitespace-only,
+    known-weak, or too-short value raises and ``/admin/*`` denies by default
+    rather than silently accepting an ingest key or a placeholder such as
+    ``changemechangeme``.
+
+    Args:
+        raw_value: The raw ``METRICS_ADMIN_API_KEY`` environment value, or None.
+
+    Returns:
+        The normalized (stripped) admin key string.
+
+    Raises:
+        ValueError: If the admin key is unset, empty/whitespace, known-weak, or
+            shorter than the minimum length. Denies by default.
+    """
+    return _reject_weak_secret(
+        raw_value,
+        "METRICS_ADMIN_API_KEY",
+        _MIN_ADMIN_KEY_LENGTH,
+    )
+
+
 def _validate_pepper(
     raw_value: str | None,
 ) -> str:
@@ -76,47 +185,11 @@ def _validate_pepper(
         ValueError: If the pepper is unset, empty/whitespace, a known-weak
             literal, or shorter than the minimum length. Denies by default.
     """
-    if raw_value is None:
-        raise ValueError(
-            "METRICS_KEY_PEPPER is required but not set. Set it to a unique, "
-            "high-entropy per-deployment secret (e.g. `openssl rand -hex 32`). "
-            "The metrics service will not start without it."
-        )
-
-    pepper = raw_value.strip()
-
-    if not pepper:
-        raise ValueError(
-            "METRICS_KEY_PEPPER is set but empty/whitespace. Set it to a "
-            "unique, high-entropy per-deployment secret (e.g. "
-            "`openssl rand -hex 32`)."
-        )
-
-    # Run the weak-value check BEFORE the length check so a known placeholder
-    # produces the most actionable error message. Reject exact known-weak
-    # literals, known placeholder prefixes, and placeholder markers appearing
-    # anywhere in the value (so editing the middle of the example does not slip
-    # past a start-only check).
-    normalized = pepper.lower()
-    if (
-        normalized in _WEAK_PEPPER_VALUES
-        or normalized.startswith(_WEAK_PEPPER_PREFIXES)
-        or any(marker in normalized for marker in _WEAK_PEPPER_MARKERS)
-    ):
-        raise ValueError(
-            "METRICS_KEY_PEPPER is set to a known-weak/placeholder value. Set "
-            "it to a unique, high-entropy per-deployment secret (e.g. "
-            "`openssl rand -hex 32`)."
-        )
-
-    if len(pepper) < _MIN_PEPPER_LENGTH:
-        raise ValueError(
-            f"METRICS_KEY_PEPPER must be at least {_MIN_PEPPER_LENGTH} "
-            f"characters (got {len(pepper)}). Use a high-entropy value such "
-            "as `openssl rand -hex 32`."
-        )
-
-    return pepper
+    return _reject_weak_secret(
+        raw_value,
+        "METRICS_KEY_PEPPER",
+        _MIN_PEPPER_LENGTH,
+    )
 
 
 class Settings:
@@ -182,6 +255,23 @@ class Settings:
                 is missing, empty, weak, or too short.
         """
         return _validate_pepper(os.getenv("METRICS_KEY_PEPPER"))
+
+    @staticmethod
+    def get_admin_api_key() -> str:
+        """Return the validated admin API key, failing closed if unusable.
+
+        Read at verification time (not import time) so the fail-closed behavior
+        applies at every ``/admin/*`` entrypoint, and so importing this module
+        for unrelated purposes does not require the secret to be present.
+
+        Returns:
+            The normalized admin key string.
+
+        Raises:
+            ValueError: Propagated from :func:`_validate_admin_api_key` when the
+                admin key is missing, empty, or too short.
+        """
+        return _validate_admin_api_key(os.getenv("METRICS_ADMIN_API_KEY"))
 
 
 settings = Settings()

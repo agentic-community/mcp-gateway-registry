@@ -104,35 +104,48 @@ class EgressOperationalRepository:
     # -- refresh lease (single-flight) ---------------------------------------- #
 
     async def acquire_lease(self, key: str, holder: str, ttl_seconds: int) -> bool:
-        """Acquire the refresh lease for ``key`` (the canonical vault tuple,
-        stringified). Returns True if acquired.
+        """Acquire an operational lease for ``key`` and return whether it was won.
 
-        Lease pattern (mirrors agent_batch_job_repository.claim_next_queued): the
-        upsert matches a free or expired lease and stamps holder+expiry atomically;
-        we then confirm we are the holder. Correctness is the lease comparison, not
-        the TTL sweep."""
+        The same primitive coordinates tuple-level token refreshes and principal-level
+        Secrets Manager document mutations. If an unexpired record already exists,
+        MongoDB may take the upsert path and report a duplicate ``_id``; that means
+        contention, not an operational failure.
+        """
         col = await self._get_collection()
         now = datetime.now(UTC)
         expires = now + timedelta(seconds=ttl_seconds)
-        doc = await col.find_one_and_update(
-            {
-                "_id": f"lease:{key}",
-                "$or": [
-                    {"holder": {"$exists": False}},
-                    {"expires_at_dt": {"$lt": now}},
-                ],
-            },
-            {
-                "$set": {
-                    "kind": "lease",
-                    "holder": holder,
-                    "expires_at_dt": expires,
-                }
-            },
-            upsert=True,
-            return_document=ReturnDocument.AFTER,
-        )
+        try:
+            doc = await col.find_one_and_update(
+                {
+                    "_id": f"lease:{key}",
+                    "$or": [
+                        {"holder": {"$exists": False}},
+                        {"expires_at_dt": {"$lt": now}},
+                    ],
+                },
+                {
+                    "$set": {
+                        "kind": "lease",
+                        "holder": holder,
+                        "expires_at_dt": expires,
+                    }
+                },
+                upsert=True,
+                return_document=ReturnDocument.AFTER,
+            )
+        except DuplicateKeyError:
+            return False
         return bool(doc) and doc.get("holder") == holder
+
+    async def renew_lease(self, key: str, holder: str, ttl_seconds: int) -> bool:
+        """Extend a lease iff ``holder`` still owns it."""
+        col = await self._get_collection()
+        expires = datetime.now(UTC) + timedelta(seconds=ttl_seconds)
+        result = await col.update_one(
+            {"_id": f"lease:{key}", "holder": holder},
+            {"$set": {"expires_at_dt": expires}},
+        )
+        return bool(result.matched_count)
 
     async def release_lease(self, key: str, holder: str) -> None:
         """Release the lease iff still held by ``holder`` (idempotent). The holder

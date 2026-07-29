@@ -29,6 +29,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ValidationError
 
 from ..audit import set_audit_action
+from ..audit.request_id import sanitize_correlation_id
 from ..auth.asset_permissions import user_has_asset_permission
 from ..auth.csrf import verify_csrf_token_flexible
 from ..auth.dependencies import nginx_proxied_auth
@@ -1886,7 +1887,7 @@ async def submit_agent_batch(
             submitted_body_hash=_hash_items(body.items),
             submitter_is_admin=user_context.get("is_admin", False),
             submitter_ui_permissions=user_context.get("ui_permissions", {}),
-            request_id=http_request.headers.get("x-request-id"),
+            request_id=sanitize_correlation_id(http_request.headers.get("x-request-id")),
         )
     except ConcurrentJobLimitError as e:
         raise HTTPException(status_code=429, detail=str(e)) from e

@@ -1387,25 +1387,35 @@ server {
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_generate_config_async_keycloak_url_parse_exception(
+async def test_generate_config_async_keycloak_bad_port_preserves_https_scheme(
     nginx_service, sample_servers, mock_health_service, mock_atomic_write
 ):
-    """Test Keycloak URL parsing falls back to defaults on exception."""
+    """A malformed port in an https KEYCLOAK_URL must NOT silently downgrade to http.
+
+    Finding A regression guard: ``urlparse(...).port`` raises ValueError for an
+    out-of-range port. The old code caught that and reset the scheme to http,
+    which silently dropped the fail-closed proxy_ssl_verify block (no TLS
+    verification) for a config the operator INTENDED to be https. The fix parses
+    the scheme first and only falls back the PORT (to the scheme default),
+    keeping scheme=https so the renderer still emits verify-on.
+    """
     template_content = """
 server {
-    {{KEYCLOAK_SCHEME}}://{{KEYCLOAK_HOST}}:{{KEYCLOAK_PORT}}
+    proxy_pass {{KEYCLOAK_SCHEME}}://{{KEYCLOAK_HOST}}:{{KEYCLOAK_PORT}};
+    {{KEYCLOAK_PROXY_SSL}}
     {{LOCATION_BLOCKS}}
 }
 """
 
     env_values = {
         "AUTH_PROVIDER": "keycloak",
-        "KEYCLOAK_URL": "http://keycloak:8080",
+        # Out-of-range port -> urlparse(...).port raises ValueError.
+        "KEYCLOAK_URL": "https://keycloak.example.com:99999",
         "NGINX_DISABLE_API_AUTH_REQUEST": "false",
     }
 
     with patch.object(nginx_service.nginx_template_path, "exists", return_value=True):
-        with patch("builtins.open", mock_open(read_data=template_content)) as mock_file:
+        with patch("builtins.open", mock_open(read_data=template_content)):
             with patch("registry.health.service.health_service", mock_health_service):
                 mock_health_service.server_health_status = {}
 
@@ -1415,19 +1425,16 @@ server {
                             "os.environ.get",
                             side_effect=lambda key, default=None: env_values.get(key, default),
                         ):
-                            # Force urlparse to raise an exception
-                            with patch(
-                                "registry.core.nginx_service.urlparse",
-                                side_effect=Exception("parse error"),
-                            ):
-                                result = await nginx_service.generate_config_async(sample_servers)
+                            result = await nginx_service.generate_config_async(sample_servers)
 
-                                assert result is True
-                                written_content = mock_atomic_write.call_args_list[0][0][1]
-                                # Should fall back to defaults
-                                assert "http" in written_content
-                                assert "keycloak" in written_content
-                                assert "8080" in written_content
+                            assert result is True
+                            written_content = mock_atomic_write.call_args_list[0][0][1]
+                            # Scheme preserved as https (NOT downgraded to http),
+                            # port falls back to the https default 443, and the
+                            # fail-closed TLS block is still rendered.
+                            assert "https://keycloak.example.com:443" in written_content
+                            assert "proxy_ssl_verify on;" in written_content
+                            assert "proxy_ssl_verify off" not in written_content
 
 
 # =============================================================================
@@ -2134,6 +2141,7 @@ def test_conf_declares_rate_limit_zones(conf_path):
         "limit_req_zone $mcp_gateway_register_key zone=mcp_gateway_register:10m rate=5r/s;" in text
     )
     assert "limit_conn_zone $binary_remote_addr zone=mcp_gateway_conn:10m;" in text
+    assert "limit_req_zone $binary_remote_addr zone=mcp_gateway_wellknown:5m rate=2r/s;" in text
     # Registration classifier map + fail-safe empty default (skip when non-register).
     assert "map $uri $mcp_gateway_register_key {" in text
     assert re.search(r'default\s+"";', text)
@@ -2271,3 +2279,329 @@ def test_conf_does_not_rate_limit_validate_subrequest(conf_path):
     body = body[: end if end != -1 else len(body)]
     assert "limit_req" not in body
     assert "limit_conn" not in body
+
+
+# =============================================================================
+# PingFederate upstream TLS verification (MITM / auth-bypass guard)
+# =============================================================================
+#
+# The nginx -> PingFederate runtime reverse proxy carries the token exchange,
+# JWKS, and OIDC discovery. If nginx does not verify the upstream cert over TLS,
+# a MITM can substitute JWKS (forge tokens) or intercept the token exchange =
+# authentication bypass for every PingFederate user. The intent pinned here:
+# when the upstream is https, verification is ON with a trusted CA bundle, and
+# the rendered/static config NEVER contains `proxy_ssl_verify off` for these
+# locations. Same class as the internal-mtls and lambda-tls verify-off fixes.
+
+# Marker comments delimiting the PingFederate location blocks in both confs.
+_PF_START_MARKER = "# {{PINGFEDERATE_LOCATIONS_START}}"
+_PF_END_MARKER = "# {{PINGFEDERATE_LOCATIONS_END}}"
+
+
+def _pingfederate_block_bodies(text: str) -> list[str]:
+    """Return every PingFederate location block body from a conf template.
+
+    The http+https template carries two copies (one per listener), so this
+    returns a list and callers assert against all of them.
+    """
+    bodies = []
+    start = 0
+    while True:
+        s = text.find(_PF_START_MARKER, start)
+        if s == -1:
+            break
+        e = text.find(_PF_END_MARKER, s)
+        assert e != -1, "unbalanced PingFederate location markers"
+        bodies.append(text[s:e])
+        start = e + len(_PF_END_MARKER)
+    return bodies
+
+
+@pytest.mark.unit
+def test_render_pingfederate_proxy_ssl_https_is_fail_closed():
+    """When the upstream scheme is https, verification MUST be ON with a CA bundle.
+
+    This is the core invariant: a MITM cannot present an untrusted cert because
+    proxy_ssl_verify is enforced and a trusted CA bundle is pinned. Hostname
+    verification (SNI + proxy_ssl_name) binds the cert to the configured host.
+    """
+    rendered = nginx_module._render_pingfederate_proxy_ssl("https", "pf.example.com")
+    assert "proxy_ssl_verify on;" in rendered
+    assert "proxy_ssl_verify off" not in rendered
+    assert "proxy_ssl_trusted_certificate " in rendered
+    assert "proxy_ssl_server_name on;" in rendered
+    assert "proxy_ssl_name pf.example.com;" in rendered
+
+
+@pytest.mark.unit
+def test_render_pingfederate_proxy_ssl_https_uses_configured_ca_bundle(monkeypatch):
+    """The CA bundle path is operator-configurable via PINGFEDERATE_CA_BUNDLE."""
+    monkeypatch.setenv("PINGFEDERATE_CA_BUNDLE", "/custom/pf-root.pem")
+    rendered = nginx_module._render_pingfederate_proxy_ssl("https", "pf.example.com")
+    assert "proxy_ssl_trusted_certificate /custom/pf-root.pem;" in rendered
+
+
+@pytest.mark.unit
+def test_render_pingfederate_proxy_ssl_https_defaults_ca_bundle(monkeypatch):
+    """With no env override, a documented default CA bundle path is emitted."""
+    monkeypatch.delenv("PINGFEDERATE_CA_BUNDLE", raising=False)
+    rendered = nginx_module._render_pingfederate_proxy_ssl("https", "pf.example.com")
+    assert (
+        f"proxy_ssl_trusted_certificate {nginx_module._PINGFEDERATE_CA_BUNDLE_DEFAULT};" in rendered
+    )
+
+
+@pytest.mark.unit
+def test_render_pingfederate_proxy_ssl_http_does_not_disable_verification():
+    """An http upstream has nothing to verify, but must NOT emit `proxy_ssl_verify off`.
+
+    Emitting verify-off would be dead config for http and a latent footgun if the
+    scheme later flips to https; instead we emit only an explanatory comment.
+    """
+    rendered = nginx_module._render_pingfederate_proxy_ssl("http", "pingfederate")
+    assert "proxy_ssl_verify off" not in rendered
+    assert "proxy_ssl_verify on" not in rendered
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("conf_path", [_HTTP_ONLY_CONF, _HTTP_AND_HTTPS_CONF])
+def test_conf_pingfederate_blocks_never_disable_ssl_verify(conf_path):
+    """Neither static conf may hardcode `proxy_ssl_verify off` in a PingFederate block.
+
+    Regression guard for the two duplicated templates: the fix must not silently
+    persist in one file while the other keeps the MITM hole. The blocks use the
+    {{PINGFEDERATE_PROXY_SSL}} placeholder that nginx_service renders fail-closed.
+    """
+    text = conf_path.read_text()
+    bodies = _pingfederate_block_bodies(text)
+    assert bodies, f"{conf_path.name}: no PingFederate location blocks found"
+    for body in bodies:
+        assert "proxy_ssl_verify off" not in body, (
+            f"{conf_path.name}: a PingFederate location still disables TLS "
+            f"verification (proxy_ssl_verify off) -- MITM/auth-bypass hole."
+        )
+        assert "{{PINGFEDERATE_PROXY_SSL}}" in body, (
+            f"{conf_path.name}: PingFederate blocks must use the "
+            f"{{{{PINGFEDERATE_PROXY_SSL}}}} placeholder rendered by nginx_service."
+        )
+
+
+@pytest.mark.unit
+def test_conf_templates_have_no_leftover_proxy_ssl_verify_off():
+    """No nginx conf template anywhere should hardcode `proxy_ssl_verify off`."""
+    for conf_path in (_HTTP_ONLY_CONF, _HTTP_AND_HTTPS_CONF):
+        assert "proxy_ssl_verify off" not in conf_path.read_text(), (
+            f"{conf_path.name} still contains a hardcoded `proxy_ssl_verify off`."
+        )
+
+
+# =============================================================================
+# Keycloak upstream TLS verification (MITM / auth-bypass guard)
+# =============================================================================
+#
+# The nginx -> Keycloak runtime reverse proxy (/keycloak/, /realms/, /resources/)
+# carries Keycloak's JWKS, token, and OIDC discovery traffic. The shipped default
+# upstream is in-cluster http://keycloak:8080 (plaintext), but an operator may
+# point KEYCLOAK_URL at an https endpoint (BYO Keycloak). If nginx does not verify
+# the upstream cert over TLS, a MITM can substitute JWKS (forge tokens) or
+# intercept the token exchange = authentication bypass for every Keycloak user.
+# Before this fix these locations set NO proxy_ssl_verify directive at all and
+# relied on nginx's insecure DEFAULT-OFF. The intent pinned here: when the
+# upstream is https, verification is ON with a trusted CA bundle, and the
+# rendered/static config NEVER contains `proxy_ssl_verify off` for these
+# locations. Same class as the PingFederate front-channel verify fix.
+
+# Marker comments delimiting the Keycloak location blocks in both confs.
+_KC_START_MARKER = "# {{KEYCLOAK_LOCATIONS_START}}"
+_KC_END_MARKER = "# {{KEYCLOAK_LOCATIONS_END}}"
+
+
+def _keycloak_block_bodies(text: str) -> list[str]:
+    """Return every Keycloak location block body from a conf template.
+
+    The http+https template carries two copies (one per listener), so this
+    returns a list and callers assert against all of them.
+    """
+    bodies = []
+    start = 0
+    while True:
+        s = text.find(_KC_START_MARKER, start)
+        if s == -1:
+            break
+        e = text.find(_KC_END_MARKER, s)
+        assert e != -1, "unbalanced Keycloak location markers"
+        bodies.append(text[s:e])
+        start = e + len(_KC_END_MARKER)
+    return bodies
+
+
+@pytest.mark.unit
+def test_render_keycloak_proxy_ssl_https_is_fail_closed():
+    """When the Keycloak upstream is https, verification MUST be ON with a CA bundle.
+
+    Core invariant: a MITM cannot present an untrusted cert to the Keycloak
+    upstream because verification is enforced when https and a trusted CA bundle
+    is pinned. Hostname verification (SNI + proxy_ssl_name) binds the cert to the
+    configured host.
+    """
+    rendered = nginx_module._render_keycloak_proxy_ssl("https", "keycloak.example.com")
+    assert "proxy_ssl_verify on;" in rendered
+    assert "proxy_ssl_verify off" not in rendered
+    assert "proxy_ssl_trusted_certificate " in rendered
+    assert "proxy_ssl_server_name on;" in rendered
+    assert "proxy_ssl_name keycloak.example.com;" in rendered
+
+
+@pytest.mark.unit
+def test_render_keycloak_proxy_ssl_https_uses_configured_ca_bundle(monkeypatch):
+    """The CA bundle path is operator-configurable via KEYCLOAK_CA_BUNDLE."""
+    monkeypatch.setenv("KEYCLOAK_CA_BUNDLE", "/custom/kc-root.pem")
+    rendered = nginx_module._render_keycloak_proxy_ssl("https", "keycloak.example.com")
+    assert "proxy_ssl_trusted_certificate /custom/kc-root.pem;" in rendered
+
+
+@pytest.mark.unit
+def test_render_keycloak_proxy_ssl_https_defaults_ca_bundle(monkeypatch):
+    """With no env override, a documented default CA bundle path is emitted."""
+    monkeypatch.delenv("KEYCLOAK_CA_BUNDLE", raising=False)
+    rendered = nginx_module._render_keycloak_proxy_ssl("https", "keycloak.example.com")
+    assert f"proxy_ssl_trusted_certificate {nginx_module._KEYCLOAK_CA_BUNDLE_DEFAULT};" in rendered
+
+
+@pytest.mark.unit
+def test_render_keycloak_proxy_ssl_http_does_not_disable_verification():
+    """The in-cluster http default has nothing to verify, but must NOT emit verify-off.
+
+    Emitting verify-off would be dead config for http and a latent footgun if the
+    scheme later flips to https; instead we emit only an explanatory comment.
+    """
+    rendered = nginx_module._render_keycloak_proxy_ssl("http", "keycloak")
+    assert "proxy_ssl_verify off" not in rendered
+    assert "proxy_ssl_verify on" not in rendered
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("conf_path", [_HTTP_ONLY_CONF, _HTTP_AND_HTTPS_CONF])
+def test_conf_keycloak_blocks_never_disable_ssl_verify(conf_path):
+    """Neither static conf may hardcode `proxy_ssl_verify off` in a Keycloak block.
+
+    Regression guard for the two duplicated templates: the fix must not silently
+    persist in one file while the other keeps the MITM hole. The blocks use the
+    {{KEYCLOAK_PROXY_SSL}} placeholder that nginx_service renders fail-closed.
+    """
+    text = conf_path.read_text()
+    bodies = _keycloak_block_bodies(text)
+    assert bodies, f"{conf_path.name}: no Keycloak location blocks found"
+    for body in bodies:
+        assert "proxy_ssl_verify off" not in body, (
+            f"{conf_path.name}: a Keycloak location still disables TLS "
+            f"verification (proxy_ssl_verify off) -- MITM/auth-bypass hole."
+        )
+        assert "{{KEYCLOAK_PROXY_SSL}}" in body, (
+            f"{conf_path.name}: Keycloak upstream blocks must use the "
+            f"{{{{KEYCLOAK_PROXY_SSL}}}} placeholder rendered by nginx_service."
+        )
+
+
+async def _render_real_conf(
+    nginx_service,
+    sample_servers,
+    mock_health_service,
+    mock_atomic_write,
+    conf_path,
+    env_values,
+):
+    """Render a real conf template through generate_config_async and return the output.
+
+    Feeds the on-disk conf template into the genuine ``_render_config_impl`` path
+    (so the ``.replace("{{...PROXY_SSL}}", ...)`` wiring actually runs) and
+    returns the string handed to the atomic writer.
+    """
+    template_content = conf_path.read_text()
+    mock_health_service.server_health_status = {}
+    with patch.object(nginx_service.nginx_template_path, "exists", return_value=True):
+        with patch("builtins.open", mock_open(read_data=template_content)):
+            with patch("registry.health.service.health_service", mock_health_service):
+                with patch.object(nginx_service, "get_additional_server_names", return_value=""):
+                    with patch.object(nginx_service, "reload_nginx", return_value=True):
+                        with patch(
+                            "os.environ.get",
+                            side_effect=lambda key, default=None: env_values.get(key, default),
+                        ):
+                            result = await nginx_service.generate_config_async(sample_servers)
+    assert result is True
+    return mock_atomic_write.call_args_list[0][0][1]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+@pytest.mark.parametrize("conf_path", [_HTTP_ONLY_CONF, _HTTP_AND_HTTPS_CONF])
+async def test_proxy_ssl_placeholder_is_substituted_end_to_end(
+    conf_path, nginx_service, sample_servers, mock_health_service, mock_atomic_write
+):
+    """The {{*_PROXY_SSL}} placeholders must be substituted by the real render path.
+
+    Finding B: the per-helper unit tests and the static-conf guards prove the
+    helpers render fail-closed and the templates carry the placeholder, but
+    NOTHING pinned the ``.replace("{{...PROXY_SSL}}", ...)`` wiring in
+    ``_render_config_impl``. If that wiring were deleted or the placeholder name
+    typo'd, both existing checks still pass and a literal ``{{KEYCLOAK_PROXY_SSL}}``
+    / ``{{PINGFEDERATE_PROXY_SSL}}`` would survive into the rendered config -- only
+    caught by ``nginx -t`` at deploy (and not even that when the nginx binary is
+    absent and validation is skipped -> broken cold start).
+
+    Because each provider's location blocks are stripped when the other provider
+    is active, this renders the real conf ONCE PER PROVIDER (https Keycloak URL,
+    https PingFederate URL) and asserts for each: (a) ``proxy_ssl_verify on``
+    appears in the rendered output, and (b) NO ``{{...PROXY_SSL}}`` literal
+    placeholder remains anywhere in the rendered output.
+    """
+    # --- Keycloak provider: https KEYCLOAK_URL ---
+    keycloak_env = {
+        "AUTH_PROVIDER": "keycloak",
+        "KEYCLOAK_URL": "https://keycloak.example.com:8443",
+        "NGINX_DISABLE_API_AUTH_REQUEST": "false",
+    }
+    keycloak_rendered = await _render_real_conf(
+        nginx_service,
+        sample_servers,
+        mock_health_service,
+        mock_atomic_write,
+        conf_path,
+        keycloak_env,
+    )
+    assert "proxy_ssl_verify on;" in keycloak_rendered, (
+        f"{conf_path.name} (keycloak): rendered config missing proxy_ssl_verify on -- "
+        "the {{KEYCLOAK_PROXY_SSL}} placeholder was not substituted fail-closed."
+    )
+    assert "proxy_ssl_verify off" not in keycloak_rendered
+    assert "{{KEYCLOAK_PROXY_SSL}}" not in keycloak_rendered, (
+        f"{conf_path.name} (keycloak): {{{{KEYCLOAK_PROXY_SSL}}}} placeholder was NOT "
+        "substituted -- the .replace() wiring in _render_config_impl is broken."
+    )
+
+    mock_atomic_write.reset_mock()
+
+    # --- PingFederate provider: https PINGFEDERATE_BASE_URL ---
+    pingfederate_env = {
+        "AUTH_PROVIDER": "pingfederate",
+        "PINGFEDERATE_BASE_URL": "https://pf.example.com:9031",
+        "NGINX_DISABLE_API_AUTH_REQUEST": "false",
+    }
+    pingfederate_rendered = await _render_real_conf(
+        nginx_service,
+        sample_servers,
+        mock_health_service,
+        mock_atomic_write,
+        conf_path,
+        pingfederate_env,
+    )
+    assert "proxy_ssl_verify on;" in pingfederate_rendered, (
+        f"{conf_path.name} (pingfederate): rendered config missing proxy_ssl_verify on -- "
+        "the {{PINGFEDERATE_PROXY_SSL}} placeholder was not substituted fail-closed."
+    )
+    assert "proxy_ssl_verify off" not in pingfederate_rendered
+    assert "{{PINGFEDERATE_PROXY_SSL}}" not in pingfederate_rendered, (
+        f"{conf_path.name} (pingfederate): {{{{PINGFEDERATE_PROXY_SSL}}}} placeholder was NOT "
+        "substituted -- the .replace() wiring in _render_config_impl is broken."
+    )

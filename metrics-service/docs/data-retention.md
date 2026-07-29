@@ -30,6 +30,19 @@ The data retention system automatically manages the lifecycle of metrics data by
 - **Compliance Support**: Configurable retention periods for data governance requirements
 - **Operational Safety**: Preview and dry-run capabilities before actual cleanup
 
+## Admin API authorization (UPGRADE NOTE — breaking change)
+
+The `/admin/*` endpoints (retention preview, cleanup, policy read/update, and database stats/size) are privilege-separated from metrics ingest. They now require a dedicated admin credential, `METRICS_ADMIN_API_KEY`, presented in the `X-API-Key` header. This is distinct from the ingest API keys used by `POST /metrics` and `POST /flush`.
+
+What changes when you upgrade:
+
+1. `/admin/*` now requires `METRICS_ADMIN_API_KEY`. It must be a high-entropy value at least 32 characters long, not a known placeholder, and DISTINCT from every ingest API key. Until it is configured, every `/admin/*` request fails closed with HTTP 503 (the admin surface is unusable, never open). Generate one with `openssl rand -hex 32`.
+2. Terraform and CDK deployments provision this key automatically (generated independently of the ingest key), so IaC-managed deployments are clean and need no manual action.
+3. Docker-compose operators must add `METRICS_ADMIN_API_KEY` to their `.env` file (see `.env.example`). An unset key means all `/admin/*` calls return 503 after upgrade.
+4. Admin runbooks and scripts that previously called `/admin/*` with an ingest API key must switch to the admin key. An ingest key on an admin route now returns HTTP 401.
+
+The comparison against the configured admin key is constant-time and byte-based, so a non-ASCII `X-API-Key` value is denied with a clean 401 rather than an error.
+
 ## Retention Policies
 
 ### Default Policies

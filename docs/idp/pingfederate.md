@@ -19,6 +19,7 @@ The same set of variables is set across all three deployment modes; only the fil
 | Active provider switch | `AUTH_PROVIDER=pingfederate` | `pingfederate_enabled = true` (no `auth_provider` variable; see note) | `global.authProvider.type: pingfederate` |
 | Show login button | `PINGFEDERATE_ENABLED=true` | `pingfederate_enabled = true` | `pingfederate.enabled: true` |
 | Server-to-server URL (auth-server reaches PF) | `PINGFEDERATE_BASE_URL` | `pingfederate_base_url` | `pingfederate.baseUrl` |
+| CA bundle for nginx -> PF front-channel TLS verify (https upstream) | `PINGFEDERATE_CA_BUNDLE` (default `/etc/nginx/certs/pingfederate-ca.pem`) | n/a | n/a |
 | Browser-facing URL (used in redirects) | `PINGFEDERATE_EXTERNAL_URL` | `pingfederate_external_url` | `pingfederate.externalUrl` |
 | OAuth client (web login) ID | `PINGFEDERATE_CLIENT_ID` | `pingfederate_client_id` | `pingfederate.clientId` |
 | OAuth client secret (web login, **secret**) | `PINGFEDERATE_CLIENT_SECRET` | `pingfederate_client_secret` | `pingfederate.clientSecret` (or `pingfederate.clientSecretExistingSecret`) |
@@ -272,9 +273,15 @@ The registry handles this with a fallback: it consults the `idp_user_groups` Mon
 
 For production deployments using LDAP or AD as the user store, you can populate groups inside PingFederate directly via the ATM's attribute mapping (step 3 above) and bypass the fallback. See your PingFederate documentation on Password Credential Validators for the full set of user-store options (LDAP, AD, JDBC, PingDirectory, etc.).
 
-## TLS / Self-Signed Certificate Handling (local dev only)
+## TLS / Self-Signed Certificate Handling
 
-The PingFederate dev container uses a self-signed certificate on port 9031. The auth-server's PingFederate provider does NOT support `verify=False`; instead, mount a CA bundle.
+The PingFederate dev container uses a self-signed certificate on port 9031. TLS verification is ON by default on every hop that reaches PingFederate over https (fail closed) — nothing supports `verify=False`. For a private/self-signed cert you supply the CA bundle that signed it; you never disable verification.
+
+There are two independent hops, each with its own CA bundle knob:
+
+### auth-server -> PingFederate (token/JWKS/userinfo)
+
+The auth-server's PingFederate provider verifies the upstream cert. Mount the CA bundle and point `REQUESTS_CA_BUNDLE` at it:
 
 ```bash
 # Extract the dev container's certificate
@@ -287,7 +294,22 @@ REQUESTS_CA_BUNDLE=/path/to/pf-cert.pem
 
 `init-pingfederate.sh` does this automatically; the bundle ends up at `pingfederate/setup/pingfederate-ca-bundle.pem` and `docker-compose.yml` mounts it into the auth-server container.
 
-For production with a properly-signed certificate (Let's Encrypt, internal PKI, etc.), no special handling is needed.
+### nginx -> PingFederate (front-channel reverse proxy)
+
+When `AUTH_PROVIDER=pingfederate`, the gateway's nginx reverse-proxies the PingFederate front-channel — `/as/` (authorization and token exchange), the JWKS endpoint, `/.well-known/openid-configuration`, `/pf/`, `/ext/`, `/idp/`, and `/assets/`. When `PINGFEDERATE_BASE_URL` is https, nginx verifies the upstream cert on these locations with `proxy_ssl_verify on` (fail closed). A MITM on this hop that could present an untrusted cert would be able to substitute JWKS (forge tokens) or intercept the token exchange, an authentication bypass for every PingFederate user, so verification is never disabled.
+
+nginx does not consult a system trust store for `proxy_ssl`, so it always needs an explicit CA bundle. Set `PINGFEDERATE_CA_BUNDLE` to the PEM the nginx container should trust (default `/etc/nginx/certs/pingfederate-ca.pem`):
+
+```bash
+# For a private/self-signed PingFederate: mount the signing CA into the nginx
+# container and point PINGFEDERATE_CA_BUNDLE at it.
+PINGFEDERATE_CA_BUNDLE=/etc/nginx/certs/pingfederate-ca.pem
+
+# For a publicly trusted PingFederate cert: point at the system CA bundle.
+PINGFEDERATE_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+```
+
+A missing or wrong bundle makes nginx reject the upstream cert (fail closed) rather than trust it. If `PINGFEDERATE_BASE_URL` is http, there is nothing to verify on either hop — but plaintext to the IdP is itself insecure and should only be used for isolated local development.
 
 ## M2M / Client Credentials Flow
 

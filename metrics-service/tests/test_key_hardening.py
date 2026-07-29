@@ -233,6 +233,11 @@ class TestRetentionErrorTextStatic:
         self, mock_retention, mock_storage_class, monkeypatch
     ):
         monkeypatch.setenv("METRICS_KEY_PEPPER", _STRONG_PEPPER)
+        # /admin/* requires the dedicated admin key (privilege separation).
+        # Configure it and present it so this test can reach the handler and
+        # exercise the static-error-text behavior it is actually checking.
+        admin_key = "admin-key-for-static-text-test-abcdef0123456789"
+        monkeypatch.setenv("METRICS_ADMIN_API_KEY", admin_key)
 
         # Authenticate: valid key.
         mock_storage = AsyncMock()
@@ -251,7 +256,7 @@ class TestRetentionErrorTextStatic:
         client = TestClient(app)
         resp = client.get(
             "/admin/retention/preview?table_name=evil",
-            headers={"X-API-Key": "valid-key"},
+            headers={"X-API-Key": admin_key},
         )
         assert resp.status_code == 400
         # The leaky allowlist must NOT appear in the response.
