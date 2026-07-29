@@ -348,8 +348,11 @@ module "mcp_gateway" {
   gateway_generic_require_bearer_for_writes   = var.gateway_generic_require_bearer_for_writes
   gateway_egress_selfcheck_enabled            = var.gateway_egress_selfcheck_enabled
   gateway_generic_tls_verify                  = var.gateway_generic_tls_verify
-  gateway_proxy_pin_refresh_seconds           = var.gateway_proxy_pin_refresh_seconds
   gateway_generic_max_concurrency             = var.gateway_generic_max_concurrency
+  gateway_generic_stream_max_concurrency      = var.gateway_generic_stream_max_concurrency
+  gateway_generic_acquire_timeout_seconds     = var.gateway_generic_acquire_timeout_seconds
+  gateway_generic_stream_max_duration_seconds = var.gateway_generic_stream_max_duration_seconds
+  gateway_generic_stream_max_bytes            = var.gateway_generic_stream_max_bytes
 
   # Custom entity types (admin-defined, schema-driven catalog types)
   custom_entity_types_enabled   = var.custom_entity_types_enabled

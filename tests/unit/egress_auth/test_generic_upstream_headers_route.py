@@ -41,6 +41,8 @@ def _entity(**over):
         "is_proxied": True,
         "proxy_target_url": "https://llm.example/",
         "custom_headers_encrypted": [{"name": "Authorization", "value_encrypted": "enc"}],
+        "custom_header_names": ["Authorization"],
+        "custom_header_overridable_names": ["Authorization"],
     }
     doc.update(over)
     return SimpleNamespace(model_dump=lambda: dict(doc))
@@ -59,20 +61,30 @@ def _claims(**over):
 
 @pytest.fixture
 def make_client(monkeypatch):
-    def _build(claims, entity, *, target="https://llm.example/", decrypted=None):
+    def _build(
+        claims,
+        entity,
+        *,
+        target="https://llm.example/",
+        decrypted=None,
+        decrypt_error=False,
+    ):
         monkeypatch.setattr(routes, "verify_generic_proxy_token", lambda tok: claims)
         repo = _StubRepo(entity)
         monkeypatch.setattr(routes, "_proxyable_repo_for", lambda et: repo)
         monkeypatch.setattr(routes, "resolve_proxy_target", lambda et, doc: target)
-        monkeypatch.setattr(
-            routes,
-            "decrypt_custom_headers",
-            lambda enc: (
+
+        def _decrypt(_encrypted, *, strict=False):
+            assert strict is True
+            if decrypt_error:
+                raise ValueError("bad ciphertext")
+            return (
                 decrypted
                 if decrypted is not None
                 else [{"name": "Authorization", "value": "Bearer sk-x"}]
-            ),
-        )
+            )
+
+        monkeypatch.setattr(routes, "decrypt_custom_headers", _decrypt)
         app = FastAPI()
         app.include_router(routes.router)
         app.dependency_overrides[routes.validate_internal_auth] = lambda: "auth-server"
@@ -122,18 +134,141 @@ class TestVend:
         resp = _post(client)
         assert resp.status_code == 403
 
-    def test_entity_gone_returns_empty(self, make_client):
+    def test_same_host_path_repoint_refused_403(self, make_client):
+        client = make_client(
+            _claims(upstream_url="https://llm.example/v1"),
+            _entity(),
+            target="https://llm.example/v2",
+        )
+        assert _post(client).status_code == 403
+
+    def test_same_path_query_repoint_refused_403(self, make_client):
+        client = make_client(
+            _claims(upstream_url="https://llm.example/v1?tenant=a"),
+            _entity(),
+            target="https://llm.example/v1?tenant=b",
+        )
+        assert _post(client).status_code == 403
+
+    def test_equivalent_normalized_full_target_vends(self, make_client):
+        client = make_client(
+            _claims(upstream_url="HTTPS://LLM.Example:443/v1?tenant=a"),
+            _entity(),
+            target="https://llm.example/v1?tenant=a",
+        )
+        assert _post(client).status_code == 200
+
+    def test_entity_gone_fails_closed(self, make_client):
         client = make_client(_claims(), None)
         resp = _post(client)
-        assert resp.status_code == 200
-        assert resp.json()["headers"] == {}
+        assert resp.status_code == 404
 
-    def test_not_proxyable_returns_empty(self, make_client):
-        # resolve_proxy_target returns None (disabled / federated / targetless).
-        client = make_client(_claims(), _entity(), target=None)
+    @pytest.mark.parametrize(
+        "entity",
+        [
+            _entity(is_enabled=False),
+            _entity(proxy_target_url=None),
+            _entity(proxy_disabled_reason="dns refresh failed"),
+        ],
+    )
+    def test_inactive_or_targetless_entity_fails_closed(self, make_client, entity):
+        client = make_client(_claims(), entity, target=None)
+        resp = _post(client)
+        assert resp.status_code == 409
+
+    def test_same_origin_different_path_is_refused(self, make_client):
+        client = make_client(
+            _claims(upstream_url="https://llm.example/v2"),
+            _entity(proxy_target_url="https://llm.example/v1"),
+            target="https://llm.example/v1",
+        )
+        resp = _post(client)
+        assert resp.status_code == 403
+
+    def test_equivalent_normalized_target_is_accepted(self, make_client):
+        client = make_client(
+            _claims(upstream_url="https://LLM.EXAMPLE:443/v1"),
+            _entity(proxy_target_url="https://llm.example/v1"),
+            target="https://llm.example/v1",
+        )
         resp = _post(client)
         assert resp.status_code == 200
-        assert resp.json()["headers"] == {}
+
+    def test_same_path_different_query_is_refused(self, make_client):
+        client = make_client(
+            _claims(upstream_url="https://llm.example/v1?tenant=attacker"),
+            _entity(proxy_target_url="https://llm.example/v1?tenant=registered"),
+            target="https://llm.example/v1?tenant=registered",
+        )
+        resp = _post(client)
+        assert resp.status_code == 403
+
+    def test_decryption_failure_fails_closed(self, make_client):
+        client = make_client(_claims(), _entity(), decrypt_error=True)
+        resp = _post(client)
+        assert resp.status_code == 500
+        assert resp.json()["detail"] == "stored upstream credentials are unavailable"
+
+    def test_missing_expected_fixed_header_fails_closed(self, make_client):
+        client = make_client(
+            _claims(),
+            _entity(
+                custom_header_names=["X-Api-Key"],
+                custom_header_overridable_names=[],
+                custom_headers_encrypted=[],
+            ),
+            decrypted=[],
+        )
+        resp = _post(client)
+        assert resp.status_code == 500
+        assert resp.json()["detail"] == "stored upstream credentials are incomplete"
+
+    def test_caller_only_slot_does_not_require_stored_value(self, make_client):
+        client = make_client(
+            _claims(),
+            _entity(
+                custom_header_names=["X-Caller-Token"],
+                custom_header_overridable_names=["X-Caller-Token"],
+                custom_headers_encrypted=[],
+            ),
+            decrypted=[],
+        )
+        resp = _post(client)
+        assert resp.status_code == 200
+        assert resp.json() == {"headers": {}, "overridable_names": ["X-Caller-Token"]}
+
+    @pytest.mark.parametrize(
+        ("entity", "decrypted"),
+        [
+            (
+                _entity(
+                    proxy_target_url="http://llm.example/",
+                    custom_header_names=["X-Api-Key"],
+                    custom_header_overridable_names=[],
+                ),
+                [{"name": "X-Api-Key", "value": "secret"}],
+            ),
+            (
+                _entity(
+                    proxy_target_url="http://llm.example/",
+                    custom_headers_encrypted=[],
+                    custom_header_names=["X-Caller-Token"],
+                    custom_header_overridable_names=["X-Caller-Token"],
+                ),
+                [],
+            ),
+        ],
+    )
+    def test_credential_headers_refused_for_http_target(self, make_client, entity, decrypted):
+        client = make_client(
+            _claims(upstream_url="http://llm.example/"),
+            entity,
+            target="http://llm.example/",
+            decrypted=decrypted,
+        )
+        resp = _post(client)
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == "upstream credential headers require an HTTPS target"
 
 
 class TestOverridableNamesVended:
@@ -143,42 +278,62 @@ class TestOverridableNamesVended:
     def test_overridable_names_returned(self, make_client):
         client = make_client(
             _claims(),
-            _entity(custom_header_overridable_names=["X-Tenant", "Authorization"]),
+            _entity(
+                custom_header_names=["Authorization", "X-Tenant"],
+                custom_header_overridable_names=["X-Tenant", "Authorization"],
+            ),
         )
         resp = _post(client)
         assert resp.status_code == 200
         assert sorted(resp.json()["overridable_names"]) == ["Authorization", "X-Tenant"]
 
     def test_empty_when_none_registered(self, make_client):
-        client = make_client(_claims(), _entity())
-        resp = _post(client)
-        assert resp.json()["overridable_names"] == []
-
-    def test_reserved_names_backstopped_out(self, make_client):
-        # A bypass-written doc lists a gateway-cred name as overridable; the vend
-        # must drop everything reserved EXCEPT Authorization.
         client = make_client(
             _claims(),
             _entity(
+                custom_headers_encrypted=[],
+                custom_header_names=[],
+                custom_header_overridable_names=[],
+            ),
+            decrypted=[],
+        )
+        resp = _post(client)
+        assert resp.json()["overridable_names"] == []
+
+    def test_invalid_overridable_name_metadata_fails_closed(self, make_client):
+        client = make_client(
+            _claims(),
+            _entity(custom_header_overridable_names=["X-Bad\rInjected"]),
+        )
+        resp = _post(client)
+        assert resp.status_code == 500
+        assert resp.json()["detail"] == "stored upstream credential metadata is invalid"
+
+    def test_reserved_names_backstopped_out(self, make_client):
+        # A bypass-written doc lists gateway-managed names as overridable; the
+        # vend drops those names, while consistent safe registrations survive.
+        client = make_client(
+            _claims(),
+            _entity(
+                custom_header_names=["Authorization", "X-Tenant"],
                 custom_header_overridable_names=[
                     "X-Tenant",
                     "Cookie",
                     "X-Authorization",
                     "Authorization",
                     "Host",
-                ]
+                ],
             ),
         )
         resp = _post(client)
         assert sorted(resp.json()["overridable_names"]) == ["Authorization", "X-Tenant"]
 
     def test_default_values_backstopped_against_internal_names(self, make_client):
-        # A bypass-written doc stores an internal-header name as an operator
-        # DEFAULT (not just overridable). The vend must drop it so the hop can
-        # never inject a gateway-internal header toward the backend.
+        # A bypass-written doc stores internal-header values alongside a valid
+        # registered default. Internal names are dropped before consistency checks.
         client = make_client(
             _claims(),
-            _entity(),
+            _entity(custom_header_names=["Authorization", "X-Api-Key"]),
             decrypted=[
                 {"name": "X-Api-Key", "value": "sk-ok"},
                 {"name": "X-Internal-Token-Generic", "value": "sneaky"},
@@ -187,3 +342,42 @@ class TestOverridableNamesVended:
         )
         resp = _post(client)
         assert resp.json()["headers"] == {"X-Api-Key": "sk-ok"}
+
+    def test_unregistered_decrypted_header_fails_closed(self, make_client):
+        client = make_client(
+            _claims(),
+            _entity(),
+            decrypted=[
+                {"name": "Authorization", "value": "Bearer expected"},
+                {"name": "X-Unregistered-Secret", "value": "must-not-vend"},
+            ],
+        )
+        resp = _post(client)
+        assert resp.status_code == 500
+        assert resp.json()["detail"] == "stored upstream credential metadata is invalid"
+
+    def test_duplicate_decrypted_header_names_fail_closed(self, make_client):
+        client = make_client(
+            _claims(),
+            _entity(
+                custom_header_names=["Authorization", "X-Api-Key"],
+                custom_header_overridable_names=["Authorization"],
+            ),
+            decrypted=[
+                {"name": "Authorization", "value": "Bearer expected"},
+                {"name": "X-Api-Key", "value": "first-secret"},
+                {"name": "x-api-key", "value": "second-secret"},
+            ],
+        )
+        resp = _post(client)
+        assert resp.status_code == 500
+        assert resp.json()["detail"] == "stored upstream credential metadata is invalid"
+
+    def test_overridable_name_must_be_registered(self, make_client):
+        client = make_client(
+            _claims(),
+            _entity(custom_header_overridable_names=["Authorization", "X-Unregistered"]),
+        )
+        resp = _post(client)
+        assert resp.status_code == 500
+        assert resp.json()["detail"] == "stored upstream credential metadata is invalid"

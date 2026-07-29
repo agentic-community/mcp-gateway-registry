@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 
 import httpx
 
+from registry.common.log_redaction import redact_url
 from registry.constants import REGISTRY_CONSTANTS, DeploymentType, HealthStatus
 from registry.schemas.proxy_mixin import _assert_egress_allowed, build_proxy_client_path
 
@@ -2012,7 +2013,13 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
                 entity_type, path, target_url, streaming, has_upstream_auth
             )
         except Exception as e:
-            logger.warning("Skipping generic block for %s%s: %s", entity_type, path, e)
+            logger.warning(
+                "Skipping generic block for %s%s (target=%s, reason=%s)",
+                entity_type,
+                path,
+                redact_url(target_url),
+                type(e).__name__,
+            )
             GATEWAY_GENERIC_BLOCKS_DROPPED.labels(reason="invalid").inc()
             return None
 
@@ -3118,10 +3125,17 @@ async def _fetch_generic_proxied_resources() -> list[dict[str, Any]]:
                     # Opt-in streaming: chunk-forward + buffering-off nginx route.
                     # Coerced to bool so a missing/None projection field is False.
                     "streaming": bool(doc.get("proxy_streaming")),
-                    # Presence of registered upstream headers -> the hop must vend
-                    # + inject them. Only the boolean travels into nginx / the
-                    # token; the encrypted VALUES never leave the registry.
-                    "has_upstream_auth": bool(doc.get("custom_header_names")),
+                    # Any stored/vended credential signal forces the hop through
+                    # strict vending. This intentionally includes malformed legacy
+                    # or bypass-written rows (for example orphaned ciphertext with
+                    # no name metadata): the vend endpoint then rejects inconsistent
+                    # storage instead of forwarding the request unauthenticated.
+                    # Only this boolean enters nginx/the token; secret values do not.
+                    "has_upstream_auth": bool(
+                        doc.get("custom_header_names")
+                        or doc.get("custom_header_overridable_names")
+                        or doc.get("custom_headers_encrypted")
+                    ),
                 }
             )
     return resources

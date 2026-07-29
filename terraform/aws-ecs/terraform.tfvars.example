@@ -1344,19 +1344,31 @@ aws_registry_federation_enabled = true
 # ============================================================================
 # Gateway generic-proxy feature (ships disabled by default)
 # ============================================================================
+# Keep disabled until egress controls exclude EC2 IMDS (169.254.169.254,
+# fd00:ec2::254), ECS task credentials (169.254.170.2), and EKS Pod Identity
+# (169.254.170.23, fd00:ec2::23). ECS security groups cannot express deny
+# exceptions; Fargate isolates EC2 IMDS, the task disables SDK IMDS fallback,
+# and application URL validation hard-denies every listed endpoint. The ECS
+# container-credential endpoint must remain reachable for the task IAM role.
+#
 # Registry container settings
-# gateway_generic_proxy_enabled             = false     # master switch for the generic-proxy feature
-# gateway_canonical_namespace_enabled       = false     # canonical namespace handling for proxied entities
-# gateway_proxy_allow_private_targets       = false     # allow proxy to reach private/internal targets (SSRF guard)
-# gateway_generic_client_max_body_size      = "1m"      # nginx client_max_body_size for the generic-proxy location
+# gateway_generic_proxy_enabled               = false     # shared master switch; passed to registry + auth-server
+# gateway_canonical_namespace_enabled         = false     # canonical namespace handling for proxied entities
+# gateway_proxy_allow_private_targets         = false     # allow proxy to reach private/internal targets (metadata remains denied)
+# gateway_generic_client_max_body_size        = "1m"      # nginx client_max_body_size for generic routes
+# gateway_proxy_prefix                        = "gateway" # generated client route prefix
+# gateway_generic_stream_read_timeout_seconds = 3600      # nginx read timeout for streaming routes
 # Auth-server container settings
-# generic_proxy_token_ttl_seconds           = 30        # lifetime (seconds) of the minted generic-proxy token
-# generic_proxy_max_body_bytes              = 10485760  # max upstream response body buffered (bytes; 10 MiB)
-# gateway_generic_require_bearer_for_writes = true      # require bearer token for write requests (fail-closed)
-# gateway_egress_selfcheck_enabled          = true      # run egress self-check before enabling targets (fail-closed)
-# gateway_generic_tls_verify                = "true"    # verify upstream TLS certs; "false" only for trusted internal
-# gateway_proxy_pin_refresh_seconds         = 300       # interval (seconds) to refresh pinned upstream resolution
-# gateway_generic_max_concurrency           = 32        # max concurrent in-flight generic-proxy requests
+# generic_proxy_token_ttl_seconds              = 30        # lifetime of the minted generic-proxy token
+# generic_proxy_max_body_bytes                 = 10485760  # buffered response ceiling (10 MiB)
+# gateway_generic_require_bearer_for_writes    = true      # CSRF guard for writes
+# gateway_egress_selfcheck_enabled             = true      # startup metadata reachability check
+# gateway_generic_tls_verify                   = "true"    # verify upstream TLS certificates
+# gateway_generic_max_concurrency              = 32        # buffered request pool
+# gateway_generic_stream_max_concurrency       = 8         # isolated long-lived stream pool
+# gateway_generic_acquire_timeout_seconds      = 5         # pool wait before 503
+# gateway_generic_stream_max_duration_seconds  = 3600      # absolute stream lifetime
+# gateway_generic_stream_max_bytes             = 104857600 # raw bytes per stream (100 MiB)
 
 # ---------------------------------------------------------------------------
 # Per-user egress credential vault (third-party OBO support). Off by default.

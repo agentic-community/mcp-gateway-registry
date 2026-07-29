@@ -42,11 +42,12 @@ from registry.core.nginx_service import NginxConfigService  # noqa: E402
 pytestmark = pytest.mark.unit
 
 
-def _req(headers, entity_type="skill", entity_path="skills/proxy-demo"):
+def _req(headers, entity_type="skill", entity_path="skills/proxy-demo", method="GET"):
     lower = {k.lower(): v for k, v in headers.items()}
     return SimpleNamespace(
         headers=SimpleNamespace(get=lambda k, default=None: lower.get(k.lower(), default)),
         path_params={"entity_type": entity_type, "entity_path": entity_path},
+        method=method,
         state=SimpleNamespace(),
     )
 
@@ -73,6 +74,7 @@ class TestMintVerifyHandlerChain:
             entity_type="skill",
             registered_path="skills/proxy-demo",
             upstream_url="https://backend.example/api",
+            http_method="GET",
         )
         # Verify on a sub-path UNDER the bound entity (allowed).
         req = _req({"X-Internal-Token-Generic": tok}, entity_path="skills/proxy-demo/reports")
@@ -92,6 +94,7 @@ class TestMintVerifyHandlerChain:
             entity_type="skill",
             registered_path="skills/proxy-demo",
             upstream_url="https://b/",
+            http_method="GET",
         )
         req = _req(
             {"X-Internal-Token-Generic": tok},
@@ -111,6 +114,7 @@ class TestMintVerifyHandlerChain:
             entity_type="skill",
             registered_path="skills/proxy-demo",
             upstream_url="https://b/",
+            http_method="GET",
         )
         req = _req({"X-Internal-Token-Generic": tok}, entity_path="skills/proxy-demo-evil")
         from fastapi import HTTPException
@@ -124,21 +128,43 @@ class TestMintDiscriminatorComposed:
     is minted per request kind (no double-mint across the shared /validate)."""
 
     def test_generic_request_mints_only_generic(self):
-        req = _req({"X-Resolved-Generic-Upstream": "https://backend.example/"})
+        req = _req(
+            {
+                "X-Resolved-Generic-Upstream": "https://backend.example/",
+                "X-Validate-Source-Secret": server_module.settings.auth_server_nginx_marker_secret,
+            }
+        )
         resp = _Resp()
         _attach_mcp_proxy_token(req, resp, subject="alice", scopes=[], server_name="skill/x")
         _attach_generic_proxy_token(
-            req, resp, subject="alice", scopes=[], entity_type="skill", registered_path="skills/x"
+            req,
+            resp,
+            subject="alice",
+            scopes=[],
+            entity_type="skill",
+            registered_path="skills/x",
+            http_method="GET",
         )
         assert "X-Internal-Token" not in resp.headers
         assert "X-Internal-Token-Generic" in resp.headers
 
     def test_mcp_request_mints_only_mcp(self):
-        req = _req({"X-Resolved-Upstream": "https://mcp-backend/"})
+        req = _req(
+            {
+                "X-Resolved-Upstream": "https://mcp-backend/",
+                "X-Validate-Source-Secret": server_module.settings.auth_server_nginx_marker_secret,
+            }
+        )
         resp = _Resp()
         _attach_mcp_proxy_token(req, resp, subject="alice", scopes=[], server_name="foo/mcp")
         _attach_generic_proxy_token(
-            req, resp, subject="alice", scopes=[], entity_type="skill", registered_path="x"
+            req,
+            resp,
+            subject="alice",
+            scopes=[],
+            entity_type="skill",
+            registered_path="x",
+            http_method="GET",
         )
         assert "X-Internal-Token" in resp.headers
         assert "X-Internal-Token-Generic" not in resp.headers
@@ -154,6 +180,7 @@ class TestRenderAuthzCoherence:
         with patch("registry.core.nginx_service.settings") as s:
             s.auth_server_url = "http://auth-server:8888"
             s.gateway_generic_client_max_body_size = "1m"
+            s.gateway_proxy_prefix = "gateway"
             block = NginxConfigService()._create_generic_proxy_block(
                 "skill", "/skills/proxy-demo", "https://backend.example/"
             )
@@ -168,6 +195,7 @@ class TestRenderAuthzCoherence:
             entity_type="skill",
             registered_path="skills/proxy-demo",
             upstream_url="https://backend.example/",
+            http_method="GET",
         )
         req = _req({"X-Internal-Token-Generic": tok})
         await verify_generic_proxy_token(req)  # the same shape verifies -> coherent
@@ -186,6 +214,7 @@ class TestFeatureLatchComposed:
             entity_type="skill",
             registered_path="skills/proxy-demo",
             upstream_url="https://backend.example/",
+            http_method="GET",
         )
         req = _req({"X-Internal-Token-Generic": tok})
         await verify_generic_proxy_token(req)  # token is valid
@@ -194,3 +223,29 @@ class TestFeatureLatchComposed:
             with pytest.raises(HTTPException) as e:
                 await server_module.generic_proxy("skill", "skills/proxy-demo", req)
         assert e.value.status_code == 503
+
+    async def test_lifespan_initializes_the_feature_latch(self):
+        """REGRESSION: the latch MUST be set from the lifespan, not an
+        @app.on_event('startup') hook. Starlette ignores on_event handlers when a
+        lifespan is provided, so an on_event init would silently never run and the
+        latch would stay None -> the hop 503s forever even with the flag on.
+        Assert the lifespan actually invokes initialize_generic_proxy_feature.
+        """
+        called = {"init": False}
+
+        async def _fake_init():
+            called["init"] = True
+
+        # Stub the heavy startup deps so we can drive the lifespan in isolation.
+        async def _noop(*a, **k):
+            return {"group_mappings": {}}
+
+        with (
+            patch.object(server_module, "initialize_generic_proxy_feature", _fake_init),
+            patch.object(server_module, "reload_scopes_config", _noop),
+            patch.object(server_module, "_build_static_token_map", _noop),
+            patch.object(server_module, "_log_otel_state", lambda: None),
+        ):
+            async with server_module.lifespan(server_module.app):
+                pass
+        assert called["init"] is True, "lifespan did not initialize the generic-proxy latch"

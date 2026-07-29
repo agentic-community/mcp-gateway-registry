@@ -56,10 +56,10 @@ tests:
       #   env[10] = RATE_LIMIT_DEFINITIONS_CACHE_TTL_SECONDS
       #   env[11] = RATE_LIMIT_BACKEND_TIMEOUT_MS
       #   env[12] = AWS_EC2_METADATA_DISABLED (chart-managed security constant)
-      #   env[13..20] = the eight unconditional GATEWAY_/GENERIC_PROXY_
+      #   env[13..23] = the eleven unconditional GATEWAY_/GENERIC_PROXY_
       #                 generic-proxy vars (auth-server-consumed)
-      #   env[21] = MY_FLAG       (extraEnv[0])
-      #   env[22] = MY_SECRET_VAR (extraEnv[1])
+      #   env[24] = MY_FLAG       (extraEnv[0])
+      #   env[25] = MY_SECRET_VAR (extraEnv[1])
       - equal:
           path: spec.template.spec.containers[0].env[0].name
           value: ENTRA_CLIENT_SECRET
@@ -82,13 +82,13 @@ tests:
           path: spec.template.spec.containers[0].env[13].name
           value: GATEWAY_GENERIC_PROXY_ENABLED
       - equal:
-          path: spec.template.spec.containers[0].env[20].name
-          value: GATEWAY_GENERIC_MAX_CONCURRENCY
+          path: spec.template.spec.containers[0].env[23].name
+          value: GATEWAY_GENERIC_STREAM_MAX_BYTES
       - equal:
-          path: spec.template.spec.containers[0].env[21].name
+          path: spec.template.spec.containers[0].env[24].name
           value: MY_FLAG
       - equal:
-          path: spec.template.spec.containers[0].env[22].name
+          path: spec.template.spec.containers[0].env[25].name
           value: MY_SECRET_VAR
 
   - it: appends extraEnvFrom entries after chart-managed envFrom sources
@@ -127,6 +127,15 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: "\"ENTRA_CLIENT_SECRET\" is a reserved variable"
+
+  - it: fails when extraEnv contains a reserved generic stream limit
+    set:
+      extraEnv:
+        - name: GATEWAY_GENERIC_STREAM_MAX_BYTES
+          value: "999999999"
+    asserts:
+      - failedTemplate:
+          errorPattern: "\"GATEWAY_GENERIC_STREAM_MAX_BYTES\" is a reserved variable"
 
   - it: fails when extraEnv contains a reserved envFrom-sourced name (SECRET_KEY)
     set:

@@ -8,13 +8,15 @@ traffic to the entity's effective backend URL.
 Security posture (this module wires the entity/proxy layer to the SSRF control):
 - IP classification + the egress allowlist are owned by the canonical
   ``registry.utils.url_guard``, including its inline literal parser and IP-category
-  classifier. The functions here are thin PROXY_PROFILE adapters that translate the guard's ``UrlValidationError`` into the local
-  ``EgressPolicyError`` (a ``ValueError``) so a Pydantic field validator surfaces a
-  clean 4xx. Registration and the fetch-time pinned transport therefore share ONE
-  policy — the ``gateway_proxy_allow_private_targets`` bool (relaxes loopback/
-  private/CGNAT only) plus ``ssrf_allowed_hosts``/``ssrf_allowed_cidrs`` (an explicit
-  CIDR re-permits any non-metadata category); the cloud metadata endpoints
-  (169.254.169.254 AND the IPv6 fd00:ec2::254) are NEVER reachable.
+  classifier. The functions here are thin PROXY_PROFILE adapters that translate
+  the guard's ``UrlValidationError`` into the local ``EgressPolicyError`` (a
+  ``ValueError``) so a Pydantic field validator surfaces a clean 4xx. Registration
+  and the fetch-time pinned transport therefore share ONE policy — the
+  ``gateway_proxy_allow_private_targets`` bool plus ``ssrf_allowed_hosts`` /
+  ``ssrf_allowed_cidrs`` can relax only loopback/private/CGNAT targets;
+  cloud/workload credential endpoints (including Alibaba), link-local, reserved,
+  multicast, and unspecified destinations remain hard-denied, including scoped
+  and embedded/tunneled IPv6 forms.
 - The static check is best-effort on literal-IP targets; hostnames pass it (no DNS
   in a validator). The authoritative rebind defense is the fetch-time pinned
   transport (``url_guard.guarded_async_client``, which resolves+validates+connects
@@ -108,16 +110,20 @@ def strip_proxy_fields(doc: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in doc.items() if k not in PROXY_FIELD_NAMES}
 
 
-def _target_base(url: str | None) -> str:
-    """scheme://host[:port] of a URL, lowercased -- the target-identity surface.
-
-    Matches the vend endpoint's _base_url: the sub-path is confined to the bound
-    host, so two targets are "the same backend" iff their scheme+host+port match.
-    """
+def _target_identity(url: str | None) -> str:
+    """Return normalized full-URL credential identity, or a fail-closed marker."""
     if not url:
         return ""
-    p = urlparse(url)
-    return f"{(p.scheme or '').lower()}://{(p.netloc or '').lower()}"
+    from registry.exceptions import UrlValidationError
+    from registry.utils.url_guard import normalize_url_identity
+
+    try:
+        return normalize_url_identity(url)
+    except UrlValidationError:
+        # Invalid legacy values should never share credentials with a replacement.
+        # Include the original value so an unchanged malformed row remains stable,
+        # while any edit necessarily changes identity and clears credentials.
+        return f"invalid:{url}"
 
 
 def clear_upstream_headers_on_repoint(
@@ -128,19 +134,15 @@ def clear_upstream_headers_on_repoint(
     """Clear stored upstream custom headers when an update repoints the target.
 
     Credential-misdirection guard (shared by every entity update path). The
-    encrypted ``custom_headers`` were entered by an operator for a SPECIFIC
-    upstream host. If an update changes the effective backend (different
-    scheme/host/port), continuing to inject those headers would send the OLD
-    host's secret to the NEW host -- and the vend cross-check would still pass,
-    because it re-pins to the new (registered) target. So on any host change we
-    null the stored headers in ``updates`` (mutated in place). Headers are not
-    settable on update, so the operator re-adds them for the new target via a
-    fresh create / the dedicated credential surface.
+    encrypted ``custom_headers`` were entered by an operator for one exact
+    normalized upstream URL. A scheme, host, port, path, or query change can
+    repoint the credential to a different tenant/resource even on the same host,
+    so every full-target identity change clears the stored headers.
 
-    No-op when the base is unchanged (a same-host path/scheme-identical edit) or
-    when there is nothing to clear.
+    No-op only when the normalized full URLs are identical (for example, host
+    case or an explicit default port differs) or when there is nothing to clear.
     """
-    if _target_base(existing_target) == _target_base(new_target):
+    if _target_identity(existing_target) == _target_identity(new_target):
         return
     updates["custom_headers_encrypted"] = None
     updates["custom_header_names"] = []
@@ -353,6 +355,8 @@ def egress_guard_validator(v: str | None) -> str | None:
 
 async def resolve_and_validate_proxy_target(
     url: str,
+    *,
+    profile: Any = None,
 ) -> tuple[str | None, list[str]]:
     """Resolve a proxy_target_url's hostname and validate every resolved IP.
 
@@ -385,6 +389,7 @@ async def resolve_and_validate_proxy_target(
     from registry.exceptions import UrlValidationError
     from registry.utils.url_guard import PROXY_PROFILE, validate_url
 
+    selected_profile = profile or PROXY_PROFILE
     host = (urlparse(url).hostname or "").strip("[]")
     is_literal = coerce_ip_literal(host) is not None
     try:
@@ -394,7 +399,12 @@ async def resolve_and_validate_proxy_target(
         # SYNCHRONOUS (socket.getaddrinfo), so run it in a worker thread — a slow
         # or adversarial DNS answer must not block the event loop on this async
         # register/refresh path.
-        ips = await asyncio.to_thread(validate_url, url, profile=PROXY_PROFILE, resolve=True)
+        ips = await asyncio.to_thread(
+            validate_url,
+            url,
+            profile=selected_profile,
+            resolve=True,
+        )
     except UrlValidationError as e:
         raise EgressPolicyError(f"proxy_target_url rejected: {e.reason}") from e
 
@@ -435,7 +445,10 @@ async def validate_and_pin_proxy_target(
     target = resolve_proxy_target(entity_type, doc)
     if not target:
         return {}
-    host, ips = await resolve_and_validate_proxy_target(target)
+    from registry.utils.url_guard import proxy_profile_for_entity_target
+
+    profile = proxy_profile_for_entity_target(entity_type, doc.get("path"), target)
+    host, ips = await resolve_and_validate_proxy_target(target, profile=profile)
     return {"proxy_resolved_ips": ips, "proxy_target_host": host or ""}
 
 
@@ -549,7 +562,7 @@ def effective_proxy_target(entity_type: str, doc: dict[str, Any]) -> str | None:
     ``proxy_target_url``, else the type's native fallback) but deliberately
     OMITS the is_enabled / is_proxied / proxy_disabled_reason / federated
     short-circuits. Use this ONLY to answer "does this update repoint the
-    backend host?" for the credential-misdirection guard: a disabled or
+    exact backend URL?" for the credential-misdirection guard: a disabled or
     not-yet-enabled server can still be repointed, and its dormant upstream
     headers must be cleared on that host change even though it currently
     resolves to no live route. Never use this to decide whether to EMIT a route

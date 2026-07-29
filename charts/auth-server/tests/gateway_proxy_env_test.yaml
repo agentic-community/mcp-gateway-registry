@@ -68,3 +68,77 @@ tests:
           content:
             name: GATEWAY_GENERIC_REQUIRE_BEARER_FOR_WRITES
             value: "false"
+
+  - it: renders bounded generic stream defaults
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GATEWAY_GENERIC_STREAM_MAX_CONCURRENCY
+            value: "8"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GATEWAY_GENERIC_ACQUIRE_TIMEOUT_SECONDS
+            value: "5"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GATEWAY_GENERIC_STREAM_MAX_DURATION_SECONDS
+            value: "3600"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GATEWAY_GENERIC_STREAM_MAX_BYTES
+            value: "104857600"
+
+  - it: renders generic stream overrides without scientific notation
+    set:
+      app.gatewayGenericStreamMaxConcurrency: 3
+      app.gatewayGenericAcquireTimeoutSeconds: 2.5
+      app.gatewayGenericStreamMaxDurationSeconds: 900
+      app.gatewayGenericStreamMaxBytes: 52428800
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GATEWAY_GENERIC_STREAM_MAX_CONCURRENCY
+            value: "3"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GATEWAY_GENERIC_ACQUIRE_TIMEOUT_SECONDS
+            value: "2.5"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GATEWAY_GENERIC_STREAM_MAX_DURATION_SECONDS
+            value: "900"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GATEWAY_GENERIC_STREAM_MAX_BYTES
+            value: "52428800"
+
+  - it: fails closed when generic proxy is enabled without any declared egress policy
+    set:
+      app.gatewayGenericProxyEnabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "generic proxy is enabled but no egress policy is declared"
+
+  - it: permits generic proxy with the chart-managed egress NetworkPolicy
+    set:
+      app.gatewayGenericProxyEnabled: true
+      egress.networkPolicy.enabled: true
+    asserts:
+      - isKind:
+          of: Deployment
+
+  - it: permits generic proxy with explicit external-policy acknowledgement
+    set:
+      app.gatewayGenericProxyEnabled: true
+      egress.externalEgressPolicyAcknowledged: true
+    asserts:
+      - isKind:
+          of: Deployment

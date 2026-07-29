@@ -76,6 +76,7 @@ class _FakeGuardedClient:
     def stream(self, method, url, **kw):
         self._captured["method"] = method
         self._captured["url"] = url
+        self._captured["request_kwargs"] = kw
 
         @asynccontextmanager
         async def _cm():
@@ -129,7 +130,13 @@ class TestHappyPathAndRedirect:
         captured = {}
         resp_obj = _FakeStreamResponse(
             200,
-            {"Content-Type": "application/json", "Set-Cookie": "evil=1"},
+            {
+                "Content-Type": "application/json",
+                "Content-Length": "999",
+                "Content-Encoding": "gzip",
+                "Content-Range": "bytes 0-998/999",
+                "Set-Cookie": "evil=1",
+            },
             b'{"ok":true}',
         )
         with (
@@ -142,7 +149,11 @@ class TestHappyPathAndRedirect:
             client = TestClient(app)
             resp = client.get(
                 "/proxy/skill/skills/proxy-demo",
-                headers={"X-Upstream-Url": "https://attacker.example/"},
+                headers={
+                    "X-Upstream-Url": "https://attacker.example/",
+                    "X-Arbitrary-Caller": "must-not-forward",
+                    "Accept-Language": "en-US",
+                },
             )
         assert resp.status_code == 200
         # pinned upstream used, forgeable inbound header ignored
@@ -153,6 +164,14 @@ class TestHappyPathAndRedirect:
         assert "set-cookie" not in {k.lower() for k in resp.headers}
         assert resp.headers["X-Content-Type-Options"] == "nosniff"
         assert resp.headers["X-Frame-Options"] == "DENY"
+        assert resp.headers["Content-Length"] == str(len(b'{"ok":true}'))
+        assert "Content-Encoding" not in resp.headers
+        assert "Content-Range" not in resp.headers
+        forwarded = {
+            key.lower(): value for key, value in captured["request_kwargs"]["headers"].items()
+        }
+        assert "x-arbitrary-caller" not in forwarded
+        assert forwarded["accept-language"] == "en-US"
 
     def test_redirect_not_followed_location_forwarded(self):
         app.dependency_overrides[verify_generic_proxy_token] = _override_claims()
@@ -227,3 +246,30 @@ class TestHappyPathAndRedirect:
             resp = client.get("/proxy/skill/skills/proxy-demo/reports/2024")
         assert resp.status_code == 200
         assert captured["url"] == "https://backend.example/api/reports/2024"
+
+    def test_query_and_subpath_are_built_once_without_httpx_params(self):
+        app.dependency_overrides[verify_generic_proxy_token] = _override_claims(
+            upstream="https://backend.example/api?fixed=registered&token=a%2Fb",
+            server="skills/proxy-demo",
+        )
+        captured = {}
+        resp_obj = _FakeStreamResponse(200, {"Content-Type": "application/json"}, b"{}")
+        with (
+            patch.object(server_module, "_generic_proxy_feature_active", True),
+            patch(
+                "auth_server.server.guarded_async_client",
+                _fake_guarded_async_client(captured, resp_obj),
+            ),
+        ):
+            client = TestClient(app)
+            resp = client.get(
+                "/proxy/skill/skills/proxy-demo/reports/2024"
+                "?fixed=caller&tag=one&tag=two&other=allowed"
+            )
+
+        assert resp.status_code == 200
+        assert captured["url"] == (
+            "https://backend.example/api/reports/2024"
+            "?fixed=registered&token=a%2Fb&tag=one&tag=two&other=allowed"
+        )
+        assert "params" not in captured["request_kwargs"]

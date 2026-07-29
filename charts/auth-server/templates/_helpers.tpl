@@ -32,6 +32,21 @@ inject one of these via extraEnv gets a clear template-render error.
 {{- end -}}
 
 {{/*
+Fail closed when the generic proxy is enabled without a network egress control.
+The chart-managed NetworkPolicy is preferred. Operators whose CNI or platform
+manages an equivalent policy outside this chart must deliberately acknowledge
+that responsibility with egress.externalEgressPolicyAcknowledged=true.
+*/}}
+{{- define "auth-server.validateGenericProxyEgress" -}}
+{{- $proxyEnabled := .Values.app.gatewayGenericProxyEnabled | default false -}}
+{{- $managedPolicyEnabled := .Values.egress.networkPolicy.enabled | default false -}}
+{{- $externalPolicyAcknowledged := .Values.egress.externalEgressPolicyAcknowledged | default false -}}
+{{- if and $proxyEnabled (not $managedPolicyEnabled) (not $externalPolicyAcknowledged) -}}
+{{- fail "generic proxy is enabled but no egress policy is declared: set auth-server.egress.networkPolicy.enabled=true, or set auth-server.egress.externalEgressPolicyAcknowledged=true only after an equivalent external policy blocks metadata/workload-credential endpoints" -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Name of the ServiceAccount the auth-server pod runs as. Explicit
 serviceAccount.name wins; otherwise defaults to the app name ("auth-server").
 Provides a stable identity to attach roles to (RBAC, IRSA, etc.).
