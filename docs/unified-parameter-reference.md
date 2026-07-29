@@ -137,6 +137,8 @@ Affects only `with-gateway` deployments (nginx reverse proxy).
 | Extra nginx `server_name` entries | `GATEWAY_ADDITIONAL_SERVER_NAMES` | — | — (ingress annotations handle this) | Space-separated list of additional hostnames / IPs to accept. |
 | Server bind address (IPv6 opt-in) | `BIND_HOST` (and `HOST` for currenttime/mcpgw) | `bind_host` | `mcpgw.app.bindHost` | Default `0.0.0.0` (IPv4) works everywhere. Set to `::` only for IPv6-only deployments — requires `net.ipv6.bindv6only=0` on the host AND an IPv6 loopback in the container. Issue #863 / PR #864. Local-dev `uvicorn` direct invocation and `servers/currenttime` keep the safer `127.0.0.1` default. |
 | Nginx IPv6 listeners (opt-in) | `NGINX_ENABLE_IPV6` | — | via `extraEnv` | Default `false` keeps the in-pod nginx reverse proxy's IPv4-only `listen` directives, which work on every host (binding `[::]` fails where IPv6 is unavailable). Set to `true` on IPv6-only / dual-stack clusters so the entrypoint adds `listen [::]:8080;` (and `[::]:8443 ssl;`), letting the load balancer and kubelet readiness probe reach the pod over IPv6. Nginx counterpart to `BIND_HOST=::`. |
+| Trusted real-IP CIDRs **(recommended behind a load balancer)** | `TRUSTED_REAL_IP_CIDRS` | `trusted_real_ip_cidrs` (auto-defaults to the VPC CIDR) | via `extraEnv` | `set_real_ip_from` ranges nginx trusts to recover the real client IP from `X-Forwarded-For`. **Without it, behind an ALB/CloudFront the audited client IP and per-IP rate limits collapse to the load balancer's IP** (every client shares one bucket). Leave empty only for direct-exposure / single-host deployments where nginx's peer already IS the client. Terraform auto-sets it to the VPC CIDR; docker-compose behind a proxy must set it. |
+| Trusted proxy hops | `TRUSTED_PROXY_HOPS` | `trusted_proxy_hops` | via `extraEnv` | Number of trusted reverse-proxy hops when extracting the client IP from `X-Forwarded-For`. Default `1`. Must match your proxy depth (e.g. CloudFront in front of an ALB = `2`) or the trusted-hop selection is wrong and a client could spoof its apparent IP. |
 
 ---
 
@@ -643,6 +645,10 @@ Weights must sum to 1.0 ± 0.001 or the registry process refuses to start (valid
 | Enable AMP/ADOT/Grafana pipeline | — | `enable_observability` | — | ECS-specific. |
 | Metrics service image | — | `metrics_service_image_uri` | — | ECR URI. |
 | Grafana image | — | `grafana_image_uri` | — | ECR URI. |
+| Metrics-service API-key pepper **(secret)** | `METRICS_KEY_PEPPER` | auto-generated into Secrets Manager | — (metrics-service not in the Helm stack) | Per-deployment HMAC pepper for stored metrics API-key hashes. **The metrics-service refuses to start if unset/empty/weak/`< 32` chars** (fail closed). `build_and_run.sh` auto-generates it into `.env`; Terraform generates it into Secrets Manager. Distinct per deployment. |
+| Metrics-service admin API key **(secret)** | `METRICS_ADMIN_API_KEY` | auto-generated into Secrets Manager (distinct from the ingest key) | — (metrics-service not in the Helm stack) | Privilege-separated credential gating the metrics-service `/admin/*` endpoints (retention policy changes, cleanup, database stats). Must be `>= 32` chars, not a known placeholder, and **distinct from any ingest key**. **`/admin/*` returns 503 until it is set** (ingest + the in-process daily cleanup are unaffected); a startup log announces the posture. docker-compose upgraders must add it to `.env`; Terraform/CDK generate it automatically. Introduced by PR #1539. |
+
+> **Note (metrics-service surface):** the standalone metrics-service is deployed only on the docker-compose and Terraform/CDK (ECS) surfaces — it is **not** part of the Helm/EKS stack (core services emit metrics natively via OpenTelemetry there). Its `METRICS_*` secrets therefore have no Helm column. Full metrics-service configuration lives in [`metrics-service/docs/deployment.md`](../metrics-service/docs/deployment.md) and [`metrics-service/docs/data-retention.md`](../metrics-service/docs/data-retention.md). Note also that the metrics-service Prometheus-exporter vars (`OTEL_PROMETHEUS_ENABLED` / `OTEL_PROMETHEUS_PORT`) are named differently from the main app's exporter vars (`OTEL_EXPORTER_PROMETHEUS_PORT` / `_HOST`, Group 25) — they are separate settings on separate services.
 
 ---
 
@@ -738,6 +744,7 @@ shared in the stack `shared-secret`.
 | OpenBao namespace | `OPENBAO_NAMESPACE` | — | `registry.egressAuth.openbao.namespace` | Enterprise namespaces only.                                       |
 | OpenBao KV mount | `OPENBAO_KV_MOUNT` | — | `registry.egressAuth.openbao.kvMount` | KV v2 mount point (default `secret`).                             |
 | OpenBao auth method | `OPENBAO_AUTH_METHOD` | — | `registry.egressAuth.openbao.authMethod` | `token` \| `kubernetes`. EKS uses `kubernetes` (no static token). |
+| OpenBao token **(secret)** | `OPENBAO_TOKEN` | — | via secret | Static OpenBao/Vault token, root access to all vaulted egress credentials. **Required when `SECRET_STORE_BACKEND=openbao` with `OPENBAO_AUTH_METHOD=token`** — docker-compose references it as `${OPENBAO_TOKEN:?}`, so the stack refuses to start if unset. Not needed with `authMethod=kubernetes` (EKS), which uses the ServiceAccount instead. |
 | OpenBao role | `OPENBAO_ROLE` | — | `registry.egressAuth.openbao.role` | Kubernetes-auth role bound to the registry ServiceAccount.        |
 
 **Backend by surface:** ECS wires only the `secrets-manager` knobs (`OPENBAO_*`
