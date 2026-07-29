@@ -491,8 +491,10 @@ curl -X POST "https://mcpgateway.example.com/api/servers/github-mcp/mcp/egress-a
       }'
 ```
 
-- `egress_auth_mode`: `none` (default, feature off for this server) or
-  `oauth_user` (per-user OBO).
+- `egress_auth_mode`: `none` (default, feature off for this server),
+  `oauth_user` (per-user 3LO OAuth), `obo_exchange` (on-behalf-of token
+  exchange, nothing vaulted), or `pat` (per-user static PAT / API key vaulted
+  with a bounded TTL). See [egress modes](design/egress-auth-design.md#the-egress-modes).
 - `client_secret` is **write-only** — it is Fernet-encrypted with the gateway
   `SECRET_KEY` at rest and never returned by the `GET` endpoint. Rotating
   `SECRET_KEY` invalidates stored secrets.

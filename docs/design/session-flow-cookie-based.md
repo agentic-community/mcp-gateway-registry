@@ -296,7 +296,7 @@ See [registry/auth/csrf.py:114-158](../../registry/auth/csrf.py#L114-L158).
 
 ## 7. Logout
 
-Sequence (driven by `registry/auth/routes.py:189-288`):
+Sequence (driven by `registry/auth/routes.py:266-441`):
 
 1. **Resolve the session** before anything else, to get `provider`, `id_token`,
    and `session_id`.
@@ -307,14 +307,31 @@ Sequence (driven by `registry/auth/routes.py:189-288`):
 3. **Clear the local cookie** with a `Set-Cookie` containing the same name,
    path, and domain as the original (browsers ignore deletes that don't
    match the original attributes).
-4. **Redirect to the IdP's logout endpoint** with `id_token_hint=<token>` so
-   the SSO session at the IdP also terminates. If `id_token` is missing
-   (unusual; some flows omit it), proceed without the hint and rely on
-   browser redirect alone.
-5. **Browser ends up at `/login`**, ready to re-authenticate.
+4. **Call the auth-server directly (server-to-server)** at
+   `settings.auth_server_url` (the internal cluster URL, never the public
+   `auth_server_external_url`), forwarding `redirect_uri` and — when present
+   and well-formed — `id_token_hint=<token>`. The registry reads the `Location`
+   header from auth-server's `302` and redirects the browser straight to the
+   IdP logout URL. The `id_token_hint` JWT therefore never appears in a
+   browser-facing URL, so it can no longer be blocked by a WAF/proxy that
+   inspects query strings, or leak into browser history and access logs
+   (issue #1503). `X-Forwarded-Host`/`X-Forwarded-Proto` are forwarded so
+   auth-server's `redirect_uri` same-origin validation approves the URI.
+   If the S2S call fails, returns a non-3xx, or yields an unsafe `Location`,
+   logout still completes locally by falling back to `/login` (the session and
+   cookie were already invalidated in steps 2-3).
+5. **Browser lands at the IdP logout URL.** The `post_logout_redirect_uri`
+   sent to the IdP is the registry's own `/logout` (built by
+   `_build_external_url(request, "/logout")`). So the IdP terminates the SSO
+   session and then redirects the browser back to `/logout` — but the session
+   cookie was already cleared in step 3, so this second `/logout` resolves no
+   session, finds no `provider`, skips the S2S call entirely, and falls
+   straight through to `/login`. On the fallback path (S2S failure, non-3xx,
+   or unsafe `Location`) the browser goes to `/login` directly without the IdP
+   round trip. Either way the user ends at `/login`, ready to re-authenticate.
 
 Operational visibility: four Prometheus counters track logout outcomes
-([registry/auth/routes.py:58-77](../../registry/auth/routes.py#L58-L77)):
+([registry/auth/routes.py:12-23](../../registry/auth/routes.py#L12-L23)):
 
 - `registry_logout_id_token_hint_present_total`
 - `registry_logout_id_token_hint_missing_total`

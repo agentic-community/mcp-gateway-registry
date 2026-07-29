@@ -71,7 +71,8 @@ import type {
 } from '../types/customEntity';
 import axios from 'axios';
 import { getBaseURL } from '../utils/basePath';
-import { isEgressAuthEnabled } from '../utils/egressAuth';
+import { isEgressAuthEnabled, loadEgressCardState, type EgressCardState } from '../utils/egressAuth';
+import { EgressConnectProvider } from '../contexts/EgressConnectContext';
 import {
   buildLocalRuntimeForm,
   buildLocalRuntimeJson,
@@ -305,7 +306,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
     },
     custom_headers: [] as Array<{ name: string; value: string }>,
     // Egress auth to the upstream (admin config).
-    egress_auth_mode: 'none' as 'none' | 'oauth_user' | 'obo_exchange',
+    egress_auth_mode: 'none' as 'none' | 'oauth_user' | 'obo_exchange' | 'pat',
     egress_provider: '',
     egress_client_id: '',
     egress_client_secret: '',  // write-only; blank on edit keeps the stored one
@@ -315,6 +316,9 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
     egress_target_audience: '',
   });
   const [egressEnabled, setEgressEnabled] = useState(false);
+  // Per-server egress connect state (card icon + connect-modal callout). Keyed by
+  // server path; empty when the feature is off or the caller is not per-user.
+  const [egressStateByPath, setEgressStateByPath] = useState<Map<string, EgressCardState>>(new Map());
   const [editLoading, setEditLoading] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
@@ -373,6 +377,17 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
       active = false;
     };
   }, []);
+
+  // Load the per-server egress connect state for the card icon + modal callout.
+  // Returns an empty map when the feature is off or the caller is not per-user.
+  // Extracted so the modal can re-run it after a connect/disconnect.
+  const reloadEgressState = useCallback(() => {
+    void loadEgressCardState().then(setEgressStateByPath);
+  }, []);
+
+  useEffect(() => {
+    reloadEgressState();
+  }, [reloadEgressState]);
 
   // Reset viewFilter to 'discover' when the active tab is hidden by the
   // deployment feature flag. For servers and custom-entity types we ALSO redirect
@@ -1278,7 +1293,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         deployment,
         local_runtime: buildLocalRuntimeForm(localRuntimeRaw),
         custom_headers: (serverDetails.custom_header_names || []).map((name: string) => ({ name, value: '' })),
-        egress_auth_mode: (serverDetails.egress_auth_mode || 'none') as 'none' | 'oauth_user' | 'obo_exchange',
+        egress_auth_mode: (serverDetails.egress_auth_mode || 'none') as 'none' | 'oauth_user' | 'obo_exchange' | 'pat',
         egress_provider: serverDetails.egress_oauth?.provider || '',
         egress_client_id: serverDetails.egress_oauth?.client_id || '',
         egress_client_secret: '',  // never round-trip the secret
@@ -1524,6 +1539,17 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
                 scopes: scopesList,
                 custom_authorize_url: editForm.egress_custom_authorize_url || undefined,
                 custom_token_url: editForm.egress_custom_token_url || undefined,
+              },
+              { headers: csrfHeaders }
+            );
+          } else if (mode === 'pat') {
+            await axios.post(
+              `/api/servers${editingServer.path}/egress-auth`,
+              {
+                egress_auth_mode: 'pat',
+                egress_provider: editForm.egress_provider.trim(),
+                // The inject header is inherited from Backend Authentication at
+                // vend time, so it is not sent here.
               },
               { headers: csrfHeaders }
             );
@@ -2213,6 +2239,8 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
                       onShowToast={showToast}
                       onServerUpdate={handleServerUpdate}
                       authToken={agentApiToken}
+                      egressConnect={egressStateByPath.get(server.path)}
+                      onEgressChanged={reloadEgressState}
                     />
                   );
 
@@ -2538,6 +2566,8 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
               onServerUpdate={handleServerUpdate}
               onDelete={handleDeleteServer}
               authToken={agentApiToken}
+              egressConnect={egressStateByPath.get(server.path)}
+              onEgressChanged={reloadEgressState}
             />
           )}
           renderAgentCard={(agent) => (
@@ -2623,7 +2653,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
   }
 
   return (
-    <>
+    <EgressConnectProvider value={{ stateByPath: egressStateByPath, reload: reloadEgressState }}>
       {/* Toast Notification */}
       {toast && (
         <Toast
@@ -3120,7 +3150,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         isLoading={customDeleteLoading}
       />
 
-    </>
+    </EgressConnectProvider>
   );
 };
 

@@ -35,6 +35,25 @@ MEMBERSHIPS_COLLECTION_BASE: str = "rate_limit_memberships"
 # Default in-process cache TTL for membership reads.
 DEFAULT_CACHE_TTL_SECONDS: float = 30.0
 
+# Last-observed member count per group, refreshed by the async count on every
+# admin quarantine mutation / list call and by seeding. Read SYNCHRONOUSLY by the
+# metrics ObservableGauge callback (OTel callbacks cannot await). Reflects the
+# most recent DB-backed count this process observed; bounded to the reserved
+# group names in practice.
+_GROUP_MEMBER_COUNTS: dict[str, int] = {}
+
+# Process-wide shared repository (used by the metrics gauge in the registry
+# process, which is separate from the auth-server's rate limiter instance).
+_shared_repo: "MembershipsRepository | None" = None
+
+
+def get_shared_memberships_repo() -> "MembershipsRepository":
+    """Return a lazily-created process-wide MembershipsRepository (metrics + seeding)."""
+    global _shared_repo
+    if _shared_repo is None:
+        _shared_repo = MembershipsRepository()
+    return _shared_repo
+
 
 class MembershipsRepository:
     """Repository for rate-limit memberships with a small time-based read cache."""
@@ -120,6 +139,64 @@ class MembershipsRepository:
                 seen.add(group)
                 unique.append(group)
         return unique
+
+    async def is_target_quarantined(
+        self,
+        target_entity_type: str | None,
+        target_name: str | None,
+    ) -> bool:
+        """True if the classified target is in the quarantine-targets group.
+
+        One cached point-read on the target's membership (``server:<name>`` or
+        ``agent:<path>``), reusing the same 30s cache as caller lookups -- so the
+        steady-state cost is zero DB reads. Returns False when no target is
+        classified (control-plane requests never reach here anyway).
+        """
+        from .models import QUARANTINE_TARGET_GROUP
+
+        if not target_entity_type or not target_name:
+            return False
+        subject_type = "server" if target_entity_type == "mcp_server" else "agent"
+        groups = await self._groups_for_id(f"{subject_type}:{target_name}")
+        return QUARANTINE_TARGET_GROUP in groups
+
+    async def count_group_members(
+        self,
+        group: str,
+    ) -> int:
+        """Count enabled memberships whose ``groups`` contain ``group`` (single query).
+
+        Also refreshes the process-wide sync count cache the metrics ObservableGauge
+        reads (OTel callbacks cannot await), so the gauge tracks the latest observed
+        count. No per-item loop; one ``count_documents``.
+        """
+        collection = await self._get_collection()
+        count = await collection.count_documents({"groups": group, "enabled": True})
+        _GROUP_MEMBER_COUNTS[group] = count
+        return count
+
+    def count_group_members_cached(
+        self,
+        group: str,
+    ) -> int:
+        """Synchronously return the last observed member count for the metrics gauge."""
+        return _GROUP_MEMBER_COUNTS.get(group, 0)
+
+    async def list_group_members(
+        self,
+        group: str,
+    ) -> list[RateLimitMembership]:
+        """Return every enabled membership belonging to ``group`` (admin quarantine list)."""
+        collection = await self._get_collection()
+        memberships: list[RateLimitMembership] = []
+        async for doc in collection.find({"groups": group, "enabled": True}):
+            doc.pop("_id", None)
+            doc.pop("enabled", None)
+            try:
+                memberships.append(RateLimitMembership(**doc))
+            except Exception as exc:
+                logger.warning(f"skipping malformed rate-limit membership: {exc}")
+        return memberships
 
     async def upsert(
         self,

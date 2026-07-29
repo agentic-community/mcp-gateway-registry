@@ -251,7 +251,9 @@ class RegistryApiAccessRecord(BaseModel):
     version: str = Field(default="1.0", description="Schema version for this record type")
     request_id: str = Field(description="Unique identifier for this request")
     correlation_id: str | None = Field(
-        default=None, description="Correlation ID for tracing across services"
+        default=None,
+        max_length=200,
+        description="Correlation ID for tracing across services",
     )
     instance_id: str | None = Field(
         default=None,
@@ -344,7 +346,9 @@ class MCPServerAccessRecord(BaseModel):
     version: str = Field(default="1.0", description="Schema version for this record type")
     request_id: str = Field(description="Unique identifier for this request")
     correlation_id: str | None = Field(
-        default=None, description="Correlation ID for tracing across services"
+        default=None,
+        max_length=200,
+        description="Correlation ID for tracing across services",
     )
     identity: Identity = Field(description="Identity of the requester")
     mcp_server: MCPServer = Field(description="Target MCP server details")
@@ -395,6 +399,7 @@ class TokenMintAuditRecord(BaseModel):
     )
     correlation_id: str | None = Field(
         default=None,
+        max_length=200,
         description="Cross-service trace id propagated from the registry",
     )
 

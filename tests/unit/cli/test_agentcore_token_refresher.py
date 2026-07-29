@@ -65,9 +65,14 @@ class TestDetectIdpVendor:
 
 
 class TestReadManifest:
-    """Tests for manifest reading."""
+    """Tests for manifest reading.
 
-    def test_reads_valid_manifest(self, tmp_path):
+    ``is_safe_egress_url`` is patched to avoid real DNS in unit tests; the
+    read-time SSRF re-validation drop path has its own dedicated test below.
+    """
+
+    @patch("cli.agentcore.token_refresher.is_safe_egress_url", return_value=True)
+    def test_reads_valid_manifest(self, _mock_safe, tmp_path):
         manifest = tmp_path / "manifest.json"
         entries = [{"server_path": "/test", "discovery_url": "https://example.com"}]
         manifest.write_text(json.dumps(entries))
@@ -93,6 +98,55 @@ class TestReadManifest:
 
         with pytest.raises(ValueError, match="JSON array"):
             _read_manifest(str(manifest))
+
+    @patch("cli.agentcore.token_refresher.is_safe_egress_url", return_value=False)
+    def test_drops_entry_with_unsafe_discovery_url(self, _mock_unsafe, tmp_path):
+        # A manifest entry whose discovery_url fails SSRF/HTTPS validation at read
+        # time is dropped fail-closed (covers a tampered-on-disk manifest driving
+        # the Cognito secret path before the fetch-time guards run).
+        manifest = tmp_path / "manifest.json"
+        entries = [
+            {"server_path": "/evil", "discovery_url": "http://169.254.169.254/x"},
+        ]
+        manifest.write_text(json.dumps(entries))
+
+        result = _read_manifest(str(manifest))
+        assert result == []
+
+    @patch("cli.agentcore.token_refresher.is_safe_egress_url", return_value=True)
+    def test_drops_entry_missing_server_path(self, _mock_safe, tmp_path):
+        # An entry missing server_path would KeyError in refresh_all; drop it.
+        manifest = tmp_path / "manifest.json"
+        entries = [{"discovery_url": "https://good.example.com/x"}]
+        manifest.write_text(json.dumps(entries))
+
+        result = _read_manifest(str(manifest))
+        assert result == []
+
+    @patch("cli.agentcore.token_refresher.is_safe_egress_url", return_value=True)
+    def test_drops_non_dict_entry(self, _mock_safe, tmp_path):
+        manifest = tmp_path / "manifest.json"
+        manifest.write_text(
+            json.dumps(
+                ["not-an-object", {"server_path": "/ok", "discovery_url": "https://ok.example/x"}]
+            )
+        )
+
+        result = _read_manifest(str(manifest))
+        assert [e["server_path"] for e in result] == ["/ok"]
+
+    @patch("cli.agentcore.token_refresher.is_safe_egress_url")
+    def test_keeps_safe_drops_unsafe_mixed(self, mock_safe, tmp_path):
+        mock_safe.side_effect = lambda u: u.startswith("https://good")
+        manifest = tmp_path / "manifest.json"
+        entries = [
+            {"server_path": "/good", "discovery_url": "https://good.example.com/x"},
+            {"server_path": "/bad", "discovery_url": "https://evil.example.com/x"},
+        ]
+        manifest.write_text(json.dumps(entries))
+
+        result = _read_manifest(str(manifest))
+        assert [e["server_path"] for e in result] == ["/good"]
 
 
 # ---------------------------------------------------------------------------
@@ -129,10 +183,33 @@ class TestGetCognitoClientSecret:
         mock_boto3.client.side_effect = Exception("Access denied")
 
         result = _get_cognito_client_secret(
-            "https://cognito-idp.us-east-1.amazonaws.com/pool/.well-known/openid-configuration",
+            "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_abc/.well-known/openid-configuration",
             "client-id",
         )
         assert result is None
+
+    @patch("cli.agentcore.token_refresher.boto3")
+    def test_rejects_host_steering_region(self, mock_boto3):
+        # A crafted region spliced from a tampered discovery_url is interpolated
+        # into the boto3 endpoint host — reject it (shape guard) BEFORE any AWS
+        # client is built, so boto3 is never called with an attacker host.
+        malicious = (
+            "https://cognito-idp.us-east-1.attacker.example#.amazonaws.com/"
+            "us-east-1_abc/.well-known/openid-configuration"
+        )
+        result = _get_cognito_client_secret(malicious, "client-id")
+        assert result is None
+        mock_boto3.client.assert_not_called()
+
+    @patch("cli.agentcore.token_refresher.boto3")
+    def test_rejects_malformed_pool_id(self, mock_boto3):
+        malicious = (
+            "https://cognito-idp.us-east-1.amazonaws.com/"
+            "../../evil/.well-known/openid-configuration"
+        )
+        result = _get_cognito_client_secret(malicious, "client-id")
+        assert result is None
+        mock_boto3.client.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -193,7 +270,7 @@ class TestGetClientSecret:
 class TestGetTokenEndpoint:
     """Tests for OIDC discovery token endpoint extraction."""
 
-    @patch("cli.agentcore.token_refresher.requests.get")
+    @patch("cli.agentcore.token_refresher.guarded_oidc_get")
     def test_extracts_token_endpoint(self, mock_get):
         mock_response = MagicMock()
         mock_response.json.return_value = {
@@ -205,11 +282,22 @@ class TestGetTokenEndpoint:
         result = _get_token_endpoint("https://auth.example.com/.well-known/openid-configuration")
         assert result == "https://auth.example.com/oauth2/token"
 
-    @patch("cli.agentcore.token_refresher.requests.get")
+    @patch("cli.agentcore.token_refresher.guarded_oidc_get")
     def test_returns_none_on_error(self, mock_get):
         mock_get.side_effect = Exception("Connection refused")
 
         result = _get_token_endpoint("https://unreachable.example.com")
+        assert result is None
+
+    @patch("cli.agentcore.token_refresher.guarded_oidc_get")
+    def test_returns_none_when_url_guard_blocks(self, mock_get):
+        # discovery_url that fails SSRF/scheme validation is refused before any
+        # HTTP request; _get_token_endpoint fails closed (None).
+        from cli.agentcore.security import EgressSecurityError
+
+        mock_get.side_effect = EgressSecurityError("blocked: private target")
+
+        result = _get_token_endpoint("http://169.254.169.254/.well-known/openid-configuration")
         assert result is None
 
 
@@ -221,7 +309,7 @@ class TestGetTokenEndpoint:
 class TestRequestToken:
     """Tests for OAuth2 client_credentials token request."""
 
-    @patch("cli.agentcore.token_refresher.requests.post")
+    @patch("cli.agentcore.token_refresher.guarded_oidc_post")
     def test_successful_token_request(self, mock_post):
         mock_response = MagicMock()
         mock_response.json.return_value = {"access_token": "eyJtoken123"}
@@ -240,7 +328,18 @@ class TestRequestToken:
         assert call_data["client_id"] == "client-id"
         assert call_data["client_secret"] == "client-secret"
 
-    @patch("cli.agentcore.token_refresher.requests.post")
+    @patch("cli.agentcore.token_refresher.guarded_oidc_post")
+    def test_returns_none_when_url_guard_blocks(self, mock_post):
+        # token_endpoint that fails SSRF/scheme validation is refused before the
+        # client_secret leaves the process; _request_token fails closed (None).
+        from cli.agentcore.security import EgressSecurityError
+
+        mock_post.side_effect = EgressSecurityError("blocked: private target")
+
+        result = _request_token("http://127.0.0.1/token", "id", "secret")
+        assert result is None
+
+    @patch("cli.agentcore.token_refresher.guarded_oidc_post")
     def test_returns_none_on_error(self, mock_post):
         mock_post.side_effect = Exception("401 Unauthorized")
 
@@ -404,7 +503,18 @@ class TestTriggerSecurityScan:
 
 
 class TestRefreshAll:
-    """Tests for the end-to-end refresh_all flow."""
+    """Tests for the end-to-end refresh_all flow.
+
+    These exercise the refresh orchestration, not the SSRF guard, so the
+    read-time discovery_url validation is stubbed safe (real validation +
+    drop behavior is covered by TestReadManifest). Avoids real DNS on the
+    sample https discovery URLs.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _allow_manifest_urls(self):
+        with patch("cli.agentcore.token_refresher.is_safe_egress_url", return_value=True):
+            yield
 
     def _write_manifest(self, tmp_path, entries):
         manifest = tmp_path / "manifest.json"

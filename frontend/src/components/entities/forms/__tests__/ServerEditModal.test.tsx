@@ -148,6 +148,17 @@ describe('ServerEditModal', () => {
     expect(screen.queryByText('Target Audience')).not.toBeInTheDocument();
   });
 
+  it('shows the provider field in pat mode, not the target audience or a header input', () => {
+    render(<Harness initial={{ ...baseForm, egress_auth_mode: 'pat' }} egressEnabled />);
+    expect(screen.getByText('Provider (vault key)')).toBeInTheDocument();
+    // pat inherits the inject header from Backend Authentication: no header inputs here.
+    expect(screen.queryByText('Auth header name')).not.toBeInTheDocument();
+    expect(screen.queryByText('Value prefix')).not.toBeInTheDocument();
+    expect(screen.queryByText('Target Audience')).not.toBeInTheDocument();
+    // pat needs only a provider (no client id/secret fields).
+    expect(screen.queryByText('Client ID')).not.toBeInTheDocument();
+  });
+
   it('shows neither provider nor target audience when egress mode is none', () => {
     render(<Harness initial={{ ...baseForm, egress_auth_mode: 'none' }} egressEnabled />);
     expect(screen.getByText('Egress Auth')).toBeInTheDocument();

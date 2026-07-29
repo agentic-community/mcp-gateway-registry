@@ -59,6 +59,109 @@ class TestRateLimitDefinition:
         )
         assert d.entity_type == "a2a_agent"
 
+    def test_valid_server_group_definition(self):
+        """A server_group target with max_requests + non-empty members is accepted."""
+        d = RateLimitDefinition(
+            axis="target",
+            entity_type="server_group",
+            name="fragile-backends",
+            max_requests=100,
+            window_seconds=60,
+            members=["airegistry-tools", "aws-kb"],
+        )
+        assert d.build_id() == "target:server_group:fragile-backends:60"
+        assert d.members == ["airegistry-tools", "aws-kb"]
+
+    def test_server_group_requires_members(self):
+        """A server_group with no members (or empty list) is rejected."""
+        with pytest.raises(ValidationError, match="non-empty members"):
+            RateLimitDefinition(
+                axis="target",
+                entity_type="server_group",
+                name="empty",
+                max_requests=100,
+            )
+        with pytest.raises(ValidationError, match="non-empty members"):
+            RateLimitDefinition(
+                axis="target",
+                entity_type="server_group",
+                name="empty",
+                max_requests=100,
+                members=[],
+            )
+
+    def test_server_group_requires_max_requests(self):
+        """A server_group still needs the single target max_requests."""
+        with pytest.raises(ValidationError, match="must set max_requests"):
+            RateLimitDefinition(
+                axis="target",
+                entity_type="server_group",
+                name="grp",
+                members=["mcpgw"],
+            )
+
+    def test_server_group_rejects_duplicate_and_blank_members(self):
+        """Members must be clean: no duplicates, no blank strings."""
+        with pytest.raises(ValidationError, match="duplicates"):
+            RateLimitDefinition(
+                axis="target",
+                entity_type="server_group",
+                name="dup",
+                max_requests=100,
+                members=["mcpgw", "mcpgw"],
+            )
+        with pytest.raises(ValidationError, match="non-empty server-path"):
+            RateLimitDefinition(
+                axis="target",
+                entity_type="server_group",
+                name="blank",
+                max_requests=100,
+                members=["mcpgw", "  "],
+            )
+
+    def test_single_target_rejects_members(self):
+        """members is only valid for server_group; a plain mcp_server def rejects it."""
+        with pytest.raises(ValidationError, match="only valid for a server_group"):
+            RateLimitDefinition(
+                axis="target",
+                entity_type="mcp_server",
+                name="mcpgw",
+                max_requests=500,
+                members=["mcpgw"],
+            )
+
+    def test_legacy_target_has_no_members(self):
+        """A pre-existing mcp_server def (no members key) parses with members=None."""
+        d = RateLimitDefinition(
+            axis="target",
+            entity_type="mcp_server",
+            name="mcpgw",
+            max_requests=500,
+        )
+        assert d.members is None
+
+    def test_server_group_members_normalized(self):
+        """Members with leading/trailing slashes normalize to the bare classifier name."""
+        d = RateLimitDefinition(
+            axis="target",
+            entity_type="server_group",
+            name="grp",
+            max_requests=10,
+            members=["/aws-kb", "airegistry-tools/", "/mcpgw/"],
+        )
+        assert d.members == ["aws-kb", "airegistry-tools", "mcpgw"]
+
+    def test_server_group_members_dedup_after_normalization(self):
+        """'aws-kb' and '/aws-kb' are the same member after normalization -> rejected as dup."""
+        with pytest.raises(ValidationError, match="duplicates"):
+            RateLimitDefinition(
+                axis="target",
+                entity_type="server_group",
+                name="grp",
+                max_requests=10,
+                members=["aws-kb", "/aws-kb"],
+            )
+
     def test_daily_volume_window_is_allowed(self):
         """A full-day window (volume cap) is within bounds."""
         d = RateLimitDefinition(
@@ -152,3 +255,133 @@ class TestRateLimitDecision:
         assert headers["X-RateLimit-Reset"] == "1000"
         assert headers["Retry-After"] == "30"
         assert headers["Connection"] == "close"
+
+
+class TestCallerTargetAndQuarantineModels:
+    """Tests for the caller_target axis, the quarantine sentinel, and target subjects."""
+
+    def test_caller_target_definition_id(self):
+        """A caller_target group definition validates and builds its composite id."""
+        from registry.rate_limiting.models import RateLimitDefinition
+
+        d = RateLimitDefinition(
+            axis="caller_target",
+            entity_type="group",
+            name="per-server-cap",
+            user_max_requests=60,
+            window_seconds=60,
+        )
+        assert d.build_id() == "caller_target:group:per-server-cap:60"
+
+    def test_caller_target_requires_a_per_type_limit(self):
+        from registry.rate_limiting.models import RateLimitDefinition
+
+        with pytest.raises(ValidationError):
+            RateLimitDefinition(axis="caller_target", entity_type="group", name="x")
+
+    def test_quarantine_sentinel_valid(self):
+        from registry.rate_limiting.models import RateLimitDefinition
+
+        d = RateLimitDefinition(
+            axis="quarantine",
+            entity_type="group",
+            name="quarantine-callers",
+            scope="caller",
+            window_seconds=1,
+        )
+        assert d.build_id() == "quarantine:group:quarantine-callers:1"
+
+    def test_quarantine_rejects_rate(self):
+        from registry.rate_limiting.models import RateLimitDefinition
+
+        with pytest.raises(ValidationError):
+            RateLimitDefinition(
+                axis="quarantine",
+                entity_type="group",
+                name="quarantine-callers",
+                scope="caller",
+                user_max_requests=5,
+                window_seconds=1,
+            )
+
+    def test_quarantine_requires_reserved_name(self):
+        from registry.rate_limiting.models import RateLimitDefinition
+
+        with pytest.raises(ValidationError):
+            RateLimitDefinition(
+                axis="quarantine", entity_type="group", name="not-reserved", scope="caller"
+            )
+
+    def test_reserved_name_rejected_on_rate_axis(self):
+        """An operator cannot shadow a kill-switch group with a rate definition."""
+        from registry.rate_limiting.models import RateLimitDefinition
+
+        with pytest.raises(ValidationError):
+            RateLimitDefinition(
+                axis="caller",
+                entity_type="group",
+                name="quarantine-callers",
+                user_max_requests=5,
+            )
+
+    def test_target_subject_membership(self):
+        from registry.rate_limiting.models import QUARANTINE_TARGET_GROUP, RateLimitMembership
+
+        m = RateLimitMembership(
+            subject_type="server", subject="mcpgw", groups=[QUARANTINE_TARGET_GROUP]
+        )
+        assert m.build_id() == "server:mcpgw"
+
+    def test_target_subject_only_quarantine_group(self):
+        from registry.rate_limiting.models import RateLimitMembership
+
+        with pytest.raises(ValidationError):
+            RateLimitMembership(subject_type="server", subject="mcpgw", groups=["some-rate-group"])
+
+    def test_caller_cannot_join_target_quarantine(self):
+        from registry.rate_limiting.models import QUARANTINE_TARGET_GROUP, RateLimitMembership
+
+        with pytest.raises(ValidationError):
+            RateLimitMembership(
+                subject_type="user", subject="alice", groups=[QUARANTINE_TARGET_GROUP]
+            )
+
+    def test_quarantine_deny_decision(self):
+        from registry.rate_limiting.models import RateLimitDecision
+
+        d = RateLimitDecision.quarantine_deny("clr", "group")
+        assert d.allowed is False
+        assert d.quarantined is True
+
+
+class TestTargetSubjectNormalization:
+    """Tests for the target-name normalizers (match the request classifier's forms)."""
+
+    def test_normalize_server_name_strips_slashes(self):
+        from registry.rate_limiting.models import normalize_server_name
+
+        assert normalize_server_name("aws-kb") == "aws-kb"
+        assert normalize_server_name("/aws-kb") == "aws-kb"
+        assert normalize_server_name("/aws-kb/") == "aws-kb"
+        # Only the first path segment (the classifier keys on path_parts[0]).
+        assert normalize_server_name("/aws-kb/mcp") == "aws-kb"
+        assert normalize_server_name("") == ""
+
+    def test_normalize_agent_path_ensures_leading_slash(self):
+        from registry.rate_limiting.models import normalize_agent_path
+
+        assert normalize_agent_path("/flight-booking-agent") == "/flight-booking-agent"
+        assert normalize_agent_path("flight-booking-agent") == "/flight-booking-agent"
+        assert normalize_agent_path("/flight-booking-agent/") == "/flight-booking-agent"
+        # Multi-segment agent paths are preserved (agents can be multi-segment).
+        assert normalize_agent_path("agents/booking") == "/agents/booking"
+        assert normalize_agent_path("") == ""
+
+    def test_normalize_target_subject_by_type(self):
+        from registry.rate_limiting.models import normalize_target_subject
+
+        assert normalize_target_subject("server", "/aws-kb") == "aws-kb"
+        assert normalize_target_subject("agent", "booking") == "/booking"
+        # Caller subjects are identities, never slash-mangled.
+        assert normalize_target_subject("user", "/alice") == "/alice"
+        assert normalize_target_subject("client", "my-client") == "my-client"

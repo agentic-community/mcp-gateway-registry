@@ -276,6 +276,86 @@ class TestServerNameNormalization:
         assert _server_names_match("*", "another-server")
 
 
+class TestIsRedirectWithinCookieDomain:
+    """Tests for _is_redirect_within_cookie_domain same-origin validation.
+
+    The registry's server-to-server logout hop (issue #1503) forwards a raw
+    X-Forwarded-Host that may carry a port (e.g. "localhost:7860"), while the
+    redirect_uri host is port-stripped by urlparse. These tests guard against
+    the port causing a false same-origin rejection.
+    """
+
+    def _request(self, forwarded_host="", forwarded_proto="", url_host="localhost", scheme="http"):
+        request = MagicMock()
+        headers = {"x-forwarded-host": forwarded_host, "x-forwarded-proto": forwarded_proto}
+        request.headers = MagicMock()
+        request.headers.get = lambda key, default="": headers.get(key, default)
+        request.url = MagicMock()
+        request.url.hostname = url_host
+        request.url.scheme = scheme
+        return request
+
+    def test_forwarded_host_with_port_matches_portless_redirect(self):
+        """X-Forwarded-Host: localhost:7860 must match http://localhost:7860/logout."""
+        from auth_server.server import _is_redirect_within_cookie_domain
+
+        request = self._request(forwarded_host="localhost:7860", forwarded_proto="http")
+        assert _is_redirect_within_cookie_domain("http://localhost:7860/logout", "", request)
+
+    def test_forwarded_host_https_with_domain(self):
+        """A real public host forwarded with https matches an https redirect."""
+        from auth_server.server import _is_redirect_within_cookie_domain
+
+        request = self._request(forwarded_host="app.example.com", forwarded_proto="https")
+        assert _is_redirect_within_cookie_domain("https://app.example.com/logout", "", request)
+
+    def test_different_host_rejected(self):
+        """A redirect to a different host is rejected when no cookie domain covers it."""
+        from auth_server.server import _is_redirect_within_cookie_domain
+
+        request = self._request(forwarded_host="app.example.com", forwarded_proto="https")
+        assert not _is_redirect_within_cookie_domain("https://evil.example.net/logout", "", request)
+
+    def test_scheme_mismatch_rejected(self):
+        """A proto mismatch (http forwarded vs https redirect) is rejected."""
+        from auth_server.server import _is_redirect_within_cookie_domain
+
+        request = self._request(forwarded_host="localhost:7860", forwarded_proto="http")
+        assert not _is_redirect_within_cookie_domain("https://localhost:7860/logout", "", request)
+
+    def test_configured_external_host_trusted_on_s2s_hop(self, monkeypatch):
+        """Issue #1503: on the internal S2S logout hop the request scheme reconstructs
+        as http and X-Forwarded-Host is absent, so the same-origin match fails for a
+        legitimate https public redirect_uri. The redirect_uri host matching the
+        deployment's own AUTH_SERVER_EXTERNAL_URL must still be accepted."""
+        from auth_server.server import _is_redirect_within_cookie_domain
+
+        monkeypatch.setenv("AUTH_SERVER_EXTERNAL_URL", "https://d2xl2zfuhgc4l0.cloudfront.net")
+        # Reconstructed request origin is internal (http, no forwarded host).
+        request = self._request(forwarded_host="", forwarded_proto="", url_host="127.0.0.1")
+        assert _is_redirect_within_cookie_domain(
+            "https://d2xl2zfuhgc4l0.cloudfront.net/logout", "", request
+        )
+
+    def test_configured_external_host_falls_back_to_registry_url(self, monkeypatch):
+        """REGISTRY_URL is used when AUTH_SERVER_EXTERNAL_URL is unset."""
+        from auth_server.server import _is_redirect_within_cookie_domain
+
+        monkeypatch.delenv("AUTH_SERVER_EXTERNAL_URL", raising=False)
+        monkeypatch.setenv("REGISTRY_URL", "https://app.example.com")
+        request = self._request(forwarded_host="", forwarded_proto="", url_host="127.0.0.1")
+        assert _is_redirect_within_cookie_domain("https://app.example.com/logout", "", request)
+
+    def test_non_configured_host_still_rejected_on_s2s_hop(self, monkeypatch):
+        """A redirect to a host that is NOT the configured external host is still
+        rejected even on the internal hop (the fix does not open a general bypass)."""
+        from auth_server.server import _is_redirect_within_cookie_domain
+
+        monkeypatch.setenv("AUTH_SERVER_EXTERNAL_URL", "https://d2xl2zfuhgc4l0.cloudfront.net")
+        request = self._request(forwarded_host="", forwarded_proto="", url_host="127.0.0.1")
+        assert not _is_redirect_within_cookie_domain("https://evil.example.net/logout", "", request)
+
+
 class TestGroupToScopeMapping:
     """Tests for mapping IdP groups to MCP scopes."""
 
@@ -4295,6 +4375,151 @@ class TestMcpProxyOboExchange:
         assert sent["authorization"] == "Bearer real-exchanged-token"
 
 
+class TestMcpProxyPatMode:
+    """pat egress mode in mcp_proxy.
+
+    A vended PAT arrives as {access_token: <PAT>} and flows through the SAME
+    generic inject branch as a vaulted OAuth token (no auth_server change for the
+    hit path). A miss arrives as {mode: "pat"} with no access_token/connect_url
+    and is answered by the terminal _pat_missing_response.
+    """
+
+    def test_pat_missing_response_shape(self):
+        import auth_server.server as server_module
+
+        resp = server_module._pat_missing_response("github", "tools/call", 7)
+        assert resp.status_code == 200
+        import json as _json
+
+        body = _json.loads(resp.body)
+        assert body["id"] == 7
+        # Terminal tool result (isError), NOT a -32042 URL elicitation.
+        assert "error" not in body
+        assert body["result"]["isError"] is True
+        text = body["result"]["content"][0]["text"]
+        assert "No PAT configured" in text
+        assert "Connected Accounts" in text
+        # No connect/authorize URL is offered (pat is not interactive).
+        assert "http" not in text.lower()
+
+    def test_pat_hit_injects_and_strips_ingress_creds(self):
+        import auth_server.server as server_module
+
+        async def _pat_vend(token, server):
+            return {"access_token": "ghp_the_pat"}
+
+        patch_httpx, captured = _capture_upstream_headers()
+        with (
+            patch.object(server_module.settings, "egress_auth_enabled", True),
+            patch.object(server_module, "_vend_egress_token", _pat_vend),
+            patch.object(server_module, "_read_mcp_filter_enabled", return_value=False),
+            _patch_scope_repo_allow_all(),
+            patch_httpx,
+        ):
+            client = TestClient(server_module.app)
+            response = client.post(
+                "/mcp-proxy/github",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
+                    "params": {"name": "list_repos"},
+                },
+                headers={
+                    **_mcp_proxy_token_headers(server_name="github"),
+                    "X-Authorization": "Bearer raw-ingress-jwt",
+                    "Cookie": "session=secret",
+                },
+            )
+
+        assert response.status_code == 200
+        sent = {k.lower(): v for k, v in captured["headers"].items()}
+        # The PAT is injected via the generic access_token branch.
+        assert sent["authorization"] == "Bearer ghp_the_pat"
+        # Ingress gateway creds / internal identity are stripped before inject.
+        assert "x-authorization" not in sent
+        assert "cookie" not in sent
+        assert "x-internal-token" not in sent
+
+    def test_pat_hit_injects_custom_header_and_prefix(self):
+        """The vend response carries the inject header derived from the server's
+        Backend Auth scheme (api_key -> PRIVATE-TOKEN with an empty prefix -> a
+        bare token in a custom header). mcp_proxy injects it and strips any
+        client-supplied copy so only the gateway-injected value reaches upstream."""
+        import auth_server.server as server_module
+
+        async def _pat_vend(token, server):
+            return {
+                "access_token": "glpat_the_pat",
+                "pat_header_name": "PRIVATE-TOKEN",
+                "pat_value_prefix": "",
+            }
+
+        patch_httpx, captured = _capture_upstream_headers()
+        with (
+            patch.object(server_module.settings, "egress_auth_enabled", True),
+            patch.object(server_module, "_vend_egress_token", _pat_vend),
+            patch.object(server_module, "_read_mcp_filter_enabled", return_value=False),
+            _patch_scope_repo_allow_all(),
+            patch_httpx,
+        ):
+            client = TestClient(server_module.app)
+            response = client.post(
+                "/mcp-proxy/gitlab",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
+                    "params": {"name": "list_projects"},
+                },
+                headers={
+                    **_mcp_proxy_token_headers(server_name="gitlab"),
+                    # A hostile/stale client copy of the custom header must not survive.
+                    "PRIVATE-TOKEN": "attacker-supplied",
+                    "X-Authorization": "Bearer raw-ingress-jwt",
+                },
+            )
+
+        assert response.status_code == 200
+        sent = {k.lower(): v for k, v in captured["headers"].items()}
+        # Bare token in the custom header (no "Bearer " prefix).
+        assert sent["private-token"] == "glpat_the_pat"
+        # The client-supplied copy of the custom header was dropped, not merged.
+        assert "attacker-supplied" not in sent.get("private-token", "")
+        # No stray Authorization was injected for a custom-header pat server.
+        assert "authorization" not in sent
+        assert "x-authorization" not in sent
+
+    def test_pat_miss_is_terminal_no_forward(self):
+        import auth_server.server as server_module
+
+        async def _pat_miss_vend(token, server):
+            return {"consent_required": True, "mode": "pat"}
+
+        patch_httpx, captured = _capture_upstream_headers()
+        with (
+            patch.object(server_module.settings, "egress_auth_enabled", True),
+            patch.object(server_module, "_vend_egress_token", _pat_miss_vend),
+            patch.object(server_module, "_read_mcp_filter_enabled", return_value=False),
+            _patch_scope_repo_allow_all(),
+            patch_httpx,
+        ):
+            client = TestClient(server_module.app)
+            response = client.post(
+                "/mcp-proxy/github",
+                json={"jsonrpc": "2.0", "id": 9, "method": "tools/call"},
+                headers=_mcp_proxy_token_headers(server_name="github"),
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["id"] == 9
+        assert body["result"]["isError"] is True
+        assert "No PAT configured" in body["result"]["content"][0]["text"]
+        # Nothing was forwarded upstream (terminal miss).
+        assert "headers" not in captured
+
+
 # =============================================================================
 # SCOPES STARTUP LOGGING TESTS (issue #1248)
 # =============================================================================
@@ -5480,3 +5705,102 @@ class TestFederationTokenRotationStrength:
             assert response.json()["action"] == "rotated"
             assert server_module.FEDERATION_STATIC_TOKEN == self._STRONG
             assert server_module.FEDERATION_STATIC_TOKEN_AUTH_ENABLED is True
+
+
+class TestEntraLogoutQueryStringGuard:
+    """Entra logout must not breach the logout-URL length limit (AADSTS90015).
+
+    Large ID tokens (users in many groups) push the full logout URL past Entra's
+    limit. The handler drops the optional id_token_hint when the composed URL
+    would exceed MAX_LOGOUT_URL_LENGTH; Entra still processes the logout without
+    it.
+    """
+
+    _PROVIDER = "entra"
+    _LOGOUT_URL = "https://login.microsoftonline.com/tenant/oauth2/v2.0/logout"
+
+    def _run_logout(self, id_token_hint):
+        import asyncio
+        import urllib.parse
+
+        import auth_server.server as server_module
+
+        config = {
+            "providers": {
+                self._PROVIDER: {
+                    "client_id": "app-client-id",
+                    "logout_url": self._LOGOUT_URL,
+                }
+            }
+        }
+        request = Mock()
+        request.headers = {}
+
+        with (
+            patch.object(server_module, "OAUTH2_CONFIG", config),
+            patch.dict("os.environ", {"REGISTRY_URL": "https://gw.example.com"}),
+        ):
+            response = asyncio.run(
+                server_module.oauth2_logout(
+                    provider=self._PROVIDER,
+                    request=request,
+                    redirect_uri="/login",
+                    id_token_hint=id_token_hint,
+                )
+            )
+
+        parsed = urllib.parse.urlparse(response.headers["location"])
+        return urllib.parse.parse_qs(parsed.query)
+
+    def _hint_for_url_length(self, target_url_len):
+        """Build an id_token_hint that makes the composed logout URL exactly
+        target_url_len chars, so boundary behavior can be tested precisely."""
+        import urllib.parse
+
+        base_params = {"post_logout_redirect_uri": "https://gw.example.com/login"}
+        # Length of the URL with an empty hint value appended.
+        empty_hint_url_len = len(
+            f"{self._LOGOUT_URL}?" + urllib.parse.urlencode({**base_params, "id_token_hint": ""})
+        )
+        # "a" is not percent-encoded, so each char adds exactly one to the URL.
+        return "a" * (target_url_len - empty_hint_url_len)
+
+    def test_small_token_keeps_id_token_hint(self):
+        """A short id_token_hint stays in the logout query string."""
+        query = self._run_logout("short-token")
+        assert query["id_token_hint"] == ["short-token"]
+        assert query["post_logout_redirect_uri"] == ["https://gw.example.com/login"]
+
+    def test_no_hint_provided_omits_id_token_hint(self):
+        """With no id_token_hint the handler must not inject one; logout still
+        redirects with the post_logout_redirect_uri."""
+        query = self._run_logout(None)
+        assert "id_token_hint" not in query
+        assert query["post_logout_redirect_uri"] == ["https://gw.example.com/login"]
+
+    def test_hint_at_limit_is_kept(self):
+        """A hint whose composed URL is exactly at the limit is kept (boundary)."""
+        from auth_server.server import MAX_LOGOUT_URL_LENGTH
+
+        hint = self._hint_for_url_length(MAX_LOGOUT_URL_LENGTH)
+        query = self._run_logout(hint)
+        assert query["id_token_hint"] == [hint]
+
+    def test_hint_one_over_limit_is_dropped(self):
+        """A hint whose composed URL is one char over the limit is dropped."""
+        from auth_server.server import MAX_LOGOUT_URL_LENGTH
+
+        hint = self._hint_for_url_length(MAX_LOGOUT_URL_LENGTH + 1)
+        query = self._run_logout(hint)
+        assert "id_token_hint" not in query
+        assert query["post_logout_redirect_uri"] == ["https://gw.example.com/login"]
+
+    def test_oversized_token_drops_id_token_hint(self):
+        """An id_token_hint that would breach the limit is omitted; logout still
+        redirects with the post_logout_redirect_uri so Entra completes it."""
+        from auth_server.server import MAX_LOGOUT_URL_LENGTH
+
+        oversized = "a" * (MAX_LOGOUT_URL_LENGTH + 100)
+        query = self._run_logout(oversized)
+        assert "id_token_hint" not in query
+        assert query["post_logout_redirect_uri"] == ["https://gw.example.com/login"]

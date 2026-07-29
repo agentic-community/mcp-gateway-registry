@@ -1098,10 +1098,14 @@ def cmd_rate_limit_set(args: argparse.Namespace) -> int:
     """Create or update a rate-limit definition.
 
     Caller (group) axis uses --user-max-requests / --agent-max-requests (at least
-    one). Target axis uses --max-requests.
+    one). Target axis uses --max-requests. A server_group target entity also takes
+    --members (comma-separated server paths); each member gets its own bucket.
     """
     try:
         client = _create_client(args)
+        members = None
+        if getattr(args, "members", None):
+            members = [m.strip() for m in args.members.split(",") if m.strip()]
         result = client.set_rate_limit(
             axis=args.axis,
             entity_type=args.entity_type,
@@ -1112,6 +1116,7 @@ def cmd_rate_limit_set(args: argparse.Namespace) -> int:
             window_seconds=args.window_seconds,
             fail_closed=args.fail_closed,
             enabled=not args.disabled,
+            members=members,
         )
         logger.info("Rate-limit definition stored")
         print(json.dumps(result, indent=2))
@@ -1240,6 +1245,44 @@ def cmd_rate_limit_member_delete(args: argparse.Namespace) -> int:
         return 0
     except Exception as e:
         logger.error(f"Failed to delete rate-limit membership: {e}")
+        return 1
+
+
+def cmd_rate_limit_quarantine_add(args: argparse.Namespace) -> int:
+    """Quarantine a caller or target (drops ALL its data-plane traffic)."""
+    try:
+        client = _create_client(args)
+        result = client.quarantine_add(args.subject_type, args.subject)
+        logger.info(f"Quarantined {args.subject_type}:{args.subject}")
+        print(json.dumps(result, indent=2))
+        return 0
+    except Exception as e:
+        logger.error(f"Failed to quarantine: {e}")
+        return 1
+
+
+def cmd_rate_limit_quarantine_remove(args: argparse.Namespace) -> int:
+    """Remove a caller or target from quarantine."""
+    try:
+        client = _create_client(args)
+        result = client.quarantine_remove(args.subject_type, args.subject)
+        logger.info(f"Removed quarantine for {args.subject_type}:{args.subject}")
+        print(json.dumps(result, indent=2))
+        return 0
+    except Exception as e:
+        logger.error(f"Failed to remove quarantine: {e}")
+        return 1
+
+
+def cmd_rate_limit_quarantine_list(args: argparse.Namespace) -> int:
+    """List everything currently quarantined (callers + targets)."""
+    try:
+        client = _create_client(args)
+        result = client.quarantine_list()
+        print(json.dumps(result, indent=2))
+        return 0
+    except Exception as e:
+        logger.error(f"Failed to list quarantine: {e}")
         return 1
 
 
@@ -1954,6 +1997,151 @@ def cmd_server_connect_config(args: argparse.Namespace) -> int:
 
     except Exception as e:
         logger.error(f"Failed to fetch connect config: {e}")
+        return 1
+
+
+def _parse_scopes(raw: str | None) -> list[str] | None:
+    """Turn a comma-separated --scopes value into a list of scope strings.
+
+    Args:
+        raw: Comma-separated scopes, or None.
+
+    Returns:
+        List of non-empty scope strings, or None when nothing was provided.
+    """
+    if not raw:
+        return None
+    scopes = [s.strip() for s in raw.split(",") if s.strip()]
+    return scopes or None
+
+
+def cmd_egress_configure(args: argparse.Namespace) -> int:
+    """
+    Configure per-user egress auth on a server (admin only).
+
+    Args:
+        args: Command arguments with path, mode, and mode-specific options.
+
+    Returns:
+        Exit code (0 for success, 1 for failure)
+    """
+    try:
+        client = _create_client(args)
+        response = client.configure_egress_auth(
+            server_path=args.path,
+            mode=args.mode,
+            provider=args.provider,
+            client_id=args.client_id,
+            client_secret=args.client_secret,
+            scopes=_parse_scopes(args.scopes),
+            target_audience=args.target_audience,
+        )
+        print(json.dumps(response, indent=2, default=str))
+        return 0
+
+    except Exception as e:
+        logger.error(f"Failed to configure egress auth: {e}")
+        return 1
+
+
+def cmd_egress_config_get(args: argparse.Namespace) -> int:
+    """
+    Fetch the (non-secret) egress auth config for a server.
+
+    Args:
+        args: Command arguments with path.
+
+    Returns:
+        Exit code (0 for success, 1 for failure)
+    """
+    try:
+        client = _create_client(args)
+        response = client.get_egress_auth_config(server_path=args.path)
+        print(json.dumps(response, indent=2, default=str))
+        return 0
+
+    except Exception as e:
+        logger.error(f"Failed to fetch egress auth config: {e}")
+        return 1
+
+
+def cmd_egress_pat_set(args: argparse.Namespace) -> int:
+    """
+    Submit (or replace) a per-user PAT for a server (write-only).
+
+    The secret value is never logged. The server enforces admin-gating of
+    ``--sub``; a non-admin supplying it is rejected 403. An admin using ``--sub``
+    must also pass ``--auth-method`` (the target's ingress auth method).
+
+    Args:
+        args: Command arguments with path, secret, ttl-value, ttl-unit, sub,
+            auth-method.
+
+    Returns:
+        Exit code (0 for success, 1 for failure)
+    """
+    try:
+        client = _create_client(args)
+        response = client.set_egress_pat(
+            server_path=args.path,
+            secret=args.secret,
+            ttl_value=args.ttl_value,
+            ttl_unit=args.ttl_unit,
+            sub=args.sub,
+            auth_method=args.auth_method,
+        )
+        # The response never contains the secret; safe to print as-is.
+        print(json.dumps(response, indent=2, default=str))
+        return 0
+
+    except Exception as e:
+        logger.error(f"Failed to submit egress PAT: {e}")
+        return 1
+
+
+def cmd_egress_pat_status(args: argparse.Namespace) -> int:
+    """
+    Report whether a per-user PAT is stored and when it expires.
+
+    Args:
+        args: Command arguments with path and optional sub / auth-method.
+
+    Returns:
+        Exit code (0 for success, 1 for failure)
+    """
+    try:
+        client = _create_client(args)
+        response = client.get_egress_pat_status(
+            server_path=args.path, sub=args.sub, auth_method=args.auth_method
+        )
+        print(json.dumps(response, indent=2, default=str))
+        return 0
+
+    except Exception as e:
+        logger.error(f"Failed to fetch egress PAT status: {e}")
+        return 1
+
+
+def cmd_egress_pat_delete(args: argparse.Namespace) -> int:
+    """
+    Delete a stored per-user PAT (idempotent).
+
+    Args:
+        args: Command arguments with path and optional sub / auth-method.
+
+    Returns:
+        Exit code (0 for success, 1 for failure)
+    """
+    try:
+        client = _create_client(args)
+        response = client.delete_egress_pat(
+            server_path=args.path, sub=args.sub, auth_method=args.auth_method
+        )
+        print(json.dumps(response, indent=2, default=str))
+        return 0
+
+    except Exception as e:
+        logger.error(f"Failed to delete egress PAT: {e}")
         return 1
 
 
@@ -6144,22 +6332,37 @@ Examples:
         "rate-limit-set", help="Create or update a rate-limit definition (admin)"
     )
     rate_limit_set_parser.add_argument(
-        "--axis", required=True, choices=["caller", "target"], help="Which side of the call"
+        "--axis",
+        required=True,
+        choices=["caller", "target", "caller_target"],
+        help="Which side: 'caller', 'target', or 'caller_target' (per-caller-per-target)",
     )
     rate_limit_set_parser.add_argument(
         "--entity-type",
         required=True,
         dest="entity_type",
-        help="caller: 'group'; target: 'mcp_server' | 'a2a_agent'",
+        help="caller: 'group'; target: 'mcp_server' | 'a2a_agent' | 'server_group'",
     )
     rate_limit_set_parser.add_argument(
-        "--name", required=True, help="Group name, server path, or agent path"
+        "--name", required=True, help="Group name, server path, agent path, or server-group name"
     )
     rate_limit_set_parser.add_argument(
         "--max-requests",
         type=int,
         dest="max_requests",
-        help="TARGET axis: max requests per window across all callers",
+        help=(
+            "TARGET axis: max requests per window across all callers. For a "
+            "server_group, applies to EACH member server individually."
+        ),
+    )
+    rate_limit_set_parser.add_argument(
+        "--members",
+        dest="members",
+        help=(
+            "server_group target entity only: comma-separated server paths. Each "
+            "listed server gets its own independent max-requests/window bucket "
+            "(per-member uniform, not a shared pool)."
+        ),
     )
     rate_limit_set_parser.add_argument(
         "--user-max-requests",
@@ -6259,6 +6462,41 @@ Examples:
     )
     rate_limit_member_delete_parser.add_argument(
         "--id", required=True, help="Membership id, e.g. 'user:alice' or 'client:my-agent-id'"
+    )
+
+    # Quarantine (kill-switch) commands: drop ALL data-plane traffic from a caller
+    # or to a target. The server picks the reserved group from the subject type.
+    rate_limit_quarantine_add_parser = subparsers.add_parser(
+        "rate-limit-quarantine-add",
+        help="Quarantine a caller or target: drops ALL its data-plane traffic (admin)",
+    )
+    rate_limit_quarantine_add_parser.add_argument(
+        "--subject-type",
+        required=True,
+        choices=["user", "client", "server", "agent"],
+        dest="subject_type",
+        help="'user'/'client' (caller) or 'server'/'agent' (target)",
+    )
+    rate_limit_quarantine_add_parser.add_argument(
+        "--subject", required=True, help="username / client_id / server name / agent path"
+    )
+
+    rate_limit_quarantine_remove_parser = subparsers.add_parser(
+        "rate-limit-quarantine-remove", help="Remove a caller or target from quarantine (admin)"
+    )
+    rate_limit_quarantine_remove_parser.add_argument(
+        "--subject-type",
+        required=True,
+        choices=["user", "client", "server", "agent"],
+        dest="subject_type",
+        help="'user'/'client' (caller) or 'server'/'agent' (target)",
+    )
+    rate_limit_quarantine_remove_parser.add_argument(
+        "--subject", required=True, help="username / client_id / server name / agent path"
+    )
+
+    subparsers.add_parser(
+        "rate-limit-quarantine-list", help="List everything currently quarantined (admin)"
     )
 
     # Add to groups command
@@ -6463,6 +6701,96 @@ Examples:
         "--path", required=True, help="Server path (e.g., /my-server)"
     )
     server_connect_config_parser.add_argument("--json", action="store_true", help="Output raw JSON")
+
+    # Egress Auth Commands (per-user egress credential vault)
+
+    # Configure egress auth command
+    egress_configure_parser = subparsers.add_parser(
+        "egress-configure", help="Configure per-user egress auth on a server (admin only)"
+    )
+    egress_configure_parser.add_argument(
+        "--path", required=True, help="Server path (e.g., /github)"
+    )
+    egress_configure_parser.add_argument(
+        "--mode",
+        required=True,
+        choices=["none", "oauth_user", "obo_exchange", "pat"],
+        help="Egress auth mode",
+    )
+    egress_configure_parser.add_argument(
+        "--provider", help="Provider slug/name (required for oauth_user and pat)"
+    )
+    egress_configure_parser.add_argument("--client-id", help="OAuth client id (oauth_user only)")
+    egress_configure_parser.add_argument(
+        "--client-secret", help="OAuth client secret (oauth_user only, write-only)"
+    )
+    egress_configure_parser.add_argument(
+        "--scopes", help="Comma-separated OAuth scopes (e.g., repo,read:org)"
+    )
+    egress_configure_parser.add_argument(
+        "--target-audience", help="Target audience (obo_exchange only)"
+    )
+
+    # Get egress config command
+    egress_config_get_parser = subparsers.add_parser(
+        "egress-config-get", help="Fetch the (non-secret) egress auth config for a server"
+    )
+    egress_config_get_parser.add_argument(
+        "--path", required=True, help="Server path (e.g., /github)"
+    )
+
+    # Submit egress PAT command
+    egress_pat_set_parser = subparsers.add_parser(
+        "egress-pat-set", help="Submit (or replace) a per-user PAT for a server (write-only)"
+    )
+    egress_pat_set_parser.add_argument("--path", required=True, help="Server path (e.g., /github)")
+    egress_pat_set_parser.add_argument(
+        "--secret", required=True, help="The PAT / API key to store (never logged)"
+    )
+    egress_pat_set_parser.add_argument(
+        "--ttl-value",
+        required=True,
+        type=int,
+        help="Positive integer validity amount (capped at 30 days)",
+    )
+    egress_pat_set_parser.add_argument(
+        "--ttl-unit",
+        required=True,
+        choices=["minutes", "hours", "days"],
+        help="Validity unit",
+    )
+    egress_pat_set_parser.add_argument("--sub", help="Admin-only: submit on another user's behalf")
+    egress_pat_set_parser.add_argument(
+        "--auth-method",
+        help="Admin-only (required with --sub): the target's ingress auth method "
+        "(e.g. oauth2), the vault partition the target vends from",
+    )
+
+    # Egress PAT status command
+    egress_pat_status_parser = subparsers.add_parser(
+        "egress-pat-status", help="Report whether a per-user PAT is stored and when it expires"
+    )
+    egress_pat_status_parser.add_argument(
+        "--path", required=True, help="Server path (e.g., /github)"
+    )
+    egress_pat_status_parser.add_argument("--sub", help="Admin-only: query another user's status")
+    egress_pat_status_parser.add_argument(
+        "--auth-method",
+        help="Admin-only (required with --sub): the target's ingress auth method (e.g. oauth2)",
+    )
+
+    # Egress PAT delete command
+    egress_pat_delete_parser = subparsers.add_parser(
+        "egress-pat-delete", help="Delete a stored per-user PAT (idempotent)"
+    )
+    egress_pat_delete_parser.add_argument(
+        "--path", required=True, help="Server path (e.g., /github)"
+    )
+    egress_pat_delete_parser.add_argument("--sub", help="Admin-only: delete another user's PAT")
+    egress_pat_delete_parser.add_argument(
+        "--auth-method",
+        help="Admin-only (required with --sub): the target's ingress auth method (e.g. oauth2)",
+    )
 
     # Server search command
     server_search_parser = subparsers.add_parser(
@@ -7630,6 +7958,9 @@ Examples:
         "rate-limit-member-set": cmd_rate_limit_member_set,
         "rate-limit-member-list": cmd_rate_limit_member_list,
         "rate-limit-member-delete": cmd_rate_limit_member_delete,
+        "rate-limit-quarantine-add": cmd_rate_limit_quarantine_add,
+        "rate-limit-quarantine-remove": cmd_rate_limit_quarantine_remove,
+        "rate-limit-quarantine-list": cmd_rate_limit_quarantine_list,
         "add-to-groups": cmd_add_to_groups,
         "remove-from-groups": cmd_remove_from_groups,
         "create-group": cmd_create_group,
@@ -7646,6 +7977,11 @@ Examples:
         "rescan": cmd_rescan,
         "server-update-credential": cmd_server_update_credential,
         "server-connect-config": cmd_server_connect_config,
+        "egress-configure": cmd_egress_configure,
+        "egress-config-get": cmd_egress_config_get,
+        "egress-pat-set": cmd_egress_pat_set,
+        "egress-pat-status": cmd_egress_pat_status,
+        "egress-pat-delete": cmd_egress_pat_delete,
         "server-search": cmd_server_search,
         "ard-search": cmd_ard_search,
         "ard-agents": cmd_ard_agents,

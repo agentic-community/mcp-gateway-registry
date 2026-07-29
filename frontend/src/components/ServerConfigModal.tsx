@@ -1,10 +1,17 @@
 import React, { useCallback, useState, useEffect } from 'react';
 import { ClipboardDocumentIcon, KeyIcon } from '@heroicons/react/24/outline';
+import PlugIcon from './icons/PlugIcon';
 import axios from 'axios';
 import type { Server } from './ServerCard';
 import { useRegistryConfig } from '../hooks/useRegistryConfig';
 import useEscapeKey from '../hooks/useEscapeKey';
 import { getBaseURL } from '../utils/basePath';
+import { isSafeUrl } from '../utils/safeUrl';
+import {
+  initiateConsent,
+  disconnect as disconnectEgress,
+  type EgressCardState,
+} from '../utils/egressAuth';
 
 const IDE_LABELS = {
   'cursor': 'Cursor',
@@ -30,6 +37,142 @@ interface ServerConfigModalProps {
    * server. Used to build the `resource` field on /api/tokens/generate.
    */
   resourceType?: 'server' | 'virtual_server';
+  // Per-user egress state for this server (undefined => no callout). Shared with
+  // the card icon so the two surfaces never disagree.
+  egressConnect?: EgressCardState;
+  // Refresh the dashboard's egress state after a connect/disconnect here.
+  onEgressChanged?: () => void;
+}
+
+
+/**
+ * The issue #1495 "Connect your account" callout, shown at the top of the
+ * connect modal for a per-user-egress server. Roomier than the card icon, so it
+ * carries the full treatment: connect / connected+disconnect / reconnect on a
+ * dead token. Reuses the same initiate()/disconnect() client the Connected
+ * Accounts page uses.
+ */
+function EgressConnectCallout({
+  serverPath,
+  state,
+  onEgressChanged,
+  onShowToast,
+}: {
+  serverPath: string;
+  state: EgressCardState;
+  onEgressChanged?: () => void;
+  onShowToast?: (message: string, type: 'success' | 'error') => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const providerLabel = state.provider
+    ? state.provider.charAt(0).toUpperCase() + state.provider.slice(1)
+    : 'account';
+
+  const startConnect = async () => {
+    setBusy(true);
+    try {
+      // Prefer the same initiate() the Connected Accounts page uses; fall back
+      // to the server-built connect_url front door. Both are opened, never fetched.
+      let url = '';
+      try {
+        url = await initiateConsent(serverPath);
+      } catch {
+        url = state.connectUrl;
+      }
+      // MANDATORY isSafeUrl guard before window.open (fail closed on unsafe/empty).
+      if (!isSafeUrl(url)) {
+        onShowToast?.('Cannot open the connect URL for this server.', 'error');
+        return;
+      }
+      window.open(url, '_blank', 'noopener,noreferrer');
+      // The callback tab vaults the token; refresh so the card/callout flip to
+      // "Connected" when the user returns.
+      onEgressChanged?.();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleDisconnect = async () => {
+    setBusy(true);
+    try {
+      await disconnectEgress(state.provider, serverPath);
+      onShowToast?.(`Disconnected ${providerLabel}.`, 'success');
+      onEgressChanged?.();
+    } catch {
+      onShowToast?.(`Could not disconnect ${providerLabel}.`, 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // PAT server: no OAuth redirect — point at the token form on Connected Accounts.
+  if (state.mode === 'pat') {
+    return (
+      <div className="flex items-center gap-3 rounded-lg border border-purple-200 dark:border-purple-800 bg-purple-50 dark:bg-purple-900/20 p-4">
+        <PlugIcon className="h-5 w-5 flex-shrink-0 text-purple-600 dark:text-purple-400" />
+        <span className="text-sm text-purple-900 dark:text-purple-100">
+          This server needs a personal access token before its tools appear.
+        </span>
+        <a
+          href={`/connected-accounts?server=${encodeURIComponent(serverPath)}`}
+          className="ml-auto text-sm font-medium text-purple-700 dark:text-purple-300 hover:underline"
+        >
+          Submit token
+        </a>
+      </div>
+    );
+  }
+
+  // 3LO: not connected / needs reconnect / connected.
+  if (!state.connected || state.needsReconnect) {
+    const warn = state.needsReconnect;
+    return (
+      <div
+        className={`flex items-center gap-3 rounded-lg border p-4 ${
+          warn
+            ? 'border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20'
+            : 'border-purple-200 dark:border-purple-800 bg-purple-50 dark:bg-purple-900/20'
+        }`}
+      >
+        <PlugIcon
+          className={`h-5 w-5 flex-shrink-0 ${
+            warn ? 'text-amber-500' : 'text-purple-600 dark:text-purple-400'
+          }`}
+        />
+        <span className="text-sm text-gray-900 dark:text-gray-100">
+          {warn
+            ? `Your ${providerLabel} connection expired or failed — reconnect to restore this server's tools.`
+            : `This server acts on your behalf. Connect your ${providerLabel} account before copying the config.`}
+        </span>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={startConnect}
+          className="ml-auto flex-shrink-0 rounded-md bg-purple-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-purple-700 disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-purple-500"
+        >
+          {busy ? 'Opening…' : warn ? `Reconnect ${providerLabel}` : `Connect ${providerLabel} account`}
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-3 rounded-lg border border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-900/20 p-4">
+      <PlugIcon className="h-5 w-5 flex-shrink-0 text-green-600 dark:text-green-400" />
+      <span className="text-sm text-green-900 dark:text-green-100">
+        Connected to {providerLabel}. This server can act on your behalf.
+      </span>
+      <button
+        type="button"
+        disabled={busy}
+        onClick={handleDisconnect}
+        className="ml-auto flex-shrink-0 rounded-md px-3 py-1.5 text-sm font-medium text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30 disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-red-500"
+      >
+        {busy ? 'Working…' : 'Disconnect'}
+      </button>
+    </div>
+  );
 }
 
 const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
@@ -38,6 +181,8 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
   onClose,
   onShowToast,
   resourceType = 'server',
+  egressConnect,
+  onEgressChanged,
 }) => {
   const [jwtToken, setJwtToken] = useState<string | null>(null);
   const [tokenLoading, setTokenLoading] = useState(false);
@@ -739,6 +884,18 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
         </div>
 
         <div className="space-y-4">
+          {/* Egress "Connect your account" callout (#1495): shown before the
+              config the user copies, so per-user-auth servers stop silently
+              returning "0 tools". Only rendered when eligible. */}
+          {egressConnect && (
+            <EgressConnectCallout
+              serverPath={server.path}
+              state={egressConnect}
+              onEgressChanged={onEgressChanged}
+              onShowToast={onShowToast}
+            />
+          )}
+
           <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
             <h4 className="font-medium text-blue-900 dark:text-blue-100 mb-2">
               How to use this configuration:

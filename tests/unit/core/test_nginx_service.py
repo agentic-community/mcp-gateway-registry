@@ -1003,8 +1003,59 @@ def test_create_location_block_direct_transport(nginx_service):
     assert "proxy_cache off" in block
 
 
-# =============================================================================
-# KEYCLOAK CONFIGURATION TESTS
+@pytest.mark.unit
+def test_create_location_block_appends_trailing_slash(nginx_service):
+    """Issue #1501: a server path without a trailing slash must render as a
+    trailing-slash location so nginx does a subtree prefix match (`/a/`) instead
+    of hijacking any URL that merely starts with the path (`/a` matches /api/...).
+    """
+    block = nginx_service._create_location_block(
+        "/a", "http://localhost:8000/mcp", "streamable-http"
+    )
+
+    # The location directive is normalised to end with a slash ...
+    assert "location {{ROOT_PATH}}/a/ {" in block
+    # ... and must NOT emit the bare-path form that prefix-matches /api, /auth, etc.
+    assert "location {{ROOT_PATH}}/a {" not in block
+
+
+@pytest.mark.unit
+def test_create_location_block_preserves_single_trailing_slash(nginx_service):
+    """A path already ending in a slash stays a single-slash location (no `//`)."""
+    block = nginx_service._create_location_block(
+        "/test/", "http://localhost:8000/mcp", "streamable-http"
+    )
+
+    assert "location {{ROOT_PATH}}/test/ {" in block
+    assert "location {{ROOT_PATH}}/test// {" not in block
+
+
+@pytest.mark.unit
+def test_create_location_block_normalises_multi_segment_path(nginx_service):
+    """A multi-segment path (e.g. a peer-registry namespaced server) keeps its
+    inner segments and only gains a single trailing slash."""
+    block = nginx_service._create_location_block(
+        "/peer-registry/server-name", "http://localhost:8000/mcp", "streamable-http"
+    )
+
+    assert "location {{ROOT_PATH}}/peer-registry/server-name/ {" in block
+    assert "location {{ROOT_PATH}}/peer-registry/server-name {" not in block
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("path", ["/", "//", "///", ""])
+def test_generate_transport_location_blocks_skips_empty_path(nginx_service, path):
+    """Issue #1501 render-time mirror of validate_server_path: a persisted path
+    that normalizes to empty (bypassed registration validation) must NOT render
+    a gateway-wide `location /` block. The offending server is skipped; the rest
+    of the config is unaffected."""
+    blocks = nginx_service._generate_transport_location_blocks(
+        path, {"proxy_pass_url": "http://localhost:8000/mcp"}
+    )
+
+    assert blocks == []
+
+
 # =============================================================================
 
 
@@ -2090,6 +2141,7 @@ def test_conf_declares_rate_limit_zones(conf_path):
         "limit_req_zone $mcp_gateway_register_key zone=mcp_gateway_register:10m rate=5r/s;" in text
     )
     assert "limit_conn_zone $binary_remote_addr zone=mcp_gateway_conn:10m;" in text
+    assert "limit_req_zone $binary_remote_addr zone=mcp_gateway_wellknown:5m rate=2r/s;" in text
     # Registration classifier map + fail-safe empty default (skip when non-register).
     assert "map $uri $mcp_gateway_register_key {" in text
     assert re.search(r'default\s+"";', text)

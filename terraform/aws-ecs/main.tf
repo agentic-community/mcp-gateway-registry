@@ -144,6 +144,7 @@ module "mcp_gateway" {
   rate_limiting_enabled                    = var.rate_limiting_enabled
   rate_limit_backend                       = var.rate_limit_backend
   rate_limit_fail_open                     = var.rate_limit_fail_open
+  rate_limit_quarantine_fail_closed        = var.rate_limit_quarantine_fail_closed
   rate_limit_definitions_cache_ttl_seconds = var.rate_limit_definitions_cache_ttl_seconds
   rate_limit_backend_timeout_ms            = var.rate_limit_backend_timeout_ms
   rate_limit_user_floor_per_min            = var.rate_limit_user_floor_per_min
