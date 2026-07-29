@@ -11,7 +11,8 @@ implementations (``skill_service._is_safe_url`` and
   is delegated to the shared ``registry.utils.ip_guard`` (one classifier
   repo-wide): private, loopback, link-local, reserved, multicast, unspecified, and
   CGNAT ranges are blocked, along with the cloud metadata endpoints
-  (``169.254.169.254`` AND the IPv6 ``fd00:ec2::254``) which are NEVER reachable —
+  (including AWS endpoints, IPv6 ``fd00:ec2::*``, and Alibaba
+  ``100.100.100.200``) which are NEVER reachable —
   not via the coarse bool nor an explicit CIDR allowlist.
 - Obfuscated IPv4 literals (hex/octal/decimal/trailing-dot) and embedded-IPv4 IPv6
   transports (mapped ``::ffff:``, NAT64, 6to4, Teredo) are recognized and
@@ -48,7 +49,12 @@ Validation profiles separate the registry's distinct outbound trust surfaces:
 - **Server / agent targets** (``PROXY_PROFILE``): the same public-only default,
   but operators who legitimately proxy to internal MCP servers can opt those
   targets in via ``settings.ssrf_allowed_hosts`` / ``settings.ssrf_allowed_cidrs``.
-  The cloud metadata address is never allowlistable in either profile.
+  Cloud/workload credential endpoints are never allowlistable in any profile.
+
+- **Credential-bearing OAuth token endpoints**
+  (``CREDENTIALED_OAUTH_PROFILE``): HTTPS-only with a deliberately empty
+  host/CIDR allowlist. Token POSTs carry client secrets, refresh tokens, or user
+  assertions and must never inherit the proxy profile's internal-target bypass.
 """
 
 from __future__ import annotations
@@ -290,6 +296,16 @@ def _builtin_airegistry_tools_allowlist() -> _Allowlist:
     )
 
 
+def _credentialed_oauth_allowlist() -> _Allowlist:
+    """Return the OAuth token-endpoint allowlist: deliberately empty.
+
+    Credential-bearing token POSTs may include a client secret, refresh token,
+    or user assertion. They must not inherit any operator proxy/skill bypass.
+    The profile also enforces HTTPS at both structural validation and transport.
+    """
+    return _Allowlist()
+
+
 def _federation_allowlist() -> _Allowlist:
     """Return the peer-federation allowlist: deliberately empty (no bypass).
 
@@ -312,6 +328,7 @@ class _Profile:
     name: str
     allowlist_factory: object  # callable returning _Allowlist
     allowed_url_identities: frozenset[str] | None = None
+    require_https: bool = False
 
 
 SKILL_PROFILE = _Profile(name="skill", allowlist_factory=_skill_allowlist)
@@ -322,6 +339,11 @@ BUILTIN_AIREGISTRY_TOOLS_PROFILE = _Profile(
     allowed_url_identities=_BUILTIN_AIREGISTRY_TOOLS_OUTBOUND_IDENTITIES,
 )
 FEDERATION_PROFILE = _Profile(name="federation", allowlist_factory=_federation_allowlist)
+CREDENTIALED_OAUTH_PROFILE = _Profile(
+    name="credentialed-oauth",
+    allowlist_factory=_credentialed_oauth_allowlist,
+    require_https=True,
+)
 
 
 def proxy_profile_for_entity_target(
@@ -498,7 +520,7 @@ def validate_url(
         raise UrlValidationError(url, "URL does not match the selected exact outbound identity")
     parsed = urlparse(normalized)
 
-    allowed_schemes = ("https",) if require_https else ("http", "https")
+    allowed_schemes = ("https",) if require_https or profile.require_https else ("http", "https")
     if parsed.scheme not in allowed_schemes:
         raise UrlValidationError(url, f"scheme '{parsed.scheme}' is not allowed")
 

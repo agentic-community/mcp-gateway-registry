@@ -242,22 +242,47 @@ def encrypt_credential_in_server_dict(
     return server_dict
 
 
+_SERVER_RESPONSE_SECRET_FIELDS: frozenset[str] = frozenset(
+    {
+        ENCRYPTED_FIELD,
+        PLAINTEXT_FIELD,
+        CUSTOM_HEADERS_ENCRYPTED_FIELD,
+        CUSTOM_HEADERS_PLAINTEXT_FIELD,
+        "client_secret",
+        "client_secret_encrypted",
+    }
+)
+
+
+def _token_free_projection(value: object) -> object:
+    """Recursively copy a response value while omitting known secret fields."""
+    if isinstance(value, dict):
+        return {
+            key: _token_free_projection(item)
+            for key, item in value.items()
+            if key not in _SERVER_RESPONSE_SECRET_FIELDS
+        }
+    if isinstance(value, list):
+        return [_token_free_projection(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_token_free_projection(item) for item in value)
+    return value
+
+
 def strip_credentials_from_dict(
     server_dict: dict,
 ) -> dict:
-    """Remove encrypted credentials from a server dict before returning in API responses.
+    """Return a recursive token-free copy for server API responses.
 
-    Args:
-        server_dict: Server config dictionary.
-
-    Returns:
-        Modified dict with credentials removed (original dict is mutated).
+    Top-level backend credentials, encrypted custom-header values, nested
+    per-version credentials, and ``egress_oauth.client_secret_encrypted`` are
+    removed. The input and all shared nested dictionaries/lists are left
+    untouched so redacting one response cannot corrupt repository/cache state.
     """
-    server_dict.pop(ENCRYPTED_FIELD, None)
-    server_dict.pop(PLAINTEXT_FIELD, None)
-    server_dict.pop(CUSTOM_HEADERS_ENCRYPTED_FIELD, None)
-    server_dict.pop(CUSTOM_HEADERS_PLAINTEXT_FIELD, None)
-    return server_dict
+    projected = _token_free_projection(server_dict)
+    if not isinstance(projected, dict):  # pragma: no cover - input type contract
+        return {}
+    return projected
 
 
 def encrypt_custom_headers_in_server_dict(

@@ -241,6 +241,36 @@ class TestStripCredentialsFromDict:
         assert result["path"] == "/test-server"
         assert "credential_updated_at" in result
 
+    def test_strips_nested_egress_and_version_secrets_without_mutation(self):
+        nested_oauth = {
+            "provider": "custom",
+            "client_id": "safe-client-id",
+            "client_secret_encrypted": "ciphertext",
+        }
+        version = {
+            "version": "v2",
+            "auth_credential_encrypted": "version-secret",
+        }
+        server_dict = {
+            "path": "/test-server",
+            "egress_oauth": nested_oauth,
+            "versions": [version],
+        }
+
+        result = strip_credentials_from_dict(server_dict)
+
+        assert result["egress_oauth"] == {
+            "provider": "custom",
+            "client_id": "safe-client-id",
+        }
+        assert "auth_credential_encrypted" not in result["versions"][0]
+        assert server_dict["egress_oauth"] is nested_oauth
+        assert server_dict["versions"][0] is version
+        assert nested_oauth["client_secret_encrypted"] == "ciphertext"
+        assert version["auth_credential_encrypted"] == "version-secret"
+        assert result["egress_oauth"] is not nested_oauth
+        assert result["versions"][0] is not version
+
     def test_strip_credentials_from_dict_no_credential_fields(self):
         """Dict without credential fields is returned unchanged."""
         # Arrange

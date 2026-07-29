@@ -20,6 +20,7 @@ from ..core.config import settings
 from ..core.endpoint_utils import get_endpoint_url
 from ..repositories.factory import get_security_scan_repository
 from ..schemas.security import SecurityScanConfig, SecurityScanResult
+from ..utils.url_guard import sanitized_url_for_log
 
 logger = logging.getLogger(__name__)
 
@@ -53,11 +54,11 @@ def _extract_bearer_token_from_headers(headers: str) -> str | None:
         else:
             logger.warning("Headers provided but no Bearer token found in X-Authorization header")
             return None
-    except json.JSONDecodeError as e:
-        # Never echo the raw headers string: it may contain a bearer token /
-        # API key. Log/raise only the parser's positional error, not the value.
-        logger.error(f"Failed to parse headers JSON: {e}")
-        raise ValueError(f"Invalid headers JSON: {e}") from e
+    except json.JSONDecodeError as exc:
+        # Never echo the raw headers string or parser detail: either may expose
+        # credential-bearing context through a higher-level error log/response.
+        logger.error("Failed to parse scanner headers JSON")
+        raise ValueError("Invalid headers JSON") from exc
 
 
 def _parse_scanner_json_output(stdout: str) -> list:
@@ -224,7 +225,12 @@ class SecurityScannerService:
             mcp_endpoint=mcp_endpoint,
         )
 
-        logger.info(f"Starting security scan for {server_url} with analyzers: {analyzers}")
+        safe_server_url = sanitized_url_for_log(server_url)
+        logger.info(
+            "Starting security scan endpoint=%s analyzers=%s",
+            safe_server_url,
+            analyzers,
+        )
 
         try:
             # Re-validate the FINAL resolved URL before spawning the scanner.
@@ -274,8 +280,13 @@ class SecurityScannerService:
             await self._scan_repo.create(result.model_dump())
 
             logger.info(
-                f"Security scan completed for {server_url}. "
-                f"Safe: {is_safe}, Critical: {critical}, High: {high}, Medium: {medium}, Low: {low}"
+                "Security scan completed endpoint=%s safe=%s critical=%d high=%d medium=%d low=%d",
+                safe_server_url,
+                is_safe,
+                critical,
+                high,
+                medium,
+                low,
             )
 
             return result
@@ -286,71 +297,68 @@ class SecurityScannerService:
             ValueError,
             RuntimeError,
             UrlValidationError,
-        ) as e:
-            logger.error(f"Security scan failed for {server_url}: {e}")
+        ) as exc:
+            failure = f"security scan failed ({type(exc).__name__})"
+            logger.error(
+                "Security scan failed endpoint=%s type=%s",
+                safe_server_url,
+                type(exc).__name__,
+            )
 
-            # Create error output
             raw_output = {
-                "error": str(e),
+                "error": failure,
                 "analysis_results": {},
                 "tool_results": [],
                 "scan_failed": True,
             }
 
-            # Return error result
             result = SecurityScanResult(
                 server_url=server_url,
-                server_path=server_path
-                or server_url,  # Use server_path if provided, fallback to URL
+                server_path=server_path or server_url,
                 scan_timestamp=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-                is_safe=False,  # Treat scanner failures as unsafe
+                is_safe=False,
                 critical_issues=0,
                 high_severity=0,
                 medium_severity=0,
                 low_severity=0,
                 analyzers_used=analyzers.split(",") if analyzers else [],
                 raw_output=raw_output,
-                output_file="",  # Repository handles storage
+                output_file="",
                 scan_failed=True,
-                error_message=str(e),
+                error_message=failure,
             )
 
-            # Save error result via repository
             await self._scan_repo.create(result.model_dump())
-
             return result
-        except Exception as e:
-            logger.exception(f"Unexpected error during security scan for {server_url}")
-
-            # Create error output
+        except Exception as exc:
+            failure = f"security scan failed ({type(exc).__name__})"
+            logger.error(
+                "Unexpected security scan failure endpoint=%s type=%s",
+                safe_server_url,
+                type(exc).__name__,
+            )
             raw_output = {
-                "error": str(e),
+                "error": failure,
                 "analysis_results": {},
                 "tool_results": [],
                 "scan_failed": True,
             }
-
-            # Return error result
             result = SecurityScanResult(
                 server_url=server_url,
-                server_path=server_path
-                or server_url,  # Use server_path if provided, fallback to URL
+                server_path=server_path or server_url,
                 scan_timestamp=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-                is_safe=False,  # Treat scanner failures as unsafe
+                is_safe=False,
                 critical_issues=0,
                 high_severity=0,
                 medium_severity=0,
                 low_severity=0,
                 analyzers_used=analyzers.split(",") if analyzers else [],
                 raw_output=raw_output,
-                output_file="",  # Repository handles storage
+                output_file="",
                 scan_failed=True,
-                error_message=str(e),
+                error_message=failure,
             )
-
-            # Save error result via repository
             await self._scan_repo.create(result.model_dump())
-
             return result
 
     def _run_mcp_scanner(
@@ -382,8 +390,8 @@ class SecurityScannerService:
             ValueError: If headers are invalid or output cannot be parsed
             RuntimeError: If scan fails for other reasons
         """
-        logger.info(f"Running security scan on: {server_url}")
-        logger.info(f"Using analyzers: {analyzers}")
+        logger.info("Running security scan endpoint=%s", sanitized_url_for_log(server_url))
+        logger.info("Using analyzers: %s", analyzers)
 
         # Build command
         cmd = [
@@ -418,33 +426,25 @@ class SecurityScannerService:
                 timeout=timeout,
             )
 
-            # Log raw output for debugging
-            logger.debug(f"Raw scanner stdout:\n{result.stdout[:500]}")
-
-            # Parse JSON output - scanner outputs JSON array after log messages
+            # Parse scanner output without logging it: stdout can contain
+            # credential-bearing response data from the scanned endpoint.
             stdout = result.stdout.strip()
             tool_results = _parse_scanner_json_output(stdout)
 
-            # Wrap in expected format with analysis_results
             raw_output = {"analysis_results": {}, "tool_results": tool_results}
-
-            # Extract findings from tool results and organize by analyzer
             raw_output["analysis_results"] = _organize_findings_by_analyzer(tool_results)
-
-            logger.debug(f"Scanner output:\n{json.dumps(raw_output, indent=2, default=str)}")
+            logger.info("Security scanner output parsed findings=%d", len(tool_results))
             return raw_output
 
-        except subprocess.TimeoutExpired as e:
-            logger.error(f"Scanner command timed out after {timeout} seconds")
-            raise RuntimeError(f"Security scan timed out after {timeout} seconds") from e
-        except subprocess.CalledProcessError as e:
-            logger.error(f"Scanner command failed with exit code {e.returncode}")
-            logger.error(f"stderr: {e.stderr}")
-            raise RuntimeError(f"Security scanner failed: {e.stderr}") from e
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse scanner output as JSON: {e}")
-            logger.error(f"Raw stdout: {result.stdout[:1000]}")
-            raise RuntimeError("Failed to parse security scanner output") from e
+        except subprocess.TimeoutExpired as exc:
+            logger.error("Scanner command timed out timeout_seconds=%d", timeout)
+            raise RuntimeError("Security scan timed out") from exc
+        except subprocess.CalledProcessError as exc:
+            logger.error("Scanner command failed exit_code=%d", exc.returncode)
+            raise RuntimeError("Security scanner command failed") from exc
+        except (json.JSONDecodeError, ValueError) as exc:
+            logger.error("Failed to parse security scanner output type=%s", type(exc).__name__)
+            raise RuntimeError("Failed to parse security scanner output") from exc
 
     def _analyze_scan_results(self, raw_output: dict) -> tuple[bool, int, int, int, int]:
         """
@@ -509,8 +509,11 @@ class SecurityScannerService:
             # builder still dedups defensively in case a backend returns dupes.
             scans = await self._scan_repo.list_latest()
             return build_scan_summary_map(scans)
-        except Exception:
-            logger.exception("Failed to bulk-load server security scan summaries")
+        except Exception as exc:
+            logger.error(
+                "Failed to bulk-load server security scan summaries type=%s",
+                type(exc).__name__,
+            )
             return {}
 
     async def get_scan_result(self, server_path: str) -> dict | None:
@@ -528,17 +531,19 @@ class SecurityScannerService:
             scan_result = await self._scan_repo.get_latest(server_path)
 
             if scan_result:
-                logger.info(f"Loaded security scan results for {server_path} from repository")
-                # Convert to dict if needed
+                logger.info("Loaded security scan results from repository")
                 if hasattr(scan_result, "model_dump"):
                     return scan_result.model_dump()
                 return scan_result
 
-            logger.warning(f"No security scan results found for server {server_path}")
+            logger.warning("No security scan results found for server")
             return None
 
-        except Exception as e:
-            logger.exception(f"Unexpected error loading security scan results for {server_path}")
+        except Exception as exc:
+            logger.error(
+                "Unexpected security scan result lookup failure type=%s",
+                type(exc).__name__,
+            )
             return None
 
 

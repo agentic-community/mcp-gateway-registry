@@ -18,6 +18,8 @@ from mcp import ClientSession
 from mcp.client.sse import sse_client
 from mcp.client.streamable_http import streamablehttp_client
 
+from ..utils.url_guard import sanitized_url_for_log
+
 logger = logging.getLogger(__name__)
 
 
@@ -46,7 +48,6 @@ def _assert_mcp_url_fetchable(
     from ..exceptions import UrlValidationError
     from ..utils.url_guard import (
         proxy_profile_for_entity_target,
-        sanitized_url_for_log,
         validate_url,
     )
 
@@ -57,18 +58,17 @@ def _assert_mcp_url_fetchable(
         profile = proxy_profile_for_entity_target("mcp_server", entity_path, registered_target, url)
         validate_url(url, profile=profile)
         return True
-    except UrlValidationError as e:
+    except UrlValidationError:
         logger.warning(
-            "MCP connection blocked by SSRF guard for %s: %s",
+            "MCP connection blocked by SSRF guard for %s",
             sanitized_url_for_log(url),
-            e.reason,
         )
         return False
-    except Exception as e:  # pragma: no cover - defensive, fail closed
+    except Exception as exc:  # pragma: no cover - defensive, fail closed
         logger.warning(
-            "MCP connection blocked (validation error) for %s: %s",
+            "MCP connection blocked for %s validation_type=%s",
             sanitized_url_for_log(url),
-            e,
+            type(exc).__name__,
         )
         return False
 
@@ -113,7 +113,7 @@ def normalize_sse_endpoint_url(endpoint_url: str) -> str:
         mount_path = match.group(1)  # e.g., "/currenttime"
         rest_of_url = match.group(2)  # e.g., "/messages/?session_id=123"
 
-        logger.debug(f"Stripping mount path '{mount_path}' from endpoint URL: {endpoint_url}")
+        logger.debug("Stripping MCP SSE mount path=%s", mount_path)
         return rest_of_url
 
     # If no mount path pattern detected, return as-is
@@ -124,110 +124,85 @@ import httpx
 
 
 def _build_headers_for_server(
-    server_info: dict = None,
+    server_info: dict | None = None,
     destination_url: str | None = None,
 ) -> dict[str, str]:
+    """Build MCP headers, attaching server values only to a validated target.
+
+    Protocol headers are always returned. Every server-provided header,
+    encrypted custom header, and auth credential is withheld unless the exact
+    destination passes the entity-bound URL guard before any decryption occurs.
     """
-    Build HTTP headers for server requests by merging server-specific headers.
+    headers = {
+        "Accept": "application/json, text/event-stream",
+        "Content-Type": "application/json",
+    }
+    if not server_info:
+        return headers
 
-    Args:
-        server_info: Server configuration dictionary
-        destination_url: The URL the resulting headers will be sent to. When any
-            encrypted secret (custom headers or an auth credential) would be
-            attached, this destination is re-validated through the shared SSRF
-            guard before decryption. If it is missing or fails validation, the
-            decrypted secrets are NOT attached (fail closed) so a mutated /
-            unvalidated backend can never receive them. Non-secret headers
-            (Accept/Content-Type and plaintext server headers) are unaffected.
-
-    Returns:
-        Headers dictionary with server-specific headers
-    """
-    # Start with default MCP headers (required by some servers like Cloudflare)
-    headers = {"Accept": "application/json, text/event-stream", "Content-Type": "application/json"}
-
-    # Merge server-specific headers if present
-    logger.info(
-        f"[AUTH DEBUG] _build_headers_for_server called, server_info is None: {server_info is None}"
+    has_server_values = bool(
+        server_info.get("headers")
+        or server_info.get("custom_headers_encrypted")
+        or (
+            server_info.get("auth_scheme", "none") != "none"
+            and server_info.get("auth_credential_encrypted")
+        )
     )
-    if server_info:
-        logger.info(f"[AUTH DEBUG] server_info keys: {list(server_info.keys())}")
-        server_headers = server_info.get("headers", [])
-        if server_headers and isinstance(server_headers, list):
-            for header_dict in server_headers:
-                if isinstance(header_dict, dict):
-                    from ..common.log_redaction import redact_headers
-
-                    headers.update(header_dict)
-                    logger.debug(
-                        f"Added server headers to MCP client: {redact_headers(header_dict)}"
-                    )
-
-        # Gate every decrypted secret on a fresh SSRF re-validation of the exact
-        # destination the headers will be sent to. Callers validate before
-        # connecting, but self-guarding here means a future caller that forgets
-        # cannot leak a decrypted credential to a private/metadata address. If we
-        # have a secret to attach but no validated destination, fail closed and
-        # attach no secret.
-        _has_secret = bool(
-            server_info.get("custom_headers_encrypted")
-            or (
-                server_info.get("auth_scheme", "none") != "none"
-                and server_info.get("auth_credential_encrypted")
-            )
+    destination_safe = bool(destination_url) and _assert_mcp_url_fetchable(
+        destination_url,
+        server_info,
+    )
+    if has_server_values and not destination_safe:
+        logger.warning(
+            "MCP headers withheld service=%s destination=%s reason=URL validation failed",
+            server_info.get("service_path") or server_info.get("path") or "unknown",
+            sanitized_url_for_log(destination_url or ""),
         )
-        _destination_safe = bool(destination_url) and _assert_mcp_url_fetchable(
-            destination_url, server_info
-        )
-        if _has_secret and not _destination_safe:
-            logger.warning(
-                "Not attaching decrypted headers/credential for '%s': destination "
-                "missing or failed SSRF re-validation.",
-                server_info.get("service_path", "unknown"),
-            )
-            return headers
+        return headers
 
-        # Custom headers go first; auth_scheme below overwrites name collisions
-        encrypted_custom = server_info.get("custom_headers_encrypted")
-        if encrypted_custom:
-            from ..utils.credential_encryption import decrypt_custom_headers
-
-            decrypted = decrypt_custom_headers(encrypted_custom)
-            for entry in decrypted:
-                headers[entry["name"]] = entry["value"]
-            logger.debug(
-                f"Merged {len(decrypted)} custom headers into outbound request "
-                f"(names only): {[e['name'] for e in decrypted]}"
-            )
-
-        # Inject auth header from encrypted credentials (if present)
-        auth_scheme = server_info.get("auth_scheme", "none")
-        encrypted_credential = server_info.get("auth_credential_encrypted")
-
-        logger.debug(
-            f"[AUTH DEBUG] auth_scheme: {auth_scheme}, has_credential: {bool(encrypted_credential)}"
-        )
-
-        if auth_scheme != "none" and encrypted_credential:
-            from ..utils.credential_encryption import decrypt_credential
-
-            credential = decrypt_credential(encrypted_credential)
-            if credential:
-                if auth_scheme == "bearer":
-                    header_name = server_info.get("auth_header_name", "Authorization")
-                    headers[header_name] = f"Bearer {credential}"
-                    logger.debug("Added Bearer auth header for MCP client")
-                elif auth_scheme == "api_key":
-                    header_name = server_info.get("auth_header_name", "X-API-Key")
-                    headers[header_name] = credential
-                    logger.debug(f"Added API key header '{header_name}' for MCP client")
-            else:
-                logger.warning(
-                    f"Could not decrypt credential for "
-                    f"'{server_info.get('service_path', 'unknown')}'. "
-                    f"MCP client will proceed without auth."
+    server_headers = server_info.get("headers", [])
+    if isinstance(server_headers, list):
+        for header_dict in server_headers:
+            if isinstance(header_dict, dict):
+                headers.update(header_dict)
+                logger.debug(
+                    "Added server header names to MCP client names=%s",
+                    sorted(str(name) for name in header_dict),
                 )
 
+    encrypted_custom = server_info.get("custom_headers_encrypted")
+    if encrypted_custom:
+        from ..utils.credential_encryption import decrypt_custom_headers
+
+        decrypted = decrypt_custom_headers(encrypted_custom)
+        for entry in decrypted:
+            headers[entry["name"]] = entry["value"]
+        logger.debug(
+            "Merged encrypted custom headers into MCP request count=%d names=%s",
+            len(decrypted),
+            sorted(entry["name"] for entry in decrypted),
+        )
+
+    auth_scheme = server_info.get("auth_scheme", "none")
+    encrypted_credential = server_info.get("auth_credential_encrypted")
+    if auth_scheme != "none" and encrypted_credential:
+        from ..utils.credential_encryption import decrypt_credential
+
+        credential = decrypt_credential(encrypted_credential)
+        if credential:
+            if auth_scheme == "bearer":
+                header_name = server_info.get("auth_header_name", "Authorization")
+                headers[header_name] = f"Bearer {credential}"
+                logger.debug("Added bearer auth header to MCP request")
+            elif auth_scheme == "api_key":
+                header_name = server_info.get("auth_header_name", "X-API-Key")
+                headers[header_name] = credential
+                logger.debug("Added API-key header name=%s to MCP request", header_name)
+        else:
+            logger.warning(
+                "MCP credential decryption failed service=%s",
+                server_info.get("service_path") or server_info.get("path") or "unknown",
+            )
     return headers
 
 
@@ -255,7 +230,11 @@ def normalize_sse_endpoint_url_for_request(url_str: str) -> str:
             return url_str
 
         normalized = f"{base_url}{messages_path}"
-        logger.debug(f"Normalized request URL: {url_str} -> {normalized}")
+        logger.debug(
+            "Normalized MCP request URL from=%s to=%s",
+            sanitized_url_for_log(url_str),
+            sanitized_url_for_log(normalized),
+        )
         return normalized
 
     return url_str
@@ -275,10 +254,10 @@ async def detect_server_transport_aware(base_url: str, server_info: dict = None)
     """
     # If URL already has a transport endpoint, detect from it
     if base_url.endswith("/sse") or "/sse/" in base_url:
-        logger.debug(f"Server URL {base_url} already has SSE endpoint")
+        logger.debug("Server URL %s already has SSE endpoint", sanitized_url_for_log(base_url))
         return "sse"
     elif base_url.endswith("/mcp") or "/mcp/" in base_url:
-        logger.debug(f"Server URL {base_url} already has MCP endpoint")
+        logger.debug("Server URL %s already has MCP endpoint", sanitized_url_for_log(base_url))
         return "streamable-http"
 
     # Use server configuration if available
@@ -312,10 +291,10 @@ async def detect_server_transport(base_url: str) -> str:
     """
     # If URL already has a transport endpoint, detect from it
     if base_url.endswith("/sse") or "/sse/" in base_url:
-        logger.debug(f"Server URL {base_url} already has SSE endpoint")
+        logger.debug("Server URL %s already has SSE endpoint", sanitized_url_for_log(base_url))
         return "sse"
     elif base_url.endswith("/mcp") or "/mcp/" in base_url:
-        logger.debug(f"Server URL {base_url} already has MCP endpoint")
+        logger.debug("Server URL %s already has MCP endpoint", sanitized_url_for_log(base_url))
         return "streamable-http"
 
     # Fail closed on SSRF before probing the target with the (unpinnable) SDK
@@ -328,22 +307,35 @@ async def detect_server_transport(base_url: str) -> str:
     try:
         mcp_url = base_url.rstrip("/") + "/mcp/"
         async with streamablehttp_client(url=mcp_url) as connection:
-            logger.debug(f"Server at {base_url} supports streamable-http transport")
+            logger.debug(
+                "Server at %s supports streamable-http transport", sanitized_url_for_log(base_url)
+            )
             return "streamable-http"
     except Exception as e:
-        logger.debug(f"Streamable-HTTP test failed for {base_url}: {e}")
+        logger.debug(
+            "Streamable-HTTP probe failed endpoint=%s type=%s",
+            sanitized_url_for_log(base_url),
+            type(e).__name__,
+        )
 
     # Fallback to SSE
     try:
         sse_url = base_url.rstrip("/") + "/sse"
         async with sse_client(sse_url) as connection:
-            logger.debug(f"Server at {base_url} supports SSE transport")
+            logger.debug("Server at %s supports SSE transport", sanitized_url_for_log(base_url))
             return "sse"
     except Exception as e:
-        logger.debug(f"SSE test failed for {base_url}: {e}")
+        logger.debug(
+            "SSE probe failed endpoint=%s type=%s",
+            sanitized_url_for_log(base_url),
+            type(e).__name__,
+        )
 
     # Default to streamable-http if detection fails
-    logger.warning(f"Could not detect transport for {base_url}, defaulting to streamable-http")
+    logger.warning(
+        "Could not detect transport endpoint=%s; defaulting to streamable-http",
+        sanitized_url_for_log(base_url),
+    )
     return "streamable-http"
 
 
@@ -368,7 +360,11 @@ async def get_tools_from_server_with_transport(
     if transport == "auto":
         transport = await detect_server_transport(base_url)
 
-    logger.info(f"Attempting to connect to MCP server at {base_url} using {transport} transport...")
+    logger.info(
+        "Attempting MCP connection endpoint=%s transport=%s",
+        sanitized_url_for_log(base_url),
+        transport,
+    )
 
     try:
         if transport == "streamable-http":
@@ -381,7 +377,7 @@ async def get_tools_from_server_with_transport(
 
     except Exception as e:
         logger.error(
-            f"MCP Check Error: Failed to get tool list from {base_url} with {transport}: {type(e).__name__} - {e}"
+            f"MCP Check Error: Failed to get tool list from {sanitized_url_for_log(base_url)} with {transport}: {type(e).__name__}"
         )
         return None
 
@@ -391,21 +387,14 @@ async def _get_tools_streamable_http(base_url: str, server_info: dict = None) ->
     # Check if server_info has explicit mcp_endpoint
     explicit_endpoint = server_info.get("mcp_endpoint") if server_info else None
 
-    # Fail closed on SSRF BEFORE decrypting/building credential headers: a
-    # target that resolves to a private/metadata address must never receive the
-    # server's decrypted backend credentials. Validate the actual endpoint about
-    # to be connected to (explicit endpoint if set, else the base URL).
-    if not _assert_mcp_url_fetchable(explicit_endpoint or base_url, server_info):
-        return None
-
-    # Build headers for the server (destination re-validated inside before any
-    # decrypted secret is attached).
-    headers = _build_headers_for_server(server_info, destination_url=explicit_endpoint or base_url)
+    # Derive and validate each exact destination before building/decrypting its
+    # credential headers. A base URL check is insufficient when the actual MCP
+    # endpoint adds a path or query parameter.
 
     # If explicit endpoint is provided, use it directly (single attempt)
     if explicit_endpoint:
         mcp_url = explicit_endpoint
-        logger.info(f"MCP Client: Using explicit mcp_endpoint: {mcp_url}")
+        logger.info("MCP client using explicit endpoint=%s", sanitized_url_for_log(mcp_url))
 
         # Handle servers imported from anthropic by adding required query parameter
         if (
@@ -420,6 +409,7 @@ async def _get_tools_streamable_http(base_url: str, server_info: dict = None) ->
 
         if not _assert_mcp_url_fetchable(mcp_url, server_info):
             return None
+        headers = _build_headers_for_server(server_info, destination_url=mcp_url)
 
         try:
             async with streamablehttp_client(url=mcp_url, headers=headers) as (
@@ -433,7 +423,11 @@ async def _get_tools_streamable_http(base_url: str, server_info: dict = None) ->
                     result = _extract_tool_details(tools_response)
                     return result
         except Exception as e:
-            logger.error(f"MCP Check Error: Streamable-HTTP connection failed to {mcp_url}: {e}")
+            logger.error(
+                "Streamable-HTTP connection failed endpoint=%s type=%s",
+                sanitized_url_for_log(mcp_url),
+                type(e).__name__,
+            )
             return None
 
     # If URL already has MCP endpoint, use it directly
@@ -452,11 +446,12 @@ async def _get_tools_streamable_http(base_url: str, server_info: dict = None) ->
             elif "instance_id=" not in mcp_url:
                 mcp_url += "&instance_id=default"
         else:
-            logger.info(f"DEBUG: Not a Strata server, URL unchanged: {mcp_url}")
+            logger.debug("MCP endpoint unchanged=%s", sanitized_url_for_log(mcp_url))
 
-        logger.info(f"DEBUG: About to connect to: {mcp_url}")
+        logger.debug("MCP connection starting endpoint=%s", sanitized_url_for_log(mcp_url))
         if not _assert_mcp_url_fetchable(mcp_url, server_info):
             return None
+        headers = _build_headers_for_server(server_info, destination_url=mcp_url)
         try:
             async with streamablehttp_client(url=mcp_url, headers=headers) as (
                 read,
@@ -470,7 +465,11 @@ async def _get_tools_streamable_http(base_url: str, server_info: dict = None) ->
                     result = _extract_tool_details(tools_response)
                     return result
         except Exception as e:
-            logger.error(f"MCP Check Error: Streamable-HTTP connection failed to {base_url}: {e}")
+            logger.error(
+                "Streamable-HTTP connection failed endpoint=%s type=%s",
+                sanitized_url_for_log(base_url),
+                type(e).__name__,
+            )
 
             return None
     else:
@@ -480,8 +479,9 @@ async def _get_tools_streamable_http(base_url: str, server_info: dict = None) ->
         for mcp_url in endpoints_to_try:
             if not _assert_mcp_url_fetchable(mcp_url, server_info):
                 continue
+            headers = _build_headers_for_server(server_info, destination_url=mcp_url)
             try:
-                logger.info(f"MCP Client: Trying streamable-http endpoint: {mcp_url}")
+                logger.info("Trying streamable-http endpoint=%s", sanitized_url_for_log(mcp_url))
                 async with streamablehttp_client(url=mcp_url, headers=headers) as (
                     read,
                     write,
@@ -491,19 +491,22 @@ async def _get_tools_streamable_http(base_url: str, server_info: dict = None) ->
                         await asyncio.wait_for(session.initialize(), timeout=10.0)
                         tools_response = await asyncio.wait_for(session.list_tools(), timeout=15.0)
 
-                        logger.info(f"MCP Client: Successfully connected to {mcp_url}")
+                        logger.info(
+                            "MCP connection succeeded endpoint=%s", sanitized_url_for_log(mcp_url)
+                        )
                         return _extract_tool_details(tools_response)
 
             except TimeoutError:
                 logger.error(
-                    f"MCP Check Error: Timeout during streamable-http session with {mcp_url}."
+                    "MCP streamable-http timeout endpoint=%s",
+                    sanitized_url_for_log(mcp_url),
                 )
                 if mcp_url == endpoints_to_try[0]:
                     continue
                 return None
             except Exception as e:
                 logger.error(
-                    f"MCP Check Error: Streamable-HTTP connection failed to {mcp_url}: {e}"
+                    f"MCP Check Error: Streamable-HTTP connection failed to {sanitized_url_for_log(mcp_url)}: {type(e).__name__}"
                 )
                 if mcp_url == endpoints_to_try[0]:
                     continue
@@ -520,7 +523,7 @@ async def _get_tools_sse(base_url: str, server_info: dict = None) -> list[dict] 
     # Resolve SSE endpoint URL
     if explicit_endpoint:
         sse_url = explicit_endpoint
-        logger.info(f"MCP Client: Using explicit sse_endpoint: {sse_url}")
+        logger.info("MCP client using explicit SSE endpoint=%s", sanitized_url_for_log(sse_url))
     elif base_url.endswith("/sse") or "/sse/" in base_url:
         sse_url = base_url
     else:
@@ -565,10 +568,17 @@ async def _get_tools_sse(base_url: str, server_info: dict = None) -> list[dict] 
             httpx.AsyncClient.request = original_request  # type: ignore[method-assign]  # restore monkeypatch
 
     except TimeoutError:
-        logger.error(f"MCP Check Error: Timeout during SSE session with {base_url}.")
+        logger.error(
+            "MCP timeout during SSE session endpoint=%s",
+            sanitized_url_for_log(base_url),
+        )
         return None
     except Exception as e:
-        logger.error(f"MCP Check Error: SSE connection failed to {base_url}: {e}")
+        logger.error(
+            "SSE connection failed endpoint=%s type=%s",
+            sanitized_url_for_log(base_url),
+            type(e).__name__,
+        )
         return None
 
 
@@ -580,10 +590,6 @@ def _extract_tool_details(tools_response) -> list[dict]:
         for tool in tools_response.tools:
             tool_name = getattr(tool, "name", "Unknown Name")
             tool_desc = getattr(tool, "description", None) or getattr(tool, "__doc__", None)
-
-            # Log tool description for debugging
-            desc_preview = repr(tool_desc)[:100] if tool_desc else "None"
-            logger.debug(f"Tool '{tool_name}' description: {desc_preview}")
 
             # Parse docstring into sections
             parsed_desc = {
@@ -649,10 +655,7 @@ def _extract_tool_details(tools_response) -> list[dict]:
                 }
             )
 
-    tool_names = [tool["name"] for tool in tool_details_list]
-    logger.info(
-        f"Successfully retrieved details for {len(tool_details_list)} tools: {', '.join(tool_names)}"
-    )
+    logger.info("Successfully retrieved tool details count=%d", len(tool_details_list))
     return tool_details_list
 
 
@@ -679,7 +682,9 @@ async def get_tools_from_server_with_server_info(
     transport = await detect_server_transport_aware(base_url, server_info)
 
     logger.info(
-        f"Attempting to connect to MCP server at {base_url} using {transport} transport (server-info aware)..."
+        "Attempting MCP connection endpoint=%s transport=%s server_info=true",
+        sanitized_url_for_log(base_url),
+        transport,
     )
 
     try:
@@ -693,7 +698,7 @@ async def get_tools_from_server_with_server_info(
 
     except Exception as e:
         logger.error(
-            f"MCP Check Error: Failed to get tool list from {base_url} with {transport}: {type(e).__name__} - {e}"
+            f"MCP Check Error: Failed to get tool list from {sanitized_url_for_log(base_url)} with {transport}: {type(e).__name__}"
         )
         return None
 
@@ -736,11 +741,11 @@ async def get_mcp_connection_result(
     # Use transport-aware detection
     transport = await detect_server_transport_aware(base_url, server_info)
 
-    logger.info(f"Getting MCP connection result from {base_url} using {transport} transport...")
-
-    # Build headers for the server (destination re-validated inside before any
-    # decrypted secret is attached).
-    headers = _build_headers_for_server(server_info, destination_url=explicit_endpoint or base_url)
+    logger.info(
+        "Getting MCP connection result endpoint=%s transport=%s",
+        sanitized_url_for_log(base_url),
+        transport,
+    )
 
     if explicit_endpoint:
         mcp_url = explicit_endpoint
@@ -760,8 +765,10 @@ async def get_mcp_connection_result(
         elif "instance_id=" not in mcp_url:
             mcp_url += "&instance_id=default"
 
-    if transport == "streamable-http" and not _assert_mcp_url_fetchable(mcp_url, server_info):
-        return None
+    if transport == "streamable-http":
+        if not _assert_mcp_url_fetchable(mcp_url, server_info):
+            return None
+        headers = _build_headers_for_server(server_info, destination_url=mcp_url)
 
     try:
         if transport == "streamable-http":
@@ -791,7 +798,7 @@ async def get_mcp_connection_result(
 
                     if mcp_server_info:
                         logger.info(
-                            f"MCP Server Info from {base_url}: "
+                            f"MCP Server Info from {sanitized_url_for_log(base_url)}: "
                             f"name={mcp_server_info.get('name')}, "
                             f"version={mcp_server_info.get('version')}"
                         )
@@ -805,6 +812,9 @@ async def get_mcp_connection_result(
                 sse_url = sse_endpoint
             else:
                 sse_url = base_url.rstrip("/") + "/sse"
+            if not _assert_mcp_url_fetchable(sse_url, server_info):
+                return None
+            headers = _build_headers_for_server(server_info, destination_url=sse_url)
 
             async with sse_client(url=sse_url, headers=headers) as (read, write):
                 async with ClientSession(read, write) as session:
@@ -828,7 +838,7 @@ async def get_mcp_connection_result(
 
                     if mcp_server_info:
                         logger.info(
-                            f"MCP Server Info from {base_url}: "
+                            f"MCP Server Info from {sanitized_url_for_log(base_url)}: "
                             f"name={mcp_server_info.get('name')}, "
                             f"version={mcp_server_info.get('version')}"
                         )
@@ -840,12 +850,13 @@ async def get_mcp_connection_result(
             return None
 
     except TimeoutError:
-        logger.error(f"MCP Check Error: Timeout connecting to {mcp_url}")
+        logger.error("MCP connection timeout endpoint=%s", sanitized_url_for_log(mcp_url))
         return None
     except Exception as e:
         logger.error(
-            f"MCP Check Error: Failed to get connection result from {base_url}: "
-            f"{type(e).__name__} - {e}"
+            "MCP connection-result failure endpoint=%s type=%s",
+            sanitized_url_for_log(base_url),
+            type(e).__name__,
         )
         return None
 

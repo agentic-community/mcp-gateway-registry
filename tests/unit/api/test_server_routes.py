@@ -904,8 +904,20 @@ class TestRegisterService:
             "is_new_version": False,
         }
 
-        with patch(
-            "registry.auth.dependencies.user_has_ui_permission_for_service", return_value=True
+        def fake_encrypt(entry):
+            entry["auth_credential_encrypted"] = "registration-ciphertext"
+            entry.pop("auth_credential", None)
+            return entry
+
+        with (
+            patch(
+                "registry.auth.dependencies.user_has_ui_permission_for_service",
+                return_value=True,
+            ),
+            patch(
+                "registry.api.server_routes.encrypt_credential_in_server_dict",
+                side_effect=fake_encrypt,
+            ),
         ):
             # Act
             response = test_client_admin.post(
@@ -918,6 +930,8 @@ class TestRegisterService:
                     "tags": "test, new",
                     "num_tools": 5,
                     "license": "MIT",
+                    "auth_scheme": "bearer",
+                    "auth_credential": "registration-plaintext",
                 },
             )
 
@@ -926,8 +940,64 @@ class TestRegisterService:
             data = response.json()
             assert data["message"] == "Service registered successfully"
             assert data["service"]["server_name"] == "New Server"
+            persisted = mock_server_service.register_server.call_args.args[0]
+            assert persisted["auth_credential_encrypted"] == "registration-ciphertext"
+            serialized = str(data)
+            assert "auth_credential_encrypted" not in serialized
+            assert "registration-ciphertext" not in serialized
+            assert "registration-plaintext" not in serialized
             mock_server_service.register_server.assert_called_once()
             mock_nginx_reload_scheduler.mark_dirty.assert_called()
+
+    def test_register_new_version_response_strips_encrypted_credential(
+        self,
+        test_client_admin,
+        mock_server_service,
+        mock_nginx_service,
+        mock_nginx_reload_scheduler,
+        mock_health_service,
+    ):
+        mock_server_service.register_server.return_value = {
+            "success": True,
+            "message": "Server version registered successfully",
+            "is_new_version": True,
+            "existing_version": "1.0.0",
+        }
+
+        def fake_encrypt(entry):
+            entry["auth_credential_encrypted"] = "version-ciphertext"
+            entry.pop("auth_credential", None)
+            return entry
+
+        with (
+            patch(
+                "registry.auth.dependencies.user_has_ui_permission_for_service",
+                return_value=True,
+            ),
+            patch(
+                "registry.api.server_routes.encrypt_credential_in_server_dict",
+                side_effect=fake_encrypt,
+            ),
+        ):
+            response = test_client_admin.post(
+                "/api/register",
+                data={
+                    "name": "Versioned Server",
+                    "description": "A new version",
+                    "path": "/versioned-server",
+                    "proxy_pass_url": "http://localhost:9000",
+                    "auth_scheme": "bearer",
+                    "auth_credential": "version-plaintext",
+                },
+            )
+
+        assert response.status_code == 201
+        serialized = str(response.json())
+        assert "auth_credential_encrypted" not in serialized
+        assert "version-ciphertext" not in serialized
+        assert "version-plaintext" not in serialized
+        persisted = mock_server_service.register_server.call_args.args[0]
+        assert persisted["auth_credential_encrypted"] == "version-ciphertext"
 
     def test_register_service_honors_supplied_id(
         self,
@@ -1444,9 +1514,18 @@ class TestInternalRegister:
             "is_new_version": False,
         }
 
+        def fake_encrypt(entry):
+            entry["auth_credential_encrypted"] = "internal-registration-ciphertext"
+            entry.pop("auth_credential", None)
+            return entry
+
         with (
             patch.dict("os.environ", {"SECRET_KEY": "testpass"}),
             patch("registry.utils.scopes_manager.update_server_scopes", new_callable=AsyncMock),
+            patch(
+                "registry.api.server_routes.encrypt_credential_in_server_dict",
+                side_effect=fake_encrypt,
+            ),
         ):
             token = generate_internal_token(subject="test-service", purpose="test")
             # Act
@@ -1459,6 +1538,8 @@ class TestInternalRegister:
                     "proxy_pass_url": "http://localhost:9000",
                     "tags": "internal",
                     "num_tools": 3,
+                    "auth_scheme": "bearer",
+                    "auth_credential": "internal-registration-plaintext",
                 },
                 headers={"Authorization": f"Bearer {token}"},
             )
@@ -1467,6 +1548,12 @@ class TestInternalRegister:
             assert response.status_code == 201
             data = response.json()
             assert data["message"] == "Service registered successfully"
+            persisted = mock_server_service.register_server.call_args.args[0]
+            assert persisted["auth_credential_encrypted"] == "internal-registration-ciphertext"
+            serialized = str(data)
+            assert "auth_credential_encrypted" not in serialized
+            assert "internal-registration-ciphertext" not in serialized
+            assert "internal-registration-plaintext" not in serialized
             mock_server_service.register_server.assert_called_once()
 
     def test_internal_register_missing_auth_header(self, test_client_no_auth):

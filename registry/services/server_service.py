@@ -72,10 +72,11 @@ class ServerService:
             Prepared server dict with auth_scheme migrated and credentials
             optionally stripped.
         """
-        _migrate_auth_type_to_auth_scheme(server_dict)
+        prepared = dict(server_dict)
+        _migrate_auth_type_to_auth_scheme(prepared)
         if not include_credentials:
-            strip_credentials_from_dict(server_dict)
-        return server_dict
+            prepared = strip_credentials_from_dict(prepared)
+        return prepared
 
     async def load_servers_and_state(self):
         """Load server definitions and persisted state from repository."""
@@ -291,8 +292,8 @@ class ServerService:
         """
         result = await self._repo.get(path)
         if result:
-            self._prepare_server_dict(result, include_credentials)
-        return result
+            return self._prepare_server_dict(result, include_credentials)
+        return None
 
     async def get_all_servers(
         self,
@@ -316,9 +317,11 @@ class ServerService:
         # Query repository directly instead of using cache
         all_servers = await self._repo.list_all(exclude_tool_list=exclude_tool_list)
 
-        # Apply read-time migration and credential stripping
-        for server_info in all_servers.values():
-            self._prepare_server_dict(server_info, include_credentials)
+        # Apply read-time migration and credential stripping as fresh projections.
+        all_servers = {
+            path: self._prepare_server_dict(server_info, include_credentials)
+            for path, server_info in all_servers.items()
+        }
 
         # Filter out inactive servers (non-default versions) unless requested
         if not include_inactive:
@@ -359,9 +362,11 @@ class ServerService:
         )
         total = await self._repo.count()
 
-        # Apply read-time migration and credential stripping
-        for server_info in servers.values():
-            self._prepare_server_dict(server_info, include_credentials=False)
+        # Apply read-time migration and credential stripping as fresh projections.
+        servers = {
+            path: self._prepare_server_dict(server_info, include_credentials=False)
+            for path, server_info in servers.items()
+        }
 
         # Filter out inactive servers (non-default versions)
         servers = {
@@ -411,9 +416,11 @@ class ServerService:
         # Query repository directly instead of using cache
         all_servers = await self._repo.list_all()
 
-        # Apply read-time migration and credential stripping
-        for server_info in all_servers.values():
-            self._prepare_server_dict(server_info, include_credentials=False)
+        # Apply read-time migration and credential stripping as fresh projections.
+        all_servers = {
+            path: self._prepare_server_dict(server_info, include_credentials=False)
+            for path, server_info in all_servers.items()
+        }
 
         # Filter out inactive servers (non-default versions) unless requested
         if not include_inactive:
@@ -498,10 +505,13 @@ class ServerService:
 
             filtered_servers = await self._repo.list_by_ids(candidate_paths)
 
-            # Apply read-time migration and credential stripping
-            for server_info in filtered_servers.values():
-                self._prepare_server_dict(server_info, include_credentials=False)
-                if exclude_tool_list:
+            # Apply read-time migration and credential stripping as fresh projections.
+            filtered_servers = {
+                path: self._prepare_server_dict(server_info, include_credentials=False)
+                for path, server_info in filtered_servers.items()
+            }
+            if exclude_tool_list:
+                for server_info in filtered_servers.values():
                     server_info.pop("tool_list", None)
 
             # Filter out inactive servers (non-default versions) for parity with

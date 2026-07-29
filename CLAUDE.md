@@ -733,7 +733,9 @@ working in those areas.
 - **Use the canonical helper, never reinvent/copy-paste** (see the "Canonical
   helpers" section in the guidelines doc): outbound HTTP from user/registry URLs →
   `registry/utils/url_guard.py` `guarded_client`/`guarded_async_client` (never a
-  bare `httpx` client); CSRF → `registry/auth/csrf.py`; internal service auth →
+  bare `httpx` client), IP categories/unwrapping → `registry/utils/ip_guard.py`,
+  URL identity/logging → `normalize_url_identity`/`sanitized_url_for_log`; CSRF →
+  `registry/auth/csrf.py`; internal service auth →
   `registry/auth/internal.py`; signing-secret validation →
   `registry/common/secret_key.py`; read redaction → `registry/services/visibility.py`;
   frontend hrefs → `frontend/src/utils/safeUrl.ts`; log redaction (never log raw
@@ -749,11 +751,15 @@ working in those areas.
   use one chokepoint that raises and denylists the weak value. Example creds must
   be unmistakably fake (`YOUR_*`).
 - **SSRF:** one shared hardened URL guard for every outbound fetch — block
-  RFC-1918/loopback/link-local/reserved/multicast/metadata (`169.254.169.254`),
-  unwrap IPv4-mapped IPv6, require http/https. Validate at registration AND pin
-  the resolved IP at fetch time (re-validate per redirect); never attach
-  credentials to a target that fails validation. Internal targets are opt-in
-  allowlist, default deny.
+  RFC-1918/loopback/link-local/reserved/multicast and exact cloud/workload
+  metadata endpoints (AWS plus Alibaba `100.100.100.200`), including scoped/
+  mapped/NAT64/6to4/Teredo forms. Validate at registration AND pin at fetch time.
+  Credentialed OAuth token endpoints MUST use the HTTPS-only empty-allowlist
+  `CREDENTIALED_OAUTH_PROFILE` at both points, never `PROXY_PROFILE`. Credential
+  builders self-guard the exact derived destination before adding/decrypting any
+  configured header; missing/invalid/mismatched destinations return protocol-
+  only headers. Actual ARD fetches use guarded transport; its domain wrapper
+  delegates canonical URL/IP logic.
 - **Injection:** sanitize at EVERY interpolation site AND validate at the source
   (a sanitizer that exists but isn't called is worthless); `re.escape` user input
   in regex/`$regex` queries.
@@ -768,9 +774,11 @@ working in those areas.
   after signature verification) + PKCE (`S256`), fail closed if the verifier is
   missing. Authorize the EXACT bytes you forward, never a separately-captured
   copy; fail closed when the body isn't inspectable.
-- **Read endpoints:** redaction + access checks must be uniform across the whole
-  entity family (versions, bulk, discovery projections, search, admin-config
-  reads) via one shared helper — not just the reported endpoint.
+- **Response projection:** redaction + access checks must be uniform across the
+  whole entity family (versions, bulk, discovery projections, search, admin-config
+  reads) via one shared helper — not just the reported endpoint. Mutation success
+  responses, webhooks, lifecycle events, and exports must project a fresh recursive
+  token-free copy; never serialize the encrypted storage object directly.
 - **Tokens/JWT:** never derive `verify_aud`/issuer/alg from an unverified claim —
   enforce audience against a config allowlist, fail closed. Never auto-grant
   groups/admin from a code-shipped mapping (config-driven, fail closed).

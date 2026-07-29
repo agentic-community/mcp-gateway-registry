@@ -26,6 +26,7 @@ from ..repositories.factory import (
 )
 from ..services.ard_mapping import _sanitize_name
 from ..services.canonical_export import redact_backend_urls, to_canonical
+from ..utils.credential_encryption import strip_credentials_from_dict
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,7 @@ _AGENT_SENSITIVE_FIELDS = frozenset(
         "sync_metadata",
         "ans_metadata",
         "_identity_url_normalized",
+        "rating_details",
     }
 )
 
@@ -55,16 +57,27 @@ _SKILL_SENSITIVE_FIELDS = frozenset(
         "allowed_groups",
         "owner",
         "_identity_url_normalized",
+        "rating_details",
     }
 )
 
 
 def _strip_fields(
-    record: dict[str, Any],
+    value: Any,
     sensitive: frozenset[str],
-) -> dict[str, Any]:
-    """Return a shallow copy with sensitive keys removed."""
-    return {k: v for k, v in record.items() if k not in sensitive}
+) -> Any:
+    """Return a recursive copy with sensitive keys removed at every depth."""
+    if isinstance(value, dict):
+        return {
+            key: _strip_fields(item, sensitive)
+            for key, item in value.items()
+            if key not in sensitive
+        }
+    if isinstance(value, list):
+        return [_strip_fields(item, sensitive) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_strip_fields(item, sensitive) for item in value)
+    return value
 
 
 @router.get("/public/servers/{leaf:path}/server.json")
@@ -82,9 +95,12 @@ async def get_public_server(
     records = await repo.find_with_filter({"is_enabled": True, "visibility": "public"}, limit=None)
     for path, record in records.items():
         if _sanitize_name(path) == target:
-            canonical, _ = to_canonical({**record, "path": path})
-            # Anonymous callers never receive backend URLs.
-            return redact_backend_urls(canonical)
+            safe_record = strip_credentials_from_dict({**record, "path": path})
+            canonical, _ = to_canonical(safe_record)
+            # Anonymous callers never receive backend URLs or per-user rating PII,
+            # including copies nested inside preserved upstream metadata.
+            redacted = redact_backend_urls(canonical)
+            return _strip_fields(redacted, frozenset({"rating_details"}))
     raise HTTPException(status_code=404, detail="Server not found")
 
 

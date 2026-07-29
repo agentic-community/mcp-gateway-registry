@@ -118,6 +118,10 @@ class TestPrivateAndMetadata:
             "192.168.1.5",
             "172.16.0.9",
             "169.254.169.254",
+            "100.100.100.200",
+            "::ffff:100.100.100.200",
+            "64:ff9b::6464:64c8",
+            "2002:6464:64c8::",
             "0.0.0.0",
             "224.0.0.1",
             "::1",
@@ -441,6 +445,10 @@ class TestAllowlists:
             "169.254.169.254",
             "169.254.170.2",
             "169.254.170.23",
+            "100.100.100.200",
+            "::ffff:100.100.100.200",
+            "64:ff9b::6464:64c8",
+            "2002:6464:64c8::",
             "fd00:ec2::23",
             "fd00:ec2::23%eth0",
             "fd00:ec2::254",
@@ -468,6 +476,7 @@ class TestAllowlists:
             ("169.254.169.254", "169.254.0.0/16"),
             ("169.254.170.2", "169.254.0.0/16"),
             ("169.254.170.23", "169.254.0.0/16"),
+            ("100.100.100.200", "100.64.0.0/10"),
             ("fd00:ec2::23", "fd00:ec2::/64"),
             ("fd00:ec2::23%eth0", "fd00:ec2::/64"),
             ("fd00:ec2::254", "fd00:ec2::/64"),
@@ -657,3 +666,36 @@ class TestBuiltinExactOutboundIdentity:
             )
             is url_guard.BUILTIN_AIREGISTRY_TOOLS_PROFILE
         )
+
+
+class TestCredentialedOAuthProfile:
+    def test_profile_has_empty_allowlist_and_requires_https(self):
+        profile = url_guard.CREDENTIALED_OAUTH_PROFILE
+        allowlist = profile.allowlist_factory()
+        assert profile.name == "credentialed-oauth"
+        assert profile.require_https is True
+        assert allowlist.hosts == frozenset()
+        assert allowlist.cidrs == ()
+
+    def test_proxy_allowlists_cannot_relax_oauth_token_target(self):
+        with patch.object(
+            url_guard,
+            "settings",
+            _settings(
+                ssrf_allowed_hosts="token.internal",
+                ssrf_allowed_cidrs="10.0.0.0/8",
+            ),
+        ):
+            with patch.object(url_guard.socket, "getaddrinfo", _resolve_to("10.0.0.8")):
+                with pytest.raises(UrlValidationError):
+                    url_guard.validate_url(
+                        "https://token.internal/oauth/token",
+                        profile=url_guard.CREDENTIALED_OAUTH_PROFILE,
+                    )
+
+    def test_transport_rejects_http_even_for_public_host(self):
+        transport = url_guard.GuardedAsyncTransport(
+            guard_profile=url_guard.CREDENTIALED_OAUTH_PROFILE
+        )
+        with pytest.raises(UrlValidationError):
+            transport._pin_request(httpx.Request("POST", "http://93.184.216.34/token"))

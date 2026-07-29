@@ -190,7 +190,7 @@ async def _build_origin_map() -> tuple[dict[str, str], list[ArdReferral]]:
                 )
             )
     except Exception as e:  # noqa: BLE001 - federation optional; degrade to local-only
-        logger.debug("Could not load peers for federation: %s", e)
+        logger.debug("Could not load peers for federation type=%s", type(e).__name__)
     try:
         from ..repositories.factory import get_federation_config_repository
 
@@ -199,7 +199,10 @@ async def _build_origin_map() -> tuple[dict[str, str], list[ArdReferral]]:
             for src in config.ai_catalog.sources:
                 origin_map[src.source_id] = src.resolve_uri()
     except Exception as e:  # noqa: BLE001
-        logger.debug("Could not load ai_catalog sources for federation: %s", e)
+        logger.debug(
+            "Could not load ai_catalog sources for federation type=%s",
+            type(e).__name__,
+        )
     return origin_map, referrals
 
 
@@ -362,7 +365,10 @@ async def _override_source_descriptor(
         # filter by _id. find_with_filter returns a dict keyed by _id.
         docs = await repo.find_with_filter({"_id": {"$in": paths}}, limit=None)
     except Exception as e:  # noqa: BLE001 - degrade to locally-built url on error
-        logger.debug("Could not load source descriptors for federated results: %s", e)
+        logger.debug(
+            "Could not load source descriptors for federated results type=%s",
+            type(e).__name__,
+        )
         return
     for result, path in federated:
         doc = docs.get(path) or {}

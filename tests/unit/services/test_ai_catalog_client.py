@@ -1,6 +1,7 @@
 """Unit tests for the ARD ai-catalog crawler client (issue #1296)."""
 
 import json
+import logging
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -120,6 +121,28 @@ class TestFetchCatalog:
         ):
             docs = client.fetch_catalog("https://acme.com/x.json")
         assert docs == []
+
+    def test_blocked_url_log_omits_query_and_exception_detail(self, caplog):
+        from registry.services.ard_search_service import ArdValidationError
+
+        client = c.AiCatalogFederationClient(polite_interval_ms=0)
+        with (
+            patch.object(
+                c,
+                "assert_fetchable",
+                side_effect=ArdValidationError("raw-exception-secret"),
+            ),
+            caplog.at_level(
+                logging.WARNING,
+                logger="registry.services.federation.ai_catalog_client",
+            ),
+        ):
+            docs = client.fetch_catalog("https://evil.example/catalog.json?api_key=query-secret")
+
+        assert docs == []
+        assert "query-secret" not in caplog.text
+        assert "raw-exception-secret" not in caplog.text
+        assert "https://evil.example/catalog.json" in caplog.text
 
     def test_blocked_url_skipped(self):
         from registry.services.ard_search_service import ArdValidationError

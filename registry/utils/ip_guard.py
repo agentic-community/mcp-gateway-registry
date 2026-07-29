@@ -57,6 +57,7 @@ _CGNAT_NET = ipaddress.ip_network("100.64.0.0/10")
 # - EC2 IMDS: 169.254.169.254 / fd00:ec2::254
 # - ECS task credentials: 169.254.170.2
 # - EKS Pod Identity: 169.254.170.23 / fd00:ec2::23
+# - Alibaba Cloud ECS metadata: 100.100.100.200
 _CREDENTIAL_ENDPOINT_IPS: frozenset[str] = frozenset(
     {
         "169.254.169.254",
@@ -64,6 +65,7 @@ _CREDENTIAL_ENDPOINT_IPS: frozenset[str] = frozenset(
         "169.254.170.2",
         "169.254.170.23",
         "fd00:ec2::23",
+        "100.100.100.200",
     }
 )
 

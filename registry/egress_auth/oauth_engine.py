@@ -29,7 +29,7 @@ from registry.egress_auth.schemas import (
     TokenEndpointAuthStyle,
 )
 from registry.exceptions import UrlValidationError
-from registry.utils.url_guard import PROXY_PROFILE, guarded_async_client
+from registry.utils.url_guard import CREDENTIALED_OAUTH_PROFILE, guarded_async_client
 
 logger = logging.getLogger(__name__)
 
@@ -183,18 +183,21 @@ async def _post_token(cfg: OAuthProviderConfig, data: dict, headers: dict) -> di
     # pins the connection to a validated public IP at connect time (blocking a
     # post-registration DNS rebind to a private/metadata address) and rejects a
     # non-http(s) scheme, so the credential can never be exfiltrated to an
-    # internal target. Built-in providers resolve to public hosts and pass
-    # through unchanged.
+    # internal target. The dedicated profile has an empty allowlist and
+    # requires HTTPS, so proxy allowlist entries cannot weaken this path.
+    # Built-in providers resolve to public HTTPS hosts and pass unchanged.
     try:
-        async with guarded_async_client(profile=PROXY_PROFILE, timeout=_HTTP_TIMEOUT) as client:
+        async with guarded_async_client(
+            profile=CREDENTIALED_OAUTH_PROFILE,
+            timeout=_HTTP_TIMEOUT,
+        ) as client:
             resp = await client.post(cfg.token_url, data=data, headers=headers)
     except UrlValidationError as exc:
-        # The pinned guard rejected the target (private/metadata IP, bad scheme,
-        # or a post-registration DNS rebind). Fail closed WITHOUT having sent the
-        # client_secret/refresh_token; surface it in the engine's own contract.
-        raise OAuthEngineError(f"token endpoint blocked by SSRF guard: {exc}") from exc
+        # The pinned guard rejected the target before sending any credential.
+        # Keep the wrapped detail out of higher-level logs and browser responses.
+        raise OAuthEngineError("token endpoint blocked by security policy") from exc
     except httpx.HTTPError as exc:
-        raise OAuthEngineError(f"token endpoint unreachable: {exc}") from exc
+        raise OAuthEngineError("token endpoint unreachable") from exc
 
     try:
         payload = resp.json()

@@ -118,6 +118,7 @@ class TestIpDenialReasonAlwaysDenied:
             "169.254.169.254",  # EC2 IMDS
             "169.254.170.2",  # ECS task credentials
             "169.254.170.23",  # EKS Pod Identity (IPv4)
+            "100.100.100.200",  # Alibaba Cloud ECS metadata
             "fd00:ec2::23",  # EKS Pod Identity (IPv6)
             "fd00:ec2::23%eth0",  # scoped EKS Pod Identity (scope is not identity)
             "fd00:ec2::254",  # EC2 IMDS (IPv6)
@@ -125,6 +126,10 @@ class TestIpDenialReasonAlwaysDenied:
             "fe80::1",  # IPv6 link-local
             "::ffff:169.254.169.254",  # IPv4-mapped IMDS
             "::ffff:169.254.170.2",  # IPv4-mapped ECS credentials
+            "::ffff:100.100.100.200",  # IPv4-mapped Alibaba metadata
+            "64:ff9b::6464:64c8",  # NAT64-embedded Alibaba metadata
+            "2002:6464:64c8::",  # 6to4-embedded Alibaba metadata
+            "2001::9b9b:9b37",  # Teredo-embedded Alibaba metadata
             "64:ff9b::a9fe:aa17",  # NAT64-embedded EKS Pod Identity IPv4
             "64:ff9b::a9fe:a9fe",  # NAT64-embedded metadata (RFC 6052)
             "2002:a9fe:a9fe::",  # 6to4-embedded metadata (RFC 3056)
@@ -214,6 +219,7 @@ class TestCredentialEndpointsCannotBeRelaxed:
             ("169.254.169.254", "169.254.0.0/16"),
             ("169.254.170.2", "169.254.0.0/16"),
             ("169.254.170.23", "169.254.0.0/16"),
+            ("100.100.100.200", "100.64.0.0/10"),
             ("fd00:ec2::23", "fd00:ec2::/64"),
             ("fd00:ec2::23%eth0", "fd00:ec2::/64"),
             ("fd00:ec2::254", "fd00:ec2::/64"),
@@ -251,3 +257,17 @@ class TestHardDeniedCategoriesCannotBeRelaxed:
             )
             is not None
         )
+
+
+@pytest.mark.unit
+class TestAlibabaMetadataPrecision:
+    """Only Alibaba's documented metadata IP is hard-denied, not a broad range."""
+
+    @pytest.mark.parametrize("ip", ["100.100.100.199", "100.100.100.201", "100.63.255.255"])
+    def test_adjacent_addresses_are_not_hard_denied_as_metadata(self, ip):
+        reason = ip_denial_reason(
+            ipaddress.ip_address(ip),
+            allow_private=True,
+            allowed_cidrs=(ipaddress.ip_network("100.64.0.0/10"),),
+        )
+        assert reason is None

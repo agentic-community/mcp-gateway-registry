@@ -1,40 +1,28 @@
-"""SSRF guard for ARD web ingestion (issue #1296, Phase 3).
+"""ARD structural/domain policy layered on the canonical SSRF URL guard.
 
-Every outbound catalog fetch must use HTTPS, stay within the optional root
-publisher domain, and resolve exclusively to public addresses. IP-category
-classification is delegated to :mod:`registry.utils.ip_guard` so ARD ingestion
-shares the same cloud-credential and embedded-IPv4 protections as other egress.
+ARD ingestion adds two policies to the repository-wide URL/IP classifier:
+HTTPS is mandatory, and nested catalogs may be restricted to the root publisher
+host or its subdomains. DNS resolution, literal normalization, cloud/workload
+metadata denial, and embedded-IPv4 handling are delegated to
+:mod:`registry.utils.url_guard`; actual fetches use its pinned guarded transport.
 """
 
 from __future__ import annotations
 
-import logging
-import socket
 from urllib.parse import urlparse
 
-from ..utils.ip_guard import coerce_ip_literal, ip_denial_reason
+from ..exceptions import UrlValidationError
+from ..utils.url_guard import SKILL_PROFILE, validate_url
 from .ard_search_service import ArdValidationError
-
-logger = logging.getLogger(__name__)
-
-
-def _is_blocked_ip(ip_text: str) -> bool:
-    """Return whether an address is denied by the canonical egress policy."""
-    ip = coerce_ip_literal(ip_text)
-    return ip is None or ip_denial_reason(ip, allow_private=False) is not None
 
 
 def assert_fetchable(
     url: str,
     allowed_domain: str | None = None,
 ) -> str:
-    """Validate that ``url`` is safe to fetch, or raise ``ArdValidationError``."""
+    """Apply ARD domain policy, then canonical structural/IP validation."""
     parsed = urlparse(url)
-    if parsed.scheme != "https":
-        raise ArdValidationError(f"Refusing non-https ingestion URL: {url!r}")
     host = (parsed.hostname or "").lower()
-    if not host:
-        raise ArdValidationError(f"Ingestion URL has no host: {url!r}")
     if allowed_domain:
         allowed = allowed_domain.lower()
         if not (host == allowed or host.endswith("." + allowed)):
@@ -42,13 +30,11 @@ def assert_fetchable(
                 f"Nested catalog host {host!r} is outside the root domain {allowed!r}"
             )
     try:
-        resolved = socket.getaddrinfo(host, 443, proto=socket.IPPROTO_TCP)
-    except socket.gaierror as exc:
-        raise ArdValidationError(f"Cannot resolve ingestion host {host!r}: {exc}") from exc
-    for _family, _type, _proto, _canon, sockaddr in resolved:
-        ip_text = str(sockaddr[0])
-        if _is_blocked_ip(ip_text):
-            raise ArdValidationError(
-                f"Ingestion host {host!r} resolves to blocked IP {ip_text} (SSRF guard)"
-            )
+        validate_url(
+            url,
+            profile=SKILL_PROFILE,
+            require_https=True,
+        )
+    except UrlValidationError as exc:
+        raise ArdValidationError(f"Ingestion URL rejected: {exc.reason}") from exc
     return url
