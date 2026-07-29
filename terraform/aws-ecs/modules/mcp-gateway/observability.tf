@@ -272,6 +272,12 @@ module "ecs_service_metrics" {
             # Required: metrics-service refuses to start without a strong pepper.
             name      = "METRICS_KEY_PEPPER"
             valueFrom = aws_secretsmanager_secret.metrics_key_pepper[0].arn
+          },
+          {
+            # Gates /admin/* (retention/cleanup/db stats). Distinct from the
+            # ingest key above; /admin/* denies until this is present.
+            name      = "METRICS_ADMIN_API_KEY"
+            valueFrom = aws_secretsmanager_secret.metrics_admin_api_key[0].arn
           }
         ],
         var.otel_otlp_endpoint != "" ? [

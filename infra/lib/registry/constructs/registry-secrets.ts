@@ -33,6 +33,7 @@ export class RegistrySecrets extends Construct {
   public readonly auth0M2mClientSecret?: secretsmanager.Secret;
   public readonly metricsApiKey?: secretsmanager.Secret;
   public readonly metricsKeyPepper?: secretsmanager.Secret;
+  public readonly metricsAdminApiKey?: secretsmanager.Secret;
   public readonly otlpExporterHeaders?: secretsmanager.Secret;
   public readonly grafanaAdminPassword?: secretsmanager.Secret;
 
@@ -164,6 +165,15 @@ export class RegistrySecrets extends Construct {
         kmsKey: this.kmsKey,
         generateString: { passwordLength: 64, excludePunctuation: true },
       });
+      // Admin API key gating the metrics-service /admin/* endpoints (retention,
+      // cleanup, database stats). Privilege-separated from ingest: an ingest key
+      // is rejected on /admin/*, and /admin/* denies until this is set.
+      // Generated separately from the ingest key so it is guaranteed distinct.
+      this.metricsAdminApiKey = _createSecret(this, 'MetricsAdminApiKey', {
+        description: 'Admin API key gating metrics-service /admin/* endpoints (distinct from ingest key)',
+        kmsKey: this.kmsKey,
+        generateString: { passwordLength: 48, excludePunctuation: true },
+      });
       // Issue #1325: store the Grafana admin password in Secrets Manager instead
       // of injecting it as a plaintext container env value.
       this.grafanaAdminPassword = _createSecret(this, 'GrafanaAdminPassword', {
@@ -193,8 +203,8 @@ export class RegistrySecrets extends Construct {
     for (const s of [
       this.entraClientSecret, this.oktaClientSecret, this.oktaM2mClientSecret,
       this.oktaApiToken, this.auth0ClientSecret, this.auth0M2mClientSecret,
-      this.metricsApiKey, this.metricsKeyPepper, this.otlpExporterHeaders,
-      this.grafanaAdminPassword,
+      this.metricsApiKey, this.metricsKeyPepper, this.metricsAdminApiKey,
+      this.otlpExporterHeaders, this.grafanaAdminPassword,
     ]) if (s) arns.push(s.secretArn);
 
     this.accessStatements = [
