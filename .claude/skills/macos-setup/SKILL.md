@@ -126,8 +126,13 @@ For every phase below, apply this rule:
 echo "=== Docker ==="
 docker --version 2>/dev/null && docker ps >/dev/null 2>&1 && echo "DOCKER_OK" || echo "DOCKER_FAIL"
 
-echo "=== Python ==="
-python3 --version 2>/dev/null && echo "PYTHON_OK" || echo "PYTHON_FAIL"
+echo "=== Python (>=3.14 required by pyproject.toml) ==="
+python3 --version 2>/dev/null || echo "PYTHON_FAIL"
+if python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 14) else 1)' 2>/dev/null; then
+    echo "PYTHON_OK"
+elif command -v python3 >/dev/null 2>&1; then
+    echo "PYTHON_TOO_OLD"
+fi
 
 echo "=== uv ==="
 uv --version 2>/dev/null && echo "UV_OK" || echo "UV_FAIL"
@@ -151,6 +156,7 @@ For any failed check, display the install instructions:
 |-------|----------------|
 | DOCKER_FAIL | "Install Docker Desktop from https://www.docker.com/products/docker-desktop/ then start it and wait for the whale icon in the menu bar" |
 | PYTHON_FAIL | `brew install python@3.14` |
+| PYTHON_TOO_OLD | `uv python install 3.14` — the project requires Python >=3.14 (`pyproject.toml`), and Phase 5 (`uv sync`) fails with `No interpreter found for Python >=3.14` otherwise. `uv` manages this interpreter itself, so the system `python3` is left untouched. |
 | UV_FAIL | `curl -LsSf https://astral.sh/uv/install.sh \| sh` — then restart your terminal |
 | NODE_FAIL | `brew install node@20` or download from https://nodejs.org/ |
 | GIT_FAIL | `xcode-select --install` |
@@ -158,6 +164,8 @@ For any failed check, display the install instructions:
 | GETTEXT_FAIL | `brew install gettext` |
 
 **Do not proceed if Docker or git fail.** Python, uv, Node.js, jq, and gettext must also be present before continuing. Ask the user to install missing tools and retry.
+
+**Do not proceed on `PYTHON_TOO_OLD`.** A Python older than 3.14 passes a mere presence check but fails Phase 5 four phases later, where the error names `uv` rather than the unmet prerequisite. Resolve it here: run `uv python install 3.14`, then re-run the Python check and confirm `PYTHON_OK` before continuing.
 
 Log: `{ 1, "Prerequisites Check", DONE/FAILED, list of what passed/failed }`
 
