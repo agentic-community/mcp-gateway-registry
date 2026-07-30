@@ -522,7 +522,12 @@ module "ecs_service_auth" {
         {
           name  = "AWS_EC2_METADATA_DISABLED"
           value = "true"
+        },
         # Gateway generic-proxy feature (ships disabled by default)
+        {
+          name  = "GATEWAY_GENERIC_PROXY_ENABLED"
+          value = tostring(var.gateway_generic_proxy_enabled)
+        },
         {
           name  = "GENERIC_PROXY_TOKEN_TTL_SECONDS"
           value = tostring(var.generic_proxy_token_ttl_seconds)
@@ -1519,6 +1524,7 @@ module "ecs_service_registry" {
         {
           name  = "SSRF_ALLOWED_CIDRS"
           value = var.ssrf_allowed_cidrs
+        },
         # Gateway generic-proxy feature (ships disabled by default)
         {
           name  = "GATEWAY_GENERIC_PROXY_ENABLED"
