@@ -259,7 +259,39 @@ cp .env.example .env
 # Generate SECRET_KEY
 SECRET_KEY=$(python3 -c "import secrets; print(secrets.token_urlsafe(64))")
 echo "SECRET_KEY generated: ${#SECRET_KEY} characters"
+
+# Generate the remaining secrets that later phases require. `.env.example` ships
+# DOCUMENTDB_PASSWORD and OPENBAO_TOKEN empty and GRAFANA_ADMIN_PASSWORD as the
+# placeholder CHANGE-ME-SET-STRONG-PASSWORD, but nothing between here and the end
+# of the run fills them in time:
+#   - docker-compose.yml declares all three as ${VAR:?...} required variables, and
+#     compose validates the whole file before starting anything -- so the two empty
+#     ones break Phase 8 (`docker compose up -d keycloak-db keycloak`), five phases
+#     before build_and_run.sh would have generated them itself.
+#   - GRAFANA_ADMIN_PASSWORD is non-empty, so it passes that presence check, but
+#     build_and_run.sh never generates it and its _validate_secret_defaults
+#     denylist rejects the placeholder -- failing Phase 13 instead.
+# Entropy matches build_and_run.sh so a later run of that script leaves them alone.
+export DOCUMENTDB_PASSWORD=$(python3 -c "import secrets; print(secrets.token_hex(24))")
+export OPENBAO_TOKEN=$(python3 -c "import secrets; print(secrets.token_hex(32))")
+export GRAFANA_ADMIN_PASSWORD=$(python3 -c "import secrets, string; print(''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(20)))")
+echo "DOCUMENTDB_PASSWORD generated: ${#DOCUMENTDB_PASSWORD} characters"
+echo "OPENBAO_TOKEN generated: ${#OPENBAO_TOKEN} characters"
+echo "GRAFANA_ADMIN_PASSWORD generated: ${#GRAFANA_ADMIN_PASSWORD} characters"
+
+# Generate the realm 'admin' user password used to log in to the registry UI.
+# This is a DIFFERENT credential from KEYCLOAK_ADMIN_PASSWORD: that one is the
+# Keycloak master-realm administrator (http://localhost:8080/admin), while this
+# one is the mcp-gateway realm user that Phase 10 creates for http://localhost.
+# init-keycloak.sh requires it, but it sources .env before checking -- so leaving
+# the .env.example placeholder in place does not fail the run, it silently creates
+# the UI admin with a publicly-known password. (Keycloak marks the credential
+# 'temporary', forcing a change at first login, which limits the exposure.)
+export INITIAL_ADMIN_PASSWORD=$(python3 -c "import secrets, string; print(''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(20)))")
+echo "INITIAL_ADMIN_PASSWORD generated: ${#INITIAL_ADMIN_PASSWORD} characters"
 ```
+
+Report `GRAFANA_ADMIN_PASSWORD` and `INITIAL_ADMIN_PASSWORD` in the Final Summary (Phase 16) — both are human-facing console credentials the user must know. `DOCUMENTDB_PASSWORD` and `OPENBAO_TOKEN` are service-internal and need no reporting.
 
 Update `.env` using Python to handle special characters safely:
 
@@ -278,6 +310,12 @@ updates = {
     'KEYCLOAK_ADMIN_PASSWORD': os.environ.get('KEYCLOAK_ADMIN_PASSWORD', ''),
     'KEYCLOAK_DB_PASSWORD': os.environ.get('KEYCLOAK_DB_PASSWORD', ''),
     'SECRET_KEY': os.environ.get('SECRET_KEY', ''),
+    # Required by docker-compose.yml as ${VAR:?...}; see the generation block above.
+    'DOCUMENTDB_PASSWORD': os.environ.get('DOCUMENTDB_PASSWORD', ''),
+    'OPENBAO_TOKEN': os.environ.get('OPENBAO_TOKEN', ''),
+    'GRAFANA_ADMIN_PASSWORD': os.environ.get('GRAFANA_ADMIN_PASSWORD', ''),
+    # Read from .env by init-keycloak.sh in Phase 10; see the generation block above.
+    'INITIAL_ADMIN_PASSWORD': os.environ.get('INITIAL_ADMIN_PASSWORD', ''),
     # Declare this as a local/on-prem install. The telemetry cloud-detection
     # cascade checks AWS_REGION first and would otherwise classify this Mac as
     # "aws" purely because .env.example ships AWS_REGION=us-east-1. This explicit
@@ -303,7 +341,7 @@ PYEOF
 Verify (without exposing values):
 ```bash
 cd "${INSTALL_DIR}"
-for KEY in AUTH_PROVIDER AUTH_SERVER_EXTERNAL_URL KEYCLOAK_ADMIN_PASSWORD KEYCLOAK_DB_PASSWORD SECRET_KEY MCP_CLOUD_PROVIDER; do
+for KEY in AUTH_PROVIDER AUTH_SERVER_EXTERNAL_URL KEYCLOAK_ADMIN_PASSWORD KEYCLOAK_DB_PASSWORD SECRET_KEY MCP_CLOUD_PROVIDER DOCUMENTDB_PASSWORD OPENBAO_TOKEN GRAFANA_ADMIN_PASSWORD INITIAL_ADMIN_PASSWORD; do
     VALUE=$(grep "^${KEY}=" .env | cut -d'=' -f2)
     if [ -n "$VALUE" ]; then
         echo "${KEY}=[set]"
@@ -312,6 +350,19 @@ for KEY in AUTH_PROVIDER AUTH_SERVER_EXTERNAL_URL KEYCLOAK_ADMIN_PASSWORD KEYCLO
     fi
 done
 ```
+
+Confirm every variable `docker-compose.yml` marks as required is now resolvable, so
+Phase 8 can parse the file. This catches the failure here — where the cause is
+obvious — instead of four phases later as a bare `required variable ... is missing
+a value` error:
+
+```bash
+cd "${INSTALL_DIR}"
+docker compose config --quiet && echo "COMPOSE_PARSE_OK" || echo "COMPOSE_PARSE_FAIL"
+```
+
+**Do not proceed on `COMPOSE_PARSE_FAIL`.** The message names the offending
+variable; set it in `.env` and re-run the check before continuing.
 
 The template is at: [`.env.example`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/.env.example)
 
@@ -481,6 +532,20 @@ export KEYCLOAK_ADMIN_PASSWORD="${KEYCLOAK_ADMIN_PASSWORD}"
 ./keycloak/setup/init-keycloak.sh
 echo "Init exit code: $?"
 ```
+
+This creates the realm `admin` user that logs in to the registry UI, using
+`INITIAL_ADMIN_PASSWORD` from Phase 4. The script sources `.env` with `set -a`
+before its own required-variable check, so the value written to `.env` in Phase 4
+is what takes effect — confirm it is not the shipped placeholder:
+
+```bash
+cd "${INSTALL_DIR}"
+grep -q '^INITIAL_ADMIN_PASSWORD=your-secure-keycloak-admin-password$' .env \
+    && echo "INITIAL_ADMIN_PASSWORD_PLACEHOLDER — fix .env before proceeding" \
+    || echo "INITIAL_ADMIN_PASSWORD_OK"
+```
+
+Report this password, not `KEYCLOAK_ADMIN_PASSWORD`, as the UI login in Phase 16.
 
 The newly created `mcp-gateway` realm ships with `sslRequired: external`, which
 works over loopback HTTP — no SSL change is needed. Do NOT set `sslRequired=NONE`.
@@ -774,10 +839,18 @@ Access Points:
   MCP Gateway:            http://localhost/mcpgw/mcp
   Cloudflare MCP server:  http://localhost/cloudflare-docs/mcp
 
-Login Credentials:
+Login Credentials (registry UI):
   URL:      http://localhost
   Username: admin
-  Password: [KEYCLOAK_ADMIN_PASSWORD shown only in default mode — see below]
+  Password: [INITIAL_ADMIN_PASSWORD — shown only in default mode, see below]
+            You will be prompted to change this on first login (Keycloak marks
+            the credential 'temporary'). This is NOT KEYCLOAK_ADMIN_PASSWORD,
+            which belongs to the separate Keycloak master-realm admin below.
+
+Keycloak Admin Console Credentials:
+  URL:      http://localhost:8080/admin
+  Username: admin
+  Password: [KEYCLOAK_ADMIN_PASSWORD — shown only in default mode, see below]
 
 Agent Credentials:
   Test agent:    ${INSTALL_DIR}/.oauth-tokens/agent-test-agent-m2m.env
@@ -793,12 +866,24 @@ Quick Test:
   uv run cli/mcp_client.py ping
 ```
 
-**In default mode only**, display the auto-generated passwords clearly since the user never set them:
+Display every auto-generated password clearly, since the user never set these.
+`INITIAL_ADMIN_PASSWORD` and `GRAFANA_ADMIN_PASSWORD` are generated by Phase 4 in
+**both** modes, so they must be shown in interactive mode too — otherwise the user
+cannot log in to the UI or Grafana at all. Omit the two `KEYCLOAK_*` lines in
+interactive mode, where the user chose those values in Phase 3.
 
 ```
 Generated Credentials (SAVE THESE):
-  Keycloak Admin Password: ${KEYCLOAK_ADMIN_PASSWORD}
-  Keycloak DB Password:    ${KEYCLOAK_DB_PASSWORD}
+  Registry UI admin (http://localhost):
+    Password: ${INITIAL_ADMIN_PASSWORD}   (change required on first login)
+
+  Grafana admin (http://localhost:3000):
+    Password: ${GRAFANA_ADMIN_PASSWORD}
+
+  [default mode only] Keycloak master admin (http://localhost:8080/admin):
+    Password: ${KEYCLOAK_ADMIN_PASSWORD}
+
+  [default mode only] Keycloak DB Password: ${KEYCLOAK_DB_PASSWORD}   (internal, no console)
 
 These passwords are also stored in: ${INSTALL_DIR}/.env
 ```
