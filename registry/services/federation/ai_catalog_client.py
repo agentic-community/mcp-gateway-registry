@@ -111,9 +111,7 @@ class AiCatalogFederationClient:
             manifest = self._fetch_one(url, root_domain)
         except Exception as exc:
             logger.warning(
-                "ARD ingestion: skipping catalog URL %s error_type=%s",
-                redact_url(url),
-                type(exc).__name__,
+                f"ARD ingestion: skipping catalog URL {redact_url(url)} error_type={type(exc).__name__}",
             )
             return
         if manifest is None:
@@ -138,9 +136,7 @@ class AiCatalogFederationClient:
             assert_fetchable(url, allowed)
         except ArdValidationError as exc:
             logger.warning(
-                "ARD ingestion: refusing catalog URL %s validation_type=%s",
-                redact_url(url),
-                type(exc).__name__,
+                f"ARD ingestion: refusing catalog URL {redact_url(url)} validation_type={type(exc).__name__}",
             )
             return None
 
@@ -196,16 +192,12 @@ class AiCatalogFederationClient:
             # Log only the class; guard detail can contain the original
             # query-bearing URL or resolved network topology.
             logger.warning(
-                "ARD ingestion: refusing rebound/unsafe catalog URL %s type=%s",
-                redact_url(url),
-                type(exc).__name__,
+                f"ARD ingestion: refusing rebound/unsafe catalog URL {redact_url(url)} type={type(exc).__name__}",
             )
             return None
         except httpx.HTTPError as exc:
             logger.warning(
-                "ARD ingestion: fetch failed URL=%s type=%s",
-                redact_url(url),
-                type(exc).__name__,
+                f"ARD ingestion: fetch failed URL={redact_url(url)} type={type(exc).__name__}",
             )
             return None
 
@@ -213,9 +205,7 @@ class AiCatalogFederationClient:
             payload = json.loads(content)
         except (ValueError, UnicodeDecodeError) as exc:
             logger.warning(
-                "ARD ingestion: catalog %s is not valid JSON type=%s",
-                redact_url(url),
-                type(exc).__name__,
+                f"ARD ingestion: catalog {redact_url(url)} is not valid JSON type={type(exc).__name__}",
             )
             return None
 
@@ -223,8 +213,6 @@ class AiCatalogFederationClient:
             return AICatalogManifest.model_validate(payload)
         except ValidationError as exc:
             logger.warning(
-                "ARD ingestion: catalog %s failed schema validation count=%d",
-                redact_url(url),
-                len(exc.errors()),
+                f"ARD ingestion: catalog {redact_url(url)} failed schema validation count={len(exc.errors()):d}",
             )
             return None

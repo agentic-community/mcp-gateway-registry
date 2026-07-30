@@ -308,9 +308,7 @@ def encrypt_custom_headers_in_server_dict(
     server_dict.pop(CUSTOM_HEADERS_PLAINTEXT_FIELD, None)
 
     logger.info(
-        "Custom headers encrypted for storage (path: %s, count: %d)",
-        server_dict.get("path", "unknown"),
-        len(names),
+        f"Custom headers encrypted for storage (path: {server_dict.get('path', 'unknown')}, count: {len(names):d})",
     )
     return server_dict
 
@@ -340,23 +338,23 @@ def decrypt_custom_headers(
             continue
         lower = name.lower()
         if lower in RESERVED_CUSTOM_HEADER_NAMES:
-            logger.warning("Stored custom header '%s' is gateway-managed; skipping.", name)
+            logger.warning(f"Stored custom header '{name}' is gateway-managed; skipping.")
             continue
         if lower in seen:
-            logger.warning("Stored custom header '%s' is duplicated; skipping.", name)
+            logger.warning(f"Stored custom header '{name}' is duplicated; skipping.")
             continue
         encrypted = item.get("value_encrypted")
         if not isinstance(encrypted, str) or not encrypted:
-            logger.warning("Stored custom header '%s' has no ciphertext; skipping.", name)
+            logger.warning(f"Stored custom header '{name}' has no ciphertext; skipping.")
             continue
         value = decrypt_credential(encrypted)
         if value is None:
-            logger.warning("Failed to decrypt custom header '%s'; skipping.", name)
+            logger.warning(f"Failed to decrypt custom header '{name}'; skipping.")
             continue
         try:
             _validate_custom_header_value(value, allow_empty=True)
         except ValueError:
-            logger.warning("Stored custom header '%s' has an unsafe value; skipping.", name)
+            logger.warning(f"Stored custom header '{name}' has an unsafe value; skipping.")
             continue
         seen.add(lower)
         out.append({"name": name, "value": value})

@@ -244,7 +244,7 @@ def _build_request_state(
         )
         return encode_state(state)
     except Exception as exc:
-        logger.warning("egress vend: could not build request_state type=%s", type(exc).__name__)
+        logger.warning(f"egress vend: could not build request_state type={type(exc).__name__}")
         return None
 
 
@@ -475,7 +475,7 @@ async def vend_egress_token(
             egress_oauth=egress_oauth,
         )
     except Exception as exc:  # bad provider config etc. -- still a clean miss
-        logger.warning("egress vend: could not build consent URL type=%s", type(exc).__name__)
+        logger.warning(f"egress vend: could not build consent URL type={type(exc).__name__}")
         authorize_url = None
 
     # MCP URL-mode elicitation: a session-verified gateway front door the client
@@ -1114,7 +1114,7 @@ async def egress_callback(
         # browser response: EgressAuthError messages embed internal state (e.g.
         # decryption / SECRET_KEY hints, wrapped upstream errors) — a
         # stack-trace/internal-detail exposure. Show a generic message.
-        logger.warning("egress callback failed type=%s", type(exc).__name__)
+        logger.warning(f"egress callback failed type={type(exc).__name__}")
         return HTMLResponse(
             "<h3>Connection failed. Please close this tab and try connecting again.</h3>",
             status_code=400,

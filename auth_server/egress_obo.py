@@ -225,7 +225,7 @@ async def obo_exchange(
         logger.error("obo_exchange: token endpoint blocked by security policy")
         raise OboExchangeError("IdP token endpoint blocked by security policy") from exc
     except httpx.HTTPError as exc:
-        logger.error("obo_exchange: token endpoint transport failure type=%s", type(exc).__name__)
+        logger.error(f"obo_exchange: token endpoint transport failure type={type(exc).__name__}")
         raise OboExchangeError("IdP token endpoint unreachable") from exc
 
     if resp.status_code != 200:
@@ -234,9 +234,7 @@ async def obo_exchange(
         except ValueError:
             payload = {}
         logger.warning(
-            "obo_exchange: IdP token exchange failed status=%s error=%s",
-            resp.status_code,
-            payload.get("error") or "unknown",
+            f"obo_exchange: IdP token exchange failed status={resp.status_code} error={payload.get('error') or 'unknown'}",
         )
         raise _map_token_error(resp.status_code, payload)
 

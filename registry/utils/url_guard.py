@@ -791,7 +791,7 @@ def validate_url(
     # then returned for connection pinning; cloud/workload credential endpoints
     # remain hard-denied before that relaxation.
     if allowlist.allows_host(hostname_lower):
-        logger.debug("URL guard[%s]: resolving trusted host '%s'", profile.name, hostname_lower)
+        logger.debug(f"URL guard[{profile.name}]: resolving trusted host '{hostname_lower}'")
 
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
     return _resolve_public_ips(hostname, port, allowlist)

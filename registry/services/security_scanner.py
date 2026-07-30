@@ -227,9 +227,7 @@ class SecurityScannerService:
 
         safe_server_url = redact_url(server_url)
         logger.info(
-            "Starting security scan endpoint=%s analyzers=%s",
-            safe_server_url,
-            analyzers,
+            f"Starting security scan endpoint={safe_server_url} analyzers={analyzers}",
         )
 
         try:
@@ -280,13 +278,7 @@ class SecurityScannerService:
             await self._scan_repo.create(result.model_dump())
 
             logger.info(
-                "Security scan completed endpoint=%s safe=%s critical=%d high=%d medium=%d low=%d",
-                safe_server_url,
-                is_safe,
-                critical,
-                high,
-                medium,
-                low,
+                f"Security scan completed endpoint={safe_server_url} safe={is_safe} critical={critical:d} high={high:d} medium={medium:d} low={low:d}",
             )
 
             return result
@@ -300,9 +292,7 @@ class SecurityScannerService:
         ) as exc:
             failure = f"security scan failed ({type(exc).__name__})"
             logger.error(
-                "Security scan failed endpoint=%s type=%s",
-                safe_server_url,
-                type(exc).__name__,
+                f"Security scan failed endpoint={safe_server_url} type={type(exc).__name__}",
             )
 
             raw_output = {
@@ -333,9 +323,7 @@ class SecurityScannerService:
         except Exception as exc:
             failure = f"security scan failed ({type(exc).__name__})"
             logger.error(
-                "Unexpected security scan failure endpoint=%s type=%s",
-                safe_server_url,
-                type(exc).__name__,
+                f"Unexpected security scan failure endpoint={safe_server_url} type={type(exc).__name__}",
             )
             raw_output = {
                 "error": failure,
@@ -390,8 +378,8 @@ class SecurityScannerService:
             ValueError: If headers are invalid or output cannot be parsed
             RuntimeError: If scan fails for other reasons
         """
-        logger.info("Running security scan endpoint=%s", redact_url(server_url))
-        logger.info("Using analyzers: %s", analyzers)
+        logger.info(f"Running security scan endpoint={redact_url(server_url)}")
+        logger.info(f"Using analyzers: {analyzers}")
 
         # Build command
         cmd = [
@@ -433,17 +421,17 @@ class SecurityScannerService:
 
             raw_output = {"analysis_results": {}, "tool_results": tool_results}
             raw_output["analysis_results"] = _organize_findings_by_analyzer(tool_results)
-            logger.info("Security scanner output parsed findings=%d", len(tool_results))
+            logger.info(f"Security scanner output parsed findings={len(tool_results):d}")
             return raw_output
 
         except subprocess.TimeoutExpired as exc:
-            logger.error("Scanner command timed out timeout_seconds=%d", timeout)
+            logger.error(f"Scanner command timed out timeout_seconds={timeout:d}")
             raise RuntimeError("Security scan timed out") from exc
         except subprocess.CalledProcessError as exc:
-            logger.error("Scanner command failed exit_code=%d", exc.returncode)
+            logger.error(f"Scanner command failed exit_code={exc.returncode:d}")
             raise RuntimeError("Security scanner command failed") from exc
         except (json.JSONDecodeError, ValueError) as exc:
-            logger.error("Failed to parse security scanner output type=%s", type(exc).__name__)
+            logger.error(f"Failed to parse security scanner output type={type(exc).__name__}")
             raise RuntimeError("Failed to parse security scanner output") from exc
 
     def _analyze_scan_results(self, raw_output: dict) -> tuple[bool, int, int, int, int]:
@@ -511,8 +499,7 @@ class SecurityScannerService:
             return build_scan_summary_map(scans)
         except Exception as exc:
             logger.error(
-                "Failed to bulk-load server security scan summaries type=%s",
-                type(exc).__name__,
+                f"Failed to bulk-load server security scan summaries type={type(exc).__name__}",
             )
             return {}
 
@@ -541,8 +528,7 @@ class SecurityScannerService:
 
         except Exception as exc:
             logger.error(
-                "Unexpected security scan result lookup failure type=%s",
-                type(exc).__name__,
+                f"Unexpected security scan result lookup failure type={type(exc).__name__}",
             )
             return None
 

@@ -528,8 +528,7 @@ class HealthMonitoringService:
 
         if not destination_url:
             logger.warning(
-                "Health server headers withheld service=%s destination=[missing] reason=missing URL",
-                server_info.get("path") or server_info.get("service_path") or "unknown",
+                f"Health server headers withheld service={server_info.get('path') or server_info.get('service_path') or 'unknown'} destination=[missing] reason=missing URL",
             )
             return headers
 
@@ -545,17 +544,12 @@ class HealthMonitoringService:
             validate_url(destination_url, profile=profile)
         except UrlValidationError:
             logger.warning(
-                "Health server headers withheld service=%s destination=%s reason=security policy",
-                entity_path or "unknown",
-                redact_url(destination_url),
+                f"Health server headers withheld service={entity_path or 'unknown'} destination={redact_url(destination_url)} reason=security policy",
             )
             return headers
         except Exception as exc:  # pragma: no cover - defensive fail-closed
             logger.warning(
-                "Health server headers withheld service=%s destination=%s validation_type=%s",
-                entity_path or "unknown",
-                redact_url(destination_url),
-                type(exc).__name__,
+                f"Health server headers withheld service={entity_path or 'unknown'} destination={redact_url(destination_url)} validation_type={type(exc).__name__}",
             )
             return headers
 
@@ -565,8 +559,7 @@ class HealthMonitoringService:
                 if isinstance(header_dict, dict):
                     headers.update(header_dict)
                     logger.debug(
-                        "Added health header names=%s",
-                        sorted(str(name) for name in header_dict),
+                        f"Added health header names={sorted(str(name) for name in header_dict)}",
                     )
 
         encrypted_custom = server_info.get("custom_headers_encrypted")
@@ -577,9 +570,7 @@ class HealthMonitoringService:
             for entry in decrypted:
                 headers[entry["name"]] = entry["value"]
             logger.debug(
-                "Merged encrypted health headers count=%d names=%s",
-                len(decrypted),
-                sorted(entry["name"] for entry in decrypted),
+                f"Merged encrypted health headers count={len(decrypted):d} names={sorted(entry['name'] for entry in decrypted)}",
             )
 
         auth_scheme = server_info.get("auth_scheme", "none")
@@ -596,9 +587,9 @@ class HealthMonitoringService:
                 elif auth_scheme == "api_key":
                     header_name = server_info.get("auth_header_name", "X-API-Key")
                     headers[header_name] = credential
-                    logger.debug("Added API-key health header name=%s", header_name)
+                    logger.debug(f"Added API-key health header name={header_name}")
             else:
-                logger.warning("Health credential decryption failed service=%s", entity_path)
+                logger.warning(f"Health credential decryption failed service={entity_path}")
         return headers
 
     async def _initialize_mcp_session(
@@ -644,9 +635,7 @@ class HealthMonitoringService:
             # Check if initialize succeeded
             if response.status_code not in [200, 201]:
                 logger.warning(
-                    "MCP initialize failed endpoint=%s status=%s",
-                    redact_url(endpoint),
-                    response.status_code,
+                    f"MCP initialize failed endpoint={redact_url(endpoint)} status={response.status_code}",
                 )
                 return None
 
@@ -757,8 +746,7 @@ class HealthMonitoringService:
                 validate_url(outbound_url, profile=outbound_profile)
         except UrlValidationError:
             logger.warning(
-                "Health check blocked by SSRF guard for %s (credentials NOT sent)",
-                redact_url(proxy_pass_url),
+                f"Health check blocked by SSRF guard for {redact_url(proxy_pass_url)} (credentials NOT sent)",
             )
             return False, HealthStatus.UNHEALTHY_URL_BLOCKED
 
@@ -825,10 +813,7 @@ class HealthMonitoringService:
                     # Check for auth failures first
                     if response.status_code in [401, 403]:
                         logger.info(
-                            "[TRACE] Auth failure detected status=%s endpoint=%s; "
-                            "trying ping without auth",
-                            response.status_code,
-                            redact_url(proxy_pass_url),
+                            f"[TRACE] Auth failure detected status={response.status_code} endpoint={redact_url(proxy_pass_url)}; trying ping without auth",
                         )
                         if await self._try_ping_without_auth(client, proxy_pass_url):
                             return True, HealthStatus.HEALTHY
@@ -897,7 +882,7 @@ class HealthMonitoringService:
                 ping_payload = '{ "jsonrpc": "2.0", "id": "0", "method": "ping" }'
 
                 logger.info(f"[TRACE] Sending ping to endpoint: {redact_url(endpoint)}")
-                logger.debug("Health request header names=%s", sorted(headers))
+                logger.debug(f"Health request header names={sorted(headers)}")
                 response = await client.post(
                     endpoint, headers=headers, content=ping_payload, follow_redirects=True
                 )
@@ -1009,7 +994,7 @@ class HealthMonitoringService:
 
             try:
                 logger.info(f"[TRACE] Trying default endpoint: {redact_url(endpoint)}")
-                logger.debug("Health request header names=%s", sorted(headers))
+                logger.debug(f"Health request header names={sorted(headers)}")
                 response = await client.post(
                     endpoint, headers=headers, content=ping_payload, follow_redirects=True
                 )
@@ -1031,8 +1016,7 @@ class HealthMonitoringService:
                 # Resolve default SSE endpoint using centralized utility
                 sse_endpoint = get_endpoint_url_from_server_info(server_info, transport_type="sse")
                 logger.info(
-                    "[TRACE] Resolved default SSE endpoint: %s",
-                    redact_url(sse_endpoint),
+                    f"[TRACE] Resolved default SSE endpoint: {redact_url(sse_endpoint)}",
                 )
                 # Build headers including server-specific headers
                 headers = self._build_headers_for_server(

@@ -200,7 +200,7 @@ class ArdIngestionService:
             )
         except Exception as exc:  # noqa: BLE001 - never let one source kill the scheduler
             error_type = type(exc).__name__
-            logger.error("ARD ingestion failed source=%s type=%s", source.source_id, error_type)
+            logger.error(f"ARD ingestion failed source={source.source_id} type={error_type}")
             ard_ingestion_runs_total.add(1, {"source_id": source.source_id, "status": "error"})
             failures = int(prev.get("consecutive_failures", 0)) + 1
             public_error = f"ingestion failed ({error_type})"
@@ -281,7 +281,7 @@ class ArdIngestionService:
                     await repo.update(path, update_fields)
                 stored += 1
             except Exception as exc:  # noqa: BLE001 - one bad skill must not fail the run
-                logger.error("Failed to ingest skill %s type=%s", path, type(exc).__name__)
+                logger.error(f"Failed to ingest skill {path} type={type(exc).__name__}")
         return stored
 
     async def _reconcile_skill_orphans(
@@ -295,9 +295,7 @@ class ArdIngestionService:
             existing = await repo.list_filtered(include_disabled=True, registry_name=source_id)
         except Exception as exc:  # noqa: BLE001
             logger.error(
-                "Skill orphan reconcile failed to list for %s type=%s",
-                source_id,
-                type(exc).__name__,
+                f"Skill orphan reconcile failed to list for {source_id} type={type(exc).__name__}",
             )
             return 0
         removed = 0
@@ -308,9 +306,7 @@ class ArdIngestionService:
                     removed += 1
                 except Exception as exc:  # noqa: BLE001
                     logger.error(
-                        "Failed to remove orphaned skill %s type=%s",
-                        skill.path,
-                        type(exc).__name__,
+                        f"Failed to remove orphaned skill {skill.path} type={type(exc).__name__}",
                     )
         return removed
 
