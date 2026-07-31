@@ -1,5 +1,6 @@
 """Unit tests for PingFederateProvider."""
 
+import os
 import time
 from unittest.mock import MagicMock, patch
 
@@ -449,7 +450,11 @@ class TestPingFederateTokenValidation:
         assert result["method"] == "pingfederate"
         assert "openid" in result["scopes"]
 
-    @patch("auth_server.providers.pingfederate.SECRET_KEY", "test-secret-key")
+    @patch.dict(os.environ, {"SECRET_KEY": "test-secret-key-for-self-signed-validation"})
+    @patch(
+        "auth_server.providers.pingfederate.SECRET_KEY",
+        "test-secret-key-for-self-signed-validation",
+    )
     def test_validate_token_self_signed_short_circuit(self):
         """Test self-signed gateway tokens bypass PingFederate validation."""
         claims = {
@@ -465,7 +470,9 @@ class TestPingFederateTokenValidation:
             "client_id": "user-generated",
         }
 
-        token = pyjwt.encode(claims, "test-secret-key", algorithm="HS256")
+        token = pyjwt.encode(
+            claims, "test-secret-key-for-self-signed-validation", algorithm="HS256"
+        )
 
         provider = _create_provider()
         result = provider.validate_token(token)
