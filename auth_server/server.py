@@ -124,8 +124,15 @@ from registry.auth.internal import validate_internal_auth
 # registry.auth.internal._INTERNAL_JWT_AUDIENCE ("mcp-internal").
 _USER_JWT_AUDIENCE: str = "mcp-registry"
 
-MAX_TOKEN_LIFETIME_HOURS = 24
-DEFAULT_TOKEN_LIFETIME_HOURS = 8
+# MCP access-token lifetimes are operator-configurable via the registry Settings
+# (MCP_TOKEN_MAX_TTL_HOURS / MCP_TOKEN_DEFAULT_TTL_HOURS), defaulting to 24h max
+# and 8h default. `settings` already clamps the max to a hardcoded 7-day absolute
+# ceiling (see registry.core.config.MCP_TOKEN_ABSOLUTE_MAX_TTL_HOURS) and floors
+# both at 1h, so no unbounded or non-positive lifetime is possible regardless of
+# config. Sourced from the settings singleton at import (same pattern as
+# MAX_TOKENS_PER_USER_PER_HOUR below). Issue #1477.
+MAX_TOKEN_LIFETIME_HOURS = settings.mcp_token_max_ttl_hours
+DEFAULT_TOKEN_LIFETIME_HOURS = settings.mcp_token_default_ttl_hours
 
 # Maximum length (in characters) of the full Entra logout URL before we drop the
 # optional id_token_hint. Entra ID rejects overly long logout requests with the
@@ -4475,10 +4482,13 @@ async def generate_user_token(
             )
 
             current_time = int(time.time())
-            # Honour the caller's requested lifetime, clamped to the
-            # server-wide maximum (#889).  Values <= 0 or above the cap
-            # are silently clamped; omitted values fall back to the
-            # default (8 h).
+            # Honour the caller's requested lifetime, clamped to the server-wide
+            # maximum (#889). Values <= 0 or above the cap are silently clamped;
+            # omitted values fall back to the configured default
+            # (MCP_TOKEN_DEFAULT_TTL_HOURS, default 8h). The cap
+            # (MCP_TOKEN_MAX_TTL_HOURS, default 24h) is itself bounded to a 7-day
+            # absolute ceiling by settings (#1477). Guard against a
+            # default-above-max misconfiguration so the ceiling always wins.
             effective_hours = min(
                 max(request.expires_in_hours, 1),
                 MAX_TOKEN_LIFETIME_HOURS,

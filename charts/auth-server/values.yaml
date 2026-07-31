@@ -66,6 +66,9 @@ app:
   registryApiToken: "" # Static API key value (required when registryStaticTokenAuthEnabled is true)
   # Rate limiting
   maxTokensPerUserPerHour: "100" # Max token generations per user per hour
+  # MCP token TTL configuration
+  mcpTokenDefaultTtlHours: "8" # Default TTL (hours) for minted MCP tokens
+  mcpTokenMaxTtlHours: "24" # Maximum TTL (hours) a caller may request
   # Federation configuration
   federationStaticTokenAuthEnabled: false #If not provided, defaults to false
   federationStaticToken: # If not provided, a random token is auto-generated

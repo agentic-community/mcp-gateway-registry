@@ -127,6 +127,8 @@ tests:
       # RATE_LIMIT_QUARANTINE_FAIL_CLOSED, RATE_LIMIT_DEFINITIONS_CACHE_TTL_SECONDS,
       # RATE_LIMIT_BACKEND_TIMEOUT_MS,
       # RATE_LIMIT_USER_FLOOR_PER_MIN, RATE_LIMIT_AGENT_FLOOR_PER_MIN);
+      # the MCP token TTL pair (MCP_TOKEN_DEFAULT_TTL_HOURS,
+      # MCP_TOKEN_MAX_TTL_HOURS, always rendered) is env[40]/env[41];
       # user extraEnv entries are appended at the end.
       #
       # NOTE: The indices below assume global.authProvider.type=keycloak
@@ -226,9 +228,15 @@ tests:
           value: RATE_LIMIT_AGENT_FLOOR_PER_MIN
       - equal:
           path: spec.template.spec.containers[0].env[40].name
-          value: MY_FLAG
+          value: MCP_TOKEN_DEFAULT_TTL_HOURS
       - equal:
           path: spec.template.spec.containers[0].env[41].name
+          value: MCP_TOKEN_MAX_TTL_HOURS
+      - equal:
+          path: spec.template.spec.containers[0].env[42].name
+          value: MY_FLAG
+      - equal:
+          path: spec.template.spec.containers[0].env[43].name
           value: MY_SECRET_VAR
 
   - it: appends extraEnvFrom entries after chart-managed envFrom sources
