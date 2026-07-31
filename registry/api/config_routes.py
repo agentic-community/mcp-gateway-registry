@@ -103,6 +103,9 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             ("internal_token_ttl_seconds", "MCP Proxy Token TTL (seconds)", False),
             ("internal_token_leeway_seconds", "MCP Proxy Token Leeway (seconds)", False),
             ("secret_key", "Secret Key", True),
+            ("csrf_signing_key", "CSRF Signing Key", True),
+            ("credential_encryption_key", "Credential Encryption Key", True),
+            ("session_token_enc_key", "Session Token Encryption Key", True),
         ],
     },
     "identity_providers": {
