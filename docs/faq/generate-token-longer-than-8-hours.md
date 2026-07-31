@@ -53,6 +53,10 @@ It is in the left sidebar as **Generate Token**, gated by the `token-generation`
 
 `SESSION_MAX_AGE_SECONDS` controls only the **registry browser session cookie** (and its CSRF token), not the MCP access token. Changing it does not affect how long a generated token is valid. The two defaults both being 8h is a coincidence.
 
+## Related
+
+- [Testing: MCP access-token TTL](../testing-mcp-token-ttl.md) — a manual test plan exercising the Get JWT Token button, the MCP Configuration modal, and the two TTL parameters.
+
 ## Related FAQs
 
 - [Registry API Authentication FAQ (static token, IdP JWT, coexistence)](registry-api-auth-faq.md)
