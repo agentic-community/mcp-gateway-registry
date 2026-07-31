@@ -3055,6 +3055,30 @@ async def health_check():
     return {"status": "healthy", "service": "simplified-auth-server"}
 
 
+@app.get("/.well-known/internal-jwks.json")
+async def internal_jwks():
+    """Publish the internal signing public key(s) as a JWKS document.
+
+    Unauthenticated (public keys are non-sensitive). Internal-only
+    (served on :8888, not exposed through the ALB). Consumed by the
+    registry to verify ES256-signed internal tokens without needing
+    the private key.
+    """
+    import importlib
+
+    try:
+        _isk = importlib.import_module("auth_server.internal_signing_key")
+    except (ImportError, ModuleNotFoundError):
+        _isk = importlib.import_module("internal_signing_key")
+
+    key_manager = _isk.get_internal_signing_key_manager()
+    jwks = key_manager.get_public_jwks()
+    return JSONResponse(
+        content=jwks,
+        headers={"Cache-Control": "public, max-age=600", "Content-Type": "application/json"},
+    )
+
+
 @app.get("/validate")
 async def validate_request(request: Request):
     """
@@ -6055,7 +6079,9 @@ async def oauth2_callback(
             id_token=token_data.get("id_token"),
             subject=mapped_user.get("subject"),
         )
-        registry_session = signer.dumps(session_id)
+        registry_session = (
+            session_id  # Raw hex session_id (no signature needed — 256-bit unguessable + DB lookup)
+        )
 
         # Redirect to registry with session cookie
         redirect_url = temp_session_data.get(

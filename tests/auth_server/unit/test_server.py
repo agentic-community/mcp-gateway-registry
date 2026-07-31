@@ -2537,7 +2537,7 @@ class TestOAuth2CallbackTokenStorage:
         # Cookie payload is the signed opaque session_id, never user data.
         session_cookie = response.cookies.get("mcp_gateway_session")
         assert session_cookie is not None, "Session cookie not set in response"
-        assert signer.loads(session_cookie) == "fake-session-id"
+        assert session_cookie == "fake-session-id"  # Raw session_id, no signature
 
         return captured, session_cookie
 

@@ -271,6 +271,12 @@ class InternalSigningKeyManager:
                 path,
                 type(e).__name__,
             )
+            # Update mtime on failure to prevent hot-loop retries.
+            # The next reload check will re-attempt only if the file changes again.
+            try:
+                self._last_mtime = Path(path).stat().st_mtime
+            except Exception:
+                pass
 
     def _generate_ephemeral_key(self) -> None:
         """Generate an ephemeral ES256 keypair for development/testing.
@@ -293,9 +299,14 @@ class InternalSigningKeyManager:
 _key_manager: InternalSigningKeyManager | None = None
 
 
+_key_manager_lock = threading.Lock()
+
+
 def get_internal_signing_key_manager() -> InternalSigningKeyManager:
-    """Return the singleton key manager (initializes on first call)."""
+    """Return the singleton key manager (initializes on first call, thread-safe)."""
     global _key_manager
     if _key_manager is None:
-        _key_manager = InternalSigningKeyManager()
+        with _key_manager_lock:
+            if _key_manager is None:
+                _key_manager = InternalSigningKeyManager()
     return _key_manager

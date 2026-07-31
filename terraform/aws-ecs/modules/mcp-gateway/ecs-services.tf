@@ -531,7 +531,6 @@ module "ecs_service_auth" {
           name  = "REJECT_HS256_TOKENS"
           value = tostring(var.reject_hs256_tokens)
         },
-        },
         {
           name  = "METRICS_LEGACY_HTTP_POST"
           value = "false"

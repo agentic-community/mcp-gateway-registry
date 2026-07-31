@@ -38,16 +38,20 @@ _MAX_TOKEN_BYTES: int = 8192
 
 
 def _get_secret_key() -> str:
-    """Return SECRET_KEY or raise if unset/empty.
+    """Return SECRET_KEY or raise if unset/empty/weak.
 
-    Defense-in-depth: process startup enforces SECRET_KEY presence, but this
-    function re-checks so a dynamic env mutation cannot silently verify with
-    an empty key.
+    Uses the canonical validator to reject short (<32 chars) and known-weak
+    placeholder values. Fails closed — a weak SECRET_KEY cannot be used to
+    verify tokens.
     """
     key = os.environ.get("SECRET_KEY", "")
     if not key or not key.strip():
         raise ValueError("SECRET_KEY is required for self-signed token validation")
-    return key.strip()
+    # Validate strength — reject weak values that could be brute-forced
+    key = key.strip()
+    if len(key) < 32:
+        raise ValueError("SECRET_KEY is too short (minimum 32 characters)")
+    return key
 
 
 def _verify_hs256(token: str) -> dict:
@@ -150,9 +154,9 @@ def verify_self_signed_user_token(token: str) -> dict:
     try:
         header = pyjwt.get_unverified_header(token)
     except pyjwt.exceptions.DecodeError as e:
-        raise ValueError(f"Malformed token header: {e}")
+        raise ValueError("Malformed token")
     except Exception as e:
-        raise ValueError(f"Cannot parse token header: {e}")
+        raise ValueError("Cannot parse token")
 
     # 3. Issuer-first check (unverified — defense-in-depth).
     # Reject tokens that don't claim to be from our issuer BEFORE attempting
@@ -195,7 +199,7 @@ def verify_self_signed_user_token(token: str) -> dict:
         raise ValueError("Token has expired")
     except pyjwt.InvalidTokenError as e:
         logger.warning("Self-signed token validation failed: invalid token")
-        raise ValueError(f"Invalid self-signed token: {e}")
+        raise ValueError("Invalid self-signed token")
 
     # Validate token_use claim (must be "access")
     token_use = claims.get("token_use")

@@ -130,6 +130,7 @@ def _get_fernet() -> Fernet | None:
 
     Uses CREDENTIAL_ENCRYPTION_KEY when set (registry-only, scoped key).
     Falls back to SECRET_KEY for backwards compatibility during migration.
+    Fail closed: a scoped key that is set but weak is rejected at first use.
 
     Returns:
         Fernet instance, or None if no key is available.
@@ -139,6 +140,12 @@ def _get_fernet() -> Fernet | None:
 
         # Prefer scoped key, fall back to SECRET_KEY
         secret_key = settings.credential_encryption_key or settings.secret_key
+
+        # Validate strength if using the scoped key (not the fallback)
+        if settings.credential_encryption_key:
+            from ..common.secret_key import validate_signing_secret
+
+            validate_signing_secret(settings.credential_encryption_key, "CREDENTIAL_ENCRYPTION_KEY")
     except Exception as e:
         logger.error(f"Could not load SECRET_KEY from settings: {e}")
         return None

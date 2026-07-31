@@ -361,8 +361,6 @@ services:
       - ${HOME}/mcp-gateway/ssl:/etc/ssl:ro
       # Application log files (bind mount to host for Splunk ingestion, Issue #987)
       - /var/log/containers/ai-registry:/var/log/containers/ai-registry
-      # ES256 signing key for asymmetric JWT signing
-      - ./signing-key.pem:/etc/mcp-gateway/signing-key.pem:ro
     depends_on:
       auth-server:
         condition: service_started
@@ -641,8 +639,6 @@ services:
       - ${HOME}/mcp-gateway/models:/app/registry/models
       # Application log file (bind mount to host for Splunk ingestion, Issue #987)
       - /var/log/containers/ai-registry:/var/log/containers/ai-registry
-      # ES256 signing key for asymmetric JWT signing
-      - ./signing-key.pem:/etc/mcp-gateway/signing-key.pem:ro
     ports:
       # Loopback-only: reached through the nginx front door in normal use.
       - "${HOST_BIND_IP:-127.0.0.1}:8003:8003"

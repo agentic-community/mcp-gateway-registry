@@ -183,7 +183,7 @@ def _decode_internal_token(
     try:
         header = pyjwt.get_unverified_header(token)
     except Exception as e:
-        raise pyjwt.InvalidTokenError(f"Malformed token header: {e}")
+        raise pyjwt.InvalidTokenError("Malformed token")
 
     kid = header.get("kid")
 
