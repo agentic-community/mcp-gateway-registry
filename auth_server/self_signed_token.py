@@ -175,6 +175,16 @@ def verify_self_signed_user_token(token: str) -> dict:
 
     try:
         if kid is None:
+            # Cutover lever: after all tokens have rotated to ES256, operators
+            # enable REJECT_HS256_TOKENS=true to hard-reject legacy tokens.
+            # This closes the window where a leaked SECRET_KEY could forge tokens.
+            # Keep this as a feature flag (not deletion) for one release so it's
+            # revertable if issues arise.
+            if os.environ.get("REJECT_HS256_TOKENS", "false").lower() == "true":
+                raise ValueError(
+                    "HS256 tokens are no longer accepted (REJECT_HS256_TOKENS=true). "
+                    "Generate a new token."
+                )
             # Legacy path: no kid → HS256 (SECRET_KEY)
             claims = _verify_hs256(token)
         else:
