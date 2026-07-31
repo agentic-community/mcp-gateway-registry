@@ -4846,8 +4846,27 @@ async def generate_user_token(
                     f"type={request.resource.type.value}, id={request.resource.id}"
                 )
 
-            # Sign the JWT with our SECRET_KEY
-            access_token = jwt.encode(jwt_claims, SECRET_KEY, algorithm="HS256")
+            # Sign the JWT — use ES256 (asymmetric) when configured, HS256 (legacy) otherwise.
+            # During the transition window, verifiers accept both (kid-based dispatch).
+            import importlib
+
+            try:
+                _isk_mod = importlib.import_module("auth_server.internal_signing_key")
+            except (ImportError, ModuleNotFoundError):
+                _isk_mod = importlib.import_module("internal_signing_key")
+
+            _key_mgr = _isk_mod.get_internal_signing_key_manager()
+            if _key_mgr.is_available:
+                _signing_key = _key_mgr.get_signing_key()
+                _signing_kid = _key_mgr.get_signing_kid()
+                access_token = jwt.encode(
+                    jwt_claims,
+                    _signing_key,
+                    algorithm="ES256",
+                    headers={"kid": _signing_kid},
+                )
+            else:
+                access_token = jwt.encode(jwt_claims, SECRET_KEY, algorithm="HS256")
 
             logger.info(
                 f"Generated self-signed JWT for user '{hash_username(username)}', "
