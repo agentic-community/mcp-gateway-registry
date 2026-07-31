@@ -333,3 +333,29 @@ metricsScrape:
     fromPodSelector:
       app.kubernetes.io/name: prometheus
 nodeSelector: {}
+
+# =============================================================================
+# Internal Signing Key (Asymmetric JWT signing - ES256)
+# =============================================================================
+# When enabled, auth-server signs user-vended JWTs with ES256 instead of HS256.
+# The private key is mounted as a file from a Kubernetes Secret.
+#
+# To generate a key:
+#   openssl ecparam -name prime256v1 -genkey -noout -out signing-key.pem
+#   kubectl create secret generic my-release-signing-key --from-file=key.pem=signing-key.pem
+#
+# Live rotation: update the Secret, kubelet propagates to pods (~60s).
+signingKey:
+  # Enable asymmetric signing (mount the key file, set env vars)
+  enabled: false
+  # Name of an existing Secret containing the PEM private key.
+  # If empty, defaults to "<release-name>-signing-key".
+  existingSecret: ""
+  # Key within the Secret that holds the PEM data.
+  secretKey: "key.pem"  # pragma: allowlist secret
+  # Key ID stamped into JWT headers (increment on rotation).
+  kid: "es256-1"
+  # After all tokens have rotated to ES256 (>24h), set to true to
+  # hard-reject legacy HS256 tokens. This closes the SECRET_KEY
+  # token-forging window.
+  rejectHs256: false

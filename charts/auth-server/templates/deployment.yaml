@@ -247,3 +247,19 @@ spec:
             periodSeconds: 5
             timeoutSeconds: 3
             failureThreshold: 3
+          {{- if .Values.signingKey.enabled }}
+          volumeMounts:
+            - name: signing-key
+              mountPath: /etc/mcp-gateway/signing-key
+              readOnly: true
+          {{- end }}
+      {{- if .Values.signingKey.enabled }}
+      volumes:
+        - name: signing-key
+          secret:
+            secretName: {{ .Values.signingKey.existingSecret | default (printf "%s-signing-key" .Release.Name) }}
+            items:
+              - key: {{ .Values.signingKey.secretKey | default "key.pem" }}
+                path: key.pem
+                mode: 0400
+      {{- end }}

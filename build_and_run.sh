@@ -382,6 +382,23 @@ ensure_secret SECRET_KEY 32
 # both services.
 ensure_secret AUTH_SERVER_NGINX_MARKER_SECRET 32
 
+# Generate an ES256 signing key for asymmetric JWT signing if not present.
+# This key is used by auth-server to sign user-vended tokens. The public key
+# is served at /.well-known/internal-jwks.json for verifiers to fetch.
+# Live rotation: replace the file and auth-server detects the change (~60s).
+if [ ! -f signing-key.pem ]; then
+    log "Generating ES256 signing key (signing-key.pem)..."
+    openssl ecparam -name prime256v1 -genkey -noout -out signing-key.pem 2>/dev/null || {
+        log "WARNING: Failed to generate signing key. Asymmetric signing will be disabled (HS256 fallback)."
+    }
+    if [ -f signing-key.pem ]; then
+        chmod 600 signing-key.pem
+        log "signing-key.pem generated (ES256 P-256). Mount into auth-server container."
+    fi
+else
+    log "signing-key.pem already exists"
+fi
+
 # DOCUMENTDB_PASSWORD: the local MongoDB container runs with --auth and creates
 # its root user from this value on first boot, so it must never be a weak default
 # like "admin". NOTE: this only helps a first-time install. If MongoDB was
