@@ -183,6 +183,12 @@ class Settings(BaseSettings):
 
     # Auth settings
     secret_key: str = ""
+    # Scoped signing keys (fall back to secret_key when not explicitly set)
+    csrf_signing_key: str = ""  # Registry-only, for CSRF token signing
+    credential_encryption_key: str = ""  # Registry-only, for backend credential encryption
+    session_token_enc_key: str = (
+        ""  # Shared (auth-server + registry), for id_token encryption at rest
+    )
     session_cookie_name: str = "mcp_gateway_session"
     session_max_age_seconds: int = 60 * 60 * 8  # 8 hours
     # Secure-by-default: the session cookie carries the Secure flag so browsers

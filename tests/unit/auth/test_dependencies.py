@@ -84,7 +84,7 @@ def mock_session_store(monkeypatch):
     return stub
 
 
-def _make_session_cookie(signer: URLSafeTimedSerializer, session_id: str = "sid-test") -> str:
+def _make_session_cookie(signer: URLSafeTimedSerializer, session_id: str = "a" * 64) -> str:
     """Helper: produce a signed opaque-session_id cookie matching the new format."""
     return signer.dumps(session_id)
 

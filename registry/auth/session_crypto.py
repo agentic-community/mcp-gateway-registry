@@ -38,14 +38,18 @@ _aesgcm: AESGCM | None = None
 
 
 def _derive_token_encryption_key() -> bytes:
-    """Derive the AES-GCM key for id_token encryption from SECRET_KEY via HKDF.
+    """Derive the AES-GCM key for id_token encryption.
 
-    SECRET_KEY is required at startup; rotating it invalidates stored
-    id_tokens (acceptable — same blast radius as cookie rotation today).
+    Uses SESSION_TOKEN_ENC_KEY when set (scoped key, shared between
+    auth-server and registry). Falls back to SECRET_KEY for backwards
+    compatibility during migration. Rotating either key invalidates
+    stored id_tokens (acceptable — same blast radius as before).
     """
-    secret = os.environ.get("SECRET_KEY")
+    secret = os.environ.get("SESSION_TOKEN_ENC_KEY") or os.environ.get("SECRET_KEY")
     if not secret:
-        raise RuntimeError("SECRET_KEY required for session token encryption")
+        raise RuntimeError(
+            "SESSION_TOKEN_ENC_KEY or SECRET_KEY required for session token encryption"
+        )
     hkdf = HKDF(
         algorithm=hashes.SHA256(),
         length=32,

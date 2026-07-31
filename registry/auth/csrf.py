@@ -17,7 +17,10 @@ logger = logging.getLogger(__name__)
 
 CSRF_SALT: str = "csrf-salt"
 
-_csrf_signer = URLSafeTimedSerializer(settings.secret_key)
+# CSRF uses its own signing key (registry-only, never shared with auth-server).
+# Falls back to SECRET_KEY for backwards compatibility during migration.
+_csrf_key = getattr(settings, "csrf_signing_key", None) or settings.secret_key
+_csrf_signer = URLSafeTimedSerializer(_csrf_key)
 
 
 def generate_csrf_token(
