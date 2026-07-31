@@ -673,15 +673,44 @@ uv run python api/registry_management.py \
 echo "Cloudflare registration exit code: $?"
 ```
 
+Registration alone is not enough: `register` stores the server with
+`is_enabled=False` (see `registry/api/server_routes.py`, which indexes the new
+entry with `is_enabled=False`). A disabled server gets no nginx route, so every
+call to it returns `405 Method Not Allowed` and it does NOT appear on the
+dashboard. Enable it explicitly:
+
+```bash
+cd "${INSTALL_DIR}"
+
+uv run python api/registry_management.py \
+    --token-file "${TOKEN_FILE}" \
+    --registry-url http://localhost \
+    toggle --path /cloudflare-docs
+
+echo "Cloudflare toggle exit code: $?"
+```
+
 Verify the server was registered:
 
 ```bash
 cd "${INSTALL_DIR}"
 
 uv run python api/registry_management.py \
-    --token-file ".oauth-tokens/agent-test-agent-m2m-token.json" \
+    --token-file "${TOKEN_FILE}" \
     --registry-url http://localhost \
-    list 2>/dev/null | grep -i cloudflare && echo "Cloudflare server confirmed in registry" || echo "WARNING: Cloudflare server not found in list"
+    list 2>/dev/null | grep -A3 -i cloudflare
+```
+
+Check for `Enabled: True` and `Health: healthy` (the list marks a working server
+`✓ 🟢`). Presence in the list alone is not success — a registered-but-disabled
+server still appears, marked `✗ ⚫`, and is unreachable.
+
+Confirm nginx actually generated the route:
+
+```bash
+docker exec mcp-gateway-registry-registry-1 \
+    grep -c 'location /cloudflare-docs/' /etc/nginx/conf.d/nginx_rev_proxy.conf \
+    && echo "nginx route present" || echo "WARNING: no nginx route for /cloudflare-docs"
 ```
 
 The server configuration that was registered:
@@ -695,6 +724,66 @@ The server configuration that was registered:
   "tags": ["documentation", "cloudflare", "cdn", "workers", "pages", "migration-guide"]
 }
 ```
+
+Cloudflare's `proxy_pass_url` is a public https host, so it passes the SSRF guard
+unchanged. Registering a server that lives **on the compose network** needs one
+extra step — see the note below.
+
+#### Registering the bundled local demo servers (optional)
+
+The compose stack runs `currenttime-server` and `realserverfaketools-server`, but
+neither is in the registry: they must be registered like any other server, using
+the configs in `cli/examples/`.
+
+Their `proxy_pass_url` values are docker-network hostnames, which resolve to
+RFC-1918 addresses. The health checker validates every `proxy_pass_url` through
+an SSRF guard that blocks private/loopback/link-local ranges by default, so they
+register and enable but come up UNHEALTHY with no proxy route:
+
+```
+Health check blocked by SSRF guard for http://currenttime-server:8000/:
+resolves to blocked/private IP 172.18.0.4 (credentials NOT sent)
+```
+
+Internal upstreams are opt-in. Add them to `SSRF_ALLOWED_HOSTS` in `.env` and
+recreate the registry container so it picks up the new value:
+
+```bash
+cd "${INSTALL_DIR}"
+
+# Name the hosts (least privilege). Prefer this over SSRF_ALLOWED_CIDRS, which
+# would allowlist every container on the bridge network, present and future.
+python3 - <<'PYEOF'
+import re
+content = open('.env').read()
+hosts = 'currenttime-server,realserverfaketools-server,mcpgw-server'
+content = re.sub(r'^SSRF_ALLOWED_HOSTS=.*$', f'SSRF_ALLOWED_HOSTS={hosts}',
+                 content, flags=re.MULTILINE)
+open('.env', 'w').write(content)
+print('SSRF_ALLOWED_HOSTS set')
+PYEOF
+
+docker compose up -d registry
+
+for CFG in currenttime realserverfaketools; do
+    uv run python api/registry_management.py \
+        --token-file "${TOKEN_FILE}" --registry-url http://localhost \
+        register --config "cli/examples/${CFG}.json" --overwrite
+done
+
+# register leaves them disabled; paths must match the config exactly
+# (note the trailing slash on both, unlike /cloudflare-docs)
+for P in /currenttime/ /realserverfaketools/; do
+    uv run python api/registry_management.py \
+        --token-file "${TOKEN_FILE}" --registry-url http://localhost toggle --path "$P"
+done
+
+uv run python api/registry_management.py \
+    --token-file "${TOKEN_FILE}" --registry-url http://localhost healthcheck
+```
+
+The cloud metadata address (169.254.169.254) is never permitted by either
+setting. See the "SSRF GUARD ALLOWLIST" section of `.env.example` for details.
 
 Log: `{ 15, "Cloudflare Server Registration", DONE/FAILED, "Registered at /cloudflare-docs" }`
 
