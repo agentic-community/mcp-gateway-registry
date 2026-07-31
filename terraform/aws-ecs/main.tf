@@ -335,6 +335,10 @@ module "mcp_gateway" {
 
   internal_token_ttl_seconds    = var.internal_token_ttl_seconds
   internal_token_leeway_seconds = var.internal_token_leeway_seconds
+  # Asymmetric signing (ES256)
+  internal_signing_key_secret_arn = var.internal_signing_key_secret_arn
+  internal_signing_key_id         = var.internal_signing_key_id
+  reject_hs256_tokens             = var.reject_hs256_tokens
 
   # Custom entity types (admin-defined, schema-driven catalog types)
   custom_entity_types_enabled   = var.custom_entity_types_enabled

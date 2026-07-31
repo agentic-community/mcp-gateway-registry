@@ -524,6 +524,15 @@ module "ecs_service_auth" {
           value = "true"
         },
         {
+          name  = "INTERNAL_SIGNING_KEY_ID"
+          value = var.internal_signing_key_id
+        },
+        {
+          name  = "REJECT_HS256_TOKENS"
+          value = tostring(var.reject_hs256_tokens)
+        },
+        },
+        {
           name  = "METRICS_LEGACY_HTTP_POST"
           value = "false"
         },
