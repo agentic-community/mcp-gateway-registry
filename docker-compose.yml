@@ -497,6 +497,10 @@ services:
       # Registry-UI internal token verification (the /api/ hop; mints in auth-server)
       - INTERNAL_TOKEN_TTL_SECONDS=${INTERNAL_TOKEN_TTL_SECONDS:-30}
       - INTERNAL_TOKEN_LEEWAY_SECONDS=${INTERNAL_TOKEN_LEEWAY_SECONDS:-5}
+      # Scoped encryption/signing keys (fall back to SECRET_KEY when empty)
+      - CSRF_SIGNING_KEY=${CSRF_SIGNING_KEY:-}
+      - CREDENTIAL_ENCRYPTION_KEY=${CREDENTIAL_ENCRYPTION_KEY:-}
+      - SESSION_TOKEN_ENC_KEY=${SESSION_TOKEN_ENC_KEY:-}
     ports:
       - "80:8080"   # Map host 80 to container 8080 (non-root nginx)
       - "443:8443"  # Map host 443 to container 8443 (non-root nginx)
@@ -765,6 +769,7 @@ services:
       - INTERNAL_SIGNING_KEY_PATH=${INTERNAL_SIGNING_KEY_PATH:-/etc/mcp-gateway/signing-key.pem}
       - INTERNAL_SIGNING_KEY_ID=${INTERNAL_SIGNING_KEY_ID:-es256-1}
       - REJECT_HS256_TOKENS=${REJECT_HS256_TOKENS:-false}
+      - SESSION_TOKEN_ENC_KEY=${SESSION_TOKEN_ENC_KEY:-}
     # The auth server is fronted by nginx (the registry container). Publish on
     # loopback only so callers cannot bypass the nginx front door from the
     # network; in-cluster services reach it via service DNS (auth-server:8888).
