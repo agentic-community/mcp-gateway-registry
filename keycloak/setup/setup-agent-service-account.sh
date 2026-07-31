@@ -179,6 +179,7 @@ create_agent_m2m_client() {
         "defaultClientScopes": [
             "web-origins",
             "acr",
+            "basic",
             "profile",
             "roles",
             "email"
