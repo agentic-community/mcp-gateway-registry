@@ -103,8 +103,17 @@ class InternalSigningKeyManager:
         self._last_mtime: float = 0.0
         self._last_check_time: float = 0.0
 
+        # The signing key path. Defaults to the standard mount point used by
+        # Kubernetes (Secret volume mount) and docker-compose (bind mount).
+        # Operators can override with INTERNAL_SIGNING_KEY_PATH if needed.
+        _DEFAULT_KEY_PATH = "/etc/mcp-gateway/signing-key/key.pem"
         key_path = os.environ.get("INTERNAL_SIGNING_KEY_PATH", "")
         auto_generate = os.environ.get("INTERNAL_SIGNING_KEY_GENERATE", "false").lower() == "true"
+
+        # If no explicit path, check the default mount point (key may be
+        # mounted via k8s Secret without any env var configuration).
+        if not key_path and os.path.isfile(_DEFAULT_KEY_PATH):
+            key_path = _DEFAULT_KEY_PATH
 
         if key_path:
             self._key_path = key_path

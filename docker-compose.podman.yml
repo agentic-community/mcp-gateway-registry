@@ -563,7 +563,7 @@ services:
       - INTERNAL_TOKEN_TTL_SECONDS=${INTERNAL_TOKEN_TTL_SECONDS:-30}
       - INTERNAL_TOKEN_LEEWAY_SECONDS=${INTERNAL_TOKEN_LEEWAY_SECONDS:-5}
       # Asymmetric signing (ES256)
-      - INTERNAL_SIGNING_KEY_PATH=${INTERNAL_SIGNING_KEY_PATH:-/etc/mcp-gateway/signing-key.pem}
+      - INTERNAL_SIGNING_KEY_PATH=${INTERNAL_SIGNING_KEY_PATH:-/etc/mcp-gateway/signing-key/key.pem}
       - INTERNAL_SIGNING_KEY_ID=${INTERNAL_SIGNING_KEY_ID:-es256-1}
       - REJECT_HS256_TOKENS=${REJECT_HS256_TOKENS:-false}
       - SESSION_TOKEN_ENC_KEY=${SESSION_TOKEN_ENC_KEY:-}
@@ -584,7 +584,7 @@ services:
       # Application log files (bind mount to host for Splunk ingestion, Issue #987)
       - /var/log/containers/ai-registry:/var/log/containers/ai-registry
       # ES256 signing key for asymmetric JWT signing
-      - ./signing-key.pem:/etc/mcp-gateway/signing-key.pem:ro
+      - ./signing-key.pem:/etc/mcp-gateway/signing-key/key.pem:ro
     depends_on:
       metrics-service:
         condition: service_healthy
