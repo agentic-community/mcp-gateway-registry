@@ -1366,3 +1366,10 @@ aws_registry_federation_enabled = true
 # set this only to pin a specific value. Avoid quotes/backslashes/$ (the registry
 # substitutes it verbatim into the generated nginx config).
 # egress_nginx_marker_secret         = ""
+
+# Asymmetric JWT signing (ES256)
+# Store the PEM private key in Secrets Manager, then reference its ARN here.
+# Generate: openssl ecparam -name prime256v1 -genkey -noout | aws secretsmanager create-secret --name mcp-signing-key --secret-string file:///dev/stdin
+# internal_signing_key_secret_arn = "arn:aws:secretsmanager:us-east-1:123456789:secret:mcp-signing-key-AbCdEf"
+# internal_signing_key_id = "es256-1"
+# reject_hs256_tokens = false

@@ -2151,3 +2151,22 @@ variable "egress_secrets_manager_path_prefix" {
   type        = string
   default     = "mcp/egress"
 }
+
+# Asymmetric signing (ES256)
+variable "internal_signing_key_secret_arn" {
+  description = "ARN of the Secrets Manager secret containing the ES256 PEM private key. When set, auth-server signs JWTs with ES256 instead of HS256."
+  type        = string
+  default     = ""
+}
+
+variable "internal_signing_key_id" {
+  description = "Key ID (kid) stamped into ES256-signed JWTs. Increment on rotation."
+  type        = string
+  default     = "es256-1"
+}
+
+variable "reject_hs256_tokens" {
+  description = "Hard-reject legacy HS256 tokens. Enable only after all tokens have rotated to ES256 (>24h after signing key deployment)."
+  type        = bool
+  default     = false
+}
