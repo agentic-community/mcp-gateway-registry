@@ -2,26 +2,27 @@
 
 The token minted by the **Generate Token** page (and `POST /api/tokens/generate`) is a self-signed gateway JWT that works as an MCP access token. Its **8 hours is only the default**, not the ceiling: the shipped maximum is **24 hours**, and both the default and the maximum are operator-configurable (from [#1477](https://github.com/agentic-community/mcp-gateway-registry/issues/1477)).
 
+## Short answer
+
+**For a user going through the UI, changing the config parameters is the only way to get a longer lifetime.** The UI exposes only fixed presets (1h / 8h / 24h) and cannot request an arbitrary value, and the token API is session-authenticated (not a simple Bearer `curl`), so there is no self-service "just ask for N hours" path. An operator sets the lifetime with two `.env` parameters (restart the registry and auth-server after changing them):
+
+- `MCP_TOKEN_DEFAULT_TTL_HOURS` — the lifetime every UI entry point mints (default `8`).
+- `MCP_TOKEN_MAX_TTL_HOURS` — the ceiling on any request (default `24`, hard-capped at 168h / 7 days).
+
+To go **beyond 24h**, raising `MCP_TOKEN_MAX_TTL_HOURS` is the **only** way. The rest of this FAQ explains the details.
+
 So there are two different things you might want, and they need different actions.
 
-## I just want one token that lasts, say, 12 hours
+## I want a token with a lifetime other than the presets (e.g. 12 hours)
 
-Any value up to the configured maximum (24h by default) needs **no config change at all** — you simply request it.
+**From the UI, you can only pick the built-in presets.** The **Generate Token** page's **Expires In** dropdown offers exactly **1 hour / 8 hours / 24 hours** — there is no 12-hour option and no free-form hours field. The sidebar **Get JWT Token** button and a server's **MCP Configuration** dialog don't let you choose at all; they always mint at the **configured default** lifetime. So for anything other than 1h / 8h / 24h, the UI alone will not do it.
 
-**From the UI:** open **Generate Token** in the left sidebar, pick the lifetime from the **Expires In** dropdown, and generate.
+To get an arbitrary lifetime (say 12h) you have two options:
 
-**From the API:** pass `expires_in_hours` in the request body.
+1. **Change the default (simplest, recommended).** Set `MCP_TOKEN_DEFAULT_TTL_HOURS=12` (see the next section) and restart. Every token the sidebar button, the MCP Configuration dialog, and the "omit expires_in_hours" path mint is then 12h.
+2. **Call the API with a custom `expires_in_hours`.** The endpoint accepts any integer from `1` to the configured maximum (24 by default) in the JSON body — but see the auth note below, it is not a simple Bearer `curl`.
 
-```bash
-export REG=http://localhost   # or your deployment URL
-
-curl -sS -X POST "$REG/api/tokens/generate" \
-  -H "Authorization: Bearer $(cat .token)" \
-  -H "Content-Type: application/json" \
-  -d '{"expires_in_hours": 12}'
-```
-
-The value must be an integer between `1` and the configured maximum; a request above the maximum is rejected with `400`.
+> **`POST /api/tokens/generate` is a browser/session endpoint, not a Bearer-token API.** It is authenticated by your logged-in **session cookie** (`enhanced_auth`), so a plain `curl` with only an `Authorization: Bearer <token>` header is rejected with `401 Authentication required` — you cannot mint a new token from an existing bearer token. Drive it from the UI (which carries the session cookie and, for browsers, the CSRF token), or from a script that first performs the OAuth login and reuses the resulting session cookie. A request whose `expires_in_hours` is not an integer in `1`..max is rejected with `400`.
 
 ## I want to change the default, or allow tokens longer than 24 hours
 
@@ -52,10 +53,6 @@ It is in the left sidebar as **Generate Token**, gated by the `token-generation`
 ## Note: this is not `session_max_age_seconds`
 
 `SESSION_MAX_AGE_SECONDS` controls only the **registry browser session cookie** (and its CSRF token), not the MCP access token. Changing it does not affect how long a generated token is valid. The two defaults both being 8h is a coincidence.
-
-## Related
-
-- [Testing: MCP access-token TTL](../testing-mcp-token-ttl.md) — a manual test plan exercising the Get JWT Token button, the MCP Configuration modal, and the two TTL parameters.
 
 ## Related FAQs
 

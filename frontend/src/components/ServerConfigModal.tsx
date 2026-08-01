@@ -185,6 +185,9 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
   onEgressChanged,
 }) => {
   const [jwtToken, setJwtToken] = useState<string | null>(null);
+  // Actual token lifetime in hours, derived from the response's expires_in
+  // (seconds) rather than hardcoded, since the default is operator-configurable.
+  const [tokenExpiresInHours, setTokenExpiresInHours] = useState<number | null>(null);
   const [tokenLoading, setTokenLoading] = useState(false);
   const [tokenError, setTokenError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -260,6 +263,7 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
     if (isOpen && !isRegistryOnly && server.deployment !== 'local') {
       // Reset token state when modal opens
       setJwtToken(null);
+      setTokenExpiresInHours(null);
       setTokenError(null);
       fetchJwtToken();
     }
@@ -335,9 +339,11 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
     setTokenLoading(true);
     setTokenError(null);
     try {
+      // Omit expires_in_hours so the server applies the configured default
+      // lifetime (MCP_TOKEN_DEFAULT_TTL_HOURS). Hardcoding a value here breaks
+      // when an operator lowers the max below it. Issue #1477.
       const body: Record<string, unknown> = {
         description: `Generated for MCP configuration (${server.name})`,
-        expires_in_hours: 8,
       };
       // ai-registry-tools (mcpgw) needs a user token because it calls registry
       // APIs internally (/api/search/semantic, /api/servers, etc.) which require
@@ -357,6 +363,10 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
         const accessToken = response.data.tokens?.access_token || response.data.access_token;
         if (accessToken) {
           setJwtToken(accessToken);
+          const expiresInSeconds = response.data.tokens?.expires_in ?? response.data.expires_in;
+          setTokenExpiresInHours(
+            typeof expiresInSeconds === 'number' ? Math.round(expiresInSeconds / 3600) : null,
+          );
         } else {
           setTokenError('Token not found in response');
         }
@@ -986,7 +996,10 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
                 </p>
               ) : jwtToken ? (
                 <p className="text-sm text-green-800 dark:text-green-200">
-                  JWT token has been automatically added to the configuration below. You can copy and paste it directly into your mcp.json file. Token expires in 8 hours.
+                  JWT token has been automatically added to the configuration below. You can copy and paste it directly into your mcp.json file.
+                  {tokenExpiresInHours
+                    ? ` Token expires in ${tokenExpiresInHours} hour${tokenExpiresInHours === 1 ? '' : 's'}.`
+                    : ''}
                 </p>
               ) : tokenError ? (
                 <p className="text-sm text-red-800 dark:text-red-200">
