@@ -1007,6 +1007,18 @@ variable "max_tokens_per_user_per_hour" {
   default     = 100
 }
 
+variable "mcp_token_default_ttl_hours" {
+  description = "Default TTL (hours) for minted MCP tokens when the caller does not request one."
+  type        = number
+  default     = 8
+}
+
+variable "mcp_token_max_ttl_hours" {
+  description = "Maximum TTL (hours) a caller may request for a minted MCP token."
+  type        = number
+  default     = 24
+}
+
 # Registration webhook (issue #742)
 variable "registration_webhook_url" {
   description = "Webhook URL to POST to on successful registration or deletion. Disabled if empty."

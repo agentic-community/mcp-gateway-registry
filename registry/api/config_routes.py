@@ -92,6 +92,8 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             ("registry_api_token", "Registry API Token", True),
             ("registry_api_keys", "Registry API Keys", True),
             ("max_tokens_per_user_per_hour", "JWT Token Vending Rate Limit (per user/hour)", False),
+            ("mcp_token_default_ttl_hours", "MCP Token Default TTL (hours)", False),
+            ("mcp_token_max_ttl_hours", "MCP Token Max TTL (hours)", False),
             ("m2m_direct_registration_enabled", "M2M Direct Registration Enabled", False),
             # Tool-level access control (issue #1026)
             ("mcp_tools_list_filter_enabled", "MCP tools/list Filter Enabled", False),

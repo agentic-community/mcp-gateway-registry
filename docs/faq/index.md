@@ -54,5 +54,6 @@ Common questions and answers about the MCP Gateway Registry.
 - [Can I use an Entra ID token to call the registry API instead of the UI-generated token?](use-entra-token-for-registry-api.md)
 - [How do I register an M2M client and assign it groups without an IdP Admin API token?](registering-m2m-client-without-idp-admin-token.md)
 - [Registry API Authentication FAQ (static token, IdP JWT, coexistence)](registry-api-auth-faq.md)
+- [How do I generate an MCP access token that lasts longer than 8 hours?](generate-token-longer-than-8-hours.md)
 - [How do I pass an M2M token from Entra to the registration gate?](oauth2-token-for-registration-gate.md)
 - [How does an admin seed per-user egress PATs for a `pat` server?](seeding-per-user-egress-pats-as-admin.md)

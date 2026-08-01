@@ -1058,6 +1058,28 @@ variable "max_tokens_per_user_per_hour" {
   default     = 100
 }
 
+variable "mcp_token_default_ttl_hours" {
+  description = "Default TTL (hours) for minted MCP tokens when the caller does not request one."
+  type        = number
+  default     = 8
+
+  validation {
+    condition     = var.mcp_token_default_ttl_hours >= 1
+    error_message = "mcp_token_default_ttl_hours must be at least 1"
+  }
+}
+
+variable "mcp_token_max_ttl_hours" {
+  description = "Maximum TTL (hours) a caller may request for a minted MCP token."
+  type        = number
+  default     = 24
+
+  validation {
+    condition     = var.mcp_token_max_ttl_hours >= 1
+    error_message = "mcp_token_max_ttl_hours must be at least 1"
+  }
+}
+
 # =============================================================================
 # REGISTRATION WEBHOOK (Issue #742)
 # =============================================================================

@@ -498,6 +498,14 @@ registry_api_token = "m3zT65wREARMVDToKosg_DgNkKqS_434hNxy3sslGPY"
 # Default: 100
 # max_tokens_per_user_per_hour = 100
 
+# Default TTL (hours) for minted MCP tokens when the caller does not request one
+# Default: 8
+# mcp_token_default_ttl_hours = 8
+
+# Maximum TTL (hours) a caller may request for a minted MCP token
+# Default: 24
+# mcp_token_max_ttl_hours = 24
+
 # ============================================================================
 # REGISTRATION WEBHOOK (Issue #742)
 # ============================================================================
