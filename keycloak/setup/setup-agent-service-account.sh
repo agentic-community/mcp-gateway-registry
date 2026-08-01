@@ -400,14 +400,19 @@ verify_setup() {
     echo ""
     echo "Verifying setup..."
 
-    # Check service account exists and is in the right group
-    GROUPS=$(curl -s -H "Authorization: Bearer $TOKEN" \
+    # Check service account exists and is in the right group.
+    # NOTE: do not name this variable GROUPS -- that is a special bash variable
+    # (an array of the caller's numeric supplementary group IDs). Assigning a
+    # scalar to it fails, and under `set -e` that aborts the script here, before
+    # the summary, even though the account was configured correctly.
+    local account_groups
+    account_groups=$(curl -s -H "Authorization: Bearer $TOKEN" \
         "$ADMIN_URL/admin/realms/$REALM/users/$USER_ID/groups" | \
         jq -r '.[].name')
 
-    echo "Service account groups: $GROUPS"
+    echo "Service account groups: $account_groups"
 
-    if echo "$GROUPS" | grep -q "$TARGET_GROUP"; then
+    if echo "$account_groups" | grep -q "$TARGET_GROUP"; then
         echo -e "${GREEN}✓ Service account is in '$TARGET_GROUP' group${NC}"
     else
         echo -e "${RED}✗ Service account is NOT in '$TARGET_GROUP' group${NC}"
