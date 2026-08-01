@@ -106,9 +106,11 @@ const fetchAdminTokens = async () => {
   setLoading(true);
   setError('');
   try {
+    // Omit expires_in_hours so the server applies the configured default
+    // lifetime (MCP_TOKEN_DEFAULT_TTL_HOURS). Hardcoding a value here breaks
+    // when an operator lowers the max below it. Issue #1477.
     const requestData = {
       description: 'Generated via sidebar',
-      expires_in_hours: 8,
     };
 
     const response = await axios.post('/api/tokens/generate', requestData, {
@@ -684,6 +686,25 @@ const fetchAdminTokens = async () => {
                           <span>Download JSON</span>
                         </button>
                       </div>
+
+                      {/* Human-readable lifetime, derived from the response's
+                          expires_in (seconds). The lifetime is operator-
+                          configurable (MCP_TOKEN_DEFAULT_TTL_HOURS), so read it
+                          from the response rather than hardcoding a value. */}
+                      {typeof tokenData?.tokens?.expires_in === 'number' && (
+                        <p className="text-sm text-gray-600 dark:text-gray-300">
+                          This token expires in{' '}
+                          <span className="font-medium">
+                            {(() => {
+                              const secs = tokenData.tokens.expires_in;
+                              const hrs = secs / 3600;
+                              const rounded = Math.round(hrs * 100) / 100;
+                              return `${rounded} hour${rounded === 1 ? '' : 's'}`;
+                            })()}
+                          </span>{' '}
+                          ({tokenData.tokens.expires_in} seconds).
+                        </p>
+                      )}
 
                       {/* Token Data Display */}
                       <div className="bg-gray-50 dark:bg-gray-900 rounded-lg p-4 max-h-96 overflow-y-auto">

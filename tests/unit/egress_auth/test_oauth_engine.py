@@ -6,6 +6,8 @@ no real provider is contacted.
 
 import base64
 import hashlib
+import json
+from datetime import UTC, datetime
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -126,6 +128,73 @@ class TestExchangeAndRefresh:
             await oauth_engine.exchange_code(
                 PROVIDER_REGISTRY["github"], "cid", "secret", "c", "https://gw/cb", "v"
             )
+
+
+def _make_jwt(exp: int | None) -> str:
+    """Minimal unsigned JWT (header.payload.sig) carrying an optional ``exp`` claim."""
+
+    def seg(obj: dict) -> str:
+        raw = json.dumps(obj).encode()
+        return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+
+    claims: dict = {"iss": "https://example.my.salesforce.com"}
+    if exp is not None:
+        claims["exp"] = exp
+    return f"{seg({'alg': 'RS256', 'typ': 'JWT'})}.{seg(claims)}.sig"
+
+
+@pytest.mark.unit
+class TestExpiresAtFallback:
+    """Providers that omit ``expires_in`` (e.g. Salesforce) still bound the access
+    token via the JWT ``exp`` claim. Cover both token-endpoint call sites, since
+    exchange and refresh both funnel through ``_to_stored_token``."""
+
+    def test_expires_in_takes_precedence_over_jwt_exp(self):
+        # Stale JWT exp must not override an explicit, fresher expires_in.
+        past = int(datetime.now(UTC).timestamp()) - 3600
+        at = oauth_engine._expires_at(3600, _make_jwt(past))
+        assert at is not None
+        assert datetime.fromisoformat(at) > datetime.now(UTC)
+
+    def test_jwt_exp_used_when_expires_in_missing(self):
+        exp = int(datetime.now(UTC).timestamp()) + 7200
+        at = oauth_engine._expires_at(None, _make_jwt(exp))
+        assert at is not None
+        assert datetime.fromisoformat(at) == datetime.fromtimestamp(exp, tz=UTC)
+
+    def test_none_for_opaque_token_without_expires_in(self):
+        assert oauth_engine._expires_at(None, "opaque-not-a-jwt") is None
+
+    def test_none_for_jwt_without_exp_claim(self):
+        assert oauth_engine._expires_at(None, _make_jwt(None)) is None
+
+    def test_none_for_malformed_jwt(self):
+        assert oauth_engine._expires_at(None, "a.!!!notb64!!!.c") is None
+
+    async def test_exchange_sets_expires_at_from_jwt(self, monkeypatch):
+        exp = int(datetime.now(UTC).timestamp()) + 14400  # Salesforce ~4h JWT
+
+        async def fake_post(cfg, data, headers):
+            # No expires_in, JWT access token -- the Salesforce shape.
+            return {"access_token": _make_jwt(exp), "refresh_token": "rt", "scope": "mcp_api"}
+
+        monkeypatch.setattr(oauth_engine, "_post_token", fake_post)
+        tok = await oauth_engine.exchange_code(
+            PROVIDER_REGISTRY["github"], "cid", "secret", "c", "https://gw/cb", "v"
+        )
+        assert tok.expires_at is not None
+        assert datetime.fromisoformat(tok.expires_at) == datetime.fromtimestamp(exp, tz=UTC)
+
+    async def test_refresh_sets_expires_at_from_jwt(self, monkeypatch):
+        exp = int(datetime.now(UTC).timestamp()) + 14400
+
+        async def fake_post(cfg, data, headers):
+            return {"access_token": _make_jwt(exp)}
+
+        monkeypatch.setattr(oauth_engine, "_post_token", fake_post)
+        tok = await oauth_engine.refresh_token(PROVIDER_REGISTRY["google"], "cid", "secret", "rt")
+        assert tok.expires_at is not None
+        assert datetime.fromisoformat(tok.expires_at) == datetime.fromtimestamp(exp, tz=UTC)
 
 
 @pytest.mark.unit

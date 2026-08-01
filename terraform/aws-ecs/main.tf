@@ -237,6 +237,8 @@ module "mcp_gateway" {
   registry_api_token                 = var.registry_api_token
   registry_api_keys                  = var.registry_api_keys
   max_tokens_per_user_per_hour       = var.max_tokens_per_user_per_hour
+  mcp_token_default_ttl_hours        = var.mcp_token_default_ttl_hours
+  mcp_token_max_ttl_hours            = var.mcp_token_max_ttl_hours
 
   # Registration webhook (issue #742)
   registration_webhook_url             = var.registration_webhook_url

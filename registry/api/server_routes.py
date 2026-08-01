@@ -3451,15 +3451,23 @@ async def generate_user_token(
             raise HTTPException(status_code=400, detail="Invalid JSON in request body")
 
         requested_scopes = body.get("requested_scopes", [])
-        expires_in_hours = body.get("expires_in_hours", 8)
+        # Omitted lifetime falls back to the configured default (MCP_TOKEN_DEFAULT_TTL_HOURS).
+        expires_in_hours = body.get("expires_in_hours", settings.mcp_token_default_ttl_hours)
         description = body.get("description", "")
         resource = body.get("resource")
 
-        # Validate expires_in_hours
-        if not isinstance(expires_in_hours, int) or expires_in_hours <= 0 or expires_in_hours > 24:
+        # Validate expires_in_hours against the configured maximum
+        # (MCP_TOKEN_MAX_TTL_HOURS; itself bounded to a 7-day ceiling by settings).
+        max_ttl_hours = settings.mcp_token_max_ttl_hours
+        if (
+            not isinstance(expires_in_hours, int)
+            or isinstance(expires_in_hours, bool)
+            or expires_in_hours <= 0
+            or expires_in_hours > max_ttl_hours
+        ):
             raise HTTPException(
                 status_code=400,
-                detail="expires_in_hours must be an integer between 1 and 24",
+                detail=f"expires_in_hours must be an integer between 1 and {max_ttl_hours}",
             )
 
         # Validate requested_scopes
