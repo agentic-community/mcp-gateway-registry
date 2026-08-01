@@ -34,6 +34,20 @@ _TRANSIENT_RETRIES = 4
 _TRANSIENT_BACKOFF_BASE = 0.5
 
 
+def transient_retry_budget_seconds() -> float:
+    """Worst-case total time ``_run`` can spend *sleeping* between transient
+    retries (0.5 + 1 + 2 + 4 = 7.5s today), excluding the per-attempt request
+    time itself.
+
+    Exposed so out-of-process callers can size their own timeout relative to
+    this budget instead of hard-coding a coupled magic number. In particular the
+    auth-server's egress-token vend HTTP call must outlast this window, or it
+    would abandon the request while the registry is still legitimately retrying
+    a Vault leader election (see ``auth_server.server._egress_vend_timeout_seconds``).
+    """
+    return sum(_TRANSIENT_BACKOFF_BASE * (2**i) for i in range(_TRANSIENT_RETRIES))
+
+
 def _is_auth_expiry_error(exc: Exception) -> bool:
     """True if an hvac error looks like an expired/invalid Vault token.
 
