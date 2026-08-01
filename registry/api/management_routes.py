@@ -709,8 +709,8 @@ async def management_create_group(
 
     # Extract create_in_idp from scope_config (frontend sends it there)
     create_in_idp = False  # default: do not create in IdP
-    if payload.scope_config and "create_in_idp" in payload.scope_config:
-        create_in_idp = bool(payload.scope_config["create_in_idp"])
+    if payload.scope_config is not None:
+        create_in_idp = payload.scope_config.create_in_idp
     logger.debug(
         "create_in_idp=%s for group '%s' (from scope_config)",
         create_in_idp,
@@ -755,14 +755,22 @@ async def management_create_group(
                 payload.name,
             )
 
-        # Step 2: Create in MongoDB scopes collection (always)
+        # Step 2: Create in MongoDB scopes collection (always).
+        # ScopeConfig fields default to None (so PATCH can distinguish
+        # omitted from provided); for create, None means empty.
         server_access = []
         ui_permissions = {}
         agent_access = []
-        if payload.scope_config:
-            server_access = payload.scope_config.get("server_access", [])
-            ui_permissions = payload.scope_config.get("ui_permissions", {})
-            agent_access = payload.scope_config.get("agent_access", [])
+        if payload.scope_config is not None:
+            if payload.scope_config.server_access is not None:
+                server_access = [
+                    rule.model_dump(exclude_unset=True)
+                    for rule in payload.scope_config.server_access
+                ]
+            if payload.scope_config.ui_permissions is not None:
+                ui_permissions = payload.scope_config.ui_permissions
+            if payload.scope_config.agent_access is not None:
+                agent_access = payload.scope_config.agent_access
 
         # Normalize agent paths to ensure they have leading slashes
         agent_access, ui_permissions = _normalize_agent_paths_in_scope_config(
@@ -783,9 +791,33 @@ async def management_create_group(
         )
 
         if not import_success:
+            # import_group refused the write (e.g. the reserved-wildcard
+            # guard on server: "*"/"all", or the privileged-write guard).
+            # Surface an actionable 400 instead of a success response that
+            # persisted nothing.
             logger.warning(
-                "Group %s in IdP but failed to create in MongoDB: %s",
+                "Group %s in IdP but scope write was refused for: %s",
                 "created" if create_in_idp else "skipped",
+                payload.name,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"Scope '{payload.name}' was not saved: the scope service "
+                    "refused the configuration. Wildcard server_access entries "
+                    '(server: "*" or "all") cannot be created here; grant '
+                    'broad UI visibility via ui_permissions ("all") instead.'
+                ),
+            )
+
+        # Propagate the change to the auth server so it takes effect without
+        # a restart, mirroring the CLI import path (server_routes.py).
+        # Non-fatal: the auth server also picks scopes up on its next reload.
+        reloaded = await scope_service.trigger_auth_server_reload()
+        if not reloaded:
+            logger.warning(
+                "Scope '%s' persisted but auth-server reload failed; "
+                "change will take effect on next auth-server restart.",
                 payload.name,
             )
 
@@ -797,6 +829,8 @@ async def management_create_group(
             is_idp_managed=create_in_idp,
         )
 
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.error("Failed to create group: %s", exc)
         detail = str(exc).lower()
@@ -891,6 +925,17 @@ async def management_delete_group(
                 "Group deleted from IdP but failed to delete from MongoDB: %s",
                 group_name,
             )
+        else:
+            # Propagate the deletion to the auth server so the scope stops
+            # being honored without a restart, mirroring the CLI import path.
+            # Non-fatal: the auth server also reloads scopes on restart.
+            reloaded = await scope_service.trigger_auth_server_reload()
+            if not reloaded:
+                logger.warning(
+                    "Scope '%s' deleted but auth-server reload failed; "
+                    "removal will take effect on next auth-server restart.",
+                    group_name,
+                )
 
         return GroupDeleteResponse(name=group_name)
 
@@ -1044,11 +1089,18 @@ async def management_update_group(
         group_mappings = None
         agent_access = None
 
-        if payload.scope_config:
-            server_access = payload.scope_config.get("server_access")
-            ui_permissions = payload.scope_config.get("ui_permissions")
-            group_mappings = payload.scope_config.get("group_mappings")
-            agent_access = payload.scope_config.get("agent_access")
+        if payload.scope_config is not None:
+            # ScopeConfig fields default to None, so an omitted field means
+            # "preserve existing values" (critical for group_mappings, which
+            # holds Entra Object IDs) while a provided field replaces them.
+            if payload.scope_config.server_access is not None:
+                server_access = [
+                    rule.model_dump(exclude_unset=True)
+                    for rule in payload.scope_config.server_access
+                ]
+            ui_permissions = payload.scope_config.ui_permissions
+            group_mappings = payload.scope_config.group_mappings
+            agent_access = payload.scope_config.agent_access
 
         # Preserve existing group_mappings if not provided in payload
         # This is critical for Entra ID where group_mappings contains Object IDs
@@ -1082,8 +1134,31 @@ async def management_update_group(
         )
 
         if not import_success:
+            # import_group refused the write (reserved-wildcard guard or
+            # privileged-write guard). Surface an actionable 400 instead of
+            # a success response that persisted nothing.
             logger.warning(
-                "Group updated in IdP but failed to update in MongoDB: %s",
+                "Group updated in IdP but scope write was refused for: %s",
+                group_name,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"Scope '{group_name}' was not updated: the scope service "
+                    "refused the configuration. Wildcard server_access entries "
+                    '(server: "*" or "all") cannot be saved here; grant '
+                    'broad UI visibility via ui_permissions ("all") instead.'
+                ),
+            )
+
+        # Propagate the change to the auth server so it takes effect without
+        # a restart, mirroring the CLI import path (server_routes.py).
+        # Non-fatal: the auth server also picks scopes up on its next reload.
+        reloaded = await scope_service.trigger_auth_server_reload()
+        if not reloaded:
+            logger.warning(
+                "Scope '%s' persisted but auth-server reload failed; "
+                "change will take effect on next auth-server restart.",
                 group_name,
             )
 
