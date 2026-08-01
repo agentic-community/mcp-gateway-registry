@@ -443,6 +443,14 @@ generate_agent_token() {
 
     mkdir -p "$AGENT_TOKEN_DIR"
 
+    # The URL token consumers dial to mint tokens. This must be the *external*
+    # Keycloak URL, not the in-network one ($KEYCLOAK_URL, e.g. http://keycloak:8080),
+    # because the consumers run on the host rather than inside the compose network.
+    # Follow the same precedence as credentials-provider/generate_creds.sh: honour
+    # KEYCLOAK_EXTERNAL_URL, and otherwise fall back to the admin URL this script is
+    # already talking to, which is correct by construction.
+    local keycloak_external_url="${KEYCLOAK_EXTERNAL_URL:-$ADMIN_URL}"
+
     cat > "$AGENT_TOKEN_FILE" << EOF
 {
   "provider": "keycloak_m2m",
@@ -451,7 +459,7 @@ generate_agent_token() {
   "group": "$TARGET_GROUP",
   "client_id": "$AGENT_CLIENT_ID",
   "client_secret": "$AGENT_CLIENT_SECRET",
-  "keycloak_url": "https://mcpgateway.ddns.net/keycloak",
+  "keycloak_url": "$keycloak_external_url",
   "realm": "$REALM",
   "saved_at": "$(date -u '+%Y-%m-%d %H:%M:%S UTC')",
   "usage_notes": "Individual M2M client credentials for agent $AGENT_ID with complete audit trails"
