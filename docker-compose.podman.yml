@@ -288,6 +288,11 @@ services:
       # M2M Direct Registration
       - M2M_DIRECT_REGISTRATION_ENABLED=${M2M_DIRECT_REGISTRATION_ENABLED:-true}
       - MAX_TOKENS_PER_USER_PER_HOUR=${MAX_TOKENS_PER_USER_PER_HOUR:-100}
+      # MCP access-token lifetime (hours). Default when omitted / hard cap on
+      # requests. Read by the registry (validation); mirrored to auth-server
+      # (minting). Max is bounded to a 7-day ceiling in code. Issue #1477.
+      - MCP_TOKEN_DEFAULT_TTL_HOURS=${MCP_TOKEN_DEFAULT_TTL_HOURS:-8}
+      - MCP_TOKEN_MAX_TTL_HOURS=${MCP_TOKEN_MAX_TTL_HOURS:-24}
       # Telemetry Configuration
       # Disable all:       set MCP_TELEMETRY_DISABLED=1  to disable all telemetry (startup ping + heartbeat)
       # Heartbeat opt-out: set MCP_TELEMETRY_OPT_OUT=1   to disable daily heartbeat only
@@ -418,6 +423,11 @@ services:
       - TRUSTED_PROXY_HOPS=${TRUSTED_PROXY_HOPS:-1}
       - TRUSTED_EXTERNAL_HOSTS=${TRUSTED_EXTERNAL_HOSTS:-}
       - SECRET_KEY=${SECRET_KEY}
+      # MCP access-token lifetime (hours). auth-server mints + clamps to the
+      # configured max (bounded to a 7-day ceiling in code). Must match the
+      # registry's values. Issue #1477.
+      - MCP_TOKEN_DEFAULT_TTL_HOURS=${MCP_TOKEN_DEFAULT_TTL_HOURS:-8}
+      - MCP_TOKEN_MAX_TTL_HOURS=${MCP_TOKEN_MAX_TTL_HOURS:-24}
       # Exact-match allowlist of OAuth login/logout redirect URIs (comma-separated
       # absolute URLs). Empty (default) falls back to the weaker cookie-domain
       # heuristic; set it to harden against open-redirect via a controlled subdomain.
