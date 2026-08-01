@@ -1,8 +1,7 @@
-import {exec, execFile} from "node:child_process";
+import {execFile} from "node:child_process";
 import {promisify} from "node:util";
 import path from "node:path";
 
-const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
 
 export interface TokenRefreshResult {
