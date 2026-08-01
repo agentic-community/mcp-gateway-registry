@@ -443,6 +443,11 @@ services:
       # M2M Direct Registration
       - M2M_DIRECT_REGISTRATION_ENABLED=${M2M_DIRECT_REGISTRATION_ENABLED:-true}
       - MAX_TOKENS_PER_USER_PER_HOUR=${MAX_TOKENS_PER_USER_PER_HOUR:-100}
+      # MCP access-token lifetime (hours). Default when omitted / hard cap on
+      # requests. Read by the registry (validation); mirrored to auth-server
+      # (minting). Max is bounded to a 7-day ceiling in code. Issue #1477.
+      - MCP_TOKEN_DEFAULT_TTL_HOURS=${MCP_TOKEN_DEFAULT_TTL_HOURS:-8}
+      - MCP_TOKEN_MAX_TTL_HOURS=${MCP_TOKEN_MAX_TTL_HOURS:-24}
       # OpenTelemetry / OTLP (mirrored for config panel visibility)
       - OTEL_OTLP_ENDPOINT=${OTEL_OTLP_ENDPOINT:-}
       - OTEL_OTLP_EXPORT_INTERVAL_MS=${OTEL_OTLP_EXPORT_INTERVAL_MS:-30000}
@@ -602,6 +607,11 @@ services:
       # heuristic; set it to harden against open-redirect via a controlled subdomain.
       - OAUTH2_ALLOWED_REDIRECT_URIS=${OAUTH2_ALLOWED_REDIRECT_URIS:-}
       - SECRET_KEY=${SECRET_KEY}
+      # MCP access-token lifetime (hours). auth-server mints + clamps to the
+      # configured max (bounded to a 7-day ceiling in code). Must match the
+      # registry's values. Issue #1477.
+      - MCP_TOKEN_DEFAULT_TTL_HOURS=${MCP_TOKEN_DEFAULT_TTL_HOURS:-8}
+      - MCP_TOKEN_MAX_TTL_HOURS=${MCP_TOKEN_MAX_TTL_HOURS:-24}
       # Egress vault: auth-server does the marker check + the vend call to the
       # registry (it does NOT touch the secret store, so no SECRET_STORE/AWS/
       # OPENBAO vars here).
