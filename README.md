@@ -170,6 +170,9 @@ High-traffic pages by audience:
 **Architecture & development**
 - [Architecture Diagrams](docs/architecture-diagrams.md) · [API Reference](docs/registry_api.md) · [AI Coding Assistant Integration](docs/ai-coding-assistants-setup.md) · [MCP Registry CLI](docs/mcp-registry-cli.md)
 
+**Design decisions**
+- [Architecture Decision Records (ADRs)](docs/adr/) · [ADR 0001: No server-side DCR](docs/adr/0001-no-server-side-dcr.md)
+
 ## Telemetry
 
 The registry collects **anonymous, non-sensitive** usage telemetry (version, OS, cloud provider, aggregate asset counts) to understand adoption. It is opt-out and on by default; no PII, credentials, endpoints, or model names are ever sent. Disable everything with `MCP_TELEMETRY_DISABLED=1`. Full schema and privacy guarantees: [Telemetry Documentation](docs/TELEMETRY.md).
