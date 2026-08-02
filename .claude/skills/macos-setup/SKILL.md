@@ -126,8 +126,19 @@ For every phase below, apply this rule:
 echo "=== Docker ==="
 docker --version 2>/dev/null && docker ps >/dev/null 2>&1 && echo "DOCKER_OK" || echo "DOCKER_FAIL"
 
-echo "=== Python ==="
-python3 --version 2>/dev/null && echo "PYTHON_OK" || echo "PYTHON_FAIL"
+echo "=== Python (>=3.14 required by pyproject.toml) ==="
+# Ask uv, not PATH. Phase 5 runs `uv sync`, which resolves its own managed
+# interpreters and ignores whatever `python3` happens to be first on PATH -- a
+# system python3 of 3.13 is fine as long as uv can see a >=3.14 somewhere.
+# Checking `python3 --version` instead reports a false failure on exactly the
+# machines where setup would have worked.
+if uv python find '>=3.14' >/dev/null 2>&1; then
+    echo "Interpreter for uv: $(uv python find '>=3.14' 2>/dev/null)"
+    echo "PYTHON_OK"
+else
+    echo "System python3: $(python3 --version 2>&1 || echo 'not found')"
+    echo "PYTHON_TOO_OLD"
+fi
 
 echo "=== uv ==="
 uv --version 2>/dev/null && echo "UV_OK" || echo "UV_FAIL"
@@ -150,7 +161,7 @@ For any failed check, display the install instructions:
 | Check | Install command |
 |-------|----------------|
 | DOCKER_FAIL | "Install Docker Desktop from https://www.docker.com/products/docker-desktop/ then start it and wait for the whale icon in the menu bar" |
-| PYTHON_FAIL | `brew install python@3.14` |
+| PYTHON_TOO_OLD | `uv python install 3.14` — the project requires Python >=3.14 (`pyproject.toml`), and Phase 5 (`uv sync`) fails with `No interpreter found for Python >=3.14` otherwise. `uv` manages this interpreter itself, so the system `python3` is left untouched (it may stay on 3.13 or older). |
 | UV_FAIL | `curl -LsSf https://astral.sh/uv/install.sh \| sh` — then restart your terminal |
 | NODE_FAIL | `brew install node@20` or download from https://nodejs.org/ |
 | GIT_FAIL | `xcode-select --install` |
@@ -158,6 +169,10 @@ For any failed check, display the install instructions:
 | GETTEXT_FAIL | `brew install gettext` |
 
 **Do not proceed if Docker or git fail.** Python, uv, Node.js, jq, and gettext must also be present before continuing. Ask the user to install missing tools and retry.
+
+**Do not proceed on `PYTHON_TOO_OLD`.** With no >=3.14 interpreter available to `uv`, Phase 5 fails four phases later with `No interpreter found for Python >=3.14`, an error that names `uv` rather than the unmet prerequisite. Resolve it here: run `uv python install 3.14`, then re-run the Python check and confirm `PYTHON_OK` before continuing.
+
+Note the check deliberately asks `uv`, not `python3 --version`. `uv sync` uses its own managed interpreters, so a system `python3` older than 3.14 is not a problem as long as `uv python find '>=3.14'` succeeds. Gating on `python3` instead blocks setup on machines where it would have worked.
 
 Log: `{ 1, "Prerequisites Check", DONE/FAILED, list of what passed/failed }`
 
