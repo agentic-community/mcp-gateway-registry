@@ -104,12 +104,14 @@ data "aws_ami" "amazon_linux_2023" {
   }
 }
 
-# Bastion EC2 instance (t2.micro — free tier eligible)
+# Bastion EC2 instance. Default instance type is t3.medium (see
+# var.bastion_instance_type) so the telemetry export can stream whole
+# collections without CPU-credit starvation on the heartbeat fetch.
 resource "aws_instance" "bastion" {
   count = var.bastion_enabled ? 1 : 0
 
   ami                         = data.aws_ami.amazon_linux_2023[0].id
-  instance_type               = "t2.micro"
+  instance_type               = var.bastion_instance_type
   subnet_id                   = aws_subnet.public[0].id
   vpc_security_group_ids      = [aws_security_group.bastion[0].id]
   key_name                    = aws_key_pair.bastion[0].key_name

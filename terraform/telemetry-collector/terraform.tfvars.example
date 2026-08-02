@@ -40,7 +40,12 @@ rate_limit_window_seconds = 60  # Time window in seconds
 # Leave empty to disable alarms
 # alarm_email = "alerts@example.com"
 
-# Bastion host for DocumentDB access (free tier t2.micro)
+# Bastion host for DocumentDB access.
+# Default instance type is t3.medium so the telemetry export can stream whole
+# collections without CPU-credit starvation (t2.micro caused silent heartbeat
+# drops). Override bastion_instance_type = "t2.micro" only for a throwaway
+# free-tier bastion where slow exports are acceptable.
 bastion_enabled      = true
+# bastion_instance_type = "t3.medium"        # default; use t2.micro for free tier
 # bastion_public_key   = "ssh-rsa AAAA..."   # your ~/.ssh/id_rsa.pub
 # bastion_allowed_cidrs = ["YOUR_IP/32"]      # restrict to your IP for security

@@ -100,6 +100,20 @@ variable "bastion_public_key" {
   default     = ""
 }
 
+variable "bastion_instance_type" {
+  description = <<-EOT
+    EC2 instance type for the bastion host. The default t3.medium (2 vCPU,
+    4 GB) is deliberately larger than free-tier t2.micro: the telemetry
+    export streams whole DocumentDB collections through mongosh, and on a
+    1-vCPU / 1 GB t2.micro the second (heartbeat) fetch exhausts CPU credits
+    and crawls, which previously caused a silent heartbeat drop. Use
+    t2.micro only for a throwaway free-tier bastion where slow exports are
+    acceptable.
+  EOT
+  type        = string
+  default     = "t3.medium"
+}
+
 variable "bastion_allowed_cidrs" {
   description = "CIDR blocks allowed to SSH to the bastion host"
   type        = list(string)
