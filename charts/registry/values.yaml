@@ -3,7 +3,7 @@ global:
   image:
     # Container registry (host + optional namespace). Shared default across subcharts.
     registry: public.ecr.aws/p3v1o3c6
-    tag: 1.27.1
+    tag: 1.28.0
     pullPolicy: IfNotPresent
   cloud:
     # AWS region for cloud detection in telemetry. Set this when deploying
