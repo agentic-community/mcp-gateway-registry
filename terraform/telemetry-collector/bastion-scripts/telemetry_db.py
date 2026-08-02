@@ -41,6 +41,15 @@ DEFAULT_OUTPUT = "registry_metrics.csv"
 CA_BUNDLE_PATH = os.path.expanduser("~/global-bundle.pem")
 BASTION_ENV_PATH = os.path.expanduser("~/bastion.env")
 
+# Timeout (seconds) for a full-collection mongosh fetch. The bastion is a
+# 1 GB / 1-vCPU t2.micro, so streaming a large collection is CPU-bound and can
+# take well over the old 120s default -- especially the SECOND fetch in a
+# combined export, which runs after the first fetch has already burned the
+# instance's CPU credits. A too-low timeout made the heartbeat fetch return 0
+# rows SILENTLY, zeroing out the entire Liveness/Engagement/LTV half of the
+# report. Keep this generous; the query itself is fast when not CPU-starved.
+FETCH_TIMEOUT_SECONDS = 900
+
 COLLECTIONS = ["startup_events", "heartbeat_events"]
 
 # Column order for startup events
@@ -351,11 +360,24 @@ def _fetch_documents(
         f"db.{collection}.find({{}}, {{_id:0}})"
         f".sort({{ts:1}}).forEach(d => print(JSON.stringify(d)));"
     )
-    output = _run_mongosh(endpoint, username, password, database, eval_script)
+    output = _run_mongosh(
+        endpoint,
+        username,
+        password,
+        database,
+        eval_script,
+        timeout=FETCH_TIMEOUT_SECONDS,
+    )
 
     if output is None:
-        logger.error(f"Failed to fetch documents from {collection}")
-        return []
+        # Fail loud. A silent empty return here previously let a timed-out
+        # heartbeat fetch look like a successful 0-row export, corrupting the
+        # whole liveness half of the report. Raise so the caller aborts.
+        raise RuntimeError(
+            f"Failed to fetch documents from {collection} "
+            f"(mongosh returned no output within {FETCH_TIMEOUT_SECONDS}s). "
+            f"Aborting rather than writing a partial CSV."
+        )
 
     documents = []
     for line in output.split("\n"):
@@ -707,6 +729,7 @@ def cmd_export(args: argparse.Namespace) -> None:
 
     start_time = time.time()
     all_documents = []
+    per_collection_counts: dict[str, int] = {}
 
     for collection in target_collections:
         logger.info(f"Fetching {collection}...")
@@ -718,7 +741,22 @@ def cmd_export(args: argparse.Namespace) -> None:
             collection=collection,
         )
         logger.info(f"  Found {len(docs)} documents")
+        per_collection_counts[collection] = len(docs)
         all_documents.extend(docs)
+
+    # Guard against the silent-drop failure mode: when more than one collection
+    # is requested (the combined 'all' export), a collection returning 0 rows
+    # almost always means its fetch failed rather than that it is genuinely
+    # empty (both collections have data in practice). Abort instead of writing
+    # a partial CSV that reads as a valid, complete export.
+    empty = [name for name, count in per_collection_counts.items() if count == 0]
+    if len(target_collections) > 1 and empty:
+        raise RuntimeError(
+            f"Collection(s) {empty} returned 0 documents in a combined export. "
+            f"This is almost certainly a failed fetch, not an empty collection. "
+            f"Aborting rather than writing a partial CSV. "
+            f"Re-run, or export each collection separately to isolate the failure."
+        )
 
     if not all_documents:
         logger.warning("No documents found. CSV not created.")

@@ -84,9 +84,12 @@ Privacy-first serverless telemetry collector that receives anonymous usage data 
 
   Optional Bastion Host:
   ---------------------------------------------------------------
-  When bastion_enabled = true, a t2.micro EC2 instance is
-  created in a public subnet with SSH access for direct
-  DocumentDB queries via mongosh.
+  When bastion_enabled = true, an EC2 instance (default
+  t3.medium, override via bastion_instance_type) is created
+  in a public subnet with SSH access for direct DocumentDB
+  queries via mongosh. t3.medium is the default because the
+  telemetry export streams whole collections and a t2.micro
+  starves on CPU credits during the heartbeat fetch.
 ```
 
 ## Prerequisites
