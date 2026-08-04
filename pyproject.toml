@@ -42,7 +42,7 @@ dependencies = [
     "matplotlib>=3.10.5",
     "psutil>=6.1.0",
     "email-validator>=2.2.0",
-    "aiohttp>=3.11.12",
+    "aiohttp>=3.14.3",
     "rich>=13.0.0",
     "requests>=2.32.4",
     "cisco-ai-a2a-scanner @ git+https://github.com/cisco-ai-defense/a2a-scanner.git@8f6e27f",
