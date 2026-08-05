@@ -88,6 +88,28 @@ The behavior is explicit config only.
 | Terraform (aws-ecs) | `entra_scope_format = "v1"`, `entra_application_id_uri = "api://…"` |
 | CDK (`infra/`) | `entra.scopeFormat`, `entra.applicationIdUri` |
 
+## Per-server App ID URI requirement (coding-assistant / IDE login)
+
+Separate from the v1/v2 scope *format* above: when a spec-compliant coding
+assistant (Claude Code) logs in to a gateway server on Entra, it performs RFC
+8707 discovery and sends a `resource` parameter. Entra matches that `resource` to
+a registered App ID URI (`identifierUris`) **exactly**, and App ID URIs cannot
+end in a trailing slash. Because a client canonicalizes the bare gateway origin
+with a trailing slash, the gateway-wide PRM's origin `resource` can never match
+on Entra (`AADSTS9010010`).
+
+The gateway therefore serves a **per-server PRM** for every server on Entra,
+whose `resource` is the server's exact connection URL (e.g.
+`https://<gateway>/<server>/mcp`). For each server you expose to a coding
+assistant on Entra, register that connection URL as an App ID URI on the gateway
+app and expose a `user_impersonation` scope on it (granted to the IDE public
+client). `GET /api/egress/obo-identifier-uris` lists the exact URIs to register.
+See the [client-id connection method](connection-methods/client-id.md#per-idp-setup)
+for step-by-step setup.
+
+This applies only to Entra. Lenient IdPs (Keycloak/Cognito/Okta/Auth0) accept the
+bare-origin gateway-wide PRM and need no per-server registration.
+
 ## See also
 
 - [Microsoft Entra ID Setup Guide](entra-id-setup.md)

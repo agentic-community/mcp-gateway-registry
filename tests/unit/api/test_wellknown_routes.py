@@ -324,6 +324,64 @@ class TestGlobalPrmNonEntraUnchanged:
         assert resp.json()["scopes_supported"] == ["openid", "mcp.read", "mcp.write"]
 
 
+class TestServerNeedsPerServerPrm:
+    """server_needs_per_server_prm() gate (issue #990).
+
+    On Entra, EVERY server -- including plain ``none`` servers -- needs a
+    per-server PRM, because the gateway-wide bare-origin resource is unmatchable
+    to an Entra App ID URI (trailing slash) and fails token exchange with
+    AADSTS9010010. On lenient IdPs, only the two egress modes need it; plain
+    servers keep the gateway-wide origin PRM (unchanged behavior). This gate is
+    the fix that unblocks Entra IDE login for plain servers.
+    """
+
+    def _gate(self, egress_auth_mode, auth_provider):
+        from registry.api.wellknown_routes import server_needs_per_server_prm
+
+        mock_settings = MagicMock()
+        mock_settings.auth_provider = auth_provider
+        with patch("registry.api.wellknown_routes.settings", mock_settings):
+            return server_needs_per_server_prm(egress_auth_mode)
+
+    # --- Entra: everything gets a per-server PRM ---
+    def test_entra_plain_server_gets_per_server_prm(self):
+        """The #990 fix: a plain (none) server on Entra needs the per-server PRM."""
+        assert self._gate("none", "entra") is True
+
+    def test_entra_unset_egress_mode_gets_per_server_prm(self):
+        assert self._gate(None, "entra") is True
+
+    def test_entra_obo_exchange_gets_per_server_prm(self):
+        assert self._gate("obo_exchange", "entra") is True
+
+    def test_entra_oauth_user_gets_per_server_prm(self):
+        assert self._gate("oauth_user", "entra") is True
+
+    # --- Non-Entra: only the egress modes; plain stays on the global PRM ---
+    def test_keycloak_plain_server_uses_global_prm(self):
+        """REGRESSION GUARD: a plain server on Keycloak must NOT get a per-server
+        PRM -- the bare-origin global PRM works there and this is the path that
+        has worked all along. Changing it would break lenient-IdP deployments."""
+        assert self._gate("none", "keycloak") is False
+
+    def test_keycloak_oauth_user_uses_global_prm(self):
+        """Keycloak 3LO keeps using the gateway-wide root PRM (unchanged)."""
+        assert self._gate("oauth_user", "keycloak") is False
+
+    def test_cognito_plain_server_uses_global_prm(self):
+        assert self._gate("none", "cognito") is False
+
+    def test_okta_plain_server_uses_global_prm(self):
+        assert self._gate(None, "okta") is False
+
+    def test_obo_exchange_gets_per_server_prm_on_any_provider(self):
+        """obo_exchange always needs the per-server PRM regardless of IdP."""
+        assert self._gate("obo_exchange", "keycloak") is True
+
+    def test_auth_provider_case_insensitive(self):
+        assert self._gate("none", "Entra") is True
+
+
 class TestOAuthAuthorizationServerEndpoint:
     """Tests for GET /.well-known/oauth-authorization-server (RFC 8414)."""
 
@@ -551,9 +609,10 @@ class TestPerServerOAuthProtectedResource:
             resp = client.get("/.well-known/oauth-protected-resource/github/mcp")
             assert resp.status_code == 404
 
-    def test_non_egress_server_404s(self, fake_provider):
-        # A server with no gateway-login egress mode falls back to the global PRM.
-        s = self._settings()
+    def test_non_egress_server_404s_on_lenient_idp(self, fake_provider):
+        # On a lenient IdP (Keycloak), a plain server falls back to the global
+        # PRM -- the bare-origin resource works there. 404 here is correct.
+        s = self._settings(auth_provider="keycloak")
         plain_server = {"path": "/plain", "egress_auth_mode": "none"}
         with (
             patch(
@@ -570,6 +629,34 @@ class TestPerServerOAuthProtectedResource:
             client = TestClient(_make_oauth_discovery_app(fake_provider))
             resp = client.get("/.well-known/oauth-protected-resource/plain/mcp")
             assert resp.status_code == 404
+
+    def test_non_egress_server_gets_per_server_prm_on_entra(self, fake_provider):
+        # issue #990: on Entra, a plain (none) server MUST get a per-server PRM
+        # (resource = its connection URL), because the bare-origin global PRM is
+        # unmatchable to an Entra App ID URI. This is the fix that unblocks Entra
+        # IDE login for plain servers.
+        s = self._settings(auth_provider="entra")
+        plain_server = {"path": "/plain", "egress_auth_mode": "none"}
+        with (
+            patch(
+                "registry.api.wellknown_routes._get_active_auth_provider",
+                return_value=fake_provider,
+            ),
+            patch("registry.auth.oauth_metadata.settings", s),
+            patch("registry.api.wellknown_routes.settings", s),
+            patch(
+                "registry.api.wellknown_routes.server_service.get_server_info",
+                new=AsyncMock(return_value=plain_server),
+            ),
+        ):
+            client = TestClient(_make_oauth_discovery_app(fake_provider))
+            resp = client.get("/.well-known/oauth-protected-resource/plain/mcp")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["resource"] == "https://gw.example.com/plain/mcp"
+            assert data["scopes_supported"] == [
+                "https://gw.example.com/plain/mcp/user_impersonation"
+            ]
 
     def test_unknown_server_404s(self, fake_provider):
         s = self._settings()

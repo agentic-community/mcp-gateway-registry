@@ -267,16 +267,43 @@ bash setup/idp/entra/setup-ide-public-client.sh
 ```
 
 Creates an app registration as a public client (`isFallbackPublicClient=true`,
-loopback redirect URIs, `groupMembershipClaims=SecurityGroup`). The client
-creation works, BUT the IDE login flow does NOT yet complete on Entra:
+loopback redirect URIs, `groupMembershipClaims=SecurityGroup`).
 
-Entra binds requested scopes to the `resource` parameter and requires scopes in
-the resource-qualified `api://<app-id>/<scope>` form. The PRM currently advertises
-bare scopes, so Entra rejects the authorization request with
-`AADSTS9010010: The resource parameter ... doesn't match with the requested scopes`.
-This is tracked as a known gap and needs the PRM to emit Entra-qualified scopes;
-it is not solvable by configuration alone. Until then, Entra IDE login via this
-method is not supported.
+**Entra requires one App ID URI per server (issue #990).** Entra binds the
+requested scope to the RFC 8707 `resource` parameter and matches `resource` to a
+registered App ID URI (`identifierUris`) *exactly*. Two consequences:
+
+- The gateway-wide PRM advertises the bare gateway origin as `resource`, which a
+  spec-compliant client (Claude Code, RFC 9728 §3.3) canonicalizes with a
+  trailing slash. Entra App ID URIs cannot end in a slash, so that resource can
+  never match and the token exchange fails with
+  `AADSTS9010010: The resource parameter ... doesn't match with the requested scopes`.
+- The only value that satisfies both the client (a PRM `resource` equal to the
+  connection URL it is accessing) and Entra (a slash-free registered App ID URI)
+  is the **per-server connection URL**. So on Entra the gateway serves a
+  per-server PRM for every server, and the operator must register each server's
+  connection URL as an App ID URI.
+
+Setup, per server, on the gateway app registration:
+
+1. **Expose an API → Add a scope** on an App ID URI equal to the server's
+   connection URL, e.g. `https://<gateway>/<server>/mcp`, scope name
+   `user_impersonation` (full value `https://<gateway>/<server>/mcp/user_impersonation`).
+   `GET /api/egress/obo-identifier-uris` lists the exact URIs to register.
+2. On the IDE public client: **API permissions → My APIs →** grant that
+   `user_impersonation` scope and **Grant admin consent**.
+
+Once registered, `claude mcp add --transport http --callback-port <port> <name>
+https://<gateway>/<server>/mcp` completes the full PKCE login on Entra. Only
+Claude Code can pin the callback port Entra's literal redirect match requires;
+Cursor/Codex use a random port and fall back to the static gateway token, as on
+Cognito/Okta.
+
+Trade-offs of the per-server-App-ID-URI model: each new server needs an Azure
+admin step (not self-service/dynamic), and Entra caps `identifierUris` at 999 per
+app. Lenient IdPs (Keycloak/Cognito/Okta/Auth0) do not have this constraint --
+they accept the bare-origin gateway-wide PRM, so no per-server registration is
+needed there.
 
 ## Security notes
 
