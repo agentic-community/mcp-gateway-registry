@@ -2035,6 +2035,11 @@ def cmd_egress_configure(args: argparse.Namespace) -> int:
             client_secret=args.client_secret,
             scopes=_parse_scopes(args.scopes),
             target_audience=args.target_audience,
+            custom_authorize_url=args.custom_authorize_url,
+            custom_token_url=args.custom_token_url,
+            custom_scope_separator=args.custom_scope_separator,
+            custom_token_auth_style=args.custom_token_auth_style,
+            custom_resource=args.custom_resource,
         )
         print(json.dumps(response, indent=2, default=str))
         return 0
@@ -6729,6 +6734,30 @@ Examples:
     )
     egress_configure_parser.add_argument(
         "--target-audience", help="Target audience (obo_exchange only)"
+    )
+    # Custom-OIDC provider overrides. --provider custom is unusable without the
+    # two URLs: the server's resolve_provider() rejects the config with
+    # "custom requires custom_authorize_url and custom_token_url".
+    egress_configure_parser.add_argument(
+        "--custom-authorize-url",
+        help="Authorize endpoint (REQUIRED with --provider custom)",
+    )
+    egress_configure_parser.add_argument(
+        "--custom-token-url",
+        help="Token endpoint (REQUIRED with --provider custom)",
+    )
+    egress_configure_parser.add_argument(
+        "--custom-scope-separator",
+        help="Scope delimiter when the provider does not use a space (custom only)",
+    )
+    egress_configure_parser.add_argument(
+        "--custom-token-auth-style",
+        choices=["post_body", "basic_header"],
+        help="Where the client secret goes on the token request (custom only, default post_body)",
+    )
+    egress_configure_parser.add_argument(
+        "--custom-resource",
+        help="RFC 8707 resource indicator, sent on authorize and token requests (custom only)",
     )
 
     # Get egress config command

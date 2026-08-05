@@ -3883,6 +3883,11 @@ class RegistryClient:
         client_secret: str | None = None,
         scopes: list[str] | None = None,
         target_audience: str | None = None,
+        custom_authorize_url: str | None = None,
+        custom_token_url: str | None = None,
+        custom_scope_separator: str | None = None,
+        custom_token_auth_style: str | None = None,
+        custom_resource: str | None = None,
     ) -> dict[str, Any]:
         """Configure per-user egress auth on a server (admin only).
 
@@ -3898,6 +3903,18 @@ class RegistryClient:
             client_secret: OAuth client secret (oauth_user only, write-only).
             scopes: Optional list of OAuth scopes.
             target_audience: Target audience (obo_exchange only).
+            custom_authorize_url: Authorize endpoint. REQUIRED when
+                ``provider="custom"`` (server-side ``resolve_provider`` rejects
+                the config without it).
+            custom_token_url: Token endpoint. REQUIRED when
+                ``provider="custom"``.
+            custom_scope_separator: Scope delimiter when the provider does not
+                use a space (custom only).
+            custom_token_auth_style: Where the client secret goes on the token
+                request -- "post_body" (default) or "basic_header" (custom only).
+            custom_resource: RFC 8707 resource indicator, sent on both the
+                authorize and token requests to bind the token to one protected
+                resource (custom only).
 
         Returns:
             Non-secret egress config view dict.
@@ -3920,6 +3937,19 @@ class RegistryClient:
             body["scopes"] = scopes
         if target_audience is not None:
             body["target_audience"] = target_audience
+        # Custom-OIDC overrides. Only meaningful when provider == "custom"; the
+        # server ignores them for built-in providers, so they are forwarded
+        # unconditionally like the fields above rather than gated here.
+        if custom_authorize_url is not None:
+            body["custom_authorize_url"] = custom_authorize_url
+        if custom_token_url is not None:
+            body["custom_token_url"] = custom_token_url
+        if custom_scope_separator is not None:
+            body["custom_scope_separator"] = custom_scope_separator
+        if custom_token_auth_style is not None:
+            body["custom_token_auth_style"] = custom_token_auth_style
+        if custom_resource is not None:
+            body["custom_resource"] = custom_resource
 
         response = self._make_request(
             method="POST",
