@@ -439,3 +439,43 @@ class TestAcceptedAudiences:
         auds = provider.accepted_audiences()
         assert auds.count("api://app-guid") == 1
         assert auds == ["app-guid", "api://app-guid"]
+
+
+class TestRejectNonAccessToken:
+    """_reject_non_access_token blocks id_token->access_token confusion.
+
+    An Entra id_token shares the tenant JWKS + issuer and has aud == client_id
+    (which accepted_audiences() accepts), so a client could replay the id_token
+    it gets from the auth-code exchange as the bearer. The discriminator rejects
+    on id_token-only claims (nonce/at_hash/c_hash), WITHOUT requiring scp/roles
+    (which a valid roleless M2M access token legitimately lacks).
+    """
+
+    def _reject(self, claims):
+        from auth_server.providers.entra import EntraIdProvider
+
+        EntraIdProvider._reject_non_access_token(claims)
+
+    def test_rejects_id_token_with_nonce(self):
+        with pytest.raises(ValueError, match="id_token"):
+            self._reject({"aud": "app-guid", "nonce": "abc", "groups": ["g"]})
+
+    def test_rejects_id_token_with_at_hash(self):
+        with pytest.raises(ValueError, match="id_token"):
+            self._reject({"aud": "app-guid", "at_hash": "xyz"})
+
+    def test_rejects_id_token_with_c_hash(self):
+        with pytest.raises(ValueError, match="id_token"):
+            self._reject({"aud": "app-guid", "c_hash": "xyz"})
+
+    def test_accepts_delegated_access_token_with_scp(self):
+        # scp present, no id_token-only claim -> valid delegated access token.
+        self._reject({"aud": "app-guid", "scp": "user_impersonation"})
+
+    def test_accepts_app_access_token_with_roles(self):
+        self._reject({"aud": "app-guid", "roles": ["Registry.Admin"]})
+
+    def test_accepts_roleless_m2m_access_token(self):
+        # A client-credentials token for an app with no assigned app roles has
+        # neither scp nor roles -- and MUST still be accepted (no false-reject).
+        self._reject({"aud": "api://app-guid", "azp": "svc-client"})

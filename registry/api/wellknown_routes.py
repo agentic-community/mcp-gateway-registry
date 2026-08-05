@@ -346,15 +346,26 @@ async def get_oauth_protected_resource_for_server(
         wire, which Entra App ID URIs cannot match -- a path-qualified per-server
         URL is sent verbatim.
       - Entra: the sent ``resource`` must equal a registered App ID URI exactly.
-    The trade-off: each such server's per-server URL must be an App ID URI on the
-    gateway app (operator maintains the ``identifierUris`` list; see
-    GET /api/egress/obo-identifier-uris for the exact list to register). The
-    registry side is fully dynamic -- this is derived from the server entry, no
-    per-server env config. Lenient IdPs (Keycloak/Cognito) do not hit these
-    constraints; this per-server PRM is what makes Entra ingress login work.
+    The trade-off (Entra only): each such server's per-server URL must be an App
+    ID URI on the gateway app (operator maintains the ``identifierUris`` list;
+    see GET /api/egress/obo-identifier-uris for the exact list to register).
+    On Entra this applies to EVERY server (issue #990), not just the egress
+    modes. The registry side is fully dynamic -- derived from the server entry,
+    no per-server env config. Lenient IdPs (Keycloak/Cognito/Okta/Auth0) do not
+    hit these constraints; their plain servers keep using the gateway-wide PRM
+    and this per-server PRM is what makes Entra ingress login work.
     """
     normalized = _normalize_prm_server_path(server_path)
-    info = await server_service.get_server_info(normalized)
+    # Server lookup is inside a guard: a repository/backend error on this
+    # UNAUTHENTICATED endpoint must not surface as an unhandled 500 with a
+    # traceback. Fail closed to a generic 502 (logged for operators).
+    try:
+        info = await server_service.get_server_info(normalized)
+    except Exception:
+        logger.exception("Per-server PRM: server lookup failed for %s", normalized)
+        raise HTTPException(
+            status_code=502, detail="Could not build Protected Resource Metadata"
+        ) from None
     if not info or not server_needs_per_server_prm(info.get("egress_auth_mode")):
         # No per-server PRM for this server -> client falls back to the global PRM.
         raise HTTPException(status_code=404, detail="no per-server resource metadata")

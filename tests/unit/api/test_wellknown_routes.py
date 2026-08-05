@@ -676,6 +676,31 @@ class TestPerServerOAuthProtectedResource:
             resp = client.get("/.well-known/oauth-protected-resource/nope/mcp")
             assert resp.status_code == 404
 
+    def test_server_lookup_failure_returns_502_not_500(self, fake_provider):
+        """A repository/backend error during the server lookup on this
+        UNAUTHENTICATED endpoint must fail closed to a generic 502 (logged), not
+        surface as an unhandled 500 with a traceback."""
+        s = self._settings()
+        with (
+            patch(
+                "registry.api.wellknown_routes._get_active_auth_provider",
+                return_value=fake_provider,
+            ),
+            patch("registry.auth.oauth_metadata.settings", s),
+            patch("registry.api.wellknown_routes.settings", s),
+            patch(
+                "registry.api.wellknown_routes.server_service.get_server_info",
+                new=AsyncMock(side_effect=RuntimeError("documentdb down")),
+            ),
+        ):
+            client = TestClient(
+                _make_oauth_discovery_app(fake_provider), raise_server_exceptions=False
+            )
+            resp = client.get("/.well-known/oauth-protected-resource/obo-echo/mcp")
+            assert resp.status_code == 502
+            # No internal exception detail leaked on the public endpoint.
+            assert "documentdb" not in resp.text.lower()
+
     def test_path_normalization_strips_mcp_suffix(self, fake_provider):
         """The handler must look up '/obo-echo', not '/obo-echo/mcp'."""
         s = self._settings()

@@ -2786,38 +2786,74 @@ def _is_federation_api_request(
     return False
 
 
-def _obo_extra_audiences(server_name_from_url: str | None) -> list[str]:
-    """Per-server OBO resource audiences to accept for the server being accessed.
+def _server_advertises_per_server_prm() -> bool:
+    """Whether the registry advertises a per-server PRM for the server being accessed.
 
-    The OBO ingress token's ``aud`` is the per-server resource URL the gateway
+    Mirrors the registry's ``server_needs_per_server_prm`` predicate on the
+    audience-acceptance side, WITHOUT needing the server's ``egress_auth_mode``
+    (which auth_server does not have in the validate path). The registry emits a
+    per-server, connection-URL-resource PRM when:
+
+    - the provider is Entra -- for EVERY server (issue #990): the bare-origin
+      gateway-wide PRM is unmatchable to an Entra App ID URI, so plain servers
+      also get a per-server resource. This holds regardless of egress being on.
+    - OR egress auth is enabled -- covering ``obo_exchange`` (any provider) and
+      the ``oauth_user`` 3LO ingress leg, whose ingress tokens are audienced to
+      the per-server resource.
+
+    When true, the per-server resource URL is a legitimate ingress ``aud`` for
+    THIS request's path and must be accepted at ``/validate``; otherwise the
+    client completes discovery + token exchange against the per-server resource
+    and is then rejected here (the egress-off Entra plain-server 401). The
+    accepted audience is path-bound (built from this request's path below), so
+    accepting it cannot widen access to a different server.
+    """
+    provider = (
+        os.environ.get("AUTH_PROVIDER", "") or getattr(settings, "auth_provider", "") or ""
+    ).lower()
+    if provider == "entra":
+        return True
+    return bool(getattr(settings, "egress_auth_enabled", False))
+
+
+def _obo_extra_audiences(server_name_from_url: str | None) -> list[str]:
+    """Per-server resource audiences to accept for the server being accessed.
+
+    The ingress token's ``aud`` is the per-server resource URL the gateway
     advertised in its PRM (RFC 8707), e.g. ``https://gw/<server>/mcp``. We derive
     it from the request's server path (already parsed from X-Original-URL) and the
     gateway's public URL -- no static env list. Returns both the ``/mcp`` and
     bare-path forms to be robust to the server's ``append_mcp_path``. Returns []
-    when there's no server context or no configured gateway URL.
+    when there's no server context, no configured gateway URL, or the server does
+    not advertise a per-server PRM (see ``_server_advertises_per_server_prm``).
 
-    Gated on the egress feature (not on a specific egress mode): the per-server
-    resource audience is a valid ingress ``aud`` for any server that logs the
-    client in at the gateway via a per-server PRM -- both obo_exchange and the
-    3LO vault's oauth_user ingress leg -- and none of that can function with
-    egress disabled. Returning [] when egress is off keeps the accepted-audience
-    surface at exactly the gateway-app audience for every non-egress deployment
-    rather than always widening it to the per-server resource form.
+    NOTE: this is gated on whether a per-server PRM is advertised, NOT on the
+    egress feature. On Entra, plain (non-egress) servers get a per-server PRM too
+    (issue #990), so their per-server-resource ``aud`` must be accepted even with
+    egress disabled -- otherwise Entra plain-server IDE login mints the correct
+    token and is then rejected at validation. The accepted audience is
+    path-bound, so widening it here cannot reach a different server.
     """
     if not server_name_from_url:
         return []
-    if not getattr(settings, "egress_auth_enabled", False):
+    if not _server_advertises_per_server_prm():
         return []
     # The token's aud is the PUBLIC per-server resource the registry advertised
-    # in its PRM, built from the PUBLIC gateway URL. On auth-server, settings.
-    # registry_url is the INTERNAL cluster URL, so prefer the public external URL
-    # (AUTH_SERVER_EXTERNAL_URL) and only fall back to registry_url.
-    registry_url = (
-        os.environ.get("AUTH_SERVER_EXTERNAL_URL", "")
-        or getattr(settings, "registry_url", "")
-        or os.environ.get("REGISTRY_URL", "")
-    )
-    if not registry_url:
+    # in its PRM, built from the PUBLIC gateway URL. On auth-server,
+    # settings.registry_url may be the INTERNAL cluster URL, so the PUBLIC
+    # AUTH_SERVER_EXTERNAL_URL is preferred. But if it is unset and the internal
+    # URL differs from the public one, deriving the audience from only the first
+    # candidate silently produces a non-matching audience -> a spurious 401.
+    # Build a per-server resource for EACH distinct configured base URL and
+    # accept any of them. This is safe: every candidate is bound to THIS
+    # request's path, so it cannot widen access to a different server -- it only
+    # tolerates ambiguity in which base URL the registry rendered the PRM from.
+    base_urls = [
+        os.environ.get("AUTH_SERVER_EXTERNAL_URL", ""),
+        getattr(settings, "registry_url", ""),
+        os.environ.get("REGISTRY_URL", ""),
+    ]
+    if not any(base_urls):
         return []
     try:
         from registry.auth.oauth_metadata import build_per_server_resource_url
@@ -2827,12 +2863,19 @@ def _obo_extra_audiences(server_name_from_url: str | None) -> list[str]:
     path = "/" + server_name_from_url.strip("/")
     if path.endswith("/mcp"):
         path = path[: -len("/mcp")]
-    auds = []
-    try:
-        auds.append(build_per_server_resource_url(registry_url, path, append_mcp=True))
-        auds.append(build_per_server_resource_url(registry_url, path, append_mcp=False))
-    except ValueError:
-        return []
+    auds: list[str] = []
+    seen: set[str] = set()
+    for base_url in base_urls:
+        if not base_url:
+            continue
+        try:
+            for append_mcp in (True, False):
+                aud = build_per_server_resource_url(base_url, path, append_mcp=append_mcp)
+                if aud not in seen:
+                    seen.add(aud)
+                    auds.append(aud)
+        except ValueError:
+            continue
     return auds
 
 

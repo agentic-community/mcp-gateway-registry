@@ -204,6 +204,53 @@ class EntraIdProvider(AuthProvider):
                 deduped.append(aud)
         return deduped
 
+    @staticmethod
+    def _reject_non_access_token(claims: dict[str, Any]) -> None:
+        """Reject an Entra id_token presented as an access token (fail closed).
+
+        The gateway's data plane consumes **access tokens**. An Entra id_token is
+        signed by the same tenant JWKS, carries a valid issuer, and has
+        ``aud == client_id`` -- which accepted_audiences() accepts (the bare GUID
+        is also a valid v2 access-token audience). So audience + issuer +
+        signature do NOT distinguish the two, and a client could replay the
+        id_token it receives from the same auth-code exchange as the bearer,
+        getting authenticated with authz derived from the id_token ``groups``.
+        This mirrors the self-signed path's ``token_use == "access"`` check.
+
+        Discriminator: reject on the presence of id_token-only claims. Entra
+        id_tokens issued via the authorization-code flow carry ``nonce`` (bound
+        to the login), and OIDC id_tokens carry ``at_hash`` / ``c_hash`` when an
+        access/authorization code is co-issued -- none of which appear in an
+        Entra access token. We deliberately do NOT require ``scp``/``roles`` to
+        be PRESENT: a valid client-credentials access token for an app with no
+        assigned app roles carries neither, so requiring them would false-reject
+        legitimate M2M tokens. Rejecting on id_token-only claims closes the
+        replay vector without that false-positive.
+
+        KNOWN RESIDUAL (accepted, not a believed-closed gap): an id_token minted
+        by an authorization-code flow in which the client sent NO ``nonce``
+        carries none of ``nonce``/``at_hash``/``c_hash`` (the latter two only
+        appear in hybrid/implicit flows), so a claim-presence discriminator lets
+        it through. Closing it fully requires a positive access-token signal
+        (e.g. requiring ``scp``/``roles``/a resource-scoped ``aud``), which
+        reopens the roleless-M2M false-reject above -- an explicit trade-off.
+        The residual is narrow: the gateway's own login ALWAYS sends a per-login
+        ``nonce`` (see auth_server/server.py), so every id_token our real flows
+        produce is rejected; exploiting the gap requires an attacker to drive
+        their own nonce-less code flow against the gateway's app registration,
+        from which they could equally obtain an access token. Tracked as a known
+        limitation rather than silently trusted.
+
+        Raises:
+            ValueError: if the token is an id_token rather than an access token.
+        """
+        for id_token_only in ("nonce", "at_hash", "c_hash"):
+            if id_token_only in claims:
+                raise ValueError(
+                    "Token is an id_token (carries id_token-only claim "
+                    f"'{id_token_only}'), not an access token"
+                )
+
     def _scope_prefix(self) -> str | None:
         """Return the ``api://<app-id-or-uri>`` prefix for v1 custom scopes.
 
@@ -369,6 +416,12 @@ class EntraIdProvider(AuthProvider):
                 audience=accepted_audiences,
                 options={"verify_exp": True, "verify_iat": True, "verify_aud": True},
             )
+
+            # Reject an id_token presented as an access token (token-type
+            # confusion): an Entra id_token shares the JWKS/issuer and has
+            # aud == client_id, which accepted_audiences() accepts, so only a
+            # claim-level discriminator separates them. See the method docstring.
+            self._reject_non_access_token(claims)
 
             logger.debug(
                 f"Token validation successful for user: {claims.get('preferred_username', 'unknown')}"

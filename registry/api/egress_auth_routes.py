@@ -981,17 +981,24 @@ async def get_obo_identifier_uris(
 ):
     """List the Entra Application ID URIs the operator must register.
 
-    Each server that logs the client in at the gateway via a per-server PRM
-    (``obo_exchange`` and the 3LO vault's ``oauth_user`` ingress leg) has a
+    Each server that logs the client in at the gateway via a per-server PRM has a
     per-server resource URL -- the value the gateway advertises in its PRM and
-    validates as the ingress ``aud``. On Entra, every one of those URLs must be
-    present in the gateway app's ``identifierUris`` list. This endpoint returns
-    the exact set so the operator can keep Entra in sync as such servers are
-    added/removed -- the registry side is automatic; only this list is manual.
+    validates as the ingress ``aud``. On Entra this is EVERY server (issue #990),
+    plus ``obo_exchange`` / the 3LO ``oauth_user`` ingress leg on any provider.
+    On Entra, every one of those URLs must be present in the gateway app's
+    ``identifierUris`` list. This endpoint returns the exact set so the operator
+    can keep Entra in sync as servers are added/removed -- the registry side is
+    automatic; only this list is manual.
+
+    NOT gated on egress being enabled: on an Entra ingress-only deployment
+    (egress off -- the default) plain servers still need per-server App ID URIs,
+    and the operator needs this list to register them. Available whenever a
+    per-server PRM is advertised, i.e. on Entra OR when egress auth is enabled;
+    otherwise (lenient IdP + egress off, no per-server PRMs) it returns an empty
+    list rather than 404, so the caller always gets a definitive answer.
 
     Admin only. Returns ``{"identifier_uris": [...], "count": N}``.
     """
-    _feature_enabled_or_404()
     _require_admin(user_context)
 
     from registry.api.wellknown_routes import server_needs_per_server_prm
