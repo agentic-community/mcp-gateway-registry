@@ -74,17 +74,55 @@ class EntraIdProvider(AuthProvider):
     - Group-based authorization with Azure AD security groups
     """
 
-    def __init__(self, tenant_id: str, client_id: str, client_secret: str):
+    # OIDC scopes Entra accepts bare on /authorize in BOTH v1 and v2. These are
+    # never prefixed with the api://<app-id> resource URI: Entra rejects
+    # `api://<app>/openid` with AADSTS650053. Only custom resource scopes (e.g.
+    # `mcp.read`, `user_impersonation`) take the v1 prefix.
+    STANDARD_OIDC_SCOPES: frozenset[str] = frozenset(
+        {"openid", "profile", "email", "offline_access", "address", "phone"}
+    )
+
+    def __init__(
+        self,
+        tenant_id: str,
+        client_id: str,
+        client_secret: str,
+        scope_format: str | None = None,
+        application_id_uri: str | None = None,
+    ):
         """Initialize Entra ID provider.
 
         Args:
             tenant_id: Azure AD tenant ID (GUID)
             client_id: App registration client ID (GUID)
             client_secret: App registration client secret
+            scope_format: Entra scope advertisement form, ``"v1"`` or ``"v2"``.
+                v1 requires custom resource scopes to be requested as
+                ``api://<app-id-or-uri>/<scope>`` on ``/authorize`` (Entra
+                rejects the bare form with AADSTS650053); v2 accepts the bare
+                fragment. Defaults to the ``ENTRA_SCOPE_FORMAT`` env var, then
+                ``"v2"`` (backward-compatible with existing deployments).
+            application_id_uri: The Application ID URI registered on the Entra
+                app (e.g. ``api://<app-id>`` or a custom ``api://<uri>``). Used
+                verbatim as the v1 scope prefix and accepted as a token
+                audience. Defaults to the ``ENTRA_APPLICATION_ID_URI`` env var.
         """
         self.tenant_id = tenant_id
         self.client_id = client_id
         self.client_secret = client_secret
+
+        # Scope-advertisement format and Application ID URI. Read from explicit
+        # constructor args when provided (the factory passes registry config),
+        # otherwise from the environment so direct construction still works.
+        # Normalized to lower-case; anything other than "v1" means v2 (bare).
+        raw_scope_format = scope_format or os.environ.get("ENTRA_SCOPE_FORMAT", "v2")
+        self.scope_format = (raw_scope_format or "v2").strip().lower()
+        raw_app_id_uri = (
+            application_id_uri
+            if application_id_uri is not None
+            else os.environ.get("ENTRA_APPLICATION_ID_URI")
+        )
+        self.application_id_uri = raw_app_id_uri.rstrip("/") if raw_app_id_uri else None
 
         # JWKS cache
         self._jwks_cache: dict[str, Any] | None = None
@@ -117,6 +155,139 @@ class EntraIdProvider(AuthProvider):
         self.valid_issuers = [self.issuer_v2, self.issuer_v1]
 
         logger.debug(f"Initialized Entra ID provider for tenant '{tenant_id}'")
+
+    def accepted_audiences(
+        self,
+        extra_audiences: list[str] | None = None,
+    ) -> list[str]:
+        """Return the closed allowlist of audiences accepted for this app.
+
+        Entra v1-issued access tokens may carry the ``aud`` claim as either the
+        bare client-id GUID (``<app-id>``) or the URI form (``api://<app-id>``);
+        both are equivalent and must be accepted (dual-audience normalization).
+        The list also includes the operator-configured Application ID URI (which
+        for a gateway may be a custom ``api://<uri>``) and any per-server OBO
+        resource audiences the caller passes for the server being accessed
+        (RFC 8707).
+
+        This is a closed allowlist -- only these statically-known and
+        caller-provided, registry-derived audiences are accepted, never a
+        wildcard. ``verify_aud`` is always enforced by the caller.
+
+        Args:
+            extra_audiences: Per-server OBO resource audiences to also accept
+                (e.g. ``https://gw/<server>/mcp``). Each is trailing-slash
+                stripped; empty values are ignored.
+
+        Returns:
+            Ordered, de-duplicated list of accepted ``aud`` values.
+        """
+        # Bare GUID + default Application ID URI: the two forms Entra v1 mints
+        # for a token audienced to this app.
+        audiences: list[str] = [self.client_id, f"api://{self.client_id}"]
+
+        # Operator-configured Application ID URI (may be a custom api://<uri>).
+        if self.application_id_uri:
+            audiences.append(self.application_id_uri)
+
+        # Per-server OBO resource audiences (caller-provided, registry-derived).
+        for extra in extra_audiences or []:
+            if extra:
+                audiences.append(extra.rstrip("/"))
+
+        # De-duplicate while preserving order.
+        seen: set[str] = set()
+        deduped: list[str] = []
+        for aud in audiences:
+            if aud and aud not in seen:
+                seen.add(aud)
+                deduped.append(aud)
+        return deduped
+
+    def _scope_prefix(self) -> str | None:
+        """Return the ``api://<app-id-or-uri>`` prefix for v1 custom scopes.
+
+        Prefers the operator-configured Application ID URI (which may be a
+        custom ``api://<uri>`` registered on the app), falling back to the
+        default ``api://<client-id>`` form. Returns None only if no client id
+        is available (should not happen for a configured provider).
+        """
+        if self.application_id_uri:
+            return self.application_id_uri
+        if self.client_id:
+            return f"api://{self.client_id}"
+        return None
+
+    def format_advertised_scopes(
+        self,
+        scopes_supported: list[str],
+    ) -> list[str]:
+        """Format PRM ``scopes_supported`` for the configured Entra scope form.
+
+        Entra v1 requires custom resource scopes to be requested on
+        ``/authorize`` as ``api://<app-id-or-uri>/<scope>``; the bare form is
+        rejected with ``AADSTS650053``. Entra v2 accepts the bare fragment. This
+        method rewrites each caller-supplied scope for the configured form so
+        the PRM advertises exactly what the client must send.
+
+        Standard OIDC scopes (openid/profile/email/offline_access/...) are
+        always emitted bare -- Entra rejects ``api://<app>/openid`` even under
+        v1 -- as are scopes that are already URI-qualified (contain ``://``,
+        e.g. the per-server OBO PRM's ``https://gw/<server>/mcp/...`` resource
+        scope, which the caller already fully resolved).
+
+        Args:
+            scopes_supported: The scope strings the gateway recognizes, as
+                derived by the discovery route.
+
+        Returns:
+            The scope list rewritten for the configured Entra scope format.
+            Order is preserved; a v2 (or non-v1) provider returns the input
+            unchanged.
+        """
+        if self.scope_format != "v1":
+            return list(scopes_supported)
+
+        prefix = self._scope_prefix()
+        formatted: list[str] = []
+        for scope in scopes_supported:
+            if not scope:
+                continue
+            # Leave OIDC scopes and already URI-qualified scopes untouched.
+            if scope in self.STANDARD_OIDC_SCOPES or "://" in scope:
+                formatted.append(scope)
+                continue
+            if prefix:
+                formatted.append(f"{prefix}/{scope}")
+            else:
+                # No resource prefix available: advertise verbatim rather than
+                # drop the scope (fail loud in logs, not silent).
+                logger.warning(
+                    "Entra v1 scope format configured but no Application ID URI "
+                    "or client_id available; advertising scope '%s' unqualified",
+                    scope,
+                )
+                formatted.append(scope)
+        return formatted
+
+    def protected_resource_metadata(
+        self,
+        resource: str,
+        scopes_supported: list[str],
+        resource_documentation: str | None = None,
+    ) -> dict[str, Any]:
+        """Build the RFC 9728 PRM document, formatting scopes for Entra.
+
+        Overrides the base implementation to apply Entra scope-format rules
+        (see :meth:`format_advertised_scopes`) so the advertised
+        ``scopes_supported`` are exactly the strings a spec-compliant client
+        must send on ``/authorize``. All other fields match the base shape.
+        """
+        return super().protected_resource_metadata(
+            resource=resource,
+            scopes_supported=self.format_advertised_scopes(scopes_supported),
+            resource_documentation=resource_documentation,
+        )
 
     def validate_token(self, token: str, **kwargs: Any) -> dict[str, Any]:
         """Validate Entra ID JWT token.
@@ -183,25 +354,13 @@ class EntraIdProvider(AuthProvider):
                     f"Invalid issuer: {token_issuer}. Expected one of: {self.valid_issuers}"
                 )
 
-            # Validate and decode token with the correct issuer.
-            # Accepted audience formats:
-            #   - bare client_id (default Entra format)
-            #   - api://<client_id> (default Application ID URI)
-            #   - operator-configured Application ID URI (e.g. the gateway URL),
-            #     read from ENTRA_APPLICATION_ID_URI when present
-            accepted_audiences = [self.client_id, f"api://{self.client_id}"]
-            app_id_uri = os.environ.get("ENTRA_APPLICATION_ID_URI")
-            if app_id_uri:
-                accepted_audiences.append(app_id_uri.rstrip("/"))
-            # Per-server OBO resource audiences (RFC 8707). The OBO ingress token
-            # is audienced to the per-server resource URL (e.g.
-            # https://gw/<server>/mcp); the caller passes the expected value(s)
-            # for the server being accessed so we accept it without a static env
-            # list. Still a closed allowlist -- only caller-provided, registry-
-            # derived audiences are added, never a wildcard.
-            for extra in kwargs.get("extra_audiences") or []:
-                if extra:
-                    accepted_audiences.append(extra.rstrip("/"))
+            # Validate and decode token with the correct issuer. Audience
+            # acceptance (bare GUID + api:// forms + per-server OBO resources)
+            # is centralized in accepted_audiences() so every entrypoint uses
+            # the same closed allowlist. Never a wildcard.
+            accepted_audiences = self.accepted_audiences(
+                extra_audiences=kwargs.get("extra_audiences")
+            )
             claims = jwt.decode(
                 token,
                 signing_key,
@@ -837,16 +996,15 @@ class EntraIdProvider(AuthProvider):
     def authorization_server_metadata(self) -> dict[str, Any]:
         """Return Entra ID's RFC 8414 metadata for the v2.0 endpoint.
 
-        Phase 1 emits the Entra v2 OIDC metadata only. The v1 issuer
-        (`https://sts.windows.net/{tenant}/`) is a valid token source
-        recognized in validate_token but is not advertised here. The
-        `api://<app-id>/<scope>` verbatim scope-format support required
-        for Entra v1 deployments is tracked in sub-issue F (#990).
+        This emits the Entra v2 OIDC AS metadata (issuer, endpoints, PKCE). The
+        v1 issuer (`https://sts.windows.net/{tenant}/`) is a valid token source
+        recognized in validate_token but is not advertised as a separate AS
+        document. Entra v1 `api://<app-id>/<scope>` verbatim scope-format
+        support (sub-issue F, #990) lives on the PRM ``scopes_supported`` array
+        via :meth:`format_advertised_scopes`, not here -- the AS metadata's
+        static ``scopes_supported`` remains the OIDC-universal set both v1 and
+        v2 accept bare.
         """
-        # TODO(#990): Sub-issue F adds Entra v1 `api://<app-id>/<scope>` verbatim
-        # scope passthrough. When that lands, this method should accept a
-        # caller-supplied `scopes_supported` and emit them unchanged for the
-        # v1 issuer, plus expose a separate v1 metadata document if needed.
         return {
             "issuer": self.issuer_v2,
             "authorization_endpoint": self.auth_url,
@@ -881,6 +1039,8 @@ class EntraIdProvider(AuthProvider):
             "provider_type": "entra",
             "tenant_id": self.tenant_id,
             "client_id": self.client_id,
+            "scope_format": self.scope_format,
+            "application_id_uri": self.application_id_uri,
             "endpoints": {
                 "auth": self.auth_url,
                 "token": self.token_url,

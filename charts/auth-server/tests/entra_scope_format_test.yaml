@@ -1,0 +1,81 @@
+suite: entra scope format secret vars
+templates:
+  - secret.yaml
+release:
+  name: test
+  namespace: default
+tests:
+  - it: omits ENTRA_SCOPE_FORMAT and ENTRA_APPLICATION_ID_URI when unset
+    set:
+      app:
+        secretKey: "test-key-not-for-prod" # pragma: allowlist secret
+      egressAuth:
+        markerSecret: "test-marker-not-for-prod" # pragma: allowlist secret
+      global:
+        authProvider:
+          type: entra
+        ingress:
+          routingMode: path
+          tls: false
+          paths:
+            registry: /registry
+      entra:
+        clientId: app-guid
+        clientSecret: s
+        tenantId: tenant-abc
+    asserts:
+      - notExists:
+          path: data.ENTRA_SCOPE_FORMAT
+      - notExists:
+          path: data.ENTRA_APPLICATION_ID_URI
+
+  - it: emits ENTRA_SCOPE_FORMAT when set to v1
+    set:
+      app:
+        secretKey: "test-key-not-for-prod" # pragma: allowlist secret
+      egressAuth:
+        markerSecret: "test-marker-not-for-prod" # pragma: allowlist secret
+      global:
+        authProvider:
+          type: entra
+        ingress:
+          routingMode: path
+          tls: false
+          paths:
+            registry: /registry
+      entra:
+        clientId: app-guid
+        clientSecret: s
+        tenantId: tenant-abc
+        scopeFormat: v1
+    asserts:
+      - equal:
+          path: data.ENTRA_SCOPE_FORMAT
+          value: v1
+          decodeBase64: true
+
+  - it: emits ENTRA_APPLICATION_ID_URI verbatim when set
+    set:
+      app:
+        secretKey: "test-key-not-for-prod" # pragma: allowlist secret
+      egressAuth:
+        markerSecret: "test-marker-not-for-prod" # pragma: allowlist secret
+      global:
+        authProvider:
+          type: entra
+        ingress:
+          routingMode: path
+          tls: false
+          paths:
+            registry: /registry
+      entra:
+        clientId: app-guid
+        clientSecret: s
+        tenantId: tenant-abc
+        scopeFormat: v1
+        applicationIdUri: api://gw-uri
+    asserts:
+      - equal:
+          path: data.ENTRA_APPLICATION_ID_URI
+          value: api://gw-uri
+          decodeBase64: true

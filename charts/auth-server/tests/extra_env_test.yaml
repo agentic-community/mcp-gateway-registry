@@ -188,6 +188,24 @@ tests:
       - failedTemplate:
           errorPattern: "\"RATE_LIMITING_ENABLED\" is a reserved variable"
 
+  - it: fails when extraEnv contains ENTRA_SCOPE_FORMAT (issue #990)
+    set:
+      extraEnv:
+        - name: ENTRA_SCOPE_FORMAT
+          value: "v1"
+    asserts:
+      - failedTemplate:
+          errorPattern: "\"ENTRA_SCOPE_FORMAT\" is a reserved variable"
+
+  - it: fails when extraEnv contains ENTRA_APPLICATION_ID_URI (issue #990)
+    set:
+      extraEnv:
+        - name: ENTRA_APPLICATION_ID_URI
+          value: "api://evil"
+    asserts:
+      - failedTemplate:
+          errorPattern: "\"ENTRA_APPLICATION_ID_URI\" is a reserved variable"
+
   - it: fails on duplicate names within extraEnv
     set:
       extraEnv:

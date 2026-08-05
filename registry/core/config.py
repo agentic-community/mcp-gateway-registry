@@ -808,6 +808,27 @@ class Settings(BaseSettings):
         default="",
         description="Microsoft Entra ID admin group ID",
     )
+    entra_scope_format: str = Field(
+        default="v2",
+        description=(
+            "Entra scope-advertisement form for the PRM `scopes_supported` array: "
+            "`v1` or `v2` (default `v2`). Entra v1 requires custom resource scopes "
+            "to be requested on /authorize as `api://<app-id-or-uri>/<scope>` "
+            "(the bare form is rejected with AADSTS650053); v2 accepts the bare "
+            "fragment. Standard OIDC scopes (openid/profile/email/offline_access) "
+            "are always advertised bare regardless of this setting. Set to `v1` "
+            "only if your Entra app registration exposes v1 (api://) scopes."
+        ),
+    )
+    entra_application_id_uri: str = Field(
+        default="",
+        description=(
+            "Application ID URI registered on the Entra app (e.g. "
+            "`api://<app-id>` or a custom `api://<uri>`). Used verbatim as the "
+            "v1 scope prefix in the PRM and accepted as a token audience. "
+            "Defaults to the app's `api://<client-id>` form when unset."
+        ),
+    )
 
     # IdP Group Filtering (applies to all identity providers)
     idp_group_filter_prefix: str = Field(

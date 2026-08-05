@@ -230,7 +230,19 @@ ENTRA_ENABLED=true
 # Users in this Entra group will have full admin access to the MCP Gateway.
 ENTRA_GROUP_ADMIN_ID=16c7e67e-e8ae-498c-ba2e-0593c0159e43
 ENTRA_GROUP_USERS_ID=62c07ac1-03d0-4924-90c7-a0255f23bd1d
+
+# OAuth scope-advertisement format for coding-assistant discovery (PRM).
+# Leave unset (default 'v2') unless your app exposes v1-style api:// scopes and
+# you hit AADSTS650053 at login. See docs/entra-scope-format.md.
+# ENTRA_SCOPE_FORMAT=v2
+# ENTRA_APPLICATION_ID_URI=api://87654321-4321-4321-4321-210987654321
 ```
+
+> **Coding assistants (Claude Code / Cursor / VS Code):** if you connect an IDE
+> to the gateway over OAuth and hit `AADSTS650053: ... asked for scope ... that
+> doesn't exist on the resource`, your app exposes v1-style `api://` scopes; set
+> `ENTRA_SCOPE_FORMAT=v1` (and `ENTRA_APPLICATION_ID_URI` if you use a custom
+> Application ID URI). Full guidance: [Entra v1 vs v2 scope format](entra-scope-format.md).
 
 3. Update other required settings:
 

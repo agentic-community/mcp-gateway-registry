@@ -585,6 +585,8 @@ auth-server:
     tenantId: ""
     loginBaseUrl: "" # Custom Entra login base URL for sovereign clouds
     graphBaseUrl: "" # Optional Microsoft Graph base URL override (auto-inferred from loginBaseUrl)
+    scopeFormat: "" # Entra PRM scope form: "v1" (api://<app-id>/<scope>) or "v2" (bare, default). Set "v1" only if your app exposes v1-style api:// scopes (issue #990).
+    applicationIdUri: "" # Application ID URI (e.g. api://<app-id>). Used as the v1 scope prefix and accepted as a token audience. Defaults to api://<clientId>.
   # Okta settings (used when global.authProvider.type = "okta")
   okta:
     domain: "" # e.g., dev-123456.okta.com

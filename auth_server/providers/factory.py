@@ -174,6 +174,13 @@ def _create_entra_provider() -> EntraIdProvider:
     client_id = os.environ.get("ENTRA_CLIENT_ID")
     client_secret = os.environ.get("ENTRA_CLIENT_SECRET")
 
+    # Optional PRM scope-advertisement config (issue #990). scope_format
+    # defaults to "v2" (bare scopes, backward-compatible). application_id_uri
+    # is the api://<app-id-or-uri> registered on the Entra app, used as the v1
+    # scope prefix and accepted as a token audience.
+    scope_format = os.environ.get("ENTRA_SCOPE_FORMAT")
+    application_id_uri = os.environ.get("ENTRA_APPLICATION_ID_URI")
+
     # Validate required configuration
     missing_vars = []
     if not tenant_id:
@@ -189,9 +196,18 @@ def _create_entra_provider() -> EntraIdProvider:
             "Please set these environment variables."
         )
 
-    logger.info(f"Initializing Entra ID provider for tenant '{tenant_id}'")
+    logger.info(
+        f"Initializing Entra ID provider for tenant '{tenant_id}' "
+        f"(scope_format={scope_format or 'v2'})"
+    )
 
-    return EntraIdProvider(tenant_id=tenant_id, client_id=client_id, client_secret=client_secret)
+    return EntraIdProvider(
+        tenant_id=tenant_id,
+        client_id=client_id,
+        client_secret=client_secret,
+        scope_format=scope_format,
+        application_id_uri=application_id_uri,
+    )
 
 
 def _create_okta_provider() -> OktaProvider:

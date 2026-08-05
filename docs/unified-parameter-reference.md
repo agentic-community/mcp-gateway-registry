@@ -336,6 +336,8 @@ that server's Connect dialog:
 | Enabled flag | `ENTRA_ENABLED` | — | — | — |
 | Login base URL | `ENTRA_LOGIN_BASE_URL` | `entra_login_base_url` | `auth-server.entra.loginBaseUrl` | Sovereign clouds. |
 | Graph base URL | `ENTRA_GRAPH_BASE_URL` | `entra_graph_base_url` | `auth-server.entra.graphBaseUrl` | Optional override for Microsoft Graph base URL. Leave unset on standard Entra deployments — auto-inferred from `ENTRA_LOGIN_BASE_URL` via the documented sovereign-cloud mapping. Set explicitly only for proxied or air-gapped deployments. |
+| PRM scope format | `ENTRA_SCOPE_FORMAT` | `entra_scope_format` | `auth-server.entra.scopeFormat` / `registry.entra.scopeFormat` | `v1` or `v2` (default `v2`). Controls the form of custom resource scopes advertised in the OAuth PRM `scopes_supported` array. `v1` emits `api://<app-id>/<scope>` (required by apps exposing v1-style scopes; fixes AADSTS650053 at IDE login); `v2` emits the bare fragment. Standard OIDC scopes are always advertised bare. See [Entra v1 vs v2 scope format](entra-scope-format.md). |
+| Application ID URI | `ENTRA_APPLICATION_ID_URI` | `entra_application_id_uri` | `auth-server.entra.applicationIdUri` / `registry.entra.applicationIdUri` | Application ID URI (e.g. `api://<app-id>`) registered on the Entra app. Used as the v1 scope prefix and accepted as a token audience. Defaults to `api://<ENTRA_CLIENT_ID>`. |
 | Admin group id | `ENTRA_GROUP_ADMIN_ID` | — | `global.authProvider.entra.adminGroupId` | — |
 | Users group id | `ENTRA_GROUP_USERS_ID` | — | — | — |
 
