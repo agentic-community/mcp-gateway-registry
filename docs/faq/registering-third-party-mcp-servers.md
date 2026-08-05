@@ -11,7 +11,7 @@ never handles the token. Here is the end-to-end flow.
 
 ### 1. Register the server
 
-Three ready-to-use registration files are provided under
+Ready-to-use registration files are provided under
 [`cli/examples/`](../../cli/examples):
 
 | Server | File | `proxy_pass_url` (edit as needed) |
@@ -19,6 +19,7 @@ Three ready-to-use registration files are provided under
 | GitHub | [`github-mcp-server.json`](../../cli/examples/github-mcp-server.json) | `https://api.githubcopilot.com/mcp/` |
 | Slack | [`slack-mcp-server.json`](../../cli/examples/slack-mcp-server.json) | `https://mcp.slack.com/mcp` |
 | Atlassian | [`atlassian-mcp-server.json`](../../cli/examples/atlassian-mcp-server.json) | `https://mcp.atlassian.com/v1/mcp` |
+| Salesforce Headless 360 (Beta) | [`salesforce-headless-360.json`](../../cli/examples/salesforce-headless-360.json) | `https://api.salesforce.com/platform/mcp/v1/platform/headless-360` |
 
 The `proxy_pass_url` values point at the third-party SaaS-hosted MCP endpoints.
 **Edit these as needed** — if you run a self-hosted version of one of these MCP
@@ -77,8 +78,16 @@ channels:history,groups:history,im:history,mpim:history,channels:read,files:read
 offline_access,read:confluence-content.all,read:jira-user,read:jira-work,search:confluence,write:confluence-content,write:jira-work
 ```
 
+**Salesforce Headless 360** (provider: `custom` — per-org endpoints; see
+[the Salesforce notes below](#salesforce-headless-360-beta)):
+
+```
+mcp_api,refresh_token
+```
+
 > Enter scope values as plain strings (e.g. `repo`), not quoted (`"repo"`).
-> Always include `offline_access` for Atlassian so a refresh token is issued.
+> Always include `offline_access` for Atlassian so a refresh token is issued
+> (`refresh_token` is the equivalent for Salesforce).
 
 ### 3. Connect your account (one-time 3LO consent)
 
@@ -109,6 +118,109 @@ claude mcp add --transport http com-github-github-mcp-server \
 card generates the exact command for your deployment.) You are good to go — the
 assistant sees the server's real tools, and the gateway injects your vaulted
 per-user token on every call.
+
+## Salesforce Headless 360 (Beta)
+
+Salesforce needs more provider-side setup than the others, and its OAuth
+endpoints are **per-org**, so it uses the `custom` provider rather than a
+built-in row. Everything below is in addition to the four steps above.
+
+> This is a Salesforce **Beta** service (July 2026) under Beta Services Terms,
+> and the Salesforce docs already publish an End-of-Life page for hosted MCP
+> servers. Check both before depending on it.
+
+### Salesforce-side setup
+
+1. **Create an External Client App** (Setup → External Client App Manager → New).
+   Salesforce states that **Connected Apps are not supported** for MCP client
+   connections, so an External Client App is required.
+2. Under **API (Enable OAuth Settings)**, check **Enable OAuth** and add these
+   scopes: **`mcp_api`** ("Access MCP servers") and **`refresh_token`** ("Perform
+   requests at any time").
+3. Select **"Issue JSON Web Token (JWT)-based access tokens for named users"**.
+4. Set the **Callback URL** to the gateway's egress callback —
+   `https://<your-registry-domain>/oauth2/egress/callback`. The Connected
+   Accounts page displays the exact value with a copy button.
+5. **Activate the server**: Setup → search `MCP Servers` → find `headless-360`
+   → **Activate**. Standard servers ship disabled.
+6. Requires API version **v67.0 or newer**. Allow up to **30 minutes** for the
+   External Client App to propagate.
+
+### Registry-side setup
+
+Use `provider = custom` with your org's My Domain host:
+
+| Field | Value |
+|-------|-------|
+| Authorize URL | `https://<my-domain>.my.salesforce.com/services/oauth2/authorize` |
+| Token URL | `https://<my-domain>.my.salesforce.com/services/oauth2/token` |
+| Scopes | `mcp_api,refresh_token` |
+
+The generic `https://login.salesforce.com/services/oauth2/{authorize,token}`
+endpoints also work — the token comes back scoped to the user's org either way
+(`iss` is the org host) — but the My Domain host is the better default because an
+org can require it.
+
+Equivalent CLI form:
+
+```bash
+uv run python api/registry_management.py --registry-url http://localhost --token-file .token \
+  egress-configure --path /salesforce-headless-360 \
+    --mode oauth_user --provider custom \
+    --client-id "$SF_CLIENT_ID" --client-secret "$SF_CLIENT_SECRET" \
+    --scopes 'mcp_api,refresh_token' \
+    --custom-authorize-url "https://<my-domain>.my.salesforce.com/services/oauth2/authorize" \
+    --custom-token-url "https://<my-domain>.my.salesforce.com/services/oauth2/token"
+```
+
+### Set `append_mcp_path` to false
+
+The Salesforce endpoint serves JSON-RPC at its **root** and returns 404 on
+`/mcp`:
+
+```
+POST .../platform/headless-360        -> 200
+POST .../platform/headless-360/mcp    -> 404
+```
+
+So the gateway must not append `/mcp`. Uncheck **Append /mcp path** in the Edit
+modal, or:
+
+```bash
+uv run python api/registry_management.py --registry-url http://localhost --token-file .token \
+  patch-server --path /salesforce-headless-360 --patch '{"append_mcp_path": false}'
+```
+
+Note this setting is **not** applied from a `register --config` JSON file today,
+so set it via the Edit modal or `patch-server` after registering.
+
+### Tools and transport
+
+The server exposes four tools designed to be chained: **`discover`** (natural
+language search over the Salesforce API corpus), **`describe`** (full contract
+for one operation), **`dispatch`** (invoke an API), and **`dispatch_readonly`**
+(GET only, never mutates).
+
+The transport is **streamable-http**, which the Salesforce docs do not state
+explicitly — the `mcp-session-id` response header on `initialize` confirms it.
+Note also that the MCP handshake must include `notifications/initialized` after
+`initialize`; skipping it makes `tools/list` fail with a bare
+`HTTP 500 Internal Server Error` that looks like a server fault rather than a
+protocol violation.
+
+Calls execute **as the signed-in user**: object CRUD, field-level security,
+sharing rules, and permission sets are all honored, and actions are attributed to
+that user in the Salesforce audit trail. Salesforce recommends configuring
+client-side tool restrictions so that anything mutating org configuration or data
+requires approval first.
+
+### Public (secretless) PKCE clients
+
+If your External Client App does **not** have "Require Secret for Web Server
+Flow" enabled, it is a public PKCE client with no secret. The registry currently
+requires a `client_secret` when configuring `oauth_user` egress, so create the
+app with a secret (or track
+[issue #1604](https://github.com/agentic-community/mcp-gateway-registry/issues/1604)).
 
 ## Do I have to connect before adding the server to my coding assistant?
 
