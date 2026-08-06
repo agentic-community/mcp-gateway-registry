@@ -352,7 +352,7 @@ oauth2_allowed_redirect_uris = ""
 # embeddings_auth_mode             = "idp"
 # embeddings_idp_token_endpoint    = "https://login.microsoftonline.com/<tenant-id>/oauth2/v2.0/token"
 # embeddings_idp_client_id         = "YOUR_CLIENT_ID"
-# embeddings_idp_client_secret     = "YOUR_CLIENT_SECRET"
+# embeddings_idp_client_secret     = "YOUR_CLIENT_SECRET"  # pragma: allowlist secret
 # embeddings_idp_scope             = "api://<app-id>/.default"
 # embeddings_idp_timeout_seconds   = 30
 
