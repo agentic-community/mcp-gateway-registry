@@ -431,6 +431,18 @@ class Settings(BaseSettings):
     embeddings_api_base: str | None = None
     embeddings_aws_region: str | None = "us-east-1"
 
+    # IdP client-credentials auth for the litellm embeddings provider.
+    # When embeddings_auth_mode == "idp", a bearer token is fetched from the IdP
+    # per token-lifetime and injected on each embedding call instead of a static key.
+    # Works with any OAuth2-compliant IdP (Keycloak, Entra, Okta, Auth0, PingFederate).
+    embeddings_auth_mode: str | None = None  # None | "static" | "idp"
+    embeddings_idp_token_endpoint: str | None = None
+    embeddings_idp_client_id: str | None = None
+    embeddings_idp_client_secret: str | None = None
+    embeddings_idp_scope: str | None = None
+    embeddings_idp_timeout_seconds: int = 30
+    embeddings_idp_allow_insecure: bool = False  # Local dev only: allow http:// token endpoint
+
     # Health check settings
     health_check_interval_seconds: int = (
         300  # 5 minutes for automatic background checks (configurable via env var)

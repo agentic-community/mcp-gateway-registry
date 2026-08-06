@@ -1097,6 +1097,26 @@ module "ecs_service_registry" {
           name  = "EMBEDDINGS_AWS_REGION"
           value = var.embeddings_aws_region
         },
+        {
+          name  = "EMBEDDINGS_AUTH_MODE"
+          value = var.embeddings_auth_mode
+        },
+        {
+          name  = "EMBEDDINGS_IDP_TOKEN_ENDPOINT"
+          value = var.embeddings_idp_token_endpoint
+        },
+        {
+          name  = "EMBEDDINGS_IDP_CLIENT_ID"
+          value = var.embeddings_idp_client_id
+        },
+        {
+          name  = "EMBEDDINGS_IDP_SCOPE"
+          value = var.embeddings_idp_scope
+        },
+        {
+          name  = "EMBEDDINGS_IDP_TIMEOUT_SECONDS"
+          value = tostring(var.embeddings_idp_timeout_seconds)
+        },
         # Registration deduplication. Advisory check; never blocks
         # registration. Reuses the embeddings model above.
         {
@@ -1813,6 +1833,10 @@ module "ecs_service_registry" {
           {
             name      = "EMBEDDINGS_API_KEY"
             valueFrom = aws_secretsmanager_secret.embeddings_api_key.arn
+          },
+          {
+            name      = "EMBEDDINGS_IDP_CLIENT_SECRET"
+            valueFrom = aws_secretsmanager_secret.embeddings_idp_client_secret.arn
           }
         ],
         # PR #947: MongoDB connection string override (Secrets Manager variant).

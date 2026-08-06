@@ -343,6 +343,19 @@ oauth2_allowed_redirect_uris = ""
 # embeddings_aws_region       = "us-east-1"
 # embeddings_api_key          = ""  # Empty for Bedrock (uses IAM)
 
+# Option 4: Use an IdP-gated OpenAI-compatible endpoint (Keycloak, Entra, Okta, etc.)
+# The registry fetches a short-lived token from the IdP and injects it per embedding call.
+# embeddings_provider              = "litellm"
+# embeddings_model_name            = "openai/text-embedding-3-small"
+# embeddings_model_dimensions      = 1536
+# embeddings_api_base              = "https://embeddings.example.com/v1"
+# embeddings_auth_mode             = "idp"
+# embeddings_idp_token_endpoint    = "https://login.microsoftonline.com/<tenant-id>/oauth2/v2.0/token"
+# embeddings_idp_client_id         = "YOUR_CLIENT_ID"
+# embeddings_idp_client_secret     = "YOUR_CLIENT_SECRET"
+# embeddings_idp_scope             = "api://<app-id>/.default"
+# embeddings_idp_timeout_seconds   = 30
+
 # ============================================================================
 # REGISTRATION DEDUPLICATION
 # ============================================================================
