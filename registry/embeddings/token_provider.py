@@ -62,7 +62,13 @@ class EmbeddingsTokenProvider:
         timeout_seconds: int = 30,
         allow_insecure: bool = False,
     ) -> None:
-        if allow_insecure and not token_endpoint.lower().startswith("https://"):
+        if not token_endpoint.lower().startswith("https://"):
+            if not allow_insecure:
+                raise ValueError(
+                    "EMBEDDINGS_IDP_TOKEN_ENDPOINT must use https:// "
+                    "(the client secret is sent to this endpoint). "
+                    "Set EMBEDDINGS_IDP_ALLOW_INSECURE=true for local development only."
+                )
             logger.warning(
                 "EMBEDDINGS_IDP_ALLOW_INSECURE=true: token endpoint is NOT using https. "
                 "DO NOT use this in production — the client secret is sent in plaintext."
