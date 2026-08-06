@@ -209,6 +209,25 @@ spec:
               value: {{ .Values.app.rateLimiting.definitionsCacheTtlSeconds | default 30 | toString | quote }}
             - name: RATE_LIMIT_BACKEND_TIMEOUT_MS
               value: {{ .Values.app.rateLimiting.backendTimeoutMs | default 250 | toString | quote }}
+            # Prevent AWS SDKs from falling back to EC2 IMDS. boto3 uses its own
+            # urllib3 stack (not the url_guard egress path), so this closes a
+            # credential-provider vector url_guard structurally cannot see.
+            #
+            # REQUIRES IRSA or EKS Pod Identity (both deliver pod credentials
+            # out-of-band). Node-instance-profile-only credentials (reachable
+            # only via IMDS) are NOT supported with this on. Chart-managed and
+            # reserved so extraEnv cannot override it; set
+            # app.disableEc2ImdsFallback=false if you must run on node-role creds.
+            # Kept in parity with terraform/aws-ecs + CDK auth-server env.
+            #
+            # Gate renders UNLESS the flag is explicitly false, so a missing key
+            # still renders — fails toward secure. Do NOT rewrite as
+            # `| default true`: sprig treats boolean false as empty, so
+            # `false | default true` -> true and would break the escape hatch.
+            {{- if not (eq .Values.app.disableEc2ImdsFallback false) }}
+            - name: AWS_EC2_METADATA_DISABLED
+              value: "true"
+            {{- end }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

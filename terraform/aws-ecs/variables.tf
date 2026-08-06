@@ -1961,10 +1961,17 @@ variable "ide_connect_scope" {
 }
 
 variable "registry_extra_env" {
-  description = "Extra environment variables for the registry service. List of objects with 'name' and 'value' fields. Reserved names (listed in charts/registry/reserved-env-names.txt) should not be overridden here — use their canonical Terraform variable instead. For secrets, prefer AWS Secrets Manager ARNs wired into the task definition's secrets block (see mongodb_connection_string_secret_arn as a reference pattern)."
+  description = "Extra environment variables for the registry service. List of objects with 'name' and 'value' fields. AWS_EC2_METADATA_DISABLED is Terraform-managed and cannot be overridden. Reserved names (listed in charts/registry/reserved-env-names.txt) should not be overridden here — use their canonical Terraform variable instead. For secrets, prefer AWS Secrets Manager ARNs wired into the task definition's secrets block (see mongodb_connection_string_secret_arn as a reference pattern)."
   type        = list(object({ name = string, value = string }))
   default     = []
   sensitive   = true
+
+  validation {
+    condition = alltrue([
+      for entry in var.registry_extra_env : upper(trimspace(entry.name)) != "AWS_EC2_METADATA_DISABLED"
+    ])
+    error_message = "registry_extra_env must not override Terraform-managed AWS_EC2_METADATA_DISABLED."
+  }
 }
 
 variable "auth_server_extra_env" {

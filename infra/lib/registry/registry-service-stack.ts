@@ -274,6 +274,23 @@ export class RegistryServiceStack extends cdk.Stack {
       GITHUB_APP_PRIVATE_KEY: config.github.appPrivateKey,
       GITHUB_EXTRA_HOSTS: config.github.extraHosts,
       GITHUB_API_BASE_URL: config.github.apiBaseUrl,
+      // Prevent AWS SDKs from falling back to EC2 IMDS. ECS delivers task-role
+      // credentials through the container-credentials provider (169.254.170.2)
+      // on both the Fargate and EC2 launch types; only the IMDS provider
+      // (169.254.169.254) is disabled, so task-role creds survive regardless of
+      // launch type. That is why there is no operator opt-out here (unlike the
+      // Helm charts, where an EKS node-instance-profile-only setup can need
+      // IMDS): on ECS the credential-only-via-IMDS footgun cannot occur. The
+      // registry uses boto3 (Secrets Manager, DocumentDB IAM, Cognito,
+      // AgentCore).
+      //
+      // NOT redundant with the url_guard egress SSRF check: boto3 uses its own
+      // urllib3 stack and never passes through GuardedTransport. url_guard
+      // blocks the app being tricked into fetching a URL that redirects to
+      // IMDS; this env var closes boto3's own IMDS credential provider, a
+      // vector url_guard structurally cannot see. Kept in parity with
+      // terraform/aws-ecs registry env.
+      AWS_EC2_METADATA_DISABLED: 'true',
     };
 
     const authEnv: Record<string, string> = {

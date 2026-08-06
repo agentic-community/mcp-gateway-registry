@@ -118,3 +118,6 @@ RATE_LIMIT_FAIL_OPEN
 RATE_LIMIT_QUARANTINE_FAIL_CLOSED
 RATE_LIMIT_DEFINITIONS_CACHE_TTL_SECONDS
 RATE_LIMIT_BACKEND_TIMEOUT_MS
+# Chart-managed security constant: prevents AWS SDK IMDS fallback (rendered as a
+# static env: entry in deployment.yaml, not operator-tunable).
+AWS_EC2_METADATA_DISABLED

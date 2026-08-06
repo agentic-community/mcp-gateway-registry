@@ -580,6 +580,39 @@ class TestPinnedTransport:
                 with pytest.raises(UrlValidationError):
                     transport._pin_request(request)
 
+    def test_guarded_client_denies_redirect_to_metadata_ip(self):
+        """End-to-end: a public host that 302-redirects to the metadata IP is
+        denied at the SECOND hop.
+
+        httpx's own redirect-following machinery re-issues the redirected
+        request through GuardedTransport, whose _pin_request rejects the
+        metadata literal before any connection is made. This documents the
+        per-redirect guarantee through the real httpx.Client path (not just a
+        direct _pin_request call)."""
+        metadata_url = "http://169.254.169.254/latest/meta-data/"
+        seen: list[str] = []
+
+        def _fake_base_handle(self, request):
+            # Records every hop that reaches the underlying (network) transport.
+            # The metadata hop must never appear here: the guard blocks it in
+            # _pin_request, before super().handle_request runs.
+            seen.append(request.url.host)
+            return httpx.Response(302, headers={"Location": metadata_url})
+
+        with patch.object(url_guard, "settings", _settings()):
+            with patch.object(url_guard.socket, "getaddrinfo", _resolve_to("93.184.216.34")):
+                with patch.object(httpx.HTTPTransport, "handle_request", _fake_base_handle):
+                    with url_guard.guarded_client(
+                        profile=url_guard.PROXY_PROFILE,
+                        follow_redirects=True,
+                    ) as client:
+                        with pytest.raises(UrlValidationError):
+                            client.get("https://public.example/start")
+
+        # Only the first (public) hop reached the network; the metadata IP the
+        # redirect pointed at was blocked before a second connection.
+        assert seen == ["93.184.216.34"]
+
 
 class TestProxyProfileAllowlistTiers:
     """Explicit trust cannot reopen hard-denied destination categories."""

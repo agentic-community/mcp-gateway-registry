@@ -56,6 +56,36 @@ Validation profiles separate the registry's distinct outbound trust surfaces:
   (``CREDENTIALED_OAUTH_PROFILE``): HTTPS-only with a deliberately empty
   host/CIDR allowlist. Token POSTs carry client secrets, refresh tokens, or user
   assertions and must never inherit the proxy profile's internal-target bypass.
+
+Request lifecycle (validate -> resolve -> pin -> re-validate per redirect)::
+
+    registration time                 fetch time (per request AND per redirect)
+    -----------------                 -----------------------------------------
+    validate_url(resolve=False)       guarded_client / guarded_async_client
+      | scheme / userinfo / host         |
+      | nginx metacharacters             v
+      | literal-IP category check     GuardedTransport.handle_request
+      | (metadata/private denied)        |
+      v                                  v
+    store target                      _pin_request  (once per hop)
+                                         | validate_url(resolve=False)  <- static re-check
+                                         | coerce_ip_literal(host)?
+                                         |    yes -> _is_blocked_ip -> deny metadata/private
+                                         |    no  -> _resolve_public_ips (DNS now)
+                                         v         every A/AAAA classified, else deny
+                                      rewrite connect host -> pinned public IP
+                                         | keep Host header + TLS SNI = original name
+                                         v
+                                      super().handle_request  (only public IP is dialed)
+                                         |
+                                         v
+                                      3xx? httpx re-issues Location through this
+                                           same transport -> _pin_request runs again,
+                                           so a redirect to 169.254.169.254 is denied
+                                           at the SECOND hop before any connect.
+
+    Fail closed everywhere: any resolution failure, un-encodable host, identity
+    mismatch, or ambiguity raises UrlValidationError instead of falling through.
 """
 
 from __future__ import annotations

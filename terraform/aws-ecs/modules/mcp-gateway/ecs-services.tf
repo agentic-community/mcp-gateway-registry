@@ -1745,6 +1745,27 @@ module "ecs_service_registry" {
           name  = "MCP_TOKEN_MAX_TTL_HOURS"
           value = tostring(var.mcp_token_max_ttl_hours)
         },
+        # Prevent AWS SDKs from falling back to EC2 IMDS. ECS delivers task-role
+        # credentials through the container-credentials provider
+        # (AWS_CONTAINER_CREDENTIALS_RELATIVE_URI -> 169.254.170.2) on BOTH the
+        # Fargate and EC2 launch types; only the IMDS provider
+        # (169.254.169.254) is disabled. So task-role creds survive regardless
+        # of launch type — this cannot strip the registry's credentials. That is
+        # why there is no operator opt-out here (unlike the Helm charts, where an
+        # EKS node-instance-profile-only setup can legitimately need IMDS): on
+        # ECS the credential-only-via-IMDS footgun structurally cannot occur.
+        # The registry uses boto3 for Secrets Manager, DocumentDB IAM, Cognito,
+        # and AgentCore.
+        #
+        # This is NOT redundant with the url_guard egress SSRF check: boto3 uses
+        # its own urllib3 stack and never passes through GuardedTransport. The
+        # url_guard blocks the app being tricked into *fetching* a URL that
+        # redirects to IMDS; this env var closes boto3's own IMDS credential
+        # provider, a vector the url_guard structurally cannot see.
+        {
+          name  = "AWS_EC2_METADATA_DISABLED"
+          value = "true"
+        },
         ],
         # PR #947: MongoDB connection string override (plain-text variant).
         # Only emitted when var.mongodb_connection_string is non-empty and a
