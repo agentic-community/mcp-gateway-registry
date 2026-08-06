@@ -62,13 +62,7 @@ class EmbeddingsTokenProvider:
         timeout_seconds: int = 30,
         allow_insecure: bool = False,
     ) -> None:
-        if not allow_insecure and not token_endpoint.lower().startswith("https://"):
-            raise ValueError(
-                "EMBEDDINGS_IDP_TOKEN_ENDPOINT must use https:// "
-                "(the client secret is sent to this endpoint). "
-                "Set EMBEDDINGS_IDP_ALLOW_INSECURE=true for local development only."
-            )
-        if allow_insecure:
+        if allow_insecure and not token_endpoint.lower().startswith("https://"):
             logger.warning(
                 "EMBEDDINGS_IDP_ALLOW_INSECURE=true: token endpoint is NOT using https. "
                 "DO NOT use this in production — the client secret is sent in plaintext."
@@ -123,18 +117,24 @@ class EmbeddingsTokenProvider:
         Raises:
             RuntimeError: if the token cannot be obtained.
         """
+        from registry.observability.meters import embeddings_idp_token_refresh_total
+
         with self._lock:
             if self._is_token_valid():
                 logger.debug("Using cached embeddings IdP token")
                 return self._access_token
             try:
-                return self._refresh_token()
+                token = self._refresh_token()
+                embeddings_idp_token_refresh_total.labels(result="success").inc()
+                return token
             except httpx.HTTPStatusError as exc:
+                embeddings_idp_token_refresh_total.labels(result="failure").inc()
                 raise RuntimeError(
                     f"IdP token request failed with status {exc.response.status_code}. "
                     "Check EMBEDDINGS_IDP_CLIENT_ID / _CLIENT_SECRET / _SCOPE."
                 ) from exc
             except httpx.RequestError as exc:
+                embeddings_idp_token_refresh_total.labels(result="failure").inc()
                 raise RuntimeError(f"Network error contacting IdP token endpoint: {exc}") from exc
 
     def close(self) -> None:

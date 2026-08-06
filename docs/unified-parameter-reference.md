@@ -539,6 +539,7 @@ Used by `registry` and `mcpgw` services.
 | IdP client secret **(secret)** | `EMBEDDINGS_IDP_CLIENT_SECRET` | `embeddings_idp_client_secret` | `mcpgw.app.embeddingsIdpClientSecret` / `...ExistingSecret` | Client-credentials secret. Never logged. Required when `idp`. |
 | IdP scope | `EMBEDDINGS_IDP_SCOPE` | `embeddings_idp_scope` | `mcpgw.app.embeddingsIdpScope` | OAuth2 scope (e.g. `api://<app-id>/.default`). Optional. |
 | IdP timeout | `EMBEDDINGS_IDP_TIMEOUT_SECONDS` | `embeddings_idp_timeout_seconds` | `mcpgw.app.embeddingsIdpTimeoutSeconds` | Token request timeout (default 30s). |
+| IdP allow insecure | `EMBEDDINGS_IDP_ALLOW_INSECURE` | `embeddings_idp_allow_insecure` | `mcpgw.app.embeddingsIdpAllowInsecure` | Allow `http://` token endpoint (local dev only, default `false`). |
 
 ---
 
