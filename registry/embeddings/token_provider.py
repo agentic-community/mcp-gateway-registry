@@ -140,7 +140,3 @@ class EmbeddingsTokenProvider:
     def close(self) -> None:
         """Close the underlying HTTP client."""
         self._http_client.close()
-
-    def __del__(self) -> None:
-        if hasattr(self, "_http_client"):
-            self._http_client.close()
