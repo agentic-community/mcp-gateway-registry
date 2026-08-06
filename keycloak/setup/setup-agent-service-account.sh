@@ -179,6 +179,7 @@ create_agent_m2m_client() {
         "defaultClientScopes": [
             "web-origins",
             "acr",
+            "basic",
             "profile",
             "roles",
             "email"
@@ -400,14 +401,19 @@ verify_setup() {
     echo ""
     echo "Verifying setup..."
 
-    # Check service account exists and is in the right group
-    GROUPS=$(curl -s -H "Authorization: Bearer $TOKEN" \
+    # Check service account exists and is in the right group.
+    # NOTE: do not name this variable GROUPS -- that is a special bash variable
+    # (an array of the caller's numeric supplementary group IDs). Assigning a
+    # scalar to it fails, and under `set -e` that aborts the script here, before
+    # the summary, even though the account was configured correctly.
+    local account_groups
+    account_groups=$(curl -s -H "Authorization: Bearer $TOKEN" \
         "$ADMIN_URL/admin/realms/$REALM/users/$USER_ID/groups" | \
         jq -r '.[].name')
 
-    echo "Service account groups: $GROUPS"
+    echo "Service account groups: $account_groups"
 
-    if echo "$GROUPS" | grep -q "$TARGET_GROUP"; then
+    if echo "$account_groups" | grep -q "$TARGET_GROUP"; then
         echo -e "${GREEN}✓ Service account is in '$TARGET_GROUP' group${NC}"
     else
         echo -e "${RED}✗ Service account is NOT in '$TARGET_GROUP' group${NC}"
@@ -438,6 +444,14 @@ generate_agent_token() {
 
     mkdir -p "$AGENT_TOKEN_DIR"
 
+    # The URL token consumers dial to mint tokens. This must be the *external*
+    # Keycloak URL, not the in-network one ($KEYCLOAK_URL, e.g. http://keycloak:8080),
+    # because the consumers run on the host rather than inside the compose network.
+    # Follow the same precedence as credentials-provider/generate_creds.sh: honour
+    # KEYCLOAK_EXTERNAL_URL, and otherwise fall back to the admin URL this script is
+    # already talking to, which is correct by construction.
+    local keycloak_external_url="${KEYCLOAK_EXTERNAL_URL:-$ADMIN_URL}"
+
     cat > "$AGENT_TOKEN_FILE" << EOF
 {
   "provider": "keycloak_m2m",
@@ -446,7 +460,7 @@ generate_agent_token() {
   "group": "$TARGET_GROUP",
   "client_id": "$AGENT_CLIENT_ID",
   "client_secret": "$AGENT_CLIENT_SECRET",
-  "keycloak_url": "https://mcpgateway.ddns.net/keycloak",
+  "keycloak_url": "$keycloak_external_url",
   "realm": "$REALM",
   "saved_at": "$(date -u '+%Y-%m-%d %H:%M:%S UTC')",
   "usage_notes": "Individual M2M client credentials for agent $AGENT_ID with complete audit trails"

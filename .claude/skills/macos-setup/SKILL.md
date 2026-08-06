@@ -126,8 +126,19 @@ For every phase below, apply this rule:
 echo "=== Docker ==="
 docker --version 2>/dev/null && docker ps >/dev/null 2>&1 && echo "DOCKER_OK" || echo "DOCKER_FAIL"
 
-echo "=== Python ==="
-python3 --version 2>/dev/null && echo "PYTHON_OK" || echo "PYTHON_FAIL"
+echo "=== Python (>=3.14 required by pyproject.toml) ==="
+# Ask uv, not PATH. Phase 5 runs `uv sync`, which resolves its own managed
+# interpreters and ignores whatever `python3` happens to be first on PATH -- a
+# system python3 of 3.13 is fine as long as uv can see a >=3.14 somewhere.
+# Checking `python3 --version` instead reports a false failure on exactly the
+# machines where setup would have worked.
+if uv python find '>=3.14' >/dev/null 2>&1; then
+    echo "Interpreter for uv: $(uv python find '>=3.14' 2>/dev/null)"
+    echo "PYTHON_OK"
+else
+    echo "System python3: $(python3 --version 2>&1 || echo 'not found')"
+    echo "PYTHON_TOO_OLD"
+fi
 
 echo "=== uv ==="
 uv --version 2>/dev/null && echo "UV_OK" || echo "UV_FAIL"
@@ -150,7 +161,7 @@ For any failed check, display the install instructions:
 | Check | Install command |
 |-------|----------------|
 | DOCKER_FAIL | "Install Docker Desktop from https://www.docker.com/products/docker-desktop/ then start it and wait for the whale icon in the menu bar" |
-| PYTHON_FAIL | `brew install python@3.14` |
+| PYTHON_TOO_OLD | `uv python install 3.14` — the project requires Python >=3.14 (`pyproject.toml`), and Phase 5 (`uv sync`) fails with `No interpreter found for Python >=3.14` otherwise. `uv` manages this interpreter itself, so the system `python3` is left untouched (it may stay on 3.13 or older). |
 | UV_FAIL | `curl -LsSf https://astral.sh/uv/install.sh \| sh` — then restart your terminal |
 | NODE_FAIL | `brew install node@20` or download from https://nodejs.org/ |
 | GIT_FAIL | `xcode-select --install` |
@@ -158,6 +169,10 @@ For any failed check, display the install instructions:
 | GETTEXT_FAIL | `brew install gettext` |
 
 **Do not proceed if Docker or git fail.** Python, uv, Node.js, jq, and gettext must also be present before continuing. Ask the user to install missing tools and retry.
+
+**Do not proceed on `PYTHON_TOO_OLD`.** With no >=3.14 interpreter available to `uv`, Phase 5 fails four phases later with `No interpreter found for Python >=3.14`, an error that names `uv` rather than the unmet prerequisite. Resolve it here: run `uv python install 3.14`, then re-run the Python check and confirm `PYTHON_OK` before continuing.
+
+Note the check deliberately asks `uv`, not `python3 --version`. `uv sync` uses its own managed interpreters, so a system `python3` older than 3.14 is not a problem as long as `uv python find '>=3.14'` succeeds. Gating on `python3` instead blocks setup on machines where it would have worked.
 
 Log: `{ 1, "Prerequisites Check", DONE/FAILED, list of what passed/failed }`
 
@@ -259,7 +274,39 @@ cp .env.example .env
 # Generate SECRET_KEY
 SECRET_KEY=$(python3 -c "import secrets; print(secrets.token_urlsafe(64))")
 echo "SECRET_KEY generated: ${#SECRET_KEY} characters"
+
+# Generate the remaining secrets that later phases require. `.env.example` ships
+# DOCUMENTDB_PASSWORD and OPENBAO_TOKEN empty and GRAFANA_ADMIN_PASSWORD as the
+# placeholder CHANGE-ME-SET-STRONG-PASSWORD, but nothing between here and the end
+# of the run fills them in time:
+#   - docker-compose.yml declares all three as ${VAR:?...} required variables, and
+#     compose validates the whole file before starting anything -- so the two empty
+#     ones break Phase 8 (`docker compose up -d keycloak-db keycloak`), five phases
+#     before build_and_run.sh would have generated them itself.
+#   - GRAFANA_ADMIN_PASSWORD is non-empty, so it passes that presence check, but
+#     build_and_run.sh never generates it and its _validate_secret_defaults
+#     denylist rejects the placeholder -- failing Phase 13 instead.
+# Entropy matches build_and_run.sh so a later run of that script leaves them alone.
+export DOCUMENTDB_PASSWORD=$(python3 -c "import secrets; print(secrets.token_hex(24))")
+export OPENBAO_TOKEN=$(python3 -c "import secrets; print(secrets.token_hex(32))")
+export GRAFANA_ADMIN_PASSWORD=$(python3 -c "import secrets, string; print(''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(20)))")
+echo "DOCUMENTDB_PASSWORD generated: ${#DOCUMENTDB_PASSWORD} characters"
+echo "OPENBAO_TOKEN generated: ${#OPENBAO_TOKEN} characters"
+echo "GRAFANA_ADMIN_PASSWORD generated: ${#GRAFANA_ADMIN_PASSWORD} characters"
+
+# Generate the realm 'admin' user password used to log in to the registry UI.
+# This is a DIFFERENT credential from KEYCLOAK_ADMIN_PASSWORD: that one is the
+# Keycloak master-realm administrator (http://localhost:8080/admin), while this
+# one is the mcp-gateway realm user that Phase 10 creates for http://localhost.
+# init-keycloak.sh requires it, but it sources .env before checking -- so leaving
+# the .env.example placeholder in place does not fail the run, it silently creates
+# the UI admin with a publicly-known password. (Keycloak marks the credential
+# 'temporary', forcing a change at first login, which limits the exposure.)
+export INITIAL_ADMIN_PASSWORD=$(python3 -c "import secrets, string; print(''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(20)))")
+echo "INITIAL_ADMIN_PASSWORD generated: ${#INITIAL_ADMIN_PASSWORD} characters"
 ```
+
+Report `GRAFANA_ADMIN_PASSWORD` and `INITIAL_ADMIN_PASSWORD` in the Final Summary (Phase 16) — both are human-facing console credentials the user must know. `DOCUMENTDB_PASSWORD` and `OPENBAO_TOKEN` are service-internal and need no reporting.
 
 Update `.env` using Python to handle special characters safely:
 
@@ -278,6 +325,12 @@ updates = {
     'KEYCLOAK_ADMIN_PASSWORD': os.environ.get('KEYCLOAK_ADMIN_PASSWORD', ''),
     'KEYCLOAK_DB_PASSWORD': os.environ.get('KEYCLOAK_DB_PASSWORD', ''),
     'SECRET_KEY': os.environ.get('SECRET_KEY', ''),
+    # Required by docker-compose.yml as ${VAR:?...}; see the generation block above.
+    'DOCUMENTDB_PASSWORD': os.environ.get('DOCUMENTDB_PASSWORD', ''),
+    'OPENBAO_TOKEN': os.environ.get('OPENBAO_TOKEN', ''),
+    'GRAFANA_ADMIN_PASSWORD': os.environ.get('GRAFANA_ADMIN_PASSWORD', ''),
+    # Read from .env by init-keycloak.sh in Phase 10; see the generation block above.
+    'INITIAL_ADMIN_PASSWORD': os.environ.get('INITIAL_ADMIN_PASSWORD', ''),
     # Declare this as a local/on-prem install. The telemetry cloud-detection
     # cascade checks AWS_REGION first and would otherwise classify this Mac as
     # "aws" purely because .env.example ships AWS_REGION=us-east-1. This explicit
@@ -303,7 +356,7 @@ PYEOF
 Verify (without exposing values):
 ```bash
 cd "${INSTALL_DIR}"
-for KEY in AUTH_PROVIDER AUTH_SERVER_EXTERNAL_URL KEYCLOAK_ADMIN_PASSWORD KEYCLOAK_DB_PASSWORD SECRET_KEY MCP_CLOUD_PROVIDER; do
+for KEY in AUTH_PROVIDER AUTH_SERVER_EXTERNAL_URL KEYCLOAK_ADMIN_PASSWORD KEYCLOAK_DB_PASSWORD SECRET_KEY MCP_CLOUD_PROVIDER DOCUMENTDB_PASSWORD OPENBAO_TOKEN GRAFANA_ADMIN_PASSWORD INITIAL_ADMIN_PASSWORD; do
     VALUE=$(grep "^${KEY}=" .env | cut -d'=' -f2)
     if [ -n "$VALUE" ]; then
         echo "${KEY}=[set]"
@@ -312,6 +365,19 @@ for KEY in AUTH_PROVIDER AUTH_SERVER_EXTERNAL_URL KEYCLOAK_ADMIN_PASSWORD KEYCLO
     fi
 done
 ```
+
+Confirm every variable `docker-compose.yml` marks as required is now resolvable, so
+Phase 8 can parse the file. This catches the failure here — where the cause is
+obvious — instead of four phases later as a bare `required variable ... is missing
+a value` error:
+
+```bash
+cd "${INSTALL_DIR}"
+docker compose config --quiet && echo "COMPOSE_PARSE_OK" || echo "COMPOSE_PARSE_FAIL"
+```
+
+**Do not proceed on `COMPOSE_PARSE_FAIL`.** The message names the offending
+variable; set it in `.env` and re-run the check before continuing.
 
 The template is at: [`.env.example`](https://github.com/agentic-community/mcp-gateway-registry/blob/main/.env.example)
 
@@ -481,6 +547,20 @@ export KEYCLOAK_ADMIN_PASSWORD="${KEYCLOAK_ADMIN_PASSWORD}"
 ./keycloak/setup/init-keycloak.sh
 echo "Init exit code: $?"
 ```
+
+This creates the realm `admin` user that logs in to the registry UI, using
+`INITIAL_ADMIN_PASSWORD` from Phase 4. The script sources `.env` with `set -a`
+before its own required-variable check, so the value written to `.env` in Phase 4
+is what takes effect — confirm it is not the shipped placeholder:
+
+```bash
+cd "${INSTALL_DIR}"
+grep -q '^INITIAL_ADMIN_PASSWORD=your-secure-keycloak-admin-password$' .env \
+    && echo "INITIAL_ADMIN_PASSWORD_PLACEHOLDER — fix .env before proceeding" \
+    || echo "INITIAL_ADMIN_PASSWORD_OK"
+```
+
+Report this password, not `KEYCLOAK_ADMIN_PASSWORD`, as the UI login in Phase 16.
 
 The newly created `mcp-gateway` realm ships with `sslRequired: external`, which
 works over loopback HTTP — no SSL change is needed. Do NOT set `sslRequired=NONE`.
@@ -673,15 +753,44 @@ uv run python api/registry_management.py \
 echo "Cloudflare registration exit code: $?"
 ```
 
+Registration alone is not enough: `register` stores the server with
+`is_enabled=False` (see `registry/api/server_routes.py`, which indexes the new
+entry with `is_enabled=False`). A disabled server gets no nginx route, so every
+call to it returns `405 Method Not Allowed` and it does NOT appear on the
+dashboard. Enable it explicitly:
+
+```bash
+cd "${INSTALL_DIR}"
+
+uv run python api/registry_management.py \
+    --token-file "${TOKEN_FILE}" \
+    --registry-url http://localhost \
+    toggle --path /cloudflare-docs
+
+echo "Cloudflare toggle exit code: $?"
+```
+
 Verify the server was registered:
 
 ```bash
 cd "${INSTALL_DIR}"
 
 uv run python api/registry_management.py \
-    --token-file ".oauth-tokens/agent-test-agent-m2m-token.json" \
+    --token-file "${TOKEN_FILE}" \
     --registry-url http://localhost \
-    list 2>/dev/null | grep -i cloudflare && echo "Cloudflare server confirmed in registry" || echo "WARNING: Cloudflare server not found in list"
+    list 2>/dev/null | grep -A3 -i cloudflare
+```
+
+Check for `Enabled: True` and `Health: healthy` (the list marks a working server
+`✓ 🟢`). Presence in the list alone is not success — a registered-but-disabled
+server still appears, marked `✗ ⚫`, and is unreachable.
+
+Confirm nginx actually generated the route:
+
+```bash
+docker exec mcp-gateway-registry-registry-1 \
+    grep -c 'location /cloudflare-docs/' /etc/nginx/conf.d/nginx_rev_proxy.conf \
+    && echo "nginx route present" || echo "WARNING: no nginx route for /cloudflare-docs"
 ```
 
 The server configuration that was registered:
@@ -695,6 +804,66 @@ The server configuration that was registered:
   "tags": ["documentation", "cloudflare", "cdn", "workers", "pages", "migration-guide"]
 }
 ```
+
+Cloudflare's `proxy_pass_url` is a public https host, so it passes the SSRF guard
+unchanged. Registering a server that lives **on the compose network** needs one
+extra step — see the note below.
+
+#### Registering the bundled local demo servers (optional)
+
+The compose stack runs `currenttime-server` and `realserverfaketools-server`, but
+neither is in the registry: they must be registered like any other server, using
+the configs in `cli/examples/`.
+
+Their `proxy_pass_url` values are docker-network hostnames, which resolve to
+RFC-1918 addresses. The health checker validates every `proxy_pass_url` through
+an SSRF guard that blocks private/loopback/link-local ranges by default, so they
+register and enable but come up UNHEALTHY with no proxy route:
+
+```
+Health check blocked by SSRF guard for http://currenttime-server:8000/:
+resolves to blocked/private IP 172.18.0.4 (credentials NOT sent)
+```
+
+Internal upstreams are opt-in. Add them to `SSRF_ALLOWED_HOSTS` in `.env` and
+recreate the registry container so it picks up the new value:
+
+```bash
+cd "${INSTALL_DIR}"
+
+# Name the hosts (least privilege). Prefer this over SSRF_ALLOWED_CIDRS, which
+# would allowlist every container on the bridge network, present and future.
+python3 - <<'PYEOF'
+import re
+content = open('.env').read()
+hosts = 'currenttime-server,realserverfaketools-server,mcpgw-server'
+content = re.sub(r'^SSRF_ALLOWED_HOSTS=.*$', f'SSRF_ALLOWED_HOSTS={hosts}',
+                 content, flags=re.MULTILINE)
+open('.env', 'w').write(content)
+print('SSRF_ALLOWED_HOSTS set')
+PYEOF
+
+docker compose up -d registry
+
+for CFG in currenttime realserverfaketools; do
+    uv run python api/registry_management.py \
+        --token-file "${TOKEN_FILE}" --registry-url http://localhost \
+        register --config "cli/examples/${CFG}.json" --overwrite
+done
+
+# register leaves them disabled; paths must match the config exactly
+# (note the trailing slash on both, unlike /cloudflare-docs)
+for P in /currenttime/ /realserverfaketools/; do
+    uv run python api/registry_management.py \
+        --token-file "${TOKEN_FILE}" --registry-url http://localhost toggle --path "$P"
+done
+
+uv run python api/registry_management.py \
+    --token-file "${TOKEN_FILE}" --registry-url http://localhost healthcheck
+```
+
+The cloud metadata address (169.254.169.254) is never permitted by either
+setting. See the "SSRF GUARD ALLOWLIST" section of `.env.example` for details.
 
 Log: `{ 15, "Cloudflare Server Registration", DONE/FAILED, "Registered at /cloudflare-docs" }`
 
@@ -774,10 +943,18 @@ Access Points:
   MCP Gateway:            http://localhost/mcpgw/mcp
   Cloudflare MCP server:  http://localhost/cloudflare-docs/mcp
 
-Login Credentials:
+Login Credentials (registry UI):
   URL:      http://localhost
   Username: admin
-  Password: [KEYCLOAK_ADMIN_PASSWORD shown only in default mode — see below]
+  Password: [INITIAL_ADMIN_PASSWORD — shown only in default mode, see below]
+            You will be prompted to change this on first login (Keycloak marks
+            the credential 'temporary'). This is NOT KEYCLOAK_ADMIN_PASSWORD,
+            which belongs to the separate Keycloak master-realm admin below.
+
+Keycloak Admin Console Credentials:
+  URL:      http://localhost:8080/admin
+  Username: admin
+  Password: [KEYCLOAK_ADMIN_PASSWORD — shown only in default mode, see below]
 
 Agent Credentials:
   Test agent:    ${INSTALL_DIR}/.oauth-tokens/agent-test-agent-m2m.env
@@ -793,12 +970,24 @@ Quick Test:
   uv run cli/mcp_client.py ping
 ```
 
-**In default mode only**, display the auto-generated passwords clearly since the user never set them:
+Display every auto-generated password clearly, since the user never set these.
+`INITIAL_ADMIN_PASSWORD` and `GRAFANA_ADMIN_PASSWORD` are generated by Phase 4 in
+**both** modes, so they must be shown in interactive mode too — otherwise the user
+cannot log in to the UI or Grafana at all. Omit the two `KEYCLOAK_*` lines in
+interactive mode, where the user chose those values in Phase 3.
 
 ```
 Generated Credentials (SAVE THESE):
-  Keycloak Admin Password: ${KEYCLOAK_ADMIN_PASSWORD}
-  Keycloak DB Password:    ${KEYCLOAK_DB_PASSWORD}
+  Registry UI admin (http://localhost):
+    Password: ${INITIAL_ADMIN_PASSWORD}   (change required on first login)
+
+  Grafana admin (http://localhost:3000):
+    Password: ${GRAFANA_ADMIN_PASSWORD}
+
+  [default mode only] Keycloak master admin (http://localhost:8080/admin):
+    Password: ${KEYCLOAK_ADMIN_PASSWORD}
+
+  [default mode only] Keycloak DB Password: ${KEYCLOAK_DB_PASSWORD}   (internal, no console)
 
 These passwords are also stored in: ${INSTALL_DIR}/.env
 ```

@@ -477,3 +477,25 @@ class TestOpenBaoTransientRetry:
         assert calls["n"] == 2
         got = await store.get_token("oauth2", "alice", "github", "/github-mcp")
         assert got is not None and got.access_token == "a1"
+
+
+@pytest.mark.unit
+class TestTransientRetryBudget:
+    """The retry budget is exported so out-of-process callers (the auth-server
+    egress vend timeout) can size themselves relative to it instead of hardcoding
+    a coupled magic number."""
+
+    def test_budget_matches_backoff_sum(self):
+        import registry.secrets.openbao.store as store_mod
+
+        expected = sum(
+            store_mod._TRANSIENT_BACKOFF_BASE * (2**i) for i in range(store_mod._TRANSIENT_RETRIES)
+        )
+        assert store_mod.transient_retry_budget_seconds() == expected
+
+    def test_budget_is_current_default(self):
+        # 0.5 + 1 + 2 + 4 = 7.5s with today's constants; a guard against silent
+        # drift that would decouple it from the auth-server vend timeout.
+        from registry.secrets.openbao.store import transient_retry_budget_seconds
+
+        assert transient_retry_budget_seconds() == pytest.approx(7.5)

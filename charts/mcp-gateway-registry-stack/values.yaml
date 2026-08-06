@@ -8,7 +8,7 @@ global:
   image:
     # Container registry (host + optional namespace), e.g. "public.ecr.aws/p3v1o3c6"
     registry: public.ecr.aws/p3v1o3c6
-    tag: 1.27.1
+    tag: 1.28.0
     pullPolicy: IfNotPresent
   # When installing chart from repository, add --set global.chartVersion=$(git rev-parse HEAD) to add the git hash to a configmap for debugging
   chartVersion:
@@ -436,6 +436,9 @@ registry:
     # Registry-UI internal token verification (the /api/ hop; minted by auth-server)
     internalTokenTtlSeconds: "30" # Token lifetime (seconds); the replay-window cap (min 5)
     internalTokenLeewaySeconds: "5" # Clock-skew leeway (seconds) on token exp/iat
+    # MCP token TTL configuration (also read by auth-server)
+    mcpTokenDefaultTtlHours: "8" # Default TTL (hours) for minted MCP tokens
+    mcpTokenMaxTtlHours: "24" # Maximum TTL (hours) a caller may request
     # Custom entity types (admin-defined, schema-driven catalog types)
     customEntityTypesEnabled: false # Main switch for dynamic tabs + endpoints; off = no behavior change
     customTypeCacheTtlSeconds: 60 # TTL (s) for the in-process custom-type descriptor cache
@@ -555,6 +558,9 @@ auth-server:
     registryApiToken: ""
     # Rate limiting
     maxTokensPerUserPerHour: "100"
+    # MCP token TTL configuration (also read by registry)
+    mcpTokenDefaultTtlHours: "8" # Default TTL (hours) for minted MCP tokens
+    mcpTokenMaxTtlHours: "24" # Maximum TTL (hours) a caller may request
     # Application Log Configuration - reuses anchor from registry.app above
     !!merge <<: *appLogConfig
     # Tool-level access control (issue #1026)

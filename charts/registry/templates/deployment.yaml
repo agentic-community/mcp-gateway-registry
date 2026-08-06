@@ -321,6 +321,13 @@ spec:
               value: {{ .Values.app.rateLimiting.userFloorPerMin | default 20 | toString | quote }}
             - name: RATE_LIMIT_AGENT_FLOOR_PER_MIN
               value: {{ .Values.app.rateLimiting.agentFloorPerMin | default 10 | toString | quote }}
+            # MCP token TTL configuration. Read by the registry (TTL validation
+            # in server_routes.py) and the auth-server (token minting). Both
+            # containers receive the same values.
+            - name: MCP_TOKEN_DEFAULT_TTL_HOURS
+              value: {{ .Values.app.mcpTokenDefaultTtlHours | default "8" | toString | quote }}
+            - name: MCP_TOKEN_MAX_TTL_HOURS
+              value: {{ .Values.app.mcpTokenMaxTtlHours | default "24" | toString | quote }}
             {{- if .Values.app.registryApiKeysExistingSecret }}
             - name: REGISTRY_API_KEYS
               valueFrom:

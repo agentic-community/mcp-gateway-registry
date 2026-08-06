@@ -1476,6 +1476,14 @@ module "ecs_service_registry" {
           name  = "MAX_TOKENS_PER_USER_PER_HOUR"
           value = tostring(var.max_tokens_per_user_per_hour)
         },
+        {
+          name  = "MCP_TOKEN_DEFAULT_TTL_HOURS"
+          value = tostring(var.mcp_token_default_ttl_hours)
+        },
+        {
+          name  = "MCP_TOKEN_MAX_TTL_HOURS"
+          value = tostring(var.mcp_token_max_ttl_hours)
+        },
         # M2M direct client registration (issue #851)
         {
           name  = "M2M_DIRECT_REGISTRATION_ENABLED"
@@ -1728,6 +1736,14 @@ module "ecs_service_registry" {
         {
           name  = "SECRETS_MANAGER_PATH_PREFIX"
           value = var.egress_secrets_manager_path_prefix
+        },
+        {
+          name  = "MCP_TOKEN_DEFAULT_TTL_HOURS"
+          value = tostring(var.mcp_token_default_ttl_hours)
+        },
+        {
+          name  = "MCP_TOKEN_MAX_TTL_HOURS"
+          value = tostring(var.mcp_token_max_ttl_hours)
         },
         ],
         # PR #947: MongoDB connection string override (plain-text variant).

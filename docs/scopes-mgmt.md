@@ -403,6 +403,36 @@ Access to specific MCP servers and one agent:
 
 ## Managing Scopes
 
+### Managing scopes from the UI (recommended)
+
+Scopes can be created, edited, and deleted entirely from the registry UI — no
+direct database access or JSON file editing is required:
+
+1. Navigate to **Settings → IAM → Groups** and click **Create Group** (or
+   **Edit** on an existing group).
+2. Fill in the group name, description, and group mappings, then use the
+   pickers to grant **Server Access** (per-server methods and tools),
+   **Agent Access**, and **UI Permissions**. Alternatively, drag and drop an
+   existing scope JSON file onto the form to pre-fill it.
+3. Submit. The scope is validated, persisted, and the auth server is reloaded
+   automatically — **the scope takes effect immediately**, without restarting
+   any service.
+
+The field-by-field form produces the same scope document as the CLI
+`import-group` command, and updates and deletions also take effect
+immediately.
+
+Validation errors (for example, an unknown `ui_permissions` key or a
+`server_access` entry missing its `server` name) are rejected with a
+field-level message surfaced in the UI, rather than being silently dropped.
+
+**Limitation:** scopes whose `server_access` contains a wildcard server
+(`"*"` or `"all"`) cannot be created from the UI or the API — the scope
+service unconditionally refuses them and the API returns an actionable
+`400`. Grant broad UI visibility through `ui_permissions` (`"all"`) instead;
+invocation-level wildcard scopes must be seeded through database
+initialization (see [Bootstrap Admin Scope](#bootstrap-admin-scope)).
+
 ### Using the CLI
 
 Import a scope from JSON file:

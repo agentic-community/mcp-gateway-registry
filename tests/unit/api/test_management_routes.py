@@ -969,8 +969,12 @@ class TestManagementCreateGroup:
         assert detail == "IAM provider error"
         assert "IAM service unavailable" not in detail
 
-    def test_create_group_scope_import_failure_logs_warning(self, test_client_admin):
-        """Test that scope import failure is logged but doesn't fail the request."""
+    def test_create_group_scope_import_refusal_returns_400(self, test_client_admin):
+        """A refused scope write (guard rejection) surfaces as an actionable 400.
+
+        Previously this returned 200 with only a server-side warning, so the
+        UI showed a success toast while nothing was persisted (issue #1494).
+        """
         # Arrange
         client, mock_iam = test_client_admin
         mock_iam.create_group.return_value = {
@@ -997,10 +1001,9 @@ class TestManagementCreateGroup:
                 },
             )
 
-            # Assert - should still succeed (IdP creation succeeded)
-            assert response.status_code == 200
-            data = response.json()
-            assert data["name"] == "partial-group"
+            # Assert - refusal is surfaced, not swallowed into a success toast
+            assert response.status_code == 400
+            assert "was not saved" in response.json()["detail"]
 
     def test_create_group_without_description(self, test_client_admin):
         """Test group creation without description uses empty string."""
@@ -1536,3 +1539,370 @@ class TestAgentWildcardNormalization:
 
         agent_access, _ = _normalize_agent_paths_in_scope_config([], None)
         assert agent_access == []
+
+
+# =============================================================================
+# TEST issue #1494 - Scope creation from the UI (reload + validated config)
+# =============================================================================
+
+
+@pytest.mark.unit
+@pytest.mark.api
+class TestScopeMutationsTriggerAuthReload:
+    """Create/update/delete via /iam/groups reload the auth server (#1494)."""
+
+    def test_create_group_triggers_reload(self, test_client_admin):
+        """A successful create triggers exactly one auth-server reload."""
+        client, mock_iam = test_client_admin
+        mock_iam.create_group.return_value = {
+            "id": "gid",
+            "name": "reload-group",
+            "path": "/reload-group",
+            "attributes": None,
+        }
+
+        with (
+            patch(
+                "registry.api.management_routes.scope_service.import_group",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "registry.api.management_routes.scope_service.trigger_auth_server_reload",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as mock_reload,
+            patch("registry.api.management_routes.AUTH_PROVIDER", "keycloak"),
+        ):
+            response = client.post(
+                "/api/management/iam/groups",
+                json={
+                    "name": "reload-group",
+                    "description": "d",
+                    "scope_config": {"create_in_idp": True},
+                },
+            )
+
+        assert response.status_code == 200
+        mock_reload.assert_awaited_once()
+
+    def test_create_reload_failure_is_non_fatal(self, test_client_admin):
+        """Reload returning False still yields 200 (persisted change wins)."""
+        client, mock_iam = test_client_admin
+        mock_iam.create_group.return_value = {
+            "id": "gid",
+            "name": "reload-fail-group",
+            "path": "/reload-fail-group",
+            "attributes": None,
+        }
+
+        with (
+            patch(
+                "registry.api.management_routes.scope_service.import_group",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "registry.api.management_routes.scope_service.trigger_auth_server_reload",
+                new_callable=AsyncMock,
+                return_value=False,
+            ) as mock_reload,
+            patch("registry.api.management_routes.AUTH_PROVIDER", "keycloak"),
+        ):
+            response = client.post(
+                "/api/management/iam/groups",
+                json={
+                    "name": "reload-fail-group",
+                    "scope_config": {"create_in_idp": True},
+                },
+            )
+
+        assert response.status_code == 200
+        mock_reload.assert_awaited_once()
+
+    def test_create_refusal_returns_400_and_skips_reload(self, test_client_admin):
+        """A refused import (guard) surfaces a 400 and does not reload."""
+        client, mock_iam = test_client_admin
+        mock_iam.create_group.return_value = {
+            "id": "gid",
+            "name": "wild-group",
+            "path": "/wild-group",
+            "attributes": None,
+        }
+
+        with (
+            patch(
+                "registry.api.management_routes.scope_service.import_group",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+            patch(
+                "registry.api.management_routes.scope_service.trigger_auth_server_reload",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as mock_reload,
+            patch("registry.api.management_routes.AUTH_PROVIDER", "keycloak"),
+        ):
+            response = client.post(
+                "/api/management/iam/groups",
+                json={
+                    "name": "wild-group",
+                    "scope_config": {
+                        "server_access": [{"server": "*", "methods": [], "tools": "*"}]
+                    },
+                },
+            )
+
+        assert response.status_code == 400
+        assert "was not saved" in response.json()["detail"]
+        mock_reload.assert_not_awaited()
+
+    def test_update_group_triggers_reload(self, test_client_admin):
+        """A successful PATCH triggers exactly one auth-server reload."""
+        client, _ = test_client_admin
+        existing = {
+            "id": "gid",
+            "name": "upd-group",
+            "scope_name": "upd-group",
+            "description": "old",
+            "is_idp_managed": False,
+            "group_mappings": ["upd-group"],
+            "agent_access": [],
+        }
+
+        with (
+            patch(
+                "registry.api.management_routes.scope_service.get_group",
+                new_callable=AsyncMock,
+                return_value=existing,
+            ),
+            patch(
+                "registry.api.management_routes.scope_service.import_group",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "registry.api.management_routes.scope_service.trigger_auth_server_reload",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as mock_reload,
+        ):
+            response = client.patch(
+                "/api/management/iam/groups/upd-group",
+                json={
+                    "scope_config": {
+                        "server_access": [
+                            {"server": "api", "methods": ["tools/call"], "tools": ["t1"]}
+                        ]
+                    }
+                },
+            )
+
+        assert response.status_code == 200
+        mock_reload.assert_awaited_once()
+
+    def test_update_refusal_returns_400_and_skips_reload(self, test_client_admin):
+        """A refused import on PATCH surfaces a 400 and does not reload."""
+        client, _ = test_client_admin
+        existing = {
+            "id": "gid",
+            "name": "upd-wild",
+            "scope_name": "upd-wild",
+            "is_idp_managed": False,
+            "group_mappings": ["upd-wild"],
+            "agent_access": [],
+        }
+
+        with (
+            patch(
+                "registry.api.management_routes.scope_service.get_group",
+                new_callable=AsyncMock,
+                return_value=existing,
+            ),
+            patch(
+                "registry.api.management_routes.scope_service.import_group",
+                new_callable=AsyncMock,
+                return_value=False,
+            ),
+            patch(
+                "registry.api.management_routes.scope_service.trigger_auth_server_reload",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as mock_reload,
+        ):
+            response = client.patch(
+                "/api/management/iam/groups/upd-wild",
+                json={
+                    "scope_config": {
+                        "server_access": [{"server": "*", "methods": [], "tools": "*"}]
+                    }
+                },
+            )
+
+        assert response.status_code == 400
+        assert "was not updated" in response.json()["detail"]
+        mock_reload.assert_not_awaited()
+
+    def test_delete_group_triggers_reload(self, test_client_admin):
+        """A successful delete triggers exactly one auth-server reload."""
+        client, mock_iam = test_client_admin
+        mock_iam.delete_group.return_value = True
+
+        with (
+            patch(
+                "registry.api.management_routes.scope_service.get_group",
+                new_callable=AsyncMock,
+                return_value={"scope_name": "del-group", "is_idp_managed": True},
+            ),
+            patch(
+                "registry.api.management_routes.scope_service.delete_group",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch(
+                "registry.api.management_routes.scope_service.trigger_auth_server_reload",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as mock_reload,
+        ):
+            response = client.delete("/api/management/iam/groups/del-group")
+
+        assert response.status_code == 200
+        mock_reload.assert_awaited_once()
+
+
+@pytest.mark.unit
+@pytest.mark.api
+class TestScopeConfigValidation:
+    """Typed ScopeConfig on the IAM group endpoints (#1494)."""
+
+    def test_invalid_scope_config_returns_422(self, test_client_admin):
+        """Unknown scope_config keys are rejected with a 422, not silently dropped."""
+        client, _ = test_client_admin
+
+        response = client.post(
+            "/api/management/iam/groups",
+            json={
+                "name": "bad-group",
+                "scope_config": {"sever_access": []},  # typo'd key
+            },
+        )
+
+        assert response.status_code == 422
+        assert "sever_access" in str(response.json()["detail"])
+
+    def test_malformed_server_access_rule_returns_422(self, test_client_admin):
+        """A server_access entry missing both server and agent is a 422."""
+        client, _ = test_client_admin
+
+        response = client.post(
+            "/api/management/iam/groups",
+            json={
+                "name": "bad-rule-group",
+                "scope_config": {"server_access": [{"methods": ["tools/call"]}]},
+            },
+        )
+
+        assert response.status_code == 422
+
+    def test_scope_config_applied(self, test_client_admin):
+        """server_access / ui_permissions / agent_access reach import_group."""
+        client, mock_iam = test_client_admin
+        mock_iam.create_group.return_value = {
+            "id": "gid",
+            "name": "applied-group",
+            "path": "/applied-group",
+            "attributes": None,
+        }
+
+        with (
+            patch(
+                "registry.api.management_routes.scope_service.import_group",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as mock_import,
+            patch(
+                "registry.api.management_routes.scope_service.trigger_auth_server_reload",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch("registry.api.management_routes.AUTH_PROVIDER", "keycloak"),
+        ):
+            response = client.post(
+                "/api/management/iam/groups",
+                json={
+                    "name": "applied-group",
+                    "description": "d",
+                    "scope_config": {
+                        "create_in_idp": True,
+                        "server_access": [
+                            {
+                                "server": "currenttime",
+                                "methods": ["initialize", "tools/call"],
+                                "tools": ["current_time_by_timezone"],
+                            },
+                            {"agent": "/my-planner", "actions": ["invoke_agent"]},
+                        ],
+                        "ui_permissions": {"list_service": ["currenttime"]},
+                        "agent_access": ["/my-planner"],
+                    },
+                },
+            )
+
+        assert response.status_code == 200
+        kwargs = mock_import.await_args.kwargs
+        assert kwargs["server_access"] == [
+            {
+                "server": "currenttime",
+                "methods": ["initialize", "tools/call"],
+                "tools": ["current_time_by_timezone"],
+            },
+            {"agent": "/my-planner", "actions": ["invoke_agent"]},
+        ]
+        assert kwargs["ui_permissions"] == {"list_service": ["currenttime"]}
+        assert kwargs["agent_access"] == ["/my-planner"]
+
+    def test_update_omitted_fields_preserve_existing(self, test_client_admin):
+        """PATCH with a partial scope_config preserves omitted fields.
+
+        Critical for group_mappings, which holds Entra Object IDs.
+        """
+        client, _ = test_client_admin
+        existing = {
+            "id": "gid",
+            "name": "partial-upd",
+            "scope_name": "partial-upd",
+            "description": "old",
+            "is_idp_managed": False,
+            "group_mappings": ["12345678-entra-object-id"],
+            "agent_access": ["/kept-agent"],
+        }
+
+        with (
+            patch(
+                "registry.api.management_routes.scope_service.get_group",
+                new_callable=AsyncMock,
+                return_value=existing,
+            ),
+            patch(
+                "registry.api.management_routes.scope_service.import_group",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as mock_import,
+            patch(
+                "registry.api.management_routes.scope_service.trigger_auth_server_reload",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+        ):
+            response = client.patch(
+                "/api/management/iam/groups/partial-upd",
+                json={"scope_config": {"ui_permissions": {"list_service": ["api"]}}},
+            )
+
+        assert response.status_code == 200
+        kwargs = mock_import.await_args.kwargs
+        assert kwargs["group_mappings"] == ["12345678-entra-object-id"]
+        assert kwargs["agent_access"] == ["/kept-agent"]
+        assert kwargs["server_access"] is None  # omitted -> preserved downstream
+        assert kwargs["ui_permissions"] == {"list_service": ["api"]}

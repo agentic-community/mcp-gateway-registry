@@ -152,6 +152,8 @@ Enterprise-perimeter auth for registry APIs without full IdP validation. See [`d
 | Legacy single API token **(secret)** | `REGISTRY_API_TOKEN` | `registry_api_token` (use `TF_VAR_*`) | `auth-server.app.registryApiToken` | Single admin-level key. |
 | Scoped multi-key JSON map **(secret)** | `REGISTRY_API_KEYS` | `registry_api_keys` (use `TF_VAR_*`) | `registry.app.registryApiKeys` + `registryApiKeysExistingSecret` | Named keys with per-key group assignments. |
 | Max tokens / user / hour | — | `max_tokens_per_user_per_hour` | `auth-server.app.maxTokensPerUserPerHour` | Rate limit for token vending. |
+| MCP token default TTL (hours) | `MCP_TOKEN_DEFAULT_TTL_HOURS` | `mcp_token_default_ttl_hours` | `registry.app.mcpTokenDefaultTtlHours` / `auth-server.app.mcpTokenDefaultTtlHours` | PR #1477. Lifetime of the self-signed MCP access token (Generate Token page / `POST /api/tokens/generate`) when a caller omits `expires_in_hours`. Default `8`. Read by both registry (validation) and auth-server (minting). |
+| MCP token max TTL (hours) | `MCP_TOKEN_MAX_TTL_HOURS` | `mcp_token_max_ttl_hours` | `registry.app.mcpTokenMaxTtlHours` / `auth-server.app.mcpTokenMaxTtlHours` | PR #1477. Hard cap on the requested MCP access-token lifetime; larger requests are rejected/clamped. Default `24`. Floored at 1h and bounded by a hardcoded 7-day (168h) absolute ceiling — these are self-signed bearer tokens with no revocation path, so an unbounded lifetime is refused. Read by both registry and auth-server. |
 
 ---
 

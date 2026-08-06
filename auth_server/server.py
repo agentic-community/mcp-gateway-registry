@@ -124,8 +124,15 @@ from registry.auth.internal import validate_internal_auth
 # registry.auth.internal._INTERNAL_JWT_AUDIENCE ("mcp-internal").
 _USER_JWT_AUDIENCE: str = "mcp-registry"
 
-MAX_TOKEN_LIFETIME_HOURS = 24
-DEFAULT_TOKEN_LIFETIME_HOURS = 8
+# MCP access-token lifetimes are operator-configurable via the registry Settings
+# (MCP_TOKEN_MAX_TTL_HOURS / MCP_TOKEN_DEFAULT_TTL_HOURS), defaulting to 24h max
+# and 8h default. `settings` already clamps the max to a hardcoded 7-day absolute
+# ceiling (see registry.core.config.MCP_TOKEN_ABSOLUTE_MAX_TTL_HOURS) and floors
+# both at 1h, so no unbounded or non-positive lifetime is possible regardless of
+# config. Sourced from the settings singleton at import (same pattern as
+# MAX_TOKENS_PER_USER_PER_HOUR below). Issue #1477.
+MAX_TOKEN_LIFETIME_HOURS = settings.mcp_token_max_ttl_hours
+DEFAULT_TOKEN_LIFETIME_HOURS = settings.mcp_token_default_ttl_hours
 
 # Maximum length (in characters) of the full Entra logout URL before we drop the
 # optional id_token_hint. Entra ID rejects overly long logout requests with the
@@ -4475,10 +4482,13 @@ async def generate_user_token(
             )
 
             current_time = int(time.time())
-            # Honour the caller's requested lifetime, clamped to the
-            # server-wide maximum (#889).  Values <= 0 or above the cap
-            # are silently clamped; omitted values fall back to the
-            # default (8 h).
+            # Honour the caller's requested lifetime, clamped to the server-wide
+            # maximum (#889). Values <= 0 or above the cap are silently clamped;
+            # omitted values fall back to the configured default
+            # (MCP_TOKEN_DEFAULT_TTL_HOURS, default 8h). The cap
+            # (MCP_TOKEN_MAX_TTL_HOURS, default 24h) is itself bounded to a 7-day
+            # absolute ceiling by settings (#1477). Guard against a
+            # default-above-max misconfiguration so the ceiling always wins.
             effective_hours = min(
                 max(request.expires_in_hours, 1),
                 MAX_TOKEN_LIFETIME_HOURS,
@@ -6233,6 +6243,50 @@ _EGRESS_STRIP_HEADERS: frozenset[str] = frozenset(
 )
 
 
+class EgressVendUnavailable(Exception):
+    """The registry's egress-token vend failed *transiently* -- the registry was
+    unreachable/timed out, or it answered 5xx after riding out its own bounded
+    Vault-retry budget.
+
+    Distinct from a clean miss (the registry returns HTTP 200 with
+    ``consent_required``) and from a terminal deny (401/403/404): on this
+    condition the caller must NOT forward tokenless (a misleading upstream 401)
+    nor nudge the user to reconnect (their token may be fine, the store is just
+    briefly down). It surfaces a retryable signal instead. Read-path mirror of
+    the consent-callback 503 added for the write path.
+    """
+
+
+# The vend hop's HTTP timeout is coupled to the registry's transient-retry
+# budget: the registry rides out a Vault/OpenBao leader election with a bounded
+# backoff (registry.secrets.openbao.store.transient_retry_budget_seconds, ~7.5s
+# of sleeps today) before answering. If our timeout were shorter we would abandon
+# the call -- and fail the vend -- while the registry is still legitimately
+# retrying. Derive the timeout from that budget (single source of truth) plus
+# headroom for the per-attempt request time, so the two cannot silently drift
+# apart if the retry constants ever change.
+_EGRESS_VEND_TIMEOUT_HEADROOM_SECONDS = 5.0
+_EGRESS_VEND_TIMEOUT_FALLBACK_SECONDS = 12.5
+
+
+def _egress_vend_timeout_seconds() -> float:
+    """HTTP timeout for the registry egress-token vend call, sized to outlast the
+    registry's transient Vault-retry budget (+ headroom). See the module note on
+    ``_EGRESS_VEND_TIMEOUT_HEADROOM_SECONDS``."""
+    try:
+        from registry.secrets.openbao.store import transient_retry_budget_seconds
+
+        return transient_retry_budget_seconds() + _EGRESS_VEND_TIMEOUT_HEADROOM_SECONDS
+    except Exception:  # pragma: no cover - defensive; keep a sane coupled default
+        return _EGRESS_VEND_TIMEOUT_FALLBACK_SECONDS
+
+
+# Registry vend statuses that mean "temporarily unavailable, retry" rather than a
+# terminal outcome: transport failures raise below, and the registry now answers
+# 503 when its own token store fails transiently (see vend_egress_token).
+_EGRESS_VEND_TRANSIENT_STATUSES: frozenset[int] = frozenset({502, 503, 504})
+
+
 async def _vend_egress_token(
     internal_proxy_token: str,
     server_first_segment: str,
@@ -6241,8 +6295,14 @@ async def _vend_egress_token(
 
     Forwards the verified X-Internal-Token; the registry re-verifies it,
     re-derives sub/auth_method from the signed claims, runs the allowlist
-    and upstream cross-check, and vends. Returns the JSON response dict, or
-    None on transport failure (treated as a clean miss -> consent).
+    and upstream cross-check, and vends. Returns the JSON response dict on a
+    clean answer (a hit, or a 200 ``consent_required`` miss).
+
+    Raises ``EgressVendUnavailable`` on a *transient* failure (registry
+    unreachable/timeout, or a 5xx after the registry exhausted its own Vault
+    retries) so the caller can surface a retryable signal instead of forwarding
+    tokenless. Returns None only for a terminal, non-retryable error (e.g. the
+    feature is off or the internal token was rejected).
     """
     from registry.auth.internal import generate_internal_token
 
@@ -6254,7 +6314,7 @@ async def _vend_egress_token(
         return None
 
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=_egress_vend_timeout_seconds()) as client:
             resp = await client.post(
                 f"{base}/_egress_internal/egress-token",
                 json={"server_path": server_first_segment},
@@ -6265,8 +6325,17 @@ async def _vend_egress_token(
                 },
             )
     except httpx.HTTPError as exc:
+        # Transport failure or timeout: the registry never gave a definitive
+        # answer, so this is transient by nature -- do not degrade to a tokenless
+        # forward.
         logger.error(f"egress vend: registry unreachable: {exc}")
-        return None
+        raise EgressVendUnavailable(str(exc)) from exc
+
+    if resp.status_code in _EGRESS_VEND_TRANSIENT_STATUSES:
+        logger.warning(
+            f"egress vend: registry returned {resp.status_code} (transient); signalling retry"
+        )
+        raise EgressVendUnavailable(f"registry returned {resp.status_code}")
 
     if resp.status_code != 200:
         logger.warning(f"egress vend: registry returned {resp.status_code}")
@@ -6349,6 +6418,34 @@ def _obo_failure_reason(exc: OboExchangeError) -> str:
     if isinstance(exc, OboUnsupportedIdpError):
         return "unsupported_idp"
     return "exchange_failed"
+
+
+def _egress_unavailable_response(req_id: object):
+    """Retryable response for a transient egress-credential-store outage.
+
+    Read-path mirror of the consent-callback 503 (write path). When the registry
+    vend fails transiently (Vault/OpenBao leader election / pod restart), we must
+    not forward tokenless -- that surfaces as a misleading upstream 401 with no
+    hint to retry -- nor answer consent_required, which would wrongly tell the
+    user to reconnect an account that is actually fine. Return HTTP 503 with a
+    ``Retry-After`` hint AND a JSON-RPC error body, so both transport-aware
+    clients and JSON-RPC parsers get a clear "temporarily unavailable, retry".
+    """
+    return JSONResponse(
+        status_code=503,
+        headers={"Retry-After": "2"},
+        content={
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "error": {
+                "code": -32001,
+                "message": "egress_credential_service_unavailable",
+                "data": {
+                    "detail": "Egress credential service temporarily unavailable; please retry."
+                },
+            },
+        },
+    )
 
 
 def _obo_error_response(req_id: object, detail: str):
@@ -6844,6 +6941,20 @@ async def mcp_proxy(
         relay_authorization=relay_ingress_auth,
     )
 
+    # Re-authorize the caller's scopes against the EXACT body we are about to act
+    # on, BEFORE any outbound work (egress vend or upstream forward). /validate
+    # authorizes on a separately-captured copy (X-Body) that can diverge from this
+    # body (e.g. a large body that spilled to disk, which /validate then treats as
+    # an unprivileged "initialize"), so we authorize the forwarded bytes here and
+    # fail closed on any body we cannot parse (TM-15). Running this FIRST is a
+    # security ordering guarantee: an unscoped caller is denied 403 regardless of
+    # egress-vend / OpenBao availability -- otherwise a transient vend failure
+    # (503) could mask a genuine authorization denial, turning a "denied" into a
+    # "retry later" in responses, logs, and metrics. Authorized-but-not-connected
+    # callers still pass here and reach the egress consent/local-answer paths
+    # below (they already had these methods in scope on the connected path).
+    await _authorize_forwarded_mcp_body(server_name, request_body, user_scopes)
+
     # True once we inject a vaulted egress token below. An egress upstream is
     # itself an OAuth resource server: if it rejects our injected token it 401s
     # with its OWN WWW-Authenticate (resource_metadata pointing at the upstream's
@@ -6867,7 +6978,20 @@ async def mcp_proxy(
         internal_proxy_token = request.headers.get("X-Internal-Token", "")
         if internal_proxy_token:
             server_first_segment = (server_name or "").split("/", 1)[0]
-            vend = await _vend_egress_token(internal_proxy_token, server_first_segment)
+            try:
+                vend = await _vend_egress_token(internal_proxy_token, server_first_segment)
+            except EgressVendUnavailable as exc:
+                # Transient vend failure: fail closed with a retryable signal
+                # rather than forwarding tokenless (-> silent upstream 401) or
+                # nudging a needless reconnect. Mirrors the write-path 503.
+                req_id = incoming_payload.get("id") if isinstance(incoming_payload, dict) else None
+                logger.warning(
+                    "mcp_proxy: egress vend temporarily unavailable for server=%s (%s); "
+                    "returning retryable 503",
+                    server_name,
+                    exc,
+                )
+                return _egress_unavailable_response(req_id)
             if vend and vend.get("mode") == "obo_exchange":
                 # OBO exchange: re-audience the user's ingress JWT to the internal
                 # MCP server's app via the gateway's OWN IdP credentials. The
@@ -7084,18 +7208,6 @@ async def mcp_proxy(
                     req_id=req_id,
                     vend=vend,
                 )
-
-    # Re-authorize the caller's scopes against the EXACT body we are about to
-    # forward upstream. /validate authorizes on a separately-captured copy
-    # (X-Body) that can diverge from this body (e.g. a large body that spilled to
-    # disk, which /validate then treats as an unprivileged "initialize"), so we
-    # authorize the forwarded bytes here and fail closed on any body we cannot
-    # parse (TM-15). This runs AFTER the egress-consent block above so methods the
-    # gateway answers LOCALLY for a tokenless egress server (initialize,
-    # notifications/*, tools/list, tools/call consent) are never gated here --
-    # they are not forwarded upstream. Only the request we actually forward is
-    # re-authorized. Raises 403 before the outbound call.
-    await _authorize_forwarded_mcp_body(server_name, request_body, user_scopes)
 
     logger.info(
         f"mcp_proxy: server={server_name} method={incoming_method} filter_enabled={filter_enabled} timeout={proxy_timeout}"

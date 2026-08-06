@@ -104,6 +104,31 @@ _export_telemetry() {
         "$CSV"
 
     echo ">>> Exported $(wc -l < "$CSV") rows to $CSV"
+
+    # Safety net: a combined export must contain BOTH event types. A CSV with
+    # startups but zero heartbeats is the classic silent-drop failure (mongosh
+    # fetch timeout on the t2.micro) and would zero out the entire Liveness /
+    # Engagement / LTV half of the report. Fail loud here so the workaround is
+    # never needed manually. (The bastion telemetry_db.py also guards this now;
+    # this covers the case where an older script is present on the bastion.)
+    _verify_both_event_types "$CSV"
+}
+
+
+# Verify a combined export CSV has both startup and heartbeat rows.
+_verify_both_event_types() {
+    local csv="$1"
+    local has_startup has_heartbeat
+    has_startup="$(awk -F, 'NR>1 && $1=="startup" {print "yes"; exit}' "$csv")"
+    has_heartbeat="$(awk -F, 'NR>1 && $1=="heartbeat" {print "yes"; exit}' "$csv")"
+    if [ "$has_startup" != "yes" ] || [ "$has_heartbeat" != "yes" ]; then
+        echo "ERROR: export CSV is missing an event type (startup=${has_startup:-no}, heartbeat=${has_heartbeat:-no})." >&2
+        echo "       This is the silent heartbeat-drop failure. Not proceeding with a partial export." >&2
+        echo "       Re-run with FORCE_EXPORT=1; if it recurs, export each collection separately on the bastion." >&2
+        rm -f "$csv"
+        exit 1
+    fi
+    echo ">>> Verified export contains both startup and heartbeat events."
 }
 
 

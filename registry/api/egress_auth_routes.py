@@ -453,12 +453,29 @@ async def vend_egress_token(
         )
 
     svc = get_egress_auth_service()
-    access_token = await svc.get_valid_token(
-        auth_method=auth_method,
-        user_id=sub,
-        server_path=server_path,
-        egress_oauth=egress_oauth,
-    )
+    try:
+        access_token = await svc.get_valid_token(
+            auth_method=auth_method,
+            user_id=sub,
+            server_path=server_path,
+            egress_oauth=egress_oauth,
+        )
+    except SecretStoreError as exc:
+        # The store already rode out a bounded backoff (transient Vault/OpenBao
+        # blip during an HA leader election / pod restart) and still failed. This
+        # is NOT a miss: the user may well have a vaulted token we just can't read
+        # right now. Returning consent_required here would wrongly tell them to
+        # reconnect; a 500 would surface to the caller as an opaque tokenless
+        # upstream 401. Instead fail closed with a retryable 503, mirroring the
+        # consent-callback write path, so the vend hop can hand back a clear
+        # "temporarily unavailable, retry" signal instead of a silent failure.
+        logger.warning(
+            "egress vend: token store temporarily unavailable for %s: %s", server_path, exc
+        )
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="egress credential store temporarily unavailable",
+        ) from exc
     if access_token is not None:
         return EgressTokenResponse(access_token=access_token)
 

@@ -118,6 +118,15 @@ ALLOWED_SECRET_STORES: frozenset[str] = frozenset(
     }
 )
 
+# Absolute upper bound (hours) on the configurable MCP access-token max TTL.
+# mcp_token_max_ttl_hours is clamped to this regardless of operator config.
+# These are self-signed bearer tokens with NO revocation path (no introspection
+# / denylist; the only kill switch is rotating SECRET_KEY, which invalidates
+# every token at once), so an unbounded lifetime is a security risk. 7 days is
+# the hard ceiling; longer-lived, revocable credentials should come from an IdP.
+# Issue #1477.
+MCP_TOKEN_ABSOLUTE_MAX_TTL_HOURS: int = 168
+
 
 class DeploymentMode(str, Enum):
     """Deployment mode options."""
@@ -218,6 +227,14 @@ class Settings(BaseSettings):
     registry_api_token: str = ""  # Static API token for registry access
     registry_api_keys: str = ""  # Multi-key static tokens JSON (Issue #779)
     max_tokens_per_user_per_hour: int = 100  # JWT token vending rate limit
+    # MCP access-token (self-signed gateway JWT) lifetime, in hours. The Generate
+    # Token page / POST /api/tokens/generate mints these; `default` is used when a
+    # caller omits expires_in_hours, and a requested value is clamped to `max`.
+    # `max` is itself bounded by MCP_TOKEN_ABSOLUTE_MAX_TTL_HOURS (168h / 7 days):
+    # these are self-signed bearer tokens with no revocation path, so an unbounded
+    # lifetime is a security risk. See _clamp_token_max_ttl_hours. Issue #1477.
+    mcp_token_default_ttl_hours: int = 8
+    mcp_token_max_ttl_hours: int = 24
     ide_oauth_client_id: str = Field(
         default="",
         description=(
@@ -1110,6 +1127,38 @@ class Settings(BaseSettings):
             )
             return None
         return v_lower
+
+    @field_validator("mcp_token_default_ttl_hours", "mcp_token_max_ttl_hours")
+    @classmethod
+    def _bound_mcp_token_ttl_hours(
+        cls,
+        v: int,
+    ) -> int:
+        """Bound an MCP-token TTL setting to a safe range (fail closed).
+
+        Floors any value at 1 hour and caps it at the hardcoded absolute ceiling
+        MCP_TOKEN_ABSOLUTE_MAX_TTL_HOURS (168h / 7 days). Applies to both the
+        default and the max TTL settings so a misconfiguration can never grant an
+        unbounded or non-positive token lifetime. A clamp is logged so the
+        operator sees that their value was adjusted. Issue #1477.
+
+        Args:
+            v: The configured TTL in hours.
+
+        Returns:
+            The value clamped to [1, MCP_TOKEN_ABSOLUTE_MAX_TTL_HOURS].
+        """
+        import logging as _logging
+
+        bounded = min(max(v, 1), MCP_TOKEN_ABSOLUTE_MAX_TTL_HOURS)
+        if bounded != v:
+            _logging.getLogger(__name__).warning(
+                "MCP token TTL setting %s clamped to %s (allowed range 1..%s hours)",
+                v,
+                bounded,
+                MCP_TOKEN_ABSOLUTE_MAX_TTL_HOURS,
+            )
+        return bounded
 
     # Demo server configuration
     disable_ai_registry_tools_server: bool = Field(

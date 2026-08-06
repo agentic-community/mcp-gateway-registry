@@ -41,19 +41,19 @@ variable "task_execution_role_arn" {
 variable "registry_image_uri" {
   description = "Container image URI for registry service (defaults to pre-built image from public ECR)"
   type        = string
-  default     = "public.ecr.aws/p3v1o3c6/registry:1.27.1"
+  default     = "public.ecr.aws/p3v1o3c6/registry:1.28.0"
 }
 
 variable "auth_server_image_uri" {
   description = "Container image URI for auth server service (defaults to pre-built image from public ECR)"
   type        = string
-  default     = "public.ecr.aws/p3v1o3c6/auth-server:1.27.1"
+  default     = "public.ecr.aws/p3v1o3c6/auth-server:1.28.0"
 }
 
 variable "mcpgw_image_uri" {
   description = "Container image URI for mcpgw service (defaults to pre-built image from public ECR)"
   type        = string
-  default     = "public.ecr.aws/p3v1o3c6/mcpgw:1.27.1"
+  default     = "public.ecr.aws/p3v1o3c6/mcpgw:1.28.0"
 }
 
 variable "enable_demo_servers" {
@@ -1005,6 +1005,18 @@ variable "max_tokens_per_user_per_hour" {
   description = "Maximum JWT tokens that can be vended per user per hour."
   type        = number
   default     = 100
+}
+
+variable "mcp_token_default_ttl_hours" {
+  description = "Default TTL (hours) for minted MCP tokens when the caller does not request one."
+  type        = number
+  default     = 8
+}
+
+variable "mcp_token_max_ttl_hours" {
+  description = "Maximum TTL (hours) a caller may request for a minted MCP token."
+  type        = number
+  default     = 24
 }
 
 # Registration webhook (issue #742)

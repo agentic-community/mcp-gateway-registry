@@ -1,8 +1,8 @@
-import {exec} from "node:child_process";
+import {execFile} from "node:child_process";
 import {promisify} from "node:util";
 import path from "node:path";
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 export interface TokenRefreshResult {
   success: boolean;
@@ -22,7 +22,7 @@ export async function refreshTokens(projectRoot?: string): Promise<TokenRefreshR
 
     // Check if script exists
     try {
-      await execAsync(`test -f "${scriptPath}"`);
+      await execFileAsync("test", ["-f", scriptPath]);
     } catch {
       return {
         success: false,
@@ -31,9 +31,11 @@ export async function refreshTokens(projectRoot?: string): Promise<TokenRefreshR
     }
 
     // Run the script with --ingress-only and --force flags
-    const {stdout, stderr} = await execAsync(
-      `cd "${root}" && ./credentials-provider/generate_creds.sh --ingress-only --force`,
+    const {stdout, stderr} = await execFileAsync(
+      scriptPath,
+      ["--ingress-only", "--force"],
       {
+        cwd: root,
         timeout: 30000, // 30 second timeout
         maxBuffer: 1024 * 1024 // 1MB buffer
       }

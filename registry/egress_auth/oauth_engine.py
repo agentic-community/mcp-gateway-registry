@@ -16,6 +16,7 @@ plus the operator ``client_id``/``client_secret``. Token material is returned as
 
 import base64
 import hashlib
+import json
 import logging
 import secrets
 from datetime import UTC, datetime, timedelta
@@ -151,10 +152,40 @@ def _parse_token_response(cfg: OAuthProviderConfig, payload: dict) -> dict:
 # --------------------------------------------------------------------------- #
 
 
-def _expires_at(expires_in: int | None) -> str | None:
-    if not expires_in:
+def _jwt_exp(access_token: str | None) -> int | None:
+    """Best-effort ``exp`` (epoch seconds) from a JWT access token, else None.
+
+    Opaque (non-JWT) tokens and any decode/parse failure return None; the payload
+    is base64url-decoded WITHOUT signature verification purely to read the
+    provider-asserted lifetime, never to trust the token.
+    """
+    if not access_token or access_token.count(".") != 2:
         return None
-    return (datetime.now(UTC) + timedelta(seconds=int(expires_in))).isoformat()
+    payload_b64 = access_token.split(".")[1]
+    payload_b64 += "=" * (-len(payload_b64) % 4)
+    try:
+        claims = json.loads(base64.urlsafe_b64decode(payload_b64.encode("ascii")))
+    except (ValueError, TypeError):
+        return None
+    exp = claims.get("exp")
+    return int(exp) if isinstance(exp, int | float) and not isinstance(exp, bool) else None
+
+
+def _expires_at(expires_in: int | None, access_token: str | None = None) -> str | None:
+    """ISO expiry from ``expires_in`` when present, else the access token's JWT ``exp``.
+
+    Some providers (e.g. Salesforce) omit ``expires_in`` from the token response
+    but issue a JWT access token bounded by an ``exp`` claim. Without this
+    fallback ``expires_at`` stays None, the vend path treats the token as
+    long-lived and never fires the single-flight refresh, so the gateway keeps
+    injecting a token the upstream has already expired ("Invalid token").
+    """
+    if expires_in:
+        return (datetime.now(UTC) + timedelta(seconds=int(expires_in))).isoformat()
+    exp = _jwt_exp(access_token)
+    if exp is not None:
+        return datetime.fromtimestamp(exp, tz=UTC).isoformat()
+    return None
 
 
 def _build_token_request(
@@ -233,7 +264,7 @@ def _to_stored_token(
         # the prior one (some don't re-send it on refresh).
         refresh_token=parsed.get("refresh_token") or fallback_refresh,
         token_type=parsed.get("token_type", "Bearer"),
-        expires_at=_expires_at(parsed.get("expires_in")),
+        expires_at=_expires_at(parsed.get("expires_in"), access),
         scopes=[s for s in scopes if s],
         status="active",
         client_id=client_id,

@@ -3,7 +3,7 @@ global:
   image:
     # Container registry (host + optional namespace). Shared default across subcharts.
     registry: public.ecr.aws/p3v1o3c6
-    tag: 1.27.1
+    tag: 1.28.0
     pullPolicy: IfNotPresent
 # Per-service image configuration
 # Any field left empty falls back to the corresponding global.image.* value.
@@ -66,6 +66,9 @@ app:
   registryApiToken: "" # Static API key value (required when registryStaticTokenAuthEnabled is true)
   # Rate limiting
   maxTokensPerUserPerHour: "100" # Max token generations per user per hour
+  # MCP token TTL configuration
+  mcpTokenDefaultTtlHours: "8" # Default TTL (hours) for minted MCP tokens
+  mcpTokenMaxTtlHours: "24" # Maximum TTL (hours) a caller may request
   # Federation configuration
   federationStaticTokenAuthEnabled: false #If not provided, defaults to false
   federationStaticToken: # If not provided, a random token is auto-generated

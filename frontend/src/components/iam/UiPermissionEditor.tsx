@@ -215,14 +215,40 @@ const UiPermissionEditor: React.FC<UiPermissionEditorProps> = ({
   skillsLoading,
   focusColor = 'purple',
 }) => {
-  const toggleMutation = (key: string, checked: boolean) =>
-    setPermValue(key, checked ? 'all' : '');
+  // MCP Server / Agent mutation scopes granted for the literal "all" confer
+  // FULL registry admin on the whole group (see
+  // registry/auth/privileged_constants.py::is_admin_conferring_action). To keep
+  // the UI from ever silently promoting a group to admin, these scopes are
+  // granted with the "*" wildcard instead: "*" grants the mutation across every
+  // server/agent WITHOUT admin (issue #663), which is what the checkbox intends.
+  // Admin groups are created only via the CLI/JSON scope import, never here.
+  // Skill and custom-entity mutation scopes are NOT admin-conferring, so they
+  // keep the "all" grant their permission checks expect.
+  const ADMIN_CONFERRING_KEYS = new Set(
+    MUTATION_GROUPS.flatMap((g) => g.scopes.map((s) => s.key)),
+  );
+  const toggleMutation = (key: string, checked: boolean) => {
+    if (!checked) {
+      setPermValue(key, '');
+      return;
+    }
+    // "*" for server/agent mutations (all resources, non-admin); "all" for the
+    // non-conferring skill/custom-entity mutations.
+    setPermValue(key, ADMIN_CONFERRING_KEYS.has(key) ? '*' : 'all');
+  };
 
   return (
     <div className="space-y-5 pl-6">
       <p className="text-xs text-gray-500 dark:text-gray-400">
-        List/read access for MCP Servers and Agents is set from the Server Access and
-        Agents pickers above. Grant the remaining permissions here.
+        These checkboxes grant catalog-wide CRUD (create/register, modify, delete, toggle)
+        on MCP Servers and Agents. Per-server and per-agent authorization — which specific
+        servers/agents this group can list, read, and call — is set from the Server Access
+        and Agents pickers above, not here.
+      </p>
+      <p className="text-xs text-amber-600 dark:text-amber-400">
+        Note: these permissions grant catalog-wide CRUD but never make the group a
+        registry admin. Admin groups can only be created through the CLI scope
+        import (see <code>cli/examples/</code>), not from this screen.
       </p>
 
       {/* Mutation scopes — grant-for-all checkboxes, grouped by family. */}

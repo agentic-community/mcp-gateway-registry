@@ -3,7 +3,7 @@ global:
   image:
     # Container registry (host + optional namespace). Shared default across subcharts.
     registry: public.ecr.aws/p3v1o3c6
-    tag: 1.27.1
+    tag: 1.28.0
     pullPolicy: IfNotPresent
   cloud:
     # AWS region for cloud detection in telemetry. Set this when deploying
@@ -286,6 +286,10 @@ app:
   # and uses the leeway below. Not secrets -- plain env. See docs/unified-parameter-reference.md.
   internalTokenTtlSeconds: "30" # Token lifetime (seconds); the replay-window cap (min 5)
   internalTokenLeewaySeconds: "5" # Clock-skew leeway (seconds) on token exp/iat
+  # MCP token TTL configuration. Read by the registry (TTL validation) and the
+  # auth-server (token minting); both services receive the same values.
+  mcpTokenDefaultTtlHours: "8" # Default TTL (hours) for minted MCP tokens
+  mcpTokenMaxTtlHours: "24" # Maximum TTL (hours) a caller may request
   # Override the `scopes_supported` array in the Protected Resource Metadata
   # document (`/.well-known/oauth-protected-resource`). Space-separated scope
   # names.

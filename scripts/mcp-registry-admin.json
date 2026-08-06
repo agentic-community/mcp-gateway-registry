@@ -1,6 +1,6 @@
 {
   "_id": "mcp-registry-admin",
-  "group_mappings": ["mcp-registry-admin", "mcp-servers-unrestricted/read", "mcp-servers-unrestricted/execute"],
+  "group_mappings": ["mcp-registry-admin"],
   "server_access": [
     {
       "server": "*",
