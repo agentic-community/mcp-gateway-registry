@@ -191,12 +191,26 @@ def _expires_at(expires_in: int | None, access_token: str | None = None) -> str 
 def _build_token_request(
     cfg: OAuthProviderConfig,
     client_id: str,
-    client_secret: str,
+    client_secret: str | None,
     form: dict,
 ) -> tuple[dict, dict]:
-    """Return (form_data, headers), placing the client secret per the provider's style."""
+    """Return (form_data, headers), placing the client secret per the provider's style.
+
+    ``NONE`` (RFC 7591 ``token_endpoint_auth_method=none``) is a public client:
+    only ``client_id`` goes in the body and no secret exists anywhere in the
+    request. The confidential styles fail closed on a missing secret rather
+    than sending an empty one (which providers accept-then-misattribute).
+    """
     headers = {"Accept": "application/json"}
     data = dict(form)
+    if cfg.token_endpoint_auth_style == TokenEndpointAuthStyle.NONE:
+        data["client_id"] = client_id
+        return data, headers
+    if not client_secret:
+        raise OAuthEngineError(
+            f"provider {cfg.name!r} uses token_endpoint_auth_style="
+            f"{cfg.token_endpoint_auth_style.value!r} but no client_secret is configured"
+        )
     if cfg.token_endpoint_auth_style == TokenEndpointAuthStyle.BASIC_HEADER:
         basic = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
         headers["Authorization"] = f"Basic {basic}"
@@ -273,7 +287,7 @@ def _to_stored_token(
 async def exchange_code(
     cfg: OAuthProviderConfig,
     client_id: str,
-    client_secret: str,
+    client_secret: str | None,
     code: str,
     redirect_uri: str,
     pkce_verifier: str | None = None,
@@ -298,7 +312,7 @@ async def exchange_code(
 async def refresh_token(
     cfg: OAuthProviderConfig,
     client_id: str,
-    client_secret: str,
+    client_secret: str | None,
     refresh_token_value: str,
 ) -> StoredToken:
     """Exchange a refresh token for a new access token (and possibly new refresh token).

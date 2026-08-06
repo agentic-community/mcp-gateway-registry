@@ -313,6 +313,8 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
     egress_scopes: '',  // comma/space separated
     egress_custom_authorize_url: '',
     egress_custom_token_url: '',
+    egress_custom_token_auth_style: '',  // '' = backend default (post_body)
+    egress_custom_resource: '',  // RFC 8707 resource indicator (optional)
     egress_target_audience: '',
   });
   const [egressEnabled, setEgressEnabled] = useState(false);
@@ -1300,6 +1302,8 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         egress_scopes: (serverDetails.egress_oauth?.scopes || []).join(', '),
         egress_custom_authorize_url: serverDetails.egress_oauth?.custom_authorize_url || '',
         egress_custom_token_url: serverDetails.egress_oauth?.custom_token_url || '',
+        egress_custom_token_auth_style: serverDetails.egress_oauth?.custom_token_auth_style || '',
+        egress_custom_resource: serverDetails.egress_oauth?.custom_resource || '',
         egress_target_audience: serverDetails.egress_oauth?.target_audience || '',
       });
     } catch (error) {
@@ -1331,6 +1335,8 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         egress_scopes: '',
         egress_custom_authorize_url: '',
         egress_custom_token_url: '',
+        egress_custom_token_auth_style: '',
+        egress_custom_resource: '',
         egress_target_audience: '',
       });
     }
@@ -1539,6 +1545,8 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
                 scopes: scopesList,
                 custom_authorize_url: editForm.egress_custom_authorize_url || undefined,
                 custom_token_url: editForm.egress_custom_token_url || undefined,
+                custom_token_auth_style: editForm.egress_custom_token_auth_style || undefined,
+                custom_resource: editForm.egress_custom_resource || undefined,
               },
               { headers: csrfHeaders }
             );

@@ -549,6 +549,8 @@ def _egress_config_view(server: dict) -> dict:
         "callback_url": _callback_url(),
         "custom_authorize_url": eo.get("custom_authorize_url"),
         "custom_token_url": eo.get("custom_token_url"),
+        "custom_scope_separator": eo.get("custom_scope_separator"),
+        "custom_token_auth_style": eo.get("custom_token_auth_style"),
         "custom_resource": eo.get("custom_resource"),
     }
 
@@ -645,14 +647,31 @@ async def configure_egress_auth(
             resolve_provider(eo)
         except ValueError as exc:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-        # Encrypt the secret; keep the prior one if the field is omitted on edit.
-        if body.client_secret:
-            eo["client_secret_encrypted"] = encrypt_credential(body.client_secret)
+        # Public client (RFC 7591 token_endpoint_auth_method=none, e.g. a
+        # DCR-minted MCP client like Datadog's): no secret exists by design.
+        # Require a client_id instead, and DROP any previously stored secret so
+        # a later switch back to a confidential style cannot silently reuse a
+        # stale credential. Only the 'custom' provider can select this style
+        # (every built-in is confidential); PKCE stays mandatory for custom.
+        is_public_client = (
+            body.egress_provider == "custom" and body.custom_token_auth_style == "none"  # nosec B105 - auth style enum value, not a credential
+        )
+        if is_public_client:
+            if not (body.client_id or "").strip():
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST,
+                    detail="client_id required when custom_token_auth_style is 'none'",
+                )
+            eo["client_secret_encrypted"] = None
         else:
-            prior = (server.get("egress_oauth") or {}).get("client_secret_encrypted")
-            eo["client_secret_encrypted"] = prior
-        if not eo["client_secret_encrypted"]:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="client_secret required")
+            # Encrypt the secret; keep the prior one if the field is omitted on edit.
+            if body.client_secret:
+                eo["client_secret_encrypted"] = encrypt_credential(body.client_secret)
+            else:
+                prior = (server.get("egress_oauth") or {}).get("client_secret_encrypted")
+                eo["client_secret_encrypted"] = prior
+            if not eo["client_secret_encrypted"]:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="client_secret required")
         server["egress_auth_mode"] = "oauth_user"
         server["egress_oauth"] = eo
     elif body.egress_auth_mode == "obo_exchange":

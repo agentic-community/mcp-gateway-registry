@@ -271,6 +271,90 @@ class TestResourceIndicator:
 
 
 @pytest.mark.unit
+class TestPublicClientNoneStyle:
+    """RFC 7591 ``token_endpoint_auth_method=none``: a PUBLIC client (e.g. one
+    minted by an MCP resource server's DCR endpoint, such as Datadog's MCP) has
+    no client_secret at all. The engine must send ``client_id`` + PKCE verifier
+    only -- never a ``client_secret`` key, never a Basic header -- on both the
+    code exchange and the refresh grant. Confidential styles fail closed on a
+    missing secret instead of sending an empty one.
+    """
+
+    _RES = "https://mcp.datadoghq.com/api/unstable/mcp-server/mcp"
+
+    def _public_cfg(self):
+        return resolve_provider(
+            {
+                "provider": "custom",
+                "custom_authorize_url": "https://app.datadoghq.com/oauth2/v1/authorize",
+                "custom_token_url": "https://app.datadoghq.com/api/v2/oauth2/token",
+                "custom_token_auth_style": "none",
+                "custom_resource": self._RES,
+            }
+        )
+
+    def test_build_token_request_sends_client_id_only(self):
+        cfg = self._public_cfg()
+        data, headers = oauth_engine._build_token_request(cfg, "cid", None, {"grant_type": "x"})
+        assert data["client_id"] == "cid"
+        assert "client_secret" not in data
+        assert "Authorization" not in headers
+
+    @pytest.mark.parametrize("style", ["post_body", "basic_header"])
+    def test_confidential_style_fails_closed_without_secret(self, style):
+        cfg = OAuthProviderConfig(
+            name="c",
+            display_name="C",
+            authorize_url="https://i/a",
+            token_url="https://i/t",
+            token_endpoint_auth_style=style,
+        )
+        with pytest.raises(oauth_engine.OAuthEngineError, match="no client_secret"):
+            oauth_engine._build_token_request(cfg, "cid", None, {"grant_type": "x"})
+
+    async def test_exchange_sends_verifier_and_resource_without_secret(self, monkeypatch):
+        captured: dict = {}
+        captured_headers: dict = {}
+
+        async def fake_post(cfg, data, headers):
+            captured.update(data)
+            captured_headers.update(headers)
+            return {"access_token": "at", "refresh_token": "rt", "expires_in": 3600}
+
+        monkeypatch.setattr(oauth_engine, "_post_token", fake_post)
+        tok = await oauth_engine.exchange_code(
+            self._public_cfg(), "cid", None, "code", "https://gw/cb", "verif"
+        )
+        assert captured["client_id"] == "cid"
+        assert captured["code_verifier"] == "verif"
+        assert captured["resource"] == self._RES
+        assert "client_secret" not in captured
+        assert "Authorization" not in captured_headers
+        assert tok.access_token == "at"
+
+    async def test_refresh_sends_client_id_and_resource_without_secret(self, monkeypatch):
+        captured: dict = {}
+
+        async def fake_post(cfg, data, headers):
+            captured.update(data)
+            return {"access_token": "at2", "expires_in": 3600}
+
+        monkeypatch.setattr(oauth_engine, "_post_token", fake_post)
+        tok = await oauth_engine.refresh_token(self._public_cfg(), "cid", None, "rt_old")
+        assert captured["grant_type"] == "refresh_token"
+        assert captured["client_id"] == "cid"
+        assert captured["resource"] == self._RES
+        assert "client_secret" not in captured
+        # provider did not rotate the refresh token -> keep the old one
+        assert tok.refresh_token == "rt_old"
+
+    def test_public_client_keeps_pkce_mandatory(self):
+        # use_pkce stays True for custom providers regardless of auth style;
+        # PKCE is the public client's only proof of possession.
+        assert self._public_cfg().use_pkce is True
+
+
+@pytest.mark.unit
 class TestQuirkParsers:
     def test_slack_nested_lifts_user_token(self):
         cfg = PROVIDER_REGISTRY["slack"]
