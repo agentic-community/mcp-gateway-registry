@@ -26,6 +26,7 @@ import argparse
 import hashlib
 import json
 import logging
+import random
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 logging.basicConfig(
@@ -41,9 +42,7 @@ def _deterministic_embedding(text: str) -> list[float]:
     """Generate a deterministic embedding from text hash."""
     text_hash = hashlib.sha256(text.encode()).hexdigest()
     seed = int(text_hash[:8], 16)
-    import random
-
-    rng = random.Random(seed)
+    rng = random.Random(seed)  # nosec B311 - deterministic test embeddings, not cryptographic
     raw = [rng.gauss(0, 1) for _ in range(EMBEDDING_DIMENSION)]
     norm = sum(x * x for x in raw) ** 0.5
     return [x / norm for x in raw]
