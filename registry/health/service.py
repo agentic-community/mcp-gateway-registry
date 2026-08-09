@@ -624,35 +624,38 @@ class HealthMonitoringService:
                 },
             }
 
-            response = await client.post(
+            # Streamed: a streamable-http server can hold the connection open (SSE/
+            # chunked) past the initialize response, and .post() would block reading
+            # the full body even though the headers we need already arrived.
+            async with client.stream(
+                "POST",
                 endpoint,
                 headers=init_headers,
                 json=initialize_payload,
                 timeout=httpx.Timeout(5.0),
                 follow_redirects=True,
-            )
+            ) as response:
+                # Check if initialize succeeded
+                if response.status_code not in [200, 201]:
+                    logger.warning(
+                        f"MCP initialize failed endpoint={redact_url(endpoint)} status={response.status_code}",
+                    )
+                    return None
 
-            # Check if initialize succeeded
-            if response.status_code not in [200, 201]:
-                logger.warning(
-                    f"MCP initialize failed endpoint={redact_url(endpoint)} status={response.status_code}",
+                # Get session ID from response headers (server-generated)
+                server_session_id = response.headers.get("Mcp-Session-Id") or response.headers.get(
+                    "mcp-session-id"
                 )
-                return None
-
-            # Get session ID from response headers (server-generated)
-            server_session_id = response.headers.get("Mcp-Session-Id") or response.headers.get(
-                "mcp-session-id"
-            )
-            if server_session_id:
-                logger.debug(f"Server returned session ID: {server_session_id}")
-                return server_session_id
-            else:
-                # If server doesn't return a session ID, generate one for stateless servers
-                client_session_id = str(uuid.uuid4())
-                logger.debug(
-                    f"Server did not return session ID, using client-generated: {client_session_id}"
-                )
-                return client_session_id
+                if server_session_id:
+                    logger.debug(f"Server returned session ID: {server_session_id}")
+                    return server_session_id
+                else:
+                    # If server doesn't return a session ID, generate one for stateless servers
+                    client_session_id = str(uuid.uuid4())
+                    logger.debug(
+                        f"Server did not return session ID, using client-generated: {client_session_id}"
+                    )
+                    return client_session_id
 
         except Exception as e:
             logger.warning(
