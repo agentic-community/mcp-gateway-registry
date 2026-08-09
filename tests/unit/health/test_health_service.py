@@ -458,7 +458,9 @@ async def test_health_service_initialize_mcp_session_success(health_service):
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.headers = {"Mcp-Session-Id": "server-session-123"}
-    mock_client.post.return_value = mock_response
+    mock_stream_ctx = MagicMock()
+    mock_stream_ctx.__aenter__.return_value = mock_response
+    mock_client.stream = MagicMock(return_value=mock_stream_ctx)
 
     session_id = await health_service._initialize_mcp_session(
         mock_client, "http://localhost:8000/mcp", {}
@@ -469,13 +471,39 @@ async def test_health_service_initialize_mcp_session_success(health_service):
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_health_service_initialize_mcp_session_does_not_read_body_on_success(health_service):
+    """A 200 with the session ID already in headers must not read the response
+    body: regression for the SSE/chunked streamable-http health-check hang,
+    where the body only completes when the server closes the connection."""
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {"Mcp-Session-Id": "server-session-123"}
+    mock_response.aread = AsyncMock(side_effect=AssertionError("body should not be read"))
+    mock_stream_ctx = MagicMock()
+    mock_stream_ctx.__aenter__.return_value = mock_response
+    mock_client.stream = MagicMock(return_value=mock_stream_ctx)
+
+    session_id = await health_service._initialize_mcp_session(
+        mock_client, "http://localhost:8000/mcp", {}
+    )
+
+    assert session_id == "server-session-123"
+    mock_response.aread.assert_not_called()
+    assert mock_client.stream.call_args.args[0] == "POST"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_health_service_initialize_mcp_session_failure(health_service):
     """Test initializing MCP session with failure."""
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_response = MagicMock()
     mock_response.status_code = 500
-    mock_response.text = "Internal Server Error"
-    mock_client.post.return_value = mock_response
+    mock_response.aread = AsyncMock(return_value=b"Internal Server Error")
+    mock_stream_ctx = MagicMock()
+    mock_stream_ctx.__aenter__.return_value = mock_response
+    mock_client.stream = MagicMock(return_value=mock_stream_ctx)
 
     session_id = await health_service._initialize_mcp_session(
         mock_client, "http://localhost:8000/mcp", {}
@@ -1270,7 +1298,9 @@ async def test_health_service_initialize_mcp_session_no_server_session_id(health
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.headers = {}
-    mock_client.post.return_value = mock_response
+    mock_stream_ctx = MagicMock()
+    mock_stream_ctx.__aenter__.return_value = mock_response
+    mock_client.stream = MagicMock(return_value=mock_stream_ctx)
 
     session_id = await health_service._initialize_mcp_session(
         mock_client, "http://localhost:8000/mcp", {}
@@ -1288,7 +1318,7 @@ async def test_health_service_initialize_mcp_session_no_server_session_id(health
 async def test_health_service_initialize_mcp_session_exception(health_service):
     """Test initializing MCP session with exception."""
     mock_client = AsyncMock(spec=httpx.AsyncClient)
-    mock_client.post.side_effect = Exception("Network error")
+    mock_client.stream = MagicMock(side_effect=Exception("Network error"))
 
     session_id = await health_service._initialize_mcp_session(
         mock_client, "http://localhost:8000/mcp", {}
