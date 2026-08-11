@@ -78,9 +78,7 @@ def test_register_leaves_append_mcp_path_unset_when_absent(tmp_path):
 
 @pytest.fixture
 def client() -> RegistryClient:
-    return RegistryClient(
-        registry_url="http://localhost", token="dummy-token-1234567890"
-    )
+    return RegistryClient(registry_url="http://localhost", token="dummy-token-1234567890")
 
 
 class TestAppendMcpPathOnTheWire:
@@ -91,18 +89,13 @@ class TestAppendMcpPathOnTheWire:
         response.json.return_value = {"path": "/svc", "name": "svc", "message": "ok"}
 
         with patch.object(client, "_make_request", return_value=response) as request:
-            client.register_service(
-                InternalServiceRegistration(path="/svc", name="svc", **extra)
-            )
+            client.register_service(InternalServiceRegistration(path="/svc", name="svc", **extra))
 
         return request.call_args.kwargs["data"]
 
     def test_false_is_sent(self, client: RegistryClient) -> None:
         """False is not None, so it must appear in the form payload."""
-        assert (
-            self._sent_form_data(client, append_mcp_path=False)["append_mcp_path"]
-            is False
-        )
+        assert self._sent_form_data(client, append_mcp_path=False)["append_mcp_path"] is False
 
     def test_absent_when_unset(self, client: RegistryClient) -> None:
         """Unset means absent, letting the registry apply its own default."""
