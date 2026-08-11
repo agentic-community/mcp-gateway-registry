@@ -152,6 +152,23 @@ describe('ServerConfigModal per-server append_mcp_path override', () => {
       expect(serverConfig.url).toBe('http://localhost/test-server/mcp');
     });
   });
+
+  test('append_mcp_path unset appends /mcp even when the upstream proxy already ends in /mcp', async () => {
+    // Regression: the UI previously keyed the /mcp suffix on the UPSTREAM
+    // proxy_pass_url shape (ends in /mcp -> skip append), which diverged from
+    // the server-side PRM resource (built as `append_mcp_path is not False`, so
+    // append when unset). A spec-compliant client rejects a PRM whose resource
+    // does not equal its connection URL, so the two MUST match. With
+    // append_mcp_path unset the connect URL must still append /mcp.
+    connectConfig = { custom_headers: [] }; // append_mcp_path unset (null)
+
+    renderModal({ proxy_pass_url: 'http://internal-host:8080/mcp' });
+
+    await waitFor(() => {
+      const serverConfig = getDisplayedConfig().mcpServers['test-server'];
+      expect(serverConfig.url).toBe('http://localhost/test-server/mcp');
+    });
+  });
 });
 
 describe('ServerConfigModal IDE OAuth login (oauth_client_id)', () => {
