@@ -874,6 +874,7 @@ def cmd_register(args: argparse.Namespace) -> int:
             overwrite=args.overwrite,
             mcp_endpoint=config.get("mcp_endpoint"),
             sse_endpoint=config.get("sse_endpoint"),
+            append_mcp_path=config.get("append_mcp_path"),
             metadata=config.get("metadata", {}),
             provider_organization=config.get("provider_organization"),
             provider_url=config.get("provider_url"),

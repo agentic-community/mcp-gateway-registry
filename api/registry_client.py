@@ -88,6 +88,14 @@ class InternalServiceRegistration(BaseModel):
     sse_endpoint: str | None = Field(
         None, description="Full URL for the SSE endpoint (overrides proxy_pass_url + /sse)"
     )
+    append_mcp_path: bool | None = Field(
+        None,
+        description=(
+            "Force/suppress the trailing '/mcp' transport suffix. Leave unset to keep "
+            "the registry default; set False for upstreams that serve JSON-RPC at their "
+            "root and 404 on '/mcp'."
+        ),
+    )
     metadata: dict[str, Any] | None = Field(
         default_factory=dict,
         description="Additional custom metadata for organization, compliance, or integration purposes",
