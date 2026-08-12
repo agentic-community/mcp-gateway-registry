@@ -10,6 +10,7 @@ from ..auth.oauth_metadata import (
     build_resource_documentation_url,
     derive_supported_scopes,
     enforce_https,
+    entra_forces_per_server_prm,
 )
 from ..core.config import settings
 from ..repositories.factory import get_registry_card_repository
@@ -240,7 +241,7 @@ def server_needs_per_server_prm(egress_auth_mode: str | None) -> bool:
     if egress_auth_mode == "obo_exchange":
         return True
     if egress_auth_mode == "oauth_user":
-        return (settings.auth_provider or "").lower() == "entra"
+        return entra_forces_per_server_prm(settings.auth_provider)
     # issue #990: on Entra, EVERY server -- including plain
     # (egress_auth_mode none) servers like airegistry-tools -- needs a per-server
     # PRM, because the bare-origin global PRM's resource is unmatchable to an
@@ -248,7 +249,9 @@ def server_needs_per_server_prm(egress_auth_mode: str | None) -> bool:
     # the exact per-server connection URL satisfies both Claude (RFC 9728 §3.3)
     # and Entra. Requires each connection URL registered as an identifierUri.
     # Non-Entra IdPs keep the lenient origin-based global PRM (unchanged).
-    if (settings.auth_provider or "").lower() == "entra":
+    # `entra_forces_per_server_prm` is the shared source of truth mirrored by the
+    # auth-server's `_server_advertises_per_server_prm` (keep the two in sync).
+    if entra_forces_per_server_prm(settings.auth_provider):
         return True
     return False
 
