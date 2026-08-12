@@ -694,6 +694,18 @@ variable "entra_graph_base_url" {
   default     = ""
 }
 
+variable "entra_scope_format" {
+  description = "Entra PRM scope form: 'v1' (api://<app-id>/<scope>) or 'v2' (bare, default). Set 'v1' only if the Entra app exposes v1-style api:// scopes (issue #990). Empty uses the app default (v2)."
+  type        = string
+  default     = ""
+}
+
+variable "entra_application_id_uri" {
+  description = "Application ID URI (e.g. api://<app-id>) registered on the Entra app. Used as the v1 scope prefix and accepted as a token audience. Empty defaults to api://<entra_client_id>."
+  type        = string
+  default     = ""
+}
+
 variable "idp_group_filter_prefix" {
   description = "Comma-separated list of prefixes to filter IdP groups in IAM > Groups page (e.g., 'mcp-,registry-'). Applies to all identity providers."
   type        = string

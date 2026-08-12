@@ -50,10 +50,10 @@ Legend: **Client ID** = pre-registered public client (`IDE_OAUTH_CLIENT_ID`).
 
 | Coding assistant | Keycloak | Amazon Cognito | Okta | Microsoft Entra ID |
 | --- | --- | --- | --- | --- |
-| **Claude Code** | Client ID + DCR | Client ID (fixed port) | Client ID (fixed port) | Not yet (blocked on #990) |
-| **Cursor** | Client ID + DCR | Static token only | Static token only | Not yet (blocked on #990) |
-| **Codex** | Client ID + DCR | Static token only | Static token only | Not yet (blocked on #990) |
-| **Other IDEs** | DCR (if the IDE supports it) | Static token | Static token | Not yet |
+| **Claude Code** | Client ID + DCR | Client ID (fixed port) | Client ID (fixed port) | Client ID (fixed port, per-server App ID URI) |
+| **Cursor** | Client ID + DCR | Static token only | Static token only | Static token only |
+| **Codex** | Client ID + DCR | Static token only | Static token only | Static token only |
+| **Other IDEs** | DCR (if the IDE supports it) | Static token | Static token | Static token |
 
 Notes:
 
@@ -73,8 +73,18 @@ Notes:
   [the DCR method doc](connection-methods/dynamic-client-registration.md#how-the-connect-dialog-decides-to-rely-on-dcr-important-nuance)).
   So for Cognito/Okta, non-Claude-Code assistants get the static-token config,
   not DCR, even though those IdPs technically support DCR.
-- **Entra** IDE login is blocked pending resource-qualified PRM scopes (issue
-  #990), regardless of assistant.
+- **Entra** IDE login works for Claude Code (issue #990). Entra binds the
+  requested scope to the RFC 8707 `resource` and matches `resource` to a
+  registered App ID URI exactly, and a spec client canonicalizes the bare origin
+  with a trailing slash (which Entra App ID URIs cannot have). So on Entra each
+  server advertises a **per-server PRM** whose `resource` is its exact connection
+  URL, and the operator must register **each server's connection URL as an App ID
+  URI** on the gateway app (with a `user_impersonation` scope exposed on it,
+  granted to the IDE client). See
+  [the client-id method doc](connection-methods/client-id.md#per-idp-setup) and
+  [Entra scope format](entra-scope-format.md). Only Claude Code can pin the
+  callback port Entra's literal redirect match needs, so Cursor/Codex fall back
+  to the static token on Entra as they do on Cognito/Okta.
 - Validated this release: Keycloak (Client ID + DCR), Cognito (Client ID with
   Claude Code, on ECS), Okta (Client ID with Claude Code). See
   [the client-id method doc](connection-methods/client-id.md#per-idp-setup) for

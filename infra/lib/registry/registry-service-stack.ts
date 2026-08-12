@@ -180,6 +180,12 @@ export class RegistryServiceStack extends cdk.Stack {
       ENTRA_ENABLED: String(config.entra.enabled),
       ENTRA_TENANT_ID: config.entra.tenantId,
       ENTRA_CLIENT_ID: config.entra.clientId,
+      // Optional Entra PRM scope-format config (issue #990). Only emit when set
+      // so the provider default (v2 / api://<client-id>) applies otherwise.
+      ...(config.entra.scopeFormat ? { ENTRA_SCOPE_FORMAT: config.entra.scopeFormat } : {}),
+      ...(config.entra.applicationIdUri
+        ? { ENTRA_APPLICATION_ID_URI: config.entra.applicationIdUri }
+        : {}),
       IDP_GROUP_FILTER_PREFIX: config.idpGroupFilterPrefix,
       OKTA_ENABLED: String(config.okta.enabled),
       OKTA_DOMAIN: config.okta.domain,

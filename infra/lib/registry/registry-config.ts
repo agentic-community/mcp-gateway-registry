@@ -172,6 +172,18 @@ export interface EntraConfig {
   clientId: string;
   /** Entra ID Client Secret (from env CDK_ENTRA_CLIENT_SECRET) */
   clientSecret: string;
+  /**
+   * PRM scope-advertisement form: 'v1' (api://<app-id>/<scope>) or 'v2'
+   * (bare, default). Set 'v1' only if the Entra app exposes v1-style api://
+   * scopes (issue #990). Empty string uses the provider default (v2).
+   */
+  scopeFormat: string;
+  /**
+   * Application ID URI (e.g. api://<app-id>) registered on the Entra app.
+   * Used as the v1 scope prefix and accepted as a token audience. Empty
+   * defaults to api://<clientId>.
+   */
+  applicationIdUri: string;
 }
 
 export interface OktaConfig {
@@ -508,6 +520,8 @@ export const DEFAULT_REGISTRY_CONFIG: RegistryConfig = {
     tenantId: '',
     clientId: '',
     clientSecret: '',
+    scopeFormat: '',
+    applicationIdUri: '',
   },
 
   okta: {

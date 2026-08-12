@@ -234,6 +234,154 @@ class TestOAuthProtectedResourceEndpoint:
             assert response.status_code == 502
 
 
+class TestGlobalPrmEntraScopeFormat:
+    """The global PRM must advertise scopes in the form the configured Entra
+    version expects (issue #990). Uses a REAL EntraIdProvider so the route +
+    provider.protected_resource_metadata() + format_advertised_scopes() are
+    exercised end-to-end. Regression guard for AADSTS650053: v1 clients must
+    receive api://<app-id>/<scope> so they send the correct /authorize scope.
+    """
+
+    def _entra_provider(self, monkeypatch, scope_format, application_id_uri=None):
+        for var in (
+            "ENTRA_LOGIN_BASE_URL",
+            "ENTRA_GRAPH_BASE_URL",
+            "ENTRA_SCOPE_FORMAT",
+            "ENTRA_APPLICATION_ID_URI",
+        ):
+            monkeypatch.delenv(var, raising=False)
+        from auth_server.providers.entra import EntraIdProvider
+
+        return EntraIdProvider(
+            tenant_id="tenant-abc",
+            client_id="app-guid",
+            client_secret="s",
+            scope_format=scope_format,
+            application_id_uri=application_id_uri,
+        )
+
+    def _run(self, provider, mock_settings, advertised_scopes):
+        mock_settings.registry_url = "https://gw.example.com"
+        mock_settings.mcp_https_required = True
+        mock_settings.mcp_resource_documentation_url = None
+        mock_settings.mcp_advertised_scopes = advertised_scopes
+        with (
+            patch(
+                "registry.api.wellknown_routes._get_active_auth_provider",
+                return_value=provider,
+            ),
+            patch("registry.auth.oauth_metadata.settings", mock_settings),
+            patch("registry.api.wellknown_routes.settings", mock_settings),
+        ):
+            client = TestClient(_make_oauth_discovery_app(provider))
+            return client.get("/.well-known/oauth-protected-resource")
+
+    def test_v1_emits_api_prefixed_custom_scope(self, mock_settings, monkeypatch):
+        provider = self._entra_provider(monkeypatch, scope_format="v1")
+        resp = self._run(provider, mock_settings, "openid email mcp.read")
+        assert resp.status_code == 200
+        scopes = resp.json()["scopes_supported"]
+        # OIDC scopes bare, custom scope api://-prefixed (AADSTS650053 fix).
+        assert scopes == ["openid", "email", "api://app-guid/mcp.read"]
+
+    def test_v1_uses_application_id_uri(self, mock_settings, monkeypatch):
+        provider = self._entra_provider(
+            monkeypatch, scope_format="v1", application_id_uri="api://gw-uri"
+        )
+        resp = self._run(provider, mock_settings, "mcp.read")
+        assert resp.json()["scopes_supported"] == ["api://gw-uri/mcp.read"]
+
+    def test_v2_emits_bare_custom_scope(self, mock_settings, monkeypatch):
+        provider = self._entra_provider(monkeypatch, scope_format="v2")
+        resp = self._run(provider, mock_settings, "openid mcp.read")
+        assert resp.json()["scopes_supported"] == ["openid", "mcp.read"]
+
+
+class TestGlobalPrmNonEntraUnchanged:
+    """Non-Entra providers must emit scopes unchanged (no api:// rewrite).
+
+    Keycloak/Okta/Cognito/Auth0 use the base protected_resource_metadata(),
+    which preserves the caller-supplied scopes verbatim.
+    """
+
+    def test_non_entra_provider_emits_scopes_verbatim(self, mock_settings, fake_provider):
+        # fake_provider is a MagicMock bound to the BASE implementation.
+        mock_settings.registry_url = "https://gw.example.com"
+        mock_settings.mcp_https_required = True
+        mock_settings.mcp_resource_documentation_url = None
+        mock_settings.mcp_advertised_scopes = "openid mcp.read mcp.write"
+        with (
+            patch(
+                "registry.api.wellknown_routes._get_active_auth_provider",
+                return_value=fake_provider,
+            ),
+            patch("registry.auth.oauth_metadata.settings", mock_settings),
+            patch("registry.api.wellknown_routes.settings", mock_settings),
+        ):
+            client = TestClient(_make_oauth_discovery_app(fake_provider))
+            resp = client.get("/.well-known/oauth-protected-resource")
+        # No transformation: exactly what the operator configured.
+        assert resp.json()["scopes_supported"] == ["openid", "mcp.read", "mcp.write"]
+
+
+class TestServerNeedsPerServerPrm:
+    """server_needs_per_server_prm() gate (issue #990).
+
+    On Entra, EVERY server -- including plain ``none`` servers -- needs a
+    per-server PRM, because the gateway-wide bare-origin resource is unmatchable
+    to an Entra App ID URI (trailing slash) and fails token exchange with
+    AADSTS9010010. On lenient IdPs, only the two egress modes need it; plain
+    servers keep the gateway-wide origin PRM (unchanged behavior). This gate is
+    the fix that unblocks Entra IDE login for plain servers.
+    """
+
+    def _gate(self, egress_auth_mode, auth_provider):
+        from registry.api.wellknown_routes import server_needs_per_server_prm
+
+        mock_settings = MagicMock()
+        mock_settings.auth_provider = auth_provider
+        with patch("registry.api.wellknown_routes.settings", mock_settings):
+            return server_needs_per_server_prm(egress_auth_mode)
+
+    # --- Entra: everything gets a per-server PRM ---
+    def test_entra_plain_server_gets_per_server_prm(self):
+        """The #990 fix: a plain (none) server on Entra needs the per-server PRM."""
+        assert self._gate("none", "entra") is True
+
+    def test_entra_unset_egress_mode_gets_per_server_prm(self):
+        assert self._gate(None, "entra") is True
+
+    def test_entra_obo_exchange_gets_per_server_prm(self):
+        assert self._gate("obo_exchange", "entra") is True
+
+    def test_entra_oauth_user_gets_per_server_prm(self):
+        assert self._gate("oauth_user", "entra") is True
+
+    # --- Non-Entra: only the egress modes; plain stays on the global PRM ---
+    def test_keycloak_plain_server_uses_global_prm(self):
+        """REGRESSION GUARD: a plain server on Keycloak must NOT get a per-server
+        PRM -- the bare-origin global PRM works there and this is the path that
+        has worked all along. Changing it would break lenient-IdP deployments."""
+        assert self._gate("none", "keycloak") is False
+
+    def test_keycloak_oauth_user_uses_global_prm(self):
+        """Keycloak 3LO keeps using the gateway-wide root PRM (unchanged)."""
+        assert self._gate("oauth_user", "keycloak") is False
+
+    def test_cognito_plain_server_uses_global_prm(self):
+        assert self._gate("none", "cognito") is False
+
+    def test_okta_plain_server_uses_global_prm(self):
+        assert self._gate(None, "okta") is False
+
+    def test_obo_exchange_gets_per_server_prm_on_any_provider(self):
+        """obo_exchange always needs the per-server PRM regardless of IdP."""
+        assert self._gate("obo_exchange", "keycloak") is True
+
+    def test_auth_provider_case_insensitive(self):
+        assert self._gate("none", "Entra") is True
+
+
 class TestOAuthAuthorizationServerEndpoint:
     """Tests for GET /.well-known/oauth-authorization-server (RFC 8414)."""
 
@@ -461,9 +609,10 @@ class TestPerServerOAuthProtectedResource:
             resp = client.get("/.well-known/oauth-protected-resource/github/mcp")
             assert resp.status_code == 404
 
-    def test_non_egress_server_404s(self, fake_provider):
-        # A server with no gateway-login egress mode falls back to the global PRM.
-        s = self._settings()
+    def test_non_egress_server_404s_on_lenient_idp(self, fake_provider):
+        # On a lenient IdP (Keycloak), a plain server falls back to the global
+        # PRM -- the bare-origin resource works there. 404 here is correct.
+        s = self._settings(auth_provider="keycloak")
         plain_server = {"path": "/plain", "egress_auth_mode": "none"}
         with (
             patch(
@@ -480,6 +629,34 @@ class TestPerServerOAuthProtectedResource:
             client = TestClient(_make_oauth_discovery_app(fake_provider))
             resp = client.get("/.well-known/oauth-protected-resource/plain/mcp")
             assert resp.status_code == 404
+
+    def test_non_egress_server_gets_per_server_prm_on_entra(self, fake_provider):
+        # issue #990: on Entra, a plain (none) server MUST get a per-server PRM
+        # (resource = its connection URL), because the bare-origin global PRM is
+        # unmatchable to an Entra App ID URI. This is the fix that unblocks Entra
+        # IDE login for plain servers.
+        s = self._settings(auth_provider="entra")
+        plain_server = {"path": "/plain", "egress_auth_mode": "none"}
+        with (
+            patch(
+                "registry.api.wellknown_routes._get_active_auth_provider",
+                return_value=fake_provider,
+            ),
+            patch("registry.auth.oauth_metadata.settings", s),
+            patch("registry.api.wellknown_routes.settings", s),
+            patch(
+                "registry.api.wellknown_routes.server_service.get_server_info",
+                new=AsyncMock(return_value=plain_server),
+            ),
+        ):
+            client = TestClient(_make_oauth_discovery_app(fake_provider))
+            resp = client.get("/.well-known/oauth-protected-resource/plain/mcp")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["resource"] == "https://gw.example.com/plain/mcp"
+            assert data["scopes_supported"] == [
+                "https://gw.example.com/plain/mcp/user_impersonation"
+            ]
 
     def test_unknown_server_404s(self, fake_provider):
         s = self._settings()
@@ -498,6 +675,31 @@ class TestPerServerOAuthProtectedResource:
             client = TestClient(_make_oauth_discovery_app(fake_provider))
             resp = client.get("/.well-known/oauth-protected-resource/nope/mcp")
             assert resp.status_code == 404
+
+    def test_server_lookup_failure_returns_502_not_500(self, fake_provider):
+        """A repository/backend error during the server lookup on this
+        UNAUTHENTICATED endpoint must fail closed to a generic 502 (logged), not
+        surface as an unhandled 500 with a traceback."""
+        s = self._settings()
+        with (
+            patch(
+                "registry.api.wellknown_routes._get_active_auth_provider",
+                return_value=fake_provider,
+            ),
+            patch("registry.auth.oauth_metadata.settings", s),
+            patch("registry.api.wellknown_routes.settings", s),
+            patch(
+                "registry.api.wellknown_routes.server_service.get_server_info",
+                new=AsyncMock(side_effect=RuntimeError("documentdb down")),
+            ),
+        ):
+            client = TestClient(
+                _make_oauth_discovery_app(fake_provider), raise_server_exceptions=False
+            )
+            resp = client.get("/.well-known/oauth-protected-resource/obo-echo/mcp")
+            assert resp.status_code == 502
+            # No internal exception detail leaked on the public endpoint.
+            assert "documentdb" not in resp.text.lower()
 
     def test_path_normalization_strips_mcp_suffix(self, fake_provider):
         """The handler must look up '/obo-echo', not '/obo-echo/mcp'."""
