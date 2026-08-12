@@ -2808,10 +2808,12 @@ def _server_advertises_per_server_prm() -> bool:
     accepted audience is path-bound (built from this request's path below), so
     accepting it cannot widen access to a different server.
     """
-    provider = (
-        os.environ.get("AUTH_PROVIDER", "") or getattr(settings, "auth_provider", "") or ""
-    ).lower()
-    if provider == "entra":
+    # `entra_forces_per_server_prm` is the shared source of truth mirrored by the
+    # registry's `server_needs_per_server_prm` (keep the two in sync).
+    from registry.auth.oauth_metadata import entra_forces_per_server_prm
+
+    provider = os.environ.get("AUTH_PROVIDER", "") or getattr(settings, "auth_provider", "") or ""
+    if entra_forces_per_server_prm(provider):
         return True
     return bool(getattr(settings, "egress_auth_enabled", False))
 

@@ -108,6 +108,24 @@ def build_per_server_resource_url(
     return url
 
 
+def entra_forces_per_server_prm(auth_provider: str | None) -> bool:
+    """Whether the configured IdP forces a per-server PRM for EVERY server.
+
+    Entra's gateway-wide PRM advertises the bare origin, whose resource a
+    spec-compliant client canonicalizes with a trailing slash -- unmatchable to
+    an Entra App ID URI (Entra forbids the trailing slash), which fails token
+    exchange with AADSTS9010010. So on Entra every server (including plain ones
+    with no egress mode) needs a per-server, connection-URL PRM (issue #990).
+    Non-Entra IdPs accept the bare-origin gateway-wide PRM, so this is Entra-only.
+
+    Single source of truth consulted by BOTH the registry's
+    ``server_needs_per_server_prm`` (the advertise side) and the auth-server's
+    ``_server_advertises_per_server_prm`` (the audience-accept side) so the two
+    predicates cannot drift.
+    """
+    return (auth_provider or "").strip().lower() == "entra"
+
+
 def enforce_https(
     resource_url: str,
     https_required: bool,
