@@ -6186,11 +6186,13 @@ def _forward_headers(
     """Copy incoming request headers to the upstream, stripping hop-by-hop and
     proxy-hint headers so httpx can set them correctly for the connection.
 
-    Ingress-auth policy (issue #1266): X-Authorization and Cookie are ALWAYS
-    stripped (never forwarded to any upstream). Authorization is also stripped
-    UNLESS ``relay_authorization`` is True -- set only for the built-in internal
-    registry-tools server (_INTERNAL_INGRESS_RELAY_SERVERS). Every other server
-    gets no client auth header on egress; upstream creds come from the vault.
+    Ingress-auth policy (issue #1266): Cookie is ALWAYS stripped (never
+    forwarded to any upstream). Authorization and X-Authorization are also
+    stripped UNLESS ``relay_authorization`` is True -- set only for the built-in
+    internal registry-tools server (_INTERNAL_INGRESS_RELAY_SERVERS), which
+    receives BOTH forms (the MCP Gateway carries the caller bearer in
+    X-Authorization, not Authorization). Every other server gets no client auth
+    header on egress; upstream creds come from the vault.
     """
     forwarded: dict[str, str] = {}
     for key, value in incoming.items():
@@ -6206,11 +6208,16 @@ def _forward_headers(
             # not a legal HTTP header value (braces/spaces) and must never be
             # forwarded to the upstream.
             continue
-        if lower in ("x-authorization", "cookie"):
-            # Ingress-only credentials; never forwarded to any upstream.
+        if lower == "cookie":
+            # Ingress-only credential; never forwarded to any upstream.
             continue
-        if lower == "authorization" and not relay_authorization:
-            # Ingress token; forwarded only for the internal relay server.
+        if lower in ("authorization", "x-authorization") and not relay_authorization:
+            # Ingress tokens; forwarded ONLY for the built-in internal
+            # registry-tools server (_INTERNAL_INGRESS_RELAY_SERVERS). The MCP
+            # Gateway carries the caller bearer in X-Authorization (not
+            # Authorization), so the internal server must receive X-Authorization
+            # too to identify the user for its registry API calls. Every other
+            # upstream gets neither -- upstream creds come from the egress vault.
             continue
         forwarded[key] = value
     return forwarded
