@@ -1514,7 +1514,12 @@ async def map_groups_to_scopes(groups: list[str]) -> list[str]:
 
 async def validate_session_cookie(cookie_value: str) -> dict[str, Any]:
     """
-    Validate session cookie using itsdangerous serializer.
+    Validate a session cookie carrying a raw 256-bit hex session_id.
+
+    Resolves the id against the server-side session store (a tampered or
+    unknown id fails closed). Falls back to the legacy itsdangerous-signed
+    format only during the signature-drop overlap window. Mirrors
+    registry/auth/dependencies.py resolve_session_from_cookie.
 
     Args:
         cookie_value: The session cookie value
@@ -1533,23 +1538,42 @@ async def validate_session_cookie(cookie_value: str) -> dict[str, Any]:
         ValueError: If cookie is invalid or expired
     """
     # Use global signer initialized at startup
-    global signer
-    if not signer:
-        logger.warning("Global signer not configured for session cookie validation")
-        raise ValueError("Session cookie validation not configured")
+    # The session cookie carries a raw 256-bit hex session_id (64 chars); the
+    # full record lives server-side. Security rests on unguessability (2^256)
+    # + a mandatory DB lookup (tampered id -> no record -> reject). No signature
+    # is required. This MUST match registry/auth/dependencies.py
+    # resolve_session_from_cookie — both verifier processes accept the same
+    # raw-id format, with signer.loads only as a legacy fallback during the
+    # signature-drop overlap window.
+    import re
+
+    if not cookie_value:
+        raise ValueError("Missing session cookie")
+
+    session_id = cookie_value.strip()
+    if not re.fullmatch(r"[0-9a-f]{64}", session_id):
+        # Legacy path: signed cookie minted before the signature was dropped.
+        global signer
+        if not signer:
+            logger.debug("Session cookie is not a raw session_id and no signer for legacy path")
+            raise ValueError("Invalid session cookie")
+        try:
+            payload = signer.loads(cookie_value, max_age=28800)
+        except SignatureExpired:
+            logger.warning("Session cookie has expired")
+            raise ValueError("Session cookie has expired")
+        except BadSignature:
+            logger.warning("Invalid session cookie signature")
+            raise ValueError("Invalid session cookie")
+        # Reject legacy dict-payload cookies (forces re-login post-rollout).
+        if not isinstance(payload, str) or not re.fullmatch(r"[0-9a-f]{64}", payload):
+            raise ValueError("Legacy session cookie format; please re-login")
+        session_id = payload
 
     try:
-        # Decrypt cookie (max_age=28800 for 8 hours). The cookie now carries
-        # only an opaque session_id; the full record lives server-side.
-        payload = signer.loads(cookie_value, max_age=28800)
-
-        # Reject legacy dict-payload cookies (forces re-login post-rollout).
-        if not isinstance(payload, str):
-            raise ValueError("Legacy session cookie format; please re-login")
-
         from session_store import resolve_session
 
-        session_data = await resolve_session(payload)
+        session_data = await resolve_session(session_id)
         if not session_data or not session_data.get("username"):
             raise ValueError("Session not found or expired")
 
