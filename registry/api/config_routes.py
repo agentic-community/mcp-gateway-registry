@@ -152,6 +152,8 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
                     ("entra_client_id", "Client ID", True),
                     ("entra_client_secret", "Client Secret", True),
                     ("entra_group_admin_id", "Admin Group ID", False),
+                    ("entra_scope_format", "Scope Format (v1/v2)", False),
+                    ("entra_application_id_uri", "Application ID URI", False),
                 ],
             },
             {
