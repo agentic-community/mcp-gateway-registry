@@ -669,7 +669,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             token_provider = None
             if (
                 settings.embeddings_provider.lower() == "litellm"
-                and settings.embeddings_auth_mode == "idp"
+                and (settings.embeddings_auth_mode or "").lower() == "idp"
             ):
                 from ...embeddings.token_provider import (
                     EmbeddingsTokenProvider,

@@ -382,6 +382,23 @@ ard:
   registryEnabled: true # Set false to disable the ARD Registry adapter (POST /api/ard/search, GET /api/ard/agents)
   publisherDomain: "" # URN publisher FQDN (urn:air:<domain>:...). Empty derives from registryCard.url host.
   defaultNamespace: "" # Optional override for the URN namespace segment (empty uses entity type)
+# Embeddings IdP authentication (issue #1415). When authMode="idp" the registry
+# fetches an OAuth2 client-credentials bearer token per embedding call instead of
+# a static API key. Rendered into the deployment only when authMode is set, so
+# leaving these unset keeps the existing static-key behavior (backwards compatible).
+# The pre-existing EMBEDDINGS_PROVIDER / EMBEDDINGS_API_KEY / etc. are not chart
+# values and continue to be set via extraEnv.
+embeddings:
+  authMode: "" # "" (static, default) or "idp"
+  idpTokenEndpoint: "" # OAuth2 token endpoint; https:// required unless idpAllowInsecure
+  idpClientId: ""
+  idpScope: "" # Optional OAuth2 scope, e.g. "api://<app-id>/.default"
+  idpTimeoutSeconds: 30
+  idpAllowInsecure: false # Local dev only: permit http:// loopback token endpoint
+  # EMBEDDINGS_IDP_CLIENT_SECRET is sourced from a pre-created K8s Secret (recommended).
+  idpClientSecretExistingSecret: "" # Secret name holding the client secret
+  idpClientSecretExistingSecretKey: "EMBEDDINGS_IDP_CLIENT_SECRET" # Key within that secret
+
 # Entra ID integration (used when authProvider.type = "entra" in standalone deployment)
 entra:
   clientId: ""

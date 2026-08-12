@@ -533,13 +533,13 @@ Used by `registry` and `mcpgw` services.
 | API key **(secret)** | `EMBEDDINGS_API_KEY` | `embeddings_api_key` | `mcpgw.app.embeddingsApiKey` / `mcpgw.app.embeddingsApiKeyExistingSecret` | For `litellm` cloud providers. |
 | Custom API base | `EMBEDDINGS_API_BASE` | — | `mcpgw.app.embeddingsApiBase` | — |
 | AWS region | `EMBEDDINGS_AWS_REGION` | `embeddings_aws_region` | `mcpgw.app.embeddingsAwsRegion` | Bedrock. |
-| Auth mode | `EMBEDDINGS_AUTH_MODE` | `embeddings_auth_mode` | `mcpgw.app.embeddingsAuthMode` | `static` (default) or `idp`. When `idp`, fetches bearer via OAuth2 client credentials. |
-| IdP token endpoint | `EMBEDDINGS_IDP_TOKEN_ENDPOINT` | `embeddings_idp_token_endpoint` | `mcpgw.app.embeddingsIdpTokenEndpoint` | OAuth2 token URL (must be `https://`). Required when `idp`. |
-| IdP client id | `EMBEDDINGS_IDP_CLIENT_ID` | `embeddings_idp_client_id` | `mcpgw.app.embeddingsIdpClientId` | Client-credentials client id. Required when `idp`. |
-| IdP client secret **(secret)** | `EMBEDDINGS_IDP_CLIENT_SECRET` | `embeddings_idp_client_secret` | `mcpgw.app.embeddingsIdpClientSecret` / `...ExistingSecret` | Client-credentials secret. Never logged. Required when `idp`. |
-| IdP scope | `EMBEDDINGS_IDP_SCOPE` | `embeddings_idp_scope` | `mcpgw.app.embeddingsIdpScope` | OAuth2 scope (e.g. `api://<app-id>/.default`). Optional. |
-| IdP timeout | `EMBEDDINGS_IDP_TIMEOUT_SECONDS` | `embeddings_idp_timeout_seconds` | `mcpgw.app.embeddingsIdpTimeoutSeconds` | Token request timeout (default 30s). |
-| IdP allow insecure | `EMBEDDINGS_IDP_ALLOW_INSECURE` | `embeddings_idp_allow_insecure` | `mcpgw.app.embeddingsIdpAllowInsecure` | Allow `http://` token endpoint (local dev only, default `false`). |
+| Auth mode | `EMBEDDINGS_AUTH_MODE` | `embeddings_auth_mode` | `registry.embeddings.authMode` | `static` (default) or `idp`. When `idp`, fetches bearer via OAuth2 client credentials. |
+| IdP token endpoint | `EMBEDDINGS_IDP_TOKEN_ENDPOINT` | `embeddings_idp_token_endpoint` | `registry.embeddings.idpTokenEndpoint` | OAuth2 token URL (must be `https://`). Required when `idp`. |
+| IdP client id | `EMBEDDINGS_IDP_CLIENT_ID` | `embeddings_idp_client_id` | `registry.embeddings.idpClientId` | Client-credentials client id. Required when `idp`. |
+| IdP client secret **(secret)** | `EMBEDDINGS_IDP_CLIENT_SECRET` | `embeddings_idp_client_secret` | `registry.embeddings.idpClientSecretExistingSecret` / `...Key` | Client-credentials secret. Never logged. On Helm, reference a pre-created Secret. Required when `idp`. |
+| IdP scope | `EMBEDDINGS_IDP_SCOPE` | `embeddings_idp_scope` | `registry.embeddings.idpScope` | OAuth2 scope (e.g. `api://<app-id>/.default`). Optional. |
+| IdP timeout | `EMBEDDINGS_IDP_TIMEOUT_SECONDS` | `embeddings_idp_timeout_seconds` | `registry.embeddings.idpTimeoutSeconds` | Token request timeout (default 30s). |
+| IdP allow insecure | `EMBEDDINGS_IDP_ALLOW_INSECURE` | `embeddings_idp_allow_insecure` | `registry.embeddings.idpAllowInsecure` | Allow `http://` loopback token endpoint (local dev only, default `false`). |
 
 ---
 

@@ -114,6 +114,7 @@ module "mcp_gateway" {
   embeddings_idp_client_secret   = var.embeddings_idp_client_secret
   embeddings_idp_scope           = var.embeddings_idp_scope
   embeddings_idp_timeout_seconds = var.embeddings_idp_timeout_seconds
+  embeddings_idp_allow_insecure  = var.embeddings_idp_allow_insecure
 
   # Registration deduplication
   dedup_registration_hint_enabled = var.dedup_registration_hint_enabled

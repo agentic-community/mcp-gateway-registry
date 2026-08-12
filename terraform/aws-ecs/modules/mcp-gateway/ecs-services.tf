@@ -1117,6 +1117,10 @@ module "ecs_service_registry" {
           name  = "EMBEDDINGS_IDP_TIMEOUT_SECONDS"
           value = tostring(var.embeddings_idp_timeout_seconds)
         },
+        {
+          name  = "EMBEDDINGS_IDP_ALLOW_INSECURE"
+          value = tostring(var.embeddings_idp_allow_insecure)
+        },
         # Registration deduplication. Advisory check; never blocks
         # registration. Reuses the embeddings model above.
         {

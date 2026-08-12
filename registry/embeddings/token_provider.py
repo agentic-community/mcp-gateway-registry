@@ -11,6 +11,7 @@ Injected into LiteLLMClient so a fresh bearer is used on every embedding call.
 import logging
 from datetime import UTC, datetime, timedelta
 from threading import Lock
+from urllib.parse import urlparse
 
 import httpx
 
@@ -18,6 +19,41 @@ logger = logging.getLogger(__name__)
 
 TOKEN_REFRESH_BUFFER_SECONDS: int = 60
 DEFAULT_EXPIRES_IN_SECONDS: int = 3600
+# http:// is permitted only for these loopback hosts (local dev), never a remote host.
+_LOOPBACK_HOSTS: frozenset[str] = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+def _validate_token_endpoint(
+    token_endpoint: str,
+    allow_insecure: bool,
+) -> None:
+    """Enforce https on the token endpoint (the client secret is POSTed to it).
+
+    Single source of truth used by both ``_require_idp_settings`` (pre-flight) and
+    ``EmbeddingsTokenProvider.__init__`` (constructor guard). http:// is permitted
+    ONLY when ``allow_insecure`` is set AND the host is loopback (local dev). A
+    remote http:// endpoint would transmit the client secret in cleartext, so it is
+    rejected even with ``allow_insecure`` (the "explicit flag + localhost guard").
+    """
+    if token_endpoint.lower().startswith("https://"):
+        return
+    if not allow_insecure:
+        raise ValueError(
+            "EMBEDDINGS_IDP_TOKEN_ENDPOINT must use https:// "
+            "(the client secret is sent to this endpoint). "
+            "Set EMBEDDINGS_IDP_ALLOW_INSECURE=true for local development only."
+        )
+    host = (urlparse(token_endpoint).hostname or "").lower()
+    if host not in _LOOPBACK_HOSTS:
+        raise ValueError(
+            "EMBEDDINGS_IDP_ALLOW_INSECURE only permits http:// for a loopback host "
+            f"(localhost/127.0.0.1/::1); got host '{host}'. A remote http:// endpoint "
+            "would transmit the client secret in cleartext."
+        )
+    logger.warning(
+        "EMBEDDINGS_IDP_ALLOW_INSECURE=true: token endpoint is http:// (loopback). "
+        "DO NOT use this in production."
+    )
 
 
 def _require_idp_settings(
@@ -38,12 +74,7 @@ def _require_idp_settings(
     ]
     if missing:
         raise ValueError("EMBEDDINGS_AUTH_MODE=idp requires these settings: " + ", ".join(missing))
-    if not allow_insecure and not token_endpoint.lower().startswith("https://"):
-        raise ValueError(
-            "EMBEDDINGS_IDP_TOKEN_ENDPOINT must use https:// "
-            "(the client secret is sent to this endpoint). "
-            "Set EMBEDDINGS_IDP_ALLOW_INSECURE=true for local development only."
-        )
+    _validate_token_endpoint(token_endpoint, allow_insecure)
 
 
 class EmbeddingsTokenProvider:
@@ -62,17 +93,7 @@ class EmbeddingsTokenProvider:
         timeout_seconds: int = 30,
         allow_insecure: bool = False,
     ) -> None:
-        if not token_endpoint.lower().startswith("https://"):
-            if not allow_insecure:
-                raise ValueError(
-                    "EMBEDDINGS_IDP_TOKEN_ENDPOINT must use https:// "
-                    "(the client secret is sent to this endpoint). "
-                    "Set EMBEDDINGS_IDP_ALLOW_INSECURE=true for local development only."
-                )
-            logger.warning(
-                "EMBEDDINGS_IDP_ALLOW_INSECURE=true: token endpoint is NOT using https. "
-                "DO NOT use this in production — the client secret is sent in plaintext."
-            )
+        _validate_token_endpoint(token_endpoint, allow_insecure)
         self._token_endpoint = token_endpoint
         self._client_id = client_id
         self._client_secret = client_secret
@@ -110,7 +131,7 @@ class EmbeddingsTokenProvider:
         token_data = response.json()
         access_token = token_data.get("access_token")
         if not access_token:
-            raise RuntimeError("Token response missing 'access_token'")
+            raise ValueError("Token response missing 'access_token'")
         expires_in = int(token_data.get("expires_in", DEFAULT_EXPIRES_IN_SECONDS))
         self._access_token = access_token
         self._token_expiry = datetime.now(UTC) + timedelta(seconds=expires_in)
@@ -142,7 +163,22 @@ class EmbeddingsTokenProvider:
             except httpx.RequestError as exc:
                 embeddings_idp_token_refresh_total.labels(result="failure").inc()
                 raise RuntimeError(f"Network error contacting IdP token endpoint: {exc}") from exc
+            except (ValueError, KeyError) as exc:
+                # Malformed token response: non-JSON body, non-numeric expires_in,
+                # or missing access_token. Count it (so the failure metric is
+                # accurate) and surface the actionable domain error.
+                embeddings_idp_token_refresh_total.labels(result="failure").inc()
+                raise RuntimeError(f"Malformed IdP token response: {exc}") from exc
 
     def close(self) -> None:
         """Close the underlying HTTP client."""
         self._http_client.close()
+
+    def __del__(self) -> None:
+        """Best-effort close of the HTTP client (mirrors FederationAuthManager)."""
+        client = getattr(self, "_http_client", None)
+        if client is not None:
+            try:
+                client.close()
+            except Exception:  # nosec B110 - best-effort cleanup in __del__; never raise during GC/shutdown
+                pass

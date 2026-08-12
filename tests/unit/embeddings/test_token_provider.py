@@ -32,6 +32,22 @@ class TestRequireIdpSettings:
     def test_passes_with_valid_settings(self):
         _require_idp_settings("https://idp.example.com/token", "client-id", "secret")
 
+    def test_allow_insecure_permits_loopback_http(self):
+        # http:// is allowed for local dev only when the host is loopback.
+        _require_idp_settings(
+            "http://localhost:8080/token", "client-id", "secret", allow_insecure=True
+        )
+        _require_idp_settings(
+            "http://127.0.0.1:8080/token", "client-id", "secret", allow_insecure=True
+        )
+
+    def test_allow_insecure_rejects_remote_http(self):
+        # allow_insecure must NOT permit a remote http:// endpoint (cleartext secret).
+        with pytest.raises(ValueError, match="loopback"):
+            _require_idp_settings(
+                "http://idp.example.com/token", "client-id", "secret", allow_insecure=True
+            )
+
 
 class TestEmbeddingsTokenProviderInit:
     """Tests for provider initialization validation."""
@@ -91,6 +107,21 @@ class TestEmbeddingsTokenProviderGetToken:
         assert call_kwargs[1]["data"]["client_id"] == "test-client"
         assert call_kwargs[1]["data"]["client_secret"] == "test-secret"
         assert call_kwargs[1]["data"]["scope"] == "api://test/.default"
+
+    @patch("registry.embeddings.token_provider.httpx.Client")
+    def test_raises_on_malformed_response(self, mock_client_class):
+        # A 200 with a non-numeric expires_in (ValueError from int()) must be
+        # wrapped in the domain RuntimeError, not surfaced as a raw parse error.
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"access_token": "x", "expires_in": "not-a-number"}
+        mock_response.raise_for_status = MagicMock()
+        mock_client = MagicMock()
+        mock_client.post.return_value = mock_response
+        mock_client_class.return_value = mock_client
+
+        provider = self._make_provider()
+        with pytest.raises(RuntimeError, match="Malformed IdP token response"):
+            provider.get_token()
 
     @patch("registry.embeddings.token_provider.httpx.Client")
     def test_caches_until_near_expiry(self, mock_client_class):

@@ -362,6 +362,12 @@ variable "embeddings_idp_timeout_seconds" {
   default     = 30
 }
 
+variable "embeddings_idp_allow_insecure" {
+  description = "Local dev only: permit an http:// (loopback) IdP token endpoint. Default false (https required)."
+  type        = bool
+  default     = false
+}
+
 
 #
 # Registration Deduplication Configuration

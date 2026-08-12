@@ -355,6 +355,7 @@ oauth2_allowed_redirect_uris = ""
 # embeddings_idp_client_secret     = "YOUR_CLIENT_SECRET"  # pragma: allowlist secret
 # embeddings_idp_scope             = "api://<app-id>/.default"
 # embeddings_idp_timeout_seconds   = 30
+# embeddings_idp_allow_insecure    = false  # local dev only: permit http:// loopback token endpoint
 
 # ============================================================================
 # REGISTRATION DEDUPLICATION
