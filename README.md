@@ -149,9 +149,9 @@ Across all of them you get semantic + lexical search, UI, REST, and MCP-native i
 
 The roadmap is best tracked on the [GitHub Milestones](https://github.com/agentic-community/mcp-gateway-registry/milestones) page. Per-user egress auth (3LO and OBO) and A2A traffic routing shipped in [1.27.0](docs/release-notes/1.27.0.md); at a high level, the big features we're working on next are:
 
-- **Finish per-user egress auth ([1.28.0](https://github.com/agentic-community/mcp-gateway-registry/milestones))**: per-user PAT/API-key injection (`pat`) shipped so the credentials broker now covers 3LO, OBO, and static-token modes; still landing are the coding-assistant OAuth phases (Entra scope pass-through, RFC 8707 resource enforcement).
-- **CIMD and ID-JAG for coding assistants ([1.29.0](https://github.com/agentic-community/mcp-gateway-registry/milestones))**: Client ID Metadata Documents and RFC 8693 token exchange so coding assistants connect with the least friction across identity providers.
-- **Registry Copilot ([1.30.0](https://github.com/agentic-community/mcp-gateway-registry/milestones))**: an embedded chat + agent-builder experience for discovering assets and composing agents from inside the registry.
+- **Reusable egress hardening and IdP-authenticated embeddings ([1.29.0](https://github.com/agentic-community/mcp-gateway-registry/milestones))**: a consolidated fail-closed SSRF/egress guard for all outbound fetches, OAuth2 client-credentials auth for embedding endpoints (plus a raw-array response adapter), Microsoft Entra v1 scope pass-through, and auth/infra follow-ups.
+- **CIMD and ID-JAG for coding assistants ([1.30.0](https://github.com/agentic-community/mcp-gateway-registry/milestones))**: Client ID Metadata Documents and RFC 8693 token exchange so coding assistants connect with the least friction across identity providers.
+- **Registry Copilot ([1.31.0](https://github.com/agentic-community/mcp-gateway-registry/milestones))**: an embedded chat + agent-builder experience for discovering assets and composing agents from inside the registry.
 
 Have a feature request? Please [open a GitHub issue](https://github.com/agentic-community/mcp-gateway-registry/issues/new), we build in the open.
 
