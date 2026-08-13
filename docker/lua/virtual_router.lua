@@ -962,6 +962,21 @@ function _M.route()
     -- all ngx.location.capture subrequests to backends inherit it.
     ngx.req.set_header("Accept", "application/json, text/event-stream")
 
+    -- Forward the validated caller identity to backend subrequests.
+    -- auth_request_set variables ($auth_user, $auth_username) are scoped to the
+    -- parent request and do NOT propagate into ngx.location.capture subrequests
+    -- via proxy_set_header. Setting them as request headers here ensures the
+    -- _vs_backend_* locations pass them through to the upstream MCP server,
+    -- enabling backends to enforce write-gates and record audit attribution.
+    local auth_user = ngx.var.auth_user
+    local auth_username = ngx.var.auth_username
+    if auth_user and auth_user ~= "" then
+        ngx.req.set_header("X-User", auth_user)
+    end
+    if auth_username and auth_username ~= "" then
+        ngx.req.set_header("X-Username", auth_username)
+    end
+
     local request_method = ngx.var.request_method
 
     -- Handle HTTP GET: per MCP Streamable HTTP 2025-11-25 spec section 3.3,
