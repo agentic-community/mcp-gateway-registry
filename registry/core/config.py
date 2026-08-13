@@ -431,6 +431,13 @@ class Settings(BaseSettings):
     embeddings_api_base: str | None = None
     embeddings_aws_region: str | None = "us-east-1"
 
+    # Response shape of the litellm embeddings endpoint.
+    #   "openai"    -> standard {"data": [{"embedding": [...]}]} envelope (default).
+    #   "raw_array" -> endpoint returns a bare array of vectors ([[...], [...]]);
+    #                  litellm cannot parse that, so the registry calls the endpoint
+    #                  directly and extracts the vectors itself. Opt-in only.
+    embeddings_response_format: str = "openai"  # "openai" | "raw_array"
+
     # IdP client-credentials auth for the litellm embeddings provider.
     # When embeddings_auth_mode == "idp", a bearer token is fetched from the IdP
     # per token-lifetime and injected on each embedding call instead of a static key.

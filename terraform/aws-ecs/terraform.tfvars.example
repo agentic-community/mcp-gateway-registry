@@ -356,6 +356,7 @@ oauth2_allowed_redirect_uris = ""
 # embeddings_idp_scope             = "api://<app-id>/.default"
 # embeddings_idp_timeout_seconds   = 30
 # embeddings_idp_allow_insecure    = false  # local dev only: permit http:// loopback token endpoint
+# embeddings_response_format       = "openai"  # default; use "raw_array" only if your endpoint returns a bare [[float]] array instead of the OpenAI envelope
 
 # ============================================================================
 # REGISTRATION DEDUPLICATION

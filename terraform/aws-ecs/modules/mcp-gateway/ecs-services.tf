@@ -1121,6 +1121,10 @@ module "ecs_service_registry" {
           name  = "EMBEDDINGS_IDP_ALLOW_INSECURE"
           value = tostring(var.embeddings_idp_allow_insecure)
         },
+        {
+          name  = "EMBEDDINGS_RESPONSE_FORMAT"
+          value = var.embeddings_response_format
+        },
         # Registration deduplication. Advisory check; never blocks
         # registration. Reuses the embeddings model above.
         {

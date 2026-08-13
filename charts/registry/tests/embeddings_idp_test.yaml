@@ -82,3 +82,25 @@ tests:
           path: spec.template.spec.containers[0].env
           content:
             name: EMBEDDINGS_IDP_CLIENT_SECRET
+
+  - it: emits no EMBEDDINGS_RESPONSE_FORMAT when responseFormat is unset
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: EMBEDDINGS_RESPONSE_FORMAT
+
+  - it: emits EMBEDDINGS_RESPONSE_FORMAT independently of authMode (raw_array with static auth)
+    set:
+      embeddings:
+        responseFormat: raw_array
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: EMBEDDINGS_RESPONSE_FORMAT
+            value: "raw_array"
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: EMBEDDINGS_AUTH_MODE
