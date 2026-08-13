@@ -6,10 +6,14 @@ from .client import (
     SentenceTransformersClient,
     create_embeddings_client,
 )
+from .token_provider import (
+    EmbeddingsTokenProvider,
+)
 
 __all__ = [
     "EmbeddingsClient",
     "SentenceTransformersClient",
     "LiteLLMClient",
+    "EmbeddingsTokenProvider",
     "create_embeddings_client",
 ]

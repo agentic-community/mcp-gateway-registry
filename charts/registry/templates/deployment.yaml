@@ -349,6 +349,30 @@ spec:
                   name: {{ .Values.ans.apiSecretExistingSecret }}
                   key: {{ .Values.ans.apiSecretExistingSecretKey }}
             {{- end }}
+            # Embeddings IdP auth (issue #1415). Rendered only when authMode is set,
+            # so default deployments are unchanged. EMBEDDINGS_IDP_CLIENT_SECRET is
+            # sourced from a pre-created Secret (embeddings.idpClientSecretExistingSecret).
+            {{- if .Values.embeddings.authMode }}
+            - name: EMBEDDINGS_AUTH_MODE
+              value: {{ .Values.embeddings.authMode | quote }}
+            - name: EMBEDDINGS_IDP_TOKEN_ENDPOINT
+              value: {{ .Values.embeddings.idpTokenEndpoint | default "" | quote }}
+            - name: EMBEDDINGS_IDP_CLIENT_ID
+              value: {{ .Values.embeddings.idpClientId | default "" | quote }}
+            - name: EMBEDDINGS_IDP_SCOPE
+              value: {{ .Values.embeddings.idpScope | default "" | quote }}
+            - name: EMBEDDINGS_IDP_TIMEOUT_SECONDS
+              value: {{ .Values.embeddings.idpTimeoutSeconds | default 30 | toString | quote }}
+            - name: EMBEDDINGS_IDP_ALLOW_INSECURE
+              value: {{ .Values.embeddings.idpAllowInsecure | default false | toString | quote }}
+            {{- if .Values.embeddings.idpClientSecretExistingSecret }}
+            - name: EMBEDDINGS_IDP_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.embeddings.idpClientSecretExistingSecret }}
+                  key: {{ .Values.embeddings.idpClientSecretExistingSecretKey | default "EMBEDDINGS_IDP_CLIENT_SECRET" }}
+            {{- end }}
+            {{- end }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

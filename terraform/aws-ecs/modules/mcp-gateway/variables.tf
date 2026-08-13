@@ -346,6 +346,49 @@ variable "embeddings_api_key" {
   sensitive   = true
 }
 
+variable "embeddings_auth_mode" {
+  description = "Auth strategy for the litellm embeddings provider. '' or 'static' = current behavior. 'idp' = fetch bearer via OAuth2 client credentials."
+  type        = string
+  default     = ""
+}
+
+variable "embeddings_idp_token_endpoint" {
+  description = "OAuth2 token endpoint URL (must be https://). Required when embeddings_auth_mode=idp."
+  type        = string
+  default     = ""
+}
+
+variable "embeddings_idp_client_id" {
+  description = "OAuth2 client id for embeddings IdP auth. Required when embeddings_auth_mode=idp."
+  type        = string
+  default     = ""
+}
+
+variable "embeddings_idp_client_secret" {
+  description = "OAuth2 client secret for embeddings IdP auth. Required when embeddings_auth_mode=idp."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "embeddings_idp_scope" {
+  description = "OAuth2 scope for embeddings IdP auth (e.g. 'api://<app-id>/.default'). Optional."
+  type        = string
+  default     = ""
+}
+
+variable "embeddings_idp_timeout_seconds" {
+  description = "HTTP timeout in seconds for the IdP token request."
+  type        = number
+  default     = 30
+}
+
+variable "embeddings_idp_allow_insecure" {
+  description = "Local dev only: permit an http:// (loopback) IdP token endpoint. Default false (https required)."
+  type        = bool
+  default     = false
+}
+
 
 # Registration Deduplication. Advisory only; reuses the embeddings
 # model above. The /api/<entity>/check-duplicates endpoints are always

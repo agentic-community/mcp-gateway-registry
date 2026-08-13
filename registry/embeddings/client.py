@@ -11,6 +11,7 @@ from abc import (
     ABC,
     abstractmethod,
 )
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -183,6 +184,7 @@ class LiteLLMClient(EmbeddingsClient):
         api_base: str | None = None,
         aws_region: str | None = None,
         embedding_dimension: int | None = None,
+        token_provider: Callable[[], str] | None = None,
     ):
         """
         Initialize the LiteLLM client.
@@ -194,6 +196,9 @@ class LiteLLMClient(EmbeddingsClient):
             api_base: Optional API base URL for the provider
             aws_region: Optional AWS region for Bedrock
             embedding_dimension: Expected embedding dimension (will be validated)
+            token_provider: Optional callable that returns a fresh bearer token.
+                When provided, the token is injected per-call via api_key instead
+                of setting a static environment variable.
 
         Note:
             For AWS Bedrock, this client uses the standard AWS credential chain
@@ -206,9 +211,10 @@ class LiteLLMClient(EmbeddingsClient):
         self.aws_region = aws_region
         self._embedding_dimension = embedding_dimension
         self._validated_dimension: int | None = None
+        self.token_provider = token_provider
 
-        # Set environment variables for LiteLLM
-        if self.api_key:
+        # Only set a static API key env var when NOT using a dynamic token provider.
+        if self.api_key and self.token_provider is None:
             self._set_api_key_env()
         if self.aws_region:
             os.environ["AWS_REGION_NAME"] = self.aws_region
@@ -264,6 +270,9 @@ class LiteLLMClient(EmbeddingsClient):
 
             if self.api_base:
                 kwargs["api_base"] = self.api_base
+
+            if self.token_provider is not None:
+                kwargs["api_key"] = self.token_provider()
 
             logger.debug(f"Calling LiteLLM embedding API with model: {self.model_name}")
             response = embedding(**kwargs)
@@ -333,6 +342,7 @@ def create_embeddings_client(
     api_base: str | None = None,
     aws_region: str | None = None,
     embedding_dimension: int | None = None,
+    token_provider: Callable[[], str] | None = None,
 ) -> EmbeddingsClient:
     """
     Factory function to create an embeddings client based on provider.
@@ -346,6 +356,7 @@ def create_embeddings_client(
         api_base: Optional API base URL (litellm only)
         aws_region: Optional AWS region (litellm with Bedrock only)
         embedding_dimension: Optional embedding dimension
+        token_provider: Optional callable returning a fresh bearer token (litellm only)
 
     Returns:
         EmbeddingsClient instance
@@ -385,6 +396,7 @@ def create_embeddings_client(
             api_base=api_base,
             aws_region=aws_region,
             embedding_dimension=embedding_dimension,
+            token_provider=token_provider,
         )
 
     else:
