@@ -141,6 +141,8 @@ entra:
   tenantId: ""
   loginBaseUrl: "" # Custom Entra login base URL for sovereign/national clouds (default: https://login.microsoftonline.com)
   graphBaseUrl: "" # Optional override for Microsoft Graph base URL. Leave unset on standard deployments — auto-inferred from loginBaseUrl. Set only for proxied or air-gapped deployments.
+  scopeFormat: "" # Entra PRM scope form: "v1" (api://<app-id>/<scope>) or "v2" (bare, default). Set "v1" only if your app exposes v1-style api:// scopes (issue #990).
+  applicationIdUri: "" # Application ID URI (e.g. api://<app-id>). Used as the v1 scope prefix and accepted as a token audience. Defaults to api://<clientId>.
 # Okta integration (used when authProvider.type = "okta")
 okta:
   domain: "" # e.g., dev-123456.okta.com

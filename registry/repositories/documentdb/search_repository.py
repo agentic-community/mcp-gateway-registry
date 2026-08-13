@@ -666,6 +666,31 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
         if self._embedding_model is None:
             from ...embeddings import create_embeddings_client
 
+            token_provider = None
+            if (
+                settings.embeddings_provider.lower() == "litellm"
+                and (settings.embeddings_auth_mode or "").lower() == "idp"
+            ):
+                from ...embeddings.token_provider import (
+                    EmbeddingsTokenProvider,
+                    _require_idp_settings,
+                )
+
+                _require_idp_settings(
+                    token_endpoint=settings.embeddings_idp_token_endpoint,
+                    client_id=settings.embeddings_idp_client_id,
+                    client_secret=settings.embeddings_idp_client_secret,
+                    allow_insecure=settings.embeddings_idp_allow_insecure,
+                )
+                token_provider = EmbeddingsTokenProvider(
+                    token_endpoint=settings.embeddings_idp_token_endpoint,
+                    client_id=settings.embeddings_idp_client_id,
+                    client_secret=settings.embeddings_idp_client_secret,
+                    scope=settings.embeddings_idp_scope,
+                    timeout_seconds=settings.embeddings_idp_timeout_seconds,
+                    allow_insecure=settings.embeddings_idp_allow_insecure,
+                ).get_token
+
             self._embedding_model = create_embeddings_client(
                 provider=settings.embeddings_provider,
                 model_name=settings.embeddings_model_name,
@@ -674,6 +699,8 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                 api_base=settings.embeddings_api_base,
                 aws_region=settings.embeddings_aws_region,
                 embedding_dimension=settings.embeddings_model_dimensions,
+                token_provider=token_provider,
+                response_format=settings.embeddings_response_format,
             )
         return self._embedding_model
 

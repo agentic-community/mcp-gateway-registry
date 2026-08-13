@@ -336,6 +336,8 @@ that server's Connect dialog:
 | Enabled flag | `ENTRA_ENABLED` | — | — | — |
 | Login base URL | `ENTRA_LOGIN_BASE_URL` | `entra_login_base_url` | `auth-server.entra.loginBaseUrl` | Sovereign clouds. |
 | Graph base URL | `ENTRA_GRAPH_BASE_URL` | `entra_graph_base_url` | `auth-server.entra.graphBaseUrl` | Optional override for Microsoft Graph base URL. Leave unset on standard Entra deployments — auto-inferred from `ENTRA_LOGIN_BASE_URL` via the documented sovereign-cloud mapping. Set explicitly only for proxied or air-gapped deployments. |
+| PRM scope format | `ENTRA_SCOPE_FORMAT` | `entra_scope_format` | `auth-server.entra.scopeFormat` / `registry.entra.scopeFormat` | `v1` or `v2` (default `v2`). Controls the form of custom resource scopes advertised in the OAuth PRM `scopes_supported` array. `v1` emits `api://<app-id>/<scope>` (required by apps exposing v1-style scopes; fixes AADSTS650053 at IDE login); `v2` emits the bare fragment. Standard OIDC scopes are always advertised bare. See [Entra v1 vs v2 scope format](entra-scope-format.md). |
+| Application ID URI | `ENTRA_APPLICATION_ID_URI` | `entra_application_id_uri` | `auth-server.entra.applicationIdUri` / `registry.entra.applicationIdUri` | Application ID URI (e.g. `api://<app-id>`) registered on the Entra app. Used as the v1 scope prefix and accepted as a token audience. Defaults to `api://<ENTRA_CLIENT_ID>`. |
 | Admin group id | `ENTRA_GROUP_ADMIN_ID` | — | `global.authProvider.entra.adminGroupId` | — |
 | Users group id | `ENTRA_GROUP_USERS_ID` | — | — | — |
 
@@ -531,6 +533,14 @@ Used by `registry` and `mcpgw` services.
 | API key **(secret)** | `EMBEDDINGS_API_KEY` | `embeddings_api_key` | `mcpgw.app.embeddingsApiKey` / `mcpgw.app.embeddingsApiKeyExistingSecret` | For `litellm` cloud providers. |
 | Custom API base | `EMBEDDINGS_API_BASE` | — | `mcpgw.app.embeddingsApiBase` | — |
 | AWS region | `EMBEDDINGS_AWS_REGION` | `embeddings_aws_region` | `mcpgw.app.embeddingsAwsRegion` | Bedrock. |
+| Auth mode | `EMBEDDINGS_AUTH_MODE` | `embeddings_auth_mode` | `registry.embeddings.authMode` | `static` (default) or `idp`. When `idp`, fetches bearer via OAuth2 client credentials. |
+| IdP token endpoint | `EMBEDDINGS_IDP_TOKEN_ENDPOINT` | `embeddings_idp_token_endpoint` | `registry.embeddings.idpTokenEndpoint` | OAuth2 token URL (must be `https://`). Required when `idp`. |
+| IdP client id | `EMBEDDINGS_IDP_CLIENT_ID` | `embeddings_idp_client_id` | `registry.embeddings.idpClientId` | Client-credentials client id. Required when `idp`. |
+| IdP client secret **(secret)** | `EMBEDDINGS_IDP_CLIENT_SECRET` | `embeddings_idp_client_secret` | `registry.embeddings.idpClientSecretExistingSecret` / `...Key` | Client-credentials secret. Never logged. On Helm, reference a pre-created Secret. Required when `idp`. |
+| IdP scope | `EMBEDDINGS_IDP_SCOPE` | `embeddings_idp_scope` | `registry.embeddings.idpScope` | OAuth2 scope (e.g. `api://<app-id>/.default`). Optional. |
+| IdP timeout | `EMBEDDINGS_IDP_TIMEOUT_SECONDS` | `embeddings_idp_timeout_seconds` | `registry.embeddings.idpTimeoutSeconds` | Token request timeout (default 30s). |
+| IdP allow insecure | `EMBEDDINGS_IDP_ALLOW_INSECURE` | `embeddings_idp_allow_insecure` | `registry.embeddings.idpAllowInsecure` | Allow `http://` loopback token endpoint (local dev only, default `false`). |
+| Response format | `EMBEDDINGS_RESPONSE_FORMAT` | `embeddings_response_format` | `registry.embeddings.responseFormat` | `openai` (default envelope) or `raw_array` (endpoint returns a bare `[[float]]` array). Independent of auth mode. |
 
 ---
 

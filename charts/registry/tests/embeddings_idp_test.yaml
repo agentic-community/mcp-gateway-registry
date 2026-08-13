@@ -1,0 +1,106 @@
+suite: embeddings IdP auth (issue #1415)
+templates:
+  - deployment.yaml
+release:
+  name: test
+  namespace: default
+tests:
+  - it: emits no EMBEDDINGS_* env entries when authMode is unset (backwards compatible)
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: EMBEDDINGS_AUTH_MODE
+
+  - it: emits the IdP env entries when authMode=idp
+    set:
+      embeddings:
+        authMode: idp
+        idpTokenEndpoint: https://idp.example.com/oauth2/token
+        idpClientId: mcp-embeddings
+        idpScope: "api://mcp-embeddings/.default"
+        idpTimeoutSeconds: 45
+        idpAllowInsecure: false
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: EMBEDDINGS_AUTH_MODE
+            value: "idp"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: EMBEDDINGS_IDP_TOKEN_ENDPOINT
+            value: https://idp.example.com/oauth2/token
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: EMBEDDINGS_IDP_CLIENT_ID
+            value: mcp-embeddings
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: EMBEDDINGS_IDP_SCOPE
+            value: "api://mcp-embeddings/.default"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: EMBEDDINGS_IDP_TIMEOUT_SECONDS
+            value: "45"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: EMBEDDINGS_IDP_ALLOW_INSECURE
+            value: "false"
+
+  - it: sources EMBEDDINGS_IDP_CLIENT_SECRET from an existing Secret when configured
+    set:
+      embeddings:
+        authMode: idp
+        idpTokenEndpoint: https://idp.example.com/oauth2/token
+        idpClientId: mcp-embeddings
+        idpClientSecretExistingSecret: my-embeddings-secret # pragma: allowlist secret
+        idpClientSecretExistingSecretKey: EMBEDDINGS_IDP_CLIENT_SECRET # pragma: allowlist secret
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: EMBEDDINGS_IDP_CLIENT_SECRET
+            valueFrom:
+              secretKeyRef:
+                name: my-embeddings-secret
+                key: EMBEDDINGS_IDP_CLIENT_SECRET
+
+  - it: omits EMBEDDINGS_IDP_CLIENT_SECRET when no existing Secret is set
+    set:
+      embeddings:
+        authMode: idp
+        idpTokenEndpoint: https://idp.example.com/oauth2/token
+        idpClientId: mcp-embeddings
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: EMBEDDINGS_IDP_CLIENT_SECRET
+
+  - it: emits no EMBEDDINGS_RESPONSE_FORMAT when responseFormat is unset
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: EMBEDDINGS_RESPONSE_FORMAT
+
+  - it: emits EMBEDDINGS_RESPONSE_FORMAT independently of authMode (raw_array with static auth)
+    set:
+      embeddings:
+        responseFormat: raw_array
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: EMBEDDINGS_RESPONSE_FORMAT
+            value: "raw_array"
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: EMBEDDINGS_AUTH_MODE

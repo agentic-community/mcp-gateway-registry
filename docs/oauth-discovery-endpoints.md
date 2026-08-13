@@ -165,6 +165,7 @@ Claude.ai's Custom Connector UI) and paste the resulting `client_id`/
 | `resource_metadata` URL in WWW-Authenticate header doesn't match PRM `resource` | Stale `REGISTRY_URL` in the gateway env vs. what nginx was rendered with. Restart the registry app to re-render config. |
 | PRM endpoint returns 502 | Gateway can't reach the configured IdP. Check `AUTH_PROVIDER` env vars, network policy, and IdP health. |
 | PRM endpoint returns 501 | The configured `AUTH_PROVIDER` lacks an `authorization_server_metadata()` implementation. Should not happen with the five built-in providers. |
+| `AADSTS9010010: resource parameter ... doesn't match the requested scopes` (Entra, at IDE login) | The server's connection URL is not a registered Entra App ID URI, so Entra can't match the `resource`. On Entra every server uses a per-server PRM (`resource` = connection URL); register that URL as an `identifierUri` with a `user_impersonation` scope exposed + granted to the IDE client. See [Entra scope format](entra-scope-format.md) and the client-id method doc. |
 
 ## Related issues
 

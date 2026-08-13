@@ -444,18 +444,21 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
   //   1. mcp_endpoint (explicit full-URL override) - always wins
   //   2. proxy_pass_url (registry-only mode - client reaches the server directly)
   //   3. gateway URL = origin + base + server.path, optionally + "/mcp"
-  // The trailing "/mcp" transport segment is auto-detected from proxy_pass_url
-  // but can be forced on/off per-server via append_mcp_path (e.g. root-endpoint
-  // servers like AWS Knowledge that serve MCP at the server path itself).
+  // The trailing "/mcp" transport segment is appended UNLESS a server explicitly
+  // sets append_mcp_path=false (e.g. root-endpoint servers like AWS Knowledge
+  // that serve MCP at the server path itself). This mirrors the server-side PRM
+  // resource, which is built as `append_mcp_path is not False` (append when
+  // unset), so the advertised connection URL always equals the PRM resource.
+  // RFC 9728 requires the client's connection URL and the PRM resource to match,
+  // so the two MUST be derived identically. Do NOT reintroduce a proxy_pass_url
+  // heuristic here: the upstream URL shape says nothing about the gateway path.
   const buildConnectUrl = useCallback(() => {
     if (server.mcp_endpoint) return server.mcp_endpoint;
     if (isRegistryOnly && server.proxy_pass_url) return server.proxy_pass_url;
 
     const baseUrl = `${window.location.origin}${getBaseURL()}`;
     const cleanPath = server.path.replace(/\/+$/, '').replace(/^\/+/, '/');
-    const proxyUrl = server.proxy_pass_url || '';
-    const hasMcpPath = /\/(mcp|sse|v1)(\/.*)?$/.test(proxyUrl);
-    const shouldAppend = appendMcpPath ?? !hasMcpPath;
+    const shouldAppend = appendMcpPath ?? true;
     return shouldAppend ? `${baseUrl}${cleanPath}/mcp` : `${baseUrl}${cleanPath}`;
   }, [server.mcp_endpoint, server.proxy_pass_url, server.path, isRegistryOnly, appendMcpPath]);
 

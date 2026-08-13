@@ -451,6 +451,14 @@ _embedding_removal_failures_counter = _meter.create_counter(
 )
 embedding_removal_failures_total = _CounterAdapter(_embedding_removal_failures_counter)
 
+# Embeddings IdP token refresh metrics (issue #1415)
+_embeddings_idp_token_refresh_counter = _meter.create_counter(
+    name="mcpgw_registry_embeddings_idp_token_refresh_total",
+    description="Embeddings IdP token refresh attempts labeled by result",
+    unit="1",
+)
+embeddings_idp_token_refresh_total = _CounterAdapter(_embeddings_idp_token_refresh_counter)
+
 
 # Cloud detection (registry/core/metrics.py:87)
 _cloud_detection_counter = _meter.create_counter(

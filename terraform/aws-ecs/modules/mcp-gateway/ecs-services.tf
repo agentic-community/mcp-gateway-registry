@@ -194,6 +194,14 @@ module "ecs_service_auth" {
           value = var.entra_graph_base_url
         },
         {
+          name  = "ENTRA_SCOPE_FORMAT"
+          value = var.entra_scope_format
+        },
+        {
+          name  = "ENTRA_APPLICATION_ID_URI"
+          value = var.entra_application_id_uri
+        },
+        {
           name  = "IDP_GROUP_FILTER_PREFIX"
           value = var.idp_group_filter_prefix
         },
@@ -953,6 +961,14 @@ module "ecs_service_registry" {
           value = var.entra_graph_base_url
         },
         {
+          name  = "ENTRA_SCOPE_FORMAT"
+          value = var.entra_scope_format
+        },
+        {
+          name  = "ENTRA_APPLICATION_ID_URI"
+          value = var.entra_application_id_uri
+        },
+        {
           name  = "IDP_GROUP_FILTER_PREFIX"
           value = var.idp_group_filter_prefix
         },
@@ -1086,6 +1102,34 @@ module "ecs_service_registry" {
         {
           name  = "EMBEDDINGS_AWS_REGION"
           value = var.embeddings_aws_region
+        },
+        {
+          name  = "EMBEDDINGS_AUTH_MODE"
+          value = var.embeddings_auth_mode
+        },
+        {
+          name  = "EMBEDDINGS_IDP_TOKEN_ENDPOINT"
+          value = var.embeddings_idp_token_endpoint
+        },
+        {
+          name  = "EMBEDDINGS_IDP_CLIENT_ID"
+          value = var.embeddings_idp_client_id
+        },
+        {
+          name  = "EMBEDDINGS_IDP_SCOPE"
+          value = var.embeddings_idp_scope
+        },
+        {
+          name  = "EMBEDDINGS_IDP_TIMEOUT_SECONDS"
+          value = tostring(var.embeddings_idp_timeout_seconds)
+        },
+        {
+          name  = "EMBEDDINGS_IDP_ALLOW_INSECURE"
+          value = tostring(var.embeddings_idp_allow_insecure)
+        },
+        {
+          name  = "EMBEDDINGS_RESPONSE_FORMAT"
+          value = var.embeddings_response_format
         },
         # Registration deduplication. Advisory check; never blocks
         # registration. Reuses the embeddings model above.
@@ -1824,6 +1868,10 @@ module "ecs_service_registry" {
           {
             name      = "EMBEDDINGS_API_KEY"
             valueFrom = aws_secretsmanager_secret.embeddings_api_key.arn
+          },
+          {
+            name      = "EMBEDDINGS_IDP_CLIENT_SECRET"
+            valueFrom = aws_secretsmanager_secret.embeddings_idp_client_secret.arn
           }
         ],
         # PR #947: MongoDB connection string override (Secrets Manager variant).

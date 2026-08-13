@@ -152,6 +152,8 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
                     ("entra_client_id", "Client ID", True),
                     ("entra_client_secret", "Client Secret", True),
                     ("entra_group_admin_id", "Admin Group ID", False),
+                    ("entra_scope_format", "Scope Format (v1/v2)", False),
+                    ("entra_application_id_uri", "Application ID URI", False),
                 ],
             },
             {
@@ -180,6 +182,12 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             ("vector_search_ef_search", "Vector Search EF", False),
             ("embeddings_api_key", "API Key", True),
             ("embeddings_secret_key", "Secret Key", True),
+            ("embeddings_auth_mode", "Auth Mode", False),
+            ("embeddings_idp_token_endpoint", "IdP Token Endpoint", False),
+            ("embeddings_idp_client_id", "IdP Client ID", False),
+            ("embeddings_idp_client_secret", "IdP Client Secret", True),
+            ("embeddings_idp_scope", "IdP Scope", False),
+            ("embeddings_idp_timeout_seconds", "IdP Timeout (s)", False),
         ],
     },
     "health_check": {

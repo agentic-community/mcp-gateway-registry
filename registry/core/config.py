@@ -431,6 +431,25 @@ class Settings(BaseSettings):
     embeddings_api_base: str | None = None
     embeddings_aws_region: str | None = "us-east-1"
 
+    # Response shape of the litellm embeddings endpoint.
+    #   "openai"    -> standard {"data": [{"embedding": [...]}]} envelope (default).
+    #   "raw_array" -> endpoint returns a bare array of vectors ([[...], [...]]);
+    #                  litellm cannot parse that, so the registry calls the endpoint
+    #                  directly and extracts the vectors itself. Opt-in only.
+    embeddings_response_format: str = "openai"  # "openai" | "raw_array"
+
+    # IdP client-credentials auth for the litellm embeddings provider.
+    # When embeddings_auth_mode == "idp", a bearer token is fetched from the IdP
+    # per token-lifetime and injected on each embedding call instead of a static key.
+    # Works with any OAuth2-compliant IdP (Keycloak, Entra, Okta, Auth0, PingFederate).
+    embeddings_auth_mode: str | None = None  # None | "static" | "idp"
+    embeddings_idp_token_endpoint: str | None = None
+    embeddings_idp_client_id: str | None = None
+    embeddings_idp_client_secret: str | None = None
+    embeddings_idp_scope: str | None = None
+    embeddings_idp_timeout_seconds: int = 30
+    embeddings_idp_allow_insecure: bool = False  # Local dev only: allow http:// token endpoint
+
     # Health check settings
     health_check_interval_seconds: int = (
         300  # 5 minutes for automatic background checks (configurable via env var)
@@ -807,6 +826,27 @@ class Settings(BaseSettings):
     entra_group_admin_id: str = Field(
         default="",
         description="Microsoft Entra ID admin group ID",
+    )
+    entra_scope_format: str = Field(
+        default="v2",
+        description=(
+            "Entra scope-advertisement form for the PRM `scopes_supported` array: "
+            "`v1` or `v2` (default `v2`). Entra v1 requires custom resource scopes "
+            "to be requested on /authorize as `api://<app-id-or-uri>/<scope>` "
+            "(the bare form is rejected with AADSTS650053); v2 accepts the bare "
+            "fragment. Standard OIDC scopes (openid/profile/email/offline_access) "
+            "are always advertised bare regardless of this setting. Set to `v1` "
+            "only if your Entra app registration exposes v1 (api://) scopes."
+        ),
+    )
+    entra_application_id_uri: str = Field(
+        default="",
+        description=(
+            "Application ID URI registered on the Entra app (e.g. "
+            "`api://<app-id>` or a custom `api://<uri>`). Used verbatim as the "
+            "v1 scope prefix in the PRM and accepted as a token audience. "
+            "Defaults to the app's `api://<client-id>` form when unset."
+        ),
     )
 
     # IdP Group Filtering (applies to all identity providers)

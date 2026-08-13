@@ -4911,9 +4911,10 @@ class TestSessionCookieSecureDefault:
 
 class TestForwardHeadersIngressStrip:
     """Egress ingress-auth policy (issue #1266): client auth headers are ingress
-    credentials, stripped on egress. X-Authorization and Cookie are ALWAYS
-    stripped; Authorization is stripped unless relay_authorization=True (set only
-    for the built-in internal registry-tools server). No general relay mode --
+    credentials, stripped on egress. Cookie is ALWAYS stripped; Authorization
+    and X-Authorization are stripped unless relay_authorization=True (set only
+    for the built-in internal registry-tools server, which the gateway addresses
+    via the X-Authorization header). No general relay mode -- third-party
     upstream creds come from the egress vault.
     """
 
@@ -4928,10 +4929,17 @@ class TestForwardHeadersIngressStrip:
         assert "authorization" not in {k.lower() for k in out}
         assert out.get("Accept") == "x"
 
-    def test_strips_x_authorization_always_even_when_relaying(self):
-        """X-Authorization is never forwarded, even for the internal relay server."""
-        out = self._forward({"X-Authorization": "Bearer x"}, relay=True)
+    def test_strips_x_authorization_by_default(self):
+        """Non-relay (default): X-Authorization stripped (never to third-party upstreams)."""
+        out = self._forward({"X-Authorization": "Bearer x"}, relay=False)
         assert "x-authorization" not in {k.lower() for k in out}
+
+    def test_relays_x_authorization_when_flag_set(self):
+        """relay_authorization=True keeps X-Authorization: the gateway carries the
+        caller bearer to the internal registry-tools server in this header, so it
+        must be relayed alongside Authorization."""
+        out = self._forward({"X-Authorization": "Bearer x"}, relay=True)
+        assert out.get("X-Authorization") == "Bearer x"
 
     def test_strips_cookie_always_even_when_relaying(self):
         """Cookie is never forwarded, even for the internal relay server."""
@@ -4943,14 +4951,15 @@ class TestForwardHeadersIngressStrip:
         out = self._forward({"Authorization": "Bearer a"}, relay=True)
         assert out.get("Authorization") == "Bearer a"
 
-    def test_relay_flag_does_not_readmit_x_authorization_or_cookie(self):
-        """With relay on, only Authorization is relayed; X-Authorization/Cookie stay stripped."""
+    def test_relay_flag_relays_auth_and_x_authorization_but_not_cookie(self):
+        """With relay on, Authorization AND X-Authorization are relayed (both to the
+        internal registry-tools server); Cookie stays stripped."""
         out = self._forward(
             {"Authorization": "Bearer a", "X-Authorization": "Bearer x", "Cookie": "s=1"},
             relay=True,
         )
         assert out.get("Authorization") == "Bearer a"
-        assert "x-authorization" not in {k.lower() for k in out}
+        assert out.get("X-Authorization") == "Bearer x"
         assert "cookie" not in {k.lower() for k in out}
 
     def test_case_insensitive(self):

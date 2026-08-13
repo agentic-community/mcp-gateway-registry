@@ -11,6 +11,7 @@ from abc import (
     ABC,
     abstractmethod,
 )
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -20,6 +21,58 @@ if TYPE_CHECKING:
     from sentence_transformers import SentenceTransformer
 
 logger = logging.getLogger(__name__)
+
+# Default timeout for the direct raw_array HTTP call (litellm handles its own).
+RAW_ARRAY_REQUEST_TIMEOUT_SECONDS: int = 30
+# Top-level keys a raw_array endpoint might wrap its list of vectors under.
+_RAW_ARRAY_KEYS: tuple[str, ...] = ("embeddings", "data", "vectors")
+
+
+def _extract_raw_array(
+    payload: Any,
+) -> list[list[float]]:
+    """Extract a list of embedding vectors from a non-OpenAI "raw array" response.
+
+    Some OpenAI-compatible endpoints return the vectors as a bare JSON array of
+    arrays (``[[0.1, ...], [0.2, ...]]``) instead of the standard
+    ``{"data": [{"embedding": [...]}]}`` envelope that litellm parses. A few wrap
+    the same bare array under a top-level key. This helper accepts:
+
+      - a bare list of vectors: ``[[...], [...]]``
+      - a dict with the list of vectors under "embeddings", "data", or "vectors"
+
+    Args:
+        payload: Parsed JSON body returned by the embeddings endpoint.
+
+    Returns:
+        List of embedding vectors (list of lists of floats).
+
+    Raises:
+        ValueError: If no list of numeric vectors can be found.
+    """
+    vectors = payload
+    if isinstance(payload, dict):
+        vectors = None
+        for key in _RAW_ARRAY_KEYS:
+            if isinstance(payload.get(key), list):
+                vectors = payload[key]
+                break
+        if vectors is None:
+            raise ValueError(
+                "raw_array response is a dict without an "
+                "'embeddings'/'data'/'vectors' list; "
+                f"got keys {sorted(payload.keys())}"
+            )
+
+    if not isinstance(vectors, list) or not vectors:
+        raise ValueError("raw_array response did not contain a non-empty list of vectors")
+    if not all(isinstance(vector, list) for vector in vectors):
+        raise ValueError(
+            "raw_array response must be a list of vectors (list of lists); "
+            "got a flat or malformed structure. If your endpoint returns the "
+            "OpenAI envelope, set EMBEDDINGS_RESPONSE_FORMAT=openai instead."
+        )
+    return vectors
 
 
 class EmbeddingsClient(ABC):
@@ -183,6 +236,9 @@ class LiteLLMClient(EmbeddingsClient):
         api_base: str | None = None,
         aws_region: str | None = None,
         embedding_dimension: int | None = None,
+        token_provider: Callable[[], str] | None = None,
+        response_format: str = "openai",
+        request_timeout_seconds: int = RAW_ARRAY_REQUEST_TIMEOUT_SECONDS,
     ):
         """
         Initialize the LiteLLM client.
@@ -194,6 +250,13 @@ class LiteLLMClient(EmbeddingsClient):
             api_base: Optional API base URL for the provider
             aws_region: Optional AWS region for Bedrock
             embedding_dimension: Expected embedding dimension (will be validated)
+            token_provider: Optional callable that returns a fresh bearer token.
+                When provided, the token is injected per-call via api_key instead
+                of setting a static environment variable.
+            response_format: Response shape of the endpoint. "openai" (default) uses
+                litellm to parse the standard envelope; "raw_array" bypasses litellm
+                and reads a bare array-of-vectors response directly.
+            request_timeout_seconds: Timeout for the direct raw_array HTTP call.
 
         Note:
             For AWS Bedrock, this client uses the standard AWS credential chain
@@ -206,9 +269,12 @@ class LiteLLMClient(EmbeddingsClient):
         self.aws_region = aws_region
         self._embedding_dimension = embedding_dimension
         self._validated_dimension: int | None = None
+        self.token_provider = token_provider
+        self.response_format = response_format.lower()
+        self._request_timeout_seconds = request_timeout_seconds
 
-        # Set environment variables for LiteLLM
-        if self.api_key:
+        # Only set a static API key env var when NOT using a dynamic token provider.
+        if self.api_key and self.token_provider is None:
             self._set_api_key_env()
         if self.aws_region:
             os.environ["AWS_REGION_NAME"] = self.aws_region
@@ -236,6 +302,76 @@ class LiteLLMClient(EmbeddingsClient):
             os.environ[env_var] = self.api_key
             logger.debug(f"Set {env_var} environment variable for {provider}")
 
+    def _record_dimension(
+        self,
+        embeddings_array: np.ndarray,
+    ) -> None:
+        """Record the embedding dimension on the first call and warn on mismatch."""
+        if self._validated_dimension is not None:
+            return
+        self._validated_dimension = embeddings_array.shape[1]
+        if self._embedding_dimension and self._validated_dimension != self._embedding_dimension:
+            logger.warning(
+                f"Embedding dimension mismatch: expected {self._embedding_dimension}, "
+                f"got {self._validated_dimension}"
+            )
+
+    def _encode_raw_array(
+        self,
+        texts: list[str],
+    ) -> np.ndarray:
+        """Call the endpoint directly and read a bare array-of-vectors response.
+
+        Used when response_format == "raw_array". litellm cannot parse a
+        non-envelope response, so we POST the OpenAI-style request ourselves and
+        extract the vectors via _extract_raw_array. The token (IdP bearer or
+        static api_key) is injected exactly as in the litellm path. api_base is
+        operator-configured trusted config, not user input.
+        """
+        import httpx
+
+        if not self.api_base:
+            raise RuntimeError(
+                "EMBEDDINGS_RESPONSE_FORMAT=raw_array requires EMBEDDINGS_API_BASE "
+                "(the OpenAI-compatible endpoint to call directly)."
+            )
+        url = self.api_base.rstrip("/") + "/embeddings"
+        # Endpoints expect the bare model name, not litellm's 'provider/model' form.
+        model = self.model_name.split("/", 1)[-1]
+        headers = {"Content-Type": "application/json", "Accept": "application/json"}
+        token = self.token_provider() if self.token_provider is not None else self.api_key
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+
+        try:
+            logger.debug("Calling raw_array embeddings endpoint: %s", url)
+            response = httpx.post(
+                url,
+                json={"input": texts, "model": model},
+                headers=headers,
+                timeout=self._request_timeout_seconds,
+            )
+            response.raise_for_status()
+            vectors = _extract_raw_array(response.json())
+            embeddings_array = np.array(vectors, dtype=np.float32)
+        except httpx.HTTPStatusError as e:
+            logger.error(
+                "raw_array embeddings endpoint returned status %s",
+                e.response.status_code,
+                exc_info=True,
+            )
+            raise RuntimeError(
+                f"raw_array embeddings request failed with status {e.response.status_code}"
+            ) from e
+        except Exception as e:
+            logger.error(
+                f"Failed to generate embeddings via raw_array endpoint: {e}", exc_info=True
+            )
+            raise RuntimeError(f"Failed to generate embeddings via raw_array endpoint: {e}") from e
+
+        self._record_dimension(embeddings_array)
+        return embeddings_array
+
     def encode(
         self,
         texts: list[str],
@@ -252,6 +388,9 @@ class LiteLLMClient(EmbeddingsClient):
         Raises:
             RuntimeError: If encoding fails or LiteLLM is not installed
         """
+        if self.response_format == "raw_array":
+            return self._encode_raw_array(texts)
+
         try:
             from litellm import embedding
         except ImportError as e:
@@ -265,6 +404,9 @@ class LiteLLMClient(EmbeddingsClient):
             if self.api_base:
                 kwargs["api_base"] = self.api_base
 
+            if self.token_provider is not None:
+                kwargs["api_key"] = self.token_provider()
+
             logger.debug(f"Calling LiteLLM embedding API with model: {self.model_name}")
             response = embedding(**kwargs)
 
@@ -272,17 +414,7 @@ class LiteLLMClient(EmbeddingsClient):
             embeddings_list = [item["embedding"] for item in response["data"]]
             embeddings_array = np.array(embeddings_list, dtype=np.float32)
 
-            # Validate dimension on first call
-            if self._validated_dimension is None:
-                self._validated_dimension = embeddings_array.shape[1]
-                if (
-                    self._embedding_dimension
-                    and self._validated_dimension != self._embedding_dimension
-                ):
-                    logger.warning(
-                        f"Embedding dimension mismatch: expected {self._embedding_dimension}, "
-                        f"got {self._validated_dimension}"
-                    )
+            self._record_dimension(embeddings_array)
 
             logger.debug(
                 f"Generated {len(embeddings_list)} embeddings with dimension {self._validated_dimension}"
@@ -333,6 +465,8 @@ def create_embeddings_client(
     api_base: str | None = None,
     aws_region: str | None = None,
     embedding_dimension: int | None = None,
+    token_provider: Callable[[], str] | None = None,
+    response_format: str = "openai",
 ) -> EmbeddingsClient:
     """
     Factory function to create an embeddings client based on provider.
@@ -346,6 +480,8 @@ def create_embeddings_client(
         api_base: Optional API base URL (litellm only)
         aws_region: Optional AWS region (litellm with Bedrock only)
         embedding_dimension: Optional embedding dimension
+        token_provider: Optional callable returning a fresh bearer token (litellm only)
+        response_format: Endpoint response shape, "openai" or "raw_array" (litellm only)
 
     Returns:
         EmbeddingsClient instance
@@ -385,6 +521,8 @@ def create_embeddings_client(
             api_base=api_base,
             aws_region=aws_region,
             embedding_dimension=embedding_dimension,
+            token_provider=token_provider,
+            response_format=response_format,
         )
 
     else:

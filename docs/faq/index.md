@@ -28,6 +28,7 @@ Common questions and answers about the MCP Gateway Registry.
 - [How do I rotate my MongoDB password and OpenBao token? (local Docker Compose, EC2/macOS)](rotate-mongodb-and-openbao-secrets.md)
 - [Why are some of my assets not showing up in semantic search?](fix-missing-search-embeddings.md)
 - [Why do I sometimes see search results for assets that no longer exist?](fix-stale-search-embeddings.md)
+- [How do I use a custom OpenAI-compatible embeddings endpoint (e.g. LiteLLM) that needs an IdP auth token?](idp-authenticated-embeddings-endpoint.md)
 
 ## Amazon Bedrock AgentCore
 

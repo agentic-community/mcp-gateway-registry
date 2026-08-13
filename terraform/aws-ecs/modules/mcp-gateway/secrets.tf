@@ -206,6 +206,26 @@ resource "aws_secretsmanager_secret_version" "embeddings_api_key" {
 }
 
 
+# Embeddings IdP client secret (optional - only needed for EMBEDDINGS_AUTH_MODE=idp)
+resource "aws_secretsmanager_secret" "embeddings_idp_client_secret" {
+  #checkov:skip=CKV2_AWS_57:IdP client secret managed in external IdP portal, not rotatable via Secrets Manager
+  name_prefix             = "${local.name_prefix}-embeddings-idp-secret-"
+  description             = "OAuth2 client secret for IdP-authenticated embeddings endpoint"
+  recovery_window_in_days = 0
+  kms_key_id              = aws_kms_key.secrets.id
+  tags                    = local.common_tags
+}
+
+resource "aws_secretsmanager_secret_version" "embeddings_idp_client_secret" {
+  secret_id     = aws_secretsmanager_secret.embeddings_idp_client_secret.id
+  secret_string = var.embeddings_idp_client_secret != "" ? var.embeddings_idp_client_secret : "not-configured"
+
+  lifecycle {
+    ignore_changes = [secret_string]
+  }
+}
+
+
 # Microsoft Entra ID client secret (for OAuth and IAM operations)
 resource "aws_secretsmanager_secret" "entra_client_secret" {
   #checkov:skip=CKV2_AWS_57:IdP client secret managed in Microsoft Entra ID portal, not rotatable via Secrets Manager

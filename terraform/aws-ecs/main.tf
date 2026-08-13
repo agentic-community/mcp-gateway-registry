@@ -103,11 +103,19 @@ module "mcp_gateway" {
   alarm_email       = var.alarm_email
 
   # Embeddings configuration
-  embeddings_provider         = var.embeddings_provider
-  embeddings_model_name       = var.embeddings_model_name
-  embeddings_model_dimensions = var.embeddings_model_dimensions
-  embeddings_aws_region       = var.embeddings_aws_region
-  embeddings_api_key          = var.embeddings_api_key
+  embeddings_provider            = var.embeddings_provider
+  embeddings_model_name          = var.embeddings_model_name
+  embeddings_model_dimensions    = var.embeddings_model_dimensions
+  embeddings_aws_region          = var.embeddings_aws_region
+  embeddings_api_key             = var.embeddings_api_key
+  embeddings_auth_mode           = var.embeddings_auth_mode
+  embeddings_idp_token_endpoint  = var.embeddings_idp_token_endpoint
+  embeddings_idp_client_id       = var.embeddings_idp_client_id
+  embeddings_idp_client_secret   = var.embeddings_idp_client_secret
+  embeddings_idp_scope           = var.embeddings_idp_scope
+  embeddings_idp_timeout_seconds = var.embeddings_idp_timeout_seconds
+  embeddings_idp_allow_insecure  = var.embeddings_idp_allow_insecure
+  embeddings_response_format     = var.embeddings_response_format
 
   # Registration deduplication
   dedup_registration_hint_enabled = var.dedup_registration_hint_enabled
@@ -179,6 +187,8 @@ module "mcp_gateway" {
   entra_client_secret                       = var.entra_client_secret
   entra_login_base_url                      = var.entra_login_base_url
   entra_graph_base_url                      = var.entra_graph_base_url
+  entra_scope_format                        = var.entra_scope_format
+  entra_application_id_uri                  = var.entra_application_id_uri
   idp_group_filter_prefix                   = var.idp_group_filter_prefix
   allowed_idp_groups                        = var.allowed_idp_groups
   idp_user_group_fallback_enabled_providers = var.idp_user_group_fallback_enabled_providers

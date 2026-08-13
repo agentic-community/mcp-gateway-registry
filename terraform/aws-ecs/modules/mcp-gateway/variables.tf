@@ -346,6 +346,55 @@ variable "embeddings_api_key" {
   sensitive   = true
 }
 
+variable "embeddings_auth_mode" {
+  description = "Auth strategy for the litellm embeddings provider. '' or 'static' = current behavior. 'idp' = fetch bearer via OAuth2 client credentials."
+  type        = string
+  default     = ""
+}
+
+variable "embeddings_idp_token_endpoint" {
+  description = "OAuth2 token endpoint URL (must be https://). Required when embeddings_auth_mode=idp."
+  type        = string
+  default     = ""
+}
+
+variable "embeddings_idp_client_id" {
+  description = "OAuth2 client id for embeddings IdP auth. Required when embeddings_auth_mode=idp."
+  type        = string
+  default     = ""
+}
+
+variable "embeddings_idp_client_secret" {
+  description = "OAuth2 client secret for embeddings IdP auth. Required when embeddings_auth_mode=idp."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "embeddings_idp_scope" {
+  description = "OAuth2 scope for embeddings IdP auth (e.g. 'api://<app-id>/.default'). Optional."
+  type        = string
+  default     = ""
+}
+
+variable "embeddings_idp_timeout_seconds" {
+  description = "HTTP timeout in seconds for the IdP token request."
+  type        = number
+  default     = 30
+}
+
+variable "embeddings_idp_allow_insecure" {
+  description = "Local dev only: permit an http:// (loopback) IdP token endpoint. Default false (https required)."
+  type        = bool
+  default     = false
+}
+
+variable "embeddings_response_format" {
+  description = "Response shape of the litellm embeddings endpoint. 'openai' (default) = standard envelope; 'raw_array' = endpoint returns a bare [[float]] array."
+  type        = string
+  default     = ""
+}
+
 
 # Registration Deduplication. Advisory only; reuses the embeddings
 # model above. The /api/<entity>/check-duplicates endpoints are always
@@ -690,6 +739,18 @@ variable "entra_login_base_url" {
 
 variable "entra_graph_base_url" {
   description = "Microsoft Graph base URL override. Leave empty on standard deployments — auto-inferred from entra_login_base_url."
+  type        = string
+  default     = ""
+}
+
+variable "entra_scope_format" {
+  description = "Entra PRM scope form: 'v1' (api://<app-id>/<scope>) or 'v2' (bare, default). Set 'v1' only if the Entra app exposes v1-style api:// scopes (issue #990). Empty uses the app default (v2)."
+  type        = string
+  default     = ""
+}
+
+variable "entra_application_id_uri" {
+  description = "Application ID URI (e.g. api://<app-id>) registered on the Entra app. Used as the v1 scope prefix and accepted as a token audience. Empty defaults to api://<entra_client_id>."
   type        = string
   default     = ""
 }

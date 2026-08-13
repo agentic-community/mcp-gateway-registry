@@ -78,8 +78,10 @@ COGNITO_CLIENT_SECRET
 COGNITO_DOMAIN
 COGNITO_ENABLED
 COGNITO_USER_POOL_ID
+ENTRA_APPLICATION_ID_URI
 ENTRA_CLIENT_ID
 ENTRA_ENABLED
+ENTRA_SCOPE_FORMAT
 ENTRA_TENANT_ID
 GATEWAY_ADDITIONAL_SERVER_NAMES
 IDP_GROUP_FILTER_PREFIX
@@ -220,3 +222,16 @@ MCP_TOKEN_MAX_TTL_HOURS
 # Chart-managed security constant: prevents AWS SDK IMDS fallback (rendered as a
 # static env: entry in deployment.yaml, not operator-tunable).
 AWS_EC2_METADATA_DISABLED
+# Embeddings IdP auth (chart-rendered from embeddings.* when authMode is set; #1415).
+# The pre-existing EMBEDDINGS_PROVIDER/MODEL_NAME/MODEL_DIMENSIONS/API_KEY/API_BASE/
+# AWS_REGION are NOT chart-rendered and stay configurable via extraEnv, so they are
+# intentionally NOT reserved here.
+EMBEDDINGS_AUTH_MODE
+EMBEDDINGS_IDP_TOKEN_ENDPOINT
+EMBEDDINGS_IDP_CLIENT_ID
+EMBEDDINGS_IDP_CLIENT_SECRET
+EMBEDDINGS_IDP_SCOPE
+EMBEDDINGS_IDP_TIMEOUT_SECONDS
+EMBEDDINGS_IDP_ALLOW_INSECURE
+# Rendered from embeddings.responseFormat when set (independent of authMode; #1415 follow-up).
+EMBEDDINGS_RESPONSE_FORMAT
