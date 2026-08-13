@@ -205,9 +205,21 @@ class SecurityScannerService:
         # resolve catches a host that has since been pointed at an internal
         # address). Raises UrlValidationError -> surfaced by the caller.
         from ..exceptions import UrlValidationError
-        from ..utils.url_guard import PROXY_PROFILE, validate_url
+        from ..utils.url_guard import proxy_profile_for_entity_target, validate_url
 
-        validate_url(server_url, profile=PROXY_PROFILE)
+        # Select the SSRF profile by the server's registered identity. The bundled
+        # airegistry-tools server targets the internal mcpgw-server host, which the
+        # ordinary PROXY_PROFILE deliberately does not allowlist; it is admitted only
+        # through its exact-identity built-in profile. Any other server gets
+        # PROXY_PROFILE unchanged. entity_type is always "mcp_server" here -- this
+        # service scans MCP servers. Both the raw proxy_pass_url and the resolved
+        # endpoint URL below are validated against this same profile.
+        scan_profile = proxy_profile_for_entity_target(
+            entity_type="mcp_server",
+            entity_path=server_path,
+            registered_target_url=server_url,
+        )
+        validate_url(server_url, profile=scan_profile)
 
         # Use config values if not provided
         if analyzers is None:
@@ -241,8 +253,9 @@ class SecurityScannerService:
             # there). resolve=True forces a live DNS lookup so a rebind is
             # caught at fetch time. Fail closed: a validation failure is treated
             # like any other scan failure below (recorded as unsafe, subprocess
-            # never spawned).
-            validate_url(server_url, profile=PROXY_PROFILE)
+            # never spawned). Same profile as the pre-resolution check so the
+            # built-in server's exact-identity endpoint (/mcp) is admitted.
+            validate_url(server_url, profile=scan_profile)
 
             # Run the scan in a thread pool to avoid blocking
             raw_output = await asyncio.to_thread(

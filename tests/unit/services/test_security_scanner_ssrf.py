@@ -167,6 +167,64 @@ def test_scanner_does_not_log_stdout_body_or_query(caplog):
     assert "raw-body-secret" not in caplog.text
 
 
+@pytest.mark.asyncio
+async def test_scan_builtin_server_uses_exact_identity_profile():
+    """The bundled airegistry-tools server (internal mcpgw-server host) is scannable
+    via its exact-identity built-in profile, even though PROXY_PROFILE deliberately
+    does not allowlist the internal host. Regression test for the built-in-scan 500
+    (issue surfaced by the release smoke test)."""
+    service = _make_service()
+
+    completed = MagicMock()
+    completed.stdout = "[]"
+    completed.stderr = ""
+
+    with (
+        patch(
+            "registry.services.security_scanner.subprocess.run", return_value=completed
+        ) as mock_run,
+        patch(
+            "registry.utils.url_guard.socket.getaddrinfo",
+            side_effect=_resolve_to("172.18.0.9"),
+        ),
+    ):
+        result = await service.scan_server(
+            server_url="http://mcpgw-server:8003/",
+            server_path="/airegistry-tools",
+        )
+
+        # The scan proceeds against the exact built-in endpoint identity.
+        mock_run.assert_called_once()
+        cmd = mock_run.call_args.args[0]
+        assert "http://mcpgw-server:8003/mcp" in cmd
+        assert result.scan_failed is False
+
+
+@pytest.mark.asyncio
+async def test_scan_blocked_for_non_builtin_internal_target():
+    """The built-in exemption is exact-identity only, not a general internal bypass:
+    a server at the same internal host but a DIFFERENT registered path gets
+    PROXY_PROFILE and is refused (no subprocess)."""
+    from registry.exceptions import UrlValidationError
+
+    service = _make_service()
+
+    with (
+        patch("registry.services.security_scanner.subprocess.run") as mock_run,
+        patch(
+            "registry.utils.url_guard.socket.getaddrinfo",
+            side_effect=_resolve_to("172.18.0.9"),
+        ),
+        pytest.raises(UrlValidationError),
+    ):
+        await service.scan_server(
+            server_url="http://mcpgw-server:8003/",
+            server_path="/not-the-builtin",
+        )
+
+    mock_run.assert_not_called()
+
+
 def test_scanner_does_not_log_or_raise_stderr(caplog):
     service = _make_service()
     error = subprocess.CalledProcessError(

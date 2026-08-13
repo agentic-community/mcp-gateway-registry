@@ -5678,6 +5678,8 @@ async def rescan_server(
         f"Manual security scan requested by user={user_context.get('username')} server={path} endpoint={redact_url(server_url)}",
     )
 
+    from ..exceptions import UrlValidationError
+
     try:
         # Trigger security scan
         scan_result = await security_scanner_service.scan_server(
@@ -5705,6 +5707,15 @@ async def rescan_server(
             "error_message": scan_result.error_message,
             "raw_output": scan_result.raw_output,
         }
+    except UrlValidationError as e:
+        # The server endpoint is not a permitted scan target (e.g. it resolves to a
+        # private/metadata address and is not allowlisted). That is a client/config
+        # condition, not a server error -- surface it as 400, not 500.
+        logger.warning(f"Manual security scan blocked by URL validation type={type(e).__name__}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Server endpoint is not a permitted scan target",
+        )
     except Exception as e:
         logger.error(f"Manual security scan failed type={type(e).__name__}")
         raise HTTPException(
