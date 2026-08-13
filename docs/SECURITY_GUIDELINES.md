@@ -725,7 +725,7 @@ the drift between copies is the hole.
   `guarded_client(profile=...)` / `guarded_async_client(profile=...)` — they
   validate + pin the resolved public IP inside the transport (rebinding-safe,
   re-validated per redirect). IP category policy and literal/tunnel unwrapping
-  live in `registry/utils/ip_guard.py`; URL identity and safe logging use
+  live in `registry/utils/url_guard.py`; URL identity and safe logging use
   `normalize_url_identity()` and `sanitized_url_for_log()`. Pick the profile:
   `SKILL_PROFILE` (skill/doc fetches), `PROXY_PROFILE` (server/agent targets),
   `FEDERATION_PROFILE` (credentialed federation), or the HTTPS-only empty-
