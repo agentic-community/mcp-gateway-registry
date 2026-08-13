@@ -59,8 +59,8 @@ tests:
         authMode: idp
         idpTokenEndpoint: https://idp.example.com/oauth2/token
         idpClientId: mcp-embeddings
-        idpClientSecretExistingSecret: my-embeddings-secret
-        idpClientSecretExistingSecretKey: EMBEDDINGS_IDP_CLIENT_SECRET
+        idpClientSecretExistingSecret: my-embeddings-secret # pragma: allowlist secret
+        idpClientSecretExistingSecretKey: EMBEDDINGS_IDP_CLIENT_SECRET # pragma: allowlist secret
     asserts:
       - contains:
           path: spec.template.spec.containers[0].env
