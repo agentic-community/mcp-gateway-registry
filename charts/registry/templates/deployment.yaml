@@ -349,6 +349,31 @@ spec:
                   name: {{ .Values.ans.apiSecretExistingSecret }}
                   key: {{ .Values.ans.apiSecretExistingSecretKey }}
             {{- end }}
+            # Prevent AWS SDKs from falling back to EC2 IMDS. The registry uses
+            # boto3 (Secrets Manager, DocumentDB IAM, Cognito, AgentCore).
+            #
+            # NOT redundant with the url_guard egress SSRF check: boto3 uses its
+            # own urllib3 stack and never passes through GuardedTransport.
+            # url_guard blocks the app being tricked into fetching a URL that
+            # redirects to IMDS; this closes boto3's own IMDS credential
+            # provider, a vector url_guard structurally cannot see.
+            #
+            # REQUIRES IRSA or EKS Pod Identity (both deliver pod credentials
+            # out-of-band, unaffected by this). A cluster that gives pods
+            # credentials ONLY via the worker-node instance profile (reachable
+            # only through IMDS) is NOT supported with this on. Chart-managed and
+            # reserved so extraEnv cannot override it; if you must run on
+            # node-role credentials, set app.disableEc2ImdsFallback=false.
+            #
+            # Gate renders UNLESS the flag is explicitly false, so a missing key
+            # (e.g. a fork that strips it from values.yaml) still renders — fails
+            # toward secure. Do NOT rewrite as `| default true`: sprig's default
+            # treats boolean false as empty, so `false | default true` -> true
+            # and the escape hatch would silently stop working.
+            {{- if not (eq .Values.app.disableEc2ImdsFallback false) }}
+            - name: AWS_EC2_METADATA_DISABLED
+              value: "true"
+            {{- end }}
             # Embeddings IdP auth (issue #1415). Rendered only when authMode is set,
             # so default deployments are unchanged. EMBEDDINGS_IDP_CLIENT_SECRET is
             # sourced from a pre-created Secret (embeddings.idpClientSecretExistingSecret).

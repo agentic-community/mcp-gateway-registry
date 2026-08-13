@@ -10,6 +10,7 @@ closes the trusted-domain SSRF bypass.
 """
 
 import logging
+import socket
 from unittest.mock import patch
 
 logger = logging.getLogger(__name__)
@@ -107,21 +108,22 @@ class TestSafeUrlForGHES:
     ) -> None:
         """With github_extra_hosts set, GHES on a private IP passes SSRF.
 
-        DNS resolution should be skipped entirely for bypass hosts -- patch
-        getaddrinfo to fail loudly if it gets called.
+        Trusted hosts are still resolved and classified; the explicit hostname
+        trust relaxes non-credential private addresses only after classification.
         """
         mock_settings.github_extra_hosts = "github.mycompany.com"
         _clear_bypass_cache()
 
         with patch("registry.utils.url_guard.socket.getaddrinfo") as mock_resolve:
-            mock_resolve.side_effect = AssertionError(
-                "getaddrinfo should not be called for bypass hosts"
-            )
+            mock_resolve.return_value = [
+                (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("10.0.0.8", 443))
+            ]
 
             from registry.services.skill_service import _is_safe_url
 
             url = "https://github.mycompany.com/org/repo/blob/main/SKILL.md"
             assert _is_safe_url(url) is True
+            mock_resolve.assert_called_once()
 
     @patch("registry.utils.url_guard.settings")
     def test_public_github_on_private_ip_is_blocked(

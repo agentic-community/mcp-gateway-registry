@@ -59,8 +59,8 @@ class ArdIngestionScheduler:
         while self._running:
             try:
                 await self._check_and_ingest()
-            except Exception as e:  # noqa: BLE001
-                logger.error("Error in ARD ingestion scheduler: %s", e, exc_info=True)
+            except Exception as exc:  # noqa: BLE001
+                logger.error(f"Error in ARD ingestion scheduler type={type(exc).__name__}")
             await asyncio.sleep(SCHEDULER_CHECK_INTERVAL_SECONDS)
 
     async def _check_and_ingest(self) -> None:

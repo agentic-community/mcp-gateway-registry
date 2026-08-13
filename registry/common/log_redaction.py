@@ -159,25 +159,42 @@ def redact_url(url: str | None) -> str:
     the userinfo, query, and fragment. Non-parseable input is masked entirely
     (fail closed) rather than logged raw.
 
+    The host is canonicalized before logging: scheme and host are lower-cased
+    and the host is IDNA-encoded to ASCII, so a Unicode-homograph or otherwise
+    malformed hostname can never land raw in a log line. An IPv6 host is
+    re-bracketed. Anything that cannot be parsed or IDNA-encoded fails closed to
+    ``[REDACTED]`` rather than being logged raw.
+
     Args:
         url: The URL to redact. ``None`` and empty strings pass through as an
             empty string.
 
     Returns:
         The URL reduced to ``scheme://host[:port]/path``, an empty string for
-        falsy input, or ``[REDACTED]`` when it cannot be parsed.
+        falsy input, or ``[REDACTED]`` when it cannot be parsed/encoded.
     """
     if not url:
         return ""
     try:
         parts = urlsplit(url)
-        # ``hostname``/``port`` drop any ``user:pass@`` userinfo prefix.
-        netloc = parts.hostname or ""
-        if parts.port is not None:
-            netloc = f"{netloc}:{parts.port}"
-        return urlunsplit((parts.scheme, netloc, parts.path, "", ""))
+        # ``hostname``/``port`` drop any ``user:pass@`` userinfo prefix; reading
+        # ``.port`` also forces validation of a malformed/out-of-range port.
+        hostname = parts.hostname or ""
+        port = parts.port
     except ValueError:
         return REDACTED
+    # IDNA-normalize the host and fail closed: an un-encodable host (empty label,
+    # overlong label, illegal characters) is masked rather than logged raw.
+    try:
+        host = hostname.encode("idna").decode("ascii").lower() if hostname else ""
+    except (UnicodeError, ValueError):
+        return REDACTED
+    # Re-bracket an IPv6 literal (``.hostname`` strips the brackets) so the
+    # reassembled netloc stays well-formed.
+    if host and ":" in host:
+        host = f"[{host}]"
+    netloc = f"{host}:{port}" if port is not None else host
+    return urlunsplit((parts.scheme.lower(), netloc, parts.path, "", ""))
 
 
 def redact_mapping(

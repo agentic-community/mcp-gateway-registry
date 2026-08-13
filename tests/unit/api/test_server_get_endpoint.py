@@ -356,6 +356,33 @@ class TestGetServer:
         assert "auth_credential_encrypted" not in data
         assert "auth_credential" not in data
 
+    def test_get_server_strips_nested_egress_secret(
+        self,
+        test_client_admin,
+        mock_server_service,
+    ):
+        nested = {
+            "provider": "custom",
+            "client_id": "safe-id",
+            "client_secret_encrypted": "must-not-leak",
+        }
+        server_info = {
+            "server_name": "Test Server",
+            "path": "/test-server",
+            "is_enabled": True,
+            "egress_oauth": nested,
+        }
+        mock_server_service.get_server_info.return_value = server_info
+
+        response = test_client_admin.get("/api/servers/test-server")
+
+        assert response.status_code == 200
+        assert response.json()["egress_oauth"] == {
+            "provider": "custom",
+            "client_id": "safe-id",
+        }
+        assert nested["client_secret_encrypted"] == "must-not-leak"
+
     def test_get_server_includes_tools(
         self,
         test_client_admin,
@@ -424,9 +451,9 @@ class TestGetServer:
         mock_server_service.get_server_info.return_value = dict(sample_server_info)
         mock_server_service.user_can_access_server_path.return_value = True
 
-        # Patch deployment_mode at the module level where the endpoint reads it
+        # Patch deployment_mode where the shared visibility helper reads it.
         with patch(
-            "registry.api.server_routes.settings.deployment_mode",
+            "registry.services.visibility.settings.deployment_mode",
             DeploymentMode.REGISTRY_ONLY,
         ):
             response = test_client_regular.get("/api/servers/test-server")

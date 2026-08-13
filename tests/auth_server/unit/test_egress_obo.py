@@ -133,7 +133,7 @@ class TestErrorMapping:
             _FakeResponse(400, {"error": "invalid_grant", "error_description": "expired"}),
             cap,
         )
-        with pytest.raises(OboReauthRequired, match="expired"):
+        with pytest.raises(OboReauthRequired, match="rejected the user assertion"):
             await obo_exchange(_FakeEntraProvider(), subject_token="j", target_audience="api://srv")
 
     @pytest.mark.asyncio
@@ -208,7 +208,7 @@ class TestSsrfGuard:
 
         monkeypatch.setattr("registry.utils.url_guard.guarded_async_client", _blocking_client)
 
-        with pytest.raises(OboExchangeError, match="SSRF guard"):
+        with pytest.raises(OboExchangeError, match="security policy"):
             await obo_exchange(_FakeEntraProvider(), subject_token="j", target_audience="api://srv")
 
     @pytest.mark.asyncio
@@ -229,6 +229,38 @@ class TestSsrfGuard:
         )
         assert token == "ok"
         assert capture["calls"] == 1
+
+    @pytest.mark.asyncio
+    async def test_uses_dedicated_empty_allowlist_profile(self, monkeypatch):
+        profile_capture: dict = {}
+
+        from contextlib import asynccontextmanager
+
+        @asynccontextmanager
+        async def strict_client(*, profile, timeout):
+            profile_capture["profile"] = profile
+            client = MagicMock()
+            client.post = AsyncMock(return_value=_FakeResponse(200, {"access_token": "ok"}))
+            yield client
+
+        monkeypatch.setattr("registry.utils.url_guard.guarded_async_client", strict_client)
+        token = await obo_exchange(
+            _FakeEntraProvider(), subject_token="j", target_audience="api://srv"
+        )
+        assert token == "ok"
+        profile = profile_capture["profile"]
+        assert profile is egress_obo.CREDENTIALED_OAUTH_PROFILE
+        assert profile.allowlist_factory().hosts == frozenset()
+
+    @pytest.mark.asyncio
+    async def test_http_token_url_fails_before_client_is_opened(self, monkeypatch):
+        provider = _FakeEntraProvider()
+        provider.token_url = "http://93.184.216.34/token"
+        client = MagicMock(side_effect=AssertionError("client must not open"))
+        monkeypatch.setattr("registry.utils.url_guard.guarded_async_client", client)
+        with pytest.raises(OboExchangeError, match="security policy"):
+            await obo_exchange(provider, subject_token="assertion", target_audience="api://srv")
+        client.assert_not_called()
 
 
 class TestOboFailureReason:

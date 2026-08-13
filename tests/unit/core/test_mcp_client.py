@@ -176,7 +176,11 @@ def test_build_headers_for_server_with_custom_headers():
         ]
     }
 
-    headers = _build_headers_for_server(server_info)
+    with patch("registry.core.mcp_client._assert_mcp_url_fetchable", return_value=True):
+        headers = _build_headers_for_server(
+            server_info,
+            destination_url="https://public.example/mcp",
+        )
 
     assert "Accept" in headers
     assert "Content-Type" in headers
@@ -272,13 +276,13 @@ class TestBuildHeadersSecretDestinationGuard:
         assert "Authorization" not in headers
         mock_decrypt.assert_not_called()
 
-    def test_plaintext_headers_returned_without_destination(self):
-        """A server with only plaintext headers (no secret) is unaffected."""
+    def test_plaintext_headers_withheld_without_destination(self):
+        """Even plaintext server headers require an exact validated destination."""
         headers = _build_headers_for_server(
             {"headers": [{"X-Plain": "ok"}]},
             destination_url=None,
         )
-        assert headers["X-Plain"] == "ok"
+        assert "X-Plain" not in headers
 
     def test_encrypted_custom_headers_withheld_when_destination_unsafe(self):
         """Encrypted custom headers are also gated on destination validation."""
@@ -1083,3 +1087,173 @@ class TestMcpClientSsrfGuard:
             mock_headers.assert_not_called()
             mock_stream.assert_not_called()
             mock_sse.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_streamable_headers_validate_derived_mcp_destination(self):
+        """Derived /mcp/ is the exact destination passed to the header guard."""
+        from registry.core.mcp_client import _get_tools_streamable_http
+
+        with (
+            patch("registry.core.mcp_client._assert_mcp_url_fetchable", return_value=True),
+            patch(
+                "registry.core.mcp_client._build_headers_for_server",
+                return_value={},
+            ) as mock_headers,
+            patch(
+                "registry.core.mcp_client.streamablehttp_client",
+                side_effect=RuntimeError("stop after header build"),
+            ),
+        ):
+            await _get_tools_streamable_http(
+                "https://public.example/base",
+                {"auth_credential_encrypted": "ciphertext", "auth_scheme": "bearer"},
+            )
+
+        destinations = [call.kwargs["destination_url"] for call in mock_headers.call_args_list]
+        assert destinations == [
+            "https://public.example/base/mcp/",
+            "https://public.example/base/",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_connection_result_headers_validate_derived_mcp_destination(self):
+        """Connection-result streamable credentials bind to final /mcp/."""
+        from registry.core.mcp_client import get_mcp_connection_result
+
+        with (
+            patch("registry.core.mcp_client._assert_mcp_url_fetchable", return_value=True),
+            patch(
+                "registry.core.mcp_client.detect_server_transport_aware",
+                return_value="streamable-http",
+            ),
+            patch(
+                "registry.core.mcp_client._build_headers_for_server",
+                return_value={},
+            ) as mock_headers,
+            patch(
+                "registry.core.mcp_client.streamablehttp_client",
+                side_effect=RuntimeError("stop after header build"),
+            ),
+        ):
+            await get_mcp_connection_result(
+                "https://public.example/base",
+                {"auth_credential_encrypted": "ciphertext", "auth_scheme": "bearer"},
+            )
+
+        assert mock_headers.call_args.kwargs["destination_url"] == (
+            "https://public.example/base/mcp/"
+        )
+
+    @pytest.mark.asyncio
+    async def test_connection_result_headers_validate_derived_sse_destination(self):
+        """Connection-result SSE credentials bind to final /sse endpoint."""
+        from registry.core.mcp_client import get_mcp_connection_result
+
+        with (
+            patch("registry.core.mcp_client._assert_mcp_url_fetchable", return_value=True),
+            patch(
+                "registry.core.mcp_client.detect_server_transport_aware",
+                return_value="sse",
+            ),
+            patch(
+                "registry.core.mcp_client._build_headers_for_server",
+                return_value={},
+            ) as mock_headers,
+            patch(
+                "registry.core.mcp_client.sse_client",
+                side_effect=RuntimeError("stop after header build"),
+            ),
+        ):
+            await get_mcp_connection_result(
+                "https://public.example/base",
+                {"auth_credential_encrypted": "ciphertext", "auth_scheme": "bearer"},
+            )
+
+        assert mock_headers.call_args.kwargs["destination_url"] == (
+            "https://public.example/base/sse"
+        )
+
+
+class TestBuiltinMcpOutboundIdentityBinding:
+    """The built-in registration cannot lend private-host trust to overrides."""
+
+    _BUILTIN = {
+        "path": "/airegistry-tools/",
+        "service_path": "/airegistry-tools/",
+        "proxy_pass_url": "http://mcpgw-server:8003/",
+        "supported_transports": ["streamable-http"],
+        "headers": [],
+    }
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "actual",
+        [
+            "https://public.example/mcp",
+            "http://mcpgw-server:8004/mcp",
+            "http://mcpgw-server:8003/other",
+            "http://mcpgw-server:8003/mcp?tenant=other",
+        ],
+    )
+    async def test_mcp_endpoint_mismatch_never_builds_headers_or_fetches(self, actual):
+        server_info = {**self._BUILTIN, "mcp_endpoint": actual}
+        with (
+            patch("registry.core.mcp_client._build_headers_for_server") as headers,
+            patch("registry.core.mcp_client.streamablehttp_client") as client,
+        ):
+            result = await _get_tools_streamable_http(server_info["proxy_pass_url"], server_info)
+        assert result is None
+        headers.assert_not_called()
+        client.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_sse_endpoint_mismatch_never_builds_headers_or_fetches(self):
+        server_info = {
+            **self._BUILTIN,
+            "supported_transports": ["sse"],
+            "sse_endpoint": "http://mcpgw-server:8003/sse",
+        }
+        with (
+            patch("registry.core.mcp_client._build_headers_for_server") as headers,
+            patch("registry.core.mcp_client.sse_client") as client,
+        ):
+            result = await _get_tools_sse(server_info["proxy_pass_url"], server_info)
+        assert result is None
+        headers.assert_not_called()
+        client.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_missing_registered_target_cannot_lend_builtin_trust(self):
+        server_info = {
+            key: value for key, value in self._BUILTIN.items() if key != "proxy_pass_url"
+        }
+        server_info["mcp_endpoint"] = "http://mcpgw-server:8003/mcp"
+        with (
+            patch("registry.core.mcp_client._build_headers_for_server") as headers,
+            patch("registry.core.mcp_client.streamablehttp_client") as client,
+        ):
+            result = await _get_tools_streamable_http("http://mcpgw-server:8003/", server_info)
+        assert result is None
+        headers.assert_not_called()
+        client.assert_not_called()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_mcp_logs_strip_query_and_exception_detail(caplog):
+    url = "https://public.example/mcp?api_key=query-secret"
+    with (
+        patch("registry.core.mcp_client._assert_mcp_url_fetchable", return_value=True),
+        patch(
+            "registry.core.mcp_client.streamablehttp_client",
+            side_effect=RuntimeError("response-body-secret https://internal.example/path"),
+        ),
+        caplog.at_level("ERROR", logger="registry.core.mcp_client"),
+    ):
+        result = await _get_tools_streamable_http(url)
+
+    assert result is None
+    assert "https://public.example/mcp" in caplog.text
+    assert "query-secret" not in caplog.text
+    assert "response-body-secret" not in caplog.text
+    assert "RuntimeError" in caplog.text

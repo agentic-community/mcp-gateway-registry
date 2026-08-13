@@ -51,7 +51,11 @@ from registry.secrets.factory import get_secret_store
 from registry.secrets.interfaces import SecretStoreError
 from registry.services.server_service import server_service
 from registry.utils.credential_encryption import encrypt_credential
-from registry.utils.url_guard import PROXY_PROFILE, validate_url
+from registry.utils.url_guard import (
+    CREDENTIALED_OAUTH_PROFILE,
+    PROXY_PROFILE,
+    validate_url,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -240,7 +244,7 @@ def _build_request_state(
         )
         return encode_state(state)
     except Exception as exc:
-        logger.warning("egress vend: could not build request_state: %s", exc)
+        logger.warning(f"egress vend: could not build request_state type={type(exc).__name__}")
         return None
 
 
@@ -488,7 +492,7 @@ async def vend_egress_token(
             egress_oauth=egress_oauth,
         )
     except Exception as exc:  # bad provider config etc. -- still a clean miss
-        logger.warning("egress vend: could not build consent URL: %s", exc)
+        logger.warning(f"egress vend: could not build consent URL type={type(exc).__name__}")
         authorize_url = None
 
     # MCP URL-mode elicitation: a session-verified gateway front door the client
@@ -600,23 +604,29 @@ async def configure_egress_auth(
             "custom_token_auth_style": body.custom_token_auth_style,
             "custom_resource": body.custom_resource,
         }
-        # For a 'custom' provider the authorize/token URLs are registrant-supplied
-        # and become an outbound token POST (carrying the client_secret) and a
-        # browser 302. Fail closed at registration: require https and reject any
+        # For a 'custom' provider the authorize/token URLs are registrant-supplied.
+        # The browser-only authorize URL gets structural proxy-profile checks;
+        # the credential-bearing token URL uses the dedicated HTTPS-only,
+        # empty-allowlist profile that the guarded fetch uses too. Fail closed at
+        # registration: require https and reject any
         # literal private/metadata IP or bad scheme via the shared SSRF guard, so
         # a config that would exfiltrate the secret to an internal target (e.g.
         # 169.254.169.254) can never be persisted. resolve=False keeps this a
         # structural check; the rebinding-safe block for hostname targets is the
         # pinned guarded client at token-exchange time.
         if body.egress_provider == "custom":
-            for field, url in (
-                ("custom_authorize_url", body.custom_authorize_url),
-                ("custom_token_url", body.custom_token_url),
+            for field, url, profile in (
+                ("custom_authorize_url", body.custom_authorize_url, PROXY_PROFILE),
+                (
+                    "custom_token_url",
+                    body.custom_token_url,
+                    CREDENTIALED_OAUTH_PROFILE,
+                ),
             ):
                 try:
                     validate_url(
                         url or "",
-                        profile=PROXY_PROFILE,
+                        profile=profile,
                         require_https=True,
                         resolve=False,
                     )
@@ -1128,7 +1138,7 @@ async def egress_callback(
         # browser response: EgressAuthError messages embed internal state (e.g.
         # decryption / SECRET_KEY hints, wrapped upstream errors) — a
         # stack-trace/internal-detail exposure. Show a generic message.
-        logger.warning("egress callback failed: %s", exc)
+        logger.warning(f"egress callback failed type={type(exc).__name__}")
         return HTMLResponse(
             "<h3>Connection failed. Please close this tab and try connecting again.</h3>",
             status_code=400,

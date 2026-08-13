@@ -138,8 +138,10 @@ sanitizer that isn't called) is equivalent to no check.
 ## SSRF & outbound requests from user/registry-controlled input
 
 - **One hardened URL guard, used by every outbound fetch.** Block RFC-1918,
-  loopback, link-local, reserved, multicast, unspecified, and cloud-metadata
-  (`169.254.169.254` — never allowlistable); unwrap IPv4-mapped IPv6; require
+  loopback, link-local, reserved, multicast, unspecified, and exact documented
+  cloud/workload credential endpoints (including AWS IMDS/task/Pod Identity and
+  Alibaba ECS `100.100.100.200` — never allowlistable); unwrap scoped,
+  IPv4-mapped, NAT64, 6to4, and Teredo forms before classification; require
   http/https. Fail closed. Do not create per-call-site `_is_safe_url` variants.
 - **Don't rely on the language runtime's `is_private` to cover reserved ranges —
   block them explicitly and pin the range in a test.** Ranges like CGNAT / shared
@@ -540,7 +542,12 @@ sanitizer that isn't called) is equivalent to no check.
   outbound call; when the scope-relevant body can't be captured/parsed, FAIL
   CLOSED — do not default to an unprivileged method.
 - **Redaction and access checks on reads must be uniform across the whole entity
-  family.** The same internal fields (backend URLs, authz config) leak through the
+  family — and write responses/webhooks must use the same token-free projection.**
+  A register/update handler often holds the encrypted storage record in memory;
+  never serialize that object directly in the success response, registration
+  webhook, lifecycle event, or other export. Project a fresh recursive token-free
+  copy at every outward boundary.
+  The same internal fields (backend URLs, authz config) leak through the
   read sibling that forgot the guard — `/versions`, bulk `/all`, discovery
   projections that re-project the field under a new name, search-result shaping,
   admin-config reads. Use one shared redaction-decision helper + field-stripper;
@@ -717,14 +724,24 @@ the drift between copies is the hole.
   `httpx.AsyncClient` (or a third-party SDK client) for such fetches. Use
   `guarded_client(profile=...)` / `guarded_async_client(profile=...)` — they
   validate + pin the resolved public IP inside the transport (rebinding-safe,
-  re-validated per redirect). Pick the profile: `SKILL_PROFILE` (skill/doc
-  fetches) or `PROXY_PROFILE` (server/agent proxy targets). Validate at
+  re-validated per redirect). IP category policy and literal/tunnel unwrapping
+  live in `registry/utils/ip_guard.py`; URL identity and safe logging use
+  `normalize_url_identity()` and `sanitized_url_for_log()`. Pick the profile:
+  `SKILL_PROFILE` (skill/doc fetches), `PROXY_PROFILE` (server/agent targets),
+  `FEDERATION_PROFILE` (credentialed federation), or the HTTPS-only empty-
+  allowlist `CREDENTIALED_OAUTH_PROFILE` (client-secret/refresh/assertion token
+  endpoints). Validate at
   registration with `validate_proxy_pass_url()` / `validate_agent_url()` /
   `validate_server_path()`; reject nginx metacharacters with
   `contains_nginx_metacharacters()`. Internal targets are opt-in via
   `SSRF_ALLOWED_HOSTS` / `SSRF_ALLOWED_CIDRS`, default deny. (Legacy
-  `ard_net_guard.py` predates this — prefer `url_guard`; do not add new callers
-  to ad-hoc `_is_safe_url` variants.)
+  `ard_net_guard.py` is only an ARD HTTPS/same-root-domain policy wrapper and
+  delegates all URL/IP/DNS classification to `url_guard`; actual ARD fetches use
+  `guarded_client`. Do not add independent DNS/IP classifiers or ad-hoc
+  `_is_safe_url` variants.)
+- **Credential/header builders → self-guard on the exact destination.** Validate
+  with the entity-bound profile before reading/decrypting any configured header;
+  on missing or rejected destinations return protocol/session headers only.
 - **State-changing endpoint CSRF → `registry/auth/csrf.py`.** Add
   `Depends(verify_csrf_token_flexible)` (or `verify_csrf_token_header_only`) to
   every mutating route. Don't invent per-router CSRF logic; match the dependency

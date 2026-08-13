@@ -10,11 +10,17 @@ from fastapi import WebSocket
 
 from registry.constants import DeploymentType, HealthStatus
 
-from ..common.log_redaction import redact_headers, redact_url
+from ..common.log_redaction import redact_url
 from ..core.config import settings
 from ..core.endpoint_utils import get_endpoint_url_from_server_info
 from ..exceptions import UrlValidationError
-from ..utils.url_guard import PROXY_PROFILE, guarded_async_client, validate_url
+from ..utils.url_guard import (
+    BUILTIN_AIREGISTRY_TOOLS_PROFILE,
+    PROXY_PROFILE,
+    guarded_async_client,
+    proxy_profile_for_entity_target,
+    validate_url,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +72,7 @@ class HighPerformanceWebSocketManager:
             return True
 
         except Exception as e:
-            logger.error(f"Error adding WebSocket connection: {e}")
+            logger.error(f"Error adding WebSocket connection type={type(e).__name__}")
             return False
 
     async def remove_connection(self, websocket: WebSocket):
@@ -85,7 +91,7 @@ class HighPerformanceWebSocketManager:
             if cached_data:
                 await websocket.send_text(json.dumps(cached_data))
         except Exception as e:
-            logger.warning(f"Failed to send initial status: {e}")
+            logger.warning(f"Failed to send initial status type={type(e).__name__}")
             await self.remove_connection(websocket)
 
     async def broadcast_update(
@@ -227,7 +233,9 @@ class HealthMonitoringService:
                     f"to persist credentials across restarts."
                 )
         except Exception as e:
-            logger.debug(f"Could not check encrypted credentials at startup: {e}")
+            logger.debug(
+                f"Could not check encrypted credentials at startup type={type(e).__name__}"
+            )
 
     async def initialize(self):
         """Initialize the health monitoring service."""
@@ -258,7 +266,9 @@ class HealthMonitoringService:
             try:
                 close_tasks.append(conn.close())
             except Exception as e:
-                logger.debug(f"Error closing WebSocket connection during shutdown: {e}")
+                logger.debug(
+                    f"Error closing WebSocket connection during shutdown type={type(e).__name__}"
+                )
 
         if close_tasks:
             await asyncio.gather(*close_tasks, return_exceptions=True)
@@ -336,7 +346,7 @@ class HealthMonitoringService:
                 logger.info("Health check task cancelled")
                 break
             except Exception as e:
-                logger.error(f"Error in health check loop: {e}", exc_info=True)
+                logger.error(f"Error in health check loop type={type(e).__name__}")
                 await asyncio.sleep(60)  # Wait a minute before retrying
 
     async def _perform_health_checks(self):
@@ -363,10 +373,16 @@ class HealthMonitoringService:
         HEALTH_CHECK_BATCH_SIZE = 10
         HEALTH_CHECK_BATCH_DELAY_SECONDS = 0.5
 
-        async with guarded_async_client(
-            profile=PROXY_PROFILE,
-            timeout=httpx.Timeout(settings.health_check_timeout_seconds),
-        ) as client:
+        async with (
+            guarded_async_client(
+                profile=PROXY_PROFILE,
+                timeout=httpx.Timeout(settings.health_check_timeout_seconds),
+            ) as client,
+            guarded_async_client(
+                profile=BUILTIN_AIREGISTRY_TOOLS_PROFILE,
+                timeout=httpx.Timeout(settings.health_check_timeout_seconds),
+            ) as builtin_client,
+        ):
             check_tasks = []
             for service_path in enabled_services:
                 server_info = await server_service.get_server_info(
@@ -378,9 +394,15 @@ class HealthMonitoringService:
             # Execute health checks in staggered batches
             for batch_start in range(0, len(check_tasks), HEALTH_CHECK_BATCH_SIZE):
                 batch = check_tasks[batch_start : batch_start + HEALTH_CHECK_BATCH_SIZE]
-                batch_coros = [
-                    self._check_single_service(client, path, info) for path, info in batch
-                ]
+                batch_coros = []
+                for path, info in batch:
+                    profile = proxy_profile_for_entity_target(
+                        "mcp_server", path, info["proxy_pass_url"]
+                    )
+                    selected_client = (
+                        builtin_client if profile is BUILTIN_AIREGISTRY_TOOLS_PROFILE else client
+                    )
+                    batch_coros.append(self._check_single_service(selected_client, path, info))
                 results = await asyncio.gather(*batch_coros, return_exceptions=True)
 
                 for result in results:
@@ -402,7 +424,9 @@ class HealthMonitoringService:
                 nginx_reload_scheduler.mark_dirty()
                 logger.info("Nginx config marked dirty due to health status changes")
             except Exception as e:
-                logger.error(f"Failed to mark nginx config dirty after health status change: {e}")
+                logger.error(
+                    f"Failed to mark nginx config dirty after health status change type={type(e).__name__}"
+                )
 
     async def _check_single_service(
         self, client: httpx.AsyncClient, service_path: str, server_info: dict
@@ -481,41 +505,63 @@ class HealthMonitoringService:
         return previous_status != new_status
 
     def _build_headers_for_server(
-        self, server_info: dict, include_session_id: bool = False
+        self,
+        server_info: dict,
+        destination_url: str | None = None,
+        include_session_id: bool = False,
     ) -> dict[str, str]:
-        """
-        Build HTTP headers for server requests by merging default headers with server-specific headers.
+        """Build health headers only after validating the exact destination.
 
-        Args:
-            server_info: Server configuration dictionary
-            include_session_id: Whether to generate and include Mcp-Session-Id header
-
-        Returns:
-            Merged headers dictionary
+        Missing, malformed, blocked, or built-in-identity-mismatched destinations
+        return protocol/session headers only. Validation happens before adding
+        plaintext server headers or decrypting any stored custom/auth credential.
         """
         import uuid
 
-        # Start with default headers for MCP endpoints
         headers = {
             "Accept": "application/json, text/event-stream",
             "Content-Type": "application/json",
         }
-
-        # Add session ID if requested (required by some MCP servers like Cloudflare)
         if include_session_id:
-            session_id = str(uuid.uuid4())
-            headers["Mcp-Session-Id"] = session_id
-            logger.debug(f"Generated Mcp-Session-Id: {session_id}")
+            headers["Mcp-Session-Id"] = str(uuid.uuid4())
+            logger.debug("Generated MCP health session identifier")
 
-        # Merge server-specific headers if present
+        if not destination_url:
+            logger.warning(
+                f"Health server headers withheld service={server_info.get('path') or server_info.get('service_path') or 'unknown'} destination=[missing] reason=missing URL",
+            )
+            return headers
+
+        entity_path = server_info.get("path") or server_info.get("service_path")
+        registered_target = server_info.get("proxy_pass_url")
+        try:
+            profile = proxy_profile_for_entity_target(
+                "mcp_server",
+                entity_path,
+                registered_target,
+                destination_url,
+            )
+            validate_url(destination_url, profile=profile)
+        except UrlValidationError:
+            logger.warning(
+                f"Health server headers withheld service={entity_path or 'unknown'} destination={redact_url(destination_url)} reason=security policy",
+            )
+            return headers
+        except Exception as exc:  # pragma: no cover - defensive fail-closed
+            logger.warning(
+                f"Health server headers withheld service={entity_path or 'unknown'} destination={redact_url(destination_url)} validation_type={type(exc).__name__}",
+            )
+            return headers
+
         server_headers = server_info.get("headers", [])
-        if server_headers and isinstance(server_headers, list):
+        if isinstance(server_headers, list):
             for header_dict in server_headers:
                 if isinstance(header_dict, dict):
                     headers.update(header_dict)
-                    logger.debug(f"Added server headers: {redact_headers(header_dict)}")
+                    logger.debug(
+                        f"Added health header names={sorted(str(name) for name in header_dict)}",
+                    )
 
-        # Custom headers go first; auth_scheme below overwrites name collisions
         encrypted_custom = server_info.get("custom_headers_encrypted")
         if encrypted_custom:
             from ..utils.credential_encryption import decrypt_custom_headers
@@ -524,14 +570,11 @@ class HealthMonitoringService:
             for entry in decrypted:
                 headers[entry["name"]] = entry["value"]
             logger.debug(
-                f"Merged {len(decrypted)} custom headers into health check "
-                f"(names only): {[e['name'] for e in decrypted]}"
+                f"Merged encrypted health headers count={len(decrypted):d} names={sorted(entry['name'] for entry in decrypted)}",
             )
 
-        # Inject auth header from encrypted credentials (if present)
         auth_scheme = server_info.get("auth_scheme", "none")
         encrypted_credential = server_info.get("auth_credential_encrypted")
-
         if auth_scheme != "none" and encrypted_credential:
             from ..utils.credential_encryption import decrypt_credential
 
@@ -540,18 +583,13 @@ class HealthMonitoringService:
                 if auth_scheme == "bearer":
                     header_name = server_info.get("auth_header_name", "Authorization")
                     headers[header_name] = f"Bearer {credential}"
-                    logger.debug("Added Bearer auth header for health check")
+                    logger.debug("Added bearer auth header to health request")
                 elif auth_scheme == "api_key":
                     header_name = server_info.get("auth_header_name", "X-API-Key")
                     headers[header_name] = credential
-                    logger.debug(f"Added API key header '{header_name}' for health check")
+                    logger.debug(f"Added API-key health header name={header_name}")
             else:
-                logger.warning(
-                    f"Could not decrypt credential for "
-                    f"'{server_info.get('path', 'unknown')}'. "
-                    f"Health check will proceed without auth."
-                )
-
+                logger.warning(f"Health credential decryption failed service={entity_path}")
         return headers
 
     async def _initialize_mcp_session(
@@ -597,8 +635,7 @@ class HealthMonitoringService:
             # Check if initialize succeeded
             if response.status_code not in [200, 201]:
                 logger.warning(
-                    f"MCP initialize failed for {redact_url(endpoint)}: "
-                    f"Status {response.status_code}, Response: {response.text[:200]}"
+                    f"MCP initialize failed endpoint={redact_url(endpoint)} status={response.status_code}",
                 )
                 return None
 
@@ -618,7 +655,9 @@ class HealthMonitoringService:
                 return client_session_id
 
         except Exception as e:
-            logger.warning(f"MCP initialize failed for {redact_url(endpoint)}: {e}")
+            logger.warning(
+                f"MCP initialize failed for {redact_url(endpoint)} type={type(e).__name__}"
+            )
             return None
 
     async def _try_ping_without_auth(self, client: httpx.AsyncClient, endpoint: str) -> bool:
@@ -666,7 +705,7 @@ class HealthMonitoringService:
 
         except Exception as e:
             logger.warning(
-                f"Ping without auth failed for {redact_url(endpoint)}: {type(e).__name__} - {e}"
+                f"Ping without auth failed for {redact_url(endpoint)}: {type(e).__name__}"
             )
             return False
 
@@ -688,12 +727,26 @@ class HealthMonitoringService:
         # for the actual request additionally pins the resolved public IP so the
         # host cannot rebind to a private address after this check.
         try:
-            validate_url(proxy_pass_url, profile=PROXY_PROFILE)
-        except UrlValidationError as e:
+            entity_path = server_info.get("path") or server_info.get("service_path")
+            registered_target = server_info.get("proxy_pass_url")
+            profile = proxy_profile_for_entity_target(
+                "mcp_server", entity_path, registered_target, proxy_pass_url
+            )
+            validate_url(proxy_pass_url, profile=profile)
+            # A privileged profile selected from the registered built-in base
+            # must not validate a different actual override URL. Check both
+            # optional transports before any credential is decrypted.
+            for field_name in ("mcp_endpoint", "sse_endpoint"):
+                outbound_url = server_info.get(field_name)
+                if not outbound_url:
+                    continue
+                outbound_profile = proxy_profile_for_entity_target(
+                    "mcp_server", entity_path, registered_target, outbound_url
+                )
+                validate_url(outbound_url, profile=outbound_profile)
+        except UrlValidationError:
             logger.warning(
-                "Health check blocked by SSRF guard for %s: %s (credentials NOT sent)",
-                redact_url(proxy_pass_url),
-                e,
+                f"Health check blocked by SSRF guard for {redact_url(proxy_pass_url)} (credentials NOT sent)",
             )
             return False, HealthStatus.UNHEALTHY_URL_BLOCKED
 
@@ -710,18 +763,19 @@ class HealthMonitoringService:
         )
 
         if has_transport_in_url and "streamable-http" not in supported_transports:
-            logger.debug(f"[TRACE] Found transport endpoint in URL: {redact_url(proxy_pass_url)}")
+            logger.info(f"[TRACE] Found transport endpoint in URL: {redact_url(proxy_pass_url)}")
             logger.info(
                 f"[TRACE] URL contains /mcp: {'/mcp' in proxy_pass_url}, URL contains /sse: {'/sse' in proxy_pass_url}"
             )
             try:
                 # Build headers including server-specific headers
-                headers = self._build_headers_for_server(server_info)
+                headers = self._build_headers_for_server(
+                    server_info,
+                    destination_url=proxy_pass_url,
+                )
                 # For SSE endpoints, use a shorter timeout since they start streaming immediately
                 if proxy_pass_url.endswith("/sse") or "/sse/" in proxy_pass_url:
-                    logger.debug(
-                        "[TRACE] Detected SSE endpoint in URL, using SSE-specific handling"
-                    )
+                    logger.info("[TRACE] Detected SSE endpoint in URL, using SSE-specific handling")
                     timeout = httpx.Timeout(connect=5.0, read=2.0, write=5.0, pool=5.0)
                     try:
                         response = await client.get(
@@ -733,7 +787,7 @@ class HealthMonitoringService:
                     except (TimeoutError, httpx.TimeoutException) as e:
                         # For SSE endpoints, timeout while reading streaming response is normal after getting 200 OK
                         logger.debug(
-                            f"SSE endpoint {redact_url(proxy_pass_url)} timed out while streaming (expected): {e}"
+                            f"SSE endpoint {redact_url(proxy_pass_url)} timed out while streaming (expected) type={type(e).__name__}"
                         )
                         # If we can extract status code from response, check if it was 200
                         if hasattr(e, "response") and e.response and e.response.status_code == 200:
@@ -745,7 +799,7 @@ class HealthMonitoringService:
                         return True, HealthStatus.HEALTHY
                     except Exception as e:
                         logger.warning(
-                            f"SSE endpoint {redact_url(proxy_pass_url)} failed with exception: {type(e).__name__} - {e}"
+                            f"SSE endpoint {redact_url(proxy_pass_url)} failed with exception: {type(e).__name__}"
                         )
                         return False, f"unhealthy: {type(e).__name__}"
                 else:
@@ -759,7 +813,7 @@ class HealthMonitoringService:
                     # Check for auth failures first
                     if response.status_code in [401, 403]:
                         logger.info(
-                            f"[TRACE] Auth failure detected ({response.status_code}) for {redact_url(proxy_pass_url)}, trying ping without auth"
+                            f"[TRACE] Auth failure detected status={response.status_code} endpoint={redact_url(proxy_pass_url)}; trying ping without auth",
                         )
                         if await self._try_ping_without_auth(client, proxy_pass_url):
                             return True, HealthStatus.HEALTHY
@@ -772,37 +826,39 @@ class HealthMonitoringService:
                         return False, f"unhealthy: status {response.status_code}"
             except Exception as e:
                 logger.warning(
-                    f"Health check failed for {redact_url(proxy_pass_url)}: {type(e).__name__} - {e}"
+                    f"Health check failed for {redact_url(proxy_pass_url)}: {type(e).__name__}"
                 )
                 return False, f"unhealthy: {type(e).__name__}"
 
         # Skip health checks for stdio transport (as requested)
         if supported_transports == ["stdio"]:
-            logger.debug(
+            logger.info(
                 f"[TRACE] Skipping health check for stdio transport: {redact_url(proxy_pass_url)}"
             )
             return True, HealthStatus.UNKNOWN
 
         # Try endpoints based on supported transports, prioritizing streamable-http
-        logger.debug(f"[TRACE] No transport endpoint in URL: {redact_url(proxy_pass_url)}")
-        logger.debug(f"[TRACE] Supported transports: {supported_transports}")
+        logger.info(f"[TRACE] No transport endpoint in URL: {redact_url(proxy_pass_url)}")
+        logger.info(f"[TRACE] Supported transports: {supported_transports}")
 
         # Try streamable-http first (default preference)
         if "streamable-http" in supported_transports:
-            logger.debug("[TRACE] Trying streamable-http transport")
-            # Build base headers without session ID
-            headers = self._build_headers_for_server(server_info, include_session_id=False)
-
-            # Resolve endpoint URL using centralized utility
+            logger.info("[TRACE] Trying streamable-http transport")
+            # Resolve the exact endpoint before building any credential headers.
             # Priority: explicit mcp_endpoint > URL detection > append /mcp
             endpoint = get_endpoint_url_from_server_info(
                 server_info, transport_type="streamable-http"
             )
-            logger.debug(f"[TRACE] Resolved streamable-http endpoint: {redact_url(endpoint)}")
+            headers = self._build_headers_for_server(
+                server_info,
+                destination_url=endpoint,
+                include_session_id=False,
+            )
+            logger.info(f"[TRACE] Resolved streamable-http endpoint: {redact_url(endpoint)}")
 
             try:
                 # Step 1: Initialize session to get session ID
-                logger.debug(
+                logger.info(
                     f"[TRACE] Initializing MCP session for endpoint: {redact_url(endpoint)}"
                 )
                 session_id = await self._initialize_mcp_session(client, endpoint, headers)
@@ -825,12 +881,12 @@ class HealthMonitoringService:
                 headers["Mcp-Session-Id"] = session_id
                 ping_payload = '{ "jsonrpc": "2.0", "id": "0", "method": "ping" }'
 
-                logger.debug(f"[TRACE] Sending ping to endpoint: {redact_url(endpoint)}")
-                logger.debug(f"[TRACE] Headers being sent: {self._mask_sensitive_headers(headers)}")
+                logger.info(f"[TRACE] Sending ping to endpoint: {redact_url(endpoint)}")
+                logger.debug(f"Health request header names={sorted(headers)}")
                 response = await client.post(
                     endpoint, headers=headers, content=ping_payload, follow_redirects=True
                 )
-                logger.debug(f"[TRACE] Response status: {response.status_code}")
+                logger.info(f"[TRACE] Response status: {response.status_code}")
 
                 # Check for auth failures first
                 if response.status_code in [401, 403]:
@@ -871,26 +927,29 @@ class HealthMonitoringService:
                     return True, HealthStatus.HEALTHY
                 else:
                     logger.warning(
-                        f"Health check failed for {redact_url(endpoint)}: Status {response.status_code}, Response: {response.text}"
+                        f"Health check failed for {redact_url(endpoint)}: status={response.status_code}"
                     )
                     return False, f"unhealthy: status {response.status_code}"
 
             except Exception as e:
                 logger.warning(
-                    f"Health check failed for {redact_url(endpoint)}: {type(e).__name__} - {e}"
+                    f"Health check failed for {redact_url(endpoint)}: {type(e).__name__}"
                 )
                 return False, f"unhealthy: {type(e).__name__}"
 
         # Fallback to SSE
         if "sse" in supported_transports:
-            logger.debug("[TRACE] Trying SSE transport")
+            logger.info("[TRACE] Trying SSE transport")
             try:
                 # Resolve SSE endpoint URL using centralized utility
                 # Priority: explicit sse_endpoint > URL detection > append /sse
                 sse_endpoint = get_endpoint_url_from_server_info(server_info, transport_type="sse")
-                logger.debug(f"[TRACE] Resolved SSE endpoint: {redact_url(sse_endpoint)}")
+                logger.info(f"[TRACE] Resolved SSE endpoint: {redact_url(sse_endpoint)}")
                 # Build headers including server-specific headers
-                headers = self._build_headers_for_server(server_info)
+                headers = self._build_headers_for_server(
+                    server_info,
+                    destination_url=sse_endpoint,
+                )
                 # Use shorter timeout for SSE since it starts streaming immediately
                 timeout = httpx.Timeout(connect=5.0, read=2.0, write=5.0, pool=5.0)
                 response = await client.get(
@@ -901,7 +960,7 @@ class HealthMonitoringService:
             except (TimeoutError, httpx.TimeoutException) as e:
                 # For SSE endpoints, timeout while reading streaming response is normal after getting 200 OK
                 logger.info(
-                    f"SSE endpoint {redact_url(sse_endpoint)} timed out while streaming (expected): {e}"
+                    f"SSE endpoint {redact_url(sse_endpoint)} timed out while streaming (expected) type={type(e).__name__}"
                 )
                 # If we can extract status code from response, check if it was 200
                 if hasattr(e, "response") and e.response and e.response.status_code == 200:
@@ -913,50 +972,57 @@ class HealthMonitoringService:
                 return True, "healthy"
             except Exception as e:
                 logger.error(
-                    f"SSE endpoint {redact_url(sse_endpoint)} failed with exception: {type(e).__name__} - {e}"
+                    f"SSE endpoint {redact_url(sse_endpoint)} failed with exception: {type(e).__name__}"
                 )
                 pass
 
         # If no specific transports, try default streamable-http then sse
         if not supported_transports or supported_transports == []:
-            logger.debug("[TRACE] No specific transports defined, trying defaults")
-            headers = self._build_headers_for_server(server_info)
-
-            # Resolve default streamable-http endpoint using centralized utility
+            logger.info("[TRACE] No specific transports defined, trying defaults")
+            # Resolve the exact default endpoint before building credentials.
             endpoint = get_endpoint_url_from_server_info(
                 server_info, transport_type="streamable-http"
             )
-            logger.debug(
+            headers = self._build_headers_for_server(
+                server_info,
+                destination_url=endpoint,
+            )
+            logger.info(
                 f"[TRACE] Resolved default streamable-http endpoint: {redact_url(endpoint)}"
             )
             ping_payload = '{ "jsonrpc": "2.0", "id": "0", "method": "ping" }'
 
             try:
-                logger.debug(f"[TRACE] Trying default endpoint: {redact_url(endpoint)}")
-                logger.debug(f"[TRACE] Headers being sent: {self._mask_sensitive_headers(headers)}")
+                logger.info(f"[TRACE] Trying default endpoint: {redact_url(endpoint)}")
+                logger.debug(f"Health request header names={sorted(headers)}")
                 response = await client.post(
                     endpoint, headers=headers, content=ping_payload, follow_redirects=True
                 )
-                logger.debug(f"[TRACE] Response status: {response.status_code}")
+                logger.info(f"[TRACE] Response status: {response.status_code}")
                 if self._is_mcp_endpoint_healthy_streamable(response):
                     logger.info(f"Health check succeeded at {redact_url(endpoint)}")
                     return True, HealthStatus.HEALTHY
                 else:
                     logger.warning(
-                        f"Health check failed for {redact_url(endpoint)}: Status {response.status_code}, Response: {response.text}"
+                        f"Health check failed for {redact_url(endpoint)}: status={response.status_code}"
                     )
                     return False, f"unhealthy: status {response.status_code}"
             except Exception as e:
                 logger.warning(
-                    f"Health check failed for {redact_url(endpoint)}: {type(e).__name__} - {e}"
+                    f"Health check failed for {redact_url(endpoint)}: {type(e).__name__}"
                 )
 
             try:
                 # Resolve default SSE endpoint using centralized utility
                 sse_endpoint = get_endpoint_url_from_server_info(server_info, transport_type="sse")
-                logger.debug(f"[TRACE] Resolved default SSE endpoint: {redact_url(sse_endpoint)}")
+                logger.info(
+                    f"[TRACE] Resolved default SSE endpoint: {redact_url(sse_endpoint)}",
+                )
                 # Build headers including server-specific headers
-                headers = self._build_headers_for_server(server_info)
+                headers = self._build_headers_for_server(
+                    server_info,
+                    destination_url=sse_endpoint,
+                )
                 # Use shorter timeout for SSE since it starts streaming immediately
                 timeout = httpx.Timeout(connect=5.0, read=2.0, write=5.0, pool=5.0)
                 response = await client.get(
@@ -967,7 +1033,7 @@ class HealthMonitoringService:
             except (TimeoutError, httpx.TimeoutException) as e:
                 # For SSE endpoints, timeout while reading streaming response is normal after getting 200 OK
                 logger.info(
-                    f"SSE endpoint {redact_url(sse_endpoint)} timed out while streaming (expected): {e}"
+                    f"SSE endpoint {redact_url(sse_endpoint)} timed out while streaming (expected) type={type(e).__name__}"
                 )
                 # If we can extract status code from response, check if it was 200
                 if hasattr(e, "response") and e.response and e.response.status_code == 200:
@@ -979,28 +1045,11 @@ class HealthMonitoringService:
                 return True, "healthy"
             except Exception as e:
                 logger.error(
-                    f"SSE endpoint {redact_url(sse_endpoint)} failed with exception: {type(e).__name__} - {e}"
+                    f"SSE endpoint {redact_url(sse_endpoint)} failed with exception: {type(e).__name__}"
                 )
                 pass
 
         return False, "unhealthy: all transport checks failed"
-
-    def _mask_sensitive_headers(self, headers: dict[str, str]) -> dict[str, str]:
-        """
-        Mask sensitive authentication headers for logging.
-
-        Delegates to the shared, fail-closed header redactor so any
-        credential-bearing header (Authorization, Cookie, and anything carrying
-        a token/secret/credential/api-key) is masked — not just an exact-match
-        allowlist that a new header name could slip past.
-
-        Args:
-            headers: Dictionary of HTTP headers
-
-        Returns:
-            Dictionary with sensitive header values redacted
-        """
-        return redact_headers(headers)
 
     def _is_mcp_endpoint_healthy_streamable(self, response) -> bool:
         """
@@ -1197,14 +1246,14 @@ class HealthMonitoringService:
                             )
                         except Exception as e:
                             logger.error(
-                                f"Failed to update scopes for {service_path} after tool discovery: {e}"
+                                f"Failed to update scopes for {service_path} after tool discovery type={type(e).__name__}"
                             )
 
                         # Broadcast only this specific service update
                         await self.broadcast_health_update(service_path)
 
         except Exception as e:
-            logger.warning(f"Failed to fetch tools for {service_path}: {e}")
+            logger.warning(f"Failed to fetch tools for {service_path} type={type(e).__name__}")
 
     async def get_all_health_status(self) -> dict:
         """Get health status for all services."""
@@ -1260,8 +1309,9 @@ class HealthMonitoringService:
         self.server_health_status[service_path] = HealthStatus.CHECKING
 
         try:
+            profile = proxy_profile_for_entity_target("mcp_server", service_path, proxy_pass_url)
             async with guarded_async_client(
-                profile=PROXY_PROFILE,
+                profile=profile,
                 timeout=httpx.Timeout(settings.health_check_timeout_seconds),
             ) as client:
                 # Use transport-aware endpoint checking
@@ -1309,7 +1359,9 @@ class HealthMonitoringService:
             logger.info(f"Health check connection failed for {service_path}")
         except Exception as e:
             current_status = f"error: {type(e).__name__}"
-            logger.error(f"ERROR: Unexpected error during health check for {service_path}: {e}")
+            logger.error(
+                f"ERROR: Unexpected error during health check for {service_path} type={type(e).__name__}"
+            )
 
         # Update the status
         self.server_health_status[service_path] = current_status
@@ -1325,7 +1377,9 @@ class HealthMonitoringService:
                     f"Nginx config marked dirty due to status change for {service_path}: {previous_status} -> {current_status}"
                 )
             except Exception as e:
-                logger.error(f"Failed to mark nginx config dirty after immediate health check: {e}")
+                logger.error(
+                    f"Failed to mark nginx config dirty after immediate health check type={type(e).__name__}"
+                )
 
         return current_status, last_checked_time
 

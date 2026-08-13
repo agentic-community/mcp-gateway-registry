@@ -470,6 +470,18 @@ def _parse_and_validate_custom_headers(
         seen_names.add(lower)
         validated.append({"name": ch.name, "value": ch.value})
 
+    # Re-run the storage-layer policy here so route validation cannot drift from
+    # defensive validation performed immediately before encryption.
+    from ..utils.credential_encryption import validate_custom_headers
+
+    try:
+        validate_custom_headers(validated, allow_empty_values=allow_empty_values)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid custom header: {exc}",
+        ) from exc
+
     return validated
 
 
@@ -567,7 +579,7 @@ async def _perform_security_scan_on_registration(
         )
 
     except Exception as e:
-        logger.error(f"Security scan failed for {path}: {e}")
+        logger.error(f"Security scan failed for path={path} type={type(e).__name__}")
         # Non-fatal error - server is registered but scan failed. Still notify
         # consumers so they are not left polling for a scan that never reports.
         fire_scan_complete_event(
@@ -1533,7 +1545,7 @@ async def register_service(
             try:
                 encrypt_credential_in_server_dict(server_entry)
             except Exception as e:
-                logger.error(f"Failed to encrypt credential: {e}")
+                logger.error(f"Failed to encrypt credential type={type(e).__name__}")
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail="Failed to encrypt credential",
@@ -1548,7 +1560,7 @@ async def register_service(
         try:
             encrypt_custom_headers_in_server_dict(server_entry)
         except Exception as e:
-            logger.error(f"Failed to encrypt custom headers: {e}")
+            logger.error(f"Failed to encrypt custom headers type={type(e).__name__}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to encrypt custom headers",
@@ -1620,7 +1632,7 @@ async def register_service(
             status_code=201,
             content={
                 "message": f"Service '{name}' version registered successfully",
-                "service": server_entry,
+                "service": strip_credentials_from_dict(server_entry),
                 "is_new_version": True,
                 "existing_version": result.get("existing_version"),
             },
@@ -1657,7 +1669,7 @@ async def register_service(
         send_registration_webhook(
             event_type="registration",
             registration_type="server",
-            card_data=server_entry,
+            card_data=strip_credentials_from_dict(server_entry),
             performed_by=user_context["username"],
         )
     )
@@ -1670,7 +1682,7 @@ async def register_service(
         status_code=201,
         content={
             "message": "Service registered successfully",
-            "service": server_entry,
+            "service": strip_credentials_from_dict(server_entry),
         },
     )
 
@@ -1742,7 +1754,9 @@ async def internal_register_service(
         try:
             headers_list = json.loads(headers) if isinstance(headers, str) else headers
         except Exception as e:
-            logger.warning(f"INTERNAL REGISTER: Failed to parse headers: {e}")
+            logger.warning(
+                f"INTERNAL REGISTER: Failed to parse headers type={type(e).__name__}",
+            )
 
     # Process tool_list
     tool_list = []
@@ -1839,7 +1853,7 @@ async def internal_register_service(
         try:
             encrypt_credential_in_server_dict(server_entry)
         except ValueError as e:
-            logger.error(f"Credential encryption failed for server {path}: {e}")
+            logger.error(f"Credential encryption failed type={type(e).__name__}")
             return JSONResponse(
                 status_code=500,
                 content={
@@ -1856,7 +1870,7 @@ async def internal_register_service(
         try:
             encrypt_custom_headers_in_server_dict(server_entry)
         except Exception as e:
-            logger.error(f"Failed to encrypt custom headers: {e}")
+            logger.error(f"Failed to encrypt custom headers type={type(e).__name__}")
             return JSONResponse(
                 status_code=500,
                 content={"error": "Failed to encrypt custom headers"},
@@ -1972,7 +1986,7 @@ async def internal_register_service(
         status_code=201,
         content={
             "message": "Service registered successfully",
-            "service": server_entry,
+            "service": strip_credentials_from_dict(server_entry),
         },
     )
 
@@ -2568,7 +2582,7 @@ async def edit_server_submit(
             try:
                 encrypt_credential_in_server_dict(updated_server_entry)
             except Exception as e:
-                logger.error(f"Failed to encrypt credential: {e}")
+                logger.error(f"Failed to encrypt credential type={type(e).__name__}")
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail="Failed to encrypt credential",
@@ -2629,7 +2643,9 @@ async def edit_server_submit(
             try:
                 encrypt_custom_headers_in_server_dict(updated_server_entry)
             except Exception as e:
-                logger.error(f"Failed to encrypt custom headers on edit: {e}")
+                logger.error(
+                    f"Failed to encrypt custom headers on edit type={type(e).__name__}",
+                )
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail="Failed to encrypt custom headers",
@@ -3767,25 +3783,17 @@ async def generate_user_token(
                     )
 
                 return formatted_response
-            else:
-                error_detail = "Unknown error"
-                try:
-                    error_response = response.json()
-                    error_detail = error_response.get("detail", "Unknown error")
-                except:
-                    error_detail = response.text
-
-                logger.warning(f"Auth server returned error {response.status_code}: {error_detail}")
-                raise HTTPException(
-                    status_code=response.status_code,
-                    detail=f"Token generation failed: {error_detail}",
-                )
+            logger.warning(f"Auth server token request failed status={response.status_code}")
+            raise HTTPException(
+                status_code=response.status_code,
+                detail="Token generation failed",
+            )
 
     except HTTPException:
         raise
     except Exception as e:
         logger.error(
-            f"Unexpected error generating token for user '{user_context['username']}': {e}"
+            f"Unexpected token generation failure user={user_context['username']} type={type(e).__name__}",
         )
         raise HTTPException(status_code=500, detail="Internal error generating token")
 
@@ -3995,7 +4003,9 @@ async def register_service_api(
         try:
             headers_list = json.loads(headers) if isinstance(headers, str) else headers
         except Exception as e:
-            logger.warning(f"SERVERS REGISTER: Failed to parse headers: {e}")
+            logger.warning(
+                f"SERVERS REGISTER: Failed to parse headers type={type(e).__name__}",
+            )
 
     # Process tool_list
     tool_list = []
@@ -4164,7 +4174,7 @@ async def register_service_api(
         try:
             encrypt_credential_in_server_dict(server_entry)
         except ValueError as e:
-            logger.error(f"Credential encryption failed for server {path}: {e}")
+            logger.error(f"Credential encryption failed type={type(e).__name__}")
             return JSONResponse(
                 status_code=500,
                 content={
@@ -4181,7 +4191,7 @@ async def register_service_api(
         try:
             encrypt_custom_headers_in_server_dict(server_entry)
         except Exception as e:
-            logger.error(f"Failed to encrypt custom headers: {e}")
+            logger.error(f"Failed to encrypt custom headers type={type(e).__name__}")
             return JSONResponse(
                 status_code=500,
                 content={"error": "Failed to encrypt custom headers"},
@@ -4294,7 +4304,7 @@ async def register_service_api(
             send_registration_webhook(
                 event_type="registration",
                 registration_type="server",
-                card_data=server_entry,
+                card_data=strip_credentials_from_dict(server_entry),
                 performed_by=user_context.get("username"),
             )
         )
@@ -4309,7 +4319,7 @@ async def register_service_api(
         )
 
     except Exception as e:
-        logger.error(f"Service registration failed for {path}: {e}", exc_info=True)
+        logger.error(f"Service registration failed type={type(e).__name__}")
         raise HTTPException(status_code=500, detail="Service registration failed")
 
 
@@ -4431,7 +4441,7 @@ async def update_server_auth_credential(
         try:
             encrypt_credential_in_server_dict(existing_server)
         except ValueError as e:
-            logger.error(f"Credential encryption failed for server {server_path}: {e}")
+            logger.error(f"Credential encryption failed type={type(e).__name__}")
             return JSONResponse(
                 status_code=500,
                 content={
@@ -4765,7 +4775,7 @@ async def remove_service_api(
         send_registration_webhook(
             event_type="deletion",
             registration_type="server",
-            card_data=server_info,
+            card_data=strip_credentials_from_dict(server_info),
             performed_by=user_context.get("username"),
         )
     )
@@ -5665,9 +5675,10 @@ async def rescan_server(
     headers_json = _build_scan_headers_from_credentials(server_info)
 
     logger.info(
-        f"Manual security scan requested by user '{user_context.get('username')}' "
-        f"for server '{path}' at URL '{server_url}'"
+        f"Manual security scan requested by user={user_context.get('username')} server={path} endpoint={redact_url(server_url)}",
     )
+
+    from ..exceptions import UrlValidationError
 
     try:
         # Trigger security scan
@@ -5696,8 +5707,17 @@ async def rescan_server(
             "error_message": scan_result.error_message,
             "raw_output": scan_result.raw_output,
         }
+    except UrlValidationError as e:
+        # The server endpoint is not a permitted scan target (e.g. it resolves to a
+        # private/metadata address and is not allowlisted). That is a client/config
+        # condition, not a server error -- surface it as 400, not 500.
+        logger.warning(f"Manual security scan blocked by URL validation type={type(e).__name__}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Server endpoint is not a permitted scan target",
+        )
     except Exception as e:
-        logger.exception(f"Failed to scan server '{path}': {e}")
+        logger.error(f"Manual security scan failed type={type(e).__name__}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to scan server",
@@ -6442,6 +6462,10 @@ async def get_server(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You do not have access to this server",
             )
+
+    # Defense in depth: project a fresh recursive token-free response even
+    # though ServerService already strips credentials on ordinary reads.
+    server_info = strip_credentials_from_dict(server_info)
 
     # Strip internal backend URLs for non-admin users in with-gateway mode.
     # In registry-only mode, users need the URL to connect directly.

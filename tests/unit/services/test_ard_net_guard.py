@@ -23,7 +23,7 @@ class TestAssertFetchable:
             g.assert_fetchable("https:///nohost")
 
     def test_allows_public_ip(self):
-        with patch.object(g.socket, "getaddrinfo", _resolve_to("93.184.216.34")):
+        with patch("registry.utils.url_guard.socket.getaddrinfo", _resolve_to("93.184.216.34")):
             assert g.assert_fetchable("https://acme.com/x") == "https://acme.com/x"
 
     @pytest.mark.parametrize(
@@ -34,8 +34,17 @@ class TestAssertFetchable:
             "192.168.1.5",
             "172.16.0.9",
             "169.254.169.254",
+            "169.254.170.2",
+            "169.254.170.23",
+            "100.100.100.200",
+            "::ffff:100.100.100.200",
+            "64:ff9b::6464:64c8",
+            "2002:6464:64c8::",
             "0.0.0.0",
             "::ffff:10.0.0.1",
+            "64:ff9b::a9fe:a9fe",
+            "2002:a9fe:a9fe::",
+            "100.64.0.1",
         ],
     )
     def test_blocks_private_and_metadata(self, ip):
@@ -44,27 +53,42 @@ class TestAssertFetchable:
         def stub(host, port, **kw):
             return [(family, 1, 6, "", (ip, port))]
 
-        with patch.object(g.socket, "getaddrinfo", stub):
+        with patch("registry.utils.url_guard.socket.getaddrinfo", stub):
             with pytest.raises(ArdValidationError):
                 g.assert_fetchable("https://evil.example/x")
 
     def test_blocks_cgnat_shared_address_space(self):
         """Carrier-grade NAT (100.64.0.0/10, RFC 6598) must be blocked."""
-        with patch.object(g.socket, "getaddrinfo", _resolve_to("100.64.0.1")):
+        with patch("registry.utils.url_guard.socket.getaddrinfo", _resolve_to("100.64.0.1")):
             with pytest.raises(ArdValidationError):
                 g.assert_fetchable("https://evil.example/x")
 
-    def test_cgnat_range_pinned_in_blocked_nets(self):
-        """Pin the exact CGNAT range so a runtime-semantics change fails loudly."""
+    def test_cgnat_range_pinned_in_shared_classifier(self):
+        """Pin the exact CGNAT range at its canonical home."""
         import ipaddress
 
-        assert ipaddress.ip_network("100.64.0.0/10") in g._BLOCKED_NETS
+        from registry.utils import url_guard
+
+        assert url_guard._CGNAT_NET == ipaddress.ip_network("100.64.0.0/10")
 
     def test_same_domain_allows_subdomain(self):
-        with patch.object(g.socket, "getaddrinfo", _resolve_to("93.184.216.34")):
+        with patch("registry.utils.url_guard.socket.getaddrinfo", _resolve_to("93.184.216.34")):
             assert g.assert_fetchable("https://sub.acme.com/x", allowed_domain="acme.com")
 
     def test_same_domain_blocks_other_domain(self):
-        with patch.object(g.socket, "getaddrinfo", _resolve_to("93.184.216.34")):
+        with patch("registry.utils.url_guard.socket.getaddrinfo", _resolve_to("93.184.216.34")):
             with pytest.raises(ArdValidationError):
                 g.assert_fetchable("https://evil.com/x", allowed_domain="acme.com")
+
+
+class TestCanonicalDelegation:
+    def test_delegates_to_url_guard_with_https_skill_profile(self):
+        with patch.object(g, "validate_url", return_value=["93.184.216.34"]) as validate:
+            assert g.assert_fetchable("https://acme.com/catalog.json") == (
+                "https://acme.com/catalog.json"
+            )
+        validate.assert_called_once_with(
+            "https://acme.com/catalog.json",
+            profile=g.SKILL_PROFILE,
+            require_https=True,
+        )

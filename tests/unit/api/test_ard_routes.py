@@ -104,6 +104,48 @@ class TestPublicServer:
             resp = _client().get("/api/public/servers/github/server.json")
         assert resp.status_code == 200
 
+    def test_recursively_strips_rating_details_and_nested_credentials(self):
+        records = {
+            "/github/": {
+                "server_name": "GitHub",
+                "is_enabled": True,
+                "visibility": "public",
+                "rating_details": [{"user": "top@example.com", "rating": 5}],
+                "metadata": {
+                    "mcp_registry_spec": {
+                        "rating_details": [{"user": "nested@example.com", "rating": 4}],
+                        "egress_auth": {"oauth": {"client_secret_encrypted": "nested-ciphertext"}},
+                    }
+                },
+            }
+        }
+        repo = SimpleNamespace(find_with_filter=AsyncMock(return_value=records))
+
+        def fake_to_canonical(record):
+            return (
+                {
+                    "name": record["server_name"],
+                    "_meta": record["metadata"]["mcp_registry_spec"],
+                    "rating_details": record.get("rating_details"),
+                },
+                False,
+            )
+
+        with (
+            patch.object(public_record_routes, "get_server_repository", return_value=repo),
+            patch.object(public_record_routes, "to_canonical", side_effect=fake_to_canonical),
+            patch.object(public_record_routes, "redact_backend_urls", side_effect=lambda d: d),
+        ):
+            resp = _client().get("/api/public/servers/github/server.json")
+
+        assert resp.status_code == 200
+        serialized = str(resp.json())
+        assert "rating_details" not in serialized
+        assert "top@example.com" not in serialized
+        assert "nested@example.com" not in serialized
+        assert "client_secret_encrypted" not in serialized
+        assert "nested-ciphertext" not in serialized
+
     def test_non_public_server_returns_404(self):
         # find_with_filter returns only public+enabled, so a private/disabled
         # server is simply absent -> leaf never matches -> 404.
@@ -132,6 +174,12 @@ class TestPublicAgent:
                 "security_schemes": {"oauth2": {}},
                 "allowed_groups": ["secret-group"],
                 "registered_by": "alice",
+                "num_stars": 4.5,
+                "rating_count": 2,
+                "rating_details": [
+                    {"user": "alice@example.com", "rating": 5},
+                    {"user": "bob@example.com", "rating": 4},
+                ],
             }
         }
         repo = SimpleNamespace(find_with_filter=AsyncMock(return_value=agents))
@@ -143,6 +191,9 @@ class TestPublicAgent:
         assert "security_schemes" not in body
         assert "allowed_groups" not in body
         assert "registered_by" not in body
+        assert "rating_details" not in body
+        assert body["num_stars"] == 4.5
+        assert body["rating_count"] == 2
 
     def test_non_public_agent_404(self):
         # find_with_filter only returns public+enabled, so a private agent is absent.
@@ -162,7 +213,14 @@ class TestPublicSkill:
                 "name": "pdf",
                 "path": "/skills/pdf",
                 "auth_credential_encrypted": "secret",
+                "auth_scheme": "bearer",
+                "auth_header_name": "Authorization",
+                "credential_updated_at": "2026-07-29T00:00:00Z",
+                "_identity_url_normalized": "https://private.example/skill.md",
                 "owner": "alice",
+                "num_stars": 4.0,
+                "rating_count": 1,
+                "rating_details": [{"user": "alice@example.com", "rating": 4}],
             },
         )
         repo = SimpleNamespace(list_filtered=AsyncMock(return_value=[skill]))
@@ -172,7 +230,14 @@ class TestPublicSkill:
         body = resp.json()
         assert body["name"] == "pdf"
         assert "auth_credential_encrypted" not in body
+        assert "auth_scheme" not in body
+        assert "auth_header_name" not in body
+        assert "credential_updated_at" not in body
+        assert "_identity_url_normalized" not in body
         assert "owner" not in body
+        assert "rating_details" not in body
+        assert body["num_stars"] == 4.0
+        assert body["rating_count"] == 1
 
     def test_missing_skill_404(self):
         repo = SimpleNamespace(list_filtered=AsyncMock(return_value=[]))

@@ -194,3 +194,15 @@ class TestRedactUrl:
         result = redact_url("http://user:pass@host:notaport/path")
         assert result == REDACTED
         assert "pass" not in result
+
+    def test_scheme_and_host_are_lowercased(self):
+        # Canonicalize so a mixed-case host cannot evade a log-based match.
+        assert redact_url("HTTPS://Public.Example/MCP") == "https://public.example/MCP"
+
+    def test_ipv6_literal_is_rebracketed(self):
+        assert redact_url("http://[::1]:8080/x?t=1") == "http://[::1]:8080/x"
+
+    def test_unicode_homograph_host_fails_closed(self):
+        # A host that cannot be IDNA-encoded is masked rather than logged raw,
+        # so a homograph/confusable host never lands in a log line.
+        assert redact_url("https://a..b/path") == REDACTED

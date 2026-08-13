@@ -127,6 +127,17 @@ class TestConfigureEgressUrlValidation:
         assert resp.status_code == 400
         assert "custom_authorize_url" in resp.json()["detail"]
 
+    def test_token_url_ignores_proxy_cidr_allowlist(self, make_client, monkeypatch):
+        monkeypatch.setattr(routes.settings, "ssrf_allowed_cidrs", "10.0.0.0/8")
+        client = make_client()
+        resp = client.post(
+            "/servers/gh/egress-auth",
+            json=_body(custom_token_url="https://10.0.0.5/token"),
+        )
+        assert resp.status_code == 400
+        assert "custom_token_url" in resp.json()["detail"]
+        assert client._svc.updated_with is None
+
     def test_non_http_scheme_rejected(self, make_client):
         client = make_client()
         resp = client.post(

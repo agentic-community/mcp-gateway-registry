@@ -101,6 +101,13 @@ app:
   # non-durable JSON log lines. Set to false only where a non-durable audit
   # trail is acceptable.
   auditLogRequireDurable: true
+  # Disable the AWS SDK's EC2 IMDS credential/region fallback (sets
+  # AWS_EC2_METADATA_DISABLED=true). Secure-by-default; independent of the
+  # url_guard egress SSRF check (boto3 does not pass through that guard). Safe
+  # with ECS task roles, EKS IRSA, and EKS Pod Identity. Set to false ONLY for
+  # clusters that hand pods credentials via the worker node instance profile
+  # (reachable only through IMDS).
+  disableEc2ImdsFallback: true
   # Rate Limiting (issue #295). Application-level, identity/group/target-aware
   # limits enforced here in the /validate hop (complementary to the coarse
   # per-IP nginx edge limiting). Off by default. These must match the registry

@@ -129,6 +129,8 @@ tests:
       # RATE_LIMIT_USER_FLOOR_PER_MIN, RATE_LIMIT_AGENT_FLOOR_PER_MIN);
       # the MCP token TTL pair (MCP_TOKEN_DEFAULT_TTL_HOURS,
       # MCP_TOKEN_MAX_TTL_HOURS, always rendered) is env[40]/env[41];
+      # AWS_EC2_METADATA_DISABLED (chart-managed security constant, always
+      # rendered) is env[42];
       # user extraEnv entries are appended at the end.
       #
       # NOTE: The indices below assume global.authProvider.type=keycloak
@@ -234,9 +236,12 @@ tests:
           value: MCP_TOKEN_MAX_TTL_HOURS
       - equal:
           path: spec.template.spec.containers[0].env[42].name
-          value: MY_FLAG
+          value: AWS_EC2_METADATA_DISABLED
       - equal:
           path: spec.template.spec.containers[0].env[43].name
+          value: MY_FLAG
+      - equal:
+          path: spec.template.spec.containers[0].env[44].name
           value: MY_SECRET_VAR
 
   - it: appends extraEnvFrom entries after chart-managed envFrom sources
@@ -448,6 +453,34 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: "\"RATE_LIMIT_BACKEND_TIMEOUT_MS\" is a reserved variable"
+
+  - it: disables AWS EC2 IMDS fallback by default (defense-in-depth)
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AWS_EC2_METADATA_DISABLED
+            value: "true"
+
+  - it: omits AWS_EC2_METADATA_DISABLED when disableEc2ImdsFallback=false (node-role escape hatch)
+    set:
+      app:
+        disableEc2ImdsFallback: false
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AWS_EC2_METADATA_DISABLED
+            value: "true"
+
+  - it: fails when extraEnv contains AWS_EC2_METADATA_DISABLED (chart-managed)
+    set:
+      extraEnv:
+        - name: AWS_EC2_METADATA_DISABLED
+          value: "false"
+    asserts:
+      - failedTemplate:
+          errorPattern: "\"AWS_EC2_METADATA_DISABLED\" is a reserved variable"
 
   - it: emits empty UI_TITLE by default
     asserts:

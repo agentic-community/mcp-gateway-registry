@@ -68,28 +68,21 @@ def mock_server_info():
 
 
 @pytest.mark.unit
-class TestHealthHeaderMasking:
-    """Outbound-probe header dumps must redact credential-bearing headers."""
-
-    def test_masks_authorization_and_credential_variants(self, health_service):
-        """Authorization, Cookie, and token/credential headers are redacted."""
-        headers = {
-            "Authorization": "Bearer secret-token-value",
-            "Cookie": "session=abc",
-            "X-Api-Key": "api-key-value",
-            "X-Auth-Credential": "cred-value",
-            "Content-Type": "application/json",
+class TestHealthHeaderLogging:
+    def test_header_builder_logs_names_not_values(self, health_service, caplog):
+        server_info = {
+            "path": "/test",
+            "proxy_pass_url": "https://93.184.216.34/mcp",
+            "headers": [{"X-Trace": "query-secret-value"}],
         }
-
-        masked = health_service._mask_sensitive_headers(headers)
-
-        assert masked["Authorization"] == "[REDACTED]"
-        assert masked["Cookie"] == "[REDACTED]"
-        assert masked["X-Api-Key"] == "[REDACTED]"
-        assert masked["X-Auth-Credential"] == "[REDACTED]"
-        assert masked["Content-Type"] == "application/json"
-        assert "secret-token-value" not in str(masked)
-        assert "cred-value" not in str(masked)
+        with caplog.at_level("DEBUG", logger="registry.health.service"):
+            headers = health_service._build_headers_for_server(
+                server_info,
+                destination_url="https://93.184.216.34/mcp",
+            )
+        assert headers["X-Trace"] == "query-secret-value"
+        assert "X-Trace" in caplog.text
+        assert "query-secret-value" not in caplog.text
 
 
 # =============================================================================
@@ -425,7 +418,11 @@ async def test_health_service_check_server_endpoint_stdio_transport(
 @pytest.mark.unit
 def test_health_service_build_headers_for_server(health_service, mock_server_info):
     """Test building headers for server requests."""
-    headers = health_service._build_headers_for_server(mock_server_info)
+    with patch("registry.health.service.validate_url", return_value=["93.184.216.34"]):
+        headers = health_service._build_headers_for_server(
+            mock_server_info,
+            destination_url=mock_server_info["proxy_pass_url"],
+        )
 
     assert "Accept" in headers
     assert "Content-Type" in headers
@@ -435,7 +432,12 @@ def test_health_service_build_headers_for_server(health_service, mock_server_inf
 @pytest.mark.unit
 def test_health_service_build_headers_with_session_id(health_service, mock_server_info):
     """Test building headers with session ID."""
-    headers = health_service._build_headers_for_server(mock_server_info, include_session_id=True)
+    with patch("registry.health.service.validate_url", return_value=["93.184.216.34"]):
+        headers = health_service._build_headers_for_server(
+            mock_server_info,
+            destination_url=mock_server_info["proxy_pass_url"],
+            include_session_id=True,
+        )
 
     assert "Mcp-Session-Id" in headers
     # Should be a valid UUID
@@ -1481,3 +1483,152 @@ async def test_endpoint_check_blocks_unsafe_url_without_sending_credentials(
     client.get.assert_not_called()
     client.head.assert_not_called()
     client.post.assert_not_called()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "field,actual",
+    [
+        ("mcp_endpoint", "https://public.example/mcp"),
+        ("mcp_endpoint", "http://mcpgw-server:8004/mcp"),
+        ("mcp_endpoint", "http://mcpgw-server:8003/other"),
+        ("mcp_endpoint", "http://mcpgw-server:8003/mcp?tenant=other"),
+        ("sse_endpoint", "http://mcpgw-server:8003/sse"),
+    ],
+)
+async def test_builtin_health_override_mismatch_never_builds_headers_or_fetches(
+    health_service, field, actual
+):
+    """A built-in profile is bound to the exact actual outbound identity."""
+    from registry.utils import url_guard
+
+    url_guard._proxy_allowlist.cache_clear()
+    url_guard._builtin_airegistry_tools_allowlist.cache_clear()
+    server_info = {
+        "path": "/airegistry-tools/",
+        "server_name": "AI Registry tools",
+        "proxy_pass_url": "http://mcpgw-server:8003/",
+        "supported_transports": ["streamable-http"],
+        "auth_scheme": "bearer",
+        "auth_credential_encrypted": "must-not-be-decrypted",
+        field: actual,
+    }
+    client = AsyncMock()
+
+    with (
+        patch(
+            "registry.utils.url_guard.socket.getaddrinfo",
+            return_value=[(None, None, None, None, ("10.0.0.9", 8003))],
+        ),
+        patch.object(health_service, "_build_headers_for_server") as build_headers,
+    ):
+        healthy, detail = await health_service._check_server_endpoint_transport_aware(
+            client, server_info["proxy_pass_url"], server_info
+        )
+
+    assert healthy is False
+    assert detail == HealthStatus.UNHEALTHY_URL_BLOCKED
+    build_headers.assert_not_called()
+    client.get.assert_not_called()
+    client.post.assert_not_called()
+    client.head.assert_not_called()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_builtin_health_requires_registered_proxy_target(health_service):
+    server_info = {
+        "path": "/airegistry-tools/",
+        "server_name": "AI Registry tools",
+        "supported_transports": ["streamable-http"],
+        "auth_scheme": "bearer",
+        "auth_credential_encrypted": "must-not-be-decrypted",
+    }
+    supplied_url = "http://mcpgw-server:8003/"
+    client = AsyncMock()
+
+    with patch.object(health_service, "_build_headers_for_server") as build_headers:
+        healthy, detail = await health_service._check_server_endpoint_transport_aware(
+            client, supplied_url, server_info
+        )
+
+    assert healthy is False
+    assert detail == HealthStatus.UNHEALTHY_URL_BLOCKED
+    build_headers.assert_not_called()
+    client.get.assert_not_called()
+    client.post.assert_not_called()
+    client.head.assert_not_called()
+
+
+@pytest.mark.unit
+class TestHealthCredentialDestinationGuard:
+    _SECRET_SERVER = {
+        "path": "/secret",
+        "proxy_pass_url": "https://public.example/mcp",
+        "headers": [{"X-Configured": "configured-secret"}],
+        "custom_headers_encrypted": [{"name": "X-Secret", "value_encrypted": "enc"}],
+        "auth_scheme": "bearer",
+        "auth_credential_encrypted": "enc-auth",
+    }
+
+    def test_missing_destination_never_decrypts(self, health_service):
+        with (
+            patch("registry.utils.credential_encryption.decrypt_credential") as decrypt,
+            patch("registry.utils.credential_encryption.decrypt_custom_headers") as decrypt_custom,
+        ):
+            headers = health_service._build_headers_for_server(dict(self._SECRET_SERVER))
+        assert set(headers) == {"Accept", "Content-Type"}
+        decrypt.assert_not_called()
+        decrypt_custom.assert_not_called()
+
+    def test_invalid_destination_never_decrypts(self, health_service):
+        with (
+            patch("registry.utils.credential_encryption.decrypt_credential") as decrypt,
+            patch("registry.utils.credential_encryption.decrypt_custom_headers") as decrypt_custom,
+        ):
+            headers = health_service._build_headers_for_server(
+                dict(self._SECRET_SERVER),
+                destination_url="http://169.254.169.254/latest/meta-data/",
+            )
+        assert set(headers) == {"Accept", "Content-Type"}
+        decrypt.assert_not_called()
+        decrypt_custom.assert_not_called()
+
+    def test_different_builtin_destination_never_decrypts(self, health_service):
+        server = dict(self._SECRET_SERVER)
+        server.update(
+            {
+                "path": "/airegistry-tools/",
+                "proxy_pass_url": "http://mcpgw-server:8003/",
+            }
+        )
+        with (
+            patch("registry.utils.credential_encryption.decrypt_credential") as decrypt,
+            patch("registry.utils.credential_encryption.decrypt_custom_headers") as decrypt_custom,
+        ):
+            headers = health_service._build_headers_for_server(
+                server,
+                destination_url="https://public.example/mcp",
+            )
+        assert set(headers) == {"Accept", "Content-Type"}
+        decrypt.assert_not_called()
+        decrypt_custom.assert_not_called()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_health_logs_strip_query_and_response_body(health_service, caplog):
+    endpoint = "https://93.184.216.34/mcp?api_key=query-secret"
+    response = MagicMock(status_code=500, headers={}, text="response-body-secret")
+    client = AsyncMock(spec=httpx.AsyncClient)
+    client.post.return_value = response
+
+    with caplog.at_level("WARNING", logger="registry.health.service"):
+        session_id = await health_service._initialize_mcp_session(client, endpoint, {})
+
+    assert session_id is None
+    assert "https://93.184.216.34/mcp" in caplog.text
+    assert "query-secret" not in caplog.text
+    assert "response-body-secret" not in caplog.text
+    assert "status=500" in caplog.text

@@ -356,7 +356,7 @@ class TestPostTokenSsrfGuard:
         data, headers = oauth_engine._build_token_request(
             cfg, "cid", "supersecret", {"grant_type": "x"}
         )
-        with pytest.raises(oauth_engine.OAuthEngineError, match="SSRF guard"):
+        with pytest.raises(oauth_engine.OAuthEngineError, match="blocked by security policy"):
             await oauth_engine._post_token(cfg, data, headers)
 
     async def test_token_url_to_loopback_fails_closed(self):
@@ -364,7 +364,7 @@ class TestPostTokenSsrfGuard:
         data, headers = oauth_engine._build_token_request(
             cfg, "cid", "supersecret", {"grant_type": "x"}
         )
-        with pytest.raises(oauth_engine.OAuthEngineError, match="SSRF guard"):
+        with pytest.raises(oauth_engine.OAuthEngineError, match="blocked by security policy"):
             await oauth_engine._post_token(cfg, data, headers)
 
     async def test_token_url_to_rfc1918_fails_closed(self):
@@ -372,5 +372,87 @@ class TestPostTokenSsrfGuard:
         data, headers = oauth_engine._build_token_request(
             cfg, "cid", "supersecret", {"grant_type": "x"}
         )
-        with pytest.raises(oauth_engine.OAuthEngineError, match="SSRF guard"):
+        with pytest.raises(oauth_engine.OAuthEngineError, match="blocked by security policy"):
             await oauth_engine._post_token(cfg, data, headers)
+
+
+@pytest.mark.unit
+class TestCredentialedOAuthTransportProfile:
+    async def test_post_uses_https_only_empty_allowlist_profile(self, monkeypatch):
+        from contextlib import asynccontextmanager
+        from unittest.mock import AsyncMock, MagicMock
+
+        captured = {}
+
+        @asynccontextmanager
+        async def fake_client(*, profile, timeout):
+            captured["profile"] = profile
+            response = MagicMock(status_code=200)
+            response.json.return_value = {"access_token": "ok"}
+            client = MagicMock()
+            client.post = AsyncMock(return_value=response)
+            yield client
+
+        monkeypatch.setattr(oauth_engine, "guarded_async_client", fake_client)
+        cfg = OAuthProviderConfig(
+            name="custom",
+            display_name="Custom",
+            authorize_url="https://tokens.example/authorize",
+            token_url="https://tokens.example/oauth/token",
+        )
+        await oauth_engine._post_token(cfg, {"client_secret": "secret"}, {})
+        assert captured["profile"] is oauth_engine.CREDENTIALED_OAUTH_PROFILE
+        assert captured["profile"].allowlist_factory().hosts == frozenset()
+
+    async def test_guard_error_detail_is_not_propagated(self, monkeypatch):
+        from contextlib import asynccontextmanager
+
+        @asynccontextmanager
+        async def blocked_client(*, profile, timeout):
+            del profile, timeout
+            raise oauth_engine.UrlValidationError(
+                "https://tokens.example/token?api_key=query-secret",
+                "raw-exception-secret",
+            )
+            yield  # pragma: no cover
+
+        monkeypatch.setattr(oauth_engine, "guarded_async_client", blocked_client)
+        cfg = OAuthProviderConfig(
+            name="custom",
+            display_name="Custom",
+            authorize_url="https://tokens.example/authorize",
+            token_url="https://tokens.example/oauth/token",
+        )
+
+        with pytest.raises(oauth_engine.OAuthEngineError) as exc_info:
+            await oauth_engine._post_token(cfg, {"client_secret": "secret"}, {})
+
+        assert str(exc_info.value) == "token endpoint blocked by security policy"
+        assert "query-secret" not in str(exc_info.value)
+
+    async def test_transport_error_detail_is_not_propagated(self, monkeypatch):
+        from contextlib import asynccontextmanager
+        from unittest.mock import AsyncMock, MagicMock
+
+        @asynccontextmanager
+        async def failing_client(*, profile, timeout):
+            del profile, timeout
+            client = MagicMock()
+            client.post = AsyncMock(
+                side_effect=oauth_engine.httpx.ConnectError("raw-exception-secret")
+            )
+            yield client
+
+        monkeypatch.setattr(oauth_engine, "guarded_async_client", failing_client)
+        cfg = OAuthProviderConfig(
+            name="custom",
+            display_name="Custom",
+            authorize_url="https://tokens.example/authorize",
+            token_url="https://tokens.example/oauth/token",
+        )
+
+        with pytest.raises(oauth_engine.OAuthEngineError) as exc_info:
+            await oauth_engine._post_token(cfg, {"client_secret": "secret"}, {})
+
+        assert str(exc_info.value) == "token endpoint unreachable"
+        assert "raw-exception-secret" not in str(exc_info.value)

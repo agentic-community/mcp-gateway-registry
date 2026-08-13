@@ -18,6 +18,9 @@ import logging
 
 import httpx
 
+from registry.exceptions import UrlValidationError
+from registry.utils.url_guard import CREDENTIALED_OAUTH_PROFILE, validate_url
+
 logger = logging.getLogger(__name__)
 
 # OAuth grant types for the two supported IdPs.
@@ -122,17 +125,18 @@ def _keycloak_exchange_body(
 def _map_token_error(status_code: int, payload: dict) -> OboExchangeError:
     """Map an IdP token-endpoint error response to a typed exception."""
     err = (payload.get("error") or "").strip()
-    detail = payload.get("error_description") or payload.get("error") or "exchange failed"
     if err == "interaction_required":
-        return OboConsentRequired(detail)
+        return OboConsentRequired("IdP requires consent")
     if err == "invalid_grant":
         # invalid_grant spans both user-fixable (expired/no-permission) and
         # config (gateway not granted access) cases; surface as re-auth with the
         # IdP detail so the agent/user sees the actual reason.
-        return OboReauthRequired(detail)
+        return OboReauthRequired("IdP rejected the user assertion")
     if err in ("invalid_client", "invalid_scope", "unauthorized_client"):
-        return OboConfigError(detail)
-    return OboExchangeError(f"idp returned {status_code}: {detail}")
+        return OboConfigError(f"IdP rejected exchange configuration ({err})")
+    return OboExchangeError(
+        f"IdP token exchange failed (status={status_code}, error={err or 'unknown'})"
+    )
 
 
 async def obo_exchange(
@@ -167,6 +171,16 @@ async def obo_exchange(
     if not token_url or not client_id or not client_secret:
         raise OboConfigError("gateway IdP credentials/token_url not configured for OBO exchange")
 
+    try:
+        validate_url(
+            token_url,
+            profile=CREDENTIALED_OAUTH_PROFILE,
+            resolve=False,
+        )
+    except UrlValidationError as exc:
+        logger.error("obo_exchange: token endpoint blocked by security policy")
+        raise OboExchangeError("IdP token endpoint blocked by security policy") from exc
+
     scopes = scopes or []
     if kind == "entra":
         body = _entra_exchange_body(
@@ -196,31 +210,31 @@ async def obo_exchange(
     # never silently become an SSRF that exfiltrates the client_secret/assertion
     # to an internal target. The pinned guard rejects a non-http(s) scheme or a
     # private/metadata IP (including a post-config DNS rebind) at connect time.
-    from registry.exceptions import UrlValidationError
-    from registry.utils.url_guard import PROXY_PROFILE, guarded_async_client
+    # Resolve from the canonical module at request time so policy instrumentation
+    # and tests cannot be bypassed by a stale imported client reference.
+    from registry.utils.url_guard import guarded_async_client
 
     try:
         async with guarded_async_client(
-            profile=PROXY_PROFILE, timeout=_TOKEN_EXCHANGE_TIMEOUT_SECONDS
+            profile=CREDENTIALED_OAUTH_PROFILE,
+            timeout=_TOKEN_EXCHANGE_TIMEOUT_SECONDS,
         ) as client:
             resp = await client.post(token_url, data=body)
     except UrlValidationError as exc:
         # Guard rejected the target WITHOUT sending the credential/assertion.
-        logger.error("obo_exchange: token endpoint blocked by SSRF guard: %s", exc)
-        raise OboExchangeError(f"IdP token endpoint blocked by SSRF guard: {exc}") from exc
+        logger.error("obo_exchange: token endpoint blocked by security policy")
+        raise OboExchangeError("IdP token endpoint blocked by security policy") from exc
     except httpx.HTTPError as exc:
-        logger.error("obo_exchange: transport error calling IdP token endpoint: %s", exc)
-        raise OboExchangeError(f"IdP token endpoint unreachable: {exc}") from exc
+        logger.error(f"obo_exchange: token endpoint transport failure type={type(exc).__name__}")
+        raise OboExchangeError("IdP token endpoint unreachable") from exc
 
     if resp.status_code != 200:
         try:
             payload = resp.json()
         except ValueError:
-            payload = {"error_description": resp.text[:200]}
+            payload = {}
         logger.warning(
-            "obo_exchange: IdP returned %s: %s",
-            resp.status_code,
-            payload.get("error") or payload.get("error_description"),
+            f"obo_exchange: IdP token exchange failed status={resp.status_code} error={payload.get('error') or 'unknown'}",
         )
         raise _map_token_error(resp.status_code, payload)
 
