@@ -540,6 +540,7 @@ Used by `registry` and `mcpgw` services.
 | IdP scope | `EMBEDDINGS_IDP_SCOPE` | `embeddings_idp_scope` | `registry.embeddings.idpScope` | OAuth2 scope (e.g. `api://<app-id>/.default`). Optional. |
 | IdP timeout | `EMBEDDINGS_IDP_TIMEOUT_SECONDS` | `embeddings_idp_timeout_seconds` | `registry.embeddings.idpTimeoutSeconds` | Token request timeout (default 30s). |
 | IdP allow insecure | `EMBEDDINGS_IDP_ALLOW_INSECURE` | `embeddings_idp_allow_insecure` | `registry.embeddings.idpAllowInsecure` | Allow `http://` loopback token endpoint (local dev only, default `false`). |
+| Response format | `EMBEDDINGS_RESPONSE_FORMAT` | `embeddings_response_format` | `registry.embeddings.responseFormat` | `openai` (default envelope) or `raw_array` (endpoint returns a bare `[[float]]` array). Independent of auth mode. |
 
 ---
 

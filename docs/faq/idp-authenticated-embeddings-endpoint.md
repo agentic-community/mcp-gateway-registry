@@ -33,10 +33,12 @@ the standard request and return the standard **response envelope**:
 }
 ```
 
-An endpoint that returns a bare array of vectors (`[[0.12, ...], ...]`) is **not**
-supported even if it is labelled "OpenAI-compatible" - LiteLLM reads `data[i].embedding`
-and cannot parse a bare array. If your endpoint returns a non-standard shape, have it
-return the envelope above; response-shape adaptation is out of scope for this feature.
+If your endpoint instead returns a **bare array of vectors** (`[[0.12, ...], ...]`)
+rather than the envelope, LiteLLM cannot parse it (it reads `data[i].embedding`). For
+that case set `EMBEDDINGS_RESPONSE_FORMAT=raw_array`: the registry then calls the
+endpoint directly and reads the bare array (it also accepts the same array wrapped
+under a top-level `embeddings`, `data`, or `vectors` key). Leave the variable unset
+(or `openai`) for standard envelope endpoints.
 
 ## Configuration parameters
 
@@ -53,6 +55,7 @@ return the envelope above; response-shape adaptation is out of scope for this fe
 | `EMBEDDINGS_IDP_SCOPE` | Depends | OAuth2 scope. Required for Entra (`api://<app-id>/.default`); usually omit for Keycloak. |
 | `EMBEDDINGS_IDP_TIMEOUT_SECONDS` | No | Token request timeout (default `30`). |
 | `EMBEDDINGS_IDP_ALLOW_INSECURE` | No | Local dev only: permit an `http://` **loopback** token endpoint. Default `false` (https required). A remote `http://` endpoint is always rejected. |
+| `EMBEDDINGS_RESPONSE_FORMAT` | No | Endpoint response shape: `openai` (default, standard envelope) or `raw_array` (endpoint returns a bare `[[float]]` array). Independent of auth mode. |
 
 The full cross-surface reference (Docker / Terraform / Helm) is in
 [docs/unified-parameter-reference.md](../unified-parameter-reference.md).

@@ -368,6 +368,12 @@ variable "embeddings_idp_allow_insecure" {
   default     = false
 }
 
+variable "embeddings_response_format" {
+  description = "Response shape of the litellm embeddings endpoint. 'openai' (default) = standard envelope; 'raw_array' = endpoint returns a bare [[float]] array."
+  type        = string
+  default     = ""
+}
+
 
 #
 # Registration Deduplication Configuration

@@ -373,6 +373,13 @@ spec:
                   key: {{ .Values.embeddings.idpClientSecretExistingSecretKey | default "EMBEDDINGS_IDP_CLIENT_SECRET" }}
             {{- end }}
             {{- end }}
+            # Embeddings response shape. Rendered only when set (default "openai" is
+            # the code default). Independent of authMode: raw_array works with a
+            # static key too.
+            {{- if .Values.embeddings.responseFormat }}
+            - name: EMBEDDINGS_RESPONSE_FORMAT
+              value: {{ .Values.embeddings.responseFormat | quote }}
+            {{- end }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

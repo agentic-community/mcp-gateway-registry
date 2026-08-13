@@ -389,6 +389,7 @@ ard:
 # The pre-existing EMBEDDINGS_PROVIDER / EMBEDDINGS_API_KEY / etc. are not chart
 # values and continue to be set via extraEnv.
 embeddings:
+  responseFormat: "" # "" (openai envelope, default) or "raw_array" (endpoint returns a bare [[float]] array)
   authMode: "" # "" (static, default) or "idp"
   idpTokenEndpoint: "" # OAuth2 token endpoint; https:// required unless idpAllowInsecure
   idpClientId: ""

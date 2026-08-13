@@ -700,6 +700,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                 aws_region=settings.embeddings_aws_region,
                 embedding_dimension=settings.embeddings_model_dimensions,
                 token_provider=token_provider,
+                response_format=settings.embeddings_response_format,
             )
         return self._embedding_model
 
