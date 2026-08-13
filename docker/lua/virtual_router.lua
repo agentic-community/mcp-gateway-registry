@@ -608,6 +608,40 @@ end
 
 -- Proxy a single request to a specific backend with session management and stale retry.
 -- Returns the response body directly. Used for tools/call, resources/read, prompts/get.
+-- Record a failed backend subrequest into the same shared-dict metrics
+-- buffer that emit_metrics.lua (log_by_lua) fills for regular server
+-- locations. Virtual-server locations don't run log_by_lua_file at all, so
+-- without this, backend-proxy failures (incl. the resolver-DNS 502 class of
+-- bug -- issue #1129) were completely invisible: no access/error log entry
+-- at default level, and no metric, despite auth having already been
+-- granted. Best-effort: mirrors emit_metrics.lua's shape/key format so
+-- flush_metrics.lua picks it up with no changes; silently no-ops if the
+-- shared dict or METRICS_SERVICE_URL isn't configured (checked lazily by
+-- flush_metrics.lua).
+local function _record_backend_failure(method_name, server_id, tool_name, status)
+    local metrics = ngx.shared.metrics_buffer
+    if not metrics then
+        return
+    end
+    local entry = cjson.encode({
+        m = method_name,
+        s = server_id or "unknown",
+        t = tool_name or "",
+        c = ngx.req.get_headers()["X-Client-Name"] or "unknown",
+        ok = false,
+        d = (tonumber(ngx.var.request_time) or 0) * 1000,
+    })
+    local key = "m:" .. ngx.now() .. ":" .. ngx.worker.pid() .. ":" .. math.random(1, 999999)
+    local set_ok, set_err = metrics:set(key, entry, 300)
+    if not set_ok then
+        ngx.log(ngx.ERR, "backend-failure metric: shared dict full, dropping metric: ", set_err)
+    end
+    ngx.log(ngx.ERR, "Backend proxy failed for ", method_name,
+        " server=", server_id or "unknown",
+        " tool=", tool_name or "",
+        " status=", status or "no response")
+end
+
 local function _proxy_to_backend(request_id, method_name, proxied_params,
                                   backend_location, client_session_id, server_id,
                                   backend_version, label)
@@ -617,6 +651,7 @@ local function _proxy_to_backend(request_id, method_name, proxied_params,
         method = method_name,
         params = proxied_params,
     })
+    local tool_name = proxied_params and proxied_params.name or nil
 
     -- Get or create backend session
     local backend_session_id = nil
@@ -642,6 +677,7 @@ local function _proxy_to_backend(request_id, method_name, proxied_params,
     })
 
     if not res then
+        _record_backend_failure(method_name, server_id, tool_name, nil)
         ngx.status = 200
         ngx.say(_jsonrpc_error(request_id, -32603,
             "Backend request failed for " .. (label or method_name)))
@@ -672,11 +708,23 @@ local function _proxy_to_backend(request_id, method_name, proxied_params,
         })
 
         if not res then
+            _record_backend_failure(method_name, server_id, tool_name, nil)
             ngx.status = 200
             ngx.say(_jsonrpc_error(request_id, -32603,
                 "Backend request failed after retry for " .. (label or method_name)))
             return
         end
+    end
+
+    -- A >=500 here means the backend subrequest itself failed (e.g. nginx's
+    -- own DNS resolution for a dynamic proxy_pass upstream, or the backend
+    -- process being unreachable) -- as opposed to the backend legitimately
+    -- responding with an error, which the retry branch above already logs.
+    -- Without this, that class of failure was completely silent: no
+    -- access/error log entry, no metric, and no way to tell it apart from a
+    -- normal response short of noticing the tool call never actually ran.
+    if res.status >= 500 then
+        _record_backend_failure(method_name, server_id, tool_name, res.status)
     end
 
     -- Forward backend response

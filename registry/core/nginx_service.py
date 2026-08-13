@@ -1,4 +1,5 @@
 import asyncio
+import functools
 import hashlib
 import ipaddress
 import json
@@ -16,7 +17,7 @@ import httpx
 from registry.constants import REGISTRY_CONSTANTS, DeploymentType, HealthStatus
 
 from .config import settings
-from .metrics import NGINX_CONFIG_WRITES, NGINX_UPDATES_SKIPPED
+from .metrics import NGINX_CONFIG_WRITES, NGINX_RESOLVER_FAILURES, NGINX_UPDATES_SKIPPED
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +26,82 @@ logger = logging.getLogger(__name__)
 # exists yet. Subsequent writes preserve whatever mode the destination
 # currently has so an operator's chmod isn't silently reverted.
 DEFAULT_NGINX_CONFIG_MODE: int = 0o644
+
+
+@functools.lru_cache(maxsize=1)
+def _discover_dns_resolver() -> str | None:
+    """Determine the nginx `resolver` directive value for dynamic proxy_pass upstreams.
+
+    Precedence:
+    1. ``NGINX_DNS_RESOLVER`` env var, if set -- explicit operator override,
+       used verbatim.
+    2. Nameservers parsed from ``/etc/resolv.conf`` -- whatever DNS is
+       already correct for this environment (Docker's embedded resolver
+       locally, kubelet's injected CoreDNS entry in any Kubernetes cluster),
+       with nothing environment-specific to hardcode or keep in sync.
+
+    IPv6 nameservers are bracketed (nginx's `resolver` directive requires
+    `[addr]` for IPv6, e.g. `resolver [fd00::a];`). Each candidate is
+    validated as a real IP address before being trusted -- resolv.conf
+    content here isn't attacker-controlled, but a malformed entry should
+    never be silently interpolated into the generated nginx config.
+
+    Returns None (and increments the NGINX_RESOLVER_FAILURES metric) if no
+    resolver can be determined at all. Callers must treat that as
+    fail-closed for the affected backend, not silently default to public
+    DNS -- a public resolver cannot resolve in-cluster Service names and
+    produces a bare, unlogged 502 on every dynamic proxy_pass (issue #1129).
+
+    Cached for the life of the process: resolv.conf does not change inside
+    a running container, and this is consulted on every nginx config
+    regen (every few seconds under the health-check poll loop).
+    """
+    override = os.environ.get("NGINX_DNS_RESOLVER")
+    if override:
+        return override
+
+    try:
+        resolv_conf_text = Path("/etc/resolv.conf").read_text()
+    except OSError as exc:
+        logger.error(
+            "Cannot determine nginx DNS resolver: /etc/resolv.conf unreadable "
+            "(%s) and NGINX_DNS_RESOLVER is not set. Dynamic proxy_pass "
+            "backends (virtual servers, and any registered server whose "
+            "hostname isn't resolvable at nginx config-load time) will have "
+            "their location blocks skipped rather than risk an unresolvable "
+            "or wrong resolver.",
+            exc,
+        )
+        NGINX_RESOLVER_FAILURES.labels(reason="resolv_conf_unreadable").inc()
+        return None
+
+    nameservers: list[str] = []
+    for line in resolv_conf_text.splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[0] == "nameserver":
+            candidate = parts[1]
+            try:
+                addr = ipaddress.ip_address(candidate)
+            except ValueError:
+                logger.warning(
+                    "Ignoring malformed nameserver entry in /etc/resolv.conf: %r",
+                    candidate,
+                )
+                continue
+            nameservers.append(f"[{addr}]" if addr.version == 6 else str(addr))
+
+    if not nameservers:
+        logger.error(
+            "Cannot determine nginx DNS resolver: no valid `nameserver` "
+            "entries found in /etc/resolv.conf and NGINX_DNS_RESOLVER is not "
+            "set. Dynamic proxy_pass backends will have their location "
+            "blocks skipped rather than risk an unresolvable or wrong "
+            "resolver."
+        )
+        NGINX_RESOLVER_FAILURES.labels(reason="no_nameservers").inc()
+        return None
+
+    return " ".join(nameservers)
 
 # Route prefix under which enabled A2A agents are reverse-proxied through the
 # gateway. An agent registered at path "/flight-booking-agent" is
@@ -1870,9 +1947,24 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
                 if host_is_resolvable_at_startup:
                     proxy_directive = f"proxy_pass {safe_mcp_proxy_url};"
                 else:
+                    dns_resolver = _discover_dns_resolver()
+                    if dns_resolver is None:
+                        # _discover_dns_resolver() already logged the specifics
+                        # and incremented NGINX_RESOLVER_FAILURES. Skip this
+                        # backend's location block entirely rather than emit a
+                        # `resolver` directive we can't trust -- same
+                        # fail-closed philosophy as the other `continue`s in
+                        # this loop, just one level deeper (a resolver we
+                        # can't determine, not a backend we can't find).
+                        logger.error(
+                            f"Skipping virtual-server backend location for "
+                            f"{backend_path}: no DNS resolver available for its "
+                            f"dynamic proxy_pass."
+                        )
+                        NGINX_RESOLVER_FAILURES.labels(reason="backend_location_skipped").inc()
+                        continue
                     # sanitized is already underscore-safe (valid nginx var name).
                     backend_var = f"$vs_backend{sanitized}"
-                    dns_resolver = os.environ.get("NGINX_DNS_RESOLVER", "8.8.8.8 8.8.4.4")
                     dns_resolver_timeout = os.environ.get("NGINX_DNS_RESOLVER_TIMEOUT", "5")
                     proxy_directive = (
                         f"resolver {dns_resolver} valid=10s;\n"
@@ -2173,7 +2265,13 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
         else:
             host_header = "$host"
 
-        dns_resolver = os.environ.get("NGINX_DNS_RESOLVER", "8.8.8.8 8.8.4.4")
+        # This location's proxy_pass target (backend_url) is always literal,
+        # so the resolver below isn't actually consulted for this location's
+        # own upstream resolution -- kept for parity/forward-compat, but must
+        # not silently default to public DNS (see issue #1129). Fall back to
+        # a directive nginx accepts as syntactically valid but that will
+        # never resolve anything real if no trustworthy resolver is known.
+        dns_resolver = _discover_dns_resolver() or "127.0.0.1"
         dns_resolver_timeout = os.environ.get("NGINX_DNS_RESOLVER_TIMEOUT", "5")
         safe_name = self._sanitize_for_nginx_comment(agent_name)
         route = f"{AGENT_ROUTE_PREFIX}/{agent_path}"
@@ -2483,6 +2581,18 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
         mcp_proxy_read_timeout = _resolve_mcp_proxy_read_timeout_seconds()
 
         # Common proxy settings
+        # This location's proxy_pass targets above are always literal (either
+        # the fixed auth_server mcp-proxy hop, or -- for multi-version
+        # servers -- a $backend_url set from a value known at config-load
+        # time), so the resolver below is not actually consulted for this
+        # location's own upstream resolution today. It's kept for parity/
+        # forward-compat with any future dynamic proxy_pass here, but must
+        # not silently default to public DNS (see issue #1129) -- fall back
+        # to a directive nginx accepts as syntactically valid but that will
+        # never resolve anything real if no trustworthy resolver is known,
+        # rather than one that looks plausible and quietly can't see
+        # in-cluster Service names.
+        dns_resolver = _discover_dns_resolver() or "127.0.0.1"
         common_settings = f"""
         # Inbound rate limiting: every MCP request fans out to the shared
         # /validate auth subrequest, so bound it at the edge (zones + rationale
@@ -2492,12 +2602,11 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
         limit_req zone=mcp_gateway_edge burst=100 nodelay;
         limit_conn mcp_gateway_conn 100;
 
-        # DNS resolver for dynamic proxy_pass upstreams.
-        # Default: 8.8.8.8 8.8.4.4 (public DNS).
-        # Override with NGINX_DNS_RESOLVER env var for environments where
-        # backend servers use internal hostnames (e.g., Kubernetes
-        # cluster-local names like *.svc.cluster.local need kube-dns).
-        resolver {os.environ.get("NGINX_DNS_RESOLVER", "8.8.8.8 8.8.4.4")} valid=10s;
+        # DNS resolver for dynamic proxy_pass upstreams (see comment above --
+        # not on this location's own proxy_pass path today).
+        # Default: derived from /etc/resolv.conf. Override with
+        # NGINX_DNS_RESOLVER for unusual setups.
+        resolver {dns_resolver} valid=10s;
         resolver_timeout {os.environ.get("NGINX_DNS_RESOLVER_TIMEOUT", "5")}s;
 
         # Upstream timeouts for the browser -> nginx -> auth-server mcp_proxy

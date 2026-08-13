@@ -56,6 +56,9 @@ from registry.observability.meters import (
     nginx_config_writes_total as NGINX_CONFIG_WRITES,
 )
 from registry.observability.meters import (
+    nginx_resolver_failures_total as NGINX_RESOLVER_FAILURES,
+)
+from registry.observability.meters import (
     nginx_updates_skipped_total as NGINX_UPDATES_SKIPPED,
 )
 from registry.observability.meters import (
@@ -117,6 +120,7 @@ __all__ = [
     "M2M_ORPHAN_CLEANUPS_TOTAL",
     "MODE_BLOCKED_REQUESTS",
     "NGINX_CONFIG_WRITES",
+    "NGINX_RESOLVER_FAILURES",
     "NGINX_UPDATES_SKIPPED",
     "PEER_SYNC_DURATION_SECONDS",
     "PEER_SYNC_FAILURES",
