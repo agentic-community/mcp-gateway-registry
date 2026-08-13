@@ -1900,6 +1900,12 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
         # forwarding the caller's credential.
         proxy_set_header Authorization "";
         proxy_set_header Cookie "";
+        # Forward the validated caller identity so backends can attribute
+        # write operations to the authenticated user.  These are set as
+        # request headers by virtual_router.lua (ngx.req.set_header) before
+        # the ngx.location.capture subrequest.
+        proxy_set_header X-User $http_x_user;
+        proxy_set_header X-Username $http_x_username;
         proxy_buffering off;
         proxy_set_header Accept "application/json, text/event-stream";
         proxy_set_header Content-Type $content_type;

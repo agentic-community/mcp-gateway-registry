@@ -227,6 +227,36 @@ class TestGenerateVirtualBackendLocations:
         assert 'proxy_set_header Cookie "";' in result
 
     @pytest.mark.asyncio
+    async def test_identity_headers_forwarded_via_http_vars(self, mock_server_repository):
+        """Caller identity is forwarded using $http_x_user/$http_x_username variables.
+
+        The Lua virtual_router sets X-User and X-Username as request headers
+        (ngx.req.set_header) before ngx.location.capture subrequests.  The
+        _vs_backend location block then forwards them to the upstream via
+        proxy_set_header using the $http_x_user/$http_x_username variables
+        (which read from incoming request headers, not auth_request_set vars).
+
+        This two-part approach is required because auth_request_set variables
+        ($auth_user) do not propagate into subrequest contexts.
+        """
+        vs = _make_vs_config()
+        mock_server_repository.get.return_value = {
+            "proxy_pass_url": "https://api.github.com",
+        }
+
+        from registry.core.nginx_service import NginxConfigService
+
+        service = NginxConfigService()
+        result = await service._generate_virtual_backend_locations([vs])
+
+        # Identity headers forwarded via $http_x_* (request header vars, set by Lua)
+        assert "proxy_set_header X-User $http_x_user;" in result
+        assert "proxy_set_header X-Username $http_x_username;" in result
+        # Must NOT use $auth_user (doesn't propagate to subrequests)
+        assert "proxy_set_header X-User $auth_user" not in result
+        assert "proxy_set_header X-Username $auth_username" not in result
+
+    @pytest.mark.asyncio
     async def test_bare_hostname_backend_uses_deferred_resolution(self, mock_server_repository):
         """Bare hostnames defer DNS resolution so they cannot crash nginx at startup."""
         vs = _make_vs_config()
