@@ -468,13 +468,6 @@ local function _handle_tools_list(request_id, mapping, user_scopes_str, client_s
         for _, backend_loc in ipairs(backend_locations) do
             local backend_tools, backend_ok = _fetch_backend_tools_list(
                 backend_loc, client_session_id, server_id)
-            if not backend_ok then
-                all_fetches_ok = false
-                ngx.log(ngx.WARN, "Backend tools/list fetch failed for ", backend_loc,
-                    " -- falling back to mapping file metadata for this backend")
-                _append_mapping_tools_for_backend(enriched_tools, mapping, backend_loc)
-            end
-
             if backend_ok then
                 for _, bt in ipairs(backend_tools) do
                     local mapping_entry = allowed_tools[bt.name]
@@ -494,6 +487,11 @@ local function _handle_tools_list(request_id, mapping, user_scopes_str, client_s
                         }
                     end
                 end
+            else
+                all_fetches_ok = false
+                ngx.log(ngx.WARN, "Backend tools/list fetch failed for ", backend_loc,
+                    " -- falling back to mapping file metadata for this backend")
+                _append_mapping_tools_for_backend(enriched_tools, mapping, backend_loc)
             end
         end
 
@@ -1192,6 +1190,16 @@ function _M.route()
         ngx.status = 200
         ngx.say(_jsonrpc_error(request_id, -32601, "Method not found: " .. tostring(method)))
     end
+end
+
+-- Test hook: when loaded by the Lua unit test (which sets _G._VR_TEST), expose
+-- internal helpers and return the module WITHOUT executing the router. In
+-- production _G._VR_TEST is nil, so this branch is skipped and route() runs.
+if _G._VR_TEST then
+    _M._fetch_backend_tools_list = _fetch_backend_tools_list
+    _M._append_mapping_tools_for_backend = _append_mapping_tools_for_backend
+    _M._handle_tools_list = _handle_tools_list
+    return _M
 end
 
 -- Execute routing
