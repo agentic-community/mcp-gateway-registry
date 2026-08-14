@@ -229,10 +229,7 @@ class TestGenerateVirtualBackendLocations:
         service = NginxConfigService()
         result = await service._generate_virtual_backend_locations([vs])
 
-        assert (
-            'set $vs_backend_github "http://insights-service:8000/custom/mcp/http"'
-            in result
-        )
+        assert 'set $vs_backend_github "http://insights-service:8000/custom/mcp/http"' in result
         assert "public.example.com" not in result
 
     @pytest.mark.asyncio
