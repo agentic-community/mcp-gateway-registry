@@ -224,7 +224,7 @@ curl -s -X POST "$KC/admin/realms/$REALM/identity-provider/instances" \
 
 Notes:
 - **`syncMode: FORCE`** re-applies the attribute and group mappers on **every** login, so changes to group membership upstream are reflected without manually re-linking. (Alternatives: `IMPORT` = first login only; `LEGACY` = legacy behavior.)
-- After this, the realm's login page renders an **"Entra ID"** button alongside native username/password. Users pick their IdP (or you can auto-route with `kc_idp_hint` / Home IdP Discovery — out of scope here).
+- After this, the realm's login page renders an **"Entra ID"** button alongside native username/password. By default users pick their own IdP; to route each user to the right one automatically, see [section 2D](#2d-routing-users-to-the-right-idp-identity-first-login).
 - **Idempotency:** the instance is keyed on `alias`. On re-run, `GET .../instances/<alias>` first; if it returns 200, `PUT` the same body instead of `POST` (a bare `POST` of an existing alias returns 409).
 
 #### Step 2 — create the group-convergence mappers (Strategy 1)
@@ -312,6 +312,23 @@ curl -s -H "Authorization: Bearer $TOKEN" \
   | jq -r '.[] | select(.displayName=="Review Profile") | .authenticationConfig'
 # then GET/PUT that config's {"config":{"update.profile.on.first.login":"missing"}}
 ```
+
+### 2D. Routing users to the right IdP (identity-first login)
+
+Once you have added more than one upstream IdP, Keycloak's default login page renders **one button per IdP** ("Entra ID", "Okta", ...) next to the native username/password form, and the user has to pick their own. That is acceptable for a demo but poor at scale (users must know which tenant they belong to) and it discloses the full list of tenants to everyone. There are three ways to route the right user to the right IdP. The first two are **Keycloak-only** and need no registry change; the third touches the registry's login redirect.
+
+**Option 1 — email-domain routing (recommended for multi-tenant).** The user types only their email address; Keycloak matches the domain and forwards them to the correct upstream IdP automatically, with no buttons. Two ways to get it:
+
+- **Keycloak Organizations (native, Keycloak 26+).** Model each tenant as an *Organization*, link its Identity Provider, and register the tenant's email domain(s) (e.g. `tenant-a.com` → `okta-oidc`, `tenant-b.com` → `entra-oidc`). Keycloak then does identity-first login and routes by domain out of the box. This is the supported, no-extension path and is the recommended choice for new deployments.
+- **Home IdP Discovery extension (community).** For older Keycloak, the [`sventorben/keycloak-home-idp-discovery`](https://github.com/sventorben/keycloak-home-idp-discovery) authenticator provides the same email-domain routing via a custom authentication flow, configured with a per-IdP domain list.
+
+Because routing happens entirely inside Keycloak, the registry still just validates the resulting Keycloak token — nothing changes on the registry side.
+
+**Option 2 — `kc_idp_hint` (skip the picker entirely).** If the caller already knows the tenant *before* login, add `?kc_idp_hint=<alias>` (e.g. `kc_idp_hint=entra-oidc`) to the authorization request and Keycloak jumps straight to that IdP with no login page. The catch is that *something* must know the tenant up front — typically a **per-tenant entry URL or subdomain** (e.g. `tenant-a.gateway.example.com` maps to hint `okta-oidc`). Making the registry pass this hint through to Keycloak is a small change to the auth-server's login redirect, so unlike Options 1 and 3 it is not purely a Keycloak-side config.
+
+**Option 3 — per-tenant login links.** The simplest, lowest-magic option: give each tenant a bookmark that already carries the `kc_idp_hint` for their IdP. No email-discovery infrastructure, but you maintain one link per tenant and users must use the right one.
+
+**Recommendation:** for true multi-tenant, use **Keycloak Organizations with email-domain routing** (Option 1) — it gives the clean "enter email, land on your IdP" flow with zero registry changes. Reserve `kc_idp_hint` (Option 2) for cases where you deliberately want tenant-specific entry URLs.
 
 ---
 
