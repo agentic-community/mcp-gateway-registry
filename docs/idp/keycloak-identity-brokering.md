@@ -79,14 +79,14 @@ sequenceDiagram
     AS-->>GW: 401 (unauthenticated)
     GW-->>U: 302 to Auth Server /login
 
-    Note over AS,KC: OAuth exchange #1 — Auth Server is Keycloak's client
+    Note over AS,KC: OAuth exchange 1 - Auth Server is Keycloak's client
     U->>AS: GET /login
     AS-->>U: 302 to Keycloak /authorize (client_id=registry, redirect_uri=/oauth2/callback/keycloak)
     U->>KC: GET /authorize
     KC-->>U: Login page with upstream IdP button(s)
     U->>KC: Click "Entra ID" / "Okta" / "Cognito" / "PingFederate"
 
-    Note over KC,IDP: OAuth exchange #2 — Keycloak is the upstream IdP's client
+    Note over KC,IDP: OAuth exchange 2 - Keycloak is the upstream IdP's client
     KC-->>U: 302 to upstream /authorize (redirect_uri=/realms/<realm>/broker/<alias>/endpoint)
     U->>IDP: GET /authorize
     IDP-->>U: Upstream login (password / MFA / SSO)
@@ -104,7 +104,7 @@ sequenceDiagram
     Note over AS: map_groups_to_scopes():<br/>groups -> scopes (DocumentDB lookup),<br/>create session
     AS-->>U: 302 to / + Set-Cookie (session)
 
-    Note over U,IDP: Subsequent requests use the session; no upstream round-trip
+    Note over U,IDP: Subsequent requests use the session, no upstream round-trip
     U->>GW: GET /api/... (with session cookie)
     GW->>AS: auth_request /validate
     AS-->>GW: 200 + X-Groups / scope headers
