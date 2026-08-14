@@ -61,15 +61,66 @@ Okta groups  ─┘   (NORMALIZE here, Stage 1)  └─ (uniform)     ┘   (reg
 - **Stage 1 (Keycloak, this guide):** each upstream IdP is added as a Keycloak *Identity Provider*, with *mappers* that translate the upstream group representation into Keycloak groups. This is where Entra and Okta differ, and where you make them converge.
 - **Stage 2 (registry, [section 3](#3-mapping-brokered-groups-to-registry-access)):** the converged Keycloak group names are mapped to scopes and server access — the same mechanism used for any IdP.
 
+### 1.3.1 End-to-end login sequence
+
+The diagram below shows one brokered login, with the runtime components involved. The gateway (nginx) and auth-server are the registry's own components; Keycloak is the broker; the upstream IdP (Entra / Okta / Cognito / PingFederate) is where the user actually authenticates. Note the two separate OAuth authorization-code exchanges (auth-server ↔ Keycloak, and Keycloak ↔ upstream IdP) and where each token's group claim is read.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as User (browser)
+    participant GW as MCP Gateway (nginx)
+    participant AS as Auth Server
+    participant KC as Keycloak (broker)
+    participant IDP as Upstream IdP<br/>(Entra / Okta / Cognito / PingFederate)
+
+    U->>GW: GET / (no session cookie)
+    GW->>AS: auth_request /validate
+    AS-->>GW: 401 (unauthenticated)
+    GW-->>U: 302 to Auth Server /login
+
+    Note over AS,KC: OAuth exchange 1 - Auth Server is Keycloak's client
+    U->>AS: GET /login
+    AS-->>U: 302 to Keycloak /authorize (client_id=registry, redirect_uri=/oauth2/callback/keycloak)
+    U->>KC: GET /authorize
+    KC-->>U: Login page with upstream IdP button(s)
+    U->>KC: Click "Entra ID" / "Okta" / "Cognito" / "PingFederate"
+
+    Note over KC,IDP: OAuth exchange 2 - Keycloak is the upstream IdP's client
+    KC-->>U: 302 to upstream /authorize (redirect_uri=/realms/<realm>/broker/<alias>/endpoint)
+    U->>IDP: GET /authorize
+    IDP-->>U: Upstream login (password / MFA / SSO)
+    U->>IDP: Submit credentials
+    IDP-->>U: 302 to Keycloak broker endpoint (?code=...)
+    U->>KC: GET /broker/<alias>/endpoint?code=...
+    KC->>IDP: POST /token (exchange code)
+    IDP-->>KC: Upstream ID token (groups claim: groups / cognito:groups / ...)
+    Note over KC: IdP mappers (syncMode FORCE):<br/>converge upstream groups -> Keycloak groups,<br/>create/link shadow user
+
+    KC-->>U: 302 back to Auth Server /oauth2/callback/keycloak (?code=...)
+    U->>AS: GET /oauth2/callback/keycloak?code=...
+    AS->>KC: POST /token (exchange code)
+    KC-->>AS: Keycloak token (groups claim = converged Keycloak group names)
+    Note over AS: map_groups_to_scopes():<br/>groups -> scopes (DocumentDB lookup),<br/>create session
+    AS-->>U: 302 to / + Set-Cookie (session)
+
+    Note over U,IDP: Subsequent requests use the session, no upstream round-trip
+    U->>GW: GET /api/... (with session cookie)
+    GW->>AS: auth_request /validate
+    AS-->>GW: 200 + X-Groups / scope headers
+    GW-->>U: Proxied response
+```
+
 ### 1.4 The single hardest detail: groups look different per IdP
 
 The one thing that reliably trips people up is that upstream IdPs emit group membership in **very different shapes**:
 
-| | **Entra ID** | **Okta** | **Native Keycloak** |
-|---|---|---|---|
-| What the group claim contains | **Object IDs (GUIDs)** by default — `"5510a1b0-..."`, not names | Group **names** — `"mcp-admins"` | Group **path/name** — `"/mcp-admins"` or `"mcp-admins"` |
-| How to emit it | App registration → Token configuration → add **groups** claim | Custom `groups` claim on the authorization server with a filter | Built-in group-membership mapper |
-| Large-directory caveat | "Overage": if a user is in > ~150–200 groups, Entra replaces the claim with a Graph API pointer | Filter server-side; no overage | n/a |
+| | **Entra ID** | **Okta** | **Amazon Cognito** | **PingFederate** | **Native Keycloak** |
+|---|---|---|---|---|---|
+| Claim name | `groups` | `groups` | `cognito:groups` | Configurable (default `groups`) | `groups` |
+| What the claim contains | **Object IDs (GUIDs)** by default — `"5510a1b0-..."`, not names | Group **names** — `"mcp-admins"` | Group **names** — `"mcp-admins"` | Group **names** or **DNs** — whatever the ATM/OIDC policy emits | Group **path/name** — `"/mcp-admins"` or `"mcp-admins"` |
+| How to emit it | App registration → Token configuration → add **groups** claim | Custom `groups` claim on the authorization server with a filter | Automatic — the User Pool always puts group memberships in `cognito:groups` | JWT ATM extended attribute contract + OIDC policy mapping (see [pingfederate.md](pingfederate.md)) | Built-in group-membership mapper |
+| Caveat | "Overage": if a user is in > ~150–200 groups, Entra replaces the claim with a Graph API pointer | Filter server-side; no overage | Names must be unique across the pool; no GUIDs | Empty groups if the user store has no group concept (e.g. Simple PCV) | n/a |
 
 If you do nothing, Entra users arrive at Keycloak carrying opaque GUIDs while Okta users arrive with readable names. You do **not** want raw GUIDs leaking into the registry's `group_mappings` — it couples your access config to a tenant's directory and is unmaintainable. Stage 1 is where you fix that.
 
@@ -124,6 +175,10 @@ Steps in the Entra admin center (`entra.microsoft.com`):
 
 > **Okta equivalent (brief).** Create an OIDC app (Web), set the sign-in redirect URI to the same `/realms/<realm>/broker/<alias>/endpoint` shape, and add a **groups claim** on the Okta authorization server (Security → API → Authorization Servers → Claims) with a filter (e.g. `Matches regex .*`) so the ID token carries a `groups` array of **names**. Collect the issuer, client ID, and client secret.
 
+> **Amazon Cognito equivalent (brief).** Cognito is a standard OIDC provider, so it brokers exactly like Entra/Okta. In your User Pool, create an **App Client** of type "Traditional Web App" (confidential, **Authorization code grant**, scopes `openid profile email`), and add the same `/realms/<realm>/broker/<alias>/endpoint` URL to the App Client's **Allowed callback URLs**. Cognito automatically emits the user's groups in the **`cognito:groups`** claim (group **names**, not GUIDs) — there is nothing extra to configure to get groups. Collect the **App Client ID** and **client secret**, and note the OIDC discovery URL `https://cognito-idp.<region>.amazonaws.com/<userPoolId>/.well-known/openid-configuration` (issuer `https://cognito-idp.<region>.amazonaws.com/<userPoolId>`) — Keycloak's "Discovery endpoint" field auto-fills the authorization/token/JWKS URLs from it. Assign users to Cognito groups the usual way (see [cognito.md](cognito.md) for the console/CLI steps).
+
+> **PingFederate equivalent (brief).** PingFederate is a full OIDC/SAML IdP and brokers via OIDC the same way. Create an **OAuth client** (Client Secret auth, **Authorization Code** grant, scopes `openid email profile groups`) with the redirect URI set to the same `/realms/<realm>/broker/<alias>/endpoint` shape, and make sure your OIDC policy emits group membership in a claim (default `groups`) via the JWT ATM attribute contract — see the [PingFederate setup guide](pingfederate.md) for the ATM/OIDC-policy steps. Collect the issuer (`https://<pf-host>/.well-known/openid-configuration`), client ID, and client secret. **Note:** unlike the direct-PingFederate path, the registry's `idp_user_groups` fallback does **not** apply here — in the brokered flow, Keycloak only ever sees the token PingFederate issues, so the groups must be present in that upstream token (populate them from your user store, e.g. LDAP `memberOf`).
+
 ### 2B. Keycloak broker setup
 
 All of this happens in the realm the gateway already trusts (commonly `mcp-gateway`). It uses the **Keycloak Admin REST API** (the same API the `keycloak-configure` Job uses today). The examples use `curl` so they are copy-pasteable and match how the chart's setup script is written; the Keycloak Admin **console** has an equivalent for every step (Identity Providers → Add provider, then the provider's Mappers tab).
@@ -169,7 +224,7 @@ curl -s -X POST "$KC/admin/realms/$REALM/identity-provider/instances" \
 
 Notes:
 - **`syncMode: FORCE`** re-applies the attribute and group mappers on **every** login, so changes to group membership upstream are reflected without manually re-linking. (Alternatives: `IMPORT` = first login only; `LEGACY` = legacy behavior.)
-- After this, the realm's login page renders an **"Entra ID"** button alongside native username/password. Users pick their IdP (or you can auto-route with `kc_idp_hint` / Home IdP Discovery — out of scope here).
+- After this, the realm's login page renders an **"Entra ID"** button alongside native username/password. By default users pick their own IdP; to route each user to the right one automatically, see [section 2D](#2d-routing-users-to-the-right-idp-identity-first-login).
 - **Idempotency:** the instance is keyed on `alias`. On re-run, `GET .../instances/<alias>` first; if it returns 200, `PUT` the same body instead of `POST` (a bare `POST` of an existing alias returns 409).
 
 #### Step 2 — create the group-convergence mappers (Strategy 1)
@@ -198,7 +253,19 @@ For **Okta** (names, not GUIDs), the only change is the `value`:
 "claims": "[{\"key\":\"groups\",\"value\":\"okta-mcp-admins\"}]"
 ```
 
-Both mappers point `"group"` at the **same** Keycloak group (`/mcp-registry-admin`), which is how Tenant A and Tenant B converge. Repeat for each group you want to grant (e.g. a `mcp-registry-user` group for a read-only tier).
+For **Amazon Cognito** the claim **key** is `cognito:groups` (the value is a group name):
+
+```json
+"claims": "[{\"key\":\"cognito:groups\",\"value\":\"cognito-mcp-admins\"}]"
+```
+
+For **PingFederate** the key is whatever your OIDC policy emits (default `groups`); the value is the group name or DN:
+
+```json
+"claims": "[{\"key\":\"groups\",\"value\":\"pf-mcp-admins\"}]"
+```
+
+All of these mappers point `"group"` at the **same** Keycloak group (`/mcp-registry-admin`), which is how tenants on different upstream IdPs converge. Repeat for each group you want to grant (e.g. a `mcp-registry-user` group for a read-only tier).
 
 The target Keycloak groups must already exist. In this project they are created by the `keycloak-configure` setup script (`create_groups`): `mcp-registry-admin`, `mcp-registry-user`, `mcp-registry-developer`, `mcp-registry-operator`, `mcp-servers-unrestricted`, `mcp-servers-restricted`, and the `a2a-agent-*` groups. Converge onto whichever of these matches the access you intend (see [section 3](#3-mapping-brokered-groups-to-registry-access)).
 
@@ -245,6 +312,23 @@ curl -s -H "Authorization: Bearer $TOKEN" \
   | jq -r '.[] | select(.displayName=="Review Profile") | .authenticationConfig'
 # then GET/PUT that config's {"config":{"update.profile.on.first.login":"missing"}}
 ```
+
+### 2D. Routing users to the right IdP (identity-first login)
+
+Once you have added more than one upstream IdP, Keycloak's default login page renders **one button per IdP** ("Entra ID", "Okta", ...) next to the native username/password form, and the user has to pick their own. That is acceptable for a demo but poor at scale (users must know which tenant they belong to) and it discloses the full list of tenants to everyone. There are three ways to route the right user to the right IdP. The first two are **Keycloak-only** and need no registry change; the third touches the registry's login redirect.
+
+**Option 1 — email-domain routing (recommended for multi-tenant).** The user types only their email address; Keycloak matches the domain and forwards them to the correct upstream IdP automatically, with no buttons. Two ways to get it:
+
+- **Keycloak Organizations (native, Keycloak 26+).** Model each tenant as an *Organization*, link its Identity Provider, and register the tenant's email domain(s) (e.g. `tenant-a.com` → `okta-oidc`, `tenant-b.com` → `entra-oidc`). Keycloak then does identity-first login and routes by domain out of the box. This is the supported, no-extension path and is the recommended choice for new deployments.
+- **Home IdP Discovery extension (community).** For older Keycloak, the [`sventorben/keycloak-home-idp-discovery`](https://github.com/sventorben/keycloak-home-idp-discovery) authenticator provides the same email-domain routing via a custom authentication flow, configured with a per-IdP domain list.
+
+Because routing happens entirely inside Keycloak, the registry still just validates the resulting Keycloak token — nothing changes on the registry side.
+
+**Option 2 — `kc_idp_hint` (skip the picker entirely).** If the caller already knows the tenant *before* login, add `?kc_idp_hint=<alias>` (e.g. `kc_idp_hint=entra-oidc`) to the authorization request and Keycloak jumps straight to that IdP with no login page. The catch is that *something* must know the tenant up front — typically a **per-tenant entry URL or subdomain** (e.g. `tenant-a.gateway.example.com` maps to hint `okta-oidc`). Making the registry pass this hint through to Keycloak is a small change to the auth-server's login redirect, so unlike Options 1 and 3 it is not purely a Keycloak-side config.
+
+**Option 3 — per-tenant login links.** The simplest, lowest-magic option: give each tenant a bookmark that already carries the `kc_idp_hint` for their IdP. No email-discovery infrastructure, but you maintain one link per tenant and users must use the right one.
+
+**Recommendation:** for true multi-tenant, use **Keycloak Organizations with email-domain routing** (Option 1) — it gives the clean "enter email, land on your IdP" flow with zero registry changes. Reserve `kc_idp_hint` (Option 2) for cases where you deliberately want tenant-specific entry URLs.
 
 ---
 
