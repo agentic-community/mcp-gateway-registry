@@ -36,7 +36,20 @@ AGENT_ROUTE_PREFIX: str = "/agent"
 # nginx directive positions, so they must be validated to prevent config
 # injection (e.g. "}", ";", newlines breaking out of the location block).
 _NGINX_AGENT_PATH_SAFE = re.compile(r"^[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*$")
-_NGINX_AGENT_URL_SAFE = re.compile(r"^https?://[A-Za-z0-9.\-]+(?::\d+)?(?:/[A-Za-z0-9._~\-/]*)?$")
+# The path segment also accepts percent-encoded octets (%XX), because a Bedrock
+# AgentCore runtime url embeds a percent-encoded ARN:
+#   https://bedrock-agentcore.{region}.amazonaws.com/runtimes/{encoded-ARN}/invocations
+# (built by cli/agentcore/models.py::build_invocation_url). Rejecting those made
+# every AgentCore A2A agent unroutable through the gateway.
+#
+# Only a COMPLETE triplet is allowed -- `%` must be followed by exactly two hex
+# digits -- so a bare or truncated `%` still fails. That keeps the anti-injection
+# guarantee: no unescaped `%` can reach an nginx directive position, and the
+# characters that would break out of the location block (`}`, `;`, whitespace,
+# newlines) remain excluded because they are not hex digits.
+_NGINX_AGENT_URL_SAFE = re.compile(
+    r"^https?://[A-Za-z0-9.\-]+(?::\d+)?(?:/(?:[A-Za-z0-9._~\-/]|%[0-9A-Fa-f]{2})*)?$"
+)
 
 
 # Headroom added on top of the auth-server mcp-proxy hop's own upstream timeout

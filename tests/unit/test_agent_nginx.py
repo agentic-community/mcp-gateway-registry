@@ -209,6 +209,75 @@ class TestGenerateAgentLocationBlocks:
         assert result == ""
 
     @pytest.mark.asyncio
+    async def test_generates_block_for_percent_encoded_agentcore_url(self, patched_agent_service):
+        """A Bedrock AgentCore runtime url is routable.
+
+        AgentCore invocation urls embed a percent-encoded ARN (built by
+        cli/agentcore/models.py::build_invocation_url), so the url-safety check
+        must accept %XX octets. Rejecting them made every imported AgentCore A2A
+        agent silently unroutable ("unsafe agent url" -> skipped, 0 blocks).
+        """
+        agentcore_url = (
+            "https://bedrock-agentcore.us-east-1.amazonaws.com/runtimes/"
+            "arn%3Aaws%3Abedrock-agentcore%3Aus-east-1%3A123456789012%3A"
+            "runtime%2Fevcharger2-qR51Wr33ZA/invocations"
+        )
+        patched_agent_service.get_enabled_agents = AsyncMock(return_value=["/evcharger2"])
+        patched_agent_service.get_agent_info = AsyncMock(
+            return_value=_agent(path="/evcharger2", url=agentcore_url, name="EV Charger 2")
+        )
+        service = NginxConfigService()
+
+        result = await service._generate_agent_location_blocks()
+
+        # Routes are emitted with the {{ROOT_PATH}} placeholder, substituted later.
+        assert "/agent/evcharger2/ {" in result
+        # The encoded ARN must survive into proxy_pass verbatim; re-encoding or
+        # stripping it would point the route at a non-existent runtime.
+        assert f"proxy_pass {agentcore_url}/;" in result
+
+    @pytest.mark.parametrize(
+        "bad_url",
+        [
+            "https://host/a%",  # truncated: no hex digits
+            "https://host/a%2",  # truncated: one hex digit
+            "https://host/a%zz",  # not hex
+            "https://host/a%2y",  # second char not hex
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_skips_agent_with_incomplete_percent_escape(self, patched_agent_service, bad_url):
+        """Only a COMPLETE %XX triplet is allowed, never a bare/partial '%'.
+
+        This is what keeps the anti-injection property while permitting
+        AgentCore urls: an unescaped '%' can never reach an nginx directive.
+        """
+        patched_agent_service.get_enabled_agents = AsyncMock(return_value=["/evil"])
+        patched_agent_service.get_agent_info = AsyncMock(return_value=_agent(url=bad_url))
+        service = NginxConfigService()
+
+        result = await service._generate_agent_location_blocks()
+
+        assert result == ""
+
+    @pytest.mark.asyncio
+    async def test_percent_encoding_does_not_admit_nginx_injection(self, patched_agent_service):
+        """Allowing %XX must not let config-breaking characters through.
+
+        The characters that would break out of a location block are not hex
+        digits, so they still fail even adjacent to a valid escape.
+        """
+        patched_agent_service.get_enabled_agents = AsyncMock(return_value=["/evil"])
+        patched_agent_service.get_agent_info = AsyncMock(
+            return_value=_agent(url="https://host/%2F; return 200; #")
+        )
+        service = NginxConfigService()
+
+        result = await service._generate_agent_location_blocks()
+
+        assert result == ""
+
+    @pytest.mark.asyncio
     async def test_skips_unhealthy_agent(self, patched_agent_service):
         """An unhealthy agent is skipped so no route points at a dead backend."""
         patched_agent_service.get_enabled_agents = AsyncMock(return_value=["/flight-booking-agent"])
