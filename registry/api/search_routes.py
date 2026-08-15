@@ -14,7 +14,7 @@ from ..auth.dependencies import nginx_proxied_auth
 from ..auth.tool_filter import filter_tools_for_user, tool_allowed_for_user
 from ..constants import DeploymentType
 from ..core.config import DeploymentMode, RegistryMode, settings
-from ..repositories.factory import get_search_repository
+from ..repositories.factory import get_search_repository, get_skill_repository
 from ..repositories.interfaces import SearchRepositoryBase
 from ..services.agent_service import agent_service
 from ..services.custom_entity_scopes import entity_scope as _entity_scope
@@ -805,8 +805,6 @@ async def semantic_search(
     # Batch-fetch full skill metadata and apply projection (Issue #1277).
     # Only fires when metadata_fields is supplied AND skills were found.
     if _metadata_paths is not None and filtered_skills:
-        from ..repositories.factory import get_skill_repository
-
         skill_repo = get_skill_repository()
         skill_paths = [s.path for s in filtered_skills]
         full_skill_docs = await skill_repo.list_by_paths(skill_paths)
