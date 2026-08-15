@@ -834,7 +834,10 @@ async def get_servers_json(
         # FAST PATH: DB-level pagination -- correct because no servers are filtered out
         # and no field filters need a full scan for accurate total_count
         all_servers, db_total = await server_service.get_servers_paginated(
-            skip=offset, limit=limit, exclude_tool_list=not include_tools
+            skip=offset,
+            limit=limit,
+            exclude_tool_list=not include_tools,
+            metadata_paths=_metadata_paths,
         )
     else:
         # FALLBACK PATH: full fetch needed

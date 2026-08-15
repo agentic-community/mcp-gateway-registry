@@ -449,7 +449,7 @@ class TestGetServersJSON:
         assert data["offset"] == 0
         assert data["has_next"] is False
         mock_server_service.get_servers_paginated.assert_called_once_with(
-            skip=0, limit=20, exclude_tool_list=False
+            skip=0, limit=20, exclude_tool_list=False, metadata_paths=None
         )
 
     def test_list_response_includes_local_server_fields(
