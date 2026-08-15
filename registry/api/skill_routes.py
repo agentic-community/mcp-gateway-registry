@@ -929,6 +929,13 @@ async def refresh_skill_resources(
 async def get_skill(
     user_context: Annotated[dict, Depends(nginx_proxied_auth)],
     skill_path: str = Path(..., description="Skill path or name"),
+    metadata_fields: str | None = Query(
+        None,
+        description=(
+            "Comma-separated metadata field paths to include (dot-notation for nested). "
+            "Example: 'author,extra.team'. Omit to return full metadata."
+        ),
+    ),
 ) -> SkillCard:
     """Get a specific skill by its path."""
     normalized_path = normalize_skill_path(skill_path)
@@ -943,6 +950,15 @@ async def get_skill(
     # Check visibility
     if not _user_can_access_skill(skill, user_context):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    # Apply metadata projection if requested (Issue #1277)
+    _metadata_paths = parse_and_validate_metadata_fields(metadata_fields)
+    if _metadata_paths is not None and skill.metadata:
+        projected = project_metadata(skill.metadata.model_dump(), _metadata_paths)
+        # Replace metadata with a projected SkillMetadata-compatible dict
+        from ..schemas.skill_models import SkillMetadata
+
+        skill.metadata = SkillMetadata(**(projected or {}))
 
     return skill
 
