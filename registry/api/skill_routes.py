@@ -79,7 +79,11 @@ from ..services.skill_service import (
 )
 from ..services.tool_validation_service import get_tool_validation_service
 from ..services.webhook_service import send_registration_webhook
-from ..utils.metadata import flatten_metadata_to_text
+from ..utils.metadata import (
+    flatten_metadata_to_text,
+    parse_and_validate_metadata_fields,
+    project_metadata,
+)
 from ..utils.path_utils import normalize_skill_path
 
 # Configure logging
@@ -209,8 +213,14 @@ async def list_skills(
     tag: str | None = Query(None, description="Filter by tag"),
     limit: int = Query(20, ge=1, le=2000, description="Number of skills to return (max 2000)"),
     offset: int = Query(0, ge=0, description="Number of skills to skip"),
+    metadata_fields: str | None = Query(
+        None,
+        description="Comma-separated metadata field paths to include (dot-notation for nested). Example: 'author,extra.team'. Omit to return full metadata.",
+    ),
 ) -> dict:
     """List all registered skills with visibility filtering and pagination."""
+    _metadata_paths = parse_and_validate_metadata_fields(metadata_fields)
+
     logger.debug(
         f"list_skills called: limit={limit}, offset={offset}, "
         f"tag={tag!r}, include_disabled={include_disabled}"
@@ -253,7 +263,11 @@ async def list_skills(
                 tags=s.tags,
                 author=s.metadata.author if s.metadata else None,
                 version=s.metadata.version if s.metadata else None,
-                metadata=s.metadata,
+                metadata=project_metadata(
+                    s.metadata.model_dump() if s.metadata else None, _metadata_paths
+                )
+                if _metadata_paths is not None
+                else s.metadata,
                 compatibility=s.compatibility,
                 target_agents=s.target_agents,
                 is_enabled=s.is_enabled,
