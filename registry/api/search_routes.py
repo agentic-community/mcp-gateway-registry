@@ -775,19 +775,10 @@ async def semantic_search(
             continue
 
         # Build projected metadata for skills if requested (Issue #1277).
-        # Skill search results carry author/version at the top level from the
-        # search index. We construct a pseudo-metadata dict from these fields
-        # and project it. For deeper metadata (extra.*), a batch fetch would be
-        # needed — deferred to a follow-up optimization.
+        # The actual projection is applied after the loop via a batch fetch
+        # from the skills collection (avoids N+1 and gives access to full
+        # metadata including extra.*).
         _skill_metadata_for_projection: dict | None = None
-        if _metadata_paths is not None:
-            _skill_metadata_for_projection = project_metadata(
-                {
-                    "author": skill.get("author"),
-                    "version": skill.get("version"),
-                },
-                _metadata_paths,
-            )
 
         filtered_skills.append(
             SkillSearchResult(
@@ -810,6 +801,26 @@ async def semantic_search(
                 metadata=_skill_metadata_for_projection,
             )
         )
+
+    # Batch-fetch full skill metadata and apply projection (Issue #1277).
+    # Only fires when metadata_fields is supplied AND skills were found.
+    if _metadata_paths is not None and filtered_skills:
+        from ..repositories.factory import get_skill_repository
+
+        skill_repo = get_skill_repository()
+        skill_paths = [s.path for s in filtered_skills]
+        full_skill_docs = await skill_repo.list_by_paths(skill_paths)
+        for skill_result in filtered_skills:
+            full_doc = full_skill_docs.get(skill_result.path)
+            if full_doc:
+                raw_meta = full_doc.get("metadata", {})
+                # SkillMetadata is stored as {"author":..,"version":..,"extra":{..}}
+                if isinstance(raw_meta, dict):
+                    skill_result.metadata = project_metadata(raw_meta, _metadata_paths)
+                else:
+                    skill_result.metadata = project_metadata({}, _metadata_paths)
+            else:
+                skill_result.metadata = project_metadata({}, _metadata_paths)
 
     # Process virtual servers
     filtered_virtual_servers: list[VirtualServerSearchResult] = []
