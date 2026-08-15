@@ -3135,6 +3135,7 @@ class RegistryClient:
         include_draft: bool = False,
         include_deprecated: bool = False,
         include_disabled: bool = False,
+        metadata_fields: str | None = None,
     ) -> SemanticSearchResponse:
         """
         Comprehensive semantic search across all entity types.
@@ -3148,6 +3149,9 @@ class RegistryClient:
             include_draft: Include draft assets in results (default: False)
             include_deprecated: Include deprecated assets in results (default: False)
             include_disabled: Include disabled assets in results (default: False)
+            metadata_fields: Comma-separated metadata field paths to include (dot-notation).
+                           Example: 'owner,config.region'. When supplied, search results
+                           include only the listed metadata fields. Omit for default behavior.
 
         Returns:
             SemanticSearchResponse with servers, tools, agents, skills, and virtual_servers
@@ -3166,6 +3170,8 @@ class RegistryClient:
         }
         if entity_types:
             request_data["entity_types"] = entity_types
+        if metadata_fields:
+            request_data["metadata_fields"] = metadata_fields
 
         response = self._make_request(
             method="POST", endpoint="/api/search/semantic", data=request_data
@@ -4906,6 +4912,7 @@ class RegistryClient:
         tag: str | None = None,
         limit: int = 20,
         offset: int = 0,
+        metadata_fields: str | None = None,
     ) -> SkillListResponse:
         """
         List all Agent Skills.
@@ -4915,6 +4922,8 @@ class RegistryClient:
             tag: Filter by tag
             limit: Maximum number of skills to return per page
             offset: Number of skills to skip for pagination
+            metadata_fields: Comma-separated metadata field paths to include (dot-notation).
+                           Example: 'author,extra.team'. Omit for full metadata.
 
         Returns:
             SkillListResponse with list of skills
@@ -4932,6 +4941,8 @@ class RegistryClient:
             params["include_disabled"] = "true"
         if tag:
             params["tag"] = tag
+        if metadata_fields:
+            params["metadata_fields"] = metadata_fields
 
         response = self._make_request(method="GET", endpoint="/api/skills", params=params)
 
