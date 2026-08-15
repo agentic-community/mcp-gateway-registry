@@ -878,6 +878,14 @@ Returns:
 - `is_python`: Python-based flag
 - `license`: License information
 
+**Metadata Field Projection (query parameter on all list/GET endpoints):**
+- `metadata_fields`: Comma-separated dot-notation paths to include from the metadata subdocument
+- Example: `?metadata_fields=owner,config.region` returns only those fields in metadata
+- Supports repeated params: `?metadata_fields=owner&metadata_fields=config.region`
+- When omitted, full metadata is returned (backwards compatible)
+- Invalid input (e.g., `$`-prefixed, >20 paths, >5 depth) returns 422
+- Also available as a body field on `POST /api/search/semantic`
+
 ### 6.2. Anthropic MCP Registry API Compatibility
 
 **Full compatibility** with Anthropic's MCP Registry REST API specification (v0.1):
