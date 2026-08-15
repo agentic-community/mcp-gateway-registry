@@ -579,3 +579,52 @@ class TestPathUtils:
         assert validate_skill_name("-test") is False
         assert validate_skill_name("test-") is False
         assert validate_skill_name("test_skill") is False
+
+
+class TestSkillMetadataProjection:
+    """Integration tests for metadata_fields validation on skill endpoints (Issue #1277).
+
+    Full projection behavior is covered by unit tests in
+    tests/unit/utils/test_metadata_projection.py (77 tests) and server API tests
+    in tests/unit/api/test_server_routes.py::TestMetadataFieldsProjection (9 tests).
+    These tests verify endpoint-level validation wiring for skills.
+    """
+
+    @pytest.fixture
+    def skill_test_client(self):
+        """TestClient with admin auth overrides for skills."""
+        from fastapi.testclient import TestClient
+
+        from registry.auth.dependencies import nginx_proxied_auth
+        from registry.main import app
+
+        admin_context = {
+            "username": "admin",
+            "groups": ["mcp-registry-admin"],
+            "scopes": ["mcp-servers-unrestricted/read"],
+            "is_admin": True,
+            "accessible_services": ["all"],
+            "ui_permissions": {"list_service": ["all"]},
+            "auth_method": "session",
+        }
+
+        app.dependency_overrides[nginx_proxied_auth] = lambda: admin_context
+        client = TestClient(app)
+        yield client
+        app.dependency_overrides.clear()
+
+    def test_invalid_metadata_fields_returns_422(self, skill_test_client):
+        """Invalid metadata_fields returns 422 on skills endpoint."""
+        response = skill_test_client.get("/api/skills?metadata_fields=$inject")
+        assert response.status_code == 422
+        assert "Invalid metadata_fields" in response.json()["detail"]
+
+    def test_too_deep_returns_422(self, skill_test_client):
+        """Paths exceeding max depth return 422."""
+        response = skill_test_client.get("/api/skills?metadata_fields=a.b.c.d.e.f")
+        assert response.status_code == 422
+
+    def test_empty_segments_returns_422(self, skill_test_client):
+        """Paths with empty segments return 422."""
+        response = skill_test_client.get("/api/skills?metadata_fields=extra..team")
+        assert response.status_code == 422
