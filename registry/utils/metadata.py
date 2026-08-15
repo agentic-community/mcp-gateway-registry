@@ -204,15 +204,18 @@ def build_metadata_set_stage(
 
 
 def parse_and_validate_metadata_fields(
-    metadata_fields: str | None,
+    metadata_fields: str | list[str] | None,
 ) -> list[str] | None:
     """Parse, validate, and normalize metadata_fields — raising HTTP 422 on error.
 
     Convenience wrapper for route handlers that combines parse + normalize
     and maps ValueError to HTTPException(422).
 
+    Accepts both a comma-separated string and a list of strings (from repeated
+    query params), or a mix of both (e.g. ['owner,config', 'limits.rps']).
+
     Args:
-        metadata_fields: Raw query parameter string (comma-separated paths), or None.
+        metadata_fields: Raw query parameter value(s), or None.
 
     Returns:
         Normalized list of dot-paths, or None if no projection requested.
@@ -220,6 +223,10 @@ def parse_and_validate_metadata_fields(
     Raises:
         HTTPException(422): On invalid input.
     """
+    # Normalize list input to a single comma-separated string
+    if isinstance(metadata_fields, list):
+        metadata_fields = ",".join(metadata_fields)
+
     try:
         parsed = parse_metadata_fields(metadata_fields)
         if parsed:

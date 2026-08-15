@@ -1258,7 +1258,7 @@ async def list_agents(
     ),
     limit: int = Query(20, ge=1, le=2000, description="Number of agents to return (max 2000)"),
     offset: int = Query(0, ge=0, description="Number of agents to skip"),
-    metadata_fields: str | None = Query(
+    metadata_fields: list[str] | None = Query(
         None,
         description="Comma-separated metadata field paths to include (dot-notation for nested). Example: 'owner,config.region'. Omit to return full metadata.",
     ),
@@ -2148,7 +2148,7 @@ async def get_agent(
     path: str,
     response: Response,
     user_context: Annotated[dict, Depends(nginx_proxied_auth)],
-    metadata_fields: str | None = Query(
+    metadata_fields: list[str] | None = Query(
         None,
         description="Comma-separated metadata field paths to include (dot-notation for nested). Example: 'owner,config.region'. Omit to return full metadata.",
     ),
