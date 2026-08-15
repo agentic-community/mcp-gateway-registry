@@ -760,7 +760,7 @@ async def get_servers_json(
             "behavior (active and beta shown; draft and deprecated excluded)."
         ),
     ),
-    metadata_fields: str | None = Query(
+    metadata_fields: list[str] | None = Query(
         None,
         description=(
             "Comma-separated metadata field paths to include (dot-notation for nested). "
@@ -2723,7 +2723,7 @@ async def get_server_details(
     request: Request,
     service_path: str,
     user_context: Annotated[dict, Depends(enhanced_auth)],
-    metadata_fields: str | None = Query(
+    metadata_fields: list[str] | None = Query(
         None,
         description=(
             "Comma-separated metadata field paths to include (dot-notation for nested). "

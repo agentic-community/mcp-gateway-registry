@@ -429,3 +429,87 @@ class TestBuildMetadataSetStageEquivalence:
         db_result = self._simulate_set_stage(metadata, stage)
 
         assert python_result == db_result
+
+
+class TestParseAndValidateRepeatedParams:
+    """Test that parse_and_validate_metadata_fields handles repeated query params."""
+
+    def test_list_input_single_item(self) -> None:
+        result = parse_and_validate_metadata_fields(["owner"])
+        assert result == ["owner"]
+
+    def test_list_input_multiple_items(self) -> None:
+        """Repeated query params: ?metadata_fields=owner&metadata_fields=config"""
+        result = parse_and_validate_metadata_fields(["owner", "config"])
+        assert result == ["owner", "config"]
+
+    def test_list_input_with_commas_inside(self) -> None:
+        """Mixed: ?metadata_fields=owner,config&metadata_fields=limits.rps"""
+        result = parse_and_validate_metadata_fields(["owner,config", "limits.rps"])
+        assert result == ["owner", "config", "limits.rps"]
+
+    def test_list_input_empty_list(self) -> None:
+        result = parse_and_validate_metadata_fields([])
+        assert result is None
+
+    def test_list_input_with_empty_strings(self) -> None:
+        result = parse_and_validate_metadata_fields(["", ""])
+        assert result is None
+
+    def test_list_input_invalid_raises_422(self) -> None:
+        with pytest.raises(HTTPException) as exc_info:
+            parse_and_validate_metadata_fields(["$set.attack"])
+        assert exc_info.value.status_code == 422
+
+    def test_string_input_still_works(self) -> None:
+        """Backwards compat: str input still handled."""
+        result = parse_and_validate_metadata_fields("owner,config")
+        assert result == ["owner", "config"]
+
+    def test_none_input(self) -> None:
+        assert parse_and_validate_metadata_fields(None) is None
+
+
+class TestProjectMetadataRobustness:
+    """Test graceful handling of unusual metadata shapes."""
+
+    def test_metadata_is_string_not_dict(self) -> None:
+        """If metadata is somehow a string (bad data), traversal fails gracefully."""
+        # project_metadata type says dict | None, but let's be defensive
+        result = project_metadata({"owner": "team"}, ["owner.sub"])
+        # owner is a string, traversing into it yields nothing
+        assert result == {}
+
+    def test_metadata_with_list_at_traversal_point(self) -> None:
+        """Trying to traverse into a list (not a dict) returns nothing."""
+        metadata = {"items": [1, 2, 3]}
+        result = project_metadata(metadata, ["items.0"])
+        assert result == {}
+
+    def test_metadata_with_boolean_value(self) -> None:
+        """Boolean values should not be confused with dicts."""
+        metadata = {"enabled": True, "config": {"debug": False}}
+        result = project_metadata(metadata, ["enabled", "config.debug"])
+        assert result == {"enabled": True, "config": {"debug": False}}
+
+    def test_projection_does_not_mutate_input(self) -> None:
+        """Ensure the original metadata dict is not modified."""
+        metadata = {"owner": "team", "config": {"region": "us-east-1", "tier": "prod"}}
+        original_copy = {"owner": "team", "config": {"region": "us-east-1", "tier": "prod"}}
+        project_metadata(metadata, ["owner"])
+        assert metadata == original_copy
+
+    def test_pagination_unaffected_by_projection(self) -> None:
+        """Projection should not change the number of results returned.
+        Simulated: project_metadata on a list of items returns same count."""
+        items = [
+            {"metadata": {"owner": f"team-{i}", "config": {"x": i}}}
+            for i in range(10)
+        ]
+        projected = [
+            {**item, "metadata": project_metadata(item["metadata"], ["owner"])}
+            for item in items
+        ]
+        assert len(projected) == len(items)
+        # All still have metadata (projected)
+        assert all(p["metadata"] == {"owner": f"team-{i}"} for i, p in enumerate(projected))

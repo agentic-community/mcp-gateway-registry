@@ -213,7 +213,7 @@ async def list_skills(
     tag: str | None = Query(None, description="Filter by tag"),
     limit: int = Query(20, ge=1, le=2000, description="Number of skills to return (max 2000)"),
     offset: int = Query(0, ge=0, description="Number of skills to skip"),
-    metadata_fields: str | None = Query(
+    metadata_fields: list[str] | None = Query(
         None,
         description="Comma-separated metadata field paths to include (dot-notation for nested). Example: 'author,extra.team'. Omit to return full metadata.",
     ),
@@ -929,7 +929,7 @@ async def refresh_skill_resources(
 async def get_skill(
     user_context: Annotated[dict, Depends(nginx_proxied_auth)],
     skill_path: str = Path(..., description="Skill path or name"),
-    metadata_fields: str | None = Query(
+    metadata_fields: list[str] | None = Query(
         None,
         description=(
             "Comma-separated metadata field paths to include (dot-notation for nested). "
