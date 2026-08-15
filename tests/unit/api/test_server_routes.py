@@ -3828,3 +3828,20 @@ class TestMetadataFieldsProjection:
             skip=0, limit=20, exclude_tool_list=False,
             metadata_paths=["owner", "config.region"],
         )
+
+    def test_ancestor_dedup_returns_full_subtree(
+        self, test_client_admin, mock_server_service
+    ):
+        """metadata_fields=config,config.region normalizes to just 'config' (ancestor wins)."""
+        mock_server_service.get_servers_paginated = AsyncMock(
+            return_value=(self.SERVER_WITH_METADATA, 1)
+        )
+        response = test_client_admin.get(
+            "/api/servers?metadata_fields=config,config.region"
+        )
+        assert response.status_code == 200
+        server = response.json()["servers"][0]
+        # 'config' is an ancestor of 'config.region', so full config subtree returned
+        assert server["metadata"] == {
+            "config": {"region": "us-east-1", "tier": "production"},
+        }

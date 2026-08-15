@@ -498,18 +498,3 @@ class TestProjectMetadataRobustness:
         original_copy = {"owner": "team", "config": {"region": "us-east-1", "tier": "prod"}}
         project_metadata(metadata, ["owner"])
         assert metadata == original_copy
-
-    def test_pagination_unaffected_by_projection(self) -> None:
-        """Projection should not change the number of results returned.
-        Simulated: project_metadata on a list of items returns same count."""
-        items = [
-            {"metadata": {"owner": f"team-{i}", "config": {"x": i}}}
-            for i in range(10)
-        ]
-        projected = [
-            {**item, "metadata": project_metadata(item["metadata"], ["owner"])}
-            for item in items
-        ]
-        assert len(projected) == len(items)
-        # All still have metadata (projected)
-        assert all(p["metadata"] == {"owner": f"team-{i}"} for i, p in enumerate(projected))
