@@ -249,6 +249,43 @@ class DocumentDBSkillRepository(SkillRepositoryBase):
                 logger.error(f"Failed to parse skill document: {e}")
         return skills
 
+    async def list_by_paths(
+        self,
+        paths: list[str],
+    ) -> dict[str, dict[str, Any]]:
+        """List skills whose _id is in the given set of paths.
+
+        Returns raw documents (not SkillCard objects) for metadata projection
+        use cases where the full Pydantic parse is not needed.
+
+        Args:
+            paths: Exact skill paths to fetch.
+
+        Returns:
+            Dictionary mapping skill path to raw skill document for found paths.
+        """
+        if not paths:
+            return {}
+
+        await self.ensure_indexes()
+        collection = await self._get_collection()
+        try:
+            cursor = collection.find({"_id": {"$in": paths}})
+            skills: dict[str, dict[str, Any]] = {}
+            async for doc in cursor:
+                path = doc.pop("_id")
+                doc["path"] = path
+                skills[path] = doc
+            logger.debug(
+                "DocumentDB READ: Retrieved %d of %d requested skills by path",
+                len(skills),
+                len(paths),
+            )
+            return skills
+        except Exception as e:
+            logger.error(f"Error listing skills by paths: {e}", exc_info=True)
+            return {}
+
     async def list_filtered(
         self,
         include_disabled: bool = False,
