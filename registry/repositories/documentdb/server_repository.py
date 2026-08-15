@@ -10,6 +10,7 @@ from motor.motor_asyncio import AsyncIOMotorCollection
 from pymongo.errors import DuplicateKeyError
 
 from ...exceptions import AssetIdConflictError
+from ...utils.metadata import build_metadata_set_stage, project_metadata
 from ...utils.url_normalize import ENTITY_TYPE_SERVER, NORMALIZED_IDENTITY_URL_FIELD
 from ..interfaces import ServerRepositoryBase
 from ._identity_url_sidecar import (
@@ -195,8 +196,6 @@ class DocumentDBServerRepository(ServerRepositoryBase):
         # the metadata subdocument at the DB level (avoids transferring large blobs).
         if metadata_paths:
             try:
-                from ...utils.metadata import build_metadata_set_stage, project_metadata
-
                 set_stage = build_metadata_set_stage(metadata_paths)
                 pipeline: list[dict[str, Any]] = [
                     {"$sort": {"_id": 1}},
@@ -237,8 +236,6 @@ class DocumentDBServerRepository(ServerRepositoryBase):
 
             # If this is a fallback from a failed aggregation, apply Python projection
             if metadata_paths:
-                from ...utils.metadata import project_metadata
-
                 for server_doc in servers.values():
                     server_doc["metadata"] = project_metadata(
                         server_doc.get("metadata"), metadata_paths
