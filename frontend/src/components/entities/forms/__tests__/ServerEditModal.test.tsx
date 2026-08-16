@@ -33,6 +33,8 @@ const baseForm: ServerEditForm = {
   egress_scopes: '',
   egress_custom_authorize_url: '',
   egress_custom_token_url: '',
+  egress_custom_token_auth_style: '',
+  egress_custom_resource: '',
   egress_target_audience: '',
 };
 
@@ -157,6 +159,34 @@ describe('ServerEditModal', () => {
     expect(screen.queryByText('Target Audience')).not.toBeInTheDocument();
     // pat needs only a provider (no client id/secret fields).
     expect(screen.queryByText('Client ID')).not.toBeInTheDocument();
+  });
+
+  it('shows token auth style and resource fields for a custom provider', () => {
+    render(
+      <Harness
+        initial={{ ...baseForm, egress_auth_mode: 'oauth_user', egress_provider: 'custom' }}
+        egressEnabled
+      />,
+    );
+    expect(screen.getByText('Token Endpoint Authentication')).toBeInTheDocument();
+    expect(screen.getByText('Resource (RFC 8707, optional)')).toBeInTheDocument();
+    // Confidential styles (default post_body) still show the secret field.
+    expect(screen.getByText('Client Secret')).toBeInTheDocument();
+  });
+
+  it('hides the client secret field for a custom public client (token auth none)', () => {
+    render(
+      <Harness
+        initial={{
+          ...baseForm,
+          egress_auth_mode: 'oauth_user',
+          egress_provider: 'custom',
+          egress_custom_token_auth_style: 'none',
+        }}
+        egressEnabled
+      />,
+    );
+    expect(screen.queryByText('Client Secret')).not.toBeInTheDocument();
   });
 
   it('shows neither provider nor target audience when egress mode is none', () => {

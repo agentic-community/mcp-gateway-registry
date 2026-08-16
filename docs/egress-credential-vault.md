@@ -521,8 +521,29 @@ For a custom OIDC provider:
 > [FAQ: How do I use a 3LO (per-user OAuth) AgentCore Gateway with the registry?](faq/agentcore-3lo-per-user-oauth.md).
 
 - `custom_scope_separator` (default `" "`) and `custom_token_auth_style`
-  (`post_body` default, or `basic_header`) tune the wire format for providers
-  that deviate from the common case.
+  (`post_body` default, `basic_header`, or `none`) tune the wire format for
+  providers that deviate from the common case.
+- `custom_token_auth_style: "none"` is [RFC 7591](https://www.rfc-editor.org/rfc/rfc7591)
+  `token_endpoint_auth_method=none`: a **public client** with no client secret at
+  all, as minted by an MCP resource server's Dynamic Client Registration endpoint
+  (for example **Datadog's MCP server**, whose DCR endpoint only issues public
+  clients). The gateway sends `client_id` plus the PKCE `S256` verifier on the
+  code exchange and refresh grants and never sends a `client_secret`; `client_id`
+  becomes required and no secret is stored (a previously stored secret is dropped
+  on the switch). PKCE remains mandatory. Example (Datadog MCP, US1, via `custom`):
+
+```jsonc
+{
+  "egress_auth_mode": "oauth_user",
+  "egress_provider": "custom",
+  "client_id": "<client_id returned by Datadog DCR>",
+  "scopes": [],
+  "custom_authorize_url": "https://app.datadoghq.com/oauth2/v1/authorize",
+  "custom_token_url": "https://app.datadoghq.com/api/v2/oauth2/token",
+  "custom_token_auth_style": "none",
+  "custom_resource": "https://mcp.datadoghq.com/api/unstable/mcp-server/mcp"
+}
+```
 - `custom_resource` (optional) is an [RFC 8707](https://www.rfc-editor.org/rfc/rfc8707)
   **resource indicator** — an absolute `https` URI (no fragment). When set, the
   gateway sends it as the `resource` parameter on the authorize request **and**

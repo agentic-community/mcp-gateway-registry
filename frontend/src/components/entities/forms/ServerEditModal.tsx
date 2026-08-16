@@ -43,6 +43,9 @@ export interface ServerEditForm {
   egress_scopes: string; // comma/space separated
   egress_custom_authorize_url: string;
   egress_custom_token_url: string;
+  // 'post_body' | 'basic_header' | 'none' — 'none' is a public client (no secret, PKCE only)
+  egress_custom_token_auth_style: string;
+  egress_custom_resource: string; // RFC 8707 resource indicator (optional)
   // obo_exchange (same-IdP OBO hop 1) field:
   egress_target_audience: string;
   // pat inject header config (admin). Blank = server defaults (Authorization / Bearer).
@@ -334,19 +337,26 @@ const ServerEditModal: React.FC<ServerEditModalProps> = ({
                         className={FIELD}
                       />
                     </div>
-                    <div>
-                      <label className={LABEL}>Client Secret</label>
-                      <input
-                        type="password"
-                        value={form.egress_client_secret}
-                        onChange={(e) =>
-                          setForm((prev) => ({ ...prev, egress_client_secret: e.target.value }))
-                        }
-                        placeholder="leave blank to keep current"
-                        autoComplete="new-password"
-                        className={FIELD}
-                      />
-                    </div>
+                    {/* A public client (custom provider, token auth 'none') has no
+                        secret by design — hide the field so nothing stale is sent. */}
+                    {!(
+                      form.egress_provider === 'custom' &&
+                      form.egress_custom_token_auth_style === 'none'
+                    ) && (
+                      <div>
+                        <label className={LABEL}>Client Secret</label>
+                        <input
+                          type="password"
+                          value={form.egress_client_secret}
+                          onChange={(e) =>
+                            setForm((prev) => ({ ...prev, egress_client_secret: e.target.value }))
+                          }
+                          placeholder="leave blank to keep current"
+                          autoComplete="new-password"
+                          className={FIELD}
+                        />
+                      </div>
+                    )}
                     <div>
                       <label className={LABEL}>Scopes</label>
                       <input
@@ -390,6 +400,50 @@ const ServerEditModal: React.FC<ServerEditModalProps> = ({
                             placeholder="https://idp.example/token"
                             className={FIELD}
                           />
+                        </div>
+                        <div>
+                          <label className={LABEL}>Token Endpoint Authentication</label>
+                          <select
+                            value={form.egress_custom_token_auth_style || 'post_body'}
+                            onChange={(e) =>
+                              setForm((prev) => ({
+                                ...prev,
+                                egress_custom_token_auth_style: e.target.value,
+                              }))
+                            }
+                            className={FIELD}
+                          >
+                            <option value="post_body">Client secret in POST body</option>
+                            <option value="basic_header">Client secret in Basic header</option>
+                            <option value="none">None — public client (PKCE only)</option>
+                          </select>
+                          {form.egress_custom_token_auth_style === 'none' && (
+                            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                              For providers that register public OAuth clients via Dynamic
+                              Client Registration (e.g. Datadog MCP). No client secret is
+                              stored or sent; PKCE proves possession.
+                            </p>
+                          )}
+                        </div>
+                        <div>
+                          <label className={LABEL}>Resource (RFC 8707, optional)</label>
+                          <input
+                            type="text"
+                            value={form.egress_custom_resource}
+                            onChange={(e) =>
+                              setForm((prev) => ({
+                                ...prev,
+                                egress_custom_resource: e.target.value,
+                              }))
+                            }
+                            placeholder="https://mcp.example.com/mcp"
+                            className={FIELD}
+                          />
+                          <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                            Binds issued tokens to one protected resource. Required by some
+                            MCP servers (Atlassian Rovo, Datadog); sent on authorize, token
+                            exchange, and refresh.
+                          </p>
                         </div>
                       </>
                     )}

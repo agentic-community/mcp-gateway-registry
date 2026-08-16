@@ -65,6 +65,21 @@ def egress_oauth():
 
 
 @pytest.fixture
+def egress_oauth_public():
+    """A custom public-client config (token_endpoint_auth_method=none): no secret."""
+    return {
+        "provider": "custom",
+        "client_id": "dcr-public-client-id",
+        "client_secret_encrypted": None,
+        "scopes": [],
+        "custom_authorize_url": "https://app.datadoghq.com/oauth2/v1/authorize",
+        "custom_token_url": "https://app.datadoghq.com/api/v2/oauth2/token",
+        "custom_token_auth_style": "none",
+        "custom_resource": "https://mcp.datadoghq.com/api/unstable/mcp-server/mcp",
+    }
+
+
+@pytest.fixture
 def svc():
     store = _InMemoryStore()
     return EgressAuthService(
@@ -198,6 +213,86 @@ class TestConsentAndCallback:
     async def test_tampered_state_rejected(self, svc, egress_oauth):
         with pytest.raises(service.EgressAuthError, match="invalid state"):
             await svc.handle_callback("c", "garbage-state", egress_oauth, "alice", "oauth2")
+
+    async def test_confidential_provider_still_requires_secret(self, svc, monkeypatch):
+        # A confidential (github) config whose stored secret is missing must
+        # fail closed at the callback -- NOT silently proceed secretless.
+        _stub_exchange(monkeypatch)
+        secretless = dict(EGRESS_OAUTH)
+        secretless["client_secret_encrypted"] = None
+        url = svc.build_consent_url(
+            "oauth2", "alice", "Iv1.testclient", "sess-1", "/github-mcp", secretless
+        )
+        with pytest.raises(service.EgressAuthError, match="client_secret_encrypted missing"):
+            await svc.handle_callback("c", _extract_state(url), secretless, "alice", "oauth2")
+
+
+@pytest.mark.unit
+class TestPublicClientFlow:
+    """Public client (custom provider, token_endpoint_auth_method=none): the
+    whole consent->exchange->vend->refresh cycle works with NO stored secret,
+    and no ``client_secret`` ever reaches the token endpoint."""
+
+    async def test_consent_exchange_vend_without_secret(
+        self, svc, egress_oauth_public, monkeypatch
+    ):
+        captured: dict = {}
+
+        async def fake_post(cfg, data, headers):
+            captured.update(data)
+            return {
+                "access_token": "at_public",
+                "refresh_token": "rt_public",
+                "token_type": "Bearer",
+                "expires_in": 3600,
+            }
+
+        monkeypatch.setattr(oauth_engine, "_post_token", fake_post)
+        url = svc.build_consent_url(
+            "oauth2",
+            "alice",
+            "dcr-public-client-id",
+            "sess-1",
+            "/datadog-user",
+            egress_oauth_public,
+        )
+        conn = await svc.handle_callback(
+            "the-code", _extract_state(url), egress_oauth_public, "alice", "oauth2"
+        )
+        assert conn.provider == "custom" and conn.server_path == "/datadog-user"
+        assert "client_secret" not in captured
+        assert captured["client_id"] == "dcr-public-client-id"
+        assert captured["code_verifier"]  # PKCE verifier always sent
+        assert captured["resource"] == egress_oauth_public["custom_resource"]
+
+        token = await svc.get_valid_token("oauth2", "alice", "/datadog-user", egress_oauth_public)
+        assert token == "at_public"
+
+    async def test_refresh_without_secret(self, svc, egress_oauth_public, monkeypatch):
+        captured: dict = {}
+
+        async def fake_post(cfg, data, headers):
+            captured.update(data)
+            return {"access_token": "at_refreshed", "expires_in": 3600}
+
+        monkeypatch.setattr(oauth_engine, "_post_token", fake_post)
+        await svc._store.put_token(
+            "oauth2",
+            "alice",
+            "custom",
+            "/datadog-user",
+            StoredToken(
+                access_token="old",
+                refresh_token="rt_old",
+                expires_at="2000-01-01T00:00:00+00:00",
+                client_id="dcr-public-client-id",
+            ),
+        )
+        token = await svc.get_valid_token("oauth2", "alice", "/datadog-user", egress_oauth_public)
+        assert token == "at_refreshed"
+        assert captured["grant_type"] == "refresh_token"
+        assert "client_secret" not in captured
+        assert captured["resource"] == egress_oauth_public["custom_resource"]
 
 
 @pytest.mark.unit
