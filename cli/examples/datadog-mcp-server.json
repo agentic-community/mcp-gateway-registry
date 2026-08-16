@@ -1,0 +1,14 @@
+{
+  "server_name": "Datadog MCP",
+  "description": "Datadog's hosted MCP server (Bits AI): query metrics, logs, traces, monitors, incidents, and dashboards. Uses per-user egress OAuth (3LO) against a PUBLIC PKCE client: Datadog's authorization server advertises token_endpoint_auth_methods_supported=[\"none\"], so there is no client_secret to configure -- the client_id is minted by its Dynamic Client Registration endpoint (https://app.datadoghq.com/api/v2/oauth2/register) and PKCE S256 is the proof of possession (pkce_required=true). Configure egress OAuth separately after registration via POST /servers/datadog/egress-auth with egress_provider=custom and custom_token_auth_style=none (see the example body in the registry docs: docs/egress-credential-vault.md). URLs below are the US1 site; on other sites substitute the regional domain (datadoghq.eu, us3/us5.datadoghq.com, ap1.datadoghq.com, ddog-gov.com). Set append_mcp_path=false: proxy_pass_url already ends in the /mcp transport segment.",
+  "path": "/datadog",
+  "proxy_pass_url": "https://mcp.datadoghq.com/v1/mcp",
+  "tags": ["datadog", "observability", "monitoring", "logs", "traces", "egress-oauth", "public-client", "pkce"],
+  "auth_scheme": "none",
+  "supported_transports": ["streamable-http"],
+  "append_mcp_path": false,
+  "status": "active",
+  "provider_organization": "Datadog",
+  "provider_url": "https://docs.datadoghq.com/bits_ai/mcp_server/",
+  "visibility": "public"
+}
