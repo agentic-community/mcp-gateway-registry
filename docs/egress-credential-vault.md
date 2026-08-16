@@ -526,22 +526,27 @@ For a custom OIDC provider:
 - `custom_token_auth_style: "none"` is [RFC 7591](https://www.rfc-editor.org/rfc/rfc7591)
   `token_endpoint_auth_method=none`: a **public client** with no client secret at
   all, as minted by an MCP resource server's Dynamic Client Registration endpoint
-  (for example **Datadog's MCP server**, whose DCR endpoint only issues public
-  clients). The gateway sends `client_id` plus the PKCE `S256` verifier on the
-  code exchange and refresh grants and never sends a `client_secret`; `client_id`
-  becomes required and no secret is stored (a previously stored secret is dropped
-  on the switch). PKCE remains mandatory. Example (Datadog MCP, US1, via `custom`):
+  (for example **Datadog's MCP server**, whose authorization server advertises
+  `token_endpoint_auth_methods_supported: ["none"]` and `pkce_required: true`, so
+  it issues public clients only). The gateway sends `client_id` plus the PKCE
+  `S256` verifier on the code exchange and refresh grants and never sends a
+  `client_secret`; `client_id` becomes required and no secret is stored (a
+  previously stored secret is dropped on the switch). PKCE remains mandatory.
+  Example (Datadog MCP, US1, via `custom`) — for the end-to-end walkthrough,
+  including the redirect-URL allow-list step that must be done inside Datadog,
+  see the
+  [FAQ: How do I configure the Datadog MCP server with per-user egress OAuth?](faq/configuring-datadog-mcp-server.md):
 
 ```jsonc
 {
   "egress_auth_mode": "oauth_user",
   "egress_provider": "custom",
   "client_id": "<client_id returned by Datadog DCR>",
-  "scopes": [],
+  "scopes": ["mcp_all"],
   "custom_authorize_url": "https://app.datadoghq.com/oauth2/v1/authorize",
   "custom_token_url": "https://app.datadoghq.com/api/v2/oauth2/token",
   "custom_token_auth_style": "none",
-  "custom_resource": "https://mcp.datadoghq.com/api/unstable/mcp-server/mcp"
+  "custom_resource": "https://mcp.datadoghq.com"
 }
 ```
 - `custom_resource` (optional) is an [RFC 8707](https://www.rfc-editor.org/rfc/rfc8707)
@@ -568,6 +573,67 @@ For a custom OIDC provider:
   "custom_resource": "https://mcp.atlassian.com/v1/mcp/authv2"
 }
 ```
+
+<a id="choosing-token-auth-style"></a>
+### Choosing `custom_token_auth_style`
+
+Do not guess this value: the provider publishes it. Work through the steps in
+order and stop at the first one that answers.
+
+**1. Is `egress_provider` a built-in?** (`github`, `google`, `atlassian`,
+`microsoft`, `slack`) Then there is nothing to set. `resolve_provider()` returns
+the built-in provider row verbatim and never reads `custom_token_auth_style`, so
+the field is ignored on those servers. Every built-in is confidential.
+
+**2. For `custom`, read the provider's authorization-server metadata**
+([RFC 8414](https://www.rfc-editor.org/rfc/rfc8414)). Start from the MCP server's
+protected-resource metadata and follow it to the authorization server:
+
+```bash
+# 1) the MCP server names its authorization server(s)
+curl -s https://<mcp-host>/.well-known/oauth-protected-resource
+
+# 2) the authorization server declares how clients authenticate
+curl -s https://<as-host>/.well-known/oauth-authorization-server
+# (some providers publish it at .../.well-known/openid-configuration instead)
+```
+
+Map `token_endpoint_auth_methods_supported` straight onto the setting:
+
+| Published value | Set `custom_token_auth_style` to |
+|---|---|
+| `["none"]` | `none` — public client; the PKCE verifier replaces the secret |
+| contains `client_secret_post` | `post_body` (the default) |
+| `client_secret_basic` only | `basic_header` |
+
+**3. Nothing published?** Then the app client's own configuration decides. The
+common case is **Amazon Cognito**, which does not serve discovery on its
+`*.auth.<region>.amazoncognito.com` domain: an app client **with** a secret must
+send it as HTTP Basic (`basic_header`), while a **public** app client with no
+secret sends only `client_id` (`none`). Cognito does not accept
+`client_secret_post` for confidential clients.
+
+**4. Already working?** An `active` entry for the server in
+`GET /api/egress-auth/connections` is proof that the current style is correct.
+Leave it alone.
+
+Guessing wrong is safe and loud: the provider rejects the token request with
+`invalid_client`, the gateway surfaces an `OAuthEngineError`, and no token is
+stored. When probing by hand, `invalid_grant` means client authentication
+**succeeded** (only the code or refresh token was bad), whereas `invalid_client`
+means the style is wrong.
+
+Verified examples of each value:
+
+| Upstream | Style | Evidence |
+|---|---|---|
+| Datadog MCP (`mcp.datadoghq.com`) | `none` | AS metadata publishes `token_endpoint_auth_methods_supported: ["none"]` with `pkce_required: true` |
+| Slack MCP (`mcp.slack.com`) | `post_body` | AS metadata publishes `["client_secret_post"]` |
+| Cognito app client that has a secret | `basic_header` | no discovery document; Cognito requires HTTP Basic for confidential clients |
+
+A public client also changes what the **admin form** asks for: once the style is
+`none` the Client Secret field disappears, `client_id` becomes required, and any
+previously stored secret is dropped on save.
 
 ---
 
