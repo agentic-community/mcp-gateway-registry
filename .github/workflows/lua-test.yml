@@ -31,7 +31,7 @@ jobs:
       image: openresty/openresty:alpine
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Syntax check virtual_router.lua
         run: /usr/local/openresty/luajit/bin/luajit -bl docker/lua/virtual_router.lua /dev/null
