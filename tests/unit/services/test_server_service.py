@@ -1356,6 +1356,26 @@ class TestToggleService:
             mock_nginx_service.reload_nginx.assert_not_called()
 
 
+class TestIsSafeOverrideKey:
+    """Tool names become Mongo field keys, so dots and $ prefixes are unusable."""
+
+    def test_accepts_normal_tool_names(self):
+        assert ServerService._is_safe_override_key("show_processlist")
+        assert ServerService._is_safe_override_key("resolve-library-id")
+        assert ServerService._is_safe_override_key("aws___read_documentation")
+
+    def test_rejects_dotted_names(self):
+        # A dot would be read by $set as a nested path, so the block would
+        # be written somewhere the read side never looks: a silent fail-open.
+        assert not ServerService._is_safe_override_key("foo.bar")
+
+    def test_rejects_dollar_prefix(self):
+        assert not ServerService._is_safe_override_key("$set")
+
+    def test_rejects_empty(self):
+        assert not ServerService._is_safe_override_key("")
+
+
 # =============================================================================
 # TEST: Reload State From Disk
 # =============================================================================

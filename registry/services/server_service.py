@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from datetime import datetime
 from typing import Any
 
 from ..core.metrics import ASSET_ID_CONFLICT_TOTAL
@@ -274,6 +275,54 @@ class ServerService:
             nginx_reload_scheduler.mark_dirty()
 
         return result
+
+    @staticmethod
+    def _is_safe_override_key(tool_name: str) -> bool:
+        """Whether a tool name can be used as a Mongo field key.
+
+        Tool names become keys under ``tool_overrides``. A name containing
+        "." would be read by $set as a nested path (creating {"a": {"b": ...}}
+        instead of the key "a.b"), so the read side would never find it and
+        the block would silently fail open. A leading "$" is rejected by the
+        server outright.
+        """
+        return bool(tool_name) and "." not in tool_name and not tool_name.startswith("$")
+
+    async def set_tool_blocked(
+        self,
+        path: str,
+        tool_name: str,
+        blocked: bool,
+        *,
+        source: str = "admin",
+        reason: str | None = None,
+        updated_by: str | None = None,
+    ) -> bool:
+        """Block or unblock a single tool on a server.
+
+        Callers must validate tool_name against the server's tool_list before
+        calling; this only guards the Mongo-key constraint.
+
+        Returns:
+            True if the server was found and updated.
+        """
+        if not self._is_safe_override_key(tool_name):
+            logger.warning(
+                f"Refusing to set override for unusable tool key: "
+                f"server='{path}' tool='{tool_name}'"
+            )
+            return False
+
+        override = {
+            "blocked": blocked,
+            "source": source,
+            "reason": reason,
+            "updated_at": datetime.utcnow().isoformat(),
+            "updated_by": updated_by or "system",
+        }
+        # No cache to invalidate: the proxy reads block state fresh on every
+        # tools/call, so the change takes effect on the next request.
+        return await self._repo.set_tool_override(path, tool_name, override)
 
     async def get_server_info(
         self,
