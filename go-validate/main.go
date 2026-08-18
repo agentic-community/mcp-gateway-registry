@@ -24,13 +24,6 @@ type identity struct {
 	Method   string
 }
 
-// trustHeaders are identity/trust headers a client must never be able to inject
-// (B2). They are stripped from every inbound request before verification.
-var trustHeaders = []string{
-	"X-User", "X-Username", "X-Client-Id", "X-Scopes",
-	"X-Groups", "X-Auth-Method", "X-Internal-Token-Registry",
-}
-
 // counters is a tiny lock-free metrics surface exposed at /metrics.
 type counters struct {
 	fastOK   atomic.Int64
@@ -43,13 +36,6 @@ type server struct {
 	ks       *keysetCache
 	fallback http.Handler
 	stats    counters
-}
-
-// stripClientTrustHeaders removes any client-supplied identity headers (B2).
-func stripClientTrustHeaders(r *http.Request) {
-	for _, h := range trustHeaders {
-		r.Header.Del(h)
-	}
 }
 
 // extractBearer returns the bearer token, honoring X-Authorization over
@@ -111,12 +97,15 @@ func writeIdentityHeaders(w http.ResponseWriter, ident identity, internal string
 	h.Set("X-Internal-Token-Registry", internal)
 }
 
-// handleValidate is the hot path: strip trust headers, verify the RS256 bearer,
-// and either answer 200 with identity headers, 401 for a recognized-invalid
-// token, or fall back to Python for anything unrecognized.
+// handleValidate is the hot path: verify the RS256 bearer and either answer 200
+// with identity headers, 401 for a recognized-invalid token, or fall back to
+// Python for anything unrecognized (cookies, other IdPs, opaque tokens).
 func (s *server) handleValidate(w http.ResponseWriter, r *http.Request) {
-	stripClientTrustHeaders(r) // B2: never trust client-supplied identity headers
-
+	// NOTE: do NOT strip request headers before falling back. nginx sets
+	// legitimate inputs on the /validate subrequest (e.g. X-Client-Id from
+	// $http_x_client_id, X-Original-URL, X-Registry-Api-Auth). The fallback must
+	// be byte-identical to a direct nginx->Python /validate call, and Python is
+	// authoritative for identity there (exactly as today, sidecar or not).
 	if !s.cfg.FastPathReady {
 		s.stats.fallback.Add(1)
 		s.fallback.ServeHTTP(w, r)
@@ -146,6 +135,9 @@ func (s *server) handleValidate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Fast path: we answer authoritatively. Identity in the RESPONSE is fully
+	// controlled by writeIdentityHeaders (Set overwrites), so a client cannot
+	// inject identity even though we no longer mutate the request (B2 preserved).
 	ident := mapClaims(claims)
 	internal, err := mintInternalToken(ident, s.cfg.Audience, s.cfg.SecretKey)
 	if err != nil {
