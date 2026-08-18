@@ -93,7 +93,7 @@ from registry.audit.sink import emit_audit_event
 from registry.common.scopes_loader import reload_scopes_config
 from registry.common.secret_key import validate_secret_key, validate_signing_secret
 from registry.core.config import settings
-from registry.repositories.factory import get_scope_repository
+from registry.repositories.factory import get_scope_repository, get_server_repository
 
 # Configure logging using shared module (RotatingFileHandler + optional MongoDB)
 from registry.utils.logging_setup import setup_logging as _setup_logging
@@ -1742,6 +1742,24 @@ def _registered_server_from_proxy_path(
     return "/".join(parts)
 
 
+async def _resolve_server_path(server_name: str) -> str:
+    """Map the proxy's server identifier to a registered server path.
+
+    The proxy passes a bare name (e.g. "airegistry-tools") while servers are
+    stored under an _id like "/airegistry-tools/". The repository matches both
+    trailing-slash forms, so a leading slash is all that is needed here.
+    """
+    if not server_name:
+        raise LookupError("empty server identifier")
+    return "/" + server_name.strip("/")
+
+
+async def _get_blocked_tools(server_name: str) -> set[str]:
+    """Fresh, fail-closed read of the blocked-tool set for a server."""
+    path = await _resolve_server_path(server_name)
+    return await get_server_repository().get_blocked_tools(path)
+
+
 async def validate_server_tool_access(
     server_name: str, method: str, tool_name: str, user_scopes: list[str]
 ) -> bool:
@@ -1757,6 +1775,18 @@ async def validate_server_tool_access(
     Returns:
         True if access is allowed, False otherwise
     """
+    if method == "tools/call" and tool_name:
+        try:
+            blocked = await _get_blocked_tools(server_name)
+        except Exception as exc:
+            # Fail closed: if block state is indeterminate, deny the call.
+            logger.error(f"blocked-tool lookup failed for {server_name}: {exc}")
+            logger.info(f"Access denied (block lookup): server='{server_name}' tool='{tool_name}'")
+            return False
+        if tool_name in blocked:
+            logger.info(f"Access denied (blocked tool): server='{server_name}' tool='{tool_name}'")
+            return False
+
     try:
         # Verbose per-request trace. Kept at DEBUG (never INFO): this runs on the
         # hot /validate path for every MCP proxy request, and user_scopes /
