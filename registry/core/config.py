@@ -1514,12 +1514,13 @@ class Settings(BaseSettings):
         ),
     )
     egress_registry_internal_url: str = Field(
-        default="http://registry:8080",
+        default="http://registry:8091",
         description=(
-            "Internal URL auth_server uses to reach the registry's "
-            "/_internal/egress-token vend endpoint. The registry app binds loopback, "
-            "so this goes through nginx (registry:8080 -> :80 -> 127.0.0.1:7860), "
-            "which fronts the internal-only location."
+            "Internal URL auth_server uses to reach the registry's egress-token "
+            "vend endpoint. The registry app binds loopback, so this goes through "
+            "nginx on a DEDICATED INTERNAL listener (registry:8091 -> 127.0.0.1:7860) "
+            "that is never published to the host / routed by the public Ingress, so "
+            "the vend is unreachable except by the auth_server over the cluster network."
         ),
     )
     egress_obo_allowed_audiences: str = Field(

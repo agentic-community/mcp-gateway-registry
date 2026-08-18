@@ -39,6 +39,6 @@ metadata:
     app.kubernetes.io/component: {{ .Values.app.name }}
 data:
   EGRESS_AUTH_ENABLED: {{ .Values.egressAuth.enabled | toString | quote }}
-  EGRESS_REGISTRY_INTERNAL_URL: {{ .Values.egressAuth.registryInternalUrl | default "http://registry:8000" | quote }}
+  EGRESS_REGISTRY_INTERNAL_URL: {{ .Values.egressAuth.registryInternalUrl | default "http://registry:8091" | quote }}
   EGRESS_OAUTH_CALLBACK_BASE_URL: {{ $callbackBaseUrl | quote }}
 {{- end }}

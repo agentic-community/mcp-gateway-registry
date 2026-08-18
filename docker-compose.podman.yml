@@ -444,7 +444,7 @@ services:
       # the internal vend URL, and the nginx marker secret (it does NOT touch the
       # secret store, so no SECRET_STORE/AWS/OPENBAO vars here).
       - EGRESS_AUTH_ENABLED=${EGRESS_AUTH_ENABLED:-false}
-      - EGRESS_REGISTRY_INTERNAL_URL=${EGRESS_REGISTRY_INTERNAL_URL:-http://registry:8080}
+      - EGRESS_REGISTRY_INTERNAL_URL=${EGRESS_REGISTRY_INTERNAL_URL:-http://registry:8091}
       - AUTH_SERVER_NGINX_MARKER_SECRET=${AUTH_SERVER_NGINX_MARKER_SECRET:-}
       - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID}
       - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET}

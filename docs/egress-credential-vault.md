@@ -364,7 +364,7 @@ and `AUTH_SERVER_NGINX_MARKER_SECRET`.
 | `EGRESS_TOKEN_REFRESH_SKEW_SECONDS` | `300` | Refresh a vaulted token this many seconds before expiry. |
 | `EGRESS_REFRESH_WORKER_INTERVAL_SECONDS` | `120` | Background proactive-refresh scan interval; `0` disables the sweep. |
 | `EGRESS_STATE_TTL_SECONDS` | `600` | Lifetime of the AEAD-encrypted OAuth consent state. |
-| `EGRESS_REGISTRY_INTERNAL_URL` | `http://registry:8080` | URL the auth-server uses to reach the registry's internal vend endpoint. |
+| `EGRESS_REGISTRY_INTERNAL_URL` | `http://registry:8091` | URL the auth-server uses to reach the registry's dedicated internal vend listener (never exposed to the host / public Ingress). |
 | `AUTH_SERVER_NGINX_MARKER_SECRET` | _(required)_ | Shared secret nginx force-sets on `/validate`; the auth-server only mints an mcp-proxy token when it matches. **Required at startup** (auth-server and registry refuse to start without it) and must be identical across both. Set a strong random value. **(secret)** |
 | `AWS_SECRETS_REGION` | `""` | AWS region (required when `SECRET_STORE_BACKEND=secrets-manager`). |
 | `SECRETS_MANAGER_KMS_KEY_ID` | `""` | Optional CMK for envelope encryption; empty uses the AWS-managed key. **(secret)** |
@@ -673,6 +673,13 @@ Users can review and revoke their connections in the UI at **Connected Accounts*
   **required at startup** (both auth-server and registry refuse to start without
   it); an empty marker — which would mint unconditionally — is rejected rather than
   silently disabling the check.
+- **Dedicated internal vend listener (network boundary).** The vend endpoint
+  `/_egress_internal/egress-token` is served on a separate nginx listener
+  (`registry:8091`) that is NEVER published to the host (Compose) nor routed by
+  the public Ingress (K8s: a ClusterIP-only Service port gated by a
+  NetworkPolicy that admits only the auth-server pod). It is removed from the
+  internet-facing `8080`/`8443` listeners entirely, so the app-level token gate
+  is no longer the sole defense against a reachable caller.
 - **Upstream cross-check.** The vend endpoint re-verifies the internal token and
   confirms the token's `upstream_url` falls within the registered server's
   `proxy_pass_url` (and version allowlist) before vending — a forged upstream is

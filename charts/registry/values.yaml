@@ -483,6 +483,19 @@ cognito:
 # auth, no static token). The registry owns the FULL var set.
 egressAuth:
   enabled: false
+  # Dedicated internal nginx listener (port 8091) that serves ONLY the
+  # egress-token vend endpoint. The registry Service exposes it as a
+  # ClusterIP-only port (never referenced by the public Ingress); the
+  # NetworkPolicy below restricts ingress to it to the auth-server pod.
+  internalPort: 8091
+  internalNetworkPolicy:
+    enabled: true
+    # Default: only the auth-server pod in the SAME namespace may reach the vend
+    # listener. Leave fromNamespaceSelector empty for same-namespace; set it to
+    # cross-namespace labels only if auth-server runs in another namespace.
+    fromNamespaceSelector: {}
+    fromPodSelector:
+      app.kubernetes.io/name: auth-server
   # Secret store for per-user tokens: openbao | secrets-manager.
   secretStoreBackend: "openbao"
   # Public base URL for the OAuth callback ({base}/oauth2/egress/callback).

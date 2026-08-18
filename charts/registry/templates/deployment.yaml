@@ -51,6 +51,12 @@ spec:
               name: http
             - containerPort: 8443
               name: https
+            # Dedicated internal nginx listener serving only the egress-token
+            # vend endpoint (informational; nginx binds it via the conf template).
+            # Exposed as a ClusterIP-only Service port + NetworkPolicy when
+            # egressAuth.enabled; never routed by the public Ingress.
+            - containerPort: 8091
+              name: egress-internal
             # The raw uvicorn app port (7860) is intentionally NOT declared here.
             # The app binds 127.0.0.1:7860 and is reached only over loopback by the
             # in-pod nginx; it is not a Service port and probes hit 8080 (nginx).
