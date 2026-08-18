@@ -35,10 +35,18 @@ class EgressAuthMode(str, Enum):
 
 
 class TokenEndpointAuthStyle(str, Enum):
-    """Where the client_secret goes when calling the provider token endpoint."""
+    """Where the client_secret goes when calling the provider token endpoint.
+
+    ``NONE`` is RFC 7591 ``token_endpoint_auth_method=none``: a PUBLIC client
+    with no client_secret at all (e.g. a client minted by an MCP resource
+    server's Dynamic Client Registration endpoint, such as Datadog's MCP).
+    Only ``client_id`` is sent; the PKCE verifier is the proof of possession,
+    so ``use_pkce`` stays mandatory for these providers.
+    """
 
     POST_BODY = "post_body"  # client_id/client_secret in the form body
     BASIC_HEADER = "basic_header"  # HTTP Basic auth header
+    NONE = "none"  # public client: client_id only, no secret (PKCE required)
 
 
 class OAuthProviderConfig(BaseModel):

@@ -290,6 +290,67 @@ resource "aws_cloudwatch_log_group" "rds_rotation" {
 }
 
 #
+# Lambda Function Packaging - build step (urllib3 vendored at package time)
+#
+# AWS Lambda does not install requirements.txt; the function otherwise runs on
+# the runtime-bundled SDK, whose urllib3 is affected by CVE-2025-66471/66418 and
+# CVE-2026-21441/44431. We build each package into a dedicated build directory
+# and pip-install a patched urllib3 into it. urllib3 ships in the deployment
+# package (/var/task), which precedes the runtime (/var/runtime) on sys.path, so
+# botocore imports the patched copy. Only urllib3 is installed (pure-Python, no
+# deps, ~130 KB) because it is the sole vulnerable component; boto3/botocore are
+# provided by the runtime and their floors in requirements.txt document the
+# expected minimum. Building at package time (rather than committing the vendored
+# source) keeps third-party code out of the repo and out of code scanning.
+#
+# Requires python3 + pip on the machine running `terraform apply`.
+#
+locals {
+  documentdb_rotation_build_dir = "${path.module}/.terraform/lambda-build/rotate-documentdb"
+  rds_rotation_build_dir        = "${path.module}/.terraform/lambda-build/rotate-rds"
+}
+
+resource "null_resource" "build_documentdb_rotation" {
+  count = local.is_aws_documentdb ? 1 : 0
+
+  triggers = {
+    index        = filesha256("${path.module}/lambda/rotate-documentdb/index.py")
+    requirements = filesha256("${path.module}/lambda/rotate-documentdb/requirements.txt")
+  }
+
+  provisioner "local-exec" {
+    interpreter = ["/bin/bash", "-c"]
+    command     = <<-EOT
+      set -euo pipefail
+      build="${local.documentdb_rotation_build_dir}"
+      rm -rf "$build"
+      mkdir -p "$build"
+      cp "${path.module}/lambda/rotate-documentdb/index.py" "$build/"
+      python3 -m pip install "urllib3>=2.7.0" --no-deps --target "$build" --quiet
+    EOT
+  }
+}
+
+resource "null_resource" "build_rds_rotation" {
+  triggers = {
+    index        = filesha256("${path.module}/lambda/rotate-rds/index.py")
+    requirements = filesha256("${path.module}/lambda/rotate-rds/requirements.txt")
+  }
+
+  provisioner "local-exec" {
+    interpreter = ["/bin/bash", "-c"]
+    command     = <<-EOT
+      set -euo pipefail
+      build="${local.rds_rotation_build_dir}"
+      rm -rf "$build"
+      mkdir -p "$build"
+      cp "${path.module}/lambda/rotate-rds/index.py" "$build/"
+      python3 -m pip install "urllib3>=2.7.0" --no-deps --target "$build" --quiet
+    EOT
+  }
+}
+
+#
 # Lambda Function Package - DocumentDB Rotation
 # Gated via `count` on the data source so the archive is not built when
 # DocumentDB is not provisioned. Issue #955.
@@ -298,8 +359,11 @@ data "archive_file" "documentdb_rotation" {
   count = local.is_aws_documentdb ? 1 : 0
 
   type        = "zip"
-  source_dir  = "${path.module}/lambda/rotate-documentdb"
+  source_dir  = local.documentdb_rotation_build_dir
   output_path = "${path.module}/.terraform/lambda/rotate-documentdb.zip"
+
+  # Deferred to apply so the build directory is populated first.
+  depends_on = [null_resource.build_documentdb_rotation]
 }
 
 #
@@ -307,8 +371,11 @@ data "archive_file" "documentdb_rotation" {
 #
 data "archive_file" "rds_rotation" {
   type        = "zip"
-  source_dir  = "${path.module}/lambda/rotate-rds"
+  source_dir  = local.rds_rotation_build_dir
   output_path = "${path.module}/.terraform/lambda/rotate-rds.zip"
+
+  # Deferred to apply so the build directory is populated first.
+  depends_on = [null_resource.build_rds_rotation]
 }
 
 #

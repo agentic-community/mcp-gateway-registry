@@ -199,3 +199,110 @@ class TestConfigureEgressUrlValidation:
             json=_body(egress_provider="github", custom_resource="http://bad#frag"),
         )
         assert resp.status_code == 200, resp.text
+
+    def test_blank_secret_on_edit_keeps_stored_one(self, make_client):
+        # Editing a confidential registration with a blank secret must preserve
+        # the previously stored encrypted secret, not wipe it.
+        client = make_client(
+            server={
+                "path": "/gh",
+                "egress_oauth": {"client_secret_encrypted": "enc:oldsecret"},
+            }
+        )
+        resp = client.post("/servers/gh/egress-auth", json=_body(client_secret=None))
+        assert resp.status_code == 200, resp.text
+        eo = client._svc.updated_with["egress_oauth"]
+        assert eo["client_secret_encrypted"] == "enc:oldsecret"
+
+    def test_view_echoes_token_auth_style_and_separator(self, make_client):
+        # The non-secret config view must round-trip custom_token_auth_style
+        # (and the scope separator), or a UI read-modify-write silently resets
+        # the style to post_body -- which bricks a public-client config.
+        client = make_client()
+        resp = client.post(
+            "/servers/gh/egress-auth",
+            json=_body(custom_token_auth_style="basic_header", custom_scope_separator=","),
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["custom_token_auth_style"] == "basic_header"
+        assert resp.json()["custom_scope_separator"] == ","
+
+
+@pytest.mark.unit
+class TestConfigurePublicClient:
+    """token_endpoint_auth_method=none (custom provider): a public client has
+    no secret by design -- the configure route must accept a secretless config,
+    require a client_id, and DROP any previously stored secret."""
+
+    def _public_body(self, **over):
+        base = _body(
+            client_secret=None,
+            custom_token_auth_style="none",
+            custom_authorize_url="https://app.datadoghq.com/oauth2/v1/authorize",
+            custom_token_url="https://app.datadoghq.com/api/v2/oauth2/token",
+            custom_resource="https://mcp.datadoghq.com/api/unstable/mcp-server/mcp",
+        )
+        base.update(over)
+        return base
+
+    def test_public_client_config_without_secret_succeeds(self, make_client):
+        client = make_client()
+        resp = client.post("/servers/gh/egress-auth", json=self._public_body())
+        assert resp.status_code == 200, resp.text
+        eo = client._svc.updated_with["egress_oauth"]
+        assert eo["custom_token_auth_style"] == "none"
+        assert eo["client_secret_encrypted"] is None
+        assert resp.json()["custom_token_auth_style"] == "none"
+
+    def test_public_client_requires_client_id(self, make_client):
+        client = make_client()
+        resp = client.post("/servers/gh/egress-auth", json=self._public_body(client_id="  "))
+        assert resp.status_code == 400
+        assert "client_id required" in resp.json()["detail"]
+        assert client._svc.updated_with is None
+
+    def test_switch_to_public_client_drops_stored_secret(self, make_client):
+        # A registration previously configured confidential must not carry the
+        # stale encrypted secret into the public-client config.
+        client = make_client(
+            server={
+                "path": "/gh",
+                "egress_oauth": {"client_secret_encrypted": "enc:oldsecret"},
+            }
+        )
+        resp = client.post("/servers/gh/egress-auth", json=self._public_body())
+        assert resp.status_code == 200, resp.text
+        assert client._svc.updated_with["egress_oauth"]["client_secret_encrypted"] is None
+
+    def test_supplied_secret_ignored_for_public_client(self, make_client):
+        # An operator pasting a secret alongside style 'none' must not have it
+        # stored -- there is no request the engine could ever place it in.
+        client = make_client()
+        resp = client.post(
+            "/servers/gh/egress-auth", json=self._public_body(client_secret="pasted-anyway")
+        )
+        assert resp.status_code == 200, resp.text
+        assert client._svc.updated_with["egress_oauth"]["client_secret_encrypted"] is None
+
+    def test_confidential_style_still_requires_secret(self, make_client):
+        # post_body/basic_header without a secret (and no stored prior) -> 400.
+        client = make_client()
+        resp = client.post(
+            "/servers/gh/egress-auth",
+            json=_body(client_secret=None, custom_token_auth_style="post_body"),
+        )
+        assert resp.status_code == 400
+        assert "client_secret required" in resp.json()["detail"]
+
+    def test_builtin_provider_cannot_go_secretless_via_style(self, make_client):
+        # custom_token_auth_style is a custom-provider knob; a built-in provider
+        # posting style 'none' stays confidential and still requires a secret.
+        client = make_client()
+        resp = client.post(
+            "/servers/gh/egress-auth",
+            json=_body(
+                egress_provider="github", client_secret=None, custom_token_auth_style="none"
+            ),
+        )
+        assert resp.status_code == 400
+        assert "client_secret required" in resp.json()["detail"]

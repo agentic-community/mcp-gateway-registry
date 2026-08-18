@@ -26,6 +26,7 @@ For setup and configuration:
 - [Scopes Management](scopes-mgmt.md) - Scope configuration file format and fine-grained access control
 - [Authentication Management](auth-mgmt.md) - Managing users, groups, and scopes via CLI
 - [Microsoft Entra ID Setup](entra-id-setup.md) - Entra ID-specific setup and configuration
+- [Keycloak Identity Brokering](idp/keycloak-identity-brokering.md) - Multi-tenant federation: broker Entra ID, Okta, and other upstream IdPs through a single Keycloak realm so multiple tenants' IdPs work simultaneously
 - [Complete Setup Guide](complete-setup-guide.md) - End-to-end deployment instructions
 
 ---

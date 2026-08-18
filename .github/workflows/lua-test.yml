@@ -1,0 +1,44 @@
+name: Lua Router Tests
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'docker/lua/**'
+      - 'tests/lua/**'
+      - '.github/workflows/lua-test.yml'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'docker/lua/**'
+      - 'tests/lua/**'
+      - '.github/workflows/lua-test.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lua-test:
+    name: "Lua unit tests (OpenResty LuaJIT)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    container:
+      image: openresty/openresty:alpine
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Syntax check virtual_router.lua
+        run: /usr/local/openresty/luajit/bin/luajit -bl docker/lua/virtual_router.lua /dev/null
+
+      - name: Run Lua router unit tests
+        env:
+          # Point LuaJIT at OpenResty's bundled lua-cjson.
+          LUA_CPATH: "/usr/local/openresty/lualib/?.so;;"
+          LUA_PATH: "/usr/local/openresty/lualib/?.lua;;"
+        run: /usr/local/openresty/luajit/bin/luajit tests/lua/test_virtual_router.lua

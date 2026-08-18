@@ -1,0 +1,13 @@
+{
+  "server_name": "Salesforce Headless 360",
+  "description": "Salesforce's hosted MCP server (Beta): discover, describe, and dispatch Salesforce APIs and Setup Operation Recipes. Uses per-user egress OAuth (PKCE): each user connects their own Salesforce account once, the gateway vaults the user token and injects it on egress. Calls execute as the signed-in user, honoring field-level security, sharing rules, and permission sets. Configure egress OAuth separately after registration via POST /servers/salesforce-headless-360/egress-auth (egress_provider=custom, with your org's authorize/token URLs). Set append_mcp_path=false: this endpoint serves JSON-RPC at its root and 404s on /mcp.",
+  "path": "/salesforce-headless-360",
+  "proxy_pass_url": "https://api.salesforce.com/platform/mcp/v1/platform/headless-360",
+  "tags": ["salesforce", "crm", "api-discovery", "setup-automation", "egress-oauth"],
+  "auth_scheme": "none",
+  "supported_transports": ["streamable-http"],
+  "status": "active",
+  "provider_organization": "Salesforce",
+  "provider_url": "https://developer.salesforce.com/docs/platform/hosted-mcp-servers",
+  "visibility": "public"
+}

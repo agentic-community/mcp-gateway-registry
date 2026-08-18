@@ -16,6 +16,7 @@ import httpx
 from registry.constants import REGISTRY_CONSTANTS, DeploymentType, HealthStatus
 
 from .config import settings
+from .endpoint_utils import get_endpoint_url_from_server_info
 from .metrics import NGINX_CONFIG_WRITES, NGINX_UPDATES_SKIPPED
 
 logger = logging.getLogger(__name__)
@@ -35,7 +36,20 @@ AGENT_ROUTE_PREFIX: str = "/agent"
 # nginx directive positions, so they must be validated to prevent config
 # injection (e.g. "}", ";", newlines breaking out of the location block).
 _NGINX_AGENT_PATH_SAFE = re.compile(r"^[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*$")
-_NGINX_AGENT_URL_SAFE = re.compile(r"^https?://[A-Za-z0-9.\-]+(?::\d+)?(?:/[A-Za-z0-9._~\-/]*)?$")
+# The path segment also accepts percent-encoded octets (%XX), because a Bedrock
+# AgentCore runtime url embeds a percent-encoded ARN:
+#   https://bedrock-agentcore.{region}.amazonaws.com/runtimes/{encoded-ARN}/invocations
+# (built by cli/agentcore/models.py::build_invocation_url). Rejecting those made
+# every AgentCore A2A agent unroutable through the gateway.
+#
+# Only a COMPLETE triplet is allowed -- `%` must be followed by exactly two hex
+# digits -- so a bare or truncated `%` still fails. That keeps the anti-injection
+# guarantee: no unescaped `%` can reach an nginx directive position, and the
+# characters that would break out of the location block (`}`, `;`, whitespace,
+# newlines) remain excluded because they are not hex digits.
+_NGINX_AGENT_URL_SAFE = re.compile(
+    r"^https?://[A-Za-z0-9.\-]+(?::\d+)?(?:/(?:[A-Za-z0-9._~\-/]|%[0-9A-Fa-f]{2})*)?$"
+)
 
 
 # Headroom added on top of the auth-server mcp-proxy hop's own upstream timeout
@@ -1810,28 +1824,13 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
                 parsed_url = urlparse(proxy_pass_url)
                 upstream_host = parsed_url.netloc
 
-                # Build MCP endpoint URL from the server's mcp_endpoint or proxy_pass_url.
-                # mcp_endpoint is defended by two layers: (1) registration-time
-                # validation rejects an mcp_endpoint containing nginx
-                # metacharacters (including "$") via the same canonical guard as
-                # proxy_pass_url, so a "$" can never legitimately be stored; and
-                # (2) the render-time _sanitize_for_nginx_set below strips "$"
-                # and escapes quotes/backslashes as defense in depth for any
-                # legacy value persisted before validation existed.
-                mcp_endpoint = server_info.get("mcp_endpoint", "")
-                if mcp_endpoint:
-                    mcp_parsed = urlparse(mcp_endpoint)
-                    mcp_path = mcp_parsed.path.rstrip("/")
-                    # Construct full MCP URL from proxy_pass host + mcp path
-                    mcp_proxy_url = f"{parsed_url.scheme}://{parsed_url.netloc}{mcp_path}"
-                else:
-                    # Fallback: use proxy_pass_url, appending /mcp only if needed
-                    bare_url = proxy_pass_url.rstrip("/")
-                    # Check if URL already ends with common MCP endpoint paths
-                    if bare_url.endswith("/mcp") or bare_url.endswith("/sse"):
-                        mcp_proxy_url = bare_url
-                    else:
-                        mcp_proxy_url = f"{bare_url}/mcp"
+                # Resolve custom and nested transport paths centrally, but retain
+                # the proxy host because explicit endpoints may use a public host.
+                # Registration-time validation and the render-time sanitizer below
+                # continue to protect both endpoint sources from nginx metacharacters.
+                resolved_endpoint = get_endpoint_url_from_server_info(server_info)
+                endpoint_path = urlparse(resolved_endpoint).path.rstrip("/")
+                mcp_proxy_url = f"{parsed_url.scheme}://{parsed_url.netloc}{endpoint_path}"
 
                 # Use regular internal location (not named @) so proxy_pass
                 # can include a URI path for the MCP endpoint

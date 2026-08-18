@@ -3,7 +3,7 @@ global:
   image:
     # Container registry (host + optional namespace). Shared default across subcharts.
     registry: public.ecr.aws/p3v1o3c6
-    tag: 1.28.0
+    tag: 1.29.0
     pullPolicy: IfNotPresent
   cloud:
     # AWS region for cloud detection in telemetry. Set this when deploying
@@ -408,7 +408,6 @@ embeddings:
   # EMBEDDINGS_IDP_CLIENT_SECRET is sourced from a pre-created K8s Secret (recommended).
   idpClientSecretExistingSecret: "" # Secret name holding the client secret
   idpClientSecretExistingSecretKey: "EMBEDDINGS_IDP_CLIENT_SECRET" # pragma: allowlist secret (key name, not a value)
-
 # Entra ID integration (used when authProvider.type = "entra" in standalone deployment)
 entra:
   clientId: ""

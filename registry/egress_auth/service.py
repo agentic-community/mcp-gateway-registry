@@ -24,8 +24,10 @@ from registry.egress_auth import oauth_engine
 from registry.egress_auth.providers import resolve_provider
 from registry.egress_auth.schemas import (
     EgressConnection,
+    OAuthProviderConfig,
     OAuthState,
     StoredToken,
+    TokenEndpointAuthStyle,
 )
 from registry.egress_auth.state_codec import InvalidState, decode_state, encode_state
 from registry.secrets.interfaces import SecretStoreBase
@@ -203,7 +205,20 @@ class EgressAuthService:
     # -- helpers -------------------------------------------------------------- #
 
     @staticmethod
-    def _client_secret(egress_oauth: dict) -> str:
+    def _client_secret(
+        cfg: OAuthProviderConfig,
+        egress_oauth: dict,
+    ) -> str | None:
+        """Decrypt the operator client_secret, or None for a public client.
+
+        A provider with ``token_endpoint_auth_style == NONE`` (RFC 7591
+        ``token_endpoint_auth_method=none``, e.g. a DCR-minted public client)
+        has no secret by design; the engine sends only ``client_id`` + PKCE.
+        Confidential styles still fail closed on a missing/undecryptable secret.
+        """
+        if cfg.token_endpoint_auth_style == TokenEndpointAuthStyle.NONE:
+            return None
+
         from registry.utils.credential_encryption import decrypt_credential
 
         enc = egress_oauth.get("client_secret_encrypted")
@@ -319,7 +334,7 @@ class EgressAuthService:
         token = await oauth_engine.exchange_code(
             cfg=cfg,
             client_id=egress_oauth["client_id"],
-            client_secret=self._client_secret(egress_oauth),
+            client_secret=self._client_secret(cfg, egress_oauth),
             code=code,
             redirect_uri=self._callback_url,
             pkce_verifier=state.pkce_verifier,
@@ -412,7 +427,7 @@ class EgressAuthService:
                 new = await oauth_engine.refresh_token(
                     cfg=cfg,
                     client_id=egress_oauth["client_id"],
-                    client_secret=self._client_secret(egress_oauth),
+                    client_secret=self._client_secret(cfg, egress_oauth),
                     refresh_token_value=current.refresh_token,
                 )
             except oauth_engine.DeadRefreshTokenError:

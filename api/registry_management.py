@@ -6752,8 +6752,8 @@ Examples:
     )
     egress_configure_parser.add_argument(
         "--custom-token-auth-style",
-        choices=["post_body", "basic_header"],
-        help="Where the client secret goes on the token request (custom only, default post_body)",
+        choices=["post_body", "basic_header", "none"],
+        help="Token endpoint auth style; none selects a public PKCE client (custom only)",
     )
     egress_configure_parser.add_argument(
         "--custom-resource",

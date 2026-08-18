@@ -383,6 +383,7 @@ class EgressOAuthConfig(BaseModel):
     custom_token_url: str | None = None
     custom_scope_separator: str | None = None
     custom_token_auth_style: str | None = None
+    custom_resource: str | None = None
     updated_at: str | None = None
 
 
