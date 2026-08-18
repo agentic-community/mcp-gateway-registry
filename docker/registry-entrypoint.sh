@@ -240,6 +240,10 @@ if [ "${NGINX_ENABLE_IPV6:-false}" = "true" ]; then
             sed -i 's|listen 8080;|listen 8080;\
     listen [::]:8080;|' "$nginx_template"
         fi
+        if ! grep -q 'listen \[::\]:8091;' "$nginx_template"; then
+            sed -i 's|listen 8091;|listen 8091;\
+    listen [::]:8091;|' "$nginx_template"
+        fi
         if grep -q 'listen 8443 ssl;' "$nginx_template" && ! grep -q 'listen \[::\]:8443 ssl;' "$nginx_template"; then
             sed -i 's|listen 8443 ssl;|listen 8443 ssl;\
     listen [::]:8443 ssl;|' "$nginx_template"

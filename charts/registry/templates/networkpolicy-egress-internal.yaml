@@ -1,0 +1,51 @@
+{{- /*
+NetworkPolicy gating ingress to the dedicated internal egress-token vend
+listener.
+
+The vend endpoint /_egress_internal/egress-token is served on a dedicated nginx
+listener (egressAuth.internalPort, default 8091) that is exposed only as a
+ClusterIP Service port and never referenced by the public Ingress. This policy
+adds the network boundary: when egressAuth.enabled AND
+egressAuth.internalNetworkPolicy.enabled (both default paths for an egress
+deployment), only the auth-server pod may open a connection to that port.
+
+The only legitimate client is the auth-server (its mcp_proxy hop calls the vend
+over the cluster network). By default the source is the auth-server pod in the
+SAME namespace (podSelector only). Set
+egressAuth.internalNetworkPolicy.fromNamespaceSelector if auth-server runs in a
+different namespace.
+
+Cloud/workload note: this is the ingress complement to keeping the port off the
+public Ingress and unpublished in Compose. It does NOT replace the app-level
+gate (validate_internal_auth + the re-verified X-Internal-Token); it removes the
+network reachability that the gate would otherwise be the sole defense for.
+*/ -}}
+{{- if and .Values.egressAuth.enabled .Values.egressAuth.internalNetworkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Values.app.name }}-egress-internal
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    app.kubernetes.io/name: {{ .Values.app.name }}
+    app.kubernetes.io/component: {{ .Values.app.name }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ .Values.app.name }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- toYaml .Values.egressAuth.internalNetworkPolicy.fromPodSelector | nindent 14 }}
+          {{- with .Values.egressAuth.internalNetworkPolicy.fromNamespaceSelector }}
+          namespaceSelector:
+            matchLabels:
+              {{- toYaml . | nindent 14 }}
+          {{- end }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.egressAuth.internalPort | default 8091 }}
+{{- end }}

@@ -11,7 +11,7 @@ tests:
     set:
       egressAuth:
         enabled: true
-        registryInternalUrl: http://registry:8000
+        registryInternalUrl: http://registry:8091
     asserts:
       - isKind:
           of: ConfigMap
@@ -23,7 +23,7 @@ tests:
           value: "true"
       - equal:
           path: data.EGRESS_REGISTRY_INTERNAL_URL
-          value: "http://registry:8000"
+          value: "http://registry:8091"
       # registry.core.config validation requires a non-empty callback base URL
       # when egress is enabled; standalone (no global.ingress) derives the
       # subdomain-mode default from the localhost fallback.
@@ -51,6 +51,10 @@ tests:
       - equal:
           path: data.EGRESS_OAUTH_CALLBACK_BASE_URL
           value: "https://agents-path.example.com"
+      # The dedicated internal vend listener is the default (values.yaml).
+      - equal:
+          path: data.EGRESS_REGISTRY_INTERNAL_URL
+          value: "http://registry:8091"
 
   - it: an explicit oauthCallbackBaseUrl overrides the derived value
     set:
