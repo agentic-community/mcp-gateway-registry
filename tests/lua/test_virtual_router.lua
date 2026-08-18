@@ -202,6 +202,61 @@ do
 end
 
 -- ---------------------------------------------------------------------------
+print("test: _handle_tools_list keeps empty schema arrays as [] (issue #1532)")
+do
+    dict._store["tools_enriched:srv3"] = nil
+    local mapping = { required_scopes = nil, tools = {
+        { name = "no_arg", original_name = "no_arg", backend_location = "/ok" },
+        { name = "one_arg", original_name = "one_arg", backend_location = "/ok" },
+    } }
+    capture_responses = {}
+    capture_responses["/ok"] = { status = 200, body = cjson.encode({ result = { tools = {
+        { name = "no_arg", inputSchema = {
+            type = "object", properties = {},
+            required = setmetatable({}, cjson.empty_array_mt) } },
+        { name = "one_arg", inputSchema = {
+            type = "object",
+            properties = { q = { type = "string",
+                                 enum = setmetatable({}, cjson.empty_array_mt) } },
+            required = { "q" } } },
+    } } }) }
+
+    local body = M._handle_tools_list("1", mapping, "", nil, "srv3")
+    check(body:find('"required":[]', 1, true) ~= nil,
+        "empty required serializes as [] not {}")
+    check(body:find('"required":["q"]', 1, true) ~= nil,
+        "non-empty required is still an array")
+    check(body:find('"properties":{}', 1, true) ~= nil,
+        "empty properties stays an object")
+    check(body:find('"enum":[]', 1, true) ~= nil,
+        "empty enum nested under properties serializes as []")
+
+    -- The cached path decodes and re-encodes, so it must hold the same shape.
+    local cached_body = M._handle_tools_list("1", mapping, "", nil, "srv3")
+    check(dict._store["tools_enriched:srv3"] ~= nil, "result was cached")
+    check(cached_body:find('"required":[]', 1, true) ~= nil,
+        "empty required is still [] when served from cache")
+end
+
+-- ---------------------------------------------------------------------------
+print("test: a property named like a schema keyword stays an object")
+do
+    dict._store["tools_enriched:srv4"] = nil
+    local mapping = { required_scopes = nil, tools = {
+        { name = "odd", original_name = "odd", backend_location = "/ok" },
+    } }
+    capture_responses = {}
+    capture_responses["/ok"] = { status = 200, body = cjson.encode({ result = { tools = {
+        { name = "odd", inputSchema = {
+            type = "object", properties = { required = { type = "object" } } } },
+    } } }) }
+
+    local body = M._handle_tools_list("1", mapping, "", nil, "srv4")
+    check(body:find('"required":[]', 1, true) == nil,
+        "a property called 'required' is not coerced into an array")
+end
+
+-- ---------------------------------------------------------------------------
 if failures > 0 then
     print(string.format("\n%d check(s) FAILED", failures))
     os.exit(1)
