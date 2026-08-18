@@ -3694,3 +3694,78 @@ class TestTemplateRenderingRoutes:
         assert response.status_code == 200
         # regular_user_context grants "test-server/read"
         assert "test-server/read" in response.text
+
+
+@pytest.mark.unit
+@pytest.mark.api
+@pytest.mark.servers
+class TestToggleTool:
+    """Tests for POST /toggle-tool/{service_path:path} endpoint."""
+
+    def test_block_tool_success(
+        self,
+        test_client_admin,
+        mock_server_service,
+        sample_server_info,
+    ):
+        """Blocking a tool that exists on the server succeeds."""
+        info = dict(sample_server_info)
+        info["tool_list"] = [{"name": "healthcheck"}, {"name": "list_services"}]
+        mock_server_service.get_server_info.return_value = info
+        mock_server_service.set_tool_blocked = AsyncMock(return_value=True)
+        mock_server_service._is_safe_override_key.return_value = True
+
+        with patch(
+            "registry.auth.dependencies.user_has_ui_permission_for_service", return_value=True
+        ):
+            response = test_client_admin.post(
+                "/api/toggle-tool/test-server",
+                json={"tool_name": "healthcheck", "enabled": False},
+            )
+
+        assert response.status_code == 200
+        assert response.json()["enabled"] is False
+        args, kwargs = mock_server_service.set_tool_blocked.call_args
+        assert args[0] == "/test-server"
+        assert args[1] == "healthcheck"
+        assert args[2] is True  # blocked = not enabled
+        assert kwargs["source"] == "admin"
+
+    def test_unknown_tool_rejected(
+        self,
+        test_client_admin,
+        mock_server_service,
+        sample_server_info,
+    ):
+        """A tool not on the server's tool_list is a 400, not a write."""
+        info = dict(sample_server_info)
+        info["tool_list"] = [{"name": "healthcheck"}]
+        mock_server_service.get_server_info.return_value = info
+
+        with patch(
+            "registry.auth.dependencies.user_has_ui_permission_for_service", return_value=True
+        ):
+            response = test_client_admin.post(
+                "/api/toggle-tool/test-server",
+                json={"tool_name": "not_a_real_tool", "enabled": False},
+            )
+
+        assert response.status_code == 400
+        mock_server_service.set_tool_blocked.assert_not_called()
+
+    def test_unknown_server_is_404(
+        self,
+        test_client_admin,
+        mock_server_service,
+    ):
+        mock_server_service.get_server_info.return_value = None
+
+        with patch(
+            "registry.auth.dependencies.user_has_ui_permission_for_service", return_value=True
+        ):
+            response = test_client_admin.post(
+                "/api/toggle-tool/nope",
+                json={"tool_name": "healthcheck", "enabled": False},
+            )
+
+        assert response.status_code == 404

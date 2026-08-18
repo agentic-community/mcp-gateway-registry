@@ -1112,6 +1112,95 @@ async def toggle_service_route(
     )
 
 
+class ToolTogglePayload(BaseModel):
+    """Body for the per-tool enable/disable toggle."""
+
+    tool_name: str
+    enabled: bool
+
+
+@router.post("/toggle-tool/{service_path:path}")
+async def toggle_tool_route(
+    request: Request,
+    service_path: str,
+    payload: ToolTogglePayload,
+    user_context: Annotated[dict, Depends(enhanced_auth)] = None,
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
+):
+    """Block or unblock a single tool on a server.
+
+    Uses the same toggle_service permission as the server-level toggle;
+    there is no separate per-tool permission.
+    """
+    if not service_path.startswith("/"):
+        service_path = "/" + service_path
+
+    server_info = await server_service.get_server_info(service_path)
+    if not server_info:
+        raise HTTPException(status_code=404, detail="Service path not registered")
+
+    service_name = server_info["server_name"]
+
+    if not user_has_asset_permission("server", "toggle", service_name, user_context):
+        logger.warning(
+            f"User {user_context['username']} attempted to toggle a tool on {service_name} "
+            f"without toggle_service permission"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"You do not have permission to toggle {service_name}",
+        )
+
+    if not user_context["is_admin"]:
+        if not await server_service.user_can_access_server_path(
+            service_path, user_context["accessible_servers"]
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have access to this server",
+            )
+
+    # The tool must actually exist on this server. This also keeps arbitrary
+    # strings out of the tool_overrides map.
+    tool_names = {
+        t.get("name") for t in (server_info.get("tool_list") or []) if isinstance(t, dict)
+    }
+    if payload.tool_name not in tool_names:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Tool '{payload.tool_name}' not found on server",
+        )
+
+    # Tool names become Mongo field keys; "." and a leading "$" would be
+    # written somewhere the read side never looks (a silent fail-open).
+    if not server_service._is_safe_override_key(payload.tool_name):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Tool '{payload.tool_name}' cannot be toggled: names containing '.' "
+                f"or starting with '$' are unsupported as override keys"
+            ),
+        )
+
+    blocked = not payload.enabled
+    success = await server_service.set_tool_blocked(
+        service_path,
+        payload.tool_name,
+        blocked,
+        source="admin",
+        reason=None if payload.enabled else "Disabled by admin",
+        updated_by=user_context["username"],
+    )
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to update tool state")
+
+    logger.info(
+        f"Tool '{payload.tool_name}' on '{service_name}' ({service_path}) set to "
+        f"{'enabled' if payload.enabled else 'blocked'} by user '{user_context['username']}'"
+    )
+    return {"tool_name": payload.tool_name, "enabled": payload.enabled}
+
+
 # --- Registration deduplication ---
 
 
