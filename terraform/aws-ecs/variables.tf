@@ -2128,9 +2128,9 @@ variable "egress_obo_allowed_audiences" {
 }
 
 variable "egress_registry_internal_url" {
-  description = "URL the auth-server uses to reach the registry internal vend endpoint."
+  description = "URL the auth-server uses to reach the registry's dedicated internal egress-token vend listener. Served on a separate nginx port (8091) that the ALB never fronts; reached task-to-task via Service Connect (registry:8091), gated by the auth-server->registry security-group rule."
   type        = string
-  default     = "http://registry:8080"
+  default     = "http://registry:8091"
 }
 
 variable "egress_nginx_marker_secret" {

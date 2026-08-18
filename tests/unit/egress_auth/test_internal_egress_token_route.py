@@ -216,3 +216,88 @@ class TestInternalEgressTokenRoute:
         assert client._svc.called
         # It is an availability signal, never a miss (no consent nudge).
         assert "consent_required" not in r.text
+
+
+# --- Destination binding at the route level (real EgressAuthService) --------- #
+# The _StubService above ignores the binding; these drive the REAL service so a
+# repointed proxy_pass_url is refused end-to-end through the vend route: the live
+# cross-check passes (record + minted upstream claim move together) yet the
+# write-time binding still fail-closes to consent.
+from registry.egress_auth.schemas import StoredToken  # noqa: E402
+from registry.egress_auth.service import EgressAuthService  # noqa: E402
+from registry.secrets.interfaces import SecretStoreBase  # noqa: E402
+
+_REGISTERED = "https://api.githubcopilot.com/mcp"
+_REGISTERED_BASE = "https://api.githubcopilot.com"
+_NEW_UPSTREAM = "https://new-upstream.example/mcp"
+
+
+class _InMemoryStore(SecretStoreBase):
+    def __init__(self):
+        self._d = {}
+
+    async def put_token(self, a, u, p, s, t):
+        self._d[(a, u, p, s)] = t
+
+    async def get_token(self, a, u, p, s):
+        return self._d.get((a, u, p, s))
+
+    async def delete_token(self, a, u, p, s):
+        self._d.pop((a, u, p, s), None)
+
+    async def list_for_user(self, a, u):
+        return [(p, s, t) for (aa, uu, p, s), t in self._d.items() if aa == a and uu == u]
+
+
+@pytest.fixture
+def make_real_client(monkeypatch):
+    """Like make_client, but wires the REAL EgressAuthService (in-memory store)
+    so the write-time destination binding is actually enforced by the vend."""
+
+    def _build(claims, server, bound_upstreams):
+        monkeypatch.setattr(routes.settings, "egress_auth_enabled", True)
+        monkeypatch.setattr(routes, "verify_mcp_proxy_token", lambda tok: claims)
+        monkeypatch.setattr(routes, "get_server_repository", lambda: _StubRepo(server))
+        store = _InMemoryStore()
+        store._d[("oauth2", "alice", "github", "/github-mcp")] = StoredToken(
+            access_token="gho_real",
+            client_id="Iv1.x",
+            expires_at="2999-01-01T00:00:00+00:00",
+            bound_upstreams=bound_upstreams,
+        )
+        svc = EgressAuthService(secret_store=store, callback_base_url="https://gw.example")
+        monkeypatch.setattr(routes, "get_egress_auth_service", lambda: svc)
+        app = FastAPI()
+        app.include_router(routes.router)
+        app.dependency_overrides[routes.validate_internal_auth] = lambda: "auth-server"
+        return TestClient(app)
+
+    return _build
+
+
+@pytest.mark.unit
+class TestDestinationBindingRoute:
+    def test_registered_upstream_vends(self, make_real_client):
+        client = make_real_client(
+            _claims(upstream_url=_REGISTERED),
+            _server(proxy_pass_url=_REGISTERED),
+            bound_upstreams=[_REGISTERED_BASE],
+        )
+        r = _post(client)
+        assert r.status_code == 200
+        assert r.json()["access_token"] == "gho_real"
+
+    def test_repointed_proxy_pass_url_refuses(self, make_real_client):
+        # Admin repoints proxy_pass_url to a host they control. The live
+        # cross-check passes (both the record and the minted upstream claim moved
+        # together), but the write-time binding refuses -> consent_required, no token.
+        client = make_real_client(
+            _claims(upstream_url=_NEW_UPSTREAM),
+            _server(proxy_pass_url=_NEW_UPSTREAM),
+            bound_upstreams=[_REGISTERED_BASE],
+        )
+        r = _post(client)
+        assert r.status_code == 200
+        body = r.json()
+        assert body["consent_required"] is True
+        assert body["access_token"] is None
