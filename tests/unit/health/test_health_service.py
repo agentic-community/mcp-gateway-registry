@@ -1651,8 +1651,11 @@ class TestHealthCredentialDestinationGuard:
 async def test_health_logs_strip_query_and_response_body(health_service, caplog):
     endpoint = "https://93.184.216.34/mcp?api_key=query-secret"
     response = MagicMock(status_code=500, headers={}, text="response-body-secret")
+    response.aread = AsyncMock(return_value=b"response-body-secret")
     client = AsyncMock(spec=httpx.AsyncClient)
-    client.post.return_value = response
+    stream_ctx = MagicMock()
+    stream_ctx.__aenter__.return_value = response
+    client.stream = MagicMock(return_value=stream_ctx)
 
     with caplog.at_level("WARNING", logger="registry.health.service"):
         session_id = await health_service._initialize_mcp_session(client, endpoint, {})
