@@ -20,6 +20,19 @@ logger = logging.getLogger(__name__)
 pytestmark = [pytest.mark.unit, pytest.mark.auth]
 
 
+@pytest.fixture(autouse=True)
+def _stub_blocked_tools():
+    """Stub the per-tool block lookup for every test in this module.
+
+    validate_server_tool_access reads blocked tools from DocumentDB on every
+    tools/call and fails CLOSED when that read errors. These tests have no live
+    repository, so without this stub every tools/call would 403. Any test that
+    actually exercises blocking should patch _get_blocked_tools itself.
+    """
+    with patch("auth_server.server._get_blocked_tools", new=AsyncMock(return_value=set())):
+        yield
+
+
 # =============================================================================
 # HELPER FUNCTION TESTS
 # =============================================================================
