@@ -1695,3 +1695,49 @@ async def test_streamable_http_ping_is_streamed_not_buffered(health_service, moc
     assert status == HealthStatus.HEALTHY
     mock_client.post.assert_not_called()
     assert mock_client.stream.call_args.args[0] == "POST"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_probe_mcp_endpoint_reads_body_only_on_400(health_service):
+    """The 400 branch must have its body read before health is judged.
+
+    A 400 is the one status whose payload decides health (the JSON-RPC -32600
+    check in _is_mcp_endpoint_healthy_streamable). Since the probe streams,
+    .json() would raise httpx.ResponseNotRead unless the body is read first,
+    and that exception would be swallowed into a bogus unhealthy verdict.
+    """
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    response = MagicMock(status_code=400, headers={})
+    response.aread = AsyncMock(return_value=b'{"error": {"code": -32600}}')
+    response.json = MagicMock(return_value={"error": {"code": -32600}})
+    stream_ctx = MagicMock()
+    stream_ctx.__aenter__.return_value = response
+    mock_client.stream = MagicMock(return_value=stream_ctx)
+
+    result = await health_service._probe_mcp_endpoint(
+        mock_client, "http://localhost:8000/mcp", {}, '{"jsonrpc": "2.0"}'
+    )
+
+    response.aread.assert_awaited_once()
+    assert health_service._is_mcp_endpoint_healthy_streamable(result) is True
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_probe_mcp_endpoint_does_not_read_body_on_200(health_service):
+    """A 200 is judged on status alone, so the body must never be read: that
+    is the read that hangs against a held-open event stream."""
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    response = MagicMock(status_code=200, headers={})
+    response.aread = AsyncMock(side_effect=AssertionError("body should not be read"))
+    stream_ctx = MagicMock()
+    stream_ctx.__aenter__.return_value = response
+    mock_client.stream = MagicMock(return_value=stream_ctx)
+
+    result = await health_service._probe_mcp_endpoint(
+        mock_client, "http://localhost:8000/mcp", {}, '{"jsonrpc": "2.0"}'
+    )
+
+    response.aread.assert_not_called()
+    assert result.status_code == 200
