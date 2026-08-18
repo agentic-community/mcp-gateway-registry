@@ -324,6 +324,101 @@ class ServerService:
         # tools/call, so the change takes effect on the next request.
         return await self._repo.set_tool_override(path, tool_name, override)
 
+    # Severities that trigger an automatic block. Scanner emits uppercase
+    # (e.g. "SAFE", "HIGH"), so compare case-insensitively.
+    _AUTO_BLOCK_SEVERITIES = frozenset({"critical", "high"})
+
+    @classmethod
+    def _extract_unsafe_tools(cls, raw_output: dict[str, Any]) -> dict[str, str]:
+        """Map tool_name -> reason for tools a scan flagged CRITICAL/HIGH.
+
+        raw_output["tool_results"] is a LIST of per-tool entries, each with a
+        "findings" map keyed by analyzer; a tool is unsafe if ANY analyzer
+        reports critical/high. Tool names unusable as Mongo keys are skipped
+        with a warning rather than written somewhere the read side can't see.
+        """
+        unsafe: dict[str, str] = {}
+        tool_results = raw_output.get("tool_results") or []
+        if not isinstance(tool_results, list):
+            return unsafe
+
+        for entry in tool_results:
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("item_type") not in (None, "tool"):
+                continue
+            tool_name = entry.get("tool_name")
+            if not tool_name or not isinstance(tool_name, str):
+                continue
+
+            findings = entry.get("findings") or {}
+            if not isinstance(findings, dict):
+                continue
+
+            for analyzer_name, analyzer_findings in findings.items():
+                if not isinstance(analyzer_findings, dict):
+                    continue
+                severity = str(analyzer_findings.get("severity", "")).lower()
+                if severity not in cls._AUTO_BLOCK_SEVERITIES:
+                    continue
+                if not cls._is_safe_override_key(tool_name):
+                    logger.warning(
+                        f"Scan flagged '{tool_name}' as {severity.upper()} but the name "
+                        f"cannot be used as an override key; NOT auto-blocking"
+                    )
+                    break
+                threats = analyzer_findings.get("threat_names") or []
+                threat_label = ",".join(str(t) for t in threats) if threats else analyzer_name
+                unsafe[tool_name] = f"{severity.upper()}:{threat_label}"
+                break  # one finding is enough to block this tool
+
+        return unsafe
+
+    async def reconcile_security_blocks(
+        self,
+        path: str,
+        raw_output: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Recompute a server's tool_overrides after a scan.
+
+        Rules:
+          - Admin decisions always win and are never touched. This includes an
+            admin *unblock* of a previously auto-blocked tool: if it were not
+            preserved, the next rescan would silently re-block it and the admin
+            toggle would be meaningless.
+          - source="security_scan" entries are rebuilt from this scan only, so
+            a tool that is no longer flagged has its auto-block cleared.
+
+        Returns the new overrides map (also written to the repository).
+        """
+        existing = await self._repo.get_tool_overrides(path)
+        unsafe = self._extract_unsafe_tools(raw_output)
+
+        new_overrides: dict[str, Any] = {}
+
+        # 1. Carry over every admin decision untouched.
+        for tool_name, entry in existing.items():
+            if isinstance(entry, dict) and entry.get("source") == "admin":
+                new_overrides[tool_name] = entry
+
+        # 2. Auto-block currently-flagged tools that have no admin decision.
+        now = datetime.utcnow().isoformat()
+        for tool_name, reason in unsafe.items():
+            if tool_name in new_overrides:
+                continue  # admin already decided; leave it alone
+            new_overrides[tool_name] = {
+                "blocked": True,
+                "source": "security_scan",
+                "reason": reason,
+                "updated_at": now,
+                "updated_by": "system",
+            }
+
+        # Anything previously auto-blocked but no longer flagged simply is not
+        # carried forward, which clears the block.
+        await self._repo.replace_tool_overrides(path, new_overrides)
+        return new_overrides
+
     async def get_server_info(
         self,
         path: str,

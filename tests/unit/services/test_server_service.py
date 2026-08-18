@@ -2264,3 +2264,62 @@ class TestBuiltinServerEndpointIdentityBinding:
                 {"mcp_endpoint": "http://mcpgw-server:8003/mcp?tenant=other"},
             )
         mock_server_repository.update.assert_not_called()
+
+
+class TestReconcileSecurityBlocks:
+    """Rescan reconciliation: admin decisions survive, stale auto-blocks clear."""
+
+    @staticmethod
+    def _service(existing_overrides):
+        svc = ServerService.__new__(ServerService)
+        repo = MagicMock()
+        repo.get_tool_overrides = AsyncMock(return_value=existing_overrides)
+        repo.replace_tool_overrides = AsyncMock(return_value=True)
+        svc._repo = repo
+        return svc, repo
+
+    @staticmethod
+    def _scan(*tools):
+        return {
+            "tool_results": [
+                {
+                    "tool_name": name,
+                    "item_type": "tool",
+                    "findings": {"yara_analyzer": {"severity": "HIGH", "threat_names": ["x"]}},
+                }
+                for name in tools
+            ]
+        }
+
+    @pytest.mark.asyncio
+    async def test_flagged_tool_is_auto_blocked(self):
+        svc, repo = self._service({})
+        result = await svc.reconcile_security_blocks("/s", self._scan("bad_tool"))
+        assert result["bad_tool"]["blocked"] is True
+        assert result["bad_tool"]["source"] == "security_scan"
+        repo.replace_tool_overrides.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_clean_rescan_clears_stale_auto_block(self):
+        existing = {"bad_tool": {"blocked": True, "source": "security_scan"}}
+        svc, _ = self._service(existing)
+        result = await svc.reconcile_security_blocks("/s", self._scan())
+        assert "bad_tool" not in result
+
+    @pytest.mark.asyncio
+    async def test_admin_block_survives_clean_rescan(self):
+        existing = {"ops_tool": {"blocked": True, "source": "admin"}}
+        svc, _ = self._service(existing)
+        result = await svc.reconcile_security_blocks("/s", self._scan())
+        assert result["ops_tool"]["source"] == "admin"
+        assert result["ops_tool"]["blocked"] is True
+
+    @pytest.mark.asyncio
+    async def test_admin_unblock_is_not_reblocked_by_rescan(self):
+        # The admin explicitly enabled a flagged tool; a rescan that still
+        # flags it must not silently undo that decision.
+        existing = {"bad_tool": {"blocked": False, "source": "admin"}}
+        svc, _ = self._service(existing)
+        result = await svc.reconcile_security_blocks("/s", self._scan("bad_tool"))
+        assert result["bad_tool"]["blocked"] is False
+        assert result["bad_tool"]["source"] == "admin"
