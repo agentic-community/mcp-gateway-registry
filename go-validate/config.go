@@ -19,21 +19,24 @@ type Config struct {
 	Audience       string
 	FallbackURL    string
 	JWKSRefreshSec int
+	ScopeTTLSec    int
+	AuthMethod     string
+	MarkerSecret   string
 	FastPathReady  bool
 }
 
 // knownWeakSecrets are literals that must never be accepted as a signing key.
 var knownWeakSecrets = map[string]bool{
-	"secret":              true,
-	"changeme":            true,
-	"change-me":           true,
-	"password":            true,
-	"your-secret-key":     true,
-	"your_secret_key":     true,
-	"test":                true,
-	"dev":                 true,
-	"mcp-secret-key":      true,
-	"default":             true,
+	"secret":          true,
+	"changeme":        true,
+	"change-me":       true,
+	"password":        true,
+	"your-secret-key": true,
+	"your_secret_key": true,
+	"test":            true,
+	"dev":             true,
+	"mcp-secret-key":  true,
+	"default":         true,
 }
 
 // validateSecretKey enforces the signing-secret invariant: reject missing AND weak
@@ -71,6 +74,9 @@ func loadConfig() Config {
 		Audience:       os.Getenv("VALIDATE_AUDIENCE"),
 		FallbackURL:    getenv("AUTH_FALLBACK_URL", "http://auth-server:8888"),
 		JWKSRefreshSec: atoiDefault(os.Getenv("JWKS_REFRESH_SECONDS"), 300),
+		ScopeTTLSec:    atoiDefault(os.Getenv("SCOPE_SNAPSHOT_TTL_SECONDS"), 60),
+		AuthMethod:     getenv("VALIDATE_AUTH_METHOD", "keycloak"),
+		MarkerSecret:   os.Getenv("AUTH_SERVER_NGINX_MARKER_SECRET"),
 	}
 
 	// B3: validate the signing secret. If a secret is provided at all it must be

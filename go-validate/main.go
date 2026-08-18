@@ -5,6 +5,7 @@
 package main
 
 import (
+	"crypto/hmac"
 	"log"
 	"net/http"
 	"net/http/httputil"
@@ -19,9 +20,6 @@ type identity struct {
 	Sub      string
 	Username string
 	ClientID string
-	Scopes   string
-	Groups   string
-	Method   string
 }
 
 // counters is a tiny lock-free metrics surface exposed at /metrics.
@@ -34,8 +32,44 @@ type counters struct {
 type server struct {
 	cfg      Config
 	ks       *keysetCache
+	scopes   *scopeResolver
 	fallback http.Handler
 	stats    counters
+}
+
+// perUserIdPMethods fold to the single canonical egress bucket "oauth2" in the
+// internal tokens (mirrors _canonical_auth_method / egress_auth.canonical_auth_method).
+// The per-user egress vault keys on this, so consent-write and vend-read must agree.
+var perUserIdPMethods = map[string]bool{
+	"session_cookie": true, "self_signed": true, "keycloak": true, "entra": true,
+	"cognito": true, "okta": true, "auth0": true, "pingfederate": true,
+	"jwt": true, "boto3": true,
+}
+
+// canonicalAuthMethod returns the egress-principal bucket stamped into the internal
+// tokens. Per-user IdP methods canonicalize to "oauth2"; others pass through.
+func canonicalAuthMethod(method string) string {
+	if perUserIdPMethods[method] {
+		return "oauth2"
+	}
+	return method
+}
+
+// serverNameFromOriginalURL extracts the first path segment of X-Original-URL
+// (the MCP server name / traversal-guard segment). Empty for /api/ and root.
+func serverNameFromOriginalURL(original string) string {
+	u, err := url.Parse(original)
+	if err != nil {
+		return ""
+	}
+	p := strings.Trim(u.Path, "/")
+	if p == "" || strings.HasPrefix(p, "api/") || p == "api" {
+		return ""
+	}
+	if i := strings.IndexByte(p, '/'); i >= 0 {
+		return p[:i]
+	}
+	return p
 }
 
 // extractBearer returns the bearer token, honoring X-Authorization over
@@ -64,8 +98,8 @@ func parseBearer(v string) (string, bool) {
 	return "", false
 }
 
-// mapClaims turns verified claims into an identity. Keycloak claim shape today;
-// additional IdPs add a case here (config + claim map, not a rewrite).
+// mapClaims turns verified claims into a caller identity. Keycloak claim shape
+// today; additional IdPs add a case here (config + claim map, not a rewrite).
 func mapClaims(c *Claims) identity {
 	clientID := c.Azp
 	if clientID == "" {
@@ -79,22 +113,7 @@ func mapClaims(c *Claims) identity {
 		Sub:      c.Sub,
 		Username: username,
 		ClientID: clientID,
-		Scopes:   c.Scope,
-		Groups:   strings.Join(c.Groups, " "),
-		Method:   "go-fastpath",
 	}
-}
-
-// writeIdentityHeaders sets the headers nginx consumes via auth_request_set.
-func writeIdentityHeaders(w http.ResponseWriter, ident identity, internal string) {
-	h := w.Header()
-	h.Set("X-User", ident.Username)
-	h.Set("X-Username", ident.Username)
-	h.Set("X-Client-Id", ident.ClientID)
-	h.Set("X-Scopes", ident.Scopes)
-	h.Set("X-Groups", ident.Groups)
-	h.Set("X-Auth-Method", ident.Method)
-	h.Set("X-Internal-Token-Registry", internal)
 }
 
 // handleValidate is the hot path: verify the RS256 bearer and either answer 200
@@ -135,18 +154,68 @@ func (s *server) handleValidate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fast path: we answer authoritatively. Identity in the RESPONSE is fully
-	// controlled by writeIdentityHeaders (Set overwrites), so a client cannot
-	// inject identity even though we no longer mutate the request (B2 preserved).
+	// Fast path. Resolve scopes exactly as Python does (group->scope mapping,
+	// M2M enrichment). If we cannot resolve them safely (no DB snapshot, or a
+	// user token that would need idp_user_groups enrichment), fall back.
 	ident := mapClaims(claims)
-	internal, err := mintInternalToken(ident, s.cfg.Audience, s.cfg.SecretKey)
-	if err != nil {
-		// Minting should never fail; if it does, defer to Python rather than 500.
+	if s.scopes == nil {
 		s.stats.fallback.Add(1)
 		s.fallback.ServeHTTP(w, r)
 		return
 	}
-	writeIdentityHeaders(w, ident, internal)
+	scopes, ok := s.scopes.resolve(claims.Groups, ident.ClientID)
+	if !ok {
+		s.stats.fallback.Add(1)
+		s.fallback.ServeHTTP(w, r)
+		return
+	}
+
+	// Identity in the RESPONSE is fully controlled below (Set overwrites), so a
+	// client cannot inject identity even though we never mutate the request.
+	serverName := serverNameFromOriginalURL(r.Header.Get("X-Original-URL"))
+	egressUser := ident.Sub                              // canonical egress vault id = OIDC sub (bearer callers)
+	canonMethod := canonicalAuthMethod(s.cfg.AuthMethod) // internal-token auth_method claim
+
+	h := w.Header()
+	h.Set("X-User", ident.Username)
+	h.Set("X-Username", ident.Username)
+	h.Set("X-Client-Id", ident.ClientID)
+	h.Set("X-Scopes", scopesToHeader(scopes))
+	h.Set("X-Auth-Method", s.cfg.AuthMethod)
+	h.Set("X-Server-Name", serverName)
+	h.Set("X-Tool-Name", "")
+	h.Set("X-Groups", strings.Join(claims.Groups, " "))
+
+	// Registry /api/ hop: thin identity token, minted only when nginx set the marker.
+	if r.Header.Get("X-Registry-Api-Auth") != "" {
+		if tok, err := mintRegistryUIToken(
+			s.cfg.SecretKey, ident.Username, "", claims.Groups,
+			canonMethod, ident.ClientID, egressUser,
+		); err == nil {
+			h.Set("X-Internal-Token-Registry", tok)
+		} else {
+			log.Printf("could not mint registry-ui token: %v", err)
+		}
+	}
+
+	// /mcp-proxy hop: scope+upstream-bound token, minted only when nginx forwarded
+	// the resolved upstream AND (if configured) the matching source-secret marker.
+	if up := r.Header.Get("X-Resolved-Upstream"); up != "" {
+		if s.cfg.MarkerSecret == "" ||
+			hmac.Equal([]byte(r.Header.Get("X-Validate-Source-Secret")), []byte(s.cfg.MarkerSecret)) {
+			if tok, err := mintMCPProxyToken(
+				s.cfg.SecretKey, ident.Username, scopes, serverName, up,
+				canonMethod, egressUser,
+			); err == nil {
+				h.Set("X-Internal-Token", tok)
+			} else {
+				log.Printf("could not mint mcp-proxy token: %v", err)
+			}
+		} else {
+			log.Printf("X-Resolved-Upstream present but source-secret marker mismatch; not minting")
+		}
+	}
+
 	s.stats.fastOK.Add(1)
 	w.WriteHeader(http.StatusOK)
 }
@@ -211,6 +280,9 @@ func main() {
 	if cfg.JWKSURL != "" {
 		s.ks = newKeysetCache(cfg.JWKSURL, cfg.JWKSRefreshSec)
 	}
+	// Scope resolver loads mcp_scopes + idp_m2m_clients snapshots for group->scope
+	// parity with Python. Nil when DB is unconfigured -> handler falls back.
+	s.scopes = newScopeResolver(cfg.ScopeTTLSec)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/validate", s.handleValidate)

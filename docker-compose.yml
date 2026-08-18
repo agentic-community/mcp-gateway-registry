@@ -622,6 +622,20 @@ services:
       - VALIDATE_ISSUER=${VALIDATE_ISSUER:-}
       - VALIDATE_AUDIENCE=${VALIDATE_AUDIENCE:-}
       - JWKS_REFRESH_SECONDS=${JWKS_REFRESH_SECONDS:-300}
+      # Scope parity: read-only snapshots of mcp_scopes + idp_m2m_clients so
+      # X-Scopes matches Python's group->scope resolution. Same DB the registry uses.
+      - DOCUMENTDB_HOST=${DOCUMENTDB_HOST:-mongodb}
+      - DOCUMENTDB_PORT=${DOCUMENTDB_PORT:-27017}
+      - DOCUMENTDB_DATABASE=${DOCUMENTDB_DATABASE:-mcp_registry}
+      - DOCUMENTDB_USERNAME=${DOCUMENTDB_USERNAME:-}
+      - DOCUMENTDB_PASSWORD=${DOCUMENTDB_PASSWORD:-}
+      - DOCUMENTDB_USE_TLS=${DOCUMENTDB_USE_TLS:-false}
+      - DOCUMENTDB_NAMESPACE=${DOCUMENTDB_NAMESPACE:-default}
+      - DOCUMENTDB_DIRECT_CONNECTION=${DOCUMENTDB_DIRECT_CONNECTION:-true}
+      - SCOPE_SNAPSHOT_TTL_SECONDS=${SCOPE_SNAPSHOT_TTL_SECONDS:-60}
+      # Match the nginx source-secret marker so the mcp-proxy token mints only
+      # for genuine nginx subrequests (same gate as Python).
+      - AUTH_SERVER_NGINX_MARKER_SECRET=${AUTH_SERVER_NGINX_MARKER_SECRET:-}
     healthcheck:
       test: ["CMD", "/go-validate", "-healthcheck"]
       interval: 15s
