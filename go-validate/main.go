@@ -120,6 +120,21 @@ func mapClaims(c *Claims) identity {
 // with identity headers, 401 for a recognized-invalid token, or fall back to
 // Python for anything unrecognized (cookies, other IdPs, opaque tokens).
 func (s *server) handleValidate(w http.ResponseWriter, r *http.Request) {
+	// nginx's auth_request subrequest never carries a usable body, but for a
+	// POST/PUT/PATCH origin request nginx forwards the original Content-Length
+	// with NO body. httputil.ReverseProxy would then block copying that phantom
+	// body to the auth-server, hanging the subrequest until nginx times out
+	// (504 -> auth_request collapses it to 500). Every mutating request (e.g.
+	// POST /api/tokens/generate) hit this; GETs did not. Neutralize the body so
+	// both the fast path and the fallback operate on headers only. /validate
+	// reads identity from headers/cookies, never from the body.
+	if r.Body != nil {
+		_ = r.Body.Close()
+	}
+	r.Body = http.NoBody
+	r.ContentLength = 0
+	r.Header.Del("Content-Length")
+
 	// NOTE: do NOT strip request headers before falling back. nginx sets
 	// legitimate inputs on the /validate subrequest (e.g. X-Client-Id from
 	// $http_x_client_id, X-Original-URL, X-Registry-Api-Auth). The fallback must
