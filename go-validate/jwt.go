@@ -136,7 +136,10 @@ func verifyRS256(token string, ks *keysetCache, issuer, audience string) (*Claim
 		return nil, errUnknownKey // different issuer -> let Python handle it
 	}
 	if !c.audContains(audience) {
-		return nil, errInvalidToken
+		// Audience is a policy decision, not proof of forgery. Defer to Python
+		// (authoritative) rather than 401 so we never reject a token the full
+		// handler would have accepted. Only a bad signature or expiry -> 401.
+		return nil, errUnknownKey
 	}
 	now := time.Now().Unix()
 	if c.Exp != 0 && now > c.Exp+clockLeewaySeconds {

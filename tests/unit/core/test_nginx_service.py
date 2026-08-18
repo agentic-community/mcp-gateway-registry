@@ -2605,3 +2605,86 @@ async def test_proxy_ssl_placeholder_is_substituted_end_to_end(
         f"{conf_path.name} (pingfederate): {{{{PINGFEDERATE_PROXY_SSL}}}} placeholder was NOT "
         "substituted -- the .replace() wiring in _render_config_impl is broken."
     )
+
+
+# =============================================================================
+# VALIDATE_UPSTREAM_URL PLACEHOLDER SUBSTITUTION (go-validate sidecar, #1652)
+# =============================================================================
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_generate_config_async_validate_upstream_set(
+    nginx_service, sample_servers, mock_health_service, mock_atomic_write
+):
+    """VALIDATE_UPSTREAM_URL routes only /validate to the go-validate sidecar."""
+    template_content = """
+server {
+    proxy_pass http://{{VALIDATE_UPSTREAM_HOST}}:{{VALIDATE_UPSTREAM_PORT}}/validate;
+    proxy_pass http://{{AUTH_SERVER_HOST}}:{{AUTH_SERVER_PORT}}/oauth2/login/keycloak;
+{{LOCATION_BLOCKS}}
+}
+"""
+    with patch.object(nginx_service.nginx_template_path, "exists", return_value=True):
+        with patch("builtins.open", mock_open(read_data=template_content)):
+            with patch("registry.health.service.health_service", mock_health_service):
+                mock_health_service.server_health_status = {}
+                with patch.object(nginx_service, "get_additional_server_names", return_value=""):
+                    with patch.object(nginx_service, "reload_nginx", return_value=True):
+                        env_values = {
+                            "AUTH_PROVIDER": "keycloak",
+                            "KEYCLOAK_URL": "http://keycloak:8080",
+                            "AUTH_SERVER_URL": "http://auth-server:8888",
+                            "VALIDATE_UPSTREAM_URL": "http://go-validate:8899",
+                            "NGINX_DISABLE_API_AUTH_REQUEST": "false",
+                        }
+                        with patch(
+                            "os.environ.get",
+                            side_effect=lambda key, default=None: env_values.get(key, default),
+                        ):
+                            result = await nginx_service.generate_config_async(sample_servers)
+
+                            assert result is True
+                            written = mock_atomic_write.call_args_list[0][0][1]
+                            # /validate goes to the sidecar...
+                            assert "http://go-validate:8899/validate;" in written
+                            # ...while /oauth2/* still goes to the auth-server.
+                            assert "http://auth-server:8888/oauth2/login/keycloak;" in written
+                            assert "{{VALIDATE_UPSTREAM_HOST}}" not in written
+                            assert "{{VALIDATE_UPSTREAM_PORT}}" not in written
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_generate_config_async_validate_upstream_defaults_to_auth(
+    nginx_service, sample_servers, mock_health_service, mock_atomic_write
+):
+    """When VALIDATE_UPSTREAM_URL is unset, /validate defaults to the auth-server."""
+    template_content = """
+server {
+    proxy_pass http://{{VALIDATE_UPSTREAM_HOST}}:{{VALIDATE_UPSTREAM_PORT}}/validate;
+{{LOCATION_BLOCKS}}
+}
+"""
+    with patch.object(nginx_service.nginx_template_path, "exists", return_value=True):
+        with patch("builtins.open", mock_open(read_data=template_content)):
+            with patch("registry.health.service.health_service", mock_health_service):
+                mock_health_service.server_health_status = {}
+                with patch.object(nginx_service, "get_additional_server_names", return_value=""):
+                    with patch.object(nginx_service, "reload_nginx", return_value=True):
+                        env_values = {
+                            "AUTH_PROVIDER": "keycloak",
+                            "KEYCLOAK_URL": "http://keycloak:8080",
+                            "AUTH_SERVER_URL": "http://auth-server:8888",
+                            "NGINX_DISABLE_API_AUTH_REQUEST": "false",
+                        }
+                        with patch(
+                            "os.environ.get",
+                            side_effect=lambda key, default=None: env_values.get(key, default),
+                        ):
+                            result = await nginx_service.generate_config_async(sample_servers)
+
+                            assert result is True
+                            written = mock_atomic_write.call_args_list[0][0][1]
+                            assert "http://auth-server:8888/validate;" in written
+                            assert "{{VALIDATE_UPSTREAM_HOST}}" not in written

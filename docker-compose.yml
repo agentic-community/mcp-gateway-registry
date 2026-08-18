@@ -230,6 +230,11 @@ services:
       - OPENBAO_TOKEN=${OPENBAO_TOKEN:?Set OPENBAO_TOKEN in .env (a strong random value; do not reuse the old dev-root-token default)}
       - AUTH_SERVER_URL=${AUTH_SERVER_URL}
       - AUTH_SERVER_EXTERNAL_URL=${AUTH_SERVER_EXTERNAL_URL}
+      # Dedicated upstream for the nginx /validate auth_request subrequest. Points
+      # at the go-validate fast-path sidecar by default; override to
+      # http://auth-server:8888 to route /validate straight to Python. Only
+      # /validate is affected; /oauth2/* always go to the auth-server.
+      - VALIDATE_UPSTREAM_URL=${VALIDATE_UPSTREAM_URL:-http://go-validate:8899}
       - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID}
       - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET}
       - GITHUB_ENABLED=${GITHUB_ENABLED:-false}
@@ -530,6 +535,8 @@ services:
     depends_on:
       auth-server:
         condition: service_started
+      go-validate:
+        condition: service_started
       metrics-service:
         condition: service_healthy
       mongodb-init:
@@ -595,6 +602,37 @@ services:
       retries: 3
 
   # Auth service (separate and scalable)
+  # Go fast-path sidecar for the auth-server /validate endpoint (issue #1652, PR #1653).
+  # nginx routes /validate here via the registry's VALIDATE_UPSTREAM_URL. It fast-paths
+  # the configured-IdP RS256 bearer path and reverse-proxies everything else to the
+  # auth-server, so it is a safe transparent proxy until the fast-path vars
+  # (VALIDATE_ISSUER + VALIDATE_AUDIENCE) are set. Stdlib-only, ~10 MB static binary.
+  go-validate:
+    build:
+      context: go-validate
+      dockerfile: Dockerfile
+    environment:
+      - GOVALIDATE_LISTEN=:8899
+      - SECRET_KEY=${SECRET_KEY}
+      - AUTH_FALLBACK_URL=http://auth-server:8888
+      # Fast path engages only when JWKS_URL + VALIDATE_ISSUER + VALIDATE_AUDIENCE are
+      # all set and match the tokens; otherwise every /validate request is transparently
+      # proxied to the auth-server (correct, just not accelerated).
+      - JWKS_URL=${VALIDATE_JWKS_URL:-http://keycloak:8080/realms/${KEYCLOAK_REALM:-mcp-gateway}/protocol/openid-connect/certs}
+      - VALIDATE_ISSUER=${VALIDATE_ISSUER:-}
+      - VALIDATE_AUDIENCE=${VALIDATE_AUDIENCE:-}
+      - JWKS_REFRESH_SECONDS=${JWKS_REFRESH_SECONDS:-300}
+    healthcheck:
+      test: ["CMD", "/go-validate", "-healthcheck"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    depends_on:
+      auth-server:
+        condition: service_started
+    restart: unless-stopped
+
   auth-server:
     build:
       context: .
