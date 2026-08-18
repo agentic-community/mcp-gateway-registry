@@ -272,6 +272,8 @@ from registry_client import (
     RatingInfoResponse,
     RatingResponse,
     RegistryClient,
+    RescanResponse,
+    SecurityScanResult,
     ServerUpdateResponse,
     Skill,
     SkillRegistrationRequest,

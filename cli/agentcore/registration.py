@@ -11,7 +11,7 @@ import json
 import logging
 import os
 import sys
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import boto3
 import requests
@@ -38,6 +38,9 @@ from api.registry_client import (
     InternalServiceRegistration,
     RegistryClient,
 )
+
+if TYPE_CHECKING:
+    from .discovery import AgentCoreScanner
 
 logger = logging.getLogger(__name__)
 
