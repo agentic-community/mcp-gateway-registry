@@ -728,6 +728,53 @@ class TestCredentialedOAuthProfile:
             transport._pin_request(httpx.Request("POST", "http://93.184.216.34/token"))
 
 
+class TestEgressUpstreamProfile:
+    """The egress-injected proxy hop pins to the resolved IP and permits private /
+    hostname-private MCP upstreams, but never metadata/credential endpoints."""
+
+    def test_profile_is_settings_free_and_allows_private(self):
+        profile = url_guard.EGRESS_UPSTREAM_PROFILE
+        allowlist = profile.allowlist_factory()  # must not touch registry settings
+        assert profile.name == "egress-upstream"
+        assert profile.allow_private is True
+        assert profile.require_https is False
+        assert allowlist.hosts == frozenset() and allowlist.cidrs == ()
+
+    def test_private_upstream_is_pinned_not_blocked(self):
+        # An internal MCP server resolving to a private IP stays reachable, and
+        # the connection is pinned to that resolved IP (rebinding-safe).
+        with patch.object(url_guard.socket, "getaddrinfo", _resolve_to("10.0.0.5")):
+            transport = url_guard.GuardedAsyncTransport(
+                guard_profile=url_guard.EGRESS_UPSTREAM_PROFILE
+            )
+            pinned = transport._pin_request(httpx.Request("POST", "http://internal-mcp:8003/mcp"))
+        assert pinned.url.host == "10.0.0.5"
+        assert pinned.headers["Host"] == "internal-mcp:8003"
+
+    def test_metadata_literal_is_blocked_even_with_allow_private(self):
+        transport = url_guard.GuardedAsyncTransport(guard_profile=url_guard.EGRESS_UPSTREAM_PROFILE)
+        with pytest.raises(UrlValidationError):
+            transport._pin_request(
+                httpx.Request("POST", "http://169.254.169.254/latest/meta-data/")
+            )
+
+    def test_credential_endpoint_literal_is_blocked(self):
+        # ECS task-credential endpoint: hard-denied regardless of allow_private.
+        transport = url_guard.GuardedAsyncTransport(guard_profile=url_guard.EGRESS_UPSTREAM_PROFILE)
+        with pytest.raises(UrlValidationError):
+            transport._pin_request(httpx.Request("POST", "http://169.254.170.2/creds"))
+
+    def test_rebind_to_metadata_is_defeated(self):
+        # allow_private permits private unicast, but a rebind to the metadata IP
+        # is still blocked at connect time.
+        with patch.object(url_guard.socket, "getaddrinfo", _resolve_to("169.254.169.254")):
+            transport = url_guard.GuardedAsyncTransport(
+                guard_profile=url_guard.EGRESS_UPSTREAM_PROFILE
+            )
+            with pytest.raises(UrlValidationError):
+                transport._pin_request(httpx.Request("POST", "http://rebind.example/mcp"))
+
+
 class TestProxyProfilePrivateTargetToggle:
     def test_bool_relaxes_private_but_not_credential_endpoints(self):
         settings = _settings(gateway_proxy_allow_private_targets=True)

@@ -7588,8 +7588,23 @@ async def mcp_proxy(
         f"mcp_proxy: server={server_name} method={incoming_method} filter_enabled={filter_enabled} timeout={proxy_timeout}"
     )
 
+    # When the gateway injected a third-party credential, pin the egress
+    # connection: resolve+pin the IP (rebinding-safe) and hard-deny cloud/
+    # workload credential + metadata endpoints, so a repointed egress upstream
+    # cannot exfiltrate the injected credential to IMDS/ECS/EKS creds via a DNS
+    # rebind. Private / hostname-private MCP upstreams stay reachable. Non-egress
+    # traffic keeps the plain client (no injected credential to protect, and many
+    # internal upstreams legitimately resolve to private addresses).
+    from registry.exceptions import UrlValidationError
+    from registry.utils.url_guard import EGRESS_UPSTREAM_PROFILE, guarded_async_client
+
+    proxy_client = (
+        guarded_async_client(profile=EGRESS_UPSTREAM_PROFILE, timeout=proxy_timeout)
+        if egress_token_injected
+        else httpx.AsyncClient(timeout=proxy_timeout)
+    )
     try:
-        async with httpx.AsyncClient(timeout=proxy_timeout) as client:
+        async with proxy_client as client:
             async with client.stream(
                 "POST",
                 upstream_url,
@@ -7610,6 +7625,19 @@ async def mcp_proxy(
                 upstream_headers = dict(upstream_response.headers)
     except HTTPException:
         raise
+    except UrlValidationError as exc:
+        # The injected credential was about to be sent to a blocked destination
+        # (metadata/credential endpoint or an otherwise-denied target). Fail
+        # closed -- never forward the credential.
+        logger.error(
+            "mcp_proxy: egress upstream %s blocked by egress SSRF guard: %s",
+            upstream_url,
+            exc,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail="Upstream MCP server blocked by egress policy",
+        ) from exc
     except httpx.TimeoutException as exc:
         logger.error(f"mcp_proxy: upstream timeout for {upstream_url}: {exc}")
         raise HTTPException(

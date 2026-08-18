@@ -83,6 +83,17 @@ Every stored third-party token is addressed by `(auth_method, user_id, provider,
 
 The stored payload (`StoredToken`) holds `access_token`, optional `refresh_token`, `expires_at`, `status`, and timestamps — the vault read returns everything needed to decide vend-vs-refresh. **There is no companion app-DB row; the vault is the only place token state lives.**
 
+The payload also carries a **write-time destination binding**: `client_id` (the
+provider app it was minted under), `bound_upstreams` (the server's registered
+upstream base URLs at consent / PAT-submit time), and `bound_token_url` (the
+OAuth token endpoint, for a custom provider). The vend requires the request to
+match these, so rotating the provider app or repointing `proxy_pass_url` /
+`custom_token_url` forces re-consent instead of vending a stale credential or
+shipping it to an attacker-chosen destination — the live upstream cross-check
+alone cannot catch this, because an operator edit moves both the server record
+and the minted `upstream_url` claim together. See
+`registry/egress_auth/upstream_binding.py`.
+
 Because the key includes `user_id`, one user can never vend another user's token — the identity comes from the **verified** signed internal-hop claims, not a forgeable header.
 
 ---
