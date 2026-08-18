@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
 	"strings"
 	"sync/atomic"
 )
@@ -182,7 +183,29 @@ func itoa(n int64) string {
 	return strconvFormat(n)
 }
 
+// runHealthcheck is invoked via `go-validate -healthcheck` (used by the container
+// healthcheck, since the distroless image has no shell/curl). It GETs the local
+// /health endpoint and exits 0 on 200, 1 otherwise.
+func runHealthcheck(listen string) {
+	addr := listen
+	if strings.HasPrefix(addr, ":") {
+		addr = "127.0.0.1" + addr
+	}
+	resp, err := http.Get("http://" + addr + "/health")
+	if err != nil {
+		log.Fatalf("healthcheck failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		log.Fatalf("healthcheck: status %d", resp.StatusCode)
+	}
+}
+
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "-healthcheck" {
+		runHealthcheck(getenv("GOVALIDATE_LISTEN", ":8899"))
+		return
+	}
 	cfg := loadConfig()
 
 	target, err := url.Parse(cfg.FallbackURL)
