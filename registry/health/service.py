@@ -712,6 +712,45 @@ class HealthMonitoringService:
             )
             return False
 
+    async def _probe_mcp_endpoint(
+        self,
+        client: httpx.AsyncClient,
+        endpoint: str,
+        headers: dict[str, str],
+        payload: str,
+    ) -> httpx.Response:
+        """POST an MCP probe and return the response with its head available.
+
+        Streamed, not buffered. A streamable-http server may answer with
+        Content-Type: text/event-stream and hold the connection open past the
+        response we care about; client.post() blocks until that body completes
+        and burns the whole health-check timeout. Only the response head is
+        needed -- except on a 400, the sole status whose body decides health
+        (the JSON-RPC -32600 check in _is_mcp_endpoint_healthy_streamable). A
+        400 is a finite error response that closes normally, so reading it is
+        safe.
+
+        Args:
+            client: httpx AsyncClient instance
+            endpoint: The MCP endpoint URL
+            headers: Headers to send with the request
+            payload: Raw JSON-RPC request body
+
+        Returns:
+            The response. Its body is read only when the status is 400.
+        """
+        async with client.stream(
+            "POST",
+            endpoint,
+            headers=headers,
+            content=payload,
+            follow_redirects=True,
+            timeout=httpx.Timeout(settings.health_check_timeout_seconds),
+        ) as response:
+            if response.status_code == 400:
+                await response.aread()
+            return response
+
     async def _check_server_endpoint_transport_aware(
         self, client: httpx.AsyncClient, proxy_pass_url: str, server_info: dict
     ) -> tuple[bool, str]:
@@ -886,9 +925,7 @@ class HealthMonitoringService:
 
                 logger.info(f"[TRACE] Sending ping to endpoint: {redact_url(endpoint)}")
                 logger.debug(f"Health request header names={sorted(headers)}")
-                response = await client.post(
-                    endpoint, headers=headers, content=ping_payload, follow_redirects=True
-                )
+                response = await self._probe_mcp_endpoint(client, endpoint, headers, ping_payload)
                 logger.info(f"[TRACE] Response status: {response.status_code}")
 
                 # Check for auth failures first
@@ -998,9 +1035,7 @@ class HealthMonitoringService:
             try:
                 logger.info(f"[TRACE] Trying default endpoint: {redact_url(endpoint)}")
                 logger.debug(f"Health request header names={sorted(headers)}")
-                response = await client.post(
-                    endpoint, headers=headers, content=ping_payload, follow_redirects=True
-                )
+                response = await self._probe_mcp_endpoint(client, endpoint, headers, ping_payload)
                 logger.info(f"[TRACE] Response status: {response.status_code}")
                 if self._is_mcp_endpoint_healthy_streamable(response):
                     logger.info(f"Health check succeeded at {redact_url(endpoint)}")
