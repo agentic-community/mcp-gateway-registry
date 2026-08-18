@@ -677,6 +677,15 @@ Users can review and revoke their connections in the UI at **Connected Accounts*
   confirms the token's `upstream_url` falls within the registered server's
   `proxy_pass_url` (and version allowlist) before vending — a forged upstream is
   rejected.
+- **Destination binding (write-time).** Each stored credential records the
+  server's registered upstream base URLs — and, for a custom provider, the OAuth
+  token endpoint — as they stood at consent / PAT-submit time. The vend requires
+  the request's destination to be a member of that stored set. The live
+  cross-check above reads the *current* server record, so an operator who
+  repoints `proxy_pass_url` (or `custom_token_url`) moves both sides of that
+  check together; the write-time binding does **not** move, so the vend
+  fail-closes to re-consent instead of shipping the credential to the new host.
+  See `registry/egress_auth/upstream_binding.py`.
 - **Anti-phishing consent.** The connect URL points at the gateway, not the
   provider. The AS facade requires a live gateway session and stores the token
   under the **session** principal, not any client-asserted identity.
@@ -703,6 +712,8 @@ Users can review and revoke their connections in the UI at **Connected Accounts*
 | Client never gets a consent prompt | The MCP client must support URL-mode elicitation (`-32042` `URLElicitationRequiredError`), and the elicitation only fires on token-requiring methods (`tools/call`, `prompts/get`, `resources/read`). Check the server's `egress_auth_mode` is `oauth_user`. |
 | Consent loops (re-asked every call) | Usually an `auth_method` mismatch between consent-write and vend-read — confirm the IdP method canonicalizes to `oauth2`. Or the stored refresh token is dead (provider revoked it) → re-consent. |
 | Connected once, but tools still show empty / vend logs "has no token" | The consent-write and vend paths keyed the vault on different `user_id`s. Since keying moved to the OIDC `sub` (see [Vault key scheme](#vault-key-scheme)), an existing connection created under the old display-name key is invisible to the new `sub`-keyed lookup. Fix: **disconnect and reconnect once** (from Connected Accounts), which re-writes the entry under the `sub`. On Entra this reconnect must follow a fresh gateway login so the session carries the persisted `subject`. |
+| Connected, but a `tools/call` asks to reconnect after a backend URL change | Destination binding: changing a server's `proxy_pass_url` (or a custom provider's `custom_token_url`) invalidates credentials bound to the old destination. **Reconnect once** (from Connected Accounts) to rebind. Adding a *new version* whose base URL differs only requires a reconnect for calls routed to that new version; existing routes are unaffected. |
+| After upgrading to the destination-binding release, every connection asks to reconnect once | Credentials stored before the upgrade carry an empty binding, which never matches — a deliberate one-time forced reconnect (`oauth_user` → connect nudge, `pat` → "submit a PAT"), mirroring the `sub`-keying migration above. |
 | "Connection failed" on the consent callback; registry logs `state user mismatch` | The account-swap guard saw the consent-initiate principal differ from the callback's live-session principal. Almost always the session predates the `sub`-persisting login — **log out and back in**, then reconnect, so the cookie session carries the `subject` the initiate leg bound the state to. |
 | Vend returns 401 from auth-server | Marker secret mismatch. Ensure `AUTH_SERVER_NGINX_MARKER_SECRET` matches on registry + auth-server, and nginx sets it on `/validate`. |
 | OpenBao reads fail with permission denied | The role token lapsed. The store re-authenticates and retries once; persistent failure means a real policy/role gap — verify the `mcp-egress` policy and the role binding to the registry ServiceAccount. |

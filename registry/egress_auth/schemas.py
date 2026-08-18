@@ -105,6 +105,20 @@ class StoredToken(BaseModel):
         description="OAuth client_id this token was minted under; checked on vend so a "
         "rotated provider client_id forces re-consent instead of vending a stale token.",
     )
+    bound_upstreams: list[str] = Field(
+        default_factory=list,
+        description="Upstream base URLs (scheme://host[:port]) registered for the "
+        "server when this credential was written; the vend requires the request's "
+        "destination to be a member, so repointing proxy_pass_url forces re-consent "
+        "instead of shipping the credential to a new destination.",
+    )
+    bound_token_url: str | None = Field(
+        default=None,
+        description="OAuth token endpoint this credential was minted against; "
+        "checked on vend so repointing a custom_token_url forces re-consent instead "
+        "of POSTing the refresh_token + client_secret to a new endpoint. None for "
+        "pat / legacy entries (skips the check).",
+    )
     created_at: str | None = None
     last_refreshed_at: str | None = None
 
