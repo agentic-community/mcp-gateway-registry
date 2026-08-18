@@ -373,7 +373,9 @@ async def test_health_service_check_server_endpoint_transport_aware_healthy(
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_response = MagicMock()
     mock_response.status_code = 200
-    mock_client.post.return_value = mock_response
+    mock_stream_ctx = MagicMock()
+    mock_stream_ctx.__aenter__.return_value = mock_response
+    mock_client.stream = MagicMock(return_value=mock_stream_ctx)
 
     with patch.object(health_service, "_initialize_mcp_session", return_value="session-123"):
         is_healthy, status = await health_service._check_server_endpoint_transport_aware(
@@ -1403,7 +1405,9 @@ async def test_health_service_check_server_endpoint_url_with_mcp(health_service,
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_response = MagicMock()
     mock_response.status_code = 200
-    mock_client.post.return_value = mock_response
+    mock_stream_ctx = MagicMock()
+    mock_stream_ctx.__aenter__.return_value = mock_response
+    mock_client.stream = MagicMock(return_value=mock_stream_ctx)
 
     with patch.object(health_service, "_initialize_mcp_session", return_value="session-123"):
         is_healthy, status = await health_service._check_server_endpoint_transport_aware(
@@ -1665,3 +1669,29 @@ async def test_health_logs_strip_query_and_response_body(health_service, caplog)
     assert "query-secret" not in caplog.text
     assert "response-body-secret" not in caplog.text
     assert "status=500" in caplog.text
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_streamable_http_ping_is_streamed_not_buffered(health_service, mock_server_info):
+    """Both hops of the streamable-http probe must stream, not buffer.
+
+    Streaming only the initialize hop leaves the ping hop waiting on a body a
+    live event stream never completes, which re-introduces the health-check
+    hang with the timeout simply moved one hop later.
+    """
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    ping_response = MagicMock(status_code=200, headers={})
+    stream_ctx = MagicMock()
+    stream_ctx.__aenter__.return_value = ping_response
+    mock_client.stream = MagicMock(return_value=stream_ctx)
+
+    with patch.object(health_service, "_initialize_mcp_session", return_value="session-123"):
+        is_healthy, status = await health_service._check_server_endpoint_transport_aware(
+            mock_client, "http://localhost:8000/mcp", mock_server_info
+        )
+
+    assert is_healthy is True
+    assert status == HealthStatus.HEALTHY
+    mock_client.post.assert_not_called()
+    assert mock_client.stream.call_args.args[0] == "POST"
