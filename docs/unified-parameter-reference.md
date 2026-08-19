@@ -127,6 +127,31 @@ Internal and external URLs for the auth server, plus internal JWT signing.
 | go-validate token audience | `VALIDATE_AUDIENCE` | `validate_fast_path_audience` | `auth-server.fastPath.audience` | Expected `aud` claim for the fast path. The only fast-path value that cannot be auto-derived (Keycloak varies it); commonly `account`. `JWKS_URL` and `VALIDATE_ISSUER` are auto-derived at runtime from `KEYCLOAK_URL` / `KEYCLOAK_EXTERNAL_URL` / `KEYCLOAK_REALM` when unset. Empty audience -> safe fallback-only. |
 | Internal JWT issuer | (constant in code) | — | `auth-server.app.jwtIssuer` | `iss` claim on internal service JWTs. |
 | Internal JWT audience | (constant in code) | — | `auth-server.app.jwtAudience` | `aud` claim on internal service JWTs. |
+
+### Setting the fast-path values (`VALIDATE_AUDIENCE` / `VALIDATE_ISSUER` / `JWKS_URL`)
+
+To turn the fast path on you normally set only the **enable switch** and the **audience**; the issuer and JWKS URL auto-derive from the `KEYCLOAK_*` config every deployment already has.
+If the audience is wrong or unset, or the derived issuer does not match the token, the sidecar fails safe and every request is proxied to Python (correct results, no speedup) — so these values must match your tokens exactly for the feature to actually accelerate anything.
+
+**`VALIDATE_AUDIENCE` (you must set this — it cannot be derived).**
+It is the `aud` claim your gateway's access tokens carry. To find the exact value, decode a real token your clients present (for a standard Keycloak realm this is usually `account`):
+
+```bash
+# Paste a real bearer token; prints its aud and iss claims.
+python3 -c "import sys,json,base64; p=sys.argv[1].split('.')[1]; p+='='*(-len(p)%4); c=json.loads(base64.urlsafe_b64decode(p)); print('aud =', c.get('aud')); print('iss =', c.get('iss'))" '<PASTE_TOKEN>'
+```
+
+If `aud` is a list, set `VALIDATE_AUDIENCE` to any one of its entries (the verifier accepts a match against any member).
+
+**`VALIDATE_ISSUER` (auto-derived — override only if it differs from your tokens' `iss`).**
+Derived as `<KEYCLOAK_EXTERNAL_URL or KEYCLOAK_URL>/realms/<KEYCLOAK_REALM>` (realm defaults to `mcp-gateway`).
+It must equal the `iss` claim printed above; set it explicitly if your tokens are issued under a different host than the derived one (common in local testing, where tokens are minted against `localhost` but `KEYCLOAK_EXTERNAL_URL` points at the public host).
+
+**`JWKS_URL` (auto-derived — rarely overridden).**
+Derived as `<KEYCLOAK_URL>/realms/<KEYCLOAK_REALM>/protocol/openid-connect/certs`.
+Override only if the signing keys live at a non-standard path (e.g. a non-Keycloak IdP).
+
+After setting these, confirm the fast path actually engaged (not silently falling back): `curl -s http://<sidecar>:8899/metrics` should show `govalidate_fastpath_ok` climbing under load; if only `govalidate_fallback` climbs, the audience or issuer does not match your tokens.
 | App secret key **(secret)** | `SECRET_KEY` (required) | `secret_key` via `TF_VAR_*` / Secrets Manager (required) | `global.secretKey` (Helm chart auto-generates at install time if unset) | JWT signing + session-cookie signing + at-rest encryption of OAuth `id_token`. **Required** — auth_server and registry refuse to start without it (the previous per-replica random fallback caused `BadSignature` across replicas). Must be identical across all auth_server and registry replicas. Rotating invalidates stored creds and active sessions; rotation requires a process restart, not a SIGHUP reload. **Must be high-entropy (32+ bytes from a CSPRNG)** — read access to the `oauth_sessions_*` collection is equivalent to credential compromise unless this key is strong and never written to a logged location. Generate with `python3 -c 'import secrets; print(secrets.token_urlsafe(32))'`. |
 | Advertised OAuth scopes | `MCP_ADVERTISED_SCOPES` | — | `registry.app.mcpAdvertisedScopes` | Space-separated override for the `scopes_supported` array in the PRM (Protected Resource Metadata) document. When set, only these scopes are advertised to MCP discovery clients. Useful when the IdP performs RFC 7591 DCR and rejects scope names it does not recognize. Example: `openid email profile offline_access`. When unset, all scopes from the registry authorization config are advertised (default). |
 
