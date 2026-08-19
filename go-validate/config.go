@@ -15,20 +15,29 @@ import (
 type Config struct {
 	Listen    string
 	SecretKey string
-	JWKSURL   string
+	// Provider selects the verifier: "keycloak" (default) or "cognito". Other IdPs
+	// are not fast-pathed yet and stay in fallback-only mode (deferred to Python).
+	Provider string
+	JWKSURL  string
 	// Issuers/Audiences are lists: a Keycloak token's iss is whatever host the
 	// client reached Keycloak through (external URL for browser logins, internal
 	// or localhost for service/M2M callers), and its aud names the specific
 	// client. Matching ANY member mirrors the Python Keycloak provider, which
-	// accepts three issuer URLs and a set of gateway-identifying audiences.
-	Issuers        []string
-	Audiences      []string
-	FallbackURL    string
-	JWKSRefreshSec int
-	ScopeTTLSec    int
-	AuthMethod     string
-	MarkerSecret   string
-	FastPathReady  bool
+	// accepts three issuer URLs and a set of gateway-identifying audiences. For
+	// Cognito, Issuers holds the single user-pool issuer.
+	Issuers   []string
+	Audiences []string
+	// Cognito access tokens are not audience-bound: the client binding is the
+	// "client_id" claim checked against AcceptedClientIDs (web + IDE + M2M ids).
+	// M2MAcceptAny is the "*" wildcard, honored for machine tokens only.
+	AcceptedClientIDs []string
+	M2MAcceptAny      bool
+	FallbackURL       string
+	JWKSRefreshSec    int
+	ScopeTTLSec       int
+	AuthMethod        string
+	MarkerSecret      string
+	FastPathReady     bool
 }
 
 // knownWeakSecrets are literals that must never be accepted as a signing key.
@@ -152,6 +161,67 @@ func dropAccount(in []string) []string {
 	return out
 }
 
+// detectProvider resolves which verifier to run. An explicit AUTH_PROVIDER wins
+// (the auth-server already sets it); otherwise infer from which IdP env is present.
+// Only "cognito" and "keycloak" are fast-pathed; anything else stays fallback-only.
+func detectProvider() string {
+	p := strings.ToLower(strings.TrimSpace(os.Getenv("AUTH_PROVIDER")))
+	if p == "cognito" || p == "keycloak" {
+		return p
+	}
+	if os.Getenv("COGNITO_USER_POOL_ID") != "" {
+		return "cognito"
+	}
+	if os.Getenv("KEYCLOAK_URL") != "" {
+		return "keycloak"
+	}
+	return p // e.g. "entra"/"okta"/"default"/"" -> keycloak-style derivation yields nothing -> fallback-only
+}
+
+// deriveCognito fills the Cognito issuer, JWKS URL and accepted client-id
+// allowlist from the COGNITO_* / AWS_REGION env the auth-server already has,
+// mirroring auth_server/providers/cognito.py. Explicit VALIDATE_ISSUER / JWKS_URL
+// still win. Returns nothing derivable when COGNITO_USER_POOL_ID is unset.
+func deriveCognito(cfg *Config) {
+	region := getenv("AWS_REGION", "us-east-1")
+	pool := strings.TrimSpace(os.Getenv("COGNITO_USER_POOL_ID"))
+	if pool != "" {
+		issuer := fmt.Sprintf("https://cognito-idp.%s.amazonaws.com/%s", region, pool)
+		if len(cfg.Issuers) == 0 {
+			cfg.Issuers = []string{issuer}
+		}
+		if cfg.JWKSURL == "" {
+			cfg.JWKSURL = issuer + "/.well-known/jwks.json"
+		}
+	}
+
+	// accepted_client_ids = web client + IDE client + explicit M2M ids; "*" = M2M
+	// wildcard (machine tokens only).
+	ids := []string{}
+	add := func(v string) {
+		v = strings.TrimSpace(v)
+		if v == "" {
+			return
+		}
+		for _, e := range ids {
+			if e == v {
+				return
+			}
+		}
+		ids = append(ids, v)
+	}
+	add(os.Getenv("COGNITO_CLIENT_ID"))
+	add(os.Getenv("IDE_OAUTH_CLIENT_ID"))
+	for _, m := range parseList(os.Getenv("COGNITO_M2M_CLIENT_IDS")) {
+		if m == "*" {
+			cfg.M2MAcceptAny = true
+			continue
+		}
+		add(m)
+	}
+	cfg.AcceptedClientIDs = ids
+}
+
 // loadConfig reads configuration from the environment and validates the signing key.
 // It exits the process (fail closed) when SECRET_KEY is present but weak/invalid.
 func loadConfig() Config {
@@ -166,32 +236,35 @@ func loadConfig() Config {
 		MarkerSecret:   os.Getenv("AUTH_SERVER_NGINX_MARKER_SECRET"),
 	}
 
-	// Auto-derive JWKS_URL and VALIDATE_ISSUER from the KEYCLOAK_* env vars that
-	// every deployment already provides, so operators only opt in (+ set the
-	// audience) instead of hand-computing these. Explicit values always win.
-	// The audience claim is NOT derivable (Keycloak varies it per client), so it
-	// stays operator-supplied; an unset/mismatched audience fails safe (fallback).
-	realm := getenv("KEYCLOAK_REALM", "mcp-gateway")
-	if cfg.JWKSURL == "" {
-		if kc := strings.TrimRight(os.Getenv("KEYCLOAK_URL"), "/"); kc != "" {
-			cfg.JWKSURL = fmt.Sprintf("%s/realms/%s/protocol/openid-connect/certs", kc, realm)
-		}
-	}
+	cfg.Provider = detectProvider()
 
-	// Issuers: an explicit VALIDATE_ISSUER list wins; otherwise derive the same
-	// external/internal/localhost issuer URLs Python accepts. A token matches when
-	// its iss equals ANY member, so both browser-login and service tokens fast-path.
+	// An explicit VALIDATE_ISSUER / JWKS_URL always wins for either provider.
 	cfg.Issuers = parseList(os.Getenv("VALIDATE_ISSUER"))
-	if len(cfg.Issuers) == 0 {
-		cfg.Issuers = deriveIssuers(realm)
-	}
 
-	// Audiences: an explicit VALIDATE_AUDIENCE list wins (with "account" stripped,
-	// fail closed); otherwise derive the gateway-identifying audiences Python
-	// accepts. A token matches when its aud contains ANY member.
-	cfg.Audiences = dropAccount(parseList(os.Getenv("VALIDATE_AUDIENCE")))
-	if len(cfg.Audiences) == 0 {
-		cfg.Audiences = deriveAudiences()
+	if cfg.Provider == "cognito" {
+		// Cognito: derive issuer + JWKS + accepted client-id allowlist from the
+		// COGNITO_* env. Access tokens are client_id-bound (no aud), so there is
+		// no audience list; scopes come from cognito:groups or the scope claim.
+		deriveCognito(&cfg)
+	} else {
+		// Keycloak (default): auto-derive JWKS_URL and the accepted issuer list
+		// (external/internal/localhost realm URLs) + audience list from KEYCLOAK_*,
+		// so operators only opt in. Explicit values win. A token matches when its
+		// iss equals ANY issuer and its aud contains ANY audience.
+		realm := getenv("KEYCLOAK_REALM", "mcp-gateway")
+		if cfg.JWKSURL == "" {
+			if kc := strings.TrimRight(os.Getenv("KEYCLOAK_URL"), "/"); kc != "" {
+				cfg.JWKSURL = fmt.Sprintf("%s/realms/%s/protocol/openid-connect/certs", kc, realm)
+			}
+		}
+		if len(cfg.Issuers) == 0 {
+			cfg.Issuers = deriveIssuers(realm)
+		}
+		// "account" is stripped (fail closed) even if supplied explicitly.
+		cfg.Audiences = dropAccount(parseList(os.Getenv("VALIDATE_AUDIENCE")))
+		if len(cfg.Audiences) == 0 {
+			cfg.Audiences = deriveAudiences()
+		}
 	}
 
 	// B3: validate the signing secret. If a secret is provided at all it must be
@@ -202,11 +275,15 @@ func loadConfig() Config {
 		}
 	}
 
-	// Fast path requires everything needed to verify AND mint safely.
-	cfg.FastPathReady = cfg.SecretKey != "" &&
-		cfg.JWKSURL != "" &&
-		len(cfg.Issuers) > 0 &&
-		len(cfg.Audiences) > 0
+	// Fast path requires everything needed to verify AND mint safely. The
+	// per-provider audience check differs: Keycloak needs an audience allowlist;
+	// Cognito needs the client-id allowlist (or the M2M wildcard).
+	base := cfg.SecretKey != "" && cfg.JWKSURL != "" && len(cfg.Issuers) > 0
+	if cfg.Provider == "cognito" {
+		cfg.FastPathReady = base && (len(cfg.AcceptedClientIDs) > 0 || cfg.M2MAcceptAny)
+	} else {
+		cfg.FastPathReady = base && len(cfg.Audiences) > 0
+	}
 
 	return cfg
 }

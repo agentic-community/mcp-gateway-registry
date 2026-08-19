@@ -56,11 +56,20 @@ func missingReason(cfg Config) string {
 	if cfg.JWKSURL == "" {
 		missing = append(missing, "JWKS_URL (or KEYCLOAK_URL to derive it)")
 	}
-	if len(cfg.Issuers) == 0 {
-		missing = append(missing, "VALIDATE_ISSUER (or KEYCLOAK_URL/KEYCLOAK_EXTERNAL_URL to derive it)")
-	}
-	if len(cfg.Audiences) == 0 {
-		missing = append(missing, "VALIDATE_AUDIENCE (or KEYCLOAK_CLIENT_ID/KEYCLOAK_M2M_CLIENT_ID to derive it)")
+	if cfg.Provider == "cognito" {
+		if len(cfg.Issuers) == 0 {
+			missing = append(missing, "COGNITO_USER_POOL_ID/AWS_REGION (to derive the issuer)")
+		}
+		if len(cfg.AcceptedClientIDs) == 0 && !cfg.M2MAcceptAny {
+			missing = append(missing, "COGNITO_CLIENT_ID/COGNITO_M2M_CLIENT_IDS (accepted client-id allowlist)")
+		}
+	} else {
+		if len(cfg.Issuers) == 0 {
+			missing = append(missing, "VALIDATE_ISSUER (or KEYCLOAK_URL/KEYCLOAK_EXTERNAL_URL to derive it)")
+		}
+		if len(cfg.Audiences) == 0 {
+			missing = append(missing, "VALIDATE_AUDIENCE (or KEYCLOAK_CLIENT_ID/KEYCLOAK_M2M_CLIENT_ID to derive it)")
+		}
 	}
 	if len(missing) == 0 {
 		return "no missing config"
@@ -138,9 +147,84 @@ func mapClaims(c *Claims) identity {
 	}
 }
 
-// handleValidate is the hot path: verify the RS256 bearer and either answer 200
-// with identity headers, 401 for a recognized-invalid token, or fall back to
-// Python for anything unrecognized (cookies, other IdPs, opaque tokens).
+// Fast-path verdicts: what handleValidate should do after provider resolution.
+const (
+	vOK           = iota // write identity headers + mint (200)
+	vFallback            // not ours (other IdP / cookie / unknown) -> Python
+	vUnauthorized        // recognized but invalid (bad sig / expiry) -> 401
+)
+
+// resolveFastPath verifies the bearer with the configured provider and resolves
+// identity, groups, scopes and the auth-method label. It centralizes the
+// per-provider differences; the header/mint tail in handleValidate is shared.
+func (s *server) resolveFastPath(
+	r *http.Request,
+	tok string,
+) (identity, []string, []string, string, int) {
+	if s.cfg.Provider == "cognito" {
+		return s.resolveCognito(tok)
+	}
+	return s.resolveKeycloak(tok)
+}
+
+// resolveKeycloak: RS256 verify against the issuer/audience lists, then group->scope
+// resolution (with M2M enrichment) exactly as Python does.
+func (s *server) resolveKeycloak(
+	tok string,
+) (identity, []string, []string, string, int) {
+	claims, err := verifyRS256(tok, s.ks, s.cfg.Issuers, s.cfg.Audiences)
+	switch err {
+	case nil:
+	case errInvalidToken:
+		return identity{}, nil, nil, "", vUnauthorized
+	default:
+		return identity{}, nil, nil, "", vFallback
+	}
+	ident := mapClaims(claims)
+	if s.scopes == nil {
+		return identity{}, nil, nil, "", vFallback
+	}
+	scopes, ok := s.scopes.resolve(claims.Groups, ident.ClientID)
+	if !ok {
+		return identity{}, nil, nil, "", vFallback
+	}
+	return ident, claims.Groups, scopes, s.cfg.AuthMethod, vOK
+}
+
+// resolveCognito: verify a Cognito access token, then compute scopes the way
+// server.py does -- cognito:groups -> group->scope mapping, else the token's own
+// "scope" claim (M2M / no-group user tokens). Mirrors auth_server/providers/cognito.py.
+func (s *server) resolveCognito(
+	tok string,
+) (identity, []string, []string, string, int) {
+	claims, err := verifyCognito(tok, s.ks, s.cfg.Issuers[0], s.cfg.AcceptedClientIDs, s.cfg.M2MAcceptAny)
+	switch err {
+	case nil:
+	case errInvalidToken:
+		return identity{}, nil, nil, "", vUnauthorized
+	default:
+		return identity{}, nil, nil, "", vFallback
+	}
+	ident := mapCognitoClaims(claims)
+	if len(claims.CognitoGroups) > 0 {
+		// User token with groups: map groups -> scopes (same DocumentDB path).
+		if s.scopes == nil {
+			return identity{}, nil, nil, "", vFallback
+		}
+		scopes, ok := s.scopes.resolve(claims.CognitoGroups, ident.ClientID)
+		if !ok {
+			return identity{}, nil, nil, "", vFallback
+		}
+		return ident, claims.CognitoGroups, scopes, "cognito", vOK
+	}
+	// Machine / no-group token: authorization is the token's own scope claim
+	// (Cognito resource-server scopes == registry scope names).
+	return ident, nil, strings.Fields(claims.Scope), "cognito", vOK
+}
+
+// handleValidate is the hot path: verify the bearer and either answer 200 with
+// identity headers, 401 for a recognized-invalid token, or fall back to Python
+// for anything unrecognized (cookies, other IdPs, opaque tokens).
 func (s *server) handleValidate(w http.ResponseWriter, r *http.Request) {
 	// nginx's auth_request subrequest never carries a usable body, but for a
 	// POST/PUT/PATCH origin request nginx forwards the original Content-Length
@@ -175,33 +259,17 @@ func (s *server) handleValidate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	claims, err := verifyRS256(tok, s.ks, s.cfg.Issuers, s.cfg.Audiences)
-	switch err {
-	case nil:
-		// verified below
-	case errInvalidToken:
+	// Resolve identity + groups + scopes via the configured provider's verifier.
+	// verdict decides the outcome: 401 (recognized-invalid), fallback (not ours),
+	// or OK (write identity headers below).
+	ident, groups, scopes, authMethod, verdict := s.resolveFastPath(r, tok)
+	switch verdict {
+	case vUnauthorized:
 		s.stats.unauth.Add(1)
 		w.Header().Set("WWW-Authenticate", "Bearer")
 		w.WriteHeader(http.StatusUnauthorized) // recognized but invalid -> 401 (fail closed)
 		return
-	default:
-		// errNotJWT / errUnknownKey / errWrongAlg -> other IdP / opaque / unknown kid
-		s.stats.fallback.Add(1)
-		s.fallback.ServeHTTP(w, r)
-		return
-	}
-
-	// Fast path. Resolve scopes exactly as Python does (group->scope mapping,
-	// M2M enrichment). If we cannot resolve them safely (no DB snapshot, or a
-	// user token that would need idp_user_groups enrichment), fall back.
-	ident := mapClaims(claims)
-	if s.scopes == nil {
-		s.stats.fallback.Add(1)
-		s.fallback.ServeHTTP(w, r)
-		return
-	}
-	scopes, ok := s.scopes.resolve(claims.Groups, ident.ClientID)
-	if !ok {
+	case vFallback:
 		s.stats.fallback.Add(1)
 		s.fallback.ServeHTTP(w, r)
 		return
@@ -210,23 +278,23 @@ func (s *server) handleValidate(w http.ResponseWriter, r *http.Request) {
 	// Identity in the RESPONSE is fully controlled below (Set overwrites), so a
 	// client cannot inject identity even though we never mutate the request.
 	serverName := serverNameFromOriginalURL(r.Header.Get("X-Original-URL"))
-	egressUser := ident.Sub                              // canonical egress vault id = OIDC sub (bearer callers)
-	canonMethod := canonicalAuthMethod(s.cfg.AuthMethod) // internal-token auth_method claim
+	egressUser := ident.Sub                        // canonical egress vault id = OIDC sub (bearer callers)
+	canonMethod := canonicalAuthMethod(authMethod) // internal-token auth_method claim
 
 	h := w.Header()
 	h.Set("X-User", ident.Username)
 	h.Set("X-Username", ident.Username)
 	h.Set("X-Client-Id", ident.ClientID)
 	h.Set("X-Scopes", scopesToHeader(scopes))
-	h.Set("X-Auth-Method", s.cfg.AuthMethod)
+	h.Set("X-Auth-Method", authMethod)
 	h.Set("X-Server-Name", serverName)
 	h.Set("X-Tool-Name", "")
-	h.Set("X-Groups", strings.Join(claims.Groups, " "))
+	h.Set("X-Groups", strings.Join(groups, " "))
 
 	// Registry /api/ hop: thin identity token, minted only when nginx set the marker.
 	if r.Header.Get("X-Registry-Api-Auth") != "" {
 		if tok, err := mintRegistryUIToken(
-			s.cfg.SecretKey, ident.Username, "", claims.Groups,
+			s.cfg.SecretKey, ident.Username, "", groups,
 			canonMethod, ident.ClientID, egressUser,
 		); err == nil {
 			h.Set("X-Internal-Token-Registry", tok)
@@ -355,8 +423,12 @@ func main() {
 	mux.HandleFunc("/metrics", s.handleMetrics)
 
 	if cfg.FastPathReady {
-		log.Printf("go-validate listening on %s | mode=fast-path | fallback=%s", cfg.Listen, cfg.FallbackURL)
-		log.Printf("accepted issuers=%v | accepted audiences=%v", cfg.Issuers, cfg.Audiences)
+		log.Printf("go-validate listening on %s | mode=fast-path | provider=%s | fallback=%s", cfg.Listen, cfg.Provider, cfg.FallbackURL)
+		if cfg.Provider == "cognito" {
+			log.Printf("accepted issuers=%v | accepted client_ids=%v | m2m_accept_any=%v", cfg.Issuers, cfg.AcceptedClientIDs, cfg.M2MAcceptAny)
+		} else {
+			log.Printf("accepted issuers=%v | accepted audiences=%v", cfg.Issuers, cfg.Audiences)
+		}
 	} else {
 		// Loud: an operator who deployed the sidecar expecting acceleration must
 		// see WHY it is only proxying, not discover it from a flat latency graph.

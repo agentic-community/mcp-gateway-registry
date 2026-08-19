@@ -61,6 +61,58 @@ func TestLoadConfig_ExplicitListsWin(t *testing.T) {
 	}
 }
 
+func TestLoadConfig_CognitoDerivation(t *testing.T) {
+	t.Setenv("SECRET_KEY", "unit-test-secret-32-bytes-xxxxxxxxxx")
+	t.Setenv("AUTH_PROVIDER", "cognito")
+	t.Setenv("AWS_REGION", "us-west-2")
+	t.Setenv("COGNITO_USER_POOL_ID", "us-west-2_ABC123")
+	t.Setenv("COGNITO_CLIENT_ID", "web-client")
+	t.Setenv("IDE_OAUTH_CLIENT_ID", "ide-client")
+	t.Setenv("COGNITO_M2M_CLIENT_IDS", "agent-a agent-b")
+	// Keycloak vars unset; Cognito path must be taken.
+	t.Setenv("JWKS_URL", "")
+	t.Setenv("VALIDATE_ISSUER", "")
+	cfg := loadConfig()
+
+	if cfg.Provider != "cognito" {
+		t.Fatalf("provider should be cognito, got %q", cfg.Provider)
+	}
+	wantIss := "https://cognito-idp.us-west-2.amazonaws.com/us-west-2_ABC123"
+	if len(cfg.Issuers) != 1 || cfg.Issuers[0] != wantIss {
+		t.Fatalf("issuer not derived: %v", cfg.Issuers)
+	}
+	if cfg.JWKSURL != wantIss+"/.well-known/jwks.json" {
+		t.Fatalf("jwks not derived: %q", cfg.JWKSURL)
+	}
+	for _, want := range []string{"web-client", "ide-client", "agent-a", "agent-b"} {
+		if !containsStr(cfg.AcceptedClientIDs, want) {
+			t.Fatalf("accepted client ids %v missing %q", cfg.AcceptedClientIDs, want)
+		}
+	}
+	if cfg.M2MAcceptAny {
+		t.Fatal("no '*' supplied -> M2MAcceptAny must be false")
+	}
+	if !cfg.FastPathReady {
+		t.Fatal("cognito fast path should be ready")
+	}
+}
+
+func TestLoadConfig_CognitoWildcard(t *testing.T) {
+	t.Setenv("SECRET_KEY", "unit-test-secret-32-bytes-xxxxxxxxxx")
+	t.Setenv("AUTH_PROVIDER", "cognito")
+	t.Setenv("AWS_REGION", "us-east-1")
+	t.Setenv("COGNITO_USER_POOL_ID", "us-east-1_pool")
+	t.Setenv("COGNITO_CLIENT_ID", "web-client")
+	t.Setenv("COGNITO_M2M_CLIENT_IDS", "*")
+	cfg := loadConfig()
+	if !cfg.M2MAcceptAny {
+		t.Fatal("'*' should set M2MAcceptAny")
+	}
+	if containsStr(cfg.AcceptedClientIDs, "*") {
+		t.Fatal("'*' must not be added as a literal client id")
+	}
+}
+
 func TestLoadConfig_NoKeycloak_FallbackOnly(t *testing.T) {
 	t.Setenv("SECRET_KEY", "")
 	t.Setenv("KEYCLOAK_URL", "")
