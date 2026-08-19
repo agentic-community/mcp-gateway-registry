@@ -1,0 +1,64 @@
+suite: go-validate sidecar
+templates:
+  - templates/deployment.yaml
+  - templates/service.yaml
+tests:
+  - it: no go-validate sidecar container by default
+    template: templates/deployment.yaml
+    set:
+      app:
+        secretKey: test-key-32-bytes-aaaaaaaaaaaaaaaaaa
+    asserts:
+      - lengthEqual:
+          path: spec.template.spec.containers
+          count: 1
+
+  - it: adds the go-validate sidecar container when enabled
+    template: templates/deployment.yaml
+    set:
+      app:
+        secretKey: test-key-32-bytes-aaaaaaaaaaaaaaaaaa
+      goValidate:
+        enabled: true
+        audience: account
+    asserts:
+      - lengthEqual:
+          path: spec.template.spec.containers
+          count: 2
+      - equal:
+          path: spec.template.spec.containers[1].name
+          value: go-validate
+      - equal:
+          path: spec.template.spec.containers[1].ports[0].containerPort
+          value: 8899
+      - contains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: GOVALIDATE_LISTEN
+            value: ":8899"
+      - contains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: AUTH_FALLBACK_URL
+            value: "http://localhost:8888"
+
+  - it: no extra Service port by default
+    template: templates/service.yaml
+    asserts:
+      - lengthEqual:
+          path: spec.ports
+          count: 1
+
+  - it: exposes port 8899 on the Service when enabled
+    template: templates/service.yaml
+    set:
+      goValidate:
+        enabled: true
+    asserts:
+      - contains:
+          path: spec.ports
+          content:
+            port: 8899
+            targetPort: govalidate
+            protocol: TCP
+            name: govalidate

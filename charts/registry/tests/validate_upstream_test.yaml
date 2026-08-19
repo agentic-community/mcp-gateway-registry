@@ -1,0 +1,26 @@
+suite: registry VALIDATE_UPSTREAM_URL
+templates:
+  - templates/secret.yaml
+tests:
+  - it: omits VALIDATE_UPSTREAM_URL by default (nginx /validate stays on auth-server)
+    template: templates/secret.yaml
+    set:
+      app:
+        secretKey: "test-key-not-for-prod"
+      egressAuth:
+        markerSecret: "test-marker-not-for-prod"
+    asserts:
+      - isNull:
+          path: data.VALIDATE_UPSTREAM_URL
+
+  - it: emits VALIDATE_UPSTREAM_URL when app.validateUpstreamUrl is set
+    template: templates/secret.yaml
+    set:
+      app:
+        secretKey: "test-key-not-for-prod"
+        validateUpstreamUrl: http://auth-server.default.svc.cluster.local:8899
+      egressAuth:
+        markerSecret: "test-marker-not-for-prod"
+    asserts:
+      - isNotNullOrEmpty:
+          path: data.VALIDATE_UPSTREAM_URL
