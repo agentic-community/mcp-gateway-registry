@@ -250,6 +250,116 @@ def test_docker_compose_registry_port_mapping(repo_root: Path):
 
 
 # ---------------------------------------------------------------------------
+# Keycloak healthcheck: must be runnable inside the Keycloak image
+# ---------------------------------------------------------------------------
+
+
+def _keycloak_healthcheck_command(compose_path: Path) -> str:
+    """Return the keycloak service healthcheck command as a single string.
+
+    Both the exec form (``["CMD", ...]``) and the shell form (``CMD-SHELL``)
+    are flattened to one string so callers can assert on its content without
+    caring which form the file happens to use.
+    """
+    data = yaml.safe_load(compose_path.read_text())
+    keycloak = data["services"]["keycloak"]
+    test = keycloak["healthcheck"]["test"]
+    return test if isinstance(test, str) else " ".join(test)
+
+
+def _keycloak_environment(compose_path: Path) -> dict[str, str]:
+    """Return the keycloak service environment as a mapping.
+
+    Compose accepts both the ``KEY: value`` mapping form and the ``- KEY=value``
+    list form; normalise to a dict so assertions work against either.
+    """
+    data = yaml.safe_load(compose_path.read_text())
+    env = data["services"]["keycloak"].get("environment", {})
+    if isinstance(env, dict):
+        return {str(k): str(v) for k, v in env.items()}
+    normalised = {}
+    for entry in env:
+        key, _, value = str(entry).partition("=")
+        normalised[key] = value
+    return normalised
+
+
+@pytest.mark.parametrize("compose_filename", COMPOSE_FILES)
+def test_keycloak_healthcheck_does_not_use_curl(repo_root: Path, compose_filename: str):
+    """The keycloak healthcheck must not invoke curl.
+
+    The Keycloak image deliberately ships without curl (upstream removes HTTP
+    clients to cut attack surface), so a curl-based check can never succeed and
+    the container reports unhealthy forever. That is worse than having no check
+    at all: it trains operators to ignore health status and removes the signal
+    for a real Keycloak outage. Upstream documents a bash /dev/tcp check instead.
+    """
+    command = _keycloak_healthcheck_command(repo_root / compose_filename)
+    assert "curl" not in command, (
+        f"{compose_filename}: keycloak healthcheck invokes curl, which is not present "
+        f"in the Keycloak image; the container can never become healthy. "
+        f"Use the bash /dev/tcp check documented in the Keycloak health guide."
+    )
+
+
+@pytest.mark.parametrize("compose_filename", COMPOSE_FILES)
+def test_keycloak_healthcheck_targets_management_port(repo_root: Path, compose_filename: str):
+    """The keycloak healthcheck must probe /health/ready on the management port.
+
+    Since Keycloak 25 the health endpoints moved off the main HTTP port and are
+    served on the management port (9000) by default, so a check against 8080
+    returns 404 even once a working HTTP client is used.
+    """
+    command = _keycloak_healthcheck_command(repo_root / compose_filename)
+    assert "/health/ready" in command, (
+        f"{compose_filename}: keycloak healthcheck does not probe /health/ready"
+    )
+    assert "9000" in command, (
+        f"{compose_filename}: keycloak healthcheck must target the management port 9000; "
+        f"since Keycloak 25 the health endpoints are not served on the main HTTP port."
+    )
+
+
+@pytest.mark.parametrize("compose_filename", COMPOSE_FILES)
+def test_keycloak_health_endpoints_enabled(repo_root: Path, compose_filename: str):
+    """KC_HEALTH_ENABLED must be set, or /health/ready is not served at all.
+
+    Without it the healthcheck fails for a second, independent reason, which is
+    easy to miss once the curl problem is fixed.
+    """
+    env = _keycloak_environment(repo_root / compose_filename)
+    assert env.get("KC_HEALTH_ENABLED", "").lower() == "true", (
+        f"{compose_filename}: keycloak is missing KC_HEALTH_ENABLED=true, so the "
+        f"health endpoints are not exposed and the healthcheck cannot pass."
+    )
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["docker/keycloak/Dockerfile", "terraform/aws-ecs/keycloak-ecs.tf"],
+)
+def test_keycloak_healthcheck_does_not_use_curl_outside_compose(repo_root: Path, path: str):
+    """The same invariant for the built image and the ECS task definition.
+
+    Both run the same Keycloak image, so a curl-based check is equally broken
+    there; keeping them in one test stops the fix from being applied to the
+    compose files only.
+    """
+    content = (repo_root / path).read_text()
+    healthcheck_lines = [
+        line
+        for line in content.splitlines()
+        if "health/ready" in line and not line.lstrip().startswith("#")
+    ]
+    assert healthcheck_lines, f"{path}: no /health/ready healthcheck found -- has it moved?"
+    for line in healthcheck_lines:
+        assert "curl" not in line, (
+            f"{path}: healthcheck invokes curl, which is not present in the Keycloak image: "
+            f"{line.strip()}"
+        )
+
+
+# ---------------------------------------------------------------------------
 # SA-5: compose port-exposure hardening (loopback-by-default binds)
 # ---------------------------------------------------------------------------
 

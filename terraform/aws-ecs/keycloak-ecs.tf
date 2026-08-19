@@ -328,11 +328,16 @@ resource "aws_ecs_task_definition" "keycloak" {
       readonlyRootFilesystem = false
 
       healthCheck = {
-        command     = ["CMD-SHELL", "curl -f http://localhost:9000/health/ready || exit 1"]
+        # The Keycloak image ships without curl (upstream removes HTTP clients to
+        # cut attack surface), so a curl-based check can never succeed and the task
+        # never reports healthy. bash's /dev/tcp redirection is the check documented
+        # by the Keycloak health guide.
+        command     = ["CMD", "/bin/bash", "-c", "{ printf 'HEAD /health/ready HTTP/1.0\\r\\n\\r\\n' >&0; grep 'HTTP/1.[01] 200'; } 0<>/dev/tcp/localhost/9000"]
         interval    = 30
         timeout     = 5
         retries     = 3
-        startPeriod = 90
+        # Covers the Keycloak DB schema migration on first boot.
+        startPeriod = 120
       }
     }
   ])

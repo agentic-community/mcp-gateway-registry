@@ -676,6 +676,9 @@ services:
       # Logging
       KC_LOG_LEVEL: INFO
 
+      # Health endpoints (required for /health/ready on the management port)
+      KC_HEALTH_ENABLED: 'true'
+
     # start-dev serves plain HTTP with a bootstrap admin account, so the
     # published port is bound to loopback: the browser reaches it via
     # http://localhost:8080 on the same host, and in-cluster services use the
@@ -697,11 +700,23 @@ services:
       - ./keycloak/import:/opt/keycloak/data/import
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health/ready"]
+      # The Keycloak image deliberately ships without curl (upstream removes HTTP
+      # clients to cut attack surface), so a curl-based check can never succeed
+      # and leaves the container permanently unhealthy. Use bash's /dev/tcp
+      # redirection, which is what the Keycloak health guide documents for
+      # HEALTHCHECK. Since Keycloak 25 the health endpoints are served on the
+      # management port (9000), not on the main HTTP port.
+      test:
+        - CMD
+        - /bin/bash
+        - -c
+        - "{ printf 'HEAD /health/ready HTTP/1.0\\r\\n\\r\\n' >&0; grep 'HTTP/1.[01] 200'; } 0<>/dev/tcp/localhost/9000"
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 60s
+      # First boot runs the Keycloak DB schema migration; a short start_period
+      # reports the container unhealthy during an otherwise normal startup.
+      start_period: 120s
 
   pingfederate:
     image: pingidentity/pingfederate:13.0.2
