@@ -1141,6 +1141,18 @@ variable "mcp_token_max_ttl_hours" {
   }
 }
 
+variable "mcp_token_proxy_enabled" {
+  description = "Proxy /oauth/token to the IdP and enforce the RFC 8707 resource parameter. Default off (unchanged behavior)."
+  type        = bool
+  default     = false
+}
+
+variable "mcp_idp_signed_tokens" {
+  description = "Mint IdP-signed MCP data-plane tokens instead of self-signed ones. Default off (unchanged behavior)."
+  type        = bool
+  default     = false
+}
+
 # =============================================================================
 # REGISTRATION WEBHOOK (Issue #742)
 # =============================================================================

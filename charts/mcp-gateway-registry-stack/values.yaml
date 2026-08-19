@@ -439,6 +439,8 @@ registry:
     # MCP token TTL configuration (also read by auth-server)
     mcpTokenDefaultTtlHours: "8" # Default TTL (hours) for minted MCP tokens
     mcpTokenMaxTtlHours: "24" # Maximum TTL (hours) a caller may request
+    mcpTokenProxyEnabled: "false" # Proxy /oauth/token to the IdP + enforce RFC 8707 resource
+    mcpIdpSignedTokens: "false" # Mint IdP-signed MCP data-plane tokens
     # Custom entity types (admin-defined, schema-driven catalog types)
     customEntityTypesEnabled: false # Main switch for dynamic tabs + endpoints; off = no behavior change
     customTypeCacheTtlSeconds: 60 # TTL (s) for the in-process custom-type descriptor cache
@@ -561,6 +563,8 @@ auth-server:
     # MCP token TTL configuration (also read by registry)
     mcpTokenDefaultTtlHours: "8" # Default TTL (hours) for minted MCP tokens
     mcpTokenMaxTtlHours: "24" # Maximum TTL (hours) a caller may request
+    mcpTokenProxyEnabled: "false" # Proxy /oauth/token to the IdP + enforce RFC 8707 resource
+    mcpIdpSignedTokens: "false" # Mint IdP-signed MCP data-plane tokens
     # Application Log Configuration - reuses anchor from registry.app above
     !!merge <<: *appLogConfig
     # Tool-level access control (issue #1026)

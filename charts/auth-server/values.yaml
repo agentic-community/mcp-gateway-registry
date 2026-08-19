@@ -69,6 +69,8 @@ app:
   # MCP token TTL configuration
   mcpTokenDefaultTtlHours: "8" # Default TTL (hours) for minted MCP tokens
   mcpTokenMaxTtlHours: "24" # Maximum TTL (hours) a caller may request
+  mcpTokenProxyEnabled: "false" # Proxy /oauth/token to the IdP + enforce RFC 8707 resource
+  mcpIdpSignedTokens: "false" # Mint IdP-signed MCP data-plane tokens
   # Federation configuration
   federationStaticTokenAuthEnabled: false #If not provided, defaults to false
   federationStaticToken: # If not provided, a random token is auto-generated

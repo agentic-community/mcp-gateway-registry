@@ -219,6 +219,8 @@ RATE_LIMIT_USER_FLOOR_PER_MIN
 RATE_LIMIT_AGENT_FLOOR_PER_MIN
 MCP_TOKEN_DEFAULT_TTL_HOURS
 MCP_TOKEN_MAX_TTL_HOURS
+MCP_TOKEN_PROXY_ENABLED
+MCP_IDP_SIGNED_TOKENS
 # Chart-managed security constant: prevents AWS SDK IMDS fallback (rendered as a
 # static env: entry in deployment.yaml, not operator-tunable).
 AWS_EC2_METADATA_DISABLED

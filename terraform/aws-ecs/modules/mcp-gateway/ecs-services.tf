@@ -1528,6 +1528,14 @@ module "ecs_service_registry" {
           name  = "MCP_TOKEN_MAX_TTL_HOURS"
           value = tostring(var.mcp_token_max_ttl_hours)
         },
+        {
+          name  = "MCP_TOKEN_PROXY_ENABLED"
+          value = tostring(var.mcp_token_proxy_enabled)
+        },
+        {
+          name  = "MCP_IDP_SIGNED_TOKENS"
+          value = tostring(var.mcp_idp_signed_tokens)
+        },
         # M2M direct client registration (issue #851)
         {
           name  = "M2M_DIRECT_REGISTRATION_ENABLED"
@@ -1788,6 +1796,14 @@ module "ecs_service_registry" {
         {
           name  = "MCP_TOKEN_MAX_TTL_HOURS"
           value = tostring(var.mcp_token_max_ttl_hours)
+        },
+        {
+          name  = "MCP_TOKEN_PROXY_ENABLED"
+          value = tostring(var.mcp_token_proxy_enabled)
+        },
+        {
+          name  = "MCP_IDP_SIGNED_TOKENS"
+          value = tostring(var.mcp_idp_signed_tokens)
         },
         # Prevent AWS SDKs from falling back to EC2 IMDS. ECS delivers task-role
         # credentials through the container-credentials provider

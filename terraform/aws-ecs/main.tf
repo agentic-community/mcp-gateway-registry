@@ -249,6 +249,8 @@ module "mcp_gateway" {
   max_tokens_per_user_per_hour       = var.max_tokens_per_user_per_hour
   mcp_token_default_ttl_hours        = var.mcp_token_default_ttl_hours
   mcp_token_max_ttl_hours            = var.mcp_token_max_ttl_hours
+  mcp_token_proxy_enabled            = var.mcp_token_proxy_enabled
+  mcp_idp_signed_tokens              = var.mcp_idp_signed_tokens
 
   # Registration webhook (issue #742)
   registration_webhook_url             = var.registration_webhook_url

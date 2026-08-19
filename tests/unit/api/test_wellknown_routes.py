@@ -336,11 +336,13 @@ class TestServerNeedsPerServerPrm:
     """
 
     def _gate(self, egress_auth_mode, auth_provider):
+        # The predicate now lives in registry.auth.oauth_metadata (imported back
+        # into wellknown_routes); patch settings where the function resolves it.
         from registry.api.wellknown_routes import server_needs_per_server_prm
 
         mock_settings = MagicMock()
         mock_settings.auth_provider = auth_provider
-        with patch("registry.api.wellknown_routes.settings", mock_settings):
+        with patch("registry.auth.oauth_metadata.settings", mock_settings):
             return server_needs_per_server_prm(egress_auth_mode)
 
     # --- Entra: everything gets a per-server PRM ---
@@ -446,8 +448,50 @@ class TestOAuthAuthorizationServerEndpoint:
             app = _make_oauth_discovery_app(provider)
             client = TestClient(app)
             response = client.get("/.well-known/oauth-authorization-server")
-
             assert response.status_code == 502
+
+
+class TestAsMetadataTokenEndpointRepoint:
+    """when MCP_TOKEN_PROXY_ENABLED is ON, the AS-metadata document's
+    token_endpoint is overridden to the gateway's /oauth/token; everything else
+    (authorization_endpoint, issuer, jwks_uri) stays the IdP's. OFF = passthrough.
+    """
+
+    def _get(self, fake_provider, proxy_enabled, registry_url="https://gw.example.com"):
+        from unittest.mock import MagicMock, patch
+
+        settings_stub = MagicMock()
+        settings_stub.mcp_token_proxy_enabled = proxy_enabled
+        settings_stub.registry_url = registry_url
+        with (
+            patch(
+                "registry.api.wellknown_routes._get_active_auth_provider",
+                return_value=fake_provider,
+            ),
+            patch("registry.api.wellknown_routes.settings", settings_stub),
+        ):
+            app = _make_oauth_discovery_app(fake_provider)
+            client = TestClient(app)
+            return client.get("/.well-known/oauth-authorization-server")
+
+    def test_flag_on_repoints_token_endpoint_to_gateway(self, fake_provider, fake_as_metadata):
+        resp = self._get(fake_provider, proxy_enabled=True)
+        assert resp.status_code == 200
+        doc = resp.json()
+        assert doc["token_endpoint"] == "https://gw.example.com/oauth/token"
+        # Only token_endpoint moves; the rest stay the IdP's.
+        assert doc["authorization_endpoint"] == fake_as_metadata["authorization_endpoint"]
+        assert doc["issuer"] == fake_as_metadata["issuer"]
+        assert doc["jwks_uri"] == fake_as_metadata["jwks_uri"]
+
+    def test_flag_on_strips_trailing_slash(self, fake_provider):
+        resp = self._get(fake_provider, proxy_enabled=True, registry_url="https://gw.example.com/")
+        assert resp.json()["token_endpoint"] == "https://gw.example.com/oauth/token"
+
+    def test_flag_off_is_passthrough(self, fake_provider, fake_as_metadata):
+        resp = self._get(fake_provider, proxy_enabled=False)
+        assert resp.status_code == 200
+        assert resp.json()["token_endpoint"] == fake_as_metadata["token_endpoint"]
 
 
 class TestPrmAndResourceMetadataMatchByteForByte:

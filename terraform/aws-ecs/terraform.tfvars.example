@@ -521,6 +521,14 @@ registry_api_token = "m3zT65wREARMVDToKosg_DgNkKqS_434hNxy3sslGPY"
 # Default: 24
 # mcp_token_max_ttl_hours = 24
 
+# Proxy /oauth/token to the IdP and enforce the RFC 8707 resource parameter
+# Default: false
+# mcp_token_proxy_enabled = false
+
+# Mint IdP-signed MCP data-plane tokens instead of self-signed ones
+# Default: false
+# mcp_idp_signed_tokens = false
+
 # ============================================================================
 # REGISTRATION WEBHOOK (Issue #742)
 # ============================================================================

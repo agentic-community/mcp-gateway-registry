@@ -328,6 +328,10 @@ spec:
               value: {{ .Values.app.mcpTokenDefaultTtlHours | default "8" | toString | quote }}
             - name: MCP_TOKEN_MAX_TTL_HOURS
               value: {{ .Values.app.mcpTokenMaxTtlHours | default "24" | toString | quote }}
+            - name: MCP_TOKEN_PROXY_ENABLED
+              value: {{ .Values.app.mcpTokenProxyEnabled | default "false" | toString | quote }}
+            - name: MCP_IDP_SIGNED_TOKENS
+              value: {{ .Values.app.mcpIdpSignedTokens | default "false" | toString | quote }}
             {{- if .Values.app.registryApiKeysExistingSecret }}
             - name: REGISTRY_API_KEYS
               valueFrom:

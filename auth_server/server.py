@@ -3050,38 +3050,16 @@ def _server_advertises_per_server_prm() -> bool:
     return bool(getattr(settings, "egress_auth_enabled", False))
 
 
-def _obo_extra_audiences(server_name_from_url: str | None) -> list[str]:
-    """Per-server resource audiences to accept for the server being accessed.
+def _per_server_resources(server_name_from_url: str | None) -> list[str]:
+    """The per-server RFC 8707 resource URL(s) for the server being accessed,
+    derived from the request path + the gateway's public base URL(s). Returns
+    both the ``/mcp`` and bare-path forms across each configured base URL.
 
-    The ingress token's ``aud`` is the per-server resource URL the gateway
-    advertised in its PRM (RFC 8707), e.g. ``https://gw/<server>/mcp``. We derive
-    it from the request's server path (already parsed from X-Original-URL) and the
-    gateway's public URL -- no static env list. Returns both the ``/mcp`` and
-    bare-path forms to be robust to the server's ``append_mcp_path``. Returns []
-    when there's no server context, no configured gateway URL, or the server does
-    not advertise a per-server PRM (see ``_server_advertises_per_server_prm``).
-
-    NOTE: this is gated on whether a per-server PRM is advertised, NOT on the
-    egress feature. On Entra, plain (non-egress) servers get a per-server PRM too
-    (issue #990), so their per-server-resource ``aud`` must be accepted even with
-    egress disabled -- otherwise Entra plain-server IDE login mints the correct
-    token and is then rejected at validation. The accepted audience is
-    path-bound, so widening it here cannot reach a different server.
+    Unlike ``_obo_extra_audiences`` this has NO feature/PRM gate -- callers decide
+    when a per-server resource is required or merely accepted.
     """
     if not server_name_from_url:
         return []
-    if not _server_advertises_per_server_prm():
-        return []
-    # The token's aud is the PUBLIC per-server resource the registry advertised
-    # in its PRM, built from the PUBLIC gateway URL. On auth-server,
-    # settings.registry_url may be the INTERNAL cluster URL, so the PUBLIC
-    # AUTH_SERVER_EXTERNAL_URL is preferred. But if it is unset and the internal
-    # URL differs from the public one, deriving the audience from only the first
-    # candidate silently produces a non-matching audience -> a spurious 401.
-    # Build a per-server resource for EACH distinct configured base URL and
-    # accept any of them. This is safe: every candidate is bound to THIS
-    # request's path, so it cannot widen access to a different server -- it only
-    # tolerates ambiguity in which base URL the registry rendered the PRM from.
     base_urls = [
         os.environ.get("AUTH_SERVER_EXTERNAL_URL", ""),
         getattr(settings, "registry_url", ""),
@@ -3113,10 +3091,233 @@ def _obo_extra_audiences(server_name_from_url: str | None) -> list[str]:
     return auds
 
 
+def _obo_extra_audiences(server_name_from_url: str | None) -> list[str]:
+    """Per-server resource audiences to ACCEPT for the server being accessed
+    (flag-OFF provider-validation path).
+
+    The ingress token's ``aud`` is the per-server resource URL the gateway
+    advertised in its PRM (RFC 8707), e.g. ``https://gw/<server>/mcp``. Gated on
+    whether a per-server PRM is advertised (``_server_advertises_per_server_prm``,
+    the coarse global predicate) -- NOT on the egress feature. On Entra, plain
+    servers get a per-server PRM too, so their per-server-resource ``aud``
+    must be accepted even with egress disabled. The audience is path-bound, so
+    widening acceptance here cannot reach a different server.
+    *Required* per-server aud uses the per-server ``egress_auth_mode``
+    instead -- see the /validate enforcement block.
+    """
+    if not server_name_from_url:
+        return []
+    if not _server_advertises_per_server_prm():
+        return []
+    return _per_server_resources(server_name_from_url)
+
+
+def _is_mcp_data_plane(original_url: str | None, server_name_from_url: str | None) -> bool:
+    """True when this /validate subrequest targets an MCP server data-plane path.
+
+    Scopes IdP-signed-token enforcement to MCP paths only: the registry
+    ``/api`` bearer, federation, A2A-agent, and session-cookie UI paths are NOT
+    data-plane and are left unaffected.
+    """
+    if not server_name_from_url:
+        return False
+    if _is_registry_api_request(original_url):
+        return False
+    if _is_federation_api_request(original_url):
+        return False
+    if _get_a2a_agent_path(original_url) is not None:
+        return False
+    return True
+
+
+def _token_audiences(access_token: str) -> set[str]:
+    """The ``aud`` values of a JWT (unverified decode; the signature was already
+    verified by the provider). ``aud`` may be a string or a list of strings."""
+    try:
+        aud = jwt.decode(access_token, options={"verify_signature": False}).get("aud")
+    except Exception:
+        return set()
+    if isinstance(aud, str):
+        return {aud}
+    if isinstance(aud, list):
+        return {a for a in aud if isinstance(a, str)}
+    return set()
+
+
+def _enforce_exp_ceiling(access_token: str, ceiling_hours: int | None) -> None:
+    """Reject (401) when a token's usable lifetime exceeds the per-server ceiling:
+    ``exp - iat`` must be <= ``ceiling_hours*3600`` (+leeway). Skips
+    (logs) when the ceiling is unset or ``iat`` is absent. Signature/exp were
+    already verified upstream; this only bounds a single token's lifetime, NOT
+    the IdP refresh chain."""
+    if not ceiling_hours:
+        return
+    try:
+        claims = jwt.decode(access_token, options={"verify_signature": False})
+        iat = claims.get("iat")
+        exp = claims.get("exp")
+    except Exception:
+        iat = exp = None
+    if not isinstance(iat, (int, float)) or not isinstance(exp, (int, float)):
+        logger.info("mcp data-plane: exp-ceiling skipped (iat/exp absent)")
+        return
+    if (exp - iat) > (ceiling_hours * 3600 + 60):
+        logger.warning("mcp data-plane: token lifetime exceeds per-server ceiling; rejecting")
+        raise HTTPException(
+            status_code=401,
+            detail="Token lifetime exceeds the per-server ceiling",
+            headers={"WWW-Authenticate": "Bearer", "Connection": "close"},
+        )
+
+
+# §2.0 per-server metadata cache for the hot /validate path: short TTL + negative
+# cache. Keyed by the normalized server path. A miss/unavailable caches None
+# (treated as no-per-server-PRM + no-ceiling: never widens aud).
+_SERVER_META_CACHE: dict[str, tuple[float, dict | None]] = {}
+_SERVER_META_TTL_SECONDS: float = 30.0
+
+
+async def _fetch_server_meta(server_name_from_url: str | None) -> dict | None:
+    """Fetch ``{egress_auth_mode, expires_in_hours}`` for the server being
+    accessed from the registry's internal endpoint, cached with a
+    short TTL + negative cache to bound hot-path latency. Returns None on a
+    miss/unavailable; the caller then treats the server as no-per-server-PRM and
+    applies no exp-ceiling (fail-open on availability, never widening aud)."""
+    if not server_name_from_url:
+        return None
+    path = "/" + server_name_from_url.strip("/")
+    if path.endswith("/mcp"):
+        path = path[: -len("/mcp")]
+    now = time.time()
+    cached = _SERVER_META_CACHE.get(path)
+    if cached and (now - cached[0]) < _SERVER_META_TTL_SECONDS:
+        return cached[1]
+    from registry.auth.internal import generate_internal_token
+
+    base = settings.egress_registry_internal_url.rstrip("/")
+    meta: dict | None = None
+    try:
+        service_token = generate_internal_token(subject="auth-server", purpose="server-meta")
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.post(
+                f"{base}/_egress_internal/server-meta",
+                json={"server_path": path},
+                headers={
+                    "Authorization": f"Bearer {service_token}",
+                    "Content-Type": "application/json",
+                },
+            )
+        if resp.status_code == 200:
+            meta = resp.json()
+    except Exception as exc:
+        logger.warning("server-meta lookup failed for %s: %s", path, type(exc).__name__)
+        meta = None
+    _SERVER_META_CACHE[path] = (now, meta)
+    return meta
+
+
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
     return {"status": "healthy", "service": "simplified-auth-server"}
+
+
+async def _resource_is_registered(resource: str) -> bool:
+    """True if ``resource`` (an RFC 8707 per-server resource URL) maps to a
+    registered MCP server. Matched as an identifier via the metadata lookup."""
+    try:
+        from urllib.parse import urlparse
+
+        path = (urlparse(resource).path or "").strip("/")
+    except Exception:
+        return False
+    if not path:
+        return False
+    return (await _fetch_server_meta(path)) is not None
+
+
+@app.post("/oauth/token")
+async def oauth_token_proxy(request: Request):
+    """Forwards ``authorization_code`` / ``refresh_token`` grants to the configured
+    IdP token endpoint (URL from provider config ONLY -- never client-supplied),
+    preserving PKCE ``code_verifier`` and the RFC 8707 ``resource`` parameter.
+    ``resource`` is REQUIRED and matched against the registered server set as an
+    identifier (never dereferenced) when MCP_IDP_SIGNED_TOKENS is ON; lenient
+    (optional passthrough) while OFF so re-discovering clients are not broken
+    during the staggered rollout. Returns the IdP's token response verbatim minus
+    response hygiene. Only exposed when MCP_TOKEN_PROXY_ENABLED.
+    """
+    if not settings.mcp_token_proxy_enabled:
+        raise HTTPException(status_code=404, detail="token proxy disabled")
+
+    from urllib.parse import urlencode
+
+    form = await request.form()
+    grant_type = form.get("grant_type", "")
+    if grant_type not in ("authorization_code", "refresh_token"):
+        return JSONResponse(status_code=400, content={"error": "unsupported_grant_type"})
+
+    # RFC 8707 resource: required + registered when enforcing IdP-signed tokens;
+    # matched as an identifier, NEVER dereferenced / used to build the outbound URL.
+    resource = form.get("resource")
+    if settings.mcp_idp_signed_tokens:
+        if not resource or not await _resource_is_registered(str(resource)):
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": "invalid_target",
+                    "error_description": "resource missing or not a registered MCP server",
+                },
+            )
+
+    provider = get_auth_provider()
+    token_url = getattr(provider, "token_url", "") or ""
+    if not token_url:
+        raise HTTPException(status_code=500, detail="IdP token endpoint not configured")
+
+    from registry.exceptions import UrlValidationError
+    from registry.utils.url_guard import (
+        CREDENTIALED_OAUTH_PROFILE,
+        guarded_async_client,
+        validate_url,
+    )
+
+    try:
+        validate_url(token_url, profile=CREDENTIALED_OAUTH_PROFILE, resolve=False)
+    except UrlValidationError:
+        raise HTTPException(status_code=502, detail="IdP token endpoint blocked by security policy")
+
+    # Preserve repeated params (e.g. multiple `resource`) and PKCE verbatim.
+    body = urlencode(list(form.multi_items()))
+    try:
+        async with guarded_async_client(profile=CREDENTIALED_OAUTH_PROFILE, timeout=10.0) as client:
+            resp = await client.post(
+                token_url,
+                content=body,
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+    except UrlValidationError:
+        raise HTTPException(status_code=502, detail="IdP token endpoint blocked by security policy")
+    except httpx.HTTPError:
+        raise HTTPException(status_code=502, detail="IdP token endpoint unreachable")
+
+    # Response hygiene: only standard OAuth token fields; never relay upstream
+    # Set-Cookie/arbitrary headers; never surface an id_token as access_token.
+    try:
+        payload = resp.json()
+    except ValueError:
+        payload = {}
+    allowed = {
+        "access_token",
+        "token_type",
+        "expires_in",
+        "refresh_token",
+        "scope",
+        "error",
+        "error_description",
+    }
+    clean = {k: payload[k] for k in allowed if k in payload}
+    return JSONResponse(status_code=resp.status_code, content=clean)
 
 
 @app.get("/validate")
@@ -3240,6 +3441,7 @@ async def validate_request(request: Request):
         # Extract server_name and endpoint from original_url early for logging
         server_name_from_url = None
         endpoint_from_url = None
+        access_token = None
         if original_url:
             try:
                 parsed_url = urlparse(original_url)
@@ -3586,6 +3788,30 @@ async def validate_request(request: Request):
             # Extract token
             access_token = authorization.split(" ")[1]
 
+            # Retire the user-facing self-signed token on the MCP
+            # data plane. Single chokepoint -- every MCP data-plane request
+            # transits /validate and every self-signed token carries
+            # iss==mcp-auth-server, so this covers the top-level short-circuit
+            # AND every provider-embedded self-signed branch without touching
+            # providers. Registry /api bearer, federation, A2A, and the
+            # session-cookie UI path are unaffected (not data-plane).
+            if settings.mcp_idp_signed_tokens and _is_mcp_data_plane(
+                original_url, server_name_from_url
+            ):
+                try:
+                    _iss = jwt.decode(access_token, options={"verify_signature": False}).get("iss")
+                except Exception:
+                    _iss = None
+                if _iss == JWT_ISSUER:
+                    logger.warning(
+                        "mcp data-plane: self-signed token rejected (MCP_IDP_SIGNED_TOKENS)"
+                    )
+                    raise HTTPException(
+                        status_code=401,
+                        detail="Self-signed tokens are not accepted on MCP paths",
+                        headers={"WWW-Authenticate": "Bearer", "Connection": "close"},
+                    )
+
             # Get authentication provider based on AUTH_PROVIDER environment variable
             try:
                 # Try self-signed token first (tokens minted by this auth server).
@@ -3679,6 +3905,32 @@ async def validate_request(request: Request):
                 )
 
         logger.debug("Token validation successful using method: %s", validation_result["method"])
+
+        # MCP data-plane hardening under MCP_IDP_SIGNED_TOKENS --
+        # conditional per-server required audience + per-server exp-ceiling. The
+        # required-aud decision keys on the per-server egress_auth_mode (via the
+        # registry §2.0 lookup), NOT the coarse global egress flag, so plain
+        # servers on non-Entra IdPs keep gateway-wide acceptance (no hard-lock).
+        if (
+            settings.mcp_idp_signed_tokens
+            and access_token
+            and _is_mcp_data_plane(original_url, server_name_from_url)
+        ):
+            from registry.auth.oauth_metadata import server_needs_per_server_prm
+
+            _meta = await _fetch_server_meta(server_name_from_url)
+            if server_needs_per_server_prm((_meta or {}).get("egress_auth_mode")):
+                _required = set(_per_server_resources(server_name_from_url))
+                if not _required or _required.isdisjoint(_token_audiences(access_token)):
+                    logger.warning(
+                        "mcp data-plane: token aud is not the per-server resource; rejecting"
+                    )
+                    raise HTTPException(
+                        status_code=401,
+                        detail="Token audience is not the per-server resource",
+                        headers={"WWW-Authenticate": "Bearer", "Connection": "close"},
+                    )
+            _enforce_exp_ceiling(access_token, (_meta or {}).get("expires_in_hours"))
 
         # Enrich groups from MongoDB if empty (for M2M clients)
         try:

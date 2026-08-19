@@ -1080,6 +1080,18 @@ variable "mcp_token_max_ttl_hours" {
   default     = 24
 }
 
+variable "mcp_token_proxy_enabled" {
+  description = "Proxy /oauth/token to the IdP and enforce the RFC 8707 resource parameter. Default off (unchanged behavior)."
+  type        = bool
+  default     = false
+}
+
+variable "mcp_idp_signed_tokens" {
+  description = "Mint IdP-signed MCP data-plane tokens instead of self-signed ones. Default off (unchanged behavior)."
+  type        = bool
+  default     = false
+}
+
 # Registration webhook (issue #742)
 variable "registration_webhook_url" {
   description = "Webhook URL to POST to on successful registration or deletion. Disabled if empty."

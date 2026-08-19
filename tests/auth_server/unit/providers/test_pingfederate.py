@@ -331,8 +331,8 @@ class TestPingFederateJWKS:
         with patch.object(provider, "_get_openid_configuration", return_value=MOCK_DISCOVERY_DOC):
             provider.get_jwks()
 
-            # Expire the cache
-            provider._jwks_cache_time = time.time() - 3601
+            # Expire the shared-cache entry for this JWKS URL.
+            provider._jwks._entry(provider.jwks_url).fetched_at = time.time() - 3601
             provider.get_jwks()
 
         # Should fetch JWKS twice (cache expired)
@@ -344,12 +344,12 @@ class TestPingFederateJWKS:
         mock_jwks = {"keys": [{"kid": "key1", "kty": "RSA"}]}
 
         provider = _create_provider()
-        # Pre-populate stale cache
-        provider._jwks_cache = mock_jwks
-        provider._jwks_cache_time = time.time() - 7200  # 2 hours old (expired)
 
-        # Mock discovery
+        # Mock discovery, then pre-populate a stale entry for the resolved URL.
         with patch.object(provider, "_get_openid_configuration", return_value=MOCK_DISCOVERY_DOC):
+            entry = provider._jwks._entry(provider.jwks_url)
+            entry.jwks = mock_jwks
+            entry.fetched_at = time.time() - 7200  # 2 hours old (expired)
             # All JWKS fetches fail
             mock_get.side_effect = Exception("Network error")
 
@@ -493,7 +493,7 @@ class TestPingFederateTokenValidation:
 
         provider = _create_provider()
 
-        with patch.object(provider, "get_jwks") as mock_jwks:
+        with patch.object(provider._jwks, "get_jwks") as mock_jwks:
             pub_key = private_key.public_key()
             pub_numbers = pub_key.public_numbers()
             import base64

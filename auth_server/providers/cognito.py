@@ -1,7 +1,6 @@
 """AWS Cognito authentication provider implementation."""
 
 import logging
-import time
 from typing import Any
 from urllib.parse import urlencode
 
@@ -9,6 +8,7 @@ import jwt
 import requests
 
 from .base import AuthProvider
+from .jwks_cache import JwksCache
 
 logging.basicConfig(
     level=logging.INFO,
@@ -96,10 +96,9 @@ class CognitoProvider(AuthProvider):
                 user_pool_id,
             )
 
-        # Cache for JWKS
-        self._jwks_cache: dict[str, Any] | None = None
-        self._jwks_cache_time: float = 0
-        self._jwks_cache_ttl: int = 3600  # 1 hour
+        # Shared JWKS cache: TTL cache, bounded stale-fallback, and coalesced
+        # + negative-cached unknown-kid refetch.
+        self._jwks = JwksCache(provider_name="cognito")
 
         # Cognito endpoints
         if domain:
@@ -126,27 +125,16 @@ class CognitoProvider(AuthProvider):
         try:
             logger.debug("Validating Cognito JWT token")
 
-            # Get JWKS for validation
-            jwks = self.get_jwks()
-
-            # Decode token header to get key ID
+            # Resolve the signing key via the shared, hardened JWKS cache
+            # (TTL cache, bounded stale-fallback, coalesced + negative-cached
+            # unknown-kid refetch). RS256 pinning + claim checks stay below.
             unverified_header = jwt.get_unverified_header(token)
             kid = unverified_header.get("kid")
 
             if not kid:
                 raise ValueError("Token missing 'kid' in header")
 
-            # Find matching key
-            signing_key = None
-            for key in jwks.get("keys", []):
-                if key.get("kid") == kid:
-                    from jwt import PyJWK
-
-                    signing_key = PyJWK(key).key
-                    break
-
-            if not signing_key:
-                raise ValueError(f"No matching key found for kid: {kid}")
+            signing_key = self._jwks.get_signing_key(self.jwks_url, kid)
 
             # Cognito issues two token types and they carry the client binding
             # DIFFERENTLY:
@@ -226,28 +214,8 @@ class CognitoProvider(AuthProvider):
             raise ValueError(f"Token validation failed: {e}")
 
     def get_jwks(self) -> dict[str, Any]:
-        """Get JSON Web Key Set from Cognito with caching."""
-        current_time = time.time()
-
-        # Check if cache is still valid
-        if self._jwks_cache and (current_time - self._jwks_cache_time) < self._jwks_cache_ttl:
-            logger.debug("Using cached JWKS")
-            return self._jwks_cache
-
-        try:
-            logger.debug(f"Fetching JWKS from {self.jwks_url}")
-            response = requests.get(self.jwks_url, timeout=10)
-            response.raise_for_status()
-
-            self._jwks_cache = response.json()
-            self._jwks_cache_time = current_time
-
-            logger.debug("JWKS fetched and cached successfully")
-            return self._jwks_cache
-
-        except Exception as e:
-            logger.error(f"Failed to retrieve JWKS from Cognito: {e}")
-            raise ValueError(f"Cannot retrieve JWKS: {e}")
+        """Get JSON Web Key Set from Cognito via the shared JWKS cache."""
+        return self._jwks.get_jwks(self.jwks_url)
 
     def exchange_code_for_token(self, code: str, redirect_uri: str) -> dict[str, Any]:
         """Exchange authorization code for access token."""

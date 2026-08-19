@@ -10,7 +10,7 @@ from ..auth.oauth_metadata import (
     build_resource_documentation_url,
     derive_supported_scopes,
     enforce_https,
-    entra_forces_per_server_prm,
+    server_needs_per_server_prm,
 )
 from ..core.config import settings
 from ..repositories.factory import get_registry_card_repository
@@ -212,50 +212,6 @@ def _get_active_auth_provider():
     return get_auth_provider()
 
 
-def server_needs_per_server_prm(egress_auth_mode: str | None) -> bool:
-    """Whether a server should advertise a per-server RFC 9728 PRM (vs the global one).
-
-    The per-server PRM exists to satisfy Entra's strict resource/scope alignment
-    (the ingress login must target a path-qualified App ID URI, not the bare
-    origin). It applies to:
-
-    - ``obo_exchange`` on any provider (the same-IdP exchange always logs the user
-      in at the gateway against a per-server resource),
-    - ``oauth_user`` ONLY on Entra. The 3LO vault's ingress leg is a gateway login
-      too, but lenient IdPs (Keycloak/Cognito) accept the gateway-wide root PRM's
-      bare origin + OIDC scopes, which is how Keycloak 3LO works today. We must NOT
-      route those through the per-server PRM, or we'd change that working path (and
-      force an exact connection-URL match they don't need). Only Entra requires it.
-    - **every other server (including plain ``none``) ONLY on Entra** (issue #990).
-      A plain server has no egress mode, but a spec-compliant coding assistant
-      (Claude Code) still does RFC 8707 ingress OAuth against it, and Entra rejects
-      the bare-origin resource the gateway-wide PRM advertises (see below). So on
-      Entra, plain servers also need the per-server, connection-URL resource.
-
-    On non-Entra IdPs, everything except the two egress modes above uses the
-    gateway-wide PRM (unchanged behavior) -- lenient IdPs match the bare origin
-    fine. Entra is the only provider that forces a per-server resource for plain
-    servers, and the only one that incurs the per-connection-URL App ID URI
-    registration cost.
-    """
-    if egress_auth_mode == "obo_exchange":
-        return True
-    if egress_auth_mode == "oauth_user":
-        return entra_forces_per_server_prm(settings.auth_provider)
-    # issue #990: on Entra, EVERY server -- including plain
-    # (egress_auth_mode none) servers like airegistry-tools -- needs a per-server
-    # PRM, because the bare-origin global PRM's resource is unmatchable to an
-    # Entra App ID URI (trailing slash) at token exchange (AADSTS9010010). Only
-    # the exact per-server connection URL satisfies both Claude (RFC 9728 §3.3)
-    # and Entra. Requires each connection URL registered as an identifierUri.
-    # Non-Entra IdPs keep the lenient origin-based global PRM (unchanged).
-    # `entra_forces_per_server_prm` is the shared source of truth mirrored by the
-    # auth-server's `_server_advertises_per_server_prm` (keep the two in sync).
-    if entra_forces_per_server_prm(settings.auth_provider):
-        return True
-    return False
-
-
 @router.get("/oauth-protected-resource")
 async def get_oauth_protected_resource() -> JSONResponse:
     """
@@ -445,5 +401,12 @@ async def get_oauth_authorization_server() -> JSONResponse:
             status_code=502,
             detail="Could not fetch authorization server metadata",
         ) from exc
+
+    # When the gateway token proxy is enabled, advertise the gateway's
+    # own /oauth/token as the token_endpoint so clients exchange codes/refresh
+    # tokens through the proxy. authorization_endpoint, issuer, and jwks_uri stay
+    # the IdP's (only the token exchange is fronted; /authorize is direct-to-IdP).
+    if settings.mcp_token_proxy_enabled and isinstance(document, dict):
+        document["token_endpoint"] = settings.registry_url.rstrip("/") + "/oauth/token"
 
     return JSONResponse(content=document, headers=OAUTH_DISCOVERY_CACHE_HEADERS)

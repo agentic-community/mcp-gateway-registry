@@ -3,7 +3,6 @@
 import logging
 import os
 import re
-import time
 from typing import Any
 from urllib.parse import urlencode
 
@@ -11,6 +10,7 @@ import jwt
 import requests
 
 from .base import AuthProvider
+from .jwks_cache import JwksCache
 
 # Constants for self-signed token validation
 JWT_ISSUER = os.environ.get("JWT_ISSUER", "mcp-auth-server")
@@ -87,10 +87,9 @@ class OktaProvider(AuthProvider):
                 f"Expected format: *.okta.com, *.oktapreview.com, or *.okta-emea.com"
             )
 
-        # JWKS cache
-        self._jwks_cache: dict[str, Any] | None = None
-        self._jwks_cache_time: float = 0
-        self._jwks_cache_ttl: int = 3600  # 1 hour
+        # Shared JWKS cache: TTL cache, bounded stale-fallback, and coalesced
+        # + negative-cached unknown-kid refetch.
+        self._jwks = JwksCache(provider_name="okta")
 
         # Check for custom authorization server
         auth_server_id = os.environ.get("OKTA_AUTH_SERVER_ID", "")
@@ -148,27 +147,16 @@ class OktaProvider(AuthProvider):
             except Exception as e:
                 logger.debug(f"Not a self-signed token: {e}")
 
-            # Get JWKS for validation
-            jwks = self.get_jwks()
-
-            # Decode token header to get key ID
+            # Resolve the signing key via the shared, hardened JWKS cache
+            # (TTL cache, bounded stale-fallback, coalesced + negative-cached
+            # unknown-kid refetch). RS256 pinning + claim checks stay below.
             unverified_header = jwt.get_unverified_header(token)
             kid = unverified_header.get("kid")
 
             if not kid:
                 raise ValueError("Token missing 'kid' in header")
 
-            # Find matching key
-            signing_key = None
-            for key in jwks.get("keys", []):
-                if key.get("kid") == kid:
-                    from jwt import PyJWK
-
-                    signing_key = PyJWK(key).key
-                    break
-
-            if not signing_key:
-                raise ValueError(f"No matching key found for kid: {kid}")
+            signing_key = self._jwks.get_signing_key(self.jwks_url, kid)
 
             # Build the explicit set of accepted audiences: the web/M2M client
             # ids PLUS any operator-configured M2M audiences (custom Okta
@@ -347,59 +335,8 @@ class OktaProvider(AuthProvider):
             raise ValueError(f"Self-signed token validation failed: {e}")
 
     def get_jwks(self) -> dict[str, Any]:
-        """Get JSON Web Key Set from Okta with caching.
-
-        Returns cached JWKS if still valid (within TTL), otherwise fetches
-        fresh data from Okta. Retries once on failure and falls back to
-        stale cache if available.
-
-        Returns:
-            JWKS dictionary containing keys for token verification
-
-        Raises:
-            ValueError: If JWKS cannot be retrieved and no cache exists
-        """
-        current_time = time.time()
-
-        # Check if cache is still valid
-        if self._jwks_cache and (current_time - self._jwks_cache_time) < self._jwks_cache_ttl:
-            logger.debug("Using cached JWKS")
-            return self._jwks_cache
-
-        # Try to fetch fresh JWKS with retry
-        max_retries = 2
-        last_error = None
-
-        for attempt in range(max_retries):
-            try:
-                logger.debug(f"Fetching JWKS (attempt {attempt + 1})")
-                response = requests.get(self.jwks_url, timeout=10)
-                response.raise_for_status()
-
-                self._jwks_cache = response.json()
-                self._jwks_cache_time = current_time
-
-                logger.debug("JWKS fetched and cached successfully")
-                return self._jwks_cache
-
-            except Exception as e:
-                last_error = e
-                logger.warning(f"JWKS fetch attempt {attempt + 1} failed: {e}")
-                if attempt < max_retries - 1:
-                    time.sleep(1)  # Brief delay before retry
-
-        # Graceful degradation: use stale cache if available
-        if self._jwks_cache:
-            cache_age = current_time - self._jwks_cache_time
-            logger.warning(
-                f"JWKS fetch failed after {max_retries} attempts, "
-                f"using stale cache (age: {cache_age:.0f}s): {last_error}"
-            )
-            return self._jwks_cache
-
-        # No cache available, must fail
-        logger.error(f"Failed to retrieve JWKS from Okta (no cache available): {last_error}")
-        raise ValueError(f"Cannot retrieve JWKS: {last_error}")
+        """Get JSON Web Key Set from Okta via the shared JWKS cache."""
+        return self._jwks.get_jwks(self.jwks_url)
 
     def exchange_code_for_token(self, code: str, redirect_uri: str) -> dict[str, Any]:
         """Exchange authorization code for access token.

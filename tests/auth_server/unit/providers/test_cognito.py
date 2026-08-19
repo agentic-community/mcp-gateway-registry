@@ -136,13 +136,14 @@ class TestCognitoValidateToken:
     def _run_validate(self, provider, decoded_claims):
         """Run validate_token offline.
 
-        Bypasses JWKS/signature handling by mocking get_jwks, the unverified
-        header, PyJWK, and jwt.decode. jwt.decode is called twice (unverified to
-        read token_use, then verified); both return the same claims here, which
-        is fine for exercising the token_use / client_id allowlist branch.
+        Bypasses JWKS fetch/signature handling by mocking the shared cache's
+        get_jwks, the unverified header, PyJWK, and jwt.decode. jwt.decode is
+        called twice (unverified to read token_use, then verified); both return
+        the same claims here, which is fine for exercising the token_use /
+        client_id allowlist branch.
         """
         with (
-            patch.object(provider, "get_jwks", return_value={"keys": [{"kid": "k1"}]}),
+            patch.object(provider._jwks, "get_jwks", return_value={"keys": [{"kid": "k1"}]}),
             patch(
                 "auth_server.providers.cognito.jwt.get_unverified_header",
                 return_value={"kid": "k1"},

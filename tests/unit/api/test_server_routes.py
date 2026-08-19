@@ -3831,3 +3831,81 @@ class TestMetadataFieldsProjection:
         assert server["metadata"] == {
             "config": {"region": "us-east-1", "tier": "production"},
         }
+
+
+# =============================================================================
+# TESTS -- expires_in_hours on register handlers
+# =============================================================================
+
+
+@pytest.mark.unit
+@pytest.mark.api
+@pytest.mark.servers
+class TestRegisterExpiresInHours:
+    """Per-server ingress token TTL ceiling (expires_in_hours) on both register
+    handlers: None -> registry default (unpersisted); an in-range int is
+    persisted; out-of-range is rejected with HTTP 400.
+    """
+
+    _LEGACY_BASE = {
+        "name": "TTL Server",
+        "description": "ttl test",
+        "path": "/ttl-server",
+        "proxy_pass_url": "http://localhost:9000",
+    }
+    _API_BASE = {
+        "name": "TTL Server",
+        "description": "ttl test",
+        "path": "/ttl-server",
+        "proxy_pass_url": "http://localhost:9000",
+    }
+
+    @staticmethod
+    def _stored(mock_server_service):
+        call_args = mock_server_service.register_server.call_args
+        return call_args.args[0] if call_args.args else call_args.kwargs.get("server_entry")
+
+    def test_legacy_register_persists_valid_value(self, test_client_admin, mock_server_service):
+        response = test_client_admin.post(
+            "/api/register",
+            data={**self._LEGACY_BASE, "expires_in_hours": "1"},
+        )
+        assert response.status_code == 201
+        assert self._stored(mock_server_service)["expires_in_hours"] == 1
+
+    def test_legacy_register_omits_when_unset(self, test_client_admin, mock_server_service):
+        response = test_client_admin.post("/api/register", data=self._LEGACY_BASE)
+        assert response.status_code == 201
+        assert "expires_in_hours" not in self._stored(mock_server_service)
+
+    def test_legacy_register_rejects_zero(self, test_client_admin, mock_server_service):
+        response = test_client_admin.post(
+            "/api/register",
+            data={**self._LEGACY_BASE, "expires_in_hours": "0"},
+        )
+        assert response.status_code == 400
+        mock_server_service.register_server.assert_not_called()
+
+    def test_legacy_register_rejects_too_large(self, test_client_admin, mock_server_service):
+        response = test_client_admin.post(
+            "/api/register",
+            data={**self._LEGACY_BASE, "expires_in_hours": "100000"},
+        )
+        assert response.status_code == 400
+        mock_server_service.register_server.assert_not_called()
+
+    def test_api_register_persists_valid_value(self, test_client_admin, mock_server_service):
+        response = test_client_admin.post(
+            "/api/servers/register",
+            data={**self._API_BASE, "expires_in_hours": "1"},
+        )
+        assert response.status_code == 201
+        assert self._stored(mock_server_service)["expires_in_hours"] == 1
+
+    def test_api_register_rejects_out_of_range(self, test_client_admin, mock_server_service):
+        response = test_client_admin.post(
+            "/api/servers/register",
+            data={**self._API_BASE, "expires_in_hours": "100000"},
+        )
+        assert response.status_code == 400
+        mock_server_service.register_server.assert_not_called()

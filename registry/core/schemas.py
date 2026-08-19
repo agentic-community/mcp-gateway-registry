@@ -591,6 +591,16 @@ class ServerInfo(ProxyableMixin):
             "MCP at the server path itself; set true to force the suffix."
         ),
     )
+    expires_in_hours: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "Per-server ceiling on the MCP ingress access-token lifetime (hours). "
+            "Enforced at /validate as an exp-ceiling (reject when exp-iat exceeds it). "
+            "None uses the registry default. Upper-bounded by MCP_TOKEN_MAX_TTL_HOURS "
+            "at registration."
+        ),
+    )
     metadata: dict[str, Any] = Field(
         default_factory=dict,
         description="Additional custom metadata for organization, compliance, or integration purposes",

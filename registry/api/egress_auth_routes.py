@@ -519,6 +519,55 @@ async def vend_egress_token(
     )
 
 
+class ServerMetaRequest(BaseModel):
+    """Body for POST /internal/server-meta.
+
+    server_path identifies the registered server whose per-server metadata the
+    auth_server needs at ingress /validate. Accepts both the
+    slash-prefixed form ("/github") and the bare first-segment form ("github").
+    """
+
+    server_path: str
+
+
+class ServerMetaResponse(BaseModel):
+    """Per-server metadata the auth_server caches on the hot /validate path.
+
+    ``egress_auth_mode`` drives the conditional required-``aud`` gate
+    (via ``server_needs_per_server_prm``); ``expires_in_hours`` drives the
+    ingress ``exp``-ceiling. Both are read-only registry facts -- no secrets.
+    """
+
+    egress_auth_mode: str
+    expires_in_hours: int | None = None
+
+
+@router.post("/internal/server-meta", response_model=ServerMetaResponse)
+async def get_server_meta(
+    body: ServerMetaRequest,
+    _caller: Annotated[str, Depends(validate_internal_auth)],
+) -> ServerMetaResponse:
+    """Return a registered server's per-server metadata for ingress /validate.
+
+    Internal-only (``validate_internal_auth``, same shape as ``vend_egress_token``);
+    reachable from auth_server through the nginx ``_egress_internal`` location.
+    404 when the server is unknown. Never returns secrets.
+    """
+    # Normalize the server path exactly like vend_egress_token: mcp_proxy /
+    # auth_server may pass the bare first segment ("github"), but server entries
+    # are keyed on the slash-prefixed path ("/github").
+    server_path = body.server_path if body.server_path.startswith("/") else "/" + body.server_path
+
+    server = await get_server_repository().get(server_path)
+    if server is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="server not found")
+
+    return ServerMetaResponse(
+        egress_auth_mode=server.get("egress_auth_mode") or "none",
+        expires_in_hours=server.get("expires_in_hours"),
+    )
+
+
 # ---------------------------------------------------------------------------- #
 # Public endpoints. Operator config + end-user consent/connections.
 # ---------------------------------------------------------------------------- #

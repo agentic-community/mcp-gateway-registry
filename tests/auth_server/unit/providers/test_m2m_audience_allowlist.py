@@ -87,7 +87,7 @@ class TestOktaM2MAudienceAllowlist:
         private_key, jwks = _build_keypair()
         token = _sign(private_key, _m2m_claims(provider.issuer, "api://ai-registry"))
 
-        with patch.object(provider, "get_jwks", return_value=jwks):
+        with patch.object(provider._jwks, "get_jwks", return_value=jwks):
             result = provider.validate_token(token)
 
         assert result["valid"] is True
@@ -106,7 +106,7 @@ class TestOktaM2MAudienceAllowlist:
         # aud is a legitimate but DIFFERENT API in the same Okta tenant.
         token = _sign(private_key, _m2m_claims(provider.issuer, "api://other-service"))
 
-        with patch.object(provider, "get_jwks", return_value=jwks):
+        with patch.object(provider._jwks, "get_jwks", return_value=jwks):
             with pytest.raises(ValueError):
                 provider.validate_token(token)
 
@@ -117,7 +117,7 @@ class TestOktaM2MAudienceAllowlist:
         private_key, jwks = _build_keypair()
         token = _sign(private_key, _m2m_claims(provider.issuer, "api://ai-registry"))
 
-        with patch.object(provider, "get_jwks", return_value=jwks):
+        with patch.object(provider._jwks, "get_jwks", return_value=jwks):
             with pytest.raises(ValueError):
                 provider.validate_token(token)
 
@@ -128,7 +128,7 @@ class TestOktaM2MAudienceAllowlist:
         private_key, jwks = _build_keypair()
         token = _sign(private_key, _m2m_claims(provider.issuer, "gateway-client"))
 
-        with patch.object(provider, "get_jwks", return_value=jwks):
+        with patch.object(provider._jwks, "get_jwks", return_value=jwks):
             result = provider.validate_token(token)
 
         assert result["valid"] is True
@@ -157,7 +157,7 @@ class TestOktaM2MAudienceAllowlist:
                 seen_options.append(dict(options))
             return real_decode(*args, **kwargs)
 
-        with patch.object(provider, "get_jwks", return_value=jwks):
+        with patch.object(provider._jwks, "get_jwks", return_value=jwks):
             with patch("auth_server.providers.okta.jwt.decode", side_effect=_spy_decode):
                 provider.validate_token(token)
 
@@ -243,9 +243,14 @@ class TestPingFederateM2MAudienceAllowlist:
         token = _sign(private_key, _m2m_claims("https://pf.example.com", "api://ai-registry"))
 
         with patch.object(
-            provider, "_get_openid_configuration", return_value={"issuer": "https://pf.example.com"}
+            provider,
+            "_get_openid_configuration",
+            return_value={
+                "issuer": "https://pf.example.com",
+                "jwks_uri": "https://pf.example.com/pf/JWKS",
+            },
         ):
-            with patch.object(provider, "get_jwks", return_value=jwks):
+            with patch.object(provider._jwks, "get_jwks", return_value=jwks):
                 result = provider.validate_token(token)
 
         assert result["valid"] is True
@@ -256,9 +261,14 @@ class TestPingFederateM2MAudienceAllowlist:
         token = _sign(private_key, _m2m_claims("https://pf.example.com", "api://other-service"))
 
         with patch.object(
-            provider, "_get_openid_configuration", return_value={"issuer": "https://pf.example.com"}
+            provider,
+            "_get_openid_configuration",
+            return_value={
+                "issuer": "https://pf.example.com",
+                "jwks_uri": "https://pf.example.com/pf/JWKS",
+            },
         ):
-            with patch.object(provider, "get_jwks", return_value=jwks):
+            with patch.object(provider._jwks, "get_jwks", return_value=jwks):
                 with pytest.raises(ValueError):
                     provider.validate_token(token)
 
@@ -268,9 +278,14 @@ class TestPingFederateM2MAudienceAllowlist:
         token = _sign(private_key, _m2m_claims("https://pf.example.com", "api://ai-registry"))
 
         with patch.object(
-            provider, "_get_openid_configuration", return_value={"issuer": "https://pf.example.com"}
+            provider,
+            "_get_openid_configuration",
+            return_value={
+                "issuer": "https://pf.example.com",
+                "jwks_uri": "https://pf.example.com/pf/JWKS",
+            },
         ):
-            with patch.object(provider, "get_jwks", return_value=jwks):
+            with patch.object(provider._jwks, "get_jwks", return_value=jwks):
                 with pytest.raises(ValueError):
                     provider.validate_token(token)
 
@@ -281,9 +296,14 @@ class TestPingFederateM2MAudienceAllowlist:
         token = _sign(private_key, _m2m_claims("https://pf.example.com", "api://mcp-gateway"))
 
         with patch.object(
-            provider, "_get_openid_configuration", return_value={"issuer": "https://pf.example.com"}
+            provider,
+            "_get_openid_configuration",
+            return_value={
+                "issuer": "https://pf.example.com",
+                "jwks_uri": "https://pf.example.com/pf/JWKS",
+            },
         ):
-            with patch.object(provider, "get_jwks", return_value=jwks):
+            with patch.object(provider._jwks, "get_jwks", return_value=jwks):
                 result = provider.validate_token(token)
 
         assert result["valid"] is True
@@ -306,9 +326,14 @@ class TestPingFederateM2MAudienceAllowlist:
             return real_decode(*args, **kwargs)
 
         with patch.object(
-            provider, "_get_openid_configuration", return_value={"issuer": "https://pf.example.com"}
+            provider,
+            "_get_openid_configuration",
+            return_value={
+                "issuer": "https://pf.example.com",
+                "jwks_uri": "https://pf.example.com/pf/JWKS",
+            },
         ):
-            with patch.object(provider, "get_jwks", return_value=jwks):
+            with patch.object(provider._jwks, "get_jwks", return_value=jwks):
                 with patch(
                     "auth_server.providers.pingfederate.jwt.decode", side_effect=_spy_decode
                 ):

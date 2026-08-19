@@ -456,6 +456,8 @@ services:
       # (minting). Max is bounded to a 7-day ceiling in code. Issue #1477.
       - MCP_TOKEN_DEFAULT_TTL_HOURS=${MCP_TOKEN_DEFAULT_TTL_HOURS:-8}
       - MCP_TOKEN_MAX_TTL_HOURS=${MCP_TOKEN_MAX_TTL_HOURS:-24}
+      - MCP_TOKEN_PROXY_ENABLED=${MCP_TOKEN_PROXY_ENABLED:-false}
+      - MCP_IDP_SIGNED_TOKENS=${MCP_IDP_SIGNED_TOKENS:-false}
       # OpenTelemetry / OTLP (mirrored for config panel visibility)
       - OTEL_OTLP_ENDPOINT=${OTEL_OTLP_ENDPOINT:-}
       - OTEL_OTLP_EXPORT_INTERVAL_MS=${OTEL_OTLP_EXPORT_INTERVAL_MS:-30000}
@@ -620,6 +622,8 @@ services:
       # registry's values. Issue #1477.
       - MCP_TOKEN_DEFAULT_TTL_HOURS=${MCP_TOKEN_DEFAULT_TTL_HOURS:-8}
       - MCP_TOKEN_MAX_TTL_HOURS=${MCP_TOKEN_MAX_TTL_HOURS:-24}
+      - MCP_TOKEN_PROXY_ENABLED=${MCP_TOKEN_PROXY_ENABLED:-false}
+      - MCP_IDP_SIGNED_TOKENS=${MCP_IDP_SIGNED_TOKENS:-false}
       # Egress vault: auth-server does the marker check + the vend call to the
       # registry (it does NOT touch the secret store, so no SECRET_STORE/AWS/
       # OPENBAO vars here).

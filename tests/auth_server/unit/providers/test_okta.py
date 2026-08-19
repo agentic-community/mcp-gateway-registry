@@ -101,8 +101,8 @@ class TestOktaJWKS:
         # First call — populates cache
         provider.get_jwks()
 
-        # Simulate TTL expiration by backdating the cache time
-        provider._jwks_cache_time = provider._jwks_cache_time - 3601
+        # Simulate TTL expiration by backdating the shared-cache entry.
+        provider._jwks._entry(provider.jwks_url).fetched_at -= 3601
 
         # Second call should re-fetch
         provider.get_jwks()
@@ -166,7 +166,7 @@ class TestOktaTokenValidation:
         """Test expired token raises ValueError."""
         provider = OktaProvider("dev-123.okta.com", "cid", "cs")
 
-        with patch.object(provider, "get_jwks", return_value={"keys": [{"kid": "k1"}]}):
+        with patch.object(provider._jwks, "get_jwks", return_value={"keys": [{"kid": "k1"}]}):
             with patch("auth_server.providers.okta.jwt.get_unverified_header") as mock_header:
                 mock_header.return_value = {"kid": "k1"}
                 with patch("jwt.PyJWK") as mock_pyjwk:

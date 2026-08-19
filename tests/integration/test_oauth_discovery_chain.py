@@ -89,6 +89,7 @@ def discovery_app(monkeypatch):
         registry_url = TEST_GATEWAY_URL
         mcp_https_required = True
         mcp_resource_documentation_url = None
+        mcp_token_proxy_enabled = False
 
     stub_settings = _StubSettings()
     monkeypatch.setattr(wkr, "settings", stub_settings)

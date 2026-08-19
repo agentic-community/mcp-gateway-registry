@@ -80,6 +80,29 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _validate_registration_expires_in_hours(expires_in_hours: int | None) -> int | None:
+    """Validate a per-server ingress token TTL ceiling supplied at registration.
+
+    ``None`` means "use the registry default" and is allowed. A supplied value
+    must be an integer in ``[1, MCP_TOKEN_MAX_TTL_HOURS]`` (bools rejected). This
+    mirrors the /api/tokens/generate validation style. Raises HTTP 400 otherwise.
+    """
+    if expires_in_hours is None:
+        return None
+    max_ttl_hours = settings.mcp_token_max_ttl_hours
+    if (
+        not isinstance(expires_in_hours, int)
+        or isinstance(expires_in_hours, bool)
+        or expires_in_hours < 1
+        or expires_in_hours > max_ttl_hours
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"expires_in_hours must be an integer between 1 and {max_ttl_hours}",
+        )
+    return expires_in_hours
+
+
 class RatingRequest(BaseModel):
     rating: int
 
@@ -1437,6 +1460,7 @@ async def register_service(
     local_runtime: Annotated[str | None, Form()] = None,
     oauth_client_id: Annotated[str | None, Form()] = None,
     append_mcp_path: Annotated[bool | None, Form()] = None,
+    expires_in_hours: Annotated[int | None, Form()] = None,
     user_context: Annotated[dict, Depends(enhanced_auth)] = None,
     _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ):
@@ -1571,6 +1595,11 @@ async def register_service(
         server_entry["oauth_client_id"] = oauth_client_id
     if append_mcp_path is not None:
         server_entry["append_mcp_path"] = append_mcp_path
+
+    # Per-server ingress token TTL ceiling. None -> registry default.
+    validated_expires_in_hours = _validate_registration_expires_in_hours(expires_in_hours)
+    if validated_expires_in_hours is not None:
+        server_entry["expires_in_hours"] = validated_expires_in_hours
 
     # Add metadata if provided (expects JSON string)
     if metadata:
@@ -3935,6 +3964,7 @@ async def register_service_api(
     allowed_groups: Annotated[str | None, Form()] = None,
     oauth_client_id: Annotated[str | None, Form()] = None,
     append_mcp_path: Annotated[bool | None, Form()] = None,
+    expires_in_hours: Annotated[int | None, Form()] = None,
     _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ):
     """Register a service via JWT Bearer Token authentication (External API).
@@ -4180,6 +4210,11 @@ async def register_service_api(
         server_entry["oauth_client_id"] = oauth_client_id
     if append_mcp_path is not None:
         server_entry["append_mcp_path"] = append_mcp_path
+
+    # Per-server ingress token TTL ceiling. None -> registry default.
+    validated_expires_in_hours = _validate_registration_expires_in_hours(expires_in_hours)
+    if validated_expires_in_hours is not None:
+        server_entry["expires_in_hours"] = validated_expires_in_hours
 
     if version:
         server_entry["version"] = version

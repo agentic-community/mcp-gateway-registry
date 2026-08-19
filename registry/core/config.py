@@ -236,6 +236,14 @@ class Settings(BaseSettings):
     # lifetime is a security risk. See _clamp_token_max_ttl_hours. Issue #1477.
     mcp_token_default_ttl_hours: int = 8
     mcp_token_max_ttl_hours: int = 24
+    # MCP_TOKEN_PROXY_ENABLED exposes the gateway POST /oauth/token proxy and repoints
+    # the AS-metadata token_endpoint at the gateway. MCP_IDP_SIGNED_TOKENS flips ingress
+    # validation to reject the user-facing self-signed token, require IdP-signed tokens,
+    # make RFC 8707 `resource` mandatory on the proxy, and enforce the conditional
+    # per-server audience. Boot interlock (see _validate_token_proxy_config):
+    # MCP_IDP_SIGNED_TOKENS=true requires MCP_TOKEN_PROXY_ENABLED=true.
+    mcp_token_proxy_enabled: bool = False
+    mcp_idp_signed_tokens: bool = False
     ide_oauth_client_id: str = Field(
         default="",
         description=(
@@ -2004,6 +2012,7 @@ class Settings(BaseSettings):
                 "and registry replicas (see chart values.yaml)."
             )
         self._validate_egress_auth_config()
+        self._validate_token_proxy_config()
 
     def _validate_egress_auth_config(self) -> None:
         """Cross-field startup checks for the egress credential vault.
@@ -2032,6 +2041,21 @@ class Settings(BaseSettings):
                 "EGRESS_AUTH_ENABLED=true requires EGRESS_OAUTH_CALLBACK_BASE_URL "
                 "(the public base URL for {base}/oauth2/egress/callback), or a "
                 "REGISTRY_URL to derive it from; neither is set."
+            )
+
+    def _validate_token_proxy_config(self) -> None:
+        """Boot interlock for the token-proxy flags.
+
+        MCP_IDP_SIGNED_TOKENS flips ingress validation to reject self-signed
+        tokens and repoints discovery at the gateway /oauth/token; that endpoint
+        only exists when MCP_TOKEN_PROXY_ENABLED is set. Enabling the former
+        without the latter would advertise a token_endpoint that 404s.
+        """
+        if self.mcp_idp_signed_tokens and not self.mcp_token_proxy_enabled:
+            raise ValueError(
+                "MCP_IDP_SIGNED_TOKENS=true requires MCP_TOKEN_PROXY_ENABLED=true "
+                "(the gateway /oauth/token proxy must be exposed before ingress "
+                "validation rejects self-signed tokens and discovery repoints to it)."
             )
 
     @property

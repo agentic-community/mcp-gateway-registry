@@ -95,7 +95,7 @@ class TestAccountAudienceRejected:
         private_key, jwks = _build_keypair()
         token = _sign_token(private_key, _base_claims(provider.realm_url, "account"))
 
-        with patch.object(provider, "get_jwks", return_value=jwks):
+        with patch.object(provider._jwks, "get_jwks", return_value=jwks):
             with pytest.raises(ValueError, match="[Ii]nvalid|[Aa]udience"):
                 provider.validate_token(token)
 
@@ -105,7 +105,7 @@ class TestAccountAudienceRejected:
         private_key, jwks = _build_keypair()
         token = _sign_token(private_key, _base_claims(provider.realm_url, "some-unrelated-client"))
 
-        with patch.object(provider, "get_jwks", return_value=jwks):
+        with patch.object(provider._jwks, "get_jwks", return_value=jwks):
             with pytest.raises(ValueError):
                 provider.validate_token(token)
 
@@ -118,7 +118,7 @@ class TestAccountAudienceRejected:
             _base_claims(provider.realm_url, ["account", "realm-management"]),
         )
 
-        with patch.object(provider, "get_jwks", return_value=jwks):
+        with patch.object(provider._jwks, "get_jwks", return_value=jwks):
             with pytest.raises(ValueError):
                 provider.validate_token(token)
 
@@ -137,7 +137,7 @@ class TestGatewayAudienceAccepted:
         private_key, jwks = _build_keypair()
         token = _sign_token(private_key, _base_claims(provider.realm_url, "mcp-gateway"))
 
-        with patch.object(provider, "get_jwks", return_value=jwks):
+        with patch.object(provider._jwks, "get_jwks", return_value=jwks):
             result = provider.validate_token(token)
 
         assert result["valid"] is True
@@ -149,7 +149,7 @@ class TestGatewayAudienceAccepted:
         private_key, jwks = _build_keypair()
         token = _sign_token(private_key, _base_claims(provider.realm_url, provider.client_id))
 
-        with patch.object(provider, "get_jwks", return_value=jwks):
+        with patch.object(provider._jwks, "get_jwks", return_value=jwks):
             result = provider.validate_token(token)
 
         assert result["valid"] is True
@@ -160,7 +160,7 @@ class TestGatewayAudienceAccepted:
         private_key, jwks = _build_keypair()
         token = _sign_token(private_key, _base_claims(provider.realm_url, provider.m2m_client_id))
 
-        with patch.object(provider, "get_jwks", return_value=jwks):
+        with patch.object(provider._jwks, "get_jwks", return_value=jwks):
             result = provider.validate_token(token)
 
         assert result["valid"] is True
@@ -174,7 +174,7 @@ class TestGatewayAudienceAccepted:
             _base_claims(provider.realm_url, ["account", "mcp-gateway"]),
         )
 
-        with patch.object(provider, "get_jwks", return_value=jwks):
+        with patch.object(provider._jwks, "get_jwks", return_value=jwks):
             result = provider.validate_token(token)
 
         assert result["valid"] is True
@@ -185,7 +185,7 @@ class TestGatewayAudienceAccepted:
         private_key, jwks = _build_keypair()
         token = _sign_token(private_key, _base_claims(provider.external_realm_url, "mcp-gateway"))
 
-        with patch.object(provider, "get_jwks", return_value=jwks):
+        with patch.object(provider._jwks, "get_jwks", return_value=jwks):
             result = provider.validate_token(token)
 
         assert result["valid"] is True
