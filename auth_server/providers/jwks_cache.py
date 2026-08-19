@@ -218,13 +218,18 @@ class JwksCache:
     def _negative_cache_kid(entry: _Entry, kid: str, now: float) -> None:
         """Negative-cache an unknown ``kid``, bounding the map so a spray of
         distinct kids (especially during a JWKS outage) cannot grow it without
-        limit. Drops expired entries first, then evicts the soonest-expiring."""
+        limit. Compacts only when over the cap, and then evicts down to a
+        low-water mark so the O(n log n) compaction is amortized across many
+        inserts rather than run on every insert while at capacity."""
         entry.unknown_kids[kid] = now + _negative_ttl()
         if len(entry.unknown_kids) <= MAX_UNKNOWN_KIDS:
             return
+        # Over cap: drop expired entries first (cheap), then, if still over,
+        # evict the soonest-expiring down to the low-water mark.
         entry.unknown_kids = {k: v for k, v in entry.unknown_kids.items() if v > now}
-        overflow = len(entry.unknown_kids) - MAX_UNKNOWN_KIDS
-        if overflow > 0:
+        low_water = MAX_UNKNOWN_KIDS * 3 // 4
+        if len(entry.unknown_kids) > low_water:
+            overflow = len(entry.unknown_kids) - low_water
             for k in sorted(entry.unknown_kids, key=entry.unknown_kids.get)[:overflow]:
                 entry.unknown_kids.pop(k, None)
 

@@ -3271,14 +3271,20 @@ async def oauth_token_proxy(request: Request):
     response hygiene. Only exposed when MCP_TOKEN_PROXY_ENABLED.
     """
     if not settings.mcp_token_proxy_enabled:
-        raise HTTPException(status_code=404, detail="token proxy disabled")
+        raise HTTPException(
+            status_code=404, detail="token proxy disabled", headers={"Cache-Control": "no-store"}
+        )
 
     from urllib.parse import urlencode
 
     form = await request.form()
     grant_type = form.get("grant_type", "")
     if grant_type not in ("authorization_code", "refresh_token"):
-        return JSONResponse(status_code=400, content={"error": "unsupported_grant_type"})
+        return JSONResponse(
+            status_code=400,
+            content={"error": "unsupported_grant_type"},
+            headers={"Cache-Control": "no-store"},
+        )
 
     # RFC 8707 resource: required + registered when enforcing IdP-signed tokens;
     # matched as an identifier, NEVER dereferenced / used to build the outbound URL.
@@ -3291,12 +3297,17 @@ async def oauth_token_proxy(request: Request):
                     "error": "invalid_target",
                     "error_description": "resource missing or not a registered MCP server",
                 },
+                headers={"Cache-Control": "no-store"},
             )
 
     provider = get_auth_provider()
     token_url = getattr(provider, "token_url", "") or ""
     if not token_url:
-        raise HTTPException(status_code=500, detail="IdP token endpoint not configured")
+        raise HTTPException(
+            status_code=500,
+            detail="IdP token endpoint not configured",
+            headers={"Cache-Control": "no-store"},
+        )
 
     from registry.exceptions import UrlValidationError
     from registry.utils.url_guard import (
@@ -3308,7 +3319,11 @@ async def oauth_token_proxy(request: Request):
     try:
         validate_url(token_url, profile=CREDENTIALED_OAUTH_PROFILE, resolve=False)
     except UrlValidationError:
-        raise HTTPException(status_code=502, detail="IdP token endpoint blocked by security policy")
+        raise HTTPException(
+            status_code=502,
+            detail="IdP token endpoint blocked by security policy",
+            headers={"Cache-Control": "no-store"},
+        )
 
     # Preserve repeated params (e.g. multiple `resource`) and PKCE verbatim.
     body = urlencode(list(form.multi_items()))
@@ -3320,9 +3335,17 @@ async def oauth_token_proxy(request: Request):
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
             )
     except UrlValidationError:
-        raise HTTPException(status_code=502, detail="IdP token endpoint blocked by security policy")
+        raise HTTPException(
+            status_code=502,
+            detail="IdP token endpoint blocked by security policy",
+            headers={"Cache-Control": "no-store"},
+        )
     except httpx.HTTPError:
-        raise HTTPException(status_code=502, detail="IdP token endpoint unreachable")
+        raise HTTPException(
+            status_code=502,
+            detail="IdP token endpoint unreachable",
+            headers={"Cache-Control": "no-store"},
+        )
 
     # Response hygiene: only standard OAuth token fields; never relay upstream
     # Set-Cookie/arbitrary headers; never surface an id_token as access_token.
