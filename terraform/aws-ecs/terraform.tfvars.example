@@ -1373,10 +1373,10 @@ aws_registry_federation_enabled = true
 # registry's nginx routes /validate to it (Keycloak RS256 bearer fast path);
 # everything else falls back to the Python auth-server. Leaving this unset
 # keeps /validate on the auth-server (unchanged, non-breaking).
-# To enable: set go_validate_enabled = true AND
+# To enable: set validate_fast_path_enabled = true AND
 # validate_upstream_url = "http://go-validate:8899".
 # ---------------------------------------------------------------------------
-# go_validate_enabled   = true
-# go_validate_image_uri = "123456789012.dkr.ecr.us-east-1.amazonaws.com/mcp-gateway-go-validate:latest"
-# go_validate_audience  = "account"   # the aud claim your Keycloak tokens carry
+# validate_fast_path_enabled   = true
+# validate_fast_path_image_uri = "123456789012.dkr.ecr.us-east-1.amazonaws.com/mcp-gateway-go-validate:latest"
+# validate_fast_path_audience  = "account"   # the aud claim your Keycloak tokens carry
 # validate_upstream_url = "http://go-validate:8899"

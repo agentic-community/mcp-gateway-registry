@@ -1923,26 +1923,26 @@ variable "egress_secrets_manager_path_prefix" {
 # Go /validate fast-path sidecar (issue #1652). Opt-in; default off keeps
 # nginx /validate pointed at the auth-server (unchanged behavior).
 # ---------------------------------------------------------------------------
-variable "go_validate_enabled" {
+variable "validate_fast_path_enabled" {
   description = "Deploy the go-validate fast-path sidecar in the auth-server task and route the registry's nginx /validate to it. Default false: /validate stays on the auth-server (non-breaking)."
   type        = bool
   default     = false
 }
 
-variable "go_validate_image_uri" {
+variable "validate_fast_path_image_uri" {
   description = "Container image URI for the go-validate sidecar."
   type        = string
   default     = "public.ecr.aws/p3v1o3c6/go-validate:latest"
 }
 
-variable "go_validate_audience" {
+variable "validate_fast_path_audience" {
   description = "Expected token audience (aud) for the go-validate fast path. Empty leaves the sidecar in safe fallback-only mode (transparent proxy to Python)."
   type        = string
   default     = ""
 }
 
 variable "validate_upstream_url" {
-  description = "nginx /validate upstream for the registry. Empty (default) resolves to the auth-server. Set to http://go-validate:8899 when go_validate_enabled = true."
+  description = "nginx /validate upstream for the registry. Empty (default) resolves to the auth-server. Set to http://go-validate:8899 when validate_fast_path_enabled = true."
   type        = string
   default     = ""
 }

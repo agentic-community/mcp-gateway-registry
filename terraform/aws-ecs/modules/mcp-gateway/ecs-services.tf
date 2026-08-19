@@ -73,7 +73,7 @@ module "ecs_service_auth" {
       }
       port_name      = "auth-server"
       discovery_name = "auth-server"
-      }], var.go_validate_enabled ? [{
+      }], var.validate_fast_path_enabled ? [{
       client_alias = {
         port     = 8899
         dns_name = "go-validate"
@@ -86,8 +86,8 @@ module "ecs_service_auth" {
   # Container definitions
   container_definitions = merge({
     auth-server = {
-      cpu                    = tonumber(var.cpu) - (var.enable_observability ? local.adot_sidecar_cpu : 0) - (var.go_validate_enabled ? 128 : 0)
-      memory                 = tonumber(var.memory) - (var.enable_observability ? local.adot_sidecar_memory : 0) - (var.go_validate_enabled ? 128 : 0)
+      cpu                    = tonumber(var.cpu) - (var.enable_observability ? local.adot_sidecar_cpu : 0) - (var.validate_fast_path_enabled ? 128 : 0)
+      memory                 = tonumber(var.memory) - (var.enable_observability ? local.adot_sidecar_memory : 0) - (var.validate_fast_path_enabled ? 128 : 0)
       essential              = true
       image                  = var.auth_server_image_uri
       versionConsistency     = "disabled"
@@ -728,12 +728,12 @@ module "ecs_service_auth" {
         }]
       }
     } : {},
-    var.go_validate_enabled ? {
+    var.validate_fast_path_enabled ? {
       go-validate = {
         cpu                    = 128
         memory                 = 128
         essential              = false
-        image                  = var.go_validate_image_uri
+        image                  = var.validate_fast_path_image_uri
         versionConsistency     = "disabled"
         readonlyRootFilesystem = true
 
@@ -751,7 +751,7 @@ module "ecs_service_auth" {
           { name = "AUTH_FALLBACK_URL", value = "http://localhost:18888" },
           { name = "JWKS_URL", value = var.keycloak_domain != "" ? "https://${var.keycloak_domain}/realms/mcp-gateway/protocol/openid-connect/certs" : "" },
           { name = "VALIDATE_ISSUER", value = var.keycloak_domain != "" ? "https://${var.keycloak_domain}/realms/mcp-gateway" : "" },
-          { name = "VALIDATE_AUDIENCE", value = var.go_validate_audience },
+          { name = "VALIDATE_AUDIENCE", value = var.validate_fast_path_audience },
           { name = "DOCUMENTDB_HOST", value = var.documentdb_endpoint },
           { name = "DOCUMENTDB_PORT", value = "27017" },
           { name = "DOCUMENTDB_DATABASE", value = var.documentdb_database },
@@ -955,10 +955,11 @@ module "ecs_service_registry" {
           value = var.auth_server_url
         },
         {
-          # nginx /validate upstream. Empty -> auth-server (default); set to the
-          # go-validate sidecar when enabled. Only /validate is affected.
+          # nginx /validate upstream. validate_fast_path_enabled is the single switch:
+          # when true (and no explicit override), route /validate to the sidecar;
+          # otherwise leave empty so nginx uses the auth-server (unchanged).
           name  = "VALIDATE_UPSTREAM_URL"
-          value = var.validate_upstream_url
+          value = var.validate_upstream_url != "" ? var.validate_upstream_url : (var.validate_fast_path_enabled ? "http://go-validate:8899" : "")
         },
         {
           name  = "AUTH_SERVER_EXTERNAL_URL"
@@ -2160,7 +2161,7 @@ resource "aws_vpc_security_group_ingress_rule" "registry_to_auth" {
 # Allow registry to reach the go-validate sidecar (8899) in the auth task, only
 # when the sidecar is enabled. Service Connect proxy-to-proxy uses containerPort.
 resource "aws_vpc_security_group_ingress_rule" "registry_to_auth_govalidate" {
-  count                        = var.go_validate_enabled ? 1 : 0
+  count                        = var.validate_fast_path_enabled ? 1 : 0
   security_group_id            = module.ecs_service_auth.security_group_id
   referenced_security_group_id = module.ecs_service_registry.security_group_id
   from_port                    = 8899

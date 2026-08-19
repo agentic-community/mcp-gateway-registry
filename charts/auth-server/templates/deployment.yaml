@@ -248,12 +248,12 @@ spec:
             timeoutSeconds: 3
             failureThreshold: 3
 
-        {{- if .Values.goValidate.enabled }}
+        {{- if or .Values.fastPath.enabled (dig "fastPath" "enabled" false .Values.global) }}
         # Go /validate fast-path sidecar (issue #1652). Shares the pod network with
         # auth-server, so AUTH_FALLBACK_URL is localhost:8888. Reuses the same
         # secrets (SECRET_KEY, DOCUMENTDB_*, AUTH_SERVER_NGINX_MARKER_SECRET).
         - name: go-validate
-          image: "{{ $imgRegistry }}/{{ default "go-validate" .Values.goValidate.image.repository }}:{{ $imgTag }}"
+          image: "{{ $imgRegistry }}/{{ default "go-validate" .Values.fastPath.image.repository }}:{{ $imgTag }}"
           imagePullPolicy: {{ $imgPullPolicy }}
           securityContext:
             allowPrivilegeEscalation: false
@@ -283,11 +283,11 @@ spec:
             - name: AUTH_FALLBACK_URL
               value: "http://localhost:8888"
             - name: JWKS_URL
-              value: {{ .Values.goValidate.jwksUrl | quote }}
+              value: {{ .Values.fastPath.jwksUrl | quote }}
             - name: VALIDATE_ISSUER
-              value: {{ .Values.goValidate.issuer | quote }}
+              value: {{ .Values.fastPath.issuer | quote }}
             - name: VALIDATE_AUDIENCE
-              value: {{ .Values.goValidate.audience | quote }}
+              value: {{ .Values.fastPath.audience | quote }}
           resources:
-            {{- toYaml .Values.goValidate.resources | nindent 12 }}
+            {{- toYaml .Values.fastPath.resources | nindent 12 }}
         {{- end }}

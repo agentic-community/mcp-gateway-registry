@@ -622,7 +622,9 @@ services:
       - KEYCLOAK_URL=${KEYCLOAK_URL:-http://keycloak:8080}
       - KEYCLOAK_EXTERNAL_URL=${KEYCLOAK_EXTERNAL_URL:-}
       - KEYCLOAK_REALM=${KEYCLOAK_REALM:-mcp-gateway}
-      - JWKS_URL=${VALIDATE_JWKS_URL:-http://keycloak:8080/realms/${KEYCLOAK_REALM:-mcp-gateway}/protocol/openid-connect/certs}
+      # JWKS_URL + VALIDATE_ISSUER auto-derive from the KEYCLOAK_* vars above when
+      # left empty; set VALIDATE_JWKS_URL / VALIDATE_ISSUER in .env only to override.
+      - JWKS_URL=${VALIDATE_JWKS_URL:-}
       - VALIDATE_ISSUER=${VALIDATE_ISSUER:-}
       - VALIDATE_AUDIENCE=${VALIDATE_AUDIENCE:-}
       - JWKS_REFRESH_SECONDS=${JWKS_REFRESH_SECONDS:-300}

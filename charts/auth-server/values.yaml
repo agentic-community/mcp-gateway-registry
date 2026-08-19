@@ -18,7 +18,7 @@ image:
 # it. Leave disabled to keep /validate on the Python auth-server (unchanged).
 # Fast path engages only when jwksUrl + issuer + audience are all set; otherwise
 # it transparently proxies to the auth-server (safe fallback).
-goValidate:
+fastPath:
   enabled: false
   image:
     repository: go-validate # image name within the registry (shares global registry/tag)
