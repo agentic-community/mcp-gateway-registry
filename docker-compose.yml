@@ -618,6 +618,10 @@ services:
       # Fast path engages only when JWKS_URL + VALIDATE_ISSUER + VALIDATE_AUDIENCE are
       # all set and match the tokens; otherwise every /validate request is transparently
       # proxied to the auth-server (correct, just not accelerated).
+      # KEYCLOAK_* let go-validate auto-derive JWKS_URL + VALIDATE_ISSUER when unset.
+      - KEYCLOAK_URL=${KEYCLOAK_URL:-http://keycloak:8080}
+      - KEYCLOAK_EXTERNAL_URL=${KEYCLOAK_EXTERNAL_URL:-}
+      - KEYCLOAK_REALM=${KEYCLOAK_REALM:-mcp-gateway}
       - JWKS_URL=${VALIDATE_JWKS_URL:-http://keycloak:8080/realms/${KEYCLOAK_REALM:-mcp-gateway}/protocol/openid-connect/certs}
       - VALIDATE_ISSUER=${VALIDATE_ISSUER:-}
       - VALIDATE_AUDIENCE=${VALIDATE_AUDIENCE:-}

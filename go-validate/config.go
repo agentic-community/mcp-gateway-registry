@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"strings"
@@ -77,6 +78,29 @@ func loadConfig() Config {
 		ScopeTTLSec:    atoiDefault(os.Getenv("SCOPE_SNAPSHOT_TTL_SECONDS"), 60),
 		AuthMethod:     getenv("VALIDATE_AUTH_METHOD", "keycloak"),
 		MarkerSecret:   os.Getenv("AUTH_SERVER_NGINX_MARKER_SECRET"),
+	}
+
+	// Auto-derive JWKS_URL and VALIDATE_ISSUER from the KEYCLOAK_* env vars that
+	// every deployment already provides, so operators only opt in (+ set the
+	// audience) instead of hand-computing these. Explicit values always win.
+	// The audience claim is NOT derivable (Keycloak varies it per client), so it
+	// stays operator-supplied; an unset/mismatched audience fails safe (fallback).
+	realm := getenv("KEYCLOAK_REALM", "mcp-gateway")
+	if cfg.JWKSURL == "" {
+		if kc := strings.TrimRight(os.Getenv("KEYCLOAK_URL"), "/"); kc != "" {
+			cfg.JWKSURL = fmt.Sprintf("%s/realms/%s/protocol/openid-connect/certs", kc, realm)
+		}
+	}
+	if cfg.Issuer == "" {
+		// Tokens carry the issuer of the URL the client used, usually the external
+		// Keycloak URL; fall back to the internal URL when no external is set.
+		iss := strings.TrimRight(os.Getenv("KEYCLOAK_EXTERNAL_URL"), "/")
+		if iss == "" {
+			iss = strings.TrimRight(os.Getenv("KEYCLOAK_URL"), "/")
+		}
+		if iss != "" {
+			cfg.Issuer = fmt.Sprintf("%s/realms/%s", iss, realm)
+		}
 	}
 
 	// B3: validate the signing secret. If a secret is provided at all it must be

@@ -208,6 +208,9 @@ class Settings(BaseSettings):
         ),
     )
     auth_server_url: str = "http://localhost:8888"
+    # nginx /validate upstream. Empty -> auth-server (default). Set to the
+    # go-validate sidecar (e.g. http://go-validate:8899) to enable the fast path.
+    validate_upstream_url: str = ""
     auth_server_external_url: str = "http://localhost:8888"  # External URL for OAuth redirects
     trusted_external_hosts: str = Field(
         default="",
