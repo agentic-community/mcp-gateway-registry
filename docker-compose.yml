@@ -860,6 +860,24 @@ services:
       - "${HOST_BIND_IP:-127.0.0.1}:8000:8000"
     restart: unless-stopped
 
+  # Benchmark MCP server (opt-in): a tiny, fast Go streamable-http server exposing a
+  # single `echo` tool. Used as a FAST upstream for end-to-end /validate load tests so
+  # the measurement is bounded by the gateway, not the upstream (issue #1652, PR #1653).
+  # Canonical source: https://github.com/aarora79/pingmcp
+  # Opt-in only (does not start by default): `docker compose --profile benchmark up -d pingmcp-server`.
+  # To register + health-check it, add "pingmcp-server" to SSRF_ALLOWED_HOSTS.
+  pingmcp-server:
+    profiles: ["benchmark"]
+    build:
+      context: servers/pingmcp
+      dockerfile: Dockerfile
+    environment:
+      - PORT=8100
+    ports:
+      # Loopback-only host publish for direct testing; reached in-cluster as pingmcp-server:8100.
+      - "${HOST_BIND_IP:-127.0.0.1}:8100:8100"
+    restart: unless-stopped
+
   # MCP Gateway Server
   mcpgw-server:
     build:

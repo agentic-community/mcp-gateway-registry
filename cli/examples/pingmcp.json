@@ -1,0 +1,12 @@
+{
+  "server_name": "Ping MCP (Go)",
+  "description": "Minimal, fast streamable-http MCP server written in Go with a single 'echo' tool. Used as a fast upstream so end-to-end gateway load tests are bounded by the /validate auth check, not by the upstream.",
+  "path": "/pingmcp/",
+  "proxy_pass_url": "http://pingmcp-server:8100/",
+  "auth_scheme": "none",
+  "tags": ["test", "benchmark", "echo", "go"],
+  "num_tools": 1,
+  "license": "MIT-0",
+  "status": "active",
+  "visibility": "public"
+}
