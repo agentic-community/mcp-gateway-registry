@@ -894,3 +894,91 @@ class TestKeycloakAuthorizationServerMetadata:
         assert (
             provider.authorization_server_issuer() == "https://auth.example.com/realms/test-realm"
         )
+
+
+# =============================================================================
+# KEYCLOAK_EXTERNAL_URL STARTUP DIAGNOSTIC
+# =============================================================================
+
+
+class TestKeycloakExternalUrlDiagnostic:
+    """The factory must say so at startup when the advertised URL cannot work.
+
+    The registry and the auth server publish KEYCLOAK_EXTERNAL_URL in their OAuth
+    discovery documents. A value that resolves only inside the container network
+    yields a well-formed metadata document that no external MCP client can act
+    on: nothing fails server-side and the client reports a generic OAuth error,
+    so without a startup line the misconfiguration is effectively invisible.
+    """
+
+    def _create(self, monkeypatch, external_url: str | None):
+        """Build a Keycloak provider through the factory with a patched env."""
+        from auth_server.providers import factory
+
+        monkeypatch.setenv("KEYCLOAK_URL", "http://keycloak:8080")
+        monkeypatch.setenv("KEYCLOAK_CLIENT_ID", "test-client")
+        monkeypatch.setenv("KEYCLOAK_CLIENT_SECRET", "test-secret")
+        if external_url is None:
+            monkeypatch.delenv("KEYCLOAK_EXTERNAL_URL", raising=False)
+        else:
+            monkeypatch.setenv("KEYCLOAK_EXTERNAL_URL", external_url)
+        return factory._create_keycloak_provider()
+
+    def test_unset_external_url_warns(self, monkeypatch, caplog):
+        """An unset variable silently advertises the internal URL, so warn."""
+        with caplog.at_level(logging.WARNING, logger="auth_server.providers.factory"):
+            provider = self._create(monkeypatch, None)
+
+        assert provider.keycloak_external_url == "http://keycloak:8080"
+        warnings = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+        assert any("KEYCLOAK_EXTERNAL_URL is not set" in m for m in warnings), warnings
+
+    @pytest.mark.parametrize(
+        "external_url",
+        [
+            "http://keycloak:8080",  # container DNS name, the reported case
+            "http://10.0.1.5:8080",  # RFC 1918
+            "http://192.168.1.10:8080",  # RFC 1918
+            "http://169.254.10.10:8080",  # link-local
+            "http://203.0.113.10:8080",  # RFC 5737 documentation range
+        ],
+    )
+    def test_unroutable_external_url_warns(self, monkeypatch, caplog, external_url):
+        """A set-but-unroutable value is the same outage with a different cause."""
+        with caplog.at_level(logging.WARNING, logger="auth_server.providers.factory"):
+            self._create(monkeypatch, external_url)
+
+        warnings = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+        assert any("fail discovery" in m for m in warnings), warnings
+
+    @pytest.mark.parametrize(
+        "external_url",
+        [
+            "https://gateway.example.com",
+            "https://gateway.example.com:8443",
+            "http://93.184.216.34:8080",  # globally routable literal
+        ],
+    )
+    def test_routable_external_url_is_silent(self, monkeypatch, caplog, external_url):
+        """A correctly configured deployment must not emit a warning every boot."""
+        with caplog.at_level(logging.WARNING, logger="auth_server.providers.factory"):
+            self._create(monkeypatch, external_url)
+
+        warnings = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+        assert not warnings, warnings
+
+    @pytest.mark.parametrize(
+        "external_url",
+        ["http://localhost:8080", "http://127.0.0.1:8080"],
+    )
+    def test_loopback_external_url_is_not_a_warning(self, monkeypatch, caplog, external_url):
+        """Loopback is the shipped default for local dev, so it must not warn.
+
+        It is still worth an INFO line, because it does exclude remote clients.
+        """
+        with caplog.at_level(logging.INFO, logger="auth_server.providers.factory"):
+            self._create(monkeypatch, external_url)
+
+        assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+        infos = [r.message for r in caplog.records if r.levelno == logging.INFO]
+        assert any("only works for clients on this host" in m for m in infos), infos
