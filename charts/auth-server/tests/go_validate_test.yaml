@@ -18,7 +18,7 @@ tests:
     set:
       app:
         secretKey: test-key-32-bytes-aaaaaaaaaaaaaaaaaa
-      goValidate:
+      fastPath:
         enabled: true
         audience: account
     asserts:
@@ -52,7 +52,7 @@ tests:
   - it: exposes port 8899 on the Service when enabled
     template: templates/service.yaml
     set:
-      goValidate:
+      fastPath:
         enabled: true
     asserts:
       - contains:
@@ -62,3 +62,19 @@ tests:
             targetPort: govalidate
             protocol: TCP
             name: govalidate
+
+  - it: global.fastPath.enabled also turns on the sidecar (stack single switch)
+    template: templates/deployment.yaml
+    set:
+      app:
+        secretKey: test-key-32-bytes-aaaaaaaaaaaaaaaaaa
+      global:
+        fastPath:
+          enabled: true
+    asserts:
+      - lengthEqual:
+          path: spec.template.spec.containers
+          count: 2
+      - equal:
+          path: spec.template.spec.containers[1].name
+          value: go-validate

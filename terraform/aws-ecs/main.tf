@@ -75,9 +75,9 @@ module "mcp_gateway" {
   # Container images (core services default to public ECR)
   registry_image_uri    = var.registry_image_uri
   auth_server_image_uri = var.auth_server_image_uri
-  go_validate_image_uri = var.go_validate_image_uri
-  go_validate_enabled   = var.go_validate_enabled
-  go_validate_audience  = var.go_validate_audience
+  validate_fast_path_image_uri = var.validate_fast_path_image_uri
+  validate_fast_path_enabled   = var.validate_fast_path_enabled
+  validate_fast_path_audience  = var.validate_fast_path_audience
   validate_upstream_url = var.validate_upstream_url
   mcpgw_image_uri       = var.mcpgw_image_uri
 
