@@ -1142,6 +1142,57 @@ def _normalize_server_path(path: str) -> str:
     return path
 
 
+def _build_provider_entry(
+    provider_organization: str | None,
+    provider_url: str | None,
+) -> dict[str, Any] | None:
+    """Build the nested provider object from the two provider form fields.
+
+    The pair is optional as a whole but meaningless half-filled: per the A2A
+    specification, and per ``AgentProvider``'s own required fields, a provider
+    that is present must carry both an organization and a URL.
+
+    A blank or whitespace-only field counts as absent. An HTML form submits an
+    empty string for a field the user left alone, so treating ``""`` as a value
+    would store a provider with an empty organization -- valid to Pydantic,
+    useless to a reader.
+
+    Args:
+        provider_organization: Raw ``provider_organization`` form field.
+        provider_url: Raw ``provider_url`` form field.
+
+    Returns:
+        The serialized provider object, or None when neither field was supplied
+        so the caller omits ``provider`` entirely.
+
+    Raises:
+        HTTPException: 400 naming the missing field when exactly one is given.
+            Building ``AgentProvider`` with a None field raises a Pydantic
+            ValidationError that no handler catches, which surfaces as a 500
+            with nothing to indicate which field was at fault (issue #1651).
+    """
+    from ..schemas.agent_models import AgentProvider
+
+    organization = (provider_organization or "").strip() or None
+    url = (provider_url or "").strip() or None
+
+    if organization is None and url is None:
+        return None
+
+    if organization is None or url is None:
+        missing = "provider_organization" if organization is None else "provider_url"
+        supplied = "provider_url" if organization is None else "provider_organization"
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"'{missing}' is required when '{supplied}' is supplied. "
+                f"Provider organization and URL must be given together, or both left empty."
+            ),
+        )
+
+    return AgentProvider(organization=organization, url=url).model_dump()
+
+
 def _to_dt(value: Any) -> datetime | None:
     """Coerce a stored timestamp value into a datetime.
 
@@ -1579,14 +1630,11 @@ async def register_service(
     if effective_status:
         server_entry["status"] = effective_status
 
-    # Add provider information (stored as nested AgentProvider object)
-    if provider_organization or provider_url:
-        from ..schemas.agent_models import AgentProvider
-
-        server_entry["provider"] = AgentProvider(
-            organization=provider_organization,
-            url=provider_url,
-        ).model_dump()
+    # Add provider information (stored as nested AgentProvider object).
+    # A half-filled pair is rejected with a 400 naming the missing field.
+    provider_entry = _build_provider_entry(provider_organization, provider_url)
+    if provider_entry is not None:
+        server_entry["provider"] = provider_entry
 
     # Add source timestamps
     if source_created_at:
@@ -4118,14 +4166,11 @@ async def register_service_api(
     if effective_status:
         server_entry["status"] = effective_status
 
-    # Add provider information
-    if provider_organization or provider_url:
-        from ..schemas.agent_models import AgentProvider
-
-        server_entry["provider"] = AgentProvider(
-            organization=provider_organization,
-            url=provider_url,
-        ).model_dump()
+    # Add provider information. A half-filled pair is rejected with a 400
+    # naming the missing field.
+    provider_entry = _build_provider_entry(provider_organization, provider_url)
+    if provider_entry is not None:
+        server_entry["provider"] = provider_entry
 
     # Add source timestamps
     if source_created_at:
