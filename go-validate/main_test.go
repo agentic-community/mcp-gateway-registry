@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
@@ -197,4 +199,106 @@ func TestScopeResolver_Resolve(t *testing.T) {
 	if _, ok := r.resolve(nil, userGeneratedClientID); ok {
 		t.Fatal("user-generated sentinel must not resolve as M2M")
 	}
+}
+
+// --- full fast-path handler (verify -> map -> mint -> headers) -----------
+
+func TestHandleValidate_FastPathSuccess(t *testing.T) {
+	priv, _ := rsa.GenerateKey(rand.Reader, 2048)
+	ks := testKeyset(&priv.PublicKey, "kid1")
+	res := &scopeResolver{}
+	res.snap.Store(&scopeSnapshot{
+		scopes:    []scopeDoc{{ID: "mcp-servers-unrestricted/read", GroupMappings: []string{"admins"}}},
+		m2mGroups: map[string][]string{},
+	})
+	s := &server{
+		cfg: Config{
+			FastPathReady: true, SecretKey: "unit-test-secret-32-bytes-xxxxxxxxxx",
+			Issuer: tIss, Audience: tAud, AuthMethod: "keycloak",
+		},
+		ks:       ks,
+		scopes:   res,
+		fallback: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { t.Fatal("should not fall back") }),
+	}
+	tok := mintRS256(t, priv, "kid1", baseClaims())
+	req := httptest.NewRequest(http.MethodGet, "/validate", nil)
+	req.Header.Set("X-Authorization", "Bearer "+tok)
+	req.Header.Set("X-Original-URL", "http://localhost/api/servers")
+	req.Header.Set("X-Registry-Api-Auth", "1") // marker -> mint registry-ui token
+	rr := httptest.NewRecorder()
+	s.handleValidate(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rr.Code)
+	}
+	h := rr.Header()
+	if h.Get("X-User") != "svc" || h.Get("X-Scopes") != "mcp-servers-unrestricted/read" ||
+		h.Get("X-Auth-Method") != "keycloak" {
+		t.Fatalf("identity headers wrong: user=%q scopes=%q method=%q", h.Get("X-User"), h.Get("X-Scopes"), h.Get("X-Auth-Method"))
+	}
+	if h.Get("X-Internal-Token-Registry") == "" {
+		t.Fatal("expected X-Internal-Token-Registry (marker present)")
+	}
+}
+
+func TestHandleValidate_RecognizedInvalidIs401(t *testing.T) {
+	priv, _ := rsa.GenerateKey(rand.Reader, 2048)
+	ks := testKeyset(&priv.PublicKey, "kid1")
+	s := &server{
+		cfg:      Config{FastPathReady: true, SecretKey: "unit-test-secret-32-bytes-xxxxxxxxxx", Issuer: tIss, Audience: tAud},
+		ks:       ks,
+		scopes:   &scopeResolver{},
+		fallback: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { t.Fatal("should not fall back on bad sig") }),
+	}
+	tok := mintRS256(t, priv, "kid1", baseClaims())
+	req := httptest.NewRequest(http.MethodGet, "/validate", nil)
+	req.Header.Set("X-Authorization", "Bearer "+tok[:len(tok)-2]+"xx") // corrupt sig
+	req.Header.Set("X-Original-URL", "http://localhost/api/x")
+	rr := httptest.NewRecorder()
+	s.handleValidate(rr, req)
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("want 401, got %d", rr.Code)
+	}
+}
+
+func TestHealthAndMetrics(t *testing.T) {
+	s := &server{cfg: Config{FastPathReady: false}}
+	rr := httptest.NewRecorder()
+	s.handleHealth(rr, httptest.NewRequest("GET", "/health", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("health want 200, got %d", rr.Code)
+	}
+	rr2 := httptest.NewRecorder()
+	s.handleMetrics(rr2, httptest.NewRequest("GET", "/metrics", nil))
+	if rr2.Code != http.StatusOK || rr2.Body.Len() == 0 {
+		t.Fatalf("metrics want 200 + body, got %d len=%d", rr2.Code, rr2.Body.Len())
+	}
+}
+
+func TestBuildMongoURI(t *testing.T) {
+	t.Setenv("DOCUMENTDB_HOST", "")
+	if _, ok := buildMongoURI(); ok {
+		t.Fatal("no host -> disabled")
+	}
+	t.Setenv("DOCUMENTDB_HOST", "mongodb")
+	t.Setenv("DOCUMENTDB_USERNAME", "admin")
+	t.Setenv("DOCUMENTDB_PASSWORD", "p@ss/w:rd")
+	uri, ok := buildMongoURI()
+	if !ok || uri == "" {
+		t.Fatalf("expected uri, got %q ok=%v", uri, ok)
+	}
+	// password special chars must be URL-encoded
+	if !contains(uri, "authSource=admin") || !contains(uri, "p%40ss") {
+		t.Fatalf("uri not built/escaped correctly: %s", uri)
+	}
+}
+
+func contains(s, sub string) bool { return len(s) >= len(sub) && (indexOf(s, sub) >= 0) }
+func indexOf(s, sub string) int {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return i
+		}
+	}
+	return -1
 }
