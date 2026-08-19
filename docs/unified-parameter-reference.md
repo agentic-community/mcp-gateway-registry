@@ -148,6 +148,9 @@ Derived as `KEYCLOAK_CLIENT_ID` + `KEYCLOAK_M2M_CLIENT_ID` + `mcp-gateway`, matc
 **`JWKS_URL` — auto-derived, rarely overridden.**
 Derived as `<KEYCLOAK_URL>/realms/<REALM>/protocol/openid-connect/certs`. Override only for a non-standard key path.
 
+**Amazon Cognito (auto-detected from `AUTH_PROVIDER=cognito`).**
+The sidecar also supports Cognito, mirroring the Python Cognito provider — no extra config beyond what the auth-server already has. When `AUTH_PROVIDER=cognito` (the auth-server sets it), the sidecar derives the issuer `https://cognito-idp.<AWS_REGION>.amazonaws.com/<COGNITO_USER_POOL_ID>`, its JWKS, and the accepted client-id allowlist (`COGNITO_CLIENT_ID` + `IDE_OAUTH_CLIENT_ID` + `COGNITO_M2M_CLIENT_IDS`, with `*` = M2M-only wildcard). It fast-paths **access tokens** (id/login tokens defer to Python); scopes come from `cognito:groups` (group→scope) or, for machine/no-group tokens, the token's own `scope` claim. Nothing to set beyond the same enable switch — provider selection is automatic. `VALIDATE_AUDIENCE` does not apply to Cognito (access tokens are client_id-bound, not audience-bound).
+
 To inspect a real token when debugging (decode `aud`/`iss` — but note `account` in the list is expected and correctly NOT accepted):
 
 ```bash
