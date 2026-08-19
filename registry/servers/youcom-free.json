@@ -1,0 +1,49 @@
+{
+  "server_name": "You.com Search (Free)",
+  "description": "Keyless web search using You.com's free MCP server. Provides basic web search capabilities without requiring API authentication, ideal for development and testing environments.",
+  "path": "/youcom-free/",
+  "proxy_pass_url": "https://api.you.com/mcp?profile=free",
+  "auth_scheme": "none",
+  "tags": ["search", "web", "free", "keyless", "you.com"],
+  "num_tools": 1,
+  "license": "MIT",
+  "metadata": {
+    "team": "ai-development-tools",
+    "owner": "integrations@you.com",
+    "cost_center": "CC-2001", 
+    "compliance": ["SOC2"],
+    "deployment_region": "global",
+    "jira_project": "YDC-MCP",
+    "environment": "production"
+  },
+  "tool_list": [
+    {
+      "name": "you-search",
+      "parsed_description": {
+        "main": "Search the web using You.com's search engine with basic results and snippets. Free tier with rate limits and reduced features.",
+        "args": "query: The search query string. count: Optional number of results to return (default 5, max 10 in free tier).",
+        "returns": "SearchResponse object containing web results with titles, URLs, and snippets",
+        "raises": "You.com API errors for invalid queries, rate limits exceeded, or service issues"
+      },
+      "schema": {
+        "properties": {
+          "query": {
+            "description": "The search query string",
+            "title": "Query",
+            "type": "string"
+          },
+          "count": {
+            "default": 5,
+            "description": "Number of results to return (1-10, free tier limit)",
+            "maximum": 10,
+            "minimum": 1,
+            "title": "Count",
+            "type": "integer"
+          }
+        },
+        "required": ["query"],
+        "type": "object"
+      }
+    }
+  ]
+}

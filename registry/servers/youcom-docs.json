@@ -1,0 +1,50 @@
+{
+  "server_name": "You.com Docs Search",
+  "description": "Search You.com documentation and help resources using the specialized docs MCP server. Provides targeted search within You.com's documentation, guides, and support materials.",
+  "path": "/youcom-docs/",
+  "proxy_pass_url": "https://you.com/docs/_mcp/server",
+  "auth_scheme": "none",
+  "tags": ["documentation", "search", "help", "guides", "you.com"],
+  "num_tools": 1,
+  "license": "MIT",
+  "metadata": {
+    "team": "ai-development-tools",
+    "owner": "docs@you.com",
+    "cost_center": "CC-2001",
+    "compliance": ["SOC2"],
+    "deployment_region": "global", 
+    "jira_project": "YDC-DOCS",
+    "environment": "production"
+  },
+  "tool_list": [
+    {
+      "name": "search-docs",
+      "parsed_description": {
+        "main": "Search You.com documentation, API guides, and help resources for specific information.",
+        "args": "query: The documentation search query. section: Optional specific documentation section to search within.",
+        "returns": "DocsSearchResponse object containing relevant documentation pages with titles, URLs, and content excerpts",
+        "raises": "You.com docs API errors for invalid queries or service issues"
+      },
+      "schema": {
+        "properties": {
+          "query": {
+            "description": "The documentation search query",
+            "title": "Query",
+            "type": "string"
+          },
+          "section": {
+            "anyOf": [
+              {"type": "string"},
+              {"type": "null"}
+            ],
+            "default": null,
+            "description": "Optional specific documentation section (e.g., 'api', 'guides', 'faq')",
+            "title": "Section"
+          }
+        },
+        "required": ["query"],
+        "type": "object"
+      }
+    }
+  ]
+}

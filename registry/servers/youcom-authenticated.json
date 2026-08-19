@@ -1,0 +1,152 @@
+{
+  "server_name": "You.com Search & Research (Authenticated)",
+  "description": "Comprehensive web search, URL content extraction, and research capabilities via You.com's authenticated MCP server. Provides you-search, you-contents, and you-research tools for current web intelligence and cited synthesis.",
+  "path": "/youcom/",
+  "proxy_pass_url": "https://api.you.com/mcp",
+  "auth_scheme": "bearer",
+  "tags": ["search", "web", "research", "content", "citations", "you.com"],
+  "num_tools": 3,
+  "license": "MIT",
+  "metadata": {
+    "team": "ai-development-tools",
+    "owner": "integrations@you.com", 
+    "cost_center": "CC-2001",
+    "compliance": ["SOC2", "GDPR"],
+    "deployment_region": "global",
+    "jira_project": "YDC-MCP",
+    "environment": "production"
+  },
+  "tool_list": [
+    {
+      "name": "you-search",
+      "parsed_description": {
+        "main": "Search the web using You.com's search engine with current results, snippets, and source URLs.",
+        "args": "query: The search query string. count: Optional number of results to return (default 10, max 20). domain: Optional domain to restrict search to. safesearch: Optional safe search level ('strict', 'moderate', 'off'). country: Optional country code for localized results. freshness: Optional time filter ('day', 'week', 'month', 'year'). livecrawl: Optional crawling mode for real-time results.",
+        "returns": "SearchResponse object containing web results with titles, URLs, snippets, and metadata",
+        "raises": "You.com API errors for invalid queries, quota exceeded, or service issues"
+      },
+      "schema": {
+        "properties": {
+          "query": {
+            "description": "The search query string",
+            "title": "Query",
+            "type": "string"
+          },
+          "count": {
+            "default": 10,
+            "description": "Number of results to return (1-20)",
+            "maximum": 20,
+            "minimum": 1,
+            "title": "Count", 
+            "type": "integer"
+          },
+          "domain": {
+            "anyOf": [
+              {"type": "string"},
+              {"type": "null"}
+            ],
+            "default": null,
+            "description": "Optional domain to restrict search to (e.g., 'github.com')",
+            "title": "Domain"
+          },
+          "safesearch": {
+            "default": "moderate",
+            "description": "Safe search level: 'strict', 'moderate', or 'off'",
+            "enum": ["strict", "moderate", "off"],
+            "title": "Safe Search",
+            "type": "string"
+          },
+          "country": {
+            "anyOf": [
+              {"type": "string"},
+              {"type": "null"}
+            ],
+            "default": null,
+            "description": "Country code for localized results (e.g., 'US', 'GB')",
+            "title": "Country"
+          },
+          "freshness": {
+            "anyOf": [
+              {"type": "string"},
+              {"type": "null"}
+            ],
+            "default": null,
+            "description": "Time filter: 'day', 'week', 'month', or 'year'",
+            "enum": ["day", "week", "month", "year", null],
+            "title": "Freshness"
+          }
+        },
+        "required": ["query"],
+        "type": "object"
+      }
+    },
+    {
+      "name": "you-contents",
+      "parsed_description": {
+        "main": "Extract and read content from specific URLs using You.com's content extraction service.",
+        "args": "urls: List of URLs to extract content from. timeout: Optional timeout in seconds for extraction.",
+        "returns": "ContentsResponse object containing extracted text, metadata, and processing status for each URL",
+        "raises": "You.com API errors for invalid URLs, extraction failures, or service issues"
+      },
+      "schema": {
+        "properties": {
+          "urls": {
+            "description": "List of URLs to extract content from",
+            "items": {
+              "type": "string",
+              "format": "uri"
+            },
+            "title": "URLs",
+            "type": "array"
+          },
+          "timeout": {
+            "default": 30,
+            "description": "Timeout in seconds for content extraction",
+            "maximum": 60,
+            "minimum": 5,
+            "title": "Timeout",
+            "type": "integer"
+          }
+        },
+        "required": ["urls"],
+        "type": "object"
+      }
+    },
+    {
+      "name": "you-research",
+      "parsed_description": {
+        "main": "Perform comprehensive research on a topic with cited sources and synthesis using You.com's research engine.",
+        "args": "query: The research query or topic. depth: Optional research depth ('basic', 'comprehensive'). sources: Optional preferred source types.",
+        "returns": "ResearchResponse object containing synthesized research with citations, source analysis, and structured findings",
+        "raises": "You.com API errors for invalid queries, quota exceeded, or service issues"
+      },
+      "schema": {
+        "properties": {
+          "query": {
+            "description": "The research query or topic",
+            "title": "Query",
+            "type": "string"
+          },
+          "depth": {
+            "default": "comprehensive",
+            "description": "Research depth: 'basic' for quick overview or 'comprehensive' for detailed analysis",
+            "enum": ["basic", "comprehensive"],
+            "title": "Depth",
+            "type": "string"
+          },
+          "sources": {
+            "anyOf": [
+              {"type": "array", "items": {"type": "string"}},
+              {"type": "null"}
+            ],
+            "default": null,
+            "description": "Optional preferred source types (e.g., ['academic', 'news', 'government'])",
+            "title": "Sources"
+          }
+        },
+        "required": ["query"],
+        "type": "object"
+      }
+    }
+  ]
+}
