@@ -1366,3 +1366,17 @@ aws_registry_federation_enabled = true
 # set this only to pin a specific value. Avoid quotes/backslashes/$ (the registry
 # substitutes it verbatim into the generated nginx config).
 # egress_nginx_marker_secret         = ""
+
+# ---------------------------------------------------------------------------
+# Go /validate fast-path sidecar (issue #1652) - OPT-IN, default off.
+# When enabled, a tiny Go sidecar runs in the auth-server task and the
+# registry's nginx routes /validate to it (Keycloak RS256 bearer fast path);
+# everything else falls back to the Python auth-server. Leaving this unset
+# keeps /validate on the auth-server (unchanged, non-breaking).
+# To enable: set go_validate_enabled = true AND
+# validate_upstream_url = "http://go-validate:8899".
+# ---------------------------------------------------------------------------
+# go_validate_enabled   = true
+# go_validate_image_uri = "123456789012.dkr.ecr.us-east-1.amazonaws.com/mcp-gateway-go-validate:latest"
+# go_validate_audience  = "account"   # the aud claim your Keycloak tokens carry
+# validate_upstream_url = "http://go-validate:8899"

@@ -296,6 +296,9 @@ mongodb-configure:
 # Registry service configuration
 registry:
   app:
+    # Point nginx /validate at the go-validate sidecar (must match the auth-server
+    # goValidate.enabled switch above). Empty -> auth-server (unchanged). (issue #1652)
+    # validateUpstreamUrl: "http://auth-server.<namespace>.svc.cluster.local:8899"
     replicas: 2 # set to > 1 replica for high availability
     # Session cookie Domain attribute. Leave empty to default to
     # ".<global.domain>" (cookie valid across all subdomains of the
@@ -545,6 +548,15 @@ mcpgw:
   extraEnvFrom: []
 # Auth server configuration
 auth-server:
+  # Go /validate fast-path sidecar (issue #1652). OPT-IN. To enable end-to-end:
+  #   1. set goValidate.enabled: true (+ jwksUrl/issuer/audience for the fast path)
+  #   2. set registry.app.validateUpstreamUrl below so nginx routes /validate to it.
+  # Left disabled, /validate stays on the Python auth-server (unchanged).
+  goValidate:
+    enabled: false
+    # jwksUrl: "https://<keycloak-host>/realms/mcp-gateway/protocol/openid-connect/certs"
+    # issuer: "https://<keycloak-host>/realms/mcp-gateway"
+    # audience: "account"
   app:
     replicas: 2 # set to > 1 replica for high availability
     # Session cookie Domain attribute. See registry.app.sessionCookieDomain

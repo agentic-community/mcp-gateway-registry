@@ -23,6 +23,7 @@ aws ecr get-login-password --region "${REGION}" | docker login --username AWS --
 IMAGES=(
   "mcp-gateway-registry|docker/Dockerfile.registry|."
   "mcp-gateway-auth-server|docker/Dockerfile.auth|."
+  "mcp-gateway-go-validate|go-validate/Dockerfile|go-validate"
   "mcp-gateway-currenttime|docker/Dockerfile.mcp-server|servers/currenttime"
   "mcp-gateway-mcpgw|docker/Dockerfile.mcp-server|servers/mcpgw"
   "mcp-gateway-realserverfaketools|docker/Dockerfile.mcp-server|servers/realserverfaketools"

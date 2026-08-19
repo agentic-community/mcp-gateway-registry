@@ -12,6 +12,26 @@ image:
   repository: auth-server # Image name within the registry
   tag: "" # Overrides global.image.tag when set
   pullPolicy: "" # Overrides global.image.pullPolicy when set
+
+# Go /validate fast-path sidecar (issue #1652). OPT-IN: when enabled, a tiny Go
+# container runs alongside auth-server and the registry routes nginx /validate to
+# it. Leave disabled to keep /validate on the Python auth-server (unchanged).
+# Fast path engages only when jwksUrl + issuer + audience are all set; otherwise
+# it transparently proxies to the auth-server (safe fallback).
+goValidate:
+  enabled: false
+  image:
+    repository: go-validate # image name within the registry (shares global registry/tag)
+  jwksUrl: "" # e.g. https://keycloak.example.com/realms/mcp-gateway/protocol/openid-connect/certs
+  issuer: "" # e.g. https://keycloak.example.com/realms/mcp-gateway
+  audience: "" # the aud claim your tokens carry, e.g. "account"
+  resources:
+    requests:
+      cpu: 25m
+      memory: 32Mi
+    limits:
+      cpu: 250m
+      memory: 64Mi
 # Application configuration
 # ServiceAccount the auth-server pod runs as. Created by default so roles can be
 # attached to a stable identity. Set create=false + name to bring your own.

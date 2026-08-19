@@ -66,21 +66,28 @@ module "ecs_service_auth" {
   # Enable Service Connect
   service_connect_configuration = {
     namespace = aws_service_discovery_private_dns_namespace.mcp.arn
-    service = [{
+    service = concat([{
       client_alias = {
         port     = 8888
         dns_name = "auth-server"
       }
       port_name      = "auth-server"
       discovery_name = "auth-server"
-    }]
+      }], var.go_validate_enabled ? [{
+      client_alias = {
+        port     = 8899
+        dns_name = "go-validate"
+      }
+      port_name      = "go-validate"
+      discovery_name = "go-validate"
+    }] : [])
   }
 
   # Container definitions
   container_definitions = merge({
     auth-server = {
-      cpu                    = var.enable_observability ? tonumber(var.cpu) - local.adot_sidecar_cpu : tonumber(var.cpu)
-      memory                 = var.enable_observability ? tonumber(var.memory) - local.adot_sidecar_memory : tonumber(var.memory)
+      cpu                    = tonumber(var.cpu) - (var.enable_observability ? local.adot_sidecar_cpu : 0) - (var.go_validate_enabled ? 128 : 0)
+      memory                 = tonumber(var.memory) - (var.enable_observability ? local.adot_sidecar_memory : 0) - (var.go_validate_enabled ? 128 : 0)
       essential              = true
       image                  = var.auth_server_image_uri
       versionConsistency     = "disabled"
@@ -720,6 +727,54 @@ module "ecs_service_auth" {
           condition     = "START"
         }]
       }
+    } : {},
+    var.go_validate_enabled ? {
+      go-validate = {
+        cpu                    = 128
+        memory                 = 128
+        essential              = false
+        image                  = var.go_validate_image_uri
+        versionConsistency     = "disabled"
+        readonlyRootFilesystem = true
+
+        portMappings = [{
+          name          = "go-validate"
+          containerPort = 8899
+          protocol      = "tcp"
+        }]
+
+        # Fast path engages only when JWKS_URL + VALIDATE_ISSUER + VALIDATE_AUDIENCE
+        # are all set (and match the tokens); otherwise it reverse-proxies to the
+        # auth-server (same task, loopback), which is correct but not accelerated.
+        environment = [
+          { name = "GOVALIDATE_LISTEN", value = ":8899" },
+          { name = "AUTH_FALLBACK_URL", value = "http://localhost:18888" },
+          { name = "JWKS_URL", value = var.keycloak_domain != "" ? "https://${var.keycloak_domain}/realms/mcp-gateway/protocol/openid-connect/certs" : "" },
+          { name = "VALIDATE_ISSUER", value = var.keycloak_domain != "" ? "https://${var.keycloak_domain}/realms/mcp-gateway" : "" },
+          { name = "VALIDATE_AUDIENCE", value = var.go_validate_audience },
+          { name = "DOCUMENTDB_HOST", value = var.documentdb_endpoint },
+          { name = "DOCUMENTDB_PORT", value = "27017" },
+          { name = "DOCUMENTDB_DATABASE", value = var.documentdb_database },
+          { name = "DOCUMENTDB_NAMESPACE", value = var.documentdb_namespace },
+          { name = "DOCUMENTDB_USE_TLS", value = tostring(var.documentdb_use_tls) },
+        ]
+
+        secrets = [
+          { name = "SECRET_KEY", valueFrom = aws_secretsmanager_secret.secret_key.arn },
+          { name = "AUTH_SERVER_NGINX_MARKER_SECRET", valueFrom = aws_secretsmanager_secret.nginx_marker_secret.arn },
+          { name = "DOCUMENTDB_USERNAME", valueFrom = "${var.documentdb_credentials_secret_arn}:username::" },
+          { name = "DOCUMENTDB_PASSWORD", valueFrom = "${var.documentdb_credentials_secret_arn}:password::" },
+        ]
+
+        enable_cloudwatch_logging              = true
+        cloudwatch_log_group_name              = "/ecs/${local.name_prefix}-auth-govalidate"
+        cloudwatch_log_group_retention_in_days = 30
+
+        dependencies = [{
+          containerName = "auth-server"
+          condition     = "START"
+        }]
+      }
     } : {}
   )
 
@@ -898,6 +953,12 @@ module "ecs_service_registry" {
         {
           name  = "AUTH_SERVER_URL"
           value = var.auth_server_url
+        },
+        {
+          # nginx /validate upstream. Empty -> auth-server (default); set to the
+          # go-validate sidecar when enabled. Only /validate is affected.
+          name  = "VALIDATE_UPSTREAM_URL"
+          value = var.validate_upstream_url
         },
         {
           name  = "AUTH_SERVER_EXTERNAL_URL"
@@ -2092,6 +2153,20 @@ resource "aws_vpc_security_group_ingress_rule" "registry_to_auth" {
   to_port                      = 18888
   ip_protocol                  = "tcp"
   description                  = "Allow registry to access auth server"
+
+  tags = local.common_tags
+}
+
+# Allow registry to reach the go-validate sidecar (8899) in the auth task, only
+# when the sidecar is enabled. Service Connect proxy-to-proxy uses containerPort.
+resource "aws_vpc_security_group_ingress_rule" "registry_to_auth_govalidate" {
+  count                        = var.go_validate_enabled ? 1 : 0
+  security_group_id            = module.ecs_service_auth.security_group_id
+  referenced_security_group_id = module.ecs_service_registry.security_group_id
+  from_port                    = 8899
+  to_port                      = 8899
+  ip_protocol                  = "tcp"
+  description                  = "Allow registry to access the go-validate /validate sidecar"
 
   tags = local.common_tags
 }
