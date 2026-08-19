@@ -26,10 +26,11 @@ type jwksDoc struct {
 // keysetCache holds kid -> *rsa.PublicKey behind an atomic.Pointer so request
 // handlers read lock-free. On refresh failure it retains the last-good keyset (B4).
 type keysetCache struct {
-	url     string
-	keys    atomic.Pointer[map[string]*rsa.PublicKey]
-	client  *http.Client
-	healthy atomic.Bool
+	url          string
+	keys         atomic.Pointer[map[string]*rsa.PublicKey]
+	client       *http.Client
+	healthy      atomic.Bool
+	refreshFails atomic.Int64 // total failed refreshes, exposed at /metrics
 }
 
 // key returns the public key for a kid, or nil if absent.
@@ -105,14 +106,28 @@ func newKeysetCache(url string, refreshSec int) *keysetCache {
 		client: &http.Client{Timeout: 5 * time.Second},
 	}
 	if err := k.refresh(); err != nil {
-		log.Printf("WARN initial JWKS load failed (serving via fallback until it loads): %v", err)
+		k.refreshFails.Add(1)
+		// Loud: the fast path cannot verify ANY token until the keyset loads, so
+		// every request falls back to Python (correct, not accelerated).
+		log.Printf("ERROR go-validate: initial JWKS load FAILED from %s - fast path is DEGRADED (all /validate proxied to Python) until it loads: %v", url, err)
 	}
 	go func() {
 		ticker := time.NewTicker(time.Duration(refreshSec) * time.Second)
 		defer ticker.Stop()
 		for range ticker.C {
+			wasHealthy := k.healthy.Load()
 			if err := k.refresh(); err != nil {
-				log.Printf("WARN JWKS refresh failed, keeping last-good keyset: %v", err)
+				k.refreshFails.Add(1)
+				// Log the healthy->unhealthy transition at ERROR (a working fast
+				// path just broke); keep repeating failures at WARN so the signal
+				// stays visible without flooding.
+				if wasHealthy {
+					log.Printf("ERROR go-validate: JWKS refresh FAILED and the keyset is now STALE - fast path DEGRADED, all /validate falling back to Python until recovery: %v", err)
+				} else {
+					log.Printf("WARN go-validate: JWKS still failing (fast path degraded), keeping last-good keyset: %v", err)
+				}
+			} else if !wasHealthy {
+				log.Printf("INFO go-validate: JWKS recovered - fast path healthy again")
 			}
 		}
 	}()

@@ -29,8 +29,9 @@ global:
   oauthProviderSecretName: "oauth-provider-secret"
   # Single switch for the /validate fast-path sidecar (issue #1652). true deploys
   # the go-validate sidecar in the auth-server pod AND routes nginx /validate to it.
-  # You still set auth-server.fastPath.audience to engage the fast path (JWKS/issuer
-  # auto-derive from Keycloak); empty audience = safe fallback-only.
+  # The fast path then engages automatically: JWKS URL, accepted issuers and accepted
+  # audiences all auto-derive from the Keycloak config (matching Python). No audience
+  # needs to be set; non-matching tokens fall back safely to Python.
   fastPath:
     enabled: false
   # Existing secret references - set these to use pre-existing secrets instead of chart-managed ones.
@@ -554,10 +555,12 @@ mcpgw:
   extraEnvFrom: []
 # Auth server configuration
 auth-server:
-  # Fast path is toggled by global.fastPath.enabled above (single switch:
-  # deploys the sidecar AND routes /validate). Set the audience here to engage it.
+  # Fast path is toggled by global.fastPath.enabled above (single switch: deploys
+  # the sidecar AND routes /validate). It engages automatically once enabled -
+  # issuers/audiences/JWKS auto-derive from Keycloak. Override only to narrow the
+  # derived sets (comma/space-separated LISTs); never set audience to "account".
   fastPath:
-    # audience: "account"   # required to accelerate; empty = safe fallback-only
+    # audience: "mcp-gateway mcp-gateway-m2m"   # optional override; empty auto-derives
   app:
     replicas: 2 # set to > 1 replica for high availability
     # Session cookie Domain attribute. See registry.app.sessionCookieDomain

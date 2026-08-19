@@ -364,6 +364,19 @@ sanitizer that isn't called) is equivalent to no check.
   resource in the tenant, is then accepted (confused deputy). Enforce audience
   against a config-driven allowlist with `verify_aud=True`; fail closed (reject)
   when the allowlist is unconfigured rather than accepting any audience.
+- **Never accept the IdP's universal default audience.** Keycloak stamps
+  `account` on EVERY realm token regardless of which client requested it (other
+  IdPs have equivalents), so accepting it lets a token minted for a different
+  same-realm client be replayed against this gateway (cross-client confused
+  deputy). The accepted-audience allowlist must name THIS gateway (its client
+  ids + a gateway-specific custom audience) and must exclude the universal
+  default even if an operator supplies it (strip + log, don't honor). A
+  re-implementation of a verifier (e.g. a Go fast-path mirroring a Python one)
+  must reproduce the SAME issuer list and audience allowlist, not a looser
+  single-value check — a looser fast path that accepts what the authoritative
+  path rejects is a bypass. Match on ANY member of each list (a token's `iss`
+  legitimately varies by the host the client reached the IdP through:
+  external/internal/localhost).
 - **Never auto-grant groups/roles/admin from a code-shipped mapping.** A
   hardcoded `client_id → [groups]` (or default-admin) table in an M2M/SSO sync
   path silently confers privilege. Drive the mapping from config, fail closed to

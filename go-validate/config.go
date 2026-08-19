@@ -13,11 +13,16 @@ import (
 // reverse-proxied to the Python auth-server). This fails closed: when we cannot
 // safely verify a token ourselves, Python remains authoritative.
 type Config struct {
-	Listen         string
-	SecretKey      string
-	JWKSURL        string
-	Issuer         string
-	Audience       string
+	Listen    string
+	SecretKey string
+	JWKSURL   string
+	// Issuers/Audiences are lists: a Keycloak token's iss is whatever host the
+	// client reached Keycloak through (external URL for browser logins, internal
+	// or localhost for service/M2M callers), and its aud names the specific
+	// client. Matching ANY member mirrors the Python Keycloak provider, which
+	// accepts three issuer URLs and a set of gateway-identifying audiences.
+	Issuers        []string
+	Audiences      []string
 	FallbackURL    string
 	JWKSRefreshSec int
 	ScopeTTLSec    int
@@ -64,6 +69,89 @@ func getenv(key, def string) string {
 	return def
 }
 
+// parseList splits a comma/whitespace-separated env value into a trimmed,
+// de-duplicated, non-empty slice (order preserved). Lets VALIDATE_ISSUER /
+// VALIDATE_AUDIENCE carry more than one value.
+func parseList(s string) []string {
+	fields := strings.FieldsFunc(s, func(r rune) bool {
+		return r == ',' || r == ' ' || r == '\t' || r == '\n' || r == '\r'
+	})
+	seen := map[string]bool{}
+	out := []string{}
+	for _, f := range fields {
+		if f == "" || seen[f] {
+			continue
+		}
+		seen[f] = true
+		out = append(out, f)
+	}
+	return out
+}
+
+// deriveIssuers builds the same three issuer URLs the Python Keycloak provider
+// accepts (external, internal, localhost), so a token minted against any of
+// those hosts fast-paths instead of falling back. Empty bases are skipped.
+func deriveIssuers(realm string) []string {
+	out := []string{}
+	add := func(base string) {
+		base = strings.TrimRight(base, "/")
+		if base == "" {
+			return
+		}
+		iss := fmt.Sprintf("%s/realms/%s", base, realm)
+		for _, e := range out {
+			if e == iss {
+				return
+			}
+		}
+		out = append(out, iss)
+	}
+	add(os.Getenv("KEYCLOAK_EXTERNAL_URL")) // browser logins
+	add(os.Getenv("KEYCLOAK_URL"))          // internal service-to-service
+	add("http://localhost:8080")            // local dev / host-minted tokens
+	return out
+}
+
+// deriveAudiences builds the set of gateway-identifying audiences Python accepts
+// (web client id, M2M client id, "mcp-gateway"). "account" is deliberately
+// excluded: it rides on EVERY realm token, so accepting it would let a token
+// minted for a different client in the same realm be replayed against the
+// gateway (a same-realm cross-client confused-deputy).
+func deriveAudiences() []string {
+	out := []string{}
+	add := func(a string) {
+		a = strings.TrimSpace(a)
+		if a == "" || a == "account" {
+			return
+		}
+		for _, e := range out {
+			if e == a {
+				return
+			}
+		}
+		out = append(out, a)
+	}
+	add(os.Getenv("KEYCLOAK_CLIENT_ID"))
+	add(os.Getenv("KEYCLOAK_M2M_CLIENT_ID"))
+	add("mcp-gateway")
+	return out
+}
+
+// dropAccount removes "account" from an operator-supplied audience list and logs
+// why, so copying the old VALIDATE_AUDIENCE=account value cannot silently reopen
+// the cross-client confused-deputy that Python fails closed on.
+func dropAccount(in []string) []string {
+	out := []string{}
+	for _, a := range in {
+		if a == "account" {
+			log.Printf("ignoring VALIDATE_AUDIENCE entry \"account\": it rides on every realm token; accepting it is a cross-client confused-deputy (matches Python, which rejects it)")
+			continue
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
 // loadConfig reads configuration from the environment and validates the signing key.
 // It exits the process (fail closed) when SECRET_KEY is present but weak/invalid.
 func loadConfig() Config {
@@ -71,8 +159,6 @@ func loadConfig() Config {
 		Listen:         getenv("GOVALIDATE_LISTEN", ":8899"),
 		SecretKey:      os.Getenv("SECRET_KEY"),
 		JWKSURL:        os.Getenv("JWKS_URL"),
-		Issuer:         os.Getenv("VALIDATE_ISSUER"),
-		Audience:       os.Getenv("VALIDATE_AUDIENCE"),
 		FallbackURL:    getenv("AUTH_FALLBACK_URL", "http://auth-server:8888"),
 		JWKSRefreshSec: atoiDefault(os.Getenv("JWKS_REFRESH_SECONDS"), 300),
 		ScopeTTLSec:    atoiDefault(os.Getenv("SCOPE_SNAPSHOT_TTL_SECONDS"), 60),
@@ -91,16 +177,21 @@ func loadConfig() Config {
 			cfg.JWKSURL = fmt.Sprintf("%s/realms/%s/protocol/openid-connect/certs", kc, realm)
 		}
 	}
-	if cfg.Issuer == "" {
-		// Tokens carry the issuer of the URL the client used, usually the external
-		// Keycloak URL; fall back to the internal URL when no external is set.
-		iss := strings.TrimRight(os.Getenv("KEYCLOAK_EXTERNAL_URL"), "/")
-		if iss == "" {
-			iss = strings.TrimRight(os.Getenv("KEYCLOAK_URL"), "/")
-		}
-		if iss != "" {
-			cfg.Issuer = fmt.Sprintf("%s/realms/%s", iss, realm)
-		}
+
+	// Issuers: an explicit VALIDATE_ISSUER list wins; otherwise derive the same
+	// external/internal/localhost issuer URLs Python accepts. A token matches when
+	// its iss equals ANY member, so both browser-login and service tokens fast-path.
+	cfg.Issuers = parseList(os.Getenv("VALIDATE_ISSUER"))
+	if len(cfg.Issuers) == 0 {
+		cfg.Issuers = deriveIssuers(realm)
+	}
+
+	// Audiences: an explicit VALIDATE_AUDIENCE list wins (with "account" stripped,
+	// fail closed); otherwise derive the gateway-identifying audiences Python
+	// accepts. A token matches when its aud contains ANY member.
+	cfg.Audiences = dropAccount(parseList(os.Getenv("VALIDATE_AUDIENCE")))
+	if len(cfg.Audiences) == 0 {
+		cfg.Audiences = deriveAudiences()
 	}
 
 	// B3: validate the signing secret. If a secret is provided at all it must be
@@ -114,8 +205,8 @@ func loadConfig() Config {
 	// Fast path requires everything needed to verify AND mint safely.
 	cfg.FastPathReady = cfg.SecretKey != "" &&
 		cfg.JWKSURL != "" &&
-		cfg.Issuer != "" &&
-		cfg.Audience != ""
+		len(cfg.Issuers) > 0 &&
+		len(cfg.Audiences) > 0
 
 	return cfg
 }

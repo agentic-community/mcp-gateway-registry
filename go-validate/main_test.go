@@ -214,7 +214,7 @@ func TestHandleValidate_FastPathSuccess(t *testing.T) {
 	s := &server{
 		cfg: Config{
 			FastPathReady: true, SecretKey: "unit-test-secret-32-bytes-xxxxxxxxxx",
-			Issuer: tIss, Audience: tAud, AuthMethod: "keycloak",
+			Issuers: []string{tIss}, Audiences: []string{tAud}, AuthMethod: "keycloak",
 		},
 		ks:       ks,
 		scopes:   res,
@@ -245,7 +245,7 @@ func TestHandleValidate_RecognizedInvalidIs401(t *testing.T) {
 	priv, _ := rsa.GenerateKey(rand.Reader, 2048)
 	ks := testKeyset(&priv.PublicKey, "kid1")
 	s := &server{
-		cfg:      Config{FastPathReady: true, SecretKey: "unit-test-secret-32-bytes-xxxxxxxxxx", Issuer: tIss, Audience: tAud},
+		cfg:      Config{FastPathReady: true, SecretKey: "unit-test-secret-32-bytes-xxxxxxxxxx", Issuers: []string{tIss}, Audiences: []string{tAud}},
 		ks:       ks,
 		scopes:   &scopeResolver{},
 		fallback: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { t.Fatal("should not fall back on bad sig") }),
@@ -272,6 +272,51 @@ func TestHealthAndMetrics(t *testing.T) {
 	s.handleMetrics(rr2, httptest.NewRequest("GET", "/metrics", nil))
 	if rr2.Code != http.StatusOK || rr2.Body.Len() == 0 {
 		t.Fatalf("metrics want 200 + body, got %d len=%d", rr2.Code, rr2.Body.Len())
+	}
+	// Fallback-only sidecar reports ready=0.
+	body := rr2.Body.String()
+	for _, want := range []string{
+		"govalidate_fastpath_ready 0",
+		"govalidate_jwks_healthy 0",
+		"govalidate_jwks_refresh_failures_total 0",
+		"govalidate_fallback 0",
+	} {
+		if !contains(body, want) {
+			t.Fatalf("metrics missing %q\n%s", want, body)
+		}
+	}
+}
+
+func TestMetrics_DegradedWhenReadyButJWKSUnhealthy(t *testing.T) {
+	ks := &keysetCache{} // healthy defaults to false, keys nil
+	s := &server{cfg: Config{FastPathReady: true}, ks: ks}
+	// /health must fail LOUDLY (503) when ready but the keyset is unhealthy.
+	rr := httptest.NewRecorder()
+	s.handleHealth(rr, httptest.NewRequest("GET", "/health", nil))
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("degraded health want 503, got %d", rr.Code)
+	}
+	rr2 := httptest.NewRecorder()
+	s.handleMetrics(rr2, httptest.NewRequest("GET", "/metrics", nil))
+	body := rr2.Body.String()
+	// ready=1 + jwks_healthy=0 is the "silently degraded" signal to alert on.
+	if !contains(body, "govalidate_fastpath_ready 1") || !contains(body, "govalidate_jwks_healthy 0") {
+		t.Fatalf("expected ready=1 + jwks_healthy=0 (degraded), got:\n%s", body)
+	}
+}
+
+func TestMissingReason(t *testing.T) {
+	// Nothing set -> every prerequisite named.
+	got := missingReason(Config{})
+	for _, want := range []string{"SECRET_KEY", "JWKS_URL", "VALIDATE_ISSUER", "VALIDATE_AUDIENCE"} {
+		if !contains(got, want) {
+			t.Fatalf("missingReason should name %q, got %q", want, got)
+		}
+	}
+	// Fully configured -> no missing config.
+	ready := Config{SecretKey: "x", JWKSURL: "u", Issuers: []string{"i"}, Audiences: []string{"a"}}
+	if missingReason(ready) != "no missing config" {
+		t.Fatalf("fully configured should report none, got %q", missingReason(ready))
 	}
 }
 

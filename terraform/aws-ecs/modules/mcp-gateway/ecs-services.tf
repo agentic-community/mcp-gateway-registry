@@ -743,14 +743,21 @@ module "ecs_service_auth" {
           protocol      = "tcp"
         }]
 
-        # Fast path engages only when JWKS_URL + VALIDATE_ISSUER + VALIDATE_AUDIENCE
-        # are all set (and match the tokens); otherwise it reverse-proxies to the
-        # auth-server (same task, loopback), which is correct but not accelerated.
+        # The sidecar auto-derives JWKS_URL, the accepted issuer list and the
+        # accepted audience list from the KEYCLOAK_* vars below (same values the
+        # auth-server uses), matching the Python Keycloak provider. It engages when
+        # SECRET_KEY + a reachable Keycloak are present; otherwise it reverse-proxies
+        # to the auth-server (same task, loopback), which is correct but not
+        # accelerated. validate_fast_path_audience overrides the derived audience
+        # list only when set (never "account" -> refused as a confused-deputy).
         environment = [
           { name = "GOVALIDATE_LISTEN", value = ":8899" },
           { name = "AUTH_FALLBACK_URL", value = "http://localhost:18888" },
-          { name = "JWKS_URL", value = var.keycloak_domain != "" ? "https://${var.keycloak_domain}/realms/mcp-gateway/protocol/openid-connect/certs" : "" },
-          { name = "VALIDATE_ISSUER", value = var.keycloak_domain != "" ? "https://${var.keycloak_domain}/realms/mcp-gateway" : "" },
+          { name = "KEYCLOAK_URL", value = var.keycloak_domain != "" ? "https://${var.keycloak_domain}" : "" },
+          { name = "KEYCLOAK_EXTERNAL_URL", value = var.keycloak_domain != "" ? "https://${var.keycloak_domain}" : "" },
+          { name = "KEYCLOAK_REALM", value = "mcp-gateway" },
+          { name = "KEYCLOAK_CLIENT_ID", value = "mcp-gateway-web" },
+          { name = "KEYCLOAK_M2M_CLIENT_ID", value = "mcp-gateway-m2m" },
           { name = "VALIDATE_AUDIENCE", value = var.validate_fast_path_audience },
           { name = "DOCUMENTDB_HOST", value = var.documentdb_endpoint },
           { name = "DOCUMENTDB_PORT", value = "27017" },

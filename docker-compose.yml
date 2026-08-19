@@ -618,12 +618,19 @@ services:
       # Fast path engages only when JWKS_URL + VALIDATE_ISSUER + VALIDATE_AUDIENCE are
       # all set and match the tokens; otherwise every /validate request is transparently
       # proxied to the auth-server (correct, just not accelerated).
-      # KEYCLOAK_* let go-validate auto-derive JWKS_URL + VALIDATE_ISSUER when unset.
+      # KEYCLOAK_* let go-validate auto-derive JWKS_URL, the accepted issuer list
+      # (external + internal + localhost) and the accepted audience list (web
+      # client id + M2M client id + "mcp-gateway") when the VALIDATE_* overrides
+      # are left empty, matching the Python Keycloak provider exactly.
       - KEYCLOAK_URL=${KEYCLOAK_URL:-http://keycloak:8080}
       - KEYCLOAK_EXTERNAL_URL=${KEYCLOAK_EXTERNAL_URL:-}
       - KEYCLOAK_REALM=${KEYCLOAK_REALM:-mcp-gateway}
-      # JWKS_URL + VALIDATE_ISSUER auto-derive from the KEYCLOAK_* vars above when
-      # left empty; set VALIDATE_JWKS_URL / VALIDATE_ISSUER in .env only to override.
+      - KEYCLOAK_CLIENT_ID=${KEYCLOAK_CLIENT_ID:-mcp-gateway-web}
+      - KEYCLOAK_M2M_CLIENT_ID=${KEYCLOAK_M2M_CLIENT_ID:-mcp-gateway-m2m}
+      # JWKS_URL, VALIDATE_ISSUER and VALIDATE_AUDIENCE auto-derive from the
+      # KEYCLOAK_* vars above when left empty. VALIDATE_ISSUER / VALIDATE_AUDIENCE
+      # accept comma/space-separated LISTS to override; "account" is refused as an
+      # audience (it rides on every realm token -> cross-client confused-deputy).
       - JWKS_URL=${VALIDATE_JWKS_URL:-}
       - VALIDATE_ISSUER=${VALIDATE_ISSUER:-}
       - VALIDATE_AUDIENCE=${VALIDATE_AUDIENCE:-}

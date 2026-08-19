@@ -1368,15 +1368,19 @@ aws_registry_federation_enabled = true
 # egress_nginx_marker_secret         = ""
 
 # ---------------------------------------------------------------------------
-# Go /validate fast-path sidecar (issue #1652) - OPT-IN, default off.
-# When enabled, a tiny Go sidecar runs in the auth-server task and the
-# registry's nginx routes /validate to it (Keycloak RS256 bearer fast path);
-# everything else falls back to the Python auth-server. Leaving this unset
-# keeps /validate on the auth-server (unchanged, non-breaking).
-# To enable: set validate_fast_path_enabled = true AND
-# validate_upstream_url = "http://go-validate:8899".
+# Go /validate fast-path sidecar (issue #1652) - ENABLED in this example.
+# A tiny Go sidecar runs in the auth-server task and the registry's nginx routes
+# /validate to it (Keycloak RS256 bearer fast path); everything else falls back to
+# the Python auth-server. Once enabled the fast path engages automatically: JWKS,
+# accepted issuers and accepted audiences all auto-derive from the Keycloak config
+# (matching Python). No audience needs to be set; image_uri defaults to the public
+# ECR go-validate image, and validate_upstream_url auto-routes to the sidecar.
+#
+# NOTE: the variable DEFAULT is false, so existing stacks that upgrade WITHOUT
+# copying this line are unaffected (non-breaking). This example turns it on so new
+# deployments get the fast path out of the box. Set to false to keep pure Python.
 # ---------------------------------------------------------------------------
-# validate_fast_path_enabled   = true
-# validate_fast_path_image_uri = "123456789012.dkr.ecr.us-east-1.amazonaws.com/mcp-gateway-go-validate:latest"
-# validate_fast_path_audience  = "account"   # the aud claim your Keycloak tokens carry
-# validate_upstream_url = "http://go-validate:8899"
+validate_fast_path_enabled = true
+# validate_fast_path_image_uri = "123456789012.dkr.ecr.us-east-1.amazonaws.com/mcp-gateway-go-validate:latest"  # optional; defaults to the public ECR image
+# validate_fast_path_audience  = "mcp-gateway mcp-gateway-m2m"   # optional override; empty auto-derives (never "account")
+# validate_upstream_url = "http://go-validate:8899"   # optional; auto-set when enabled

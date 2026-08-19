@@ -60,14 +60,14 @@ func TestVerifyRS256(t *testing.T) {
 
 	t.Run("valid", func(t *testing.T) {
 		tok := mintRS256(t, priv, "kid1", baseClaims())
-		c, err := verifyRS256(tok, ks, tIss, tAud)
+		c, err := verifyRS256(tok, ks, []string{tIss}, []string{tAud})
 		if err != nil || c == nil || c.Username != "svc" || c.Azp != "svc-client" {
 			t.Fatalf("valid token failed: err=%v claims=%+v", err, c)
 		}
 	})
 	t.Run("bad signature -> 401 (errInvalidToken)", func(t *testing.T) {
 		tok := mintRS256(t, priv, "kid1", baseClaims())
-		if _, err := verifyRS256(tok[:len(tok)-2]+"xx", ks, tIss, tAud); err != errInvalidToken {
+		if _, err := verifyRS256(tok[:len(tok)-2]+"xx", ks, []string{tIss}, []string{tAud}); err != errInvalidToken {
 			t.Fatalf("want errInvalidToken, got %v", err)
 		}
 	})
@@ -75,31 +75,55 @@ func TestVerifyRS256(t *testing.T) {
 		c := baseClaims()
 		c["exp"] = time.Now().Add(-time.Hour).Unix()
 		tok := mintRS256(t, priv, "kid1", c)
-		if _, err := verifyRS256(tok, ks, tIss, tAud); err != errInvalidToken {
+		if _, err := verifyRS256(tok, ks, []string{tIss}, []string{tAud}); err != errInvalidToken {
 			t.Fatalf("want errInvalidToken (expired), got %v", err)
 		}
 	})
 	t.Run("unknown kid -> fallback (errUnknownKey)", func(t *testing.T) {
 		tok := mintRS256(t, priv, "otherkid", baseClaims())
-		if _, err := verifyRS256(tok, ks, tIss, tAud); err != errUnknownKey {
+		if _, err := verifyRS256(tok, ks, []string{tIss}, []string{tAud}); err != errUnknownKey {
 			t.Fatalf("want errUnknownKey, got %v", err)
 		}
 	})
 	t.Run("wrong issuer -> fallback", func(t *testing.T) {
 		tok := mintRS256(t, priv, "kid1", baseClaims())
-		if _, err := verifyRS256(tok, ks, "https://other", tAud); err != errUnknownKey {
+		if _, err := verifyRS256(tok, ks, []string{"https://other"}, []string{tAud}); err != errUnknownKey {
 			t.Fatalf("want errUnknownKey (iss), got %v", err)
 		}
 	})
 	t.Run("wrong audience -> fallback (never 401)", func(t *testing.T) {
 		tok := mintRS256(t, priv, "kid1", baseClaims())
-		if _, err := verifyRS256(tok, ks, tIss, "different-aud"); err != errUnknownKey {
+		if _, err := verifyRS256(tok, ks, []string{tIss}, []string{"different-aud"}); err != errUnknownKey {
 			t.Fatalf("want errUnknownKey (aud), got %v", err)
 		}
 	})
 	t.Run("not a JWT -> fallback", func(t *testing.T) {
-		if _, err := verifyRS256("not.a", ks, tIss, tAud); err != errNotJWT {
+		if _, err := verifyRS256("not.a", ks, []string{tIss}, []string{tAud}); err != errNotJWT {
 			t.Fatalf("want errNotJWT, got %v", err)
+		}
+	})
+	t.Run("iss matches ANY issuer in the list", func(t *testing.T) {
+		// token minted with tIss; tIss is the SECOND accepted issuer.
+		tok := mintRS256(t, priv, "kid1", baseClaims())
+		issuers := []string{"https://external/realms/mcp-gateway", tIss}
+		if _, err := verifyRS256(tok, ks, issuers, []string{tAud}); err != nil {
+			t.Fatalf("token iss should match a non-first list member: %v", err)
+		}
+	})
+	t.Run("aud matches ANY audience in the list", func(t *testing.T) {
+		c := baseClaims()
+		c["aud"] = []string{"mcp-gateway", "account"} // realm token shape
+		tok := mintRS256(t, priv, "kid1", c)
+		// Accept mcp-gateway (parity), NOT account -> must still verify on mcp-gateway.
+		if _, err := verifyRS256(tok, ks, []string{tIss}, []string{"mcp-gateway"}); err != nil {
+			t.Fatalf("aud list member should match: %v", err)
+		}
+		// A token carrying ONLY account must NOT verify when account is not accepted.
+		c2 := baseClaims()
+		c2["aud"] = "account"
+		tok2 := mintRS256(t, priv, "kid1", c2)
+		if _, err := verifyRS256(tok2, ks, []string{tIss}, []string{"mcp-gateway"}); err != errUnknownKey {
+			t.Fatalf("account-only token must fall back when account not accepted, got %v", err)
 		}
 	})
 }

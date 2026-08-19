@@ -46,6 +46,28 @@ var perUserIdPMethods = map[string]bool{
 	"jwt": true, "boto3": true,
 }
 
+// missingReason lists which fast-path prerequisites are unset, so a FALLBACK-ONLY
+// startup log tells the operator exactly what to fix instead of just "not ready".
+func missingReason(cfg Config) string {
+	missing := []string{}
+	if cfg.SecretKey == "" {
+		missing = append(missing, "SECRET_KEY")
+	}
+	if cfg.JWKSURL == "" {
+		missing = append(missing, "JWKS_URL (or KEYCLOAK_URL to derive it)")
+	}
+	if len(cfg.Issuers) == 0 {
+		missing = append(missing, "VALIDATE_ISSUER (or KEYCLOAK_URL/KEYCLOAK_EXTERNAL_URL to derive it)")
+	}
+	if len(cfg.Audiences) == 0 {
+		missing = append(missing, "VALIDATE_AUDIENCE (or KEYCLOAK_CLIENT_ID/KEYCLOAK_M2M_CLIENT_ID to derive it)")
+	}
+	if len(missing) == 0 {
+		return "no missing config"
+	}
+	return "missing " + strings.Join(missing, ", ")
+}
+
 // canonicalAuthMethod returns the egress-principal bucket stamped into the internal
 // tokens. Per-user IdP methods canonicalize to "oauth2"; others pass through.
 func canonicalAuthMethod(method string) string {
@@ -153,7 +175,7 @@ func (s *server) handleValidate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	claims, err := verifyRS256(tok, s.ks, s.cfg.Issuer, s.cfg.Audience)
+	claims, err := verifyRS256(tok, s.ks, s.cfg.Issuers, s.cfg.Audiences)
 	switch err {
 	case nil:
 		// verified below
@@ -247,11 +269,39 @@ func (s *server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write([]byte("ok\n"))
 }
 
+// handleMetrics exposes counters plus two health gauges so a "fast path silently
+// not working" state is visible on a dashboard, not just in logs: govalidate_
+// fastpath_ready (is it configured to accelerate at all) and govalidate_jwks_
+// healthy (can it currently verify tokens). When ready=1 but jwks_healthy=0, the
+// fast path is degraded and everything is falling back to Python — alert on that.
 func (s *server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
+	ready := int64(0)
+	if s.cfg.FastPathReady {
+		ready = 1
+	}
+	jwksHealthy := int64(0)
+	refreshFails := int64(0)
+	if s.ks != nil {
+		if s.ks.healthy.Load() {
+			jwksHealthy = 1
+		}
+		refreshFails = s.ks.refreshFails.Load()
+	}
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 	_, _ = w.Write([]byte(
-		"govalidate_fastpath_ok " + itoa(s.stats.fastOK.Load()) + "\n" +
+		"# HELP govalidate_fastpath_ready 1 if the fast path is configured (else all requests proxy to Python)\n" +
+			"# TYPE govalidate_fastpath_ready gauge\n" +
+			"govalidate_fastpath_ready " + itoa(ready) + "\n" +
+			"# HELP govalidate_jwks_healthy 1 if the JWKS keyset is currently loaded (else fast path degraded)\n" +
+			"# TYPE govalidate_jwks_healthy gauge\n" +
+			"govalidate_jwks_healthy " + itoa(jwksHealthy) + "\n" +
+			"# TYPE govalidate_jwks_refresh_failures_total counter\n" +
+			"govalidate_jwks_refresh_failures_total " + itoa(refreshFails) + "\n" +
+			"# TYPE govalidate_fastpath_ok counter\n" +
+			"govalidate_fastpath_ok " + itoa(s.stats.fastOK.Load()) + "\n" +
+			"# TYPE govalidate_unauthorized counter\n" +
 			"govalidate_unauthorized " + itoa(s.stats.unauth.Load()) + "\n" +
+			"# TYPE govalidate_fallback counter\n" +
 			"govalidate_fallback " + itoa(s.stats.fallback.Load()) + "\n"))
 }
 
@@ -304,10 +354,14 @@ func main() {
 	mux.HandleFunc("/health", s.handleHealth)
 	mux.HandleFunc("/metrics", s.handleMetrics)
 
-	mode := "fast-path"
-	if !cfg.FastPathReady {
-		mode = "FALLBACK-ONLY (SECRET_KEY/JWKS_URL/VALIDATE_ISSUER/VALIDATE_AUDIENCE not all set)"
+	if cfg.FastPathReady {
+		log.Printf("go-validate listening on %s | mode=fast-path | fallback=%s", cfg.Listen, cfg.FallbackURL)
+		log.Printf("accepted issuers=%v | accepted audiences=%v", cfg.Issuers, cfg.Audiences)
+	} else {
+		// Loud: an operator who deployed the sidecar expecting acceleration must
+		// see WHY it is only proxying, not discover it from a flat latency graph.
+		log.Printf("WARN go-validate listening on %s in FALLBACK-ONLY mode: %s. Every /validate request is proxied to Python (correct, NOT accelerated). fallback=%s",
+			cfg.Listen, missingReason(cfg), cfg.FallbackURL)
 	}
-	log.Printf("go-validate listening on %s | mode=%s | fallback=%s", cfg.Listen, mode, cfg.FallbackURL)
 	log.Fatal(http.ListenAndServe(cfg.Listen, mux))
 }
