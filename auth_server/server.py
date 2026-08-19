@@ -1868,6 +1868,56 @@ async def validate_server_tool_access(
         return False  # Deny access on error
 
 
+async def _scopes_with_server_entry(
+    server_name: str,
+    user_scopes: list[str],
+) -> list[str]:
+    """Return the caller's scopes that carry a ``server_access`` entry for a server.
+
+    Diagnostics only -- this never affects an authorization decision. It answers
+    "did the scope lookup find anything at all for this server", which is what
+    separates a configuration error (no entry in any scope, so every tool is
+    filtered out) from a correctly empty allowlist (an entry exists but grants no
+    tools). Those two are indistinguishable in the response: both produce a valid
+    JSON-RPC result with an empty tools array.
+
+    Uses the bulk lookup, so this costs one round-trip regardless of how many
+    scopes the caller has. The per-tool checks in the caller already issue one
+    lookup per scope per tool, so this is negligible next to them.
+
+    Args:
+        server_name: Registered server name (the scope key, no transport suffix).
+        user_scopes: Scopes resolved for the caller.
+
+    Returns:
+        The matching scope names, in the order the caller's scopes were given.
+        Empty when no scope carries an entry for this server. Never raises.
+    """
+    matched: list[str] = []
+    # The whole body is guarded: the caller documents "never raises", and this
+    # runs purely for a log line, so a lookup or shape surprise must never turn
+    # a successful tools/list into a 500.
+    try:
+        scope_repo = get_scope_repository()
+        scope_rules = await scope_repo.get_server_scopes_bulk(user_scopes)
+        if not isinstance(scope_rules, dict):
+            return []
+        for scope in user_scopes:
+            entries = scope_rules.get(scope)
+            if not isinstance(entries, list):
+                continue
+            for server_config in entries:
+                if not isinstance(server_config, dict):
+                    continue
+                if _server_names_match(server_config.get("server"), server_name):
+                    matched.append(scope)
+                    break
+    except Exception as exc:
+        logger.debug(f"_scopes_with_server_entry: scope lookup failed: {exc}")
+        return []
+    return matched
+
+
 async def filter_tools_list_response(
     server_name: str,
     user_scopes: list[str],
@@ -1884,7 +1934,11 @@ async def filter_tools_list_response(
     tools: ["*"] / ["all"]).
 
     Args:
-        server_name: Name of the MCP server whose tools/list is being filtered.
+        server_name: The REGISTERED server name, i.e. the scope key, with no
+            transport suffix. Callers holding a proxy path (``myserver/mcp``)
+            must run it through _registered_server_from_proxy_path first --
+            passing the suffixed form silently matches no scope entry and
+            filters every tool out (issue #1647).
         user_scopes: Scopes resolved for the caller.
         tools_list: The raw tools array from the upstream JSON-RPC result.
 
@@ -1924,10 +1978,32 @@ async def filter_tools_list_response(
             kept.append(tool)
 
     after_count = len(kept)
+
+    # Which scope entry actually matched. Without this the before/after counts
+    # alone cannot tell a correct filter from a scope-key mismatch (issue #1647).
+    matched_scopes = await _scopes_with_server_entry(server_name, user_scopes)
     logger.info(
         f"filter_tools_list_response: server={server_name} "
+        f"scopes_matched={matched_scopes} "
         f"before={before_count} after={after_count}"
     )
+
+    # An empty result stays empty -- authorization always fails closed. But
+    # "no scope entry exists for this server" is a configuration error, not an
+    # empty allowlist, and the two are indistinguishable to the client: both
+    # yield a valid JSON-RPC result with zero tools, so the connector looks
+    # healthy and nothing surfaces to the user. Say so loudly instead.
+    if before_count and not after_count and not matched_scopes:
+        logger.error(
+            f"filter_tools_list_response: server={server_name} has no server_access entry "
+            f"in any of the caller's {len(user_scopes)} scope(s), so all {before_count} "
+            f"upstream tools were filtered out. The client receives a healthy-looking "
+            f"response with zero tools. This is a configuration error, not an empty "
+            f"allowlist: add a server_access entry for '{server_name}' to the caller's "
+            f"scope document, and check that it uses the registered server name without "
+            f"a transport suffix (e.g. 'myserver', not 'myserver/mcp')."
+        )
+
     return kept
 
 
@@ -7359,8 +7435,14 @@ async def mcp_proxy(
 
     result = parsed.get("result") if isinstance(parsed, dict) else None
     if isinstance(result, dict) and isinstance(result.get("tools"), list):
+        # server_name here is the proxy path (e.g. "myserver/mcp"). The scope
+        # allowlist is keyed on the registered name, and the access check
+        # earlier in this same request already stripped the transport suffix
+        # via _authorize_forwarded_mcp_body. Strip it identically, or the
+        # filter looks up a key that does not exist and drops every tool
+        # (issue #1647).
         filtered = await filter_tools_list_response(
-            server_name,
+            _registered_server_from_proxy_path(server_name),
             user_scopes,
             result["tools"],
         )
