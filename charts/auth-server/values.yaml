@@ -22,9 +22,12 @@ goValidate:
   enabled: false
   image:
     repository: go-validate # image name within the registry (shares global registry/tag)
-  jwksUrl: "" # e.g. https://keycloak.example.com/realms/mcp-gateway/protocol/openid-connect/certs
-  issuer: "" # e.g. https://keycloak.example.com/realms/mcp-gateway
-  audience: "" # the aud claim your tokens carry, e.g. "account"
+  # jwksUrl and issuer are AUTO-DERIVED at runtime from the KEYCLOAK_URL /
+  # KEYCLOAK_EXTERNAL_URL / KEYCLOAK_REALM env the sidecar already receives, so
+  # you normally only set enabled + audience. Set these to override the derivation.
+  jwksUrl: "" # override, e.g. https://<keycloak>/realms/mcp-gateway/protocol/openid-connect/certs
+  issuer: "" # override, e.g. https://<keycloak>/realms/mcp-gateway
+  audience: "" # REQUIRED to engage the fast path: the aud claim your tokens carry, e.g. "account"
   resources:
     requests:
       cpu: 25m
