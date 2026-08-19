@@ -743,16 +743,27 @@ module "ecs_service_auth" {
           protocol      = "tcp"
         }]
 
-        # The sidecar auto-derives JWKS_URL, the accepted issuer list and the
-        # accepted audience list from the KEYCLOAK_* vars below (same values the
-        # auth-server uses), matching the Python Keycloak provider. It engages when
-        # SECRET_KEY + a reachable Keycloak are present; otherwise it reverse-proxies
-        # to the auth-server (same task, loopback), which is correct but not
-        # accelerated. validate_fast_path_audience overrides the derived audience
-        # list only when set (never "account" -> refused as a confused-deputy).
+        # The sidecar picks its verifier from AUTH_PROVIDER and auto-derives
+        # everything from the same IdP vars the auth-server uses:
+        #   - keycloak: JWKS + issuer list + audience list from KEYCLOAK_*
+        #     (matches the Python Keycloak provider).
+        #   - cognito:  issuer + JWKS + accepted client-id allowlist from
+        #     COGNITO_* / AWS_REGION (matches the Python Cognito provider).
+        # It engages when SECRET_KEY + a reachable IdP are present; otherwise it
+        # reverse-proxies to the auth-server (same task, loopback) - correct but not
+        # accelerated. validate_fast_path_audience overrides the derived Keycloak
+        # audience list only when set (never "account" -> refused as a confused-deputy).
         environment = [
           { name = "GOVALIDATE_LISTEN", value = ":8899" },
           { name = "AUTH_FALLBACK_URL", value = "http://localhost:18888" },
+          { name = "AUTH_PROVIDER", value = var.pingfederate_enabled ? "pingfederate" : (var.auth0_enabled ? "auth0" : (var.okta_enabled ? "okta" : (var.entra_enabled ? "entra" : (var.cognito_enabled ? "cognito" : (var.keycloak_domain != "" ? "keycloak" : "default"))))) },
+          { name = "AWS_REGION", value = data.aws_region.current.id },
+          # Cognito (used when AUTH_PROVIDER=cognito):
+          { name = "COGNITO_USER_POOL_ID", value = var.cognito_user_pool_id },
+          { name = "COGNITO_CLIENT_ID", value = var.cognito_client_id },
+          { name = "COGNITO_M2M_CLIENT_IDS", value = var.cognito_m2m_client_ids },
+          { name = "IDE_OAUTH_CLIENT_ID", value = var.ide_oauth_client_id },
+          # Keycloak (used when AUTH_PROVIDER=keycloak):
           { name = "KEYCLOAK_URL", value = var.keycloak_domain != "" ? "https://${var.keycloak_domain}" : "" },
           { name = "KEYCLOAK_EXTERNAL_URL", value = var.keycloak_domain != "" ? "https://${var.keycloak_domain}" : "" },
           { name = "KEYCLOAK_REALM", value = "mcp-gateway" },

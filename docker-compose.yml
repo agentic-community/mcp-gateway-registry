@@ -618,6 +618,16 @@ services:
       # Fast path engages only when JWKS_URL + VALIDATE_ISSUER + VALIDATE_AUDIENCE are
       # all set and match the tokens; otherwise every /validate request is transparently
       # proxied to the auth-server (correct, just not accelerated).
+      # AUTH_PROVIDER selects the verifier (keycloak default, or cognito). The
+      # sidecar auto-derives everything from the matching IdP vars below.
+      - AUTH_PROVIDER=${AUTH_PROVIDER:-keycloak}
+      # Cognito (used when AUTH_PROVIDER=cognito): issuer + JWKS + accepted client-id
+      # allowlist derive from AWS_REGION + COGNITO_* (matches the Python provider).
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - COGNITO_USER_POOL_ID=${COGNITO_USER_POOL_ID:-}
+      - COGNITO_CLIENT_ID=${COGNITO_CLIENT_ID:-}
+      - COGNITO_M2M_CLIENT_IDS=${COGNITO_M2M_CLIENT_IDS:-}
+      - IDE_OAUTH_CLIENT_ID=${IDE_OAUTH_CLIENT_ID:-}
       # KEYCLOAK_* let go-validate auto-derive JWKS_URL, the accepted issuer list
       # (external + internal + localhost) and the accepted audience list (web
       # client id + M2M client id + "mcp-gateway") when the VALIDATE_* overrides

@@ -64,7 +64,11 @@ type Claims struct {
 	ClientID string          `json:"client_id"`
 	Scope    string          `json:"scope"`
 	Groups   []string        `json:"groups"`
-	raw      map[string]any
+	// Cognito-specific claim shapes (unused by other providers, decoded permissively).
+	CognitoGroups   []string `json:"cognito:groups"`
+	TokenUse        string   `json:"token_use"`
+	CognitoUsername string   `json:"username"`
+	raw             map[string]any
 }
 
 // audContains reports whether the token audience matches want (aud may be a string
@@ -108,7 +112,12 @@ func containsStr(list []string, want string) bool {
 // verifyRS256 verifies an RS256 JWT against the cached keyset and enforces
 // iss/aud/exp from config (never from the token). It returns the parsed claims on
 // success, or a sentinel error telling the caller whether to fall back or 401.
-func verifyRS256(token string, ks *keysetCache, issuers, audiences []string) (*Claims, error) {
+// parseVerifyDecode does the IdP-agnostic half of RS256 verification: structural
+// parse, alg=RS256, key lookup by kid, signature check, claim decode, and expiry.
+// Provider-specific iss/aud/client_id policy is layered on by the callers
+// (verifyRS256 for Keycloak, verifyCognito for Cognito). The sentinel errors keep
+// the fail-closed boundary: fallback vs 401.
+func parseVerifyDecode(token string, ks *keysetCache) (*Claims, error) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
 		return nil, errNotJWT
@@ -151,9 +160,21 @@ func verifyRS256(token string, ks *keysetCache, issuers, audiences []string) (*C
 	}
 	_ = json.Unmarshal(payloadBytes, &c.raw)
 
-	// Enforce iss/aud/exp (config-driven, fail closed). iss must match ANY
-	// accepted issuer; aud must contain ANY accepted audience (mirrors the
-	// Python Keycloak provider's valid_issuers / accepted_audiences lists).
+	now := time.Now().Unix()
+	if c.Exp != 0 && now > c.Exp+clockLeewaySeconds {
+		return nil, errInvalidToken
+	}
+	return &c, nil
+}
+
+func verifyRS256(token string, ks *keysetCache, issuers, audiences []string) (*Claims, error) {
+	c, err := parseVerifyDecode(token, ks)
+	if err != nil {
+		return nil, err
+	}
+	// Enforce iss/aud (config-driven, fail closed). iss must match ANY accepted
+	// issuer; aud must contain ANY accepted audience (mirrors the Python Keycloak
+	// provider's valid_issuers / accepted_audiences lists).
 	if !containsStr(issuers, c.Iss) {
 		return nil, errUnknownKey // different issuer -> let Python handle it
 	}
@@ -163,11 +184,7 @@ func verifyRS256(token string, ks *keysetCache, issuers, audiences []string) (*C
 		// handler would have accepted. Only a bad signature or expiry -> 401.
 		return nil, errUnknownKey
 	}
-	now := time.Now().Unix()
-	if c.Exp != 0 && now > c.Exp+clockLeewaySeconds {
-		return nil, errInvalidToken
-	}
-	return &c, nil
+	return c, nil
 }
 
 // Internal-token issuer + audiences (mirror auth_server/internal_request_token.py).
