@@ -46,6 +46,8 @@ DEFAULT_NEGATIVE_TTL_SECONDS = 30  # how long an unknown kid stays negative-cach
 _HTTP_TIMEOUT_SECONDS = 10
 _MAX_FETCH_ATTEMPTS = 2
 _RETRY_SLEEP_SECONDS = 1
+DEFAULT_UNKNOWN_REFETCH_COOLDOWN_SECONDS = 5  # min gap between unknown-kid refetches
+MAX_UNKNOWN_KIDS = 1024  # cap on the negative-cache size per jwks_url
 
 
 def _env_int(name: str, default: int) -> int:
@@ -72,6 +74,10 @@ def _negative_ttl() -> int:
     return _env_int("MCP_JWKS_NEGATIVE_CACHE_TTL", DEFAULT_NEGATIVE_TTL_SECONDS)
 
 
+def _unknown_refetch_cooldown() -> int:
+    return _env_int("MCP_JWKS_UNKNOWN_REFETCH_COOLDOWN", DEFAULT_UNKNOWN_REFETCH_COOLDOWN_SECONDS)
+
+
 def _safe_kid(kid: str | None) -> str:
     """Render a ``kid`` for logs without the whole value."""
     if not kid:
@@ -84,7 +90,7 @@ def _safe_kid(kid: str | None) -> str:
 class _Entry:
     """Per-``jwks_url`` cache state."""
 
-    __slots__ = ("lock", "jwks", "fetched_at", "unknown_kids")
+    __slots__ = ("lock", "jwks", "fetched_at", "unknown_kids", "last_unknown_refetch")
 
     def __init__(self) -> None:
         self.lock = threading.RLock()
@@ -92,6 +98,8 @@ class _Entry:
         self.fetched_at: float = 0.0
         # kid -> negative-cache expiry timestamp
         self.unknown_kids: dict[str, float] = {}
+        # Rate-limits unknown-kid refetches (see get_signing_key).
+        self.last_unknown_refetch: float = 0.0
 
 
 class JwksCache:
@@ -142,8 +150,9 @@ class JwksCache:
                 )
                 if attempt < _MAX_FETCH_ATTEMPTS - 1:
                     time.sleep(_RETRY_SLEEP_SECONDS)
-        assert last_error is not None
-        raise last_error
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("JWKS fetch failed without a captured error")
 
     @staticmethod
     def _find_key(jwks: dict[str, Any] | None, kid: str) -> dict[str, Any] | None:
@@ -205,6 +214,20 @@ class JwksCache:
             entry.unknown_kids.clear()
             return fresh
 
+    @staticmethod
+    def _negative_cache_kid(entry: _Entry, kid: str, now: float) -> None:
+        """Negative-cache an unknown ``kid``, bounding the map so a spray of
+        distinct kids (especially during a JWKS outage) cannot grow it without
+        limit. Drops expired entries first, then evicts the soonest-expiring."""
+        entry.unknown_kids[kid] = now + _negative_ttl()
+        if len(entry.unknown_kids) <= MAX_UNKNOWN_KIDS:
+            return
+        entry.unknown_kids = {k: v for k, v in entry.unknown_kids.items() if v > now}
+        overflow = len(entry.unknown_kids) - MAX_UNKNOWN_KIDS
+        if overflow > 0:
+            for k in sorted(entry.unknown_kids, key=entry.unknown_kids.get)[:overflow]:
+                entry.unknown_kids.pop(k, None)
+
     def get_signing_key(self, jwks_url: str, kid: str) -> Any:
         """Resolve the signing key for ``kid``, hardening the unknown-``kid`` path.
 
@@ -248,27 +271,39 @@ class JwksCache:
             if expiry is not None and now < expiry:
                 raise ValueError(f"No matching key found for kid: {kid}")
 
-            # We are the single caller allowed to refetch for this unknown kid.
-            logger.info(
-                "Unknown kid %s for %s; refetching JWKS once",
-                _safe_kid(kid),
-                self._provider_name,
-            )
-            try:
-                fresh = self._fetch(jwks_url)
-                entry.jwks = fresh
-                entry.fetched_at = now
-                entry.unknown_kids.clear()
-            except Exception as exc:  # noqa: BLE001
-                # Refetch failed: fall back to whatever we already hold.
-                logger.warning("Unknown-kid refetch failed for %s: %s", self._provider_name, exc)
-                fresh = entry.jwks
+            # Rate-limit unknown-kid refetches: at most one per cooldown window
+            # per jwks_url, regardless of how many DISTINCT unknown kids arrive,
+            # so a varied-kid spray cannot force a JWKS fetch per request or pin
+            # this lock. A genuinely rotated-in kid is still picked up -- it lands
+            # in entry.jwks on the next allowed refetch (or the TTL refresh in
+            # get_jwks) and is then found by the fast lookup ABOVE, before this
+            # negative cache is ever consulted.
+            fresh = entry.jwks
+            if (now - entry.last_unknown_refetch) >= _unknown_refetch_cooldown():
+                entry.last_unknown_refetch = now
+                logger.info(
+                    "Unknown kid %s for %s; refetching JWKS (cooldown-gated)",
+                    _safe_kid(kid),
+                    self._provider_name,
+                )
+                try:
+                    fresh = self._fetch(jwks_url)
+                    entry.jwks = fresh
+                    entry.fetched_at = now
+                    # Do NOT clear unknown_kids here: rotated-in kids are resolved
+                    # by the fast lookup above, and clearing would let alternating
+                    # unknown kids defeat the negative cache (one fetch per kid).
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "Unknown-kid refetch failed for %s: %s", self._provider_name, exc
+                    )
+                    fresh = entry.jwks
 
             key = self._find_key(fresh, kid)
             if key is not None:
                 entry.unknown_kids.pop(kid, None)
                 return self._to_signing_key(key)
 
-            # Still unknown after one refetch: negative-cache and reject.
-            entry.unknown_kids[kid] = now + _negative_ttl()
+            # Still unknown: negative-cache the kid (bounded map).
+            self._negative_cache_kid(entry, kid, now)
             raise ValueError(f"No matching key found for kid: {kid}")

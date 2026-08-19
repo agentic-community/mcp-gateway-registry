@@ -3158,7 +3158,7 @@ def _enforce_exp_ceiling(access_token: str, ceiling_hours: int | None) -> None:
         exp = claims.get("exp")
     except Exception:
         iat = exp = None
-    if not isinstance(iat, (int, float)) or not isinstance(exp, (int, float)):
+    if not isinstance(iat, int | float) or not isinstance(exp, int | float):
         logger.info("mcp data-plane: exp-ceiling skipped (iat/exp absent)")
         return
     if (exp - iat) > (ceiling_hours * 3600 + 60):
@@ -3179,10 +3179,17 @@ _SERVER_META_TTL_SECONDS: float = 30.0
 
 async def _fetch_server_meta(server_name_from_url: str | None) -> dict | None:
     """Fetch ``{egress_auth_mode, expires_in_hours}`` for the server being
-    accessed from the registry's internal endpoint, cached with a
-    short TTL + negative cache to bound hot-path latency. Returns None on a
-    miss/unavailable; the caller then treats the server as no-per-server-PRM and
-    applies no exp-ceiling (fail-open on availability, never widening aud)."""
+    accessed from the registry's internal endpoint, cached with a short TTL to
+    bound hot-path latency.
+
+    Availability posture is FAIL-CLOSED for enforcement: on a registry outage
+    (timeout / 5xx) we serve the last-known-good metadata if we have it, so a
+    server previously seen to need a per-server audience keeps being enforced
+    rather than silently dropping to gateway-wide acceptance. A genuine 404
+    (unregistered server) is a definite negative, cached as None. Only a cold
+    cache during an outage returns None (Entra still fails closed via the
+    provider-based predicate; the residual gap is a first-ever non-Entra OBO
+    request during an outage)."""
     if not server_name_from_url:
         return None
     path = "/" + server_name_from_url.strip("/")
@@ -3195,7 +3202,6 @@ async def _fetch_server_meta(server_name_from_url: str | None) -> dict | None:
     from registry.auth.internal import generate_internal_token
 
     base = settings.egress_registry_internal_url.rstrip("/")
-    meta: dict | None = None
     try:
         service_token = generate_internal_token(subject="auth-server", purpose="server-meta")
         async with httpx.AsyncClient(timeout=5.0) as client:
@@ -3209,11 +3215,28 @@ async def _fetch_server_meta(server_name_from_url: str | None) -> dict | None:
             )
         if resp.status_code == 200:
             meta = resp.json()
+            _SERVER_META_CACHE[path] = (now, meta)
+            return meta
+        if resp.status_code == 404:
+            # Definite negative: the server is not registered.
+            _SERVER_META_CACHE[path] = (now, None)
+            return None
+        # Unexpected status -> treat as an outage (handled below).
+        raise RuntimeError(f"server-meta returned {resp.status_code}")
     except Exception as exc:
+        # Registry unreachable/degraded. Fail CLOSED: keep serving the last
+        # known-good metadata so per-server enforcement is not silently dropped
+        # for a server we previously observed to need it.
+        if cached is not None and cached[1] is not None:
+            logger.warning(
+                "server-meta unavailable for %s (%s); serving last-known metadata",
+                path,
+                type(exc).__name__,
+            )
+            _SERVER_META_CACHE[path] = (now, cached[1])
+            return cached[1]
         logger.warning("server-meta lookup failed for %s: %s", path, type(exc).__name__)
-        meta = None
-    _SERVER_META_CACHE[path] = (now, meta)
-    return meta
+        return None
 
 
 @app.get("/health")
@@ -3317,7 +3340,10 @@ async def oauth_token_proxy(request: Request):
         "error_description",
     }
     clean = {k: payload[k] for k in allowed if k in payload}
-    return JSONResponse(status_code=resp.status_code, content=clean)
+    # RFC 6749 §5.1: token responses must not be cached by intermediaries.
+    return JSONResponse(
+        status_code=resp.status_code, content=clean, headers={"Cache-Control": "no-store"}
+    )
 
 
 @app.get("/validate")
@@ -3906,16 +3932,31 @@ async def validate_request(request: Request):
 
         logger.debug("Token validation successful using method: %s", validation_result["method"])
 
-        # MCP data-plane hardening under MCP_IDP_SIGNED_TOKENS --
-        # conditional per-server required audience + per-server exp-ceiling. The
-        # required-aud decision keys on the per-server egress_auth_mode (via the
-        # registry §2.0 lookup), NOT the coarse global egress flag, so plain
-        # servers on non-Entra IdPs keep gateway-wide acceptance (no hard-lock).
-        if (
-            settings.mcp_idp_signed_tokens
-            and access_token
-            and _is_mcp_data_plane(original_url, server_name_from_url)
+        # MCP data-plane hardening under MCP_IDP_SIGNED_TOKENS. On an MCP
+        # data-plane path the flag mandates an IdP-signed bearer token, so a
+        # caller that authenticated WITHOUT a bearer (session cookie, static
+        # token, network-trusted, ...) is rejected here instead of silently
+        # skipping the token checks below. Non-MCP paths (registry /api,
+        # federation, A2A) and the browser UI are excluded by _is_mcp_data_plane
+        # and are unaffected.
+        if settings.mcp_idp_signed_tokens and _is_mcp_data_plane(
+            original_url, server_name_from_url
         ):
+            if not access_token:
+                logger.warning(
+                    "mcp data-plane: non-bearer auth (method=%s) rejected; an "
+                    "IdP-issued token is required",
+                    validation_result.get("method"),
+                )
+                raise HTTPException(
+                    status_code=401,
+                    detail="An IdP-issued bearer token is required on MCP paths",
+                    headers={"WWW-Authenticate": "Bearer", "Connection": "close"},
+                )
+            # Conditional per-server required audience: keyed on the per-server
+            # egress_auth_mode (via the registry internal metadata lookup), NOT
+            # the coarse global egress flag, so plain servers on non-Entra IdPs
+            # keep gateway-wide acceptance (no hard-lock).
             from registry.auth.oauth_metadata import server_needs_per_server_prm
 
             _meta = await _fetch_server_meta(server_name_from_url)

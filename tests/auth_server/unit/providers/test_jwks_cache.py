@@ -180,3 +180,43 @@ class TestStaleFallback:
 
         with pytest.raises(ValueError, match="Cannot retrieve JWKS"):
             cache.get_jwks(JWKS_URL)
+
+
+class TestUnknownKidCooldownAndBound:
+    """Unknown-kid refetches are cooldown-gated and the negative cache is bounded."""
+
+    @patch("auth_server.providers.jwks_cache.requests.get")
+    def test_alternating_unknown_kids_bounded_by_cooldown(self, mock_get, mock_response):
+        mock_get.return_value = mock_response
+        cache = JwksCache(provider_name="test")
+        cache.get_signing_key(JWKS_URL, KNOWN_KID)  # warm
+        mock_get.reset_mock()
+        mock_get.return_value = mock_response
+
+        with pytest.raises(ValueError):
+            cache.get_signing_key(JWKS_URL, "unknown-A")
+        assert mock_get.call_count == 1  # one cooldown-gated refetch
+
+        # A DIFFERENT unknown kid within the cooldown must NOT trigger another
+        # refetch. (The pre-fix clear() allowed one fetch per distinct kid.)
+        with pytest.raises(ValueError):
+            cache.get_signing_key(JWKS_URL, "unknown-B")
+        assert mock_get.call_count == 1
+
+        entry = cache._entry(JWKS_URL)
+        assert "unknown-A" in entry.unknown_kids
+        assert "unknown-B" in entry.unknown_kids
+
+    @patch("auth_server.providers.jwks_cache.requests.get")
+    def test_negative_cache_is_bounded(self, mock_get, mock_response, monkeypatch):
+        monkeypatch.setattr(jwks_cache, "MAX_UNKNOWN_KIDS", 5)
+        mock_get.return_value = mock_response
+        cache = JwksCache(provider_name="test")
+        cache.get_signing_key(JWKS_URL, KNOWN_KID)  # warm
+
+        for i in range(50):
+            with pytest.raises(ValueError):
+                cache.get_signing_key(JWKS_URL, f"spray-{i}")
+
+        # A varied-kid spray cannot grow the negative cache without bound.
+        assert len(cache._entry(JWKS_URL).unknown_kids) <= 5

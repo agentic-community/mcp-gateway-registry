@@ -168,6 +168,7 @@ class TestOauthTokenProxy:
         # Response hygiene: id_token never surfaced as a token field; unknowns dropped.
         assert "id_token" not in body
         assert "unexpected" not in body
+        assert r.headers.get("cache-control") == "no-store"
 
 
 class TestSelfSignedRetirement:
@@ -200,3 +201,85 @@ class TestSelfSignedRetirement:
                 },
             )
         assert r.status_code == 401
+
+    @patch("auth_server.server.get_auth_provider")
+    def test_session_cookie_rejected_on_data_plane_when_idp_signed(
+        self,
+        mock_get_provider,
+        mock_cognito_provider,
+        auth_env_vars,
+        mock_scope_repository_with_data,
+        valid_session_cookie,
+    ):
+        """A session-cookie caller (no bearer) is rejected on an MCP data-plane
+        path once MCP_IDP_SIGNED_TOKENS is on: the flag requires an IdP-issued
+        bearer token there, closing the non-bearer bypass. (With the flag off,
+        the same call succeeds -- see test_validate_with_session_cookie.)"""
+        from itsdangerous import URLSafeTimedSerializer
+
+        mock_get_provider.return_value = mock_cognito_provider
+        test_signer = URLSafeTimedSerializer(auth_env_vars["SECRET_KEY"])
+
+        async def _fake_resolve(_session_id):
+            return {
+                "session_id": _session_id,
+                "username": "testuser",
+                "groups": ["users", "developers"],
+                "provider": "cognito",
+                "auth_method": "oauth2",
+            }
+
+        with (
+            patch.object(srv.settings, "mcp_idp_signed_tokens", True),
+            patch(
+                "auth_server.server.get_scope_repository",
+                return_value=mock_scope_repository_with_data,
+            ),
+            patch("auth_server.server.signer", test_signer),
+            patch("session_store.resolve_session", _fake_resolve),
+        ):
+            client = TestClient(srv.app)
+            r = client.get(
+                "/validate",
+                headers={
+                    "Cookie": f"mcp_gateway_session={valid_session_cookie}",
+                    "X-Original-URL": "https://example.com/test-server/mcp",
+                },
+            )
+        assert r.status_code == 401
+
+
+class TestServerMetaFailClosed:
+    @pytest.mark.asyncio
+    async def test_serves_last_known_good_on_outage(self, auth_env_vars):
+        srv._SERVER_META_CACHE.clear()
+        good = {"egress_auth_mode": "obo_exchange", "expires_in_hours": 4}
+        resp_ok = MagicMock(status_code=200)
+        resp_ok.json.return_value = good
+        cm_ok = AsyncMock()
+        cm_ok.__aenter__.return_value.post = AsyncMock(return_value=resp_ok)
+        with patch("auth_server.server.httpx.AsyncClient", return_value=cm_ok):
+            m1 = await srv._fetch_server_meta("obosrv/mcp")
+        assert m1 == good
+
+        # Expire the cache entry so the next call re-attempts the fetch.
+        ts, meta = srv._SERVER_META_CACHE["/obosrv"]
+        srv._SERVER_META_CACHE["/obosrv"] = (ts - 10_000, meta)
+
+        # Registry now unreachable: must fail CLOSED to the last-known-good meta,
+        # NOT None (which would silently drop per-server aud enforcement).
+        cm_down = AsyncMock()
+        cm_down.__aenter__.return_value.post = AsyncMock(side_effect=RuntimeError("registry down"))
+        with patch("auth_server.server.httpx.AsyncClient", return_value=cm_down):
+            m2 = await srv._fetch_server_meta("obosrv/mcp")
+        assert m2 == good
+
+    @pytest.mark.asyncio
+    async def test_404_is_definite_negative(self, auth_env_vars):
+        srv._SERVER_META_CACHE.clear()
+        resp_404 = MagicMock(status_code=404)
+        cm = AsyncMock()
+        cm.__aenter__.return_value.post = AsyncMock(return_value=resp_404)
+        with patch("auth_server.server.httpx.AsyncClient", return_value=cm):
+            m = await srv._fetch_server_meta("ghost/mcp")
+        assert m is None

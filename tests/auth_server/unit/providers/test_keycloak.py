@@ -183,12 +183,10 @@ class TestKeycloakJWKS:
         assert jwks1 == jwks2 == jwks3
 
     @patch("auth_server.providers.keycloak.requests.get")
-    @patch("auth_server.providers.keycloak.time.time")
-    def test_get_jwks_cache_expiration(self, mock_time, mock_get, mock_jwks_response):
-        """Test that JWKS cache expires after TTL."""
+    def test_get_jwks_cache_expiration(self, mock_get, mock_jwks_response):
+        """JWKS cache re-fetches after the TTL elapses (shared jwks_cache seam)."""
         from auth_server.providers.keycloak import KeycloakProvider
 
-        # Arrange
         mock_response = MagicMock()
         mock_response.json.return_value = mock_jwks_response
         mock_response.raise_for_status.return_value = None
@@ -201,20 +199,14 @@ class TestKeycloakJWKS:
             client_secret="test-secret",
         )
 
-        # First call
-        mock_time.return_value = 1000
+        # First call populates the shared cache.
         provider.get_jwks()
 
-        # Second call - cache should still be valid
-        mock_time.return_value = 1100
+        # Backdate the shared-cache entry past the TTL so the next call re-fetches.
+        provider._jwks._entry(provider.jwks_url).fetched_at -= 3601
         provider.get_jwks()
 
-        # Third call - cache should be expired (TTL is 3600 seconds)
-        mock_time.return_value = 5000
-        provider.get_jwks()
-
-        # Assert
-        assert mock_get.call_count == 2  # First call + after expiration
+        assert mock_get.call_count == 2  # first call + after expiration
 
     @patch("auth_server.providers.keycloak.requests.get")
     def test_get_jwks_network_error(self, mock_get):
