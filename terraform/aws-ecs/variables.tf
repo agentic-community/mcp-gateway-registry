@@ -2340,7 +2340,7 @@ variable "validate_fast_path_image_uri" {
 }
 
 variable "validate_fast_path_audience" {
-  description = "Expected token audience for the go-validate fast path. Empty -> fallback-only (safe)."
+  description = "Optional override for the go-validate fast-path accepted audiences (comma/space-separated). Empty auto-derives from the Keycloak client ids + \"mcp-gateway\", matching Python. \"account\" is refused (cross-client confused-deputy)."
   type        = string
   default     = ""
 }

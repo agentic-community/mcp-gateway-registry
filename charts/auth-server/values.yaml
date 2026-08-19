@@ -16,18 +16,21 @@ image:
 # Go /validate fast-path sidecar (issue #1652). OPT-IN: when enabled, a tiny Go
 # container runs alongside auth-server and the registry routes nginx /validate to
 # it. Leave disabled to keep /validate on the Python auth-server (unchanged).
-# Fast path engages only when jwksUrl + issuer + audience are all set; otherwise
-# it transparently proxies to the auth-server (safe fallback).
+# When enabled the fast path engages automatically: jwksUrl, the accepted issuer
+# list and the accepted audience list all AUTO-DERIVE from the KEYCLOAK_* env the
+# sidecar already receives (matching the Python Keycloak provider). Tokens that do
+# not match are transparently proxied to the auth-server (safe fallback).
 fastPath:
   enabled: false
   image:
     repository: go-validate # image name within the registry (shares global registry/tag)
-  # jwksUrl and issuer are AUTO-DERIVED at runtime from the KEYCLOAK_URL /
-  # KEYCLOAK_EXTERNAL_URL / KEYCLOAK_REALM env the sidecar already receives, so
-  # you normally only set enabled + audience. Set these to override the derivation.
+  # All three below AUTO-DERIVE at runtime; leave empty in the common case. Set only
+  # to OVERRIDE the derivation. issuer/audience accept a comma/space-separated LIST
+  # (a token matches on ANY member). "account" is refused as an audience (it rides on
+  # every realm token -> cross-client confused-deputy; Python rejects it too).
   jwksUrl: "" # override, e.g. https://<keycloak>/realms/mcp-gateway/protocol/openid-connect/certs
-  issuer: "" # override, e.g. https://<keycloak>/realms/mcp-gateway
-  audience: "" # REQUIRED to engage the fast path: the aud claim your tokens carry, e.g. "account"
+  issuer: "" # override list, e.g. "https://ext/realms/mcp-gateway http://keycloak:8080/realms/mcp-gateway"
+  audience: "" # override list, e.g. "mcp-gateway mcp-gateway-m2m"; empty derives from the KEYCLOAK client ids
   resources:
     requests:
       cpu: 25m

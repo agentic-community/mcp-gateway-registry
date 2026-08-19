@@ -85,10 +85,30 @@ func (c *Claims) audContains(want string) bool {
 	return false
 }
 
+// audMatchesAny reports whether the token audience contains ANY accepted value.
+func (c *Claims) audMatchesAny(accepted []string) bool {
+	for _, a := range accepted {
+		if c.audContains(a) {
+			return true
+		}
+	}
+	return false
+}
+
+// containsStr reports whether want is in list.
+func containsStr(list []string, want string) bool {
+	for _, s := range list {
+		if s == want {
+			return true
+		}
+	}
+	return false
+}
+
 // verifyRS256 verifies an RS256 JWT against the cached keyset and enforces
 // iss/aud/exp from config (never from the token). It returns the parsed claims on
 // success, or a sentinel error telling the caller whether to fall back or 401.
-func verifyRS256(token string, ks *keysetCache, issuer, audience string) (*Claims, error) {
+func verifyRS256(token string, ks *keysetCache, issuers, audiences []string) (*Claims, error) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
 		return nil, errNotJWT
@@ -131,11 +151,13 @@ func verifyRS256(token string, ks *keysetCache, issuer, audience string) (*Claim
 	}
 	_ = json.Unmarshal(payloadBytes, &c.raw)
 
-	// Enforce iss/aud/exp (config-driven, fail closed).
-	if c.Iss != issuer {
+	// Enforce iss/aud/exp (config-driven, fail closed). iss must match ANY
+	// accepted issuer; aud must contain ANY accepted audience (mirrors the
+	// Python Keycloak provider's valid_issuers / accepted_audiences lists).
+	if !containsStr(issuers, c.Iss) {
 		return nil, errUnknownKey // different issuer -> let Python handle it
 	}
-	if !c.audContains(audience) {
+	if !c.audMatchesAny(audiences) {
 		// Audience is a policy decision, not proof of forgery. Defer to Python
 		// (authoritative) rather than 401 so we never reject a token the full
 		// handler would have accepted. Only a bad signature or expiry -> 401.
