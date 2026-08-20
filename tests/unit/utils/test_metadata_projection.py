@@ -173,7 +173,9 @@ class TestProjectMetadata:
     def test_ancestor_path_returns_subtree(self) -> None:
         metadata = {"config": {"region": "us-east-1", "tier": "prod", "nested": {"deep": True}}}
         result = project_metadata(metadata, ["config"])
-        assert result == {"config": {"region": "us-east-1", "tier": "prod", "nested": {"deep": True}}}
+        assert result == {
+            "config": {"region": "us-east-1", "tier": "prod", "nested": {"deep": True}}
+        }
 
     def test_mixed_found_and_missing(self) -> None:
         metadata = {"owner": "team", "config": {"region": "us-east-1"}}
@@ -189,7 +191,9 @@ class TestProjectMetadata:
             "array": [1, 2, 3],
             "nested": {"key": "val"},
         }
-        result = project_metadata(metadata, ["string", "number", "boolean", "null_val", "array", "nested"])
+        result = project_metadata(
+            metadata, ["string", "number", "boolean", "null_val", "array", "nested"]
+        )
         assert result == metadata
 
     def test_empty_metadata_with_paths(self) -> None:
@@ -347,9 +351,7 @@ class TestBuildMetadataSetStageEquivalence:
 
     This pins the contract: both layers must agree on semantics."""
 
-    def _simulate_set_stage(
-        self, metadata: dict, stage: dict
-    ) -> dict:
+    def _simulate_set_stage(self, metadata: dict, stage: dict) -> dict:
         """Simulate what MongoDB's $set would produce by resolving $ifNull refs."""
         set_expr = stage["$set"]["metadata"]
         return self._resolve_expr(set_expr, metadata)

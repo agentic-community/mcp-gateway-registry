@@ -3734,9 +3734,7 @@ class TestMetadataFieldsProjection:
         mock_server_service.get_servers_paginated = AsyncMock(
             return_value=(self.SERVER_WITH_METADATA, 1)
         )
-        response = test_client_admin.get(
-            "/api/servers?metadata_fields=owner,config.region"
-        )
+        response = test_client_admin.get("/api/servers?metadata_fields=owner,config.region")
         assert response.status_code == 200
         server = response.json()["servers"][0]
         assert server["metadata"] == {
@@ -3744,9 +3742,7 @@ class TestMetadataFieldsProjection:
             "config": {"region": "us-east-1"},
         }
 
-    def test_projection_missing_path_returns_empty(
-        self, test_client_admin, mock_server_service
-    ):
+    def test_projection_missing_path_returns_empty(self, test_client_admin, mock_server_service):
         """metadata_fields=nonexistent returns empty metadata dict."""
         mock_server_service.get_servers_paginated = AsyncMock(
             return_value=(self.SERVER_WITH_METADATA, 1)
@@ -3756,9 +3752,7 @@ class TestMetadataFieldsProjection:
         server = response.json()["servers"][0]
         assert server["metadata"] == {}
 
-    def test_no_projection_returns_full_metadata(
-        self, test_client_admin, mock_server_service
-    ):
+    def test_no_projection_returns_full_metadata(self, test_client_admin, mock_server_service):
         """Without metadata_fields, full metadata is returned."""
         mock_server_service.get_servers_paginated = AsyncMock(
             return_value=(self.SERVER_WITH_METADATA, 1)
@@ -3783,9 +3777,7 @@ class TestMetadataFieldsProjection:
         response = test_client_admin.get(f"/api/servers?metadata_fields={paths}")
         assert response.status_code == 422
 
-    def test_repeated_query_params_combine(
-        self, test_client_admin, mock_server_service
-    ):
+    def test_repeated_query_params_combine(self, test_client_admin, mock_server_service):
         """?metadata_fields=owner&metadata_fields=config.region combines both."""
         mock_server_service.get_servers_paginated = AsyncMock(
             return_value=(self.SERVER_WITH_METADATA, 1)
@@ -3800,9 +3792,7 @@ class TestMetadataFieldsProjection:
             "config": {"region": "us-east-1"},
         }
 
-    def test_projection_does_not_affect_other_fields(
-        self, test_client_admin, mock_server_service
-    ):
+    def test_projection_does_not_affect_other_fields(self, test_client_admin, mock_server_service):
         """Projection only changes metadata, not other response fields."""
         mock_server_service.get_servers_paginated = AsyncMock(
             return_value=(self.SERVER_WITH_METADATA, 1)
@@ -3816,29 +3806,25 @@ class TestMetadataFieldsProjection:
         # metadata is projected
         assert server["metadata"] == {"owner": "team-platform"}
 
-    def test_metadata_paths_passed_to_service(
-        self, test_client_admin, mock_server_service
-    ):
+    def test_metadata_paths_passed_to_service(self, test_client_admin, mock_server_service):
         """metadata_paths is passed through to get_servers_paginated."""
         mock_server_service.get_servers_paginated = AsyncMock(
             return_value=(self.SERVER_WITH_METADATA, 1)
         )
         test_client_admin.get("/api/servers?metadata_fields=owner,config.region")
         mock_server_service.get_servers_paginated.assert_called_once_with(
-            skip=0, limit=20, exclude_tool_list=False,
+            skip=0,
+            limit=20,
+            exclude_tool_list=False,
             metadata_paths=["owner", "config.region"],
         )
 
-    def test_ancestor_dedup_returns_full_subtree(
-        self, test_client_admin, mock_server_service
-    ):
+    def test_ancestor_dedup_returns_full_subtree(self, test_client_admin, mock_server_service):
         """metadata_fields=config,config.region normalizes to just 'config' (ancestor wins)."""
         mock_server_service.get_servers_paginated = AsyncMock(
             return_value=(self.SERVER_WITH_METADATA, 1)
         )
-        response = test_client_admin.get(
-            "/api/servers?metadata_fields=config,config.region"
-        )
+        response = test_client_admin.get("/api/servers?metadata_fields=config,config.region")
         assert response.status_code == 200
         server = response.json()["servers"][0]
         # 'config' is an ancestor of 'config.region', so full config subtree returned
