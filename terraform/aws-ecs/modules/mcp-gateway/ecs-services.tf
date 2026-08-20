@@ -763,6 +763,17 @@ module "ecs_service_auth" {
           { name = "COGNITO_CLIENT_ID", value = var.cognito_client_id },
           { name = "COGNITO_M2M_CLIENT_IDS", value = var.cognito_m2m_client_ids },
           { name = "IDE_OAUTH_CLIENT_ID", value = var.ide_oauth_client_id },
+          # Entra (used when AUTH_PROVIDER=entra):
+          { name = "ENTRA_TENANT_ID", value = var.entra_tenant_id },
+          { name = "ENTRA_CLIENT_ID", value = var.entra_client_id },
+          { name = "ENTRA_LOGIN_BASE_URL", value = var.entra_login_base_url },
+          { name = "ENTRA_APPLICATION_ID_URI", value = var.entra_application_id_uri },
+          # Okta (used when AUTH_PROVIDER=okta):
+          { name = "OKTA_DOMAIN", value = var.okta_domain },
+          { name = "OKTA_CLIENT_ID", value = var.okta_client_id },
+          { name = "OKTA_M2M_CLIENT_ID", value = var.okta_m2m_client_id },
+          { name = "OKTA_AUTH_SERVER_ID", value = var.okta_auth_server_id },
+          { name = "OKTA_M2M_ALLOWED_AUDIENCES", value = var.okta_m2m_allowed_audiences },
           # Keycloak (used when AUTH_PROVIDER=keycloak):
           { name = "KEYCLOAK_URL", value = var.keycloak_domain != "" ? "https://${var.keycloak_domain}" : "" },
           { name = "KEYCLOAK_EXTERNAL_URL", value = var.keycloak_domain != "" ? "https://${var.keycloak_domain}" : "" },

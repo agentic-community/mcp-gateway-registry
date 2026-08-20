@@ -628,6 +628,17 @@ services:
       - COGNITO_CLIENT_ID=${COGNITO_CLIENT_ID:-}
       - COGNITO_M2M_CLIENT_IDS=${COGNITO_M2M_CLIENT_IDS:-}
       - IDE_OAUTH_CLIENT_ID=${IDE_OAUTH_CLIENT_ID:-}
+      # Entra (used when AUTH_PROVIDER=entra):
+      - ENTRA_TENANT_ID=${ENTRA_TENANT_ID:-}
+      - ENTRA_CLIENT_ID=${ENTRA_CLIENT_ID:-}
+      - ENTRA_LOGIN_BASE_URL=${ENTRA_LOGIN_BASE_URL:-}
+      - ENTRA_APPLICATION_ID_URI=${ENTRA_APPLICATION_ID_URI:-}
+      # Okta (used when AUTH_PROVIDER=okta):
+      - OKTA_DOMAIN=${OKTA_DOMAIN:-}
+      - OKTA_CLIENT_ID=${OKTA_CLIENT_ID:-}
+      - OKTA_M2M_CLIENT_ID=${OKTA_M2M_CLIENT_ID:-}
+      - OKTA_AUTH_SERVER_ID=${OKTA_AUTH_SERVER_ID:-}
+      - OKTA_M2M_ALLOWED_AUDIENCES=${OKTA_M2M_ALLOWED_AUDIENCES:-}
       # KEYCLOAK_* let go-validate auto-derive JWKS_URL, the accepted issuer list
       # (external + internal + localhost) and the accepted audience list (web
       # client id + M2M client id + "mcp-gateway") when the VALIDATE_* overrides

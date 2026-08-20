@@ -305,6 +305,36 @@ func TestMetrics_DegradedWhenReadyButJWKSUnhealthy(t *testing.T) {
 	}
 }
 
+func TestResolveScopes(t *testing.T) {
+	res := &scopeResolver{}
+	res.snap.Store(&scopeSnapshot{
+		scopes:    []scopeDoc{{ID: "mcp-servers-unrestricted/read", GroupMappings: []string{"admins"}}},
+		m2mGroups: map[string][]string{"svc-client": {"admins"}},
+	})
+	s := &server{scopes: res}
+
+	// Groups present -> group->scope mapping (token scopes ignored).
+	grps, sc, ok := s.resolveScopes([]string{"admins"}, "anyclient", []string{"ignored"})
+	if !ok || len(sc) != 1 || sc[0] != "mcp-servers-unrestricted/read" || len(grps) != 1 {
+		t.Fatalf("groups path wrong: grps=%v sc=%v ok=%v", grps, sc, ok)
+	}
+	// No groups + known M2M client -> enriched group->scope.
+	_, sc2, ok2 := s.resolveScopes(nil, "svc-client", []string{"tokenscope"})
+	if !ok2 || len(sc2) != 1 || sc2[0] != "mcp-servers-unrestricted/read" {
+		t.Fatalf("M2M enrichment path wrong: sc=%v ok=%v", sc2, ok2)
+	}
+	// No groups + unknown client -> token scope claim is authoritative.
+	_, sc3, ok3 := s.resolveScopes(nil, "unknown-client", []string{"tok-a", "tok-b"})
+	if !ok3 || len(sc3) != 2 || sc3[0] != "tok-a" {
+		t.Fatalf("token-scope fallback wrong: sc=%v ok=%v", sc3, ok3)
+	}
+	// Groups present but no snapshot -> caller must fall back.
+	sNoDB := &server{scopes: nil}
+	if _, _, ok4 := sNoDB.resolveScopes([]string{"admins"}, "c", nil); ok4 {
+		t.Fatal("groups present + no snapshot must return ok=false (fallback)")
+	}
+}
+
 func TestMissingReason(t *testing.T) {
 	// Nothing set -> every prerequisite named.
 	got := missingReason(Config{})

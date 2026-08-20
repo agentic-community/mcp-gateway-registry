@@ -68,7 +68,35 @@ type Claims struct {
 	CognitoGroups   []string `json:"cognito:groups"`
 	TokenUse        string   `json:"token_use"`
 	CognitoUsername string   `json:"username"`
-	raw             map[string]any
+	// Entra: M2M tokens carry group membership in "roles" (not "groups").
+	Roles []string `json:"roles"`
+	// Okta: client id is in "cid"; scopes in "scp" (array or string).
+	Cid string          `json:"cid"`
+	Scp json.RawMessage `json:"scp"`
+	raw map[string]any
+}
+
+// scpOrScope returns the token's scopes, preferring Okta's "scp" (array or
+// string) and falling back to the space-delimited "scope" claim.
+func (c *Claims) scpOrScope() []string {
+	if len(c.Scp) > 0 {
+		var arr []string
+		if json.Unmarshal(c.Scp, &arr) == nil && len(arr) > 0 {
+			return arr
+		}
+		var s string
+		if json.Unmarshal(c.Scp, &s) == nil && s != "" {
+			return strings.Fields(s)
+		}
+	}
+	return strings.Fields(c.Scope)
+}
+
+// hasClaim reports whether a raw claim key is present (used for id_token-only
+// discriminators like nonce/at_hash/c_hash).
+func (c *Claims) hasClaim(key string) bool {
+	_, ok := c.raw[key]
+	return ok
 }
 
 // audContains reports whether the token audience matches want (aud may be a string

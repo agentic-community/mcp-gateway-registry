@@ -113,6 +113,88 @@ func TestLoadConfig_CognitoWildcard(t *testing.T) {
 	}
 }
 
+func TestLoadConfig_EntraDerivation(t *testing.T) {
+	t.Setenv("SECRET_KEY", "unit-test-secret-32-bytes-xxxxxxxxxx")
+	t.Setenv("AUTH_PROVIDER", "entra")
+	t.Setenv("ENTRA_TENANT_ID", "tenant-123")
+	t.Setenv("ENTRA_CLIENT_ID", "client-abc")
+	t.Setenv("ENTRA_APPLICATION_ID_URI", "api://mcp-gateway")
+	t.Setenv("JWKS_URL", "")
+	t.Setenv("VALIDATE_ISSUER", "")
+	t.Setenv("VALIDATE_AUDIENCE", "")
+	cfg := loadConfig()
+	if cfg.Provider != "entra" {
+		t.Fatalf("provider should be entra, got %q", cfg.Provider)
+	}
+	for _, want := range []string{
+		"https://login.microsoftonline.com/tenant-123/v2.0",
+		"https://sts.windows.net/tenant-123/",
+	} {
+		if !containsStr(cfg.Issuers, want) {
+			t.Fatalf("entra issuers %v missing %q", cfg.Issuers, want)
+		}
+	}
+	if cfg.JWKSURL != "https://login.microsoftonline.com/tenant-123/discovery/v2.0/keys" {
+		t.Fatalf("entra jwks wrong: %q", cfg.JWKSURL)
+	}
+	for _, want := range []string{"client-abc", "api://client-abc", "api://mcp-gateway"} {
+		if !containsStr(cfg.Audiences, want) {
+			t.Fatalf("entra audiences %v missing %q", cfg.Audiences, want)
+		}
+	}
+	if !cfg.FastPathReady {
+		t.Fatal("entra fast path should be ready")
+	}
+}
+
+func TestLoadConfig_OktaDerivation(t *testing.T) {
+	t.Setenv("SECRET_KEY", "unit-test-secret-32-bytes-xxxxxxxxxx")
+	t.Setenv("AUTH_PROVIDER", "okta")
+	t.Setenv("OKTA_DOMAIN", "dev-123.okta.com")
+	t.Setenv("OKTA_AUTH_SERVER_ID", "aus1")
+	t.Setenv("OKTA_CLIENT_ID", "okta-web")
+	t.Setenv("OKTA_M2M_CLIENT_ID", "okta-m2m")
+	t.Setenv("OKTA_M2M_ALLOWED_AUDIENCES", "api://ai-registry")
+	t.Setenv("JWKS_URL", "")
+	t.Setenv("VALIDATE_ISSUER", "")
+	t.Setenv("VALIDATE_AUDIENCE", "")
+	cfg := loadConfig()
+	if cfg.Provider != "okta" {
+		t.Fatalf("provider should be okta, got %q", cfg.Provider)
+	}
+	if len(cfg.Issuers) != 1 || cfg.Issuers[0] != "https://dev-123.okta.com/oauth2/aus1" {
+		t.Fatalf("okta issuer wrong: %v", cfg.Issuers)
+	}
+	if cfg.JWKSURL != "https://dev-123.okta.com/oauth2/aus1/v1/keys" {
+		t.Fatalf("okta jwks wrong: %q", cfg.JWKSURL)
+	}
+	for _, want := range []string{"okta-web", "okta-m2m", "api://ai-registry"} {
+		if !containsStr(cfg.Audiences, want) {
+			t.Fatalf("okta audiences %v missing %q", cfg.Audiences, want)
+		}
+	}
+	if !cfg.FastPathReady {
+		t.Fatal("okta fast path should be ready")
+	}
+}
+
+func TestLoadConfig_OktaOrgServer(t *testing.T) {
+	t.Setenv("SECRET_KEY", "unit-test-secret-32-bytes-xxxxxxxxxx")
+	t.Setenv("AUTH_PROVIDER", "okta")
+	t.Setenv("OKTA_DOMAIN", "dev-123.okta.com")
+	t.Setenv("OKTA_AUTH_SERVER_ID", "") // org server (no custom auth server)
+	t.Setenv("OKTA_CLIENT_ID", "okta-web")
+	t.Setenv("JWKS_URL", "")
+	t.Setenv("VALIDATE_ISSUER", "")
+	cfg := loadConfig()
+	if len(cfg.Issuers) != 1 || cfg.Issuers[0] != "https://dev-123.okta.com" {
+		t.Fatalf("okta org issuer wrong: %v", cfg.Issuers)
+	}
+	if cfg.JWKSURL != "https://dev-123.okta.com/oauth2/v1/keys" {
+		t.Fatalf("okta org jwks wrong: %q", cfg.JWKSURL)
+	}
+}
+
 func TestLoadConfig_NoKeycloak_FallbackOnly(t *testing.T) {
 	t.Setenv("SECRET_KEY", "")
 	t.Setenv("KEYCLOAK_URL", "")

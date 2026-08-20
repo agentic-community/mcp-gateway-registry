@@ -166,16 +166,23 @@ func dropAccount(in []string) []string {
 // Only "cognito" and "keycloak" are fast-pathed; anything else stays fallback-only.
 func detectProvider() string {
 	p := strings.ToLower(strings.TrimSpace(os.Getenv("AUTH_PROVIDER")))
-	if p == "cognito" || p == "keycloak" {
+	switch p {
+	case "cognito", "keycloak", "entra", "okta":
 		return p
 	}
 	if os.Getenv("COGNITO_USER_POOL_ID") != "" {
 		return "cognito"
 	}
+	if os.Getenv("ENTRA_TENANT_ID") != "" {
+		return "entra"
+	}
+	if os.Getenv("OKTA_DOMAIN") != "" {
+		return "okta"
+	}
 	if os.Getenv("KEYCLOAK_URL") != "" {
 		return "keycloak"
 	}
-	return p // e.g. "entra"/"okta"/"default"/"" -> keycloak-style derivation yields nothing -> fallback-only
+	return p // e.g. "auth0"/"pingfederate"/"default"/"" -> not fast-pathed yet -> fallback-only
 }
 
 // deriveCognito fills the Cognito issuer, JWKS URL and accepted client-id
@@ -222,6 +229,97 @@ func deriveCognito(cfg *Config) {
 	cfg.AcceptedClientIDs = ids
 }
 
+// deriveEntra fills the Entra issuer list (v2 + v1), JWKS URL and accepted
+// audiences from ENTRA_* env, mirroring auth_server/providers/entra.py. Explicit
+// VALIDATE_ISSUER / JWKS_URL still win.
+func deriveEntra(cfg *Config) {
+	tenant := strings.TrimSpace(os.Getenv("ENTRA_TENANT_ID"))
+	loginBase := strings.TrimRight(getenv("ENTRA_LOGIN_BASE_URL", "https://login.microsoftonline.com"), "/")
+	if tenant != "" {
+		base := fmt.Sprintf("%s/%s", loginBase, tenant)
+		if len(cfg.Issuers) == 0 {
+			cfg.Issuers = []string{
+				base + "/v2.0", // v2 issuer
+				fmt.Sprintf("https://sts.windows.net/%s/", tenant), // v1 / M2M issuer
+			}
+		}
+		if cfg.JWKSURL == "" {
+			cfg.JWKSURL = base + "/discovery/v2.0/keys"
+		}
+	}
+	// accepted audiences: client id + api://<client-id> + Application ID URI.
+	auds := []string{}
+	add := func(a string) {
+		a = strings.TrimRight(strings.TrimSpace(a), "/")
+		if a == "" {
+			return
+		}
+		for _, e := range auds {
+			if e == a {
+				return
+			}
+		}
+		auds = append(auds, a)
+	}
+	if clientID := strings.TrimSpace(os.Getenv("ENTRA_CLIENT_ID")); clientID != "" {
+		add(clientID)
+		add("api://" + clientID)
+	}
+	add(os.Getenv("ENTRA_APPLICATION_ID_URI"))
+	if len(cfg.Audiences) == 0 {
+		cfg.Audiences = auds
+	}
+}
+
+// deriveOkta fills the Okta issuer, JWKS URL and accepted audiences from OKTA_*
+// env, mirroring auth_server/providers/okta.py (org vs custom auth server).
+func deriveOkta(cfg *Config) {
+	domain := strings.TrimSpace(os.Getenv("OKTA_DOMAIN"))
+	domain = strings.TrimPrefix(domain, "https://")
+	domain = strings.TrimRight(domain, "/")
+	authServerID := strings.TrimSpace(os.Getenv("OKTA_AUTH_SERVER_ID"))
+	if domain != "" {
+		base := "https://" + domain
+		if authServerID != "" {
+			if len(cfg.Issuers) == 0 {
+				cfg.Issuers = []string{fmt.Sprintf("%s/oauth2/%s", base, authServerID)}
+			}
+			if cfg.JWKSURL == "" {
+				cfg.JWKSURL = fmt.Sprintf("%s/oauth2/%s/v1/keys", base, authServerID)
+			}
+		} else {
+			if len(cfg.Issuers) == 0 {
+				cfg.Issuers = []string{base}
+			}
+			if cfg.JWKSURL == "" {
+				cfg.JWKSURL = base + "/oauth2/v1/keys"
+			}
+		}
+	}
+	// accepted audiences: web client id + M2M client id + M2M allowed audiences.
+	auds := []string{}
+	add := func(a string) {
+		a = strings.TrimSpace(a)
+		if a == "" {
+			return
+		}
+		for _, e := range auds {
+			if e == a {
+				return
+			}
+		}
+		auds = append(auds, a)
+	}
+	add(os.Getenv("OKTA_CLIENT_ID"))
+	add(os.Getenv("OKTA_M2M_CLIENT_ID"))
+	for _, a := range parseList(os.Getenv("OKTA_M2M_ALLOWED_AUDIENCES")) {
+		add(a)
+	}
+	if len(cfg.Audiences) == 0 {
+		cfg.Audiences = auds
+	}
+}
+
 // loadConfig reads configuration from the environment and validates the signing key.
 // It exits the process (fail closed) when SECRET_KEY is present but weak/invalid.
 func loadConfig() Config {
@@ -246,6 +344,14 @@ func loadConfig() Config {
 		// COGNITO_* env. Access tokens are client_id-bound (no aud), so there is
 		// no audience list; scopes come from cognito:groups or the scope claim.
 		deriveCognito(&cfg)
+	} else if cfg.Provider == "entra" {
+		// Entra: dual issuers (v2 + v1) + accepted audiences (client id,
+		// api://<client-id>, Application ID URI) from ENTRA_* env.
+		deriveEntra(&cfg)
+	} else if cfg.Provider == "okta" {
+		// Okta: org vs custom-auth-server issuer/JWKS + accepted audiences
+		// (client ids + M2M allowed audiences) from OKTA_* env.
+		deriveOkta(&cfg)
 	} else {
 		// Keycloak (default): auto-derive JWKS_URL and the accepted issuer list
 		// (external/internal/localhost realm URLs) + audience list from KEYCLOAK_*,
