@@ -1,6 +1,12 @@
-"""Shared metadata utilities for keyword search and field projection."""
+"""Shared utilities for ``metadata_fields`` projection on the read/search APIs.
+
+Provides the parse/validate, ancestor-dedup normalization, the canonical Python
+projection (the "oracle"), and the MongoDB ``$set`` aggregation-stage builder used
+to project the ``metadata`` subdocument on servers, agents, and skills (Issue #1277).
+"""
 
 import logging
+import re
 from typing import Any
 
 from fastapi import HTTPException, status
@@ -11,6 +17,15 @@ logger = logging.getLogger(__name__)
 MAX_METADATA_PATHS: int = 20
 MAX_PATH_DEPTH: int = 5
 MAX_SEGMENT_LENGTH: int = 64
+
+# Positive allowlist for a single dot-path segment: word characters (Unicode
+# letters of any script -- so accented/non-Latin metadata keys like ``café`` are
+# preserved -- plus digits and '_') and '-'. This is defense-in-depth on top of
+# the explicit empty/'$'-prefix checks -- it rejects any other character (spaces,
+# a mid-segment '$', '/', braces, operators, etc.) before a segment is
+# interpolated into a ``$metadata.<path>`` field reference or used as a ``$set``
+# object key.
+_VALID_SEGMENT: re.Pattern[str] = re.compile(r"[\w-]+")
 
 
 def parse_metadata_fields(
@@ -50,6 +65,11 @@ def parse_metadata_fields(
             if len(segment) > MAX_SEGMENT_LENGTH:
                 raise ValueError(
                     f"Path segment too long (max {MAX_SEGMENT_LENGTH} chars): '{segment}'"
+                )
+            if not _VALID_SEGMENT.fullmatch(segment):
+                raise ValueError(
+                    "Invalid path segment (allowed characters: letters, digits, "
+                    f"'_', '-'): '{segment}'"
                 )
         validated.append(path)
 
@@ -234,7 +254,7 @@ def parse_and_validate_metadata_fields(
         return parsed
     except ValueError as e:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"Invalid metadata_fields: {e}",
         ) from e
 

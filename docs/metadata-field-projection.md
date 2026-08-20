@@ -105,6 +105,7 @@ Invalid input returns HTTP 422 with a descriptive error message.
 | Segment length | 64 characters | A single segment exceeding 64 chars |
 | No `$` prefix | Any segment | `?metadata_fields=$set.injection` |
 | No empty segments | Between dots | `?metadata_fields=config..region` |
+| Allowed characters only | Letters (incl. accented/non-Latin), digits, `_`, `-` | `?metadata_fields=owner name` or `re@gion` |
 
 ## Performance
 
