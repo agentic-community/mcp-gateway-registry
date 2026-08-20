@@ -14,7 +14,7 @@ COPY frontend/ ./
 RUN npm run build
 
 # ===== BACKEND BUILD STAGE =====
-FROM python:3.14.6-slim AS backend-builder
+FROM python:3.14.7-slim AS backend-builder
 
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
@@ -58,7 +58,7 @@ COPY cli/examples/ /app/cli/examples/
 RUN . .venv/bin/activate && uv pip install --no-deps -e .
 
 # ===== FINAL RUNTIME STAGE =====
-FROM python:3.14.6-slim AS runtime
+FROM python:3.14.7-slim AS runtime
 
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \

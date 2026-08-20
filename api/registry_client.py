@@ -88,6 +88,14 @@ class InternalServiceRegistration(BaseModel):
     sse_endpoint: str | None = Field(
         None, description="Full URL for the SSE endpoint (overrides proxy_pass_url + /sse)"
     )
+    append_mcp_path: bool | None = Field(
+        None,
+        description=(
+            "Force/suppress the trailing '/mcp' transport suffix. Leave unset to keep "
+            "the registry default; set False for upstreams that serve JSON-RPC at their "
+            "root and 404 on '/mcp'."
+        ),
+    )
     metadata: dict[str, Any] | None = Field(
         default_factory=dict,
         description="Additional custom metadata for organization, compliance, or integration purposes",
@@ -3916,8 +3924,9 @@ class RegistryClient:
                 ``provider="custom"``.
             custom_scope_separator: Scope delimiter when the provider does not
                 use a space (custom only).
-            custom_token_auth_style: Where the client secret goes on the token
-                request -- "post_body" (default) or "basic_header" (custom only).
+            custom_token_auth_style: Token endpoint authentication style:
+                "post_body" (default), "basic_header", or "none" for a public
+                PKCE client (custom only).
             custom_resource: RFC 8707 resource indicator, sent on both the
                 authorize and token requests to bind the token to one protected
                 resource (custom only).

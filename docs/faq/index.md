@@ -17,6 +17,7 @@ Common questions and answers about the MCP Gateway Registry.
 
 - [How do I get my AI coding assistant to work with this registry?](connect-ai-coding-assistant.md)
 - [How do I register commonly used third-party MCP servers like GitHub, Slack, and Atlassian?](registering-third-party-mcp-servers.md)
+- [How do I configure the Datadog MCP server with per-user egress OAuth (public client + PKCE)?](configuring-datadog-mcp-server.md)
 - [How do I connect my agent to multiple MCP servers through the gateway?](connecting-multiple-mcp-servers.md)
 - [How do I test my agent's integration with the MCP Gateway locally?](local-testing-agent-integration.md)
 

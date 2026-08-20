@@ -373,7 +373,9 @@ async def test_health_service_check_server_endpoint_transport_aware_healthy(
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_response = MagicMock()
     mock_response.status_code = 200
-    mock_client.post.return_value = mock_response
+    mock_stream_ctx = MagicMock()
+    mock_stream_ctx.__aenter__.return_value = mock_response
+    mock_client.stream = MagicMock(return_value=mock_stream_ctx)
 
     with patch.object(health_service, "_initialize_mcp_session", return_value="session-123"):
         is_healthy, status = await health_service._check_server_endpoint_transport_aware(
@@ -458,7 +460,9 @@ async def test_health_service_initialize_mcp_session_success(health_service):
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.headers = {"Mcp-Session-Id": "server-session-123"}
-    mock_client.post.return_value = mock_response
+    mock_stream_ctx = MagicMock()
+    mock_stream_ctx.__aenter__.return_value = mock_response
+    mock_client.stream = MagicMock(return_value=mock_stream_ctx)
 
     session_id = await health_service._initialize_mcp_session(
         mock_client, "http://localhost:8000/mcp", {}
@@ -469,13 +473,39 @@ async def test_health_service_initialize_mcp_session_success(health_service):
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_health_service_initialize_mcp_session_does_not_read_body_on_success(health_service):
+    """A 200 with the session ID already in headers must not read the response
+    body: regression for the SSE/chunked streamable-http health-check hang,
+    where the body only completes when the server closes the connection."""
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {"Mcp-Session-Id": "server-session-123"}
+    mock_response.aread = AsyncMock(side_effect=AssertionError("body should not be read"))
+    mock_stream_ctx = MagicMock()
+    mock_stream_ctx.__aenter__.return_value = mock_response
+    mock_client.stream = MagicMock(return_value=mock_stream_ctx)
+
+    session_id = await health_service._initialize_mcp_session(
+        mock_client, "http://localhost:8000/mcp", {}
+    )
+
+    assert session_id == "server-session-123"
+    mock_response.aread.assert_not_called()
+    assert mock_client.stream.call_args.args[0] == "POST"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_health_service_initialize_mcp_session_failure(health_service):
     """Test initializing MCP session with failure."""
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_response = MagicMock()
     mock_response.status_code = 500
-    mock_response.text = "Internal Server Error"
-    mock_client.post.return_value = mock_response
+    mock_response.aread = AsyncMock(return_value=b"Internal Server Error")
+    mock_stream_ctx = MagicMock()
+    mock_stream_ctx.__aenter__.return_value = mock_response
+    mock_client.stream = MagicMock(return_value=mock_stream_ctx)
 
     session_id = await health_service._initialize_mcp_session(
         mock_client, "http://localhost:8000/mcp", {}
@@ -1270,7 +1300,9 @@ async def test_health_service_initialize_mcp_session_no_server_session_id(health
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.headers = {}
-    mock_client.post.return_value = mock_response
+    mock_stream_ctx = MagicMock()
+    mock_stream_ctx.__aenter__.return_value = mock_response
+    mock_client.stream = MagicMock(return_value=mock_stream_ctx)
 
     session_id = await health_service._initialize_mcp_session(
         mock_client, "http://localhost:8000/mcp", {}
@@ -1288,7 +1320,7 @@ async def test_health_service_initialize_mcp_session_no_server_session_id(health
 async def test_health_service_initialize_mcp_session_exception(health_service):
     """Test initializing MCP session with exception."""
     mock_client = AsyncMock(spec=httpx.AsyncClient)
-    mock_client.post.side_effect = Exception("Network error")
+    mock_client.stream = MagicMock(side_effect=Exception("Network error"))
 
     session_id = await health_service._initialize_mcp_session(
         mock_client, "http://localhost:8000/mcp", {}
@@ -1373,7 +1405,9 @@ async def test_health_service_check_server_endpoint_url_with_mcp(health_service,
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_response = MagicMock()
     mock_response.status_code = 200
-    mock_client.post.return_value = mock_response
+    mock_stream_ctx = MagicMock()
+    mock_stream_ctx.__aenter__.return_value = mock_response
+    mock_client.stream = MagicMock(return_value=mock_stream_ctx)
 
     with patch.object(health_service, "_initialize_mcp_session", return_value="session-123"):
         is_healthy, status = await health_service._check_server_endpoint_transport_aware(
@@ -1621,8 +1655,11 @@ class TestHealthCredentialDestinationGuard:
 async def test_health_logs_strip_query_and_response_body(health_service, caplog):
     endpoint = "https://93.184.216.34/mcp?api_key=query-secret"
     response = MagicMock(status_code=500, headers={}, text="response-body-secret")
+    response.aread = AsyncMock(return_value=b"response-body-secret")
     client = AsyncMock(spec=httpx.AsyncClient)
-    client.post.return_value = response
+    stream_ctx = MagicMock()
+    stream_ctx.__aenter__.return_value = response
+    client.stream = MagicMock(return_value=stream_ctx)
 
     with caplog.at_level("WARNING", logger="registry.health.service"):
         session_id = await health_service._initialize_mcp_session(client, endpoint, {})
@@ -1632,3 +1669,75 @@ async def test_health_logs_strip_query_and_response_body(health_service, caplog)
     assert "query-secret" not in caplog.text
     assert "response-body-secret" not in caplog.text
     assert "status=500" in caplog.text
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_streamable_http_ping_is_streamed_not_buffered(health_service, mock_server_info):
+    """Both hops of the streamable-http probe must stream, not buffer.
+
+    Streaming only the initialize hop leaves the ping hop waiting on a body a
+    live event stream never completes, which re-introduces the health-check
+    hang with the timeout simply moved one hop later.
+    """
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    ping_response = MagicMock(status_code=200, headers={})
+    stream_ctx = MagicMock()
+    stream_ctx.__aenter__.return_value = ping_response
+    mock_client.stream = MagicMock(return_value=stream_ctx)
+
+    with patch.object(health_service, "_initialize_mcp_session", return_value="session-123"):
+        is_healthy, status = await health_service._check_server_endpoint_transport_aware(
+            mock_client, "http://localhost:8000/mcp", mock_server_info
+        )
+
+    assert is_healthy is True
+    assert status == HealthStatus.HEALTHY
+    mock_client.post.assert_not_called()
+    assert mock_client.stream.call_args.args[0] == "POST"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_probe_mcp_endpoint_reads_body_only_on_400(health_service):
+    """The 400 branch must have its body read before health is judged.
+
+    A 400 is the one status whose payload decides health (the JSON-RPC -32600
+    check in _is_mcp_endpoint_healthy_streamable). Since the probe streams,
+    .json() would raise httpx.ResponseNotRead unless the body is read first,
+    and that exception would be swallowed into a bogus unhealthy verdict.
+    """
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    response = MagicMock(status_code=400, headers={})
+    response.aread = AsyncMock(return_value=b'{"error": {"code": -32600}}')
+    response.json = MagicMock(return_value={"error": {"code": -32600}})
+    stream_ctx = MagicMock()
+    stream_ctx.__aenter__.return_value = response
+    mock_client.stream = MagicMock(return_value=stream_ctx)
+
+    result = await health_service._probe_mcp_endpoint(
+        mock_client, "http://localhost:8000/mcp", {}, '{"jsonrpc": "2.0"}'
+    )
+
+    response.aread.assert_awaited_once()
+    assert health_service._is_mcp_endpoint_healthy_streamable(result) is True
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_probe_mcp_endpoint_does_not_read_body_on_200(health_service):
+    """A 200 is judged on status alone, so the body must never be read: that
+    is the read that hangs against a held-open event stream."""
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    response = MagicMock(status_code=200, headers={})
+    response.aread = AsyncMock(side_effect=AssertionError("body should not be read"))
+    stream_ctx = MagicMock()
+    stream_ctx.__aenter__.return_value = response
+    mock_client.stream = MagicMock(return_value=stream_ctx)
+
+    result = await health_service._probe_mcp_endpoint(
+        mock_client, "http://localhost:8000/mcp", {}, '{"jsonrpc": "2.0"}'
+    )
+
+    response.aread.assert_not_called()
+    assert result.status_code == 200
