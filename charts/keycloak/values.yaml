@@ -22,7 +22,7 @@ adminRealm: master
 
 # Comma-separated KC_FEATURES to enable, e.g. "cimd" for Client ID Metadata
 # Documents (experimental, >= 26.6). Empty disables the flag.
-features: "cimd"
+features: ""
 
 # Reverse-proxy / HTTP settings (Keycloak runs HTTP behind the registry nginx).
 proxyHeaders: xforwarded
@@ -68,7 +68,7 @@ postgres:
   # restores it (normalized to the DB/user above) on first init. If the
   # source isn't reachable (fresh install, or repeat upgrade after it's gone) the
   # Job skips and it's a no-op — safe by default so a missed flag can't drop a DB.
-  migrateFromBitnami: true
+  migrateFromBitnami: false
   # Source to dump from (pre-upgrade only).
   source:
     serviceName: "" # defaults to {{ .Release.Name }}-postgresql

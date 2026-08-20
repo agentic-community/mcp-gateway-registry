@@ -203,7 +203,7 @@ keycloak:
     # {{ .Release.Name }}-keycloak (auth.existingSecret defaults to it).
   # Comma-separated KC_FEATURES to enable. "cimd" turns on Keycloak's experimental
   # Client ID Metadata Documents support (>= 26.6). Empty = none.
-  features: "cimd"
+  features: ""
   # Keycloak serves from its own root; the registry pod's nginx rewrites browser
   # traffic under /keycloak before forwarding. DO NOT set httpRelativePath to
   # /keycloak — it breaks the /realms and /resources proxy locations. Proxy
