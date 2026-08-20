@@ -647,6 +647,8 @@ services:
       - JWKS_REFRESH_SECONDS=${JWKS_REFRESH_SECONDS:-300}
       # Scope parity: read-only snapshots of mcp_scopes + idp_m2m_clients so
       # X-Scopes matches Python's group->scope resolution. Same DB the registry uses.
+      # STORAGE_BACKEND selects the auth mechanism (documentdb -> SCRAM-SHA-1).
+      - STORAGE_BACKEND=${STORAGE_BACKEND:-mongodb-ce}
       - DOCUMENTDB_HOST=${DOCUMENTDB_HOST:-mongodb}
       - DOCUMENTDB_PORT=${DOCUMENTDB_PORT:-27017}
       - DOCUMENTDB_DATABASE=${DOCUMENTDB_DATABASE:-mcp_registry}

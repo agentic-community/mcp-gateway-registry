@@ -770,6 +770,8 @@ module "ecs_service_auth" {
           { name = "KEYCLOAK_CLIENT_ID", value = "mcp-gateway-web" },
           { name = "KEYCLOAK_M2M_CLIENT_ID", value = "mcp-gateway-m2m" },
           { name = "VALIDATE_AUDIENCE", value = var.validate_fast_path_audience },
+          # Selects the Mongo auth mechanism (documentdb -> SCRAM-SHA-1, else SHA-256).
+          { name = "STORAGE_BACKEND", value = var.storage_backend },
           { name = "DOCUMENTDB_HOST", value = var.documentdb_endpoint },
           { name = "DOCUMENTDB_PORT", value = "27017" },
           { name = "DOCUMENTDB_DATABASE", value = var.documentdb_database },
