@@ -1,5 +1,9 @@
 # Build a static, dependency-free binary and ship it on a minimal base.
-FROM golang:1.24-alpine AS build
+# Build base uses the AWS ECR Public mirror of the Docker official golang image
+# (same convention as docker/Dockerfile.metrics-db) to avoid Docker Hub rate
+# limits. This is the BUILD stage only; nothing from it ships (multi-stage) -- the
+# runtime image below is distroless/static (no shell, minimal CVE surface).
+FROM public.ecr.aws/docker/library/golang:1.24-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
