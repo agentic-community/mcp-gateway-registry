@@ -148,8 +148,14 @@ Derived as `KEYCLOAK_CLIENT_ID` + `KEYCLOAK_M2M_CLIENT_ID` + `mcp-gateway`, matc
 **`JWKS_URL` — auto-derived, rarely overridden.**
 Derived as `<KEYCLOAK_URL>/realms/<REALM>/protocol/openid-connect/certs`. Override only for a non-standard key path.
 
-**Amazon Cognito (auto-detected from `AUTH_PROVIDER=cognito`).**
-The sidecar also supports Cognito, mirroring the Python Cognito provider — no extra config beyond what the auth-server already has. When `AUTH_PROVIDER=cognito` (the auth-server sets it), the sidecar derives the issuer `https://cognito-idp.<AWS_REGION>.amazonaws.com/<COGNITO_USER_POOL_ID>`, its JWKS, and the accepted client-id allowlist (`COGNITO_CLIENT_ID` + `IDE_OAUTH_CLIENT_ID` + `COGNITO_M2M_CLIENT_IDS`, with `*` = M2M-only wildcard). It fast-paths **access tokens** (id/login tokens defer to Python); scopes come from `cognito:groups` (group→scope) or, for machine/no-group tokens, the token's own `scope` claim. Nothing to set beyond the same enable switch — provider selection is automatic. `VALIDATE_AUDIENCE` does not apply to Cognito (access tokens are client_id-bound, not audience-bound).
+**Multi-provider (auto-detected from `AUTH_PROVIDER`).**
+The sidecar picks its verifier from `AUTH_PROVIDER` (the auth-server already sets it) and derives everything from that IdP's existing env — no extra config beyond the enable switch. Supported today: **Keycloak, Amazon Cognito, Microsoft Entra ID, Okta**. Any other provider (Auth0, PingFederate) stays fallback-only (deferred to Python) until added. Per provider:
+
+- **Cognito** — issuer `https://cognito-idp.<AWS_REGION>.amazonaws.com/<COGNITO_USER_POOL_ID>`; client-id allowlist (`COGNITO_CLIENT_ID` + `IDE_OAUTH_CLIENT_ID` + `COGNITO_M2M_CLIENT_IDS`, `*` = M2M-only wildcard). Access tokens only; scopes from `cognito:groups` or the token `scope` claim. `VALIDATE_AUDIENCE` does not apply (client_id-bound).
+- **Entra** — dual issuers (v2 `.../v2.0` + v1 `sts.windows.net/<tenant>/`) from `ENTRA_TENANT_ID` / `ENTRA_LOGIN_BASE_URL`; accepted audiences = `ENTRA_CLIENT_ID` + `api://<client-id>` + `ENTRA_APPLICATION_ID_URI`. Groups from `groups` (or `roles` for M2M). id_token replay is deferred to Python.
+- **Okta** — issuer/JWKS from `OKTA_DOMAIN` (+ `OKTA_AUTH_SERVER_ID` for a custom auth server, else the org server); accepted audiences = `OKTA_CLIENT_ID` + `OKTA_M2M_CLIENT_ID` + `OKTA_M2M_ALLOWED_AUDIENCES`. Groups from `groups`; client id from `cid`; scopes from `scp`/`scope`.
+
+All group-based providers resolve scopes identically to Python: `groups` → DocumentDB group→scope mapping (+ `idp_m2m_clients` M2M enrichment), otherwise the token's own scope claim. Anything the fast path can't reproduce exactly falls back safely to Python.
 
 To inspect a real token when debugging (decode `aud`/`iss` — but note `account` in the list is expected and correctly NOT accepted):
 

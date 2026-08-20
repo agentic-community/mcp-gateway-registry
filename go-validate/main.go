@@ -161,10 +161,89 @@ func (s *server) resolveFastPath(
 	r *http.Request,
 	tok string,
 ) (identity, []string, []string, string, int) {
-	if s.cfg.Provider == "cognito" {
+	switch s.cfg.Provider {
+	case "cognito":
 		return s.resolveCognito(tok)
+	case "entra":
+		return s.resolveEntra(tok)
+	case "okta":
+		return s.resolveOkta(tok)
+	default:
+		return s.resolveKeycloak(tok)
 	}
-	return s.resolveKeycloak(tok)
+}
+
+// resolveScopes computes (groups, scopes) the way server.py finalizes them for
+// group-based providers (entra/okta/keycloak): when the token carries groups,
+// map them to scopes via DocumentDB; otherwise try M2M enrichment
+// (idp_m2m_clients) and, failing that, use the token's own scope claim. Returns
+// ok=false only when groups are present but the scope snapshot can't be read
+// (caller must fall back to Python).
+func (s *server) resolveScopes(
+	groups []string,
+	clientID string,
+	tokenScopes []string,
+) ([]string, []string, bool) {
+	if len(groups) > 0 {
+		if s.scopes == nil {
+			return nil, nil, false
+		}
+		sc, ok := s.scopes.resolve(groups, clientID)
+		if !ok {
+			return nil, nil, false
+		}
+		return groups, sc, true
+	}
+	// No groups: a known M2M client enriches to groups->scopes; otherwise the
+	// token's own scope claim is authoritative (server.py's else branch).
+	if s.scopes != nil {
+		if sc, ok := s.scopes.resolve(nil, clientID); ok {
+			return nil, sc, true
+		}
+	}
+	return nil, tokenScopes, true
+}
+
+// resolveEntra: verify an Entra access token (dual issuers, audience allowlist,
+// id_token guard), map claims (groups or M2M roles), then resolve scopes.
+func (s *server) resolveEntra(
+	tok string,
+) (identity, []string, []string, string, int) {
+	claims, err := verifyEntra(tok, s.ks, s.cfg.Issuers, s.cfg.Audiences)
+	switch err {
+	case nil:
+	case errInvalidToken:
+		return identity{}, nil, nil, "", vUnauthorized
+	default:
+		return identity{}, nil, nil, "", vFallback
+	}
+	ident := mapEntraClaims(claims, os.Getenv("ENTRA_CLIENT_ID"))
+	grps, scopes, ok := s.resolveScopes(entraGroups(claims), ident.ClientID, strings.Fields(claims.Scope))
+	if !ok {
+		return identity{}, nil, nil, "", vFallback
+	}
+	return ident, grps, scopes, "entra", vOK
+}
+
+// resolveOkta: verify an Okta access token (single issuer, audience allowlist),
+// map claims (sub/cid), then resolve scopes (scp/scope).
+func (s *server) resolveOkta(
+	tok string,
+) (identity, []string, []string, string, int) {
+	claims, err := verifyRS256(tok, s.ks, s.cfg.Issuers, s.cfg.Audiences)
+	switch err {
+	case nil:
+	case errInvalidToken:
+		return identity{}, nil, nil, "", vUnauthorized
+	default:
+		return identity{}, nil, nil, "", vFallback
+	}
+	ident := mapOktaClaims(claims, os.Getenv("OKTA_CLIENT_ID"))
+	grps, scopes, ok := s.resolveScopes(claims.Groups, ident.ClientID, claims.scpOrScope())
+	if !ok {
+		return identity{}, nil, nil, "", vFallback
+	}
+	return ident, grps, scopes, "okta", vOK
 }
 
 // resolveKeycloak: RS256 verify against the issuer/audience lists, then group->scope
