@@ -150,6 +150,9 @@ class _FakeSkillRepo(SkillRepositoryBase):
     async def list_paginated(self, skip=0, limit=100):  # pragma: no cover
         return []
 
+    async def list_by_paths(self, paths):  # pragma: no cover
+        return {}
+
     async def list_filtered(self, **kwargs):  # pragma: no cover
         return []
 
