@@ -49,7 +49,13 @@ _G.ngx = {
     location = {
         capture = function(loc, _opts) return capture_responses[loc] end,
     },
-    req = { set_header = function() end },
+    -- Stateful request-header mock so tests can seed a client-supplied header
+    -- and observe whether set_header overwrote it or clear_header removed it.
+    req = {
+        _headers = {},
+        set_header = function(k, v) _G.ngx.req._headers[k] = v end,
+        clear_header = function(k) _G.ngx.req._headers[k] = nil end,
+    },
     log = function() end,
     ERR = 4,
     WARN = 5,
@@ -150,6 +156,49 @@ do
 
     M._handle_tools_list("1", mapping, "", nil, "srv2")
     check(dict._store["tools_enriched:srv2"] ~= nil, "fully-discovered result IS cached")
+end
+
+-- ---------------------------------------------------------------------------
+print("test: _forward_identity_headers overwrites a spoofed client X-User")
+do
+    -- Client tries to spoof identity; a validated user is present.
+    ngx.req._headers = { ["X-User"] = "attacker", ["X-Username"] = "attacker" }
+    ngx.var.auth_user = "alice"
+    ngx.var.auth_username = "alice@corp"
+    M._forward_identity_headers()
+    check(ngx.req._headers["X-User"] == "alice",
+        "validated auth_user overwrites the client-supplied X-User")
+    check(ngx.req._headers["X-Username"] == "alice@corp",
+        "validated auth_username overwrites the client-supplied X-Username")
+end
+
+-- ---------------------------------------------------------------------------
+print("test: _forward_identity_headers CLEARS a spoofed X-User when auth_user is empty")
+do
+    -- M2M / client-credentials token: authenticates but carries no user, so
+    -- nginx auth_request_set yields "" for $auth_user. A client-supplied X-User
+    -- must NOT survive to the backend (this is the fail-open bug from #1627).
+    ngx.req._headers = { ["X-User"] = "attacker", ["X-Username"] = "attacker" }
+    ngx.var.auth_user = ""
+    ngx.var.auth_username = ""
+    M._forward_identity_headers()
+    check(ngx.req._headers["X-User"] == nil,
+        "empty auth_user clears the client-supplied X-User (no spoof passthrough)")
+    check(ngx.req._headers["X-Username"] == nil,
+        "empty auth_username clears the client-supplied X-Username")
+end
+
+-- ---------------------------------------------------------------------------
+print("test: _forward_identity_headers CLEARS a spoofed X-User when auth_user is nil")
+do
+    ngx.req._headers = { ["X-User"] = "attacker", ["X-Username"] = "attacker" }
+    ngx.var.auth_user = nil
+    ngx.var.auth_username = nil
+    M._forward_identity_headers()
+    check(ngx.req._headers["X-User"] == nil,
+        "nil auth_user clears the client-supplied X-User")
+    check(ngx.req._headers["X-Username"] == nil,
+        "nil auth_username clears the client-supplied X-Username")
 end
 
 -- ---------------------------------------------------------------------------
