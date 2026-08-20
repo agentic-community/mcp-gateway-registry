@@ -74,6 +74,24 @@ class TestParseMetadataFields:
         with pytest.raises(ValueError, match="Path segment too long"):
             parse_metadata_fields(long_segment)
 
+    def test_mid_segment_dollar_raises(self) -> None:
+        # A '$' that is not the leading char passes the prefix check but is
+        # caught by the positive allowlist.
+        with pytest.raises(ValueError, match="allowed characters"):
+            parse_metadata_fields("own$er")
+
+    def test_space_in_segment_raises(self) -> None:
+        with pytest.raises(ValueError, match="allowed characters"):
+            parse_metadata_fields("owner name")
+
+    def test_special_char_in_segment_raises(self) -> None:
+        with pytest.raises(ValueError, match="allowed characters"):
+            parse_metadata_fields("config.re@gion")
+
+    def test_underscore_hyphen_digits_allowed(self) -> None:
+        result = parse_metadata_fields("owner_id,region-1,config.v2")
+        assert result == ["owner_id", "region-1", "config.v2"]
+
     def test_max_segment_length_ok(self) -> None:
         segment = "x" * 64
         result = parse_metadata_fields(segment)

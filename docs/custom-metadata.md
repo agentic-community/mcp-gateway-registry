@@ -118,3 +118,5 @@ curl "https://registry.example.com/api/search?q=us-east-1 deployed"
 - [Service Management Guide](service-management.md)
 - [A2A Agent Guide](a2a.md)
 - [Semantic Search](design/hybrid-search-architecture.md)
+- [Metadata Field Projection](metadata-field-projection.md) — return only selected metadata fields on list and search responses
+- [FAQ: return only the metadata fields I need when listing or searching](faq/metadata-field-projection-search-listing.md)
