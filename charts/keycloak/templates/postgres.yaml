@@ -1,0 +1,143 @@
+{{- if .Values.create }}
+{{- $pg := .Values.postgres }}
+{{- $pgSecret := include "keycloak.pgSecretName" . }}
+---
+# Headless service governing the postgres StatefulSet.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "keycloak.postgresHeadlessName" . }}
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "keycloak.commonLabels" . | nindent 4 }}
+    {{- include "keycloak.postgresSelectorLabels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  selector:
+    {{- include "keycloak.postgresSelectorLabels" . | nindent 4 }}
+  ports:
+    - name: postgresql
+      port: 5432
+      targetPort: postgresql
+---
+# ClusterIP service Keycloak connects to (KC_DB_URL_HOST).
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "keycloak.postgresName" . }}
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "keycloak.commonLabels" . | nindent 4 }}
+    {{- include "keycloak.postgresSelectorLabels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "keycloak.postgresSelectorLabels" . | nindent 4 }}
+  ports:
+    - name: postgresql
+      port: 5432
+      targetPort: postgresql
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "keycloak.postgresName" . }}
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "keycloak.commonLabels" . | nindent 4 }}
+    {{- include "keycloak.postgresSelectorLabels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "keycloak.postgresHeadlessName" . }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "keycloak.postgresSelectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "keycloak.commonLabels" . | nindent 8 }}
+        {{- include "keycloak.postgresSelectorLabels" . | nindent 8 }}
+    spec:
+      securityContext:
+        fsGroup: 999
+        runAsUser: 999
+        runAsGroup: 999
+        runAsNonRoot: true
+      containers:
+        - name: postgresql
+          image: "{{ $pg.image.repository }}:{{ $pg.image.tag }}"
+          imagePullPolicy: {{ $pg.image.pullPolicy }}
+          ports:
+            - name: postgresql
+              containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              value: {{ $pg.username | quote }}
+            - name: POSTGRES_DB
+              value: {{ $pg.database | quote }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $pgSecret }}
+                  key: {{ $pg.existingSecretPasswordKey }}
+            # Subdir keeps the cluster off the volume root (avoids lost+found).
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            {{- if and $pg.migrateFromBitnami .Release.IsUpgrade }}
+            # One-time restore: the pre-upgrade dump Job wrote restore.sql here;
+            # postgres runs it during first-init, before it accepts connections.
+            - name: migration
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+            {{- end }}
+          readinessProbe:
+            exec:
+              command: ["/bin/sh", "-c", "pg_isready -U {{ $pg.username }} -d {{ $pg.database }} -h 127.0.0.1"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            exec:
+              command: ["/bin/sh", "-c", "pg_isready -U {{ $pg.username }} -d {{ $pg.database }} -h 127.0.0.1"]
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 6
+          {{- with $pg.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with $pg.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $pg.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $pg.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if and $pg.migrateFromBitnami .Release.IsUpgrade }}
+      volumes:
+        - name: migration
+          persistentVolumeClaim:
+            claimName: {{ include "keycloak.migrationPvcName" . }}
+      {{- end }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if $pg.persistence.storageClass }}
+        storageClassName: {{ $pg.persistence.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ $pg.persistence.size | quote }}
+{{- end }}
