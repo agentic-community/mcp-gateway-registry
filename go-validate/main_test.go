@@ -361,6 +361,18 @@ func TestBuildMongoURI(t *testing.T) {
 	if !contains(customURI, "tlsCAFile=%2Fcustom%2Fca.pem") {
 		t.Fatalf("custom tlsCAFile not honored/encoded: %s", customURI)
 	}
+	// Explicit non-documentdb backend keeps SCRAM-SHA-256 even with TLS on
+	// (explicit STORAGE_BACKEND wins over the TLS heuristic).
+	if !contains(customURI, "authMechanism=SCRAM-SHA-256") {
+		t.Fatalf("explicit mongodb-ce must stay SCRAM-SHA-256 even with TLS: %s", customURI)
+	}
+	// Heuristic: STORAGE_BACKEND unset + TLS on -> DocumentDB -> SCRAM-SHA-1
+	// (covers the case where the sidecar's STORAGE_BACKEND env was never wired).
+	t.Setenv("STORAGE_BACKEND", "")
+	heuristicURI, _ := buildMongoURI()
+	if !contains(heuristicURI, "authMechanism=SCRAM-SHA-1") {
+		t.Fatalf("unset backend + TLS should fall back to SCRAM-SHA-1: %s", heuristicURI)
+	}
 }
 
 func contains(s, sub string) bool { return len(s) >= len(sub) && (indexOf(s, sub) >= 0) }

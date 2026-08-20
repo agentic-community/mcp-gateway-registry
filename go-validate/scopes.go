@@ -79,9 +79,14 @@ func buildMongoURI() (string, bool) {
 	pass := os.Getenv("DOCUMENTDB_PASSWORD")
 	// Amazon DocumentDB v5.0 only supports SCRAM-SHA-1; every other MongoDB-
 	// compatible backend (mongodb-ce / mongodb / atlas) supports SCRAM-SHA-256.
-	// Mirror registry/utils/mongodb_connection.py exactly, keyed on STORAGE_BACKEND.
+	// An explicit STORAGE_BACKEND wins (mirrors mongodb_connection.py). When it is
+	// NOT set, fall back to the TLS signal: DocumentDB always runs with TLS while
+	// local mongo-ce does not, so tls=true => DocumentDB => SCRAM-SHA-1. This keeps
+	// the sidecar correct even if STORAGE_BACKEND was never wired into its env.
+	useTLS := getenv("DOCUMENTDB_USE_TLS", "false") == "true"
+	backend := os.Getenv("STORAGE_BACKEND")
 	authMech := "SCRAM-SHA-256"
-	if getenv("STORAGE_BACKEND", "mongodb-ce") == "documentdb" {
+	if backend == "documentdb" || (backend == "" && useTLS) {
 		authMech = "SCRAM-SHA-1"
 	}
 	params := "authSource=admin&authMechanism=" + authMech
