@@ -77,7 +77,14 @@ func buildMongoURI() (string, bool) {
 	dbName := getenv("DOCUMENTDB_DATABASE", "mcp_registry")
 	user := os.Getenv("DOCUMENTDB_USERNAME")
 	pass := os.Getenv("DOCUMENTDB_PASSWORD")
-	params := "authSource=admin&authMechanism=SCRAM-SHA-256"
+	// Amazon DocumentDB v5.0 only supports SCRAM-SHA-1; every other MongoDB-
+	// compatible backend (mongodb-ce / mongodb / atlas) supports SCRAM-SHA-256.
+	// Mirror registry/utils/mongodb_connection.py exactly, keyed on STORAGE_BACKEND.
+	authMech := "SCRAM-SHA-256"
+	if getenv("STORAGE_BACKEND", "mongodb-ce") == "documentdb" {
+		authMech = "SCRAM-SHA-1"
+	}
+	params := "authSource=admin&authMechanism=" + authMech
 	if getenv("DOCUMENTDB_DIRECT_CONNECTION", "true") == "true" {
 		params += "&directConnection=true"
 	}

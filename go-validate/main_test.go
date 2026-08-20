@@ -332,10 +332,21 @@ func TestBuildMongoURI(t *testing.T) {
 	if !ok || uri == "" {
 		t.Fatalf("expected uri, got %q ok=%v", uri, ok)
 	}
-	// password special chars must be URL-encoded
+	// password special chars must be URL-encoded; default backend -> SCRAM-SHA-256
 	if !contains(uri, "authSource=admin") || !contains(uri, "p%40ss") {
 		t.Fatalf("uri not built/escaped correctly: %s", uri)
 	}
+	if !contains(uri, "authMechanism=SCRAM-SHA-256") {
+		t.Fatalf("non-documentdb backend must use SCRAM-SHA-256: %s", uri)
+	}
+
+	// DocumentDB only supports SCRAM-SHA-1 (mirrors mongodb_connection.py).
+	t.Setenv("STORAGE_BACKEND", "documentdb")
+	docdbURI, _ := buildMongoURI()
+	if !contains(docdbURI, "authMechanism=SCRAM-SHA-1") || contains(docdbURI, "SHA-256") {
+		t.Fatalf("documentdb backend must use SCRAM-SHA-1: %s", docdbURI)
+	}
+	t.Setenv("STORAGE_BACKEND", "mongodb-ce")
 
 	// TLS on -> must carry tls=true AND the CA bundle path, else the DocumentDB
 	// handshake fails with "unknown authority" and scope parity never loads.
