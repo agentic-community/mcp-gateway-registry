@@ -83,6 +83,13 @@ func buildMongoURI() (string, bool) {
 	}
 	if getenv("DOCUMENTDB_USE_TLS", "false") == "true" {
 		params += "&tls=true"
+		// DocumentDB serves a cert signed by the Amazon RDS CA, which is NOT a
+		// public root, so the Mongo driver must trust the bundle explicitly (same
+		// path + env the Python side uses). Without this the handshake fails with
+		// "x509: certificate signed by unknown authority" and scope parity never
+		// loads. The bundle is baked into the image at the default path.
+		caFile := getenv("DOCUMENTDB_TLS_CA_FILE", "/app/certs/global-bundle.pem")
+		params += "&tlsCAFile=" + url.QueryEscape(caFile)
 	}
 	if user != "" && pass != "" {
 		return fmt.Sprintf("mongodb://%s:%s@%s:%s/%s?%s",

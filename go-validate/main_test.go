@@ -336,6 +336,20 @@ func TestBuildMongoURI(t *testing.T) {
 	if !contains(uri, "authSource=admin") || !contains(uri, "p%40ss") {
 		t.Fatalf("uri not built/escaped correctly: %s", uri)
 	}
+
+	// TLS on -> must carry tls=true AND the CA bundle path, else the DocumentDB
+	// handshake fails with "unknown authority" and scope parity never loads.
+	t.Setenv("DOCUMENTDB_USE_TLS", "true")
+	tlsURI, ok := buildMongoURI()
+	if !ok || !contains(tlsURI, "tls=true") || !contains(tlsURI, "tlsCAFile=") {
+		t.Fatalf("TLS uri missing tls/tlsCAFile: %s", tlsURI)
+	}
+	// custom CA path is honored and URL-encoded
+	t.Setenv("DOCUMENTDB_TLS_CA_FILE", "/custom/ca.pem")
+	customURI, _ := buildMongoURI()
+	if !contains(customURI, "tlsCAFile=%2Fcustom%2Fca.pem") {
+		t.Fatalf("custom tlsCAFile not honored/encoded: %s", customURI)
+	}
 }
 
 func contains(s, sub string) bool { return len(s) >= len(sub) && (indexOf(s, sub) >= 0) }
