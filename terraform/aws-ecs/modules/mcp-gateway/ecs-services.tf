@@ -1891,6 +1891,15 @@ module "ecs_service_registry" {
             valueFrom = aws_secretsmanager_secret.embeddings_idp_client_secret.arn
           }
         ],
+        # Per-user egress credential vault encryption key (registry-only,
+        # optional). Injected as a true secret via Secrets Manager valueFrom;
+        # only present when an operator supplied a value (empty => feature off).
+        var.egress_credential_encryption_key != "" ? [
+          {
+            name      = "EGRESS_CREDENTIAL_ENCRYPTION_KEY"
+            valueFrom = aws_secretsmanager_secret.egress_credential_encryption_key[0].arn
+          }
+        ] : [],
         # PR #947: MongoDB connection string override (Secrets Manager variant).
         # Preferred when the URI contains credentials (avoids plain text in state).
         var.mongodb_connection_string_secret_arn != "" ? [

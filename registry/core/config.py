@@ -1561,6 +1561,33 @@ class Settings(BaseSettings):
         default="mcp/egress",
         description="Secret name prefix for the egress vault in Secrets Manager.",
     )
+    egress_credential_encryption_key: str = Field(
+        default="",
+        description=(
+            "Application-layer root key for AEAD encryption of per-user egress "
+            "credentials before they are handed to the secret-store backend "
+            "(Secrets Manager / OpenBao). When set (>= 32 chars), StoredToken "
+            "payloads are AES-256-GCM encrypted under a per-principal HKDF-derived "
+            "key; the vault holds ciphertext only. When empty, credentials are "
+            "persisted as plaintext (legacy behavior). Must be kept OUTSIDE the "
+            "secret-store trust boundary this feature protects. NOTE: key "
+            "rotation is a destructive cutover -- there is currently a single "
+            "active key, so changing this value makes existing ciphertext "
+            "undecryptable (fail-closed) and forces affected users to reconnect."
+        ),
+    )
+    egress_credential_require_encrypted: bool = Field(
+        default=False,
+        description=(
+            "Terminal strict mode for the egress credential vault. When true "
+            "(and EGRESS_CREDENTIAL_ENCRYPTION_KEY is set), reads REJECT any "
+            "legacy plaintext entry instead of accepting it, so a write-capable "
+            "attacker on the secret-store backend cannot downgrade an encrypted "
+            "entry to plaintext (or inject a plaintext token) and have it vended. "
+            "Enable only AFTER migration has re-encrypted all existing entries "
+            "(new writes and read-repair happen automatically once the key is set)."
+        ),
+    )
     openbao_addr: str = Field(
         default="",
         description="OpenBao server address (secret_store_backend=openbao).",
@@ -2004,7 +2031,45 @@ class Settings(BaseSettings):
                 "strong random value at least 32 bytes long, identical across all auth_server "
                 "and registry replicas (see chart values.yaml)."
             )
+        self.egress_credential_encryption_key = self._validate_credential_encryption_key(
+            self.egress_credential_encryption_key
+        )
         self._validate_egress_auth_config()
+
+    @staticmethod
+    def _validate_credential_encryption_key(value: str | None) -> str:
+        """Validate + normalize EGRESS_CREDENTIAL_ENCRYPTION_KEY without leaking it.
+
+        Runs in __init__ (not a @field_validator) deliberately: a pydantic
+        ValidationError echoes the offending ``input_value`` in its message, which
+        would print this secret. A plain ValueError raised here carries only our
+        message, so the key material never reaches logs/exceptions.
+
+        Empty/None -> "" (feature disabled, legacy plaintext). A set value must be
+        >= 32 bytes and not a known placeholder, since it is HKDF input keying
+        material for per-user AES-256-GCM egress-credential encryption.
+        """
+        if not value or not value.strip():
+            return ""
+        stripped = value.strip()
+        if len(stripped.encode("utf-8")) < 32:
+            raise ValueError(
+                "EGRESS_CREDENTIAL_ENCRYPTION_KEY must be at least 32 bytes. Generate a "
+                'high-entropy value with `python3 -c "import secrets; '
+                'print(secrets.token_urlsafe(32))"` and keep it outside the secret-store '
+                "trust boundary it protects."
+            )
+        normalized = stripped.lower()
+        if any(
+            marker in normalized
+            for marker in ("change-me", "changeme", "change-this", "changethis", "placeholder")
+        ):
+            raise ValueError(
+                "EGRESS_CREDENTIAL_ENCRYPTION_KEY is set to a known-weak/placeholder value. "
+                'Set it to a unique, high-entropy secret (e.g. `python3 -c "import secrets; '
+                'print(secrets.token_urlsafe(32))"`).'
+            )
+        return stripped
 
     def _validate_egress_auth_config(self) -> None:
         """Cross-field startup checks for the egress credential vault.

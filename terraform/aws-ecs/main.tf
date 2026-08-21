@@ -421,6 +421,7 @@ module "mcp_gateway" {
   egress_nginx_marker_secret         = var.egress_nginx_marker_secret
   egress_secrets_manager_kms_key_id  = var.egress_secrets_manager_kms_key_id
   egress_secrets_manager_path_prefix = var.egress_secrets_manager_path_prefix
+  egress_credential_encryption_key   = var.egress_credential_encryption_key
 
   # Wait for S3 bucket policy to propagate (30s delay)
   # This prevents "Access Denied" errors when ALB tests write permissions
