@@ -1307,6 +1307,37 @@ class NginxConfigService:
             config_content = config_content.replace("{{AUTH_SERVER_HOST}}", auth_host)
             config_content = config_content.replace("{{AUTH_SERVER_PORT}}", auth_port)
 
+            # Dedicated upstream for the /validate auth_request subrequest. Defaults
+            # to the auth-server (backward compatible when unset) but can point at the
+            # go-validate fast-path sidecar via VALIDATE_UPSTREAM_URL. Only /validate is
+            # routed here; the /oauth2/* locations always stay on the auth-server.
+            validate_host = auth_host
+            validate_port = auth_port
+            validate_upstream_url = os.environ.get("VALIDATE_UPSTREAM_URL", "").strip()
+            if validate_upstream_url:
+                try:
+                    parsed_validate = urlparse(validate_upstream_url)
+                    validate_host = parsed_validate.hostname or auth_host
+                    if parsed_validate.port:
+                        validate_port = str(parsed_validate.port)
+                    else:
+                        validate_scheme = parsed_validate.scheme or "http"
+                        validate_port = "443" if validate_scheme == "https" else auth_port
+                    logger.info(
+                        f"Routing /validate to dedicated upstream from "
+                        f"VALIDATE_UPSTREAM_URL '{validate_upstream_url}': "
+                        f"{validate_host}:{validate_port}"
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to parse VALIDATE_UPSTREAM_URL "
+                        f"'{validate_upstream_url}': {e}. Using auth-server for /validate."
+                    )
+                    validate_host = auth_host
+                    validate_port = auth_port
+            config_content = config_content.replace("{{VALIDATE_UPSTREAM_HOST}}", validate_host)
+            config_content = config_content.replace("{{VALIDATE_UPSTREAM_PORT}}", validate_port)
+
             # Real client-IP recovery (TRUSTED_REAL_IP_CIDRS). Empty by default so
             # edge deployments emit nothing; when trusted proxy CIDRs are set, the
             # audited client IP becomes the end user instead of the load balancer.

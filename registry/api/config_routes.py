@@ -82,6 +82,7 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             ("auth_provider", "Auth Provider", False),
             ("auth_server_url", "Auth Server URL", False),
             ("auth_server_external_url", "Auth Server External URL", False),
+            ("validate_upstream_url", "Validate Upstream URL (/validate fast path)", False),
             ("session_max_age_seconds", "Session Max Age", False),
             ("session_cookie_secure", "Secure Cookie", False),
             ("session_cookie_domain", "Cookie Domain", False),

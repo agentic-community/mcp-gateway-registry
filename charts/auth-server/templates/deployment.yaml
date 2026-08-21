@@ -247,3 +247,47 @@ spec:
             periodSeconds: 5
             timeoutSeconds: 3
             failureThreshold: 3
+
+        {{- if or (.Values.fastPath).enabled (dig "fastPath" "enabled" false .Values.global) }}
+        # Go /validate fast-path sidecar (issue #1652). Shares the pod network with
+        # auth-server, so AUTH_FALLBACK_URL is localhost:8888. Reuses the same
+        # secrets (SECRET_KEY, DOCUMENTDB_*, AUTH_SERVER_NGINX_MARKER_SECRET).
+        - name: go-validate
+          image: "{{ $imgRegistry }}/{{ default "go-validate" .Values.fastPath.image.repository }}:{{ $imgTag }}"
+          imagePullPolicy: {{ $imgPullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          ports:
+            - containerPort: 8899
+              name: govalidate
+          envFrom:
+            - secretRef:
+                name: {{ .Values.app.existingSecret | default .Values.app.envSecretName }}
+            - secretRef:
+                name: {{ .Values.global.existingMongoCredentialsSecret | default "mongo-credentials" }}
+            {{- if .Values.global.sharedSecretName }}
+            - secretRef:
+                name: {{ .Values.global.existingSharedSecret | default .Values.global.sharedSecretName }}
+            {{- end }}
+            {{- if .Values.global.oauthProviderSecretName }}
+            - secretRef:
+                name: {{ .Values.global.existingOauthProviderSecret | default .Values.global.oauthProviderSecretName }}
+            {{- end }}
+          env:
+            - name: GOVALIDATE_LISTEN
+              value: ":8899"
+            - name: AUTH_FALLBACK_URL
+              value: "http://localhost:8888"
+            - name: JWKS_URL
+              value: {{ .Values.fastPath.jwksUrl | quote }}
+            - name: VALIDATE_ISSUER
+              value: {{ .Values.fastPath.issuer | quote }}
+            - name: VALIDATE_AUDIENCE
+              value: {{ .Values.fastPath.audience | quote }}
+          resources:
+            {{- toYaml .Values.fastPath.resources | nindent 12 }}
+        {{- end }}

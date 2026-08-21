@@ -66,21 +66,28 @@ module "ecs_service_auth" {
   # Enable Service Connect
   service_connect_configuration = {
     namespace = aws_service_discovery_private_dns_namespace.mcp.arn
-    service = [{
+    service = concat([{
       client_alias = {
         port     = 8888
         dns_name = "auth-server"
       }
       port_name      = "auth-server"
       discovery_name = "auth-server"
-    }]
+      }], var.validate_fast_path_enabled ? [{
+      client_alias = {
+        port     = 8899
+        dns_name = "go-validate"
+      }
+      port_name      = "go-validate"
+      discovery_name = "go-validate"
+    }] : [])
   }
 
   # Container definitions
   container_definitions = merge({
     auth-server = {
-      cpu                    = var.enable_observability ? tonumber(var.cpu) - local.adot_sidecar_cpu : tonumber(var.cpu)
-      memory                 = var.enable_observability ? tonumber(var.memory) - local.adot_sidecar_memory : tonumber(var.memory)
+      cpu                    = tonumber(var.cpu) - (var.enable_observability ? local.adot_sidecar_cpu : 0) - (var.validate_fast_path_enabled ? 128 : 0)
+      memory                 = tonumber(var.memory) - (var.enable_observability ? local.adot_sidecar_memory : 0) - (var.validate_fast_path_enabled ? 128 : 0)
       essential              = true
       image                  = var.auth_server_image_uri
       versionConsistency     = "disabled"
@@ -720,6 +727,85 @@ module "ecs_service_auth" {
           condition     = "START"
         }]
       }
+    } : {},
+    var.validate_fast_path_enabled ? {
+      go-validate = {
+        cpu                    = 128
+        memory                 = 128
+        essential              = false
+        image                  = var.validate_fast_path_image_uri
+        versionConsistency     = "disabled"
+        readonlyRootFilesystem = true
+
+        portMappings = [{
+          name          = "go-validate"
+          containerPort = 8899
+          protocol      = "tcp"
+        }]
+
+        # The sidecar picks its verifier from AUTH_PROVIDER and auto-derives
+        # everything from the same IdP vars the auth-server uses:
+        #   - keycloak: JWKS + issuer list + audience list from KEYCLOAK_*
+        #     (matches the Python Keycloak provider).
+        #   - cognito:  issuer + JWKS + accepted client-id allowlist from
+        #     COGNITO_* / AWS_REGION (matches the Python Cognito provider).
+        # It engages when SECRET_KEY + a reachable IdP are present; otherwise it
+        # reverse-proxies to the auth-server (same task, loopback) - correct but not
+        # accelerated. validate_fast_path_audience overrides the derived Keycloak
+        # audience list only when set (never "account" -> refused as a confused-deputy).
+        environment = [
+          { name = "GOVALIDATE_LISTEN", value = ":8899" },
+          { name = "AUTH_FALLBACK_URL", value = "http://localhost:18888" },
+          { name = "AUTH_PROVIDER", value = var.pingfederate_enabled ? "pingfederate" : (var.auth0_enabled ? "auth0" : (var.okta_enabled ? "okta" : (var.entra_enabled ? "entra" : (var.cognito_enabled ? "cognito" : (var.keycloak_domain != "" ? "keycloak" : "default"))))) },
+          { name = "AWS_REGION", value = data.aws_region.current.id },
+          # Cognito (used when AUTH_PROVIDER=cognito):
+          { name = "COGNITO_USER_POOL_ID", value = var.cognito_user_pool_id },
+          { name = "COGNITO_CLIENT_ID", value = var.cognito_client_id },
+          { name = "COGNITO_M2M_CLIENT_IDS", value = var.cognito_m2m_client_ids },
+          { name = "IDE_OAUTH_CLIENT_ID", value = var.ide_oauth_client_id },
+          # Entra (used when AUTH_PROVIDER=entra):
+          { name = "ENTRA_TENANT_ID", value = var.entra_tenant_id },
+          { name = "ENTRA_CLIENT_ID", value = var.entra_client_id },
+          { name = "ENTRA_LOGIN_BASE_URL", value = var.entra_login_base_url },
+          { name = "ENTRA_APPLICATION_ID_URI", value = var.entra_application_id_uri },
+          # Okta (used when AUTH_PROVIDER=okta):
+          { name = "OKTA_DOMAIN", value = var.okta_domain },
+          { name = "OKTA_CLIENT_ID", value = var.okta_client_id },
+          { name = "OKTA_M2M_CLIENT_ID", value = var.okta_m2m_client_id },
+          { name = "OKTA_AUTH_SERVER_ID", value = var.okta_auth_server_id },
+          { name = "OKTA_M2M_ALLOWED_AUDIENCES", value = var.okta_m2m_allowed_audiences },
+          # Keycloak (used when AUTH_PROVIDER=keycloak):
+          { name = "KEYCLOAK_URL", value = var.keycloak_domain != "" ? "https://${var.keycloak_domain}" : "" },
+          { name = "KEYCLOAK_EXTERNAL_URL", value = var.keycloak_domain != "" ? "https://${var.keycloak_domain}" : "" },
+          { name = "KEYCLOAK_REALM", value = "mcp-gateway" },
+          { name = "KEYCLOAK_CLIENT_ID", value = "mcp-gateway-web" },
+          { name = "KEYCLOAK_M2M_CLIENT_ID", value = "mcp-gateway-m2m" },
+          { name = "VALIDATE_AUDIENCE", value = var.validate_fast_path_audience },
+          # Selects the Mongo auth mechanism (documentdb -> SCRAM-SHA-1, else SHA-256).
+          { name = "STORAGE_BACKEND", value = var.storage_backend },
+          { name = "DOCUMENTDB_HOST", value = var.documentdb_endpoint },
+          { name = "DOCUMENTDB_PORT", value = "27017" },
+          { name = "DOCUMENTDB_DATABASE", value = var.documentdb_database },
+          { name = "DOCUMENTDB_NAMESPACE", value = var.documentdb_namespace },
+          { name = "DOCUMENTDB_USE_TLS", value = tostring(var.documentdb_use_tls) },
+        ]
+
+        secrets = [
+          { name = "SECRET_KEY", valueFrom = aws_secretsmanager_secret.secret_key.arn },
+          { name = "AUTH_SERVER_NGINX_MARKER_SECRET", valueFrom = aws_secretsmanager_secret.nginx_marker_secret.arn },
+          { name = "DOCUMENTDB_USERNAME", valueFrom = "${var.documentdb_credentials_secret_arn}:username::" },
+          { name = "DOCUMENTDB_PASSWORD", valueFrom = "${var.documentdb_credentials_secret_arn}:password::" },
+        ]
+
+        enable_cloudwatch_logging              = true
+        cloudwatch_log_group_name              = "/ecs/${local.name_prefix}-auth-govalidate"
+        cloudwatch_log_group_retention_in_days = 30
+
+        dependencies = [{
+          containerName = "auth-server"
+          condition     = "START"
+        }]
+      }
     } : {}
   )
 
@@ -898,6 +984,13 @@ module "ecs_service_registry" {
         {
           name  = "AUTH_SERVER_URL"
           value = var.auth_server_url
+        },
+        {
+          # nginx /validate upstream. validate_fast_path_enabled is the single switch:
+          # when true (and no explicit override), route /validate to the sidecar;
+          # otherwise leave empty so nginx uses the auth-server (unchanged).
+          name  = "VALIDATE_UPSTREAM_URL"
+          value = var.validate_upstream_url != "" ? var.validate_upstream_url : (var.validate_fast_path_enabled ? "http://go-validate:8899" : "")
         },
         {
           name  = "AUTH_SERVER_EXTERNAL_URL"
@@ -2092,6 +2185,20 @@ resource "aws_vpc_security_group_ingress_rule" "registry_to_auth" {
   to_port                      = 18888
   ip_protocol                  = "tcp"
   description                  = "Allow registry to access auth server"
+
+  tags = local.common_tags
+}
+
+# Allow registry to reach the go-validate sidecar (8899) in the auth task, only
+# when the sidecar is enabled. Service Connect proxy-to-proxy uses containerPort.
+resource "aws_vpc_security_group_ingress_rule" "registry_to_auth_govalidate" {
+  count                        = var.validate_fast_path_enabled ? 1 : 0
+  security_group_id            = module.ecs_service_auth.security_group_id
+  referenced_security_group_id = module.ecs_service_registry.security_group_id
+  from_port                    = 8899
+  to_port                      = 8899
+  ip_protocol                  = "tcp"
+  description                  = "Allow registry to access the go-validate /validate sidecar"
 
   tags = local.common_tags
 }

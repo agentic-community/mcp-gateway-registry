@@ -121,8 +121,57 @@ Internal and external URLs for the auth server, plus internal JWT signing.
 |-----------|-----------------|-----------------------|----------------------|---------|
 | Auth server internal URL | `AUTH_SERVER_URL` | — (constructed by module) | `registry.app.authServerUrl` | Server-to-server URL inside the container network. |
 | Auth server external URL | `AUTH_SERVER_EXTERNAL_URL` | — (from domain config) | `auth-server.app.externalUrl` | Public URL for browser redirects. |
+| /validate upstream | `VALIDATE_UPSTREAM_URL` | `validate_upstream_url` | `registry.app.validateUpstreamUrl` | nginx `/validate` upstream. Empty -> auth-server (unchanged). Set to `http://go-validate:8899` (or the auth-server Service on 8899) to route the auth check through the go-validate fast-path sidecar. Only `/validate` is affected. (issue #1652) |
+| go-validate sidecar enabled | (runs by default via compose service) | `validate_fast_path_enabled` | `auth-server.fastPath.enabled` | Deploy the Go `/validate` fast-path sidecar in the auth-server task/pod. Opt-in on ECS/Helm (default off); on by default (fallback-safe) in docker-compose. |
+| go-validate image | (compose `go-validate` service build) | `validate_fast_path_image_uri` | `auth-server.fastPath.image.repository` | Container image for the sidecar. |
+| go-validate token audiences | `VALIDATE_AUDIENCE` | `validate_fast_path_audience` | `auth-server.fastPath.audience` | Accepted `aud` claims for the fast path (comma/space-separated LIST; a token matches on ANY member). Auto-derived when empty from `KEYCLOAK_CLIENT_ID` + `KEYCLOAK_M2M_CLIENT_ID` + `mcp-gateway`, matching the Python Keycloak provider. `account` is refused (rides on every realm token -> cross-client confused-deputy). `JWKS_URL` and the accepted issuer LIST (external + internal + localhost realm) are also auto-derived from `KEYCLOAK_URL` / `KEYCLOAK_EXTERNAL_URL` / `KEYCLOAK_REALM`. A non-matching token is deferred to Python (never a 401). |
 | Internal JWT issuer | (constant in code) | — | `auth-server.app.jwtIssuer` | `iss` claim on internal service JWTs. |
 | Internal JWT audience | (constant in code) | — | `auth-server.app.jwtAudience` | `aud` claim on internal service JWTs. |
+
+### Setting the fast-path values (`VALIDATE_AUDIENCE` / `VALIDATE_ISSUER` / `JWKS_URL`)
+
+**In the common case you set NONE of these** — you only flip the enable switch. All three auto-derive from the `KEYCLOAK_*` config every deployment already has, and the derivation deliberately mirrors the Python Keycloak provider so the fast path accepts exactly the tokens Python does (no more, no less). Set them only to narrow or override the derived sets. All three are matched as **lists**: a token is accepted when its `iss` equals ANY accepted issuer and its `aud` contains ANY accepted audience. A token that matches neither is deferred to Python (correct results, no speedup), never a 401.
+
+**Accepted issuers (`VALIDATE_ISSUER`) — auto-derived list.**
+Derived as the three realm URLs Python accepts, so both browser-login and service/M2M tokens fast-path at once:
+
+- `<KEYCLOAK_EXTERNAL_URL>/realms/<REALM>` (browser logins, e.g. `https://mcpgateway.ddns.net/realms/mcp-gateway`)
+- `<KEYCLOAK_URL>/realms/<REALM>` (internal service-to-service, e.g. `http://keycloak:8080/realms/mcp-gateway`)
+- `http://localhost:8080/realms/<REALM>` (host-minted / local dev)
+
+Override only to restrict the set; the value is a comma/space-separated list.
+
+**Accepted audiences (`VALIDATE_AUDIENCE`) — auto-derived list.**
+Derived as `KEYCLOAK_CLIENT_ID` + `KEYCLOAK_M2M_CLIENT_ID` + `mcp-gateway`, matching Python's `accepted_audiences`.
+**Do not set `account`.** It is present on *every* realm token regardless of which client requested it, so accepting it lets a token minted for a different client be replayed against the gateway (a same-realm cross-client confused-deputy). It is refused even if supplied explicitly (logged, then dropped), exactly as Python rejects it.
+
+**`JWKS_URL` — auto-derived, rarely overridden.**
+Derived as `<KEYCLOAK_URL>/realms/<REALM>/protocol/openid-connect/certs`. Override only for a non-standard key path.
+
+**Multi-provider (auto-detected from `AUTH_PROVIDER`).**
+The sidecar picks its verifier from `AUTH_PROVIDER` (the auth-server already sets it) and derives everything from that IdP's existing env — no extra config beyond the enable switch. Supported today: **Keycloak, Amazon Cognito, Microsoft Entra ID, Okta**. Any other provider (Auth0, PingFederate) stays fallback-only (deferred to Python) until added. Per provider:
+
+- **Cognito** — issuer `https://cognito-idp.<AWS_REGION>.amazonaws.com/<COGNITO_USER_POOL_ID>`; client-id allowlist (`COGNITO_CLIENT_ID` + `IDE_OAUTH_CLIENT_ID` + `COGNITO_M2M_CLIENT_IDS`, `*` = M2M-only wildcard). Access tokens only; scopes from `cognito:groups` or the token `scope` claim. `VALIDATE_AUDIENCE` does not apply (client_id-bound).
+- **Entra** — dual issuers (v2 `.../v2.0` + v1 `sts.windows.net/<tenant>/`) from `ENTRA_TENANT_ID` / `ENTRA_LOGIN_BASE_URL`; accepted audiences = `ENTRA_CLIENT_ID` + `api://<client-id>` + `ENTRA_APPLICATION_ID_URI`. Groups from `groups` (or `roles` for M2M). id_token replay is deferred to Python.
+- **Okta** — issuer/JWKS from `OKTA_DOMAIN` (+ `OKTA_AUTH_SERVER_ID` for a custom auth server, else the org server); accepted audiences = `OKTA_CLIENT_ID` + `OKTA_M2M_CLIENT_ID` + `OKTA_M2M_ALLOWED_AUDIENCES`. Groups from `groups`; client id from `cid`; scopes from `scp`/`scope`.
+
+All group-based providers resolve scopes identically to Python: `groups` → DocumentDB group→scope mapping (+ `idp_m2m_clients` M2M enrichment), otherwise the token's own scope claim. Anything the fast path can't reproduce exactly falls back safely to Python.
+
+To inspect a real token when debugging (decode `aud`/`iss` — but note `account` in the list is expected and correctly NOT accepted):
+
+```bash
+# Paste a real bearer token; prints its aud and iss claims.
+python3 -c "import sys,json,base64; p=sys.argv[1].split('.')[1]; p+='='*(-len(p)%4); c=json.loads(base64.urlsafe_b64decode(p)); print('aud =', c.get('aud')); print('iss =', c.get('iss'))" '<PASTE_TOKEN>'
+```
+
+After enabling, confirm the fast path actually engaged (it fails **safe but loud** — a broken fast path still proxies correctly to Python, and says so). `curl -s http://<sidecar>:8899/metrics` exposes:
+
+- `govalidate_fastpath_ready` — `1` if configured to accelerate, `0` if it will only proxy (misconfig).
+- `govalidate_jwks_healthy` — `1` if the signing keyset is loaded. **`ready 1` + `jwks_healthy 0` = degraded** (keys unreachable, everything falling back) — alert on this.
+- `govalidate_jwks_refresh_failures_total` — climbs when JWKS fetches fail.
+- `govalidate_fastpath_ok` vs `govalidate_fallback` — under load `fastpath_ok` should climb; if only `fallback` climbs (with `ready 1` + `jwks_healthy 1`), the token's `iss`/`aud` are not in the accepted sets.
+
+The sidecar also logs loudly: a `WARN ... FALLBACK-ONLY mode: missing ...` line at startup names exactly what is unset, `ERROR ... fast path DEGRADED` on a JWKS outage, and prints `accepted issuers=[...] | accepted audiences=[...]` when healthy. `/health` returns `503` while ready-but-degraded. It never crashes or drops requests — fallback to Python stays correct throughout.
 | App secret key **(secret)** | `SECRET_KEY` (required) | `secret_key` via `TF_VAR_*` / Secrets Manager (required) | `global.secretKey` (Helm chart auto-generates at install time if unset) | JWT signing + session-cookie signing + at-rest encryption of OAuth `id_token`. **Required** — auth_server and registry refuse to start without it (the previous per-replica random fallback caused `BadSignature` across replicas). Must be identical across all auth_server and registry replicas. Rotating invalidates stored creds and active sessions; rotation requires a process restart, not a SIGHUP reload. **Must be high-entropy (32+ bytes from a CSPRNG)** — read access to the `oauth_sessions_*` collection is equivalent to credential compromise unless this key is strong and never written to a logged location. Generate with `python3 -c 'import secrets; print(secrets.token_urlsafe(32))'`. |
 | Advertised OAuth scopes | `MCP_ADVERTISED_SCOPES` | — | `registry.app.mcpAdvertisedScopes` | Space-separated override for the `scopes_supported` array in the PRM (Protected Resource Metadata) document. When set, only these scopes are advertised to MCP discovery clients. Useful when the IdP performs RFC 7591 DCR and rejects scope names it does not recognize. Example: `openid email profile offline_access`. When unset, all scopes from the registry authorization config are advertised (default). |
 
