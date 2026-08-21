@@ -72,6 +72,13 @@ endpoints for monitoring. See [Observability](../OBSERVABILITY.md).
 3. Read the [Theory of the System](../design/theory-of-the-system.md) to understand the design and
    its invariants.
 
+## Further reading
+
+- **Source code, issues, and pull requests:** [agentic-community/mcp-gateway-registry](https://github.com/agentic-community/mcp-gateway-registry) on GitHub.
+- **Slide deck:** [MCP Gateway & Registry presentation](../slides/mcp-gateway-registry-presentation.pdf).
+- **AWS Open Source Blog:** [Governing AI Assets at Scale with MCP Gateway and Registry](https://aws.amazon.com/blogs/opensource/governing-ai-assets-at-scale-with-mcp-gateway-and-registry/).
+- **AWS Machine Learning Blog:** [Securing AI agents: How AWS and Cisco AI Defense scale MCP and A2A deployments](https://aws.amazon.com/blogs/machine-learning/securing-ai-agents-how-aws-and-cisco-ai-defense-scale-mcp-and-a2a-deployments/).
+
 ## License and community
 
 Licensed under **Apache 2.0**. Developed in the open under the
