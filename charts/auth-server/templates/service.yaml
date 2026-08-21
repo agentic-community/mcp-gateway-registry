@@ -14,7 +14,7 @@ spec:
       targetPort: http
       protocol: TCP
       name: http
-    {{- if or .Values.fastPath.enabled (dig "fastPath" "enabled" false .Values.global) }}
+    {{- if or (.Values.fastPath).enabled (dig "fastPath" "enabled" false .Values.global) }}
     - port: 8899
       targetPort: govalidate
       protocol: TCP
