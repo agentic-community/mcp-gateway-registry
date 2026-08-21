@@ -1,6 +1,6 @@
-# Independent Testing Guide — Go `/validate` Fast-Path Sidecar
+# Testing Guide — Go `/validate` Fast-Path Sidecar
 
-This guide lets an independent tester confirm the go-validate fast path (issue #1652, PR #1653) works end to end: functional correctness (e2e suite), that a real IdP token is actually accelerated (not just proxied), and throughput under load (stress test) using the bundled `pingmcp` fast upstream.
+This guide lets anyone confirm the go-validate fast path (issue #1652, PR #1653) works end to end: functional correctness (e2e suite), that a real IdP token is actually accelerated (not just proxied), and throughput under load (stress test) using the bundled `pingmcp` fast upstream.
 
 It is written for the **docker-compose** deployment (Keycloak or Entra/Cognito). The same checks apply on ECS/EKS; only how you reach `/metrics` differs (noted where relevant).
 
