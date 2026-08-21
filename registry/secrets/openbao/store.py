@@ -6,7 +6,12 @@ Each connection is its own KV v2 entry at::
 
 so there is no shared blob and no read-modify-write race between two providers
 of the same principal. ``list_for_user`` walks the KV LIST under the principal
-prefix. The same-key refresh race is handled with KV v2 CAS (``cas`` param).
+prefix. Same-key writes (a refresh and a consent for the same connection) are
+last-writer-wins at the store level; the cross-replica single-flight refresh
+lease lives in the egress service above this store. Read-repair migration uses
+KV v2 check-and-set (``cas``) plus a value comparison, so re-encrypting a legacy
+entry never clobbers a concurrent refresh (the conditional write is rejected if
+the entry changed since the re-read).
 
 Uses ``hvac`` (Vault/OpenBao API-compatible). Auth is configured by the
 factory (token / kubernetes / approle) before the client reaches this class.
@@ -19,6 +24,7 @@ from typing import TypeVar
 
 from registry.egress_auth.schemas import StoredToken
 from registry.secrets import keys
+from registry.secrets.credential_codec import CredentialCodec
 from registry.secrets.interfaces import SecretStoreBase, SecretStoreError
 
 logger = logging.getLogger(__name__)
@@ -133,11 +139,16 @@ class OpenBaoStore(SecretStoreBase):
         mount_point: str,
         prefix: str,
         reauthenticate: Callable[[], None] | None = None,
+        codec: CredentialCodec | None = None,
     ) -> None:
         self._client = client
         self._mount = mount_point
         self._prefix = prefix.strip("/")
         self._reauthenticate = reauthenticate
+        self._codec = codec or CredentialCodec(root_key=None)
+        # Tracks in-flight, non-blocking read-repair migrations so they are not
+        # garbage-collected (and so tests can await them).
+        self._repair_tasks: set[asyncio.Task] = set()
 
     async def _run(self, fn: Callable[[], _T]) -> _T:
         """Run a blocking hvac call in a thread, with two independent recoveries:
@@ -208,11 +219,12 @@ class OpenBaoStore(SecretStoreBase):
         token: StoredToken,
     ) -> None:
         path = self._rel_path(auth_method, user_id, provider, server_path)
+        document = self._codec.encode(auth_method, user_id, provider, server_path, token)
 
         def _write() -> None:
             self._client.secrets.kv.v2.create_or_update_secret(
                 path=path,
-                secret=token.model_dump(),
+                secret=document,
                 mount_point=self._mount,
             )
 
@@ -249,7 +261,90 @@ class OpenBaoStore(SecretStoreBase):
             raw = await self._run(_read)
         except Exception as exc:
             raise SecretStoreError(f"OpenBao get failed: {exc}") from exc
-        return StoredToken(**raw) if raw else None
+        if not raw:
+            return None
+        token = self._codec.decode(auth_method, user_id, provider, server_path, raw)
+        if self._codec.needs_migration(raw):
+            self._schedule_repair(auth_method, user_id, provider, server_path, raw, token)
+        return token
+
+    def _schedule_repair(
+        self,
+        auth_method: str,
+        user_id: str,
+        provider: str,
+        server_path: str,
+        expected_plaintext: dict,
+        token: StoredToken,
+    ) -> None:
+        """Fire-and-forget a read-repair migration.
+
+        Non-blocking so it never adds latency to the read that surfaced the
+        legacy entry (and never fails it). The task set retains a reference so
+        the task is not garbage-collected mid-flight.
+        """
+        task = asyncio.ensure_future(
+            self._migrate(auth_method, user_id, provider, server_path, expected_plaintext, token)
+        )
+        self._repair_tasks.add(task)
+        task.add_done_callback(self._repair_tasks.discard)
+
+    async def _migrate(
+        self,
+        auth_method: str,
+        user_id: str,
+        provider: str,
+        server_path: str,
+        expected_plaintext: dict,
+        token: StoredToken,
+    ) -> None:
+        """Re-encrypt a legacy plaintext entry atomically, ONLY if it is unchanged.
+
+        Uses KV v2 check-and-set: re-reads the current entry (capturing its
+        version), and writes the ciphertext envelope with ``cas=<version>`` only
+        when the document still byte-matches the legacy plaintext originally
+        read. If a concurrent refresh/consent commit landed in between, either
+        the value comparison fails or the ``cas`` write is rejected server-side
+        (the version moved) -- so a migration can never roll a freshly-refreshed
+        credential back to the stale token. Best-effort: a genuine failure is
+        logged and retried on the next read; a CAS conflict is a silent skip.
+        """
+        path = self._rel_path(auth_method, user_id, provider, server_path)
+        document = self._codec.encode(auth_method, user_id, provider, server_path, token)
+
+        def _read_current() -> tuple[dict | None, int | None]:
+            try:
+                resp = self._client.secrets.kv.v2.read_secret_version(
+                    path=path, mount_point=self._mount, raise_on_deleted_version=False
+                )
+            except Exception as exc:
+                if type(exc).__name__ == "InvalidPath":
+                    return None, None
+                raise
+            data = (resp or {}).get("data", {})
+            return data.get("data"), data.get("metadata", {}).get("version")
+
+        def _write(version: int | None) -> None:
+            # cas=version makes the write conditional on the entry not having
+            # changed since the re-read (KV v2 rejects it if the version moved).
+            self._client.secrets.kv.v2.create_or_update_secret(
+                path=path, secret=document, mount_point=self._mount, cas=version
+            )
+
+        try:
+            current, version = await self._run(_read_current)
+            if current != expected_plaintext:
+                return  # someone rewrote it (refresh/consent) -> do not clobber
+            await self._run(lambda: _write(version))
+        except Exception as exc:
+            # A KV v2 check-and-set mismatch means a concurrent write won the
+            # race -> skip silently (not a failure). Keyed narrowly so an
+            # unrelated 400 is NOT swallowed.
+            if type(exc).__name__ == "InvalidRequest" or "check-and-set" in str(exc).lower():
+                return
+            logger.warning(
+                "OpenBao read-repair re-encryption failed for a legacy entry", exc_info=True
+            )
 
     async def delete_token(
         self,
@@ -280,8 +375,8 @@ class OpenBaoStore(SecretStoreBase):
     ) -> list[tuple[str, str, StoredToken]]:
         principal = self._principal_rel_prefix(auth_method, user_id)
 
-        def _walk() -> list[tuple[str, str, StoredToken]]:
-            out: list[tuple[str, str, StoredToken]] = []
+        def _walk() -> list[tuple[str, str, dict]]:
+            out: list[tuple[str, str, dict]] = []
             try:
                 providers = self._client.secrets.kv.v2.list_secrets(
                     path=principal, mount_point=self._mount
@@ -313,12 +408,20 @@ class OpenBaoStore(SecretStoreBase):
                             (
                                 keys.decode_segment(provider_enc),
                                 keys.decode_segment(server_enc),
-                                StoredToken(**raw),
+                                raw,
                             )
                         )
             return out
 
         try:
-            return await self._run(_walk)
+            rows = await self._run(_walk)
         except Exception as exc:
             raise SecretStoreError(f"OpenBao list failed: {exc}") from exc
+
+        out: list[tuple[str, str, StoredToken]] = []
+        for provider, server_path, raw in rows:
+            token = self._codec.decode(auth_method, user_id, provider, server_path, raw)
+            if self._codec.needs_migration(raw):
+                self._schedule_repair(auth_method, user_id, provider, server_path, raw, token)
+            out.append((provider, server_path, token))
+        return out

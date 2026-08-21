@@ -510,6 +510,13 @@ egressAuth:
   # When empty, a shape rule applies: the target must be an internal app audience
   # (api:// App ID URI or bare client-id/GUID), never an https host URL.
   oboAllowedAudiences: ""
+  # Application-layer AES-256-GCM root key for the per-user egress credential
+  # vault (issue #1665). Registry-only SECRET; injected into the registry env
+  # secret only when non-empty. >=32 chars recommended. Keep this OUTSIDE the
+  # secret-store trust boundary (Secrets Manager / OpenBao) so a compromise of
+  # the store alone does not yield plaintext egress tokens. Empty = disabled
+  # (legacy plaintext storage), so existing deployments keep working unchanged.
+  credentialEncryptionKey: ""
   # nginx marker secret. REQUIRED for standalone deployment (chart render fails
   # if empty) -- it guards all mcp-proxy token minting and the app requires it
   # at startup. Set a strong random value, identical to auth-server's. In the
