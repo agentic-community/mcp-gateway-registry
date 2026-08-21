@@ -68,10 +68,21 @@ RUN . .venv/bin/activate && uv pip install --no-deps -e .
 FROM python:3.14.7-slim AS cjson-builder
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      git build-essential libluajit-5.1-dev \
+      git build-essential libluajit-5.1-dev lua5.1 \
  && git clone --depth 1 https://github.com/openresty/lua-cjson /tmp/lua-cjson \
  && make -C /tmp/lua-cjson LUA_INCLUDE_DIR=/usr/include/luajit-2.1 \
- && make -C /tmp/lua-cjson install LUA_CMODULE_DIR=/usr/local/lib/lua/5.1
+ && make -C /tmp/lua-cjson install LUA_CMODULE_DIR=/usr/local/lib/lua/5.1 \
+ # Guardrail: fail the build if the cjson we are about to ship lacks
+ # empty_array_mt, and confirm an empty array-tagged table encodes as [].
+ # This is the exact property virtual_router.lua depends on (issue #1532);
+ # asserting it here means a future base-image or source change that regresses
+ # cjson breaks the image build instead of silently shipping the old bug.
+ && lua5.1 -e "package.cpath='/usr/local/lib/lua/5.1/?.so;'..package.cpath; \
+      local c=require('cjson'); \
+      assert(c.empty_array_mt, 'FATAL: shipped lua-cjson lacks empty_array_mt'); \
+      local t=setmetatable({}, c.empty_array_mt); \
+      assert(c.encode({required=t})=='{\"required\":[]}', 'FATAL: empty array did not encode as []'); \
+      print('cjson empty_array_mt guardrail: OK')"
 
 
 # ===== FINAL RUNTIME STAGE =====
