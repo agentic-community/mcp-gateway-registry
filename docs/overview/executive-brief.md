@@ -53,12 +53,12 @@ endpoints for monitoring. See [Observability](../OBSERVABILITY.md).
 
 ## Maturity signals
 
-*As of 2026-07-08:*
+*As of 2026-08-21:*
 
-- **Tests:** 4,940 test functions across 252 test files (`grep -rc "def test_" tests/`).
-- **Releases:** 30 versioned release notes in [`docs/release-notes/`](../release-notes/1.26.0.md),
-  the latest being **1.26.0** (July 2026).
-- **Community:** 775 GitHub stars and 205 forks
+- **Tests:** 6,407 test functions across 327 test files (`grep -rc "def test_" tests/`).
+- **Releases:** 35 versioned release notes in [`docs/release-notes/`](../release-notes/1.30.0.md),
+  the latest being **1.30.0** (August 2026).
+- **Community:** 869 GitHub stars and 221 forks
   ([repository](https://github.com/agentic-community/mcp-gateway-registry)).
 - **Hands-on training:** an
   [AWS Workshop Studio lab](https://catalog.us-east-1.prod.workshops.aws/workshops/0c3265a6-1a4a-467b-ae56-e4d019184b0e/en-US)
