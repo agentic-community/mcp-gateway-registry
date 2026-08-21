@@ -1,0 +1,18 @@
+suite: keycloak internal URL checksum rolls pods on change
+templates:
+  - deployment.yaml
+release:
+  name: test
+  namespace: default
+tests:
+  # envFrom-sourced env is snapshotted at pod start; this annotation is what
+  # makes a helm upgrade that changes the internal Keycloak URL definition
+  # (e.g. the headless -> stack-owned ClusterIP fix) actually roll the pods.
+  # The expected value is sha256("http://test-kc-int:8080") — if the
+  # keycloakInternalUrl helper changes, update this hash alongside the
+  # URL assertions in keycloak_service_test.yaml.
+  - it: pins the keycloakInternalUrl output into the pod template
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["checksum/keycloak-internal-url"]
+          value: 6f04647ff2f831586d70fbe1db77f870d8baa49802d457c1c23ee6ff5751128a  # pragma: allowlist secret

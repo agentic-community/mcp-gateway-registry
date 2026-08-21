@@ -1,4 +1,7 @@
-# Keycloak configuration
+# Keycloak configuration.
+# The in-cluster Keycloak base URL for KEYCLOAK_URL / KEYCLOAK_ADMIN_URL
+# comes from global.authProvider.keycloak.internalUrl (shared with the
+# umbrella stack); empty targets the stack's "<release>-kc-int" Service.
 keycloak:
   adminUser: user
   realm: mcp-gateway

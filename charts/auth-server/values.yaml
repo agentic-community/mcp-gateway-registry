@@ -126,7 +126,10 @@ app:
 authProvider:
   # Provider type: "keycloak", "entra", "okta", "auth0", "cognito", or "pingfederate"
   type: keycloak
-# Keycloak integration (used when authProvider.type = "keycloak")
+# Keycloak integration (used when authProvider.type = "keycloak").
+# The in-cluster Keycloak base URL for KEYCLOAK_URL comes from
+# global.authProvider.keycloak.internalUrl (shared with the umbrella
+# stack); empty targets the stack's "<release>-kc-int" Service.
 keycloak:
   enabled: true
   realm: mcp-gateway
