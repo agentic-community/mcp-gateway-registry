@@ -18,6 +18,14 @@ _G._VR_TEST = true
 
 local cjson = require("cjson")
 
+-- Environment guard (issue #1532): the empty-array fix relies on
+-- cjson.empty_array_mt, an OpenResty lua-cjson extension. If this suite is ever
+-- run against a cjson without it (e.g. Debian lua-cjson 2.1.0, which is what the
+-- registry image used to ship), the schema-array assertions below would give a
+-- false sense of safety. Fail loudly instead of passing on the wrong runtime.
+assert(cjson.empty_array_mt,
+    "cjson.empty_array_mt is missing -- these tests require OpenResty's lua-cjson")
+
 local failures = 0
 local function check(cond, msg)
     if cond then
