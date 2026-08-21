@@ -57,6 +57,23 @@ COPY cli/examples/ /app/cli/examples/
 # deps already installed above by `uv sync --locked`).
 RUN . .venv/bin/activate && uv pip install --no-deps -e .
 
+# ===== OPENRESTY LUA-CJSON BUILD STAGE =====
+# The virtual_router.lua aggregation path relies on cjson.empty_array_mt to emit
+# empty JSON-Schema arrays (e.g. "required": []) as [] rather than {} (issue
+# #1532). That metatable is an OpenResty lua-cjson extension; Debian's lua-cjson
+# 2.1.0 lacks it (empty_array_mt == nil), so the tag would be a no-op and empty
+# arrays would serialize as {}. Build OpenResty's lua-cjson against the same
+# LuaJIT the nginx lua module (nginx-extras) uses, so `require "cjson"` at
+# runtime resolves to a cjson that honors empty_array_mt.
+FROM python:3.14.7-slim AS cjson-builder
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      git build-essential libluajit-5.1-dev \
+ && git clone --depth 1 https://github.com/openresty/lua-cjson /tmp/lua-cjson \
+ && make -C /tmp/lua-cjson LUA_INCLUDE_DIR=/usr/include/luajit-2.1 \
+ && make -C /tmp/lua-cjson install LUA_CMODULE_DIR=/usr/local/lib/lua/5.1
+
+
 # ===== FINAL RUNTIME STAGE =====
 FROM python:3.14.7-slim AS runtime
 
@@ -85,13 +102,19 @@ ARG BUILD_VERSION="1.0.0"
 RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     nginx \
     nginx-extras \
-    lua-cjson \
     curl \
     procps \
     openssl \
     ca-certificates \
     logrotate \
     && rm -rf /var/lib/apt/lists/*
+
+# Ship OpenResty's lua-cjson (built in the cjson-builder stage) instead of the
+# Debian lua-cjson package. This is the cjson `require "cjson"` resolves to at
+# runtime and provides cjson.empty_array_mt, which the virtual router needs to
+# serialize empty JSON-Schema arrays as [] not {} (issue #1532). See the
+# lua_package_cpath in the generated nginx configs, which pins this location.
+COPY --from=cjson-builder /usr/local/lib/lua/5.1/cjson.so /usr/local/lib/lua/5.1/cjson.so
 
 WORKDIR /app
 
