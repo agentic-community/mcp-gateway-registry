@@ -248,7 +248,7 @@ spec:
             timeoutSeconds: 3
             failureThreshold: 3
 
-        {{- if or .Values.fastPath.enabled (dig "fastPath" "enabled" false .Values.global) }}
+        {{- if or (.Values.fastPath).enabled (dig "fastPath" "enabled" false .Values.global) }}
         # Go /validate fast-path sidecar (issue #1652). Shares the pod network with
         # auth-server, so AUTH_FALLBACK_URL is localhost:8888. Reuses the same
         # secrets (SECRET_KEY, DOCUMENTDB_*, AUTH_SERVER_NGINX_MARKER_SECRET).

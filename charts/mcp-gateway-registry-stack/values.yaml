@@ -559,8 +559,10 @@ auth-server:
   # the sidecar AND routes /validate). It engages automatically once enabled -
   # issuers/audiences/JWKS auto-derive from Keycloak. Override only to narrow the
   # derived sets (comma/space-separated LISTs); never set audience to "account".
-  fastPath:
-    # audience: "mcp-gateway mcp-gateway-m2m"   # optional override; empty auto-derives
+  # NOTE: keep this an empty map ({}), NOT a comment-only block (which is YAML null
+  # and would nil out the subchart's fastPath defaults -> nil-pointer at render).
+  # To override: fastPath: { audience: "mcp-gateway mcp-gateway-m2m" }
+  fastPath: {}
   app:
     replicas: 2 # set to > 1 replica for high availability
     # Session cookie Domain attribute. See registry.app.sessionCookieDomain
