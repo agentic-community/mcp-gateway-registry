@@ -74,7 +74,11 @@ from ..services.lifecycle_events import (
 )
 from ..services.registration_gate_service import check_registration_gate
 from ..services.webhook_service import send_registration_webhook
-from ..utils.metadata import flatten_metadata_to_text
+from ..utils.metadata import (
+    flatten_metadata_to_text,
+    parse_and_validate_metadata_fields,
+    project_metadata,
+)
 from ..utils.request_utils import get_client_ip
 from ..utils.url_guard import PROXY_PROFILE, guarded_async_client, validate_agent_url
 from ._etag_utils import (
@@ -1254,6 +1258,10 @@ async def list_agents(
     ),
     limit: int = Query(20, ge=1, le=2000, description="Number of agents to return (max 2000)"),
     offset: int = Query(0, ge=0, description="Number of agents to skip"),
+    metadata_fields: list[str] | None = Query(
+        None,
+        description="Comma-separated metadata field paths to include (dot-notation for nested). Example: 'owner,config.region'. Omit to return full metadata.",
+    ),
     user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
 ):
     """
@@ -1268,6 +1276,7 @@ async def list_agents(
         visibility: Filter by visibility level
         limit: Number of agents to return (1-500, default 20)
         offset: Number of agents to skip (default 0)
+        metadata_fields: Comma-separated metadata field paths to include
         user_context: Authenticated user context
 
     Returns:
@@ -1275,6 +1284,8 @@ async def list_agents(
     """
     # Set audit action for agent list
     set_audit_action(request, "list", "agent", description="List all agents")
+
+    _metadata_paths = parse_and_validate_metadata_fields(metadata_fields)
 
     logger.debug(
         f"list_agents called: limit={limit}, offset={offset}, "
@@ -1398,7 +1409,9 @@ async def list_agents(
                 visibility=getattr(agent, "visibility", "public"),
                 allowed_groups=getattr(agent, "allowed_groups", []),
                 supported_protocol=getattr(agent, "supported_protocol", None),
-                metadata=agent.metadata if agent.metadata else {},
+                metadata=project_metadata(
+                    agent.metadata if agent.metadata else {}, _metadata_paths
+                ),
             )
             filtered_agents.append(agent_info)
 
@@ -2135,6 +2148,10 @@ async def get_agent(
     path: str,
     response: Response,
     user_context: Annotated[dict, Depends(nginx_proxied_auth)],
+    metadata_fields: list[str] | None = Query(
+        None,
+        description="Comma-separated metadata field paths to include (dot-notation for nested). Example: 'owner,config.region'. Omit to return full metadata.",
+    ),
 ):
     """
     Get a single agent by path.
@@ -2187,6 +2204,11 @@ async def get_agent(
 
     if should_redact_backend_urls(user_context):
         redact_agent_backend_fields(agent_dict)
+
+    # Apply metadata field projection
+    _metadata_paths = parse_and_validate_metadata_fields(metadata_fields)
+    agent_dict["metadata"] = project_metadata(agent_dict.get("metadata") or {}, _metadata_paths)
+
     return agent_dict
 
 

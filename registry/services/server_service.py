@@ -338,6 +338,7 @@ class ServerService:
         skip: int = 0,
         limit: int = 100,
         exclude_tool_list: bool = False,
+        metadata_paths: list[str] | None = None,
     ) -> tuple[dict[str, dict[str, Any]], int]:
         """Get a page of servers with total count.
 
@@ -353,12 +354,17 @@ class ServerService:
             limit: Maximum number of servers to return.
             exclude_tool_list: If True, omit the heavy tool_list field for
                 callers that only need metadata. num_tools is unaffected.
+            metadata_paths: If provided, project metadata to only these paths
+                at the DB level (Issue #1277).
 
         Returns:
             Tuple of (servers dict for the requested page, total count of all servers).
         """
         servers = await self._repo.list_paginated(
-            skip=skip, limit=limit, exclude_tool_list=exclude_tool_list
+            skip=skip,
+            limit=limit,
+            exclude_tool_list=exclude_tool_list,
+            metadata_paths=metadata_paths,
         )
         total = await self._repo.count()
 

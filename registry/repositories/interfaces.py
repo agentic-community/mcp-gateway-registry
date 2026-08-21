@@ -63,6 +63,7 @@ class ServerRepositoryBase(ABC):
         skip: int = 0,
         limit: int = 100,
         exclude_tool_list: bool = False,
+        metadata_paths: list[str] | None = None,
     ) -> dict[str, dict[str, Any]]:
         """List servers with DB-level pagination.
 
@@ -71,6 +72,9 @@ class ServerRepositoryBase(ABC):
             limit: Maximum number of documents to return.
             exclude_tool_list: If True, omit the heavy ``tool_list`` field from
                 each document (DB-side projection). ``num_tools`` is unaffected.
+            metadata_paths: If provided, rebuild the ``metadata`` subdocument to
+                contain only these dot-paths (DB-side projection); falls back to
+                full metadata + Python prune on any pipeline error (Issue #1277).
 
         Returns:
             Dictionary mapping server path to server info for the requested page.
@@ -1647,6 +1651,25 @@ class SkillRepositoryBase(ABC):
 
         Returns:
             List of SkillCard objects for the requested page.
+        """
+        pass
+
+    @abstractmethod
+    async def list_by_paths(
+        self,
+        paths: list[str],
+    ) -> dict[str, dict[str, Any]]:
+        """List skills whose _id is in the given set of paths.
+
+        Returns raw documents (not ``SkillCard`` objects) for metadata
+        projection use cases where the full Pydantic parse is not needed
+        (Issue #1277).
+
+        Args:
+            paths: Exact skill paths to fetch.
+
+        Returns:
+            Dictionary mapping skill path to raw skill document for found paths.
         """
         pass
 

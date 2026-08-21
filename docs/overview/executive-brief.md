@@ -1,7 +1,5 @@
 # Executive Brief
 
-*A one-page overview for decision-makers evaluating adoption. Every quantitative claim is
-verifiable against the repository; figures are stated with an "as of" date.*
 
 ## The problem
 

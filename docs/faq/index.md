@@ -12,6 +12,7 @@ Common questions and answers about the MCP Gateway Registry.
 - [How do I discover available MCP tools for my AI agent?](discovering-mcp-tools.md)
 - [How do I handle tool discovery when I don't know what tools are available?](agent-autonomous-tool-discovery.md)
 - [What filtering options are available for agents in the registry?](filtering-agents-by-tags-and-fields.md)
+- [How do I return only the metadata fields I need when listing or searching?](metadata-field-projection-search-listing.md)
 
 ## Connecting and Integration
 

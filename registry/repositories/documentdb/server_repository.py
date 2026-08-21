@@ -10,6 +10,7 @@ from motor.motor_asyncio import AsyncIOMotorCollection
 from pymongo.errors import DuplicateKeyError
 
 from ...exceptions import AssetIdConflictError
+from ...utils.metadata import build_metadata_set_stage, project_metadata
 from ...utils.url_normalize import ENTITY_TYPE_SERVER, NORMALIZED_IDENTITY_URL_FIELD
 from ..interfaces import ServerRepositoryBase
 from ._identity_url_sidecar import (
@@ -169,6 +170,7 @@ class DocumentDBServerRepository(ServerRepositoryBase):
         skip: int = 0,
         limit: int = 100,
         exclude_tool_list: bool = False,
+        metadata_paths: list[str] | None = None,
     ) -> dict[str, dict[str, Any]]:
         """List servers with DB-level skip/limit pagination.
 
@@ -177,6 +179,9 @@ class DocumentDBServerRepository(ServerRepositoryBase):
             limit: Maximum number of documents to return.
             exclude_tool_list: If True, project out the ``tool_list`` field so
                 heavy tool schemas are not transferred from the database.
+            metadata_paths: If provided, rebuild metadata to contain only these
+                dot-paths via an aggregation pipeline. Falls back to full metadata
+                + Python prune on any pipeline error (Issue #1277).
 
         Returns:
             Dictionary mapping server path to server info for the requested page.
@@ -187,6 +192,38 @@ class DocumentDBServerRepository(ServerRepositoryBase):
         )
         collection = await self._get_collection()
 
+        # When metadata_paths is provided, use an aggregation pipeline to project
+        # the metadata subdocument at the DB level (avoids transferring large blobs).
+        if metadata_paths:
+            try:
+                set_stage = build_metadata_set_stage(metadata_paths)
+                pipeline: list[dict[str, Any]] = [
+                    {"$sort": {"_id": 1}},
+                    {"$skip": skip},
+                    {"$limit": limit},
+                    set_stage,
+                ]
+                if exclude_tool_list:
+                    pipeline.append({"$unset": "tool_list"})
+
+                servers: dict[str, dict[str, Any]] = {}
+                async for doc in collection.aggregate(pipeline):
+                    path = doc.pop("_id")
+                    doc["path"] = path
+                    servers[path] = doc
+                logger.info(
+                    f"DocumentDB READ: Retrieved {len(servers)} servers via aggregation "
+                    f"(skip={skip}, limit={limit}) from '{self._collection_name}'"
+                )
+                return servers
+            except Exception as e:
+                logger.warning(
+                    "Metadata projection pipeline failed for servers, "
+                    "falling back to full read + Python prune: %s",
+                    e,
+                )
+                # Fall through to standard query below; apply Python projection after
+
         projection = {"tool_list": 0} if exclude_tool_list else None
 
         try:
@@ -196,6 +233,14 @@ class DocumentDBServerRepository(ServerRepositoryBase):
                 path = doc.pop("_id")
                 doc["path"] = path
                 servers[path] = doc
+
+            # If this is a fallback from a failed aggregation, apply Python projection
+            if metadata_paths:
+                for server_doc in servers.values():
+                    server_doc["metadata"] = project_metadata(
+                        server_doc.get("metadata"), metadata_paths
+                    )
+
             logger.info(
                 f"DocumentDB READ: Retrieved {len(servers)} servers (skip={skip}, limit={limit}) "
                 f"from collection '{self._collection_name}'"
