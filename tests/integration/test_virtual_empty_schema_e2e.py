@@ -47,7 +47,9 @@ def _auth_headers() -> dict[str, str]:
 
 def _parse_mcp_body(text: str) -> dict:
     """Return the JSON object from a plain or SSE-framed MCP response body."""
-    data_lines = [line[len("data:") :].strip() for line in text.splitlines() if line.startswith("data:")]
+    data_lines = [
+        line[len("data:") :].strip() for line in text.splitlines() if line.startswith("data:")
+    ]
     return json.loads(data_lines[-1] if data_lines else text)
 
 
@@ -119,7 +121,9 @@ def test_empty_required_serializes_as_array_through_virtual_server() -> None:
             listed = client.post(
                 mcp_url,
                 headers={**_auth_headers(), **_MCP_HEADERS, "Mcp-Session-Id": session_id},
-                content=json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}),
+                content=json.dumps(
+                    {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}
+                ),
             )
             body_text = listed.text
             body = _parse_mcp_body(body_text)
