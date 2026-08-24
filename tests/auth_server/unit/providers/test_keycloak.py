@@ -911,6 +911,16 @@ class TestKeycloakExternalUrlDiagnostic:
     so without a startup line the misconfiguration is effectively invisible.
     """
 
+    @pytest.fixture(autouse=True)
+    def _reset_diagnostic_dedup(self):
+        """The diagnostic logs each (url, configured) state once per process; clear
+        that de-dup state before every test so cases stay independent."""
+        from auth_server.providers import factory
+
+        factory._reset_external_url_diagnostic()
+        yield
+        factory._reset_external_url_diagnostic()
+
     def _create(self, monkeypatch, external_url: str | None):
         """Build a Keycloak provider through the factory with a patched env."""
         from auth_server.providers import factory
@@ -982,3 +992,33 @@ class TestKeycloakExternalUrlDiagnostic:
         assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
         infos = [r.message for r in caplog.records if r.levelno == logging.INFO]
         assert any("only works for clients on this host" in m for m in infos), infos
+
+    def test_diagnostic_logs_once_per_config(self, monkeypatch, caplog):
+        """The factory runs per OAuth-discovery request; the warning must not repeat.
+
+        `.well-known` endpoints are public and crawled anonymously, so a warning
+        on every hit is noise. The same misconfiguration should log exactly once.
+        """
+        with caplog.at_level(logging.WARNING, logger="auth_server.providers.factory"):
+            for _ in range(5):
+                self._create(monkeypatch, "http://keycloak:8080")
+
+        warnings = [
+            r.message
+            for r in caplog.records
+            if r.levelno == logging.WARNING and "fail discovery" in r.message
+        ]
+        assert len(warnings) == 1, warnings
+
+    def test_distinct_configs_each_log(self, monkeypatch, caplog):
+        """A genuinely new (url, configured) state still logs, even after another."""
+        with caplog.at_level(logging.WARNING, logger="auth_server.providers.factory"):
+            self._create(monkeypatch, "http://keycloak:8080")  # single-label WARNING
+            self._create(monkeypatch, "http://10.0.1.5:8080")  # private-address WARNING
+
+        warnings = [
+            r.message
+            for r in caplog.records
+            if r.levelno == logging.WARNING and "fail discovery" in r.message
+        ]
+        assert len(warnings) == 2, warnings

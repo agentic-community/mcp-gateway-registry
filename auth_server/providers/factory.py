@@ -26,6 +26,20 @@ logger = logging.getLogger(__name__)
 # development and genuinely works for a client on the same host.
 _LOOPBACK_HOSTNAMES = frozenset({"localhost", "localhost.localdomain", "ip6-localhost"})
 
+# The KEYCLOAK_EXTERNAL_URL diagnostic is emitted from the provider factory, which
+# `get_auth_provider()` invokes on every OAuth-discovery request (`.well-known/*`),
+# not just at startup. Those endpoints are public and crawled anonymously, so
+# without de-duplication the same line repeats on every hit. Remember which
+# (url, configured) states have already been reported so each is logged at most
+# once per process; a genuinely new configuration still logs. Reset in tests via
+# ``_reset_external_url_diagnostic()``.
+_reported_external_urls: set[tuple[str, bool]] = set()
+
+
+def _reset_external_url_diagnostic() -> None:
+    """Clear the per-process de-dup state (test helper)."""
+    _reported_external_urls.clear()
+
 
 def _host_is_loopback(host: str) -> bool:
     """Whether `host` refers to the local machine."""
@@ -84,6 +98,13 @@ def _check_keycloak_external_url(external_url: str, *, configured: bool) -> None
         configured: Whether KEYCLOAK_EXTERNAL_URL was actually set, as opposed
             to having fallen back to the internal KEYCLOAK_URL.
     """
+    # The factory runs per OAuth-discovery request, so log each distinct state
+    # once instead of on every anonymous `.well-known` hit.
+    key = (external_url, configured)
+    if key in _reported_external_urls:
+        return
+    _reported_external_urls.add(key)
+
     if not configured:
         logger.warning(
             f"KEYCLOAK_EXTERNAL_URL is not set, so OAuth discovery metadata will advertise "
