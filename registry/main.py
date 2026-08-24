@@ -1416,11 +1416,8 @@ async def serve_rum_js():
 if FRONTEND_BUILD_PATH.exists():
     # Build the cached HTML at import time
     _CACHED_INDEX_HTML = _build_cached_index_html()
-    # Mount static files - path depends on ROOT_PATH
-    # When ROOT_PATH is set, FastAPI automatically handles the prefix for routes,
-    # but we need to explicitly mount static files at the root level
-    # The <base> tag in HTML will make browsers request /registry/static/*
-    # which FastAPI will handle correctly with root_path
+    # Mount static files at the unprefixed path; nginx's own ROOT_PATH-prefixed
+    # static location handles the prefixed request and never reaches this app.
     app.mount("/static", StaticFiles(directory=FRONTEND_BUILD_PATH / "static"), name="static")
 
     # Serve React app for all other routes (SPA)
