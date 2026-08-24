@@ -5400,11 +5400,19 @@ class RegistryClient:
         action = "enable" if enable else "disable"
         logger.info(f"Toggling virtual server {api_path}: {action}")
 
+        # The API exposes a single POST .../toggle endpoint that takes the
+        # desired state in the JSON body ({"enabled": true|false}); there are
+        # no separate /enable and /disable paths.
         response = self._make_request(
-            method="POST", endpoint=f"/api/virtual-servers{api_path}/{action}"
+            method="POST",
+            endpoint=f"/api/virtual-servers{api_path}/toggle",
+            data={"enabled": enable},
         )
 
+        # The toggle endpoint returns only {"path", "is_enabled"}; supply a
+        # human-readable message so VirtualServerToggleResponse validates.
         result = response.json()
+        result.setdefault("message", f"Virtual server {action}d successfully")
         logger.info(f"Virtual server {action}d: {result.get('is_enabled')}")
         return VirtualServerToggleResponse(**result)
 
