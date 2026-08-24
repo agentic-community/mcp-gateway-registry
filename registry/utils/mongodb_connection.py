@@ -6,6 +6,7 @@ synchronous MongoDBLogHandler.
 """
 
 from typing import Any
+from urllib.parse import quote_plus
 
 
 def build_connection_string() -> str:
@@ -31,8 +32,10 @@ def build_connection_string() -> str:
         credentials = session.get_credentials()
         if not credentials:
             raise ValueError("AWS credentials not found for DocumentDB IAM auth")
+        # Escape credentials per RFC 3986: AWS secret keys can contain
+        # reserved characters such as "/" and "+".
         return (
-            f"mongodb://{credentials.access_key}:{credentials.secret_key}@"
+            f"mongodb://{quote_plus(credentials.access_key)}:{quote_plus(credentials.secret_key)}@"
             f"{settings.documentdb_host}:{settings.documentdb_port}/"
             f"{settings.documentdb_database}?"
             f"authSource=$external&authMechanism=MONGODB-AWS"
@@ -46,8 +49,11 @@ def build_connection_string() -> str:
             auth_mechanism = "SCRAM-SHA-1"
         else:
             auth_mechanism = "SCRAM-SHA-256"
+        # Escape credentials per RFC 3986 so passwords with reserved
+        # characters (e.g. after a Secrets Manager rotation) do not break
+        # the connection URI.
         return (
-            f"mongodb://{settings.documentdb_username}:{settings.documentdb_password}@"
+            f"mongodb://{quote_plus(settings.documentdb_username)}:{quote_plus(settings.documentdb_password)}@"
             f"{settings.documentdb_host}:{settings.documentdb_port}/"
             f"{settings.documentdb_database}?authMechanism={auth_mechanism}&authSource=admin"
         )
