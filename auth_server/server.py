@@ -6546,13 +6546,30 @@ async def _read_bounded(
 # servers that need an upstream credential use the egress vault.
 _INTERNAL_INGRESS_RELAY_SERVERS: frozenset[str] = frozenset({"airegistry-tools"})
 
+# Proxy-context headers describe the client -> Gateway hop (scheme, host, port,
+# path prefix as seen by nginx/an ingress LB) and must not be copied onto the
+# separate Gateway -> upstream MCP server hop; an upstream that trusts them can
+# see a stale scheme and issue a redirect loop. X-Forwarded-For is deliberately
+# excluded: some deployments rely on it to see the real client IP upstream.
+_PROXY_CONTEXT_HEADERS: frozenset[str] = frozenset(
+    {
+        "forwarded",
+        "x-forwarded-host",
+        "x-forwarded-port",
+        "x-forwarded-proto",
+        "x-forwarded-prefix",
+        "x-original-uri",
+        "x-original-url",
+    }
+)
+
 
 def _forward_headers(
     incoming: dict[str, str],
     relay_authorization: bool = False,
 ) -> dict[str, str]:
     """Copy incoming request headers to the upstream, stripping hop-by-hop and
-    proxy-hint headers so httpx can set them correctly for the connection.
+    proxy-context headers so httpx can set them correctly for the connection.
 
     Ingress-auth policy (issue #1266): Cookie is ALWAYS stripped (never
     forwarded to any upstream). Authorization and X-Authorization are also
@@ -6569,6 +6586,8 @@ def _forward_headers(
             continue
         if lower == "x-upstream-url":
             # Never leak this internal routing header to the upstream.
+            continue
+        if lower in _PROXY_CONTEXT_HEADERS:
             continue
         if lower in ("x-body", "x-body-uninspectable"):
             # Gateway-internal body-capture headers set by capture_body.lua for
