@@ -5031,6 +5031,57 @@ class TestForwardHeadersIngressStrip:
         assert "authorization" not in {k.lower() for k in out}
 
 
+class TestForwardHeadersProxyContextStrip:
+    """Ingress proxy-context headers (issue #1625) describe the client -> Gateway
+    hop and must not leak onto the separate Gateway -> upstream MCP server hop,
+    or an upstream that trusts them can see a stale scheme and redirect-loop.
+    """
+
+    def _forward(self, incoming):
+        from auth_server.server import _forward_headers
+
+        return _forward_headers(incoming)
+
+    def test_strips_each_proxy_context_header(self):
+        for name in (
+            "X-Forwarded-Proto",
+            "X-Forwarded-Host",
+            "X-Forwarded-Port",
+            "X-Forwarded-Prefix",
+            "Forwarded",
+            "X-Original-URI",
+            "X-Original-URL",
+        ):
+            out = self._forward({name: "x", "Accept": "y"})
+            assert name.lower() not in {k.lower() for k in out}, name
+            assert out.get("Accept") == "y"
+
+    def test_case_insensitive(self):
+        out = self._forward({"x-forwarded-proto": "http", "x-original-url": "u"})
+        assert "x-forwarded-proto" not in {k.lower() for k in out}
+        assert "x-original-url" not in {k.lower() for k in out}
+
+    def test_stale_ingress_scheme_does_not_reach_the_egress_hop(self):
+        """The issue's own repro: an HTTPS ingress request that arrives carrying
+        a stale X-Forwarded-Proto: http must not forward it to an HTTPS upstream."""
+        out = self._forward(
+            {
+                "X-Forwarded-Proto": "http",
+                "X-Forwarded-Host": "gateway.example.com",
+                "X-Forwarded-Prefix": "/my-server",
+                "Mcp-Session-Id": "vs-abc",
+                "Accept": "application/json",
+            }
+        )
+        assert set(k.lower() for k in out) == {"mcp-session-id", "accept"}
+
+    def test_x_forwarded_for_is_not_stripped(self):
+        """X-Forwarded-For is a client-IP hint, not routing/scheme context, and
+        the issue explicitly asks that it stay untouched (compatibility)."""
+        out = self._forward({"X-Forwarded-For": "203.0.113.5"})
+        assert out.get("X-Forwarded-For") == "203.0.113.5"
+
+
 class TestInternalRelayDecision:
     """The mcp_proxy relay decision keys on the verified `server` claim (first
     path segment), matches the hardcoded internal set exactly, and normalizes
