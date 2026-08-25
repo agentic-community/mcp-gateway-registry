@@ -491,15 +491,54 @@ curl -X POST "https://mcpgateway.example.com/api/servers/github-mcp/mcp/egress-a
       }'
 ```
 
-- `egress_auth_mode`: `none` (default, feature off for this server),
-  `oauth_user` (per-user 3LO OAuth), `obo_exchange` (on-behalf-of token
-  exchange, nothing vaulted), or `pat` (per-user static PAT / API key vaulted
-  with a bounded TTL). See [egress modes](design/egress-auth-design.md#the-egress-modes).
+- `egress_auth_mode`: `none` (default, no gateway-managed upstream
+  credential), `operator_credential` (the registered Backend Authentication
+  credential is shared by every gateway-authorized caller), `oauth_user`
+  (per-user 3LO OAuth), `obo_exchange` (on-behalf-of token exchange, nothing
+  vaulted), or `pat` (per-user static PAT / API key vaulted with a bounded
+  TTL). See [egress modes](design/egress-auth-design.md#the-egress-modes).
 - `client_secret` is **write-only** — it is Fernet-encrypted with the gateway
   `SECRET_KEY` at rest and never returned by the `GET` endpoint. Rotating
   `SECRET_KEY` invalidates stored secrets.
 - The `GET` response includes the `callback_url` to register in the provider's
   OAuth app.
+
+For a service account shared by authorized callers, first configure Backend
+Authentication on the server as `bearer` or `api_key` with the service
+credential, then select the explicit operator mode. Storing the Backend
+Authentication credential alone is **not** enough for user tool calls through
+the gateway; health checks already inject it, but the proxy hop only injects
+it when this mode is set.
+
+```json
+{
+  "egress_auth_mode": "operator_credential"
+}
+```
+
+```bash
+uv run python api/registry_management.py \
+  --registry-url https://mcpgateway.example.com --token-file .token \
+  egress-configure --path /internal-mcp --mode operator_credential
+```
+
+The registry decrypts that credential only after re-verifying the internal
+proxy token and binding its upstream URL to the registered server. The auth
+server then strips client gateway credentials and injects the operator
+credential into the Backend Authentication header. Clients never receive it
+or configure a server-auth placeholder. This mode is server-scoped, so it
+works for per-user and non-per-user callers that are authorized to use the
+server.
+
+Do not enable this mode for a hosted third-party MCP that should call as the
+user (GitHub, Slack, Datadog MCP): those stay on `oauth_user` or `pat`. See the
+[operator-credential FAQ](faq/configuring-operator-credential-egress.md).
+
+Deploy the registry and auth-server code to every replica before changing a
+server to `operator_credential`. Older registry replicas do not recognize
+this new mode and cannot vend its credential; configuring it during a
+mixed-version rollout causes intermittent tokenless upstream requests until
+the rollout finishes.
 
 For a custom OIDC provider:
 

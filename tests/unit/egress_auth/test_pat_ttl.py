@@ -8,40 +8,40 @@ import pytest
 
 from registry.api.egress_auth_routes import (
     _PAT_MAX_TTL_SECONDS,
-    _derive_pat_inject_header,
+    _derive_backend_inject_header,
     _resolve_pat_ttl_seconds,
 )
 
 
-class TestDerivePatInjectHeader:
-    """The pat inject header inherits from the server's Backend Auth scheme."""
+class TestDeriveBackendInjectHeader:
+    """The egress inject header inherits the server's Backend Auth scheme."""
 
     def test_bearer_scheme_uses_authorization_bearer(self):
         server = {"auth_scheme": "bearer"}
-        assert _derive_pat_inject_header(server) == ("Authorization", "Bearer ")
+        assert _derive_backend_inject_header(server) == ("Authorization", "Bearer ")
 
     def test_bearer_scheme_honors_custom_header_name(self):
         server = {"auth_scheme": "bearer", "auth_header_name": "X-Auth"}
-        assert _derive_pat_inject_header(server) == ("X-Auth", "Bearer ")
+        assert _derive_backend_inject_header(server) == ("X-Auth", "Bearer ")
 
     def test_api_key_scheme_uses_bare_token(self):
         # api_key: bare token, no prefix, into the configured header.
         server = {"auth_scheme": "api_key", "auth_header_name": "PRIVATE-TOKEN"}
-        assert _derive_pat_inject_header(server) == ("PRIVATE-TOKEN", "")
+        assert _derive_backend_inject_header(server) == ("PRIVATE-TOKEN", "")
 
     def test_api_key_scheme_defaults_header_name(self):
         server = {"auth_scheme": "api_key"}
-        assert _derive_pat_inject_header(server) == ("X-API-Key", "")
+        assert _derive_backend_inject_header(server) == ("X-API-Key", "")
 
     def test_none_scheme_defaults_to_authorization_bearer(self):
         # Fail-safe: Backend Auth "none" still yields a usable default.
-        assert _derive_pat_inject_header({"auth_scheme": "none"}) == (
+        assert _derive_backend_inject_header({"auth_scheme": "none"}) == (
             "Authorization",
             "Bearer ",
         )
 
     def test_missing_scheme_defaults_to_authorization_bearer(self):
-        assert _derive_pat_inject_header({}) == ("Authorization", "Bearer ")
+        assert _derive_backend_inject_header({}) == ("Authorization", "Bearer ")
 
 
 @pytest.mark.unit

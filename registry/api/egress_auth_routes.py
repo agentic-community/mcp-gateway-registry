@@ -12,11 +12,15 @@ Security model for POST /internal/egress-token:
 - The forwarded X-Internal-Token (the mcp-proxy token /validate minted) is
   RE-VERIFIED here; sub + auth_method are taken from the verified claims,
   never from the request body.
-- Non-per-user auth_method is rejected so a static-key/federation caller
-  can never address a per-user vault bucket.
+- Non-per-user auth_method is rejected before any per-user vault lookup.
+  ``operator_credential`` is the explicit exception: it is server-scoped,
+  not user-scoped, and is still protected by the verified proxy token,
+  gateway authorization, and registered-upstream binding.
 - claims["upstream_url"] is cross-checked against the server's registered
   proxy_pass_url union so a forged X-Resolved-Upstream (minted via a
   direct /validate call) cannot vend a token to an attacker-controlled host.
+- The requested server path must match claims["server"], preventing a token for
+  one server from selecting another server that shares the same upstream host.
 """
 
 import logging
@@ -39,7 +43,13 @@ from registry.core.config import settings
 from registry.core.schemas import _is_gateway_own_audience
 from registry.egress_auth.factory import get_egress_auth_service
 from registry.egress_auth.providers import list_provider_names, resolve_provider
-from registry.egress_auth.schemas import StoredToken
+from registry.egress_auth.schemas import (
+    EGRESS_MODES_REQUIRING_OAUTH_CONFIG,
+    EgressAuthMode,
+    StoredToken,
+    parse_egress_auth_mode,
+    validate_operator_credential_backend,
+)
 from registry.egress_auth.service import (
     EgressAuthError,
     EgressAuthService,
@@ -50,7 +60,7 @@ from registry.repositories.factory import get_server_repository
 from registry.secrets.factory import get_secret_store
 from registry.secrets.interfaces import SecretStoreError
 from registry.services.server_service import server_service
-from registry.utils.credential_encryption import encrypt_credential
+from registry.utils.credential_encryption import decrypt_credential, encrypt_credential
 from registry.utils.url_guard import (
     CREDENTIALED_OAUTH_PROFILE,
     PROXY_PROFILE,
@@ -71,20 +81,18 @@ _PAT_MAX_TTL_SECONDS: int = 30 * 24 * 3600
 _TTL_UNIT_SECONDS: dict[str, int] = {"minutes": 60, "hours": 3600, "days": 86400}
 
 
-def _derive_pat_inject_header(server: dict) -> tuple[str, str]:
-    """Derive the (header_name, value_prefix) the PAT is injected with.
+def _derive_backend_inject_header(server: dict) -> tuple[str, str]:
+    """Derive the (header_name, value_prefix) for a backend-shaped credential.
 
-    The PAT is injected into the SAME header the server's Backend Authentication
-    uses -- it is the same upstream, so the header contract is one thing. This
-    mirrors the registry's own health-check / tool-listing inject in
-    ``registry/core/mcp_client.py``:
+    PAT and operator-credential modes inject into the SAME header configured by
+    Backend Authentication. This mirrors the registry's health-check/tool-list
+    client in ``registry/core/mcp_client.py``:
 
-      - ``bearer``  -> ``<auth_header_name or "Authorization">: Bearer <PAT>``
-      - ``api_key`` -> ``<auth_header_name or "X-API-Key">: <PAT>`` (bare, no prefix)
-      - anything else (``none``/unset) -> ``Authorization: Bearer <PAT>`` (safe default)
+      - ``bearer``  -> ``<auth_header_name or "Authorization">: Bearer <credential>``
+      - ``api_key`` -> ``<auth_header_name or "X-API-Key">: <credential>`` (bare)
+      - anything else -> ``Authorization: Bearer <credential>`` (PAT fallback only)
 
-    So an operator configures the header ONCE, in Backend Authentication, and
-    ``pat`` egress inherits it; there is no separate egress header config.
+    The operator configures the header once; egress modes inherit it.
 
     Args:
         server: The server dict (carries ``auth_scheme`` / ``auth_header_name``).
@@ -293,12 +301,15 @@ class EgressTokenResponse(BaseModel):
         description="Provider key (github/google/entra/...) for the human-readable "
         "elicitation message.",
     )
-    # obo_exchange directive (returned instead of a token; the exchange runs in
-    # auth_server, which holds the gateway's IdP creds and the raw ingress JWT).
+    # Mode signal for the mcp_proxy hop. obo_exchange returns a directive
+    # instead of a token (the exchange runs in auth_server, which holds the
+    # gateway's IdP creds and the raw ingress JWT).
     mode: str | None = Field(
         default=None,
-        description="Egress mode for this server: 'obo_exchange' when the caller "
-        "should perform a same-IdP OBO token exchange instead of a vault vend.",
+        description="Egress mode signal: 'obo_exchange' (perform a same-IdP OBO "
+        "token exchange instead of a vault vend), 'pat' (terminal PAT miss; "
+        "prompt the user to submit a token), or 'operator_credential' (hit "
+        "carrying the shared backend credential).",
     )
     obo_target_audience: str | None = Field(
         default=None,
@@ -308,17 +319,77 @@ class EgressTokenResponse(BaseModel):
         default=None,
         description="obo_exchange: audience-scoped scopes for the exchange request.",
     )
-    # pat: the header the vended PAT is injected into and its value prefix,
-    # derived at vend time from the server's Backend Auth scheme, so mcp_proxy
-    # can build "<pat_header_name>: <pat_value_prefix><PAT>" instead of the
-    # hard-coded "Authorization: Bearer". Only set on a pat hit.
+    # Credential injection shape, derived at vend time from the server's Backend
+    # Authentication scheme. The field names predate operator_credential and are
+    # retained for wire compatibility.
     pat_header_name: str | None = Field(
         default=None,
-        description="pat: HTTP header to inject the PAT into (e.g. Authorization, PRIVATE-TOKEN).",
+        description="HTTP header for a PAT or operator credential.",
     )
     pat_value_prefix: str | None = Field(
         default=None,
-        description="pat: value prefix before the PAT (e.g. 'Bearer ' or '' for a bare token).",
+        description="Value prefix before a PAT or operator credential.",
+    )
+
+
+def _vend_operator_credential(
+    server: dict,
+    server_path: str,
+) -> EgressTokenResponse:
+    """Decrypt and shape a validated server's shared operator credential.
+
+    Config drift (auth_scheme flipped off bearer/api_key after the mode was
+    set, credential deleted, or ciphertext undecryptable) answers 503, NOT a
+    4xx: the auth-server maps 5xx to its fail-closed retry signal
+    (``EgressVendUnavailable``), while any other non-200 makes its vend call
+    return None and ``mcp_proxy`` degrade to a tokenless forward -- a
+    misleading upstream 401. Both write paths validate this config up front
+    (``configure_egress_auth`` and ``ServerInfo._validate_egress_auth``), so
+    drift is the only way here.
+
+    Args:
+        server: The server dict (Backend Authentication fields + ciphertext).
+        server_path: Slash-prefixed server path, for log context.
+
+    Returns:
+        A vend hit carrying the decrypted credential and its inject header.
+
+    Raises:
+        HTTPException: 503 when the Backend Authentication config is invalid
+            or the stored credential cannot be decrypted.
+    """
+    try:
+        validate_operator_credential_backend(
+            server.get("auth_scheme", "none"),
+            server.get("auth_credential_encrypted"),
+        )
+    except ValueError:
+        logger.error(
+            "operator credential unavailable for %s; invalid Backend Authentication config",
+            server_path,
+        )
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="operator credential unavailable",
+        ) from None
+
+    credential = decrypt_credential(server["auth_credential_encrypted"])
+    if not credential:
+        logger.error(
+            "operator credential unavailable for %s; credential undecryptable",
+            server_path,
+        )
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="operator credential unavailable",
+        )
+
+    header_name, value_prefix = _derive_backend_inject_header(server)
+    return EgressTokenResponse(
+        access_token=credential,
+        mode=EgressAuthMode.OPERATOR_CREDENTIAL.value,
+        pat_header_name=header_name,
+        pat_value_prefix=value_prefix,
     )
 
 
@@ -379,28 +450,46 @@ async def vend_egress_token(
     auth_method = claims.get("auth_method") or ""
     token_upstream = claims.get("upstream_url") or ""
 
-    # Only real per-user principals may vend.
-    if not is_per_user_auth_method(auth_method):
-        logger.info("egress vend: non-per-user auth_method %r -> consent", auth_method)
-        return EgressTokenResponse(consent_required=True)
-
     # Normalize the server path: mcp_proxy passes the first path segment without a
     # leading slash ("github"), but server entries, the vault key, and the consent
     # state all use the slash-prefixed path ("/github"). Without this, the lookup
     # misses and consent loops forever. Use the canonical form everywhere below.
     server_path = body.server_path if body.server_path.startswith("/") else "/" + body.server_path
 
+    # The body-selected server must be the same server /validate authorized into
+    # the signed proxy token. Upstream binding alone is insufficient because two
+    # registered servers may share one upstream host. Bind before repository
+    # lookup and before any credential/vault access.
+    claim_server = str(claims.get("server") or "").strip("/")
+    if not claim_server or f"/{claim_server}" != server_path:
+        logger.warning(
+            "egress vend REFUSED: token server %r does not match %s",
+            claim_server,
+            server_path,
+        )
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            detail="proxy token is not bound to the requested server",
+        )
+
     server = await get_server_repository().get(server_path)
     if server is None:
         return EgressTokenResponse(consent_required=True)
 
     # Per-server enablement: a misconfigured/half-deleted server never vends.
-    egress_mode = server.get("egress_auth_mode")
-    if egress_mode not in ("oauth_user", "obo_exchange", "pat") or not server.get("egress_oauth"):
+    try:
+        egress_mode = parse_egress_auth_mode(server.get("egress_auth_mode", "none"))
+    except ValueError:
+        return EgressTokenResponse(consent_required=True)
+    if egress_mode is EgressAuthMode.NONE:
+        return EgressTokenResponse(consent_required=True)
+
+    egress_oauth = server.get("egress_oauth")
+    if egress_mode in EGRESS_MODES_REQUIRING_OAUTH_CONFIG and not egress_oauth:
         return EgressTokenResponse(consent_required=True)
 
     # The bound upstream MUST match a registered upstream for this server. This
-    # cross-check applies to BOTH egress modes: an OBO directive must only be
+    # cross-check applies to every egress mode: an OBO directive must only be
     # handed out for a legitimately-bound upstream, same as a vault vend.
     legal = _registered_upstreams(server)
     if _base_url(token_upstream) not in legal:
@@ -414,14 +503,22 @@ async def vend_egress_token(
             status.HTTP_403_FORBIDDEN, detail="upstream not registered for this server"
         )
 
-    egress_oauth = server["egress_oauth"]
+    if egress_mode is EgressAuthMode.OPERATOR_CREDENTIAL:
+        # Decryption happens only after the verified server and upstream binds.
+        return _vend_operator_credential(server, server_path)
+
+    # Every remaining mode addresses a per-user vault bucket or carries a
+    # delegated user assertion. Static/federation callers must never enter them.
+    if not is_per_user_auth_method(auth_method):
+        logger.info("egress vend: non-per-user auth_method %r -> consent", auth_method)
+        return EgressTokenResponse(consent_required=True)
 
     # pat: vend the stored per-user PAT. This branch runs BEFORE oauth_user so a
     # pat server is never routed through svc.get_valid_token (which resolves an
     # OAuth provider and rejects a token stored with client_id=None). A miss
     # (never submitted OR expired) is TERMINAL: set mode="pat" so auth_server
     # emits the PAT-missing message; NO authorize_url/connect_url (not interactive).
-    if egress_mode == "pat":
+    if egress_mode is EgressAuthMode.PAT:
         provider = egress_oauth.get("provider")
         token = await get_egress_auth_service().get_pat(
             auth_method=auth_method,
@@ -433,7 +530,7 @@ async def vend_egress_token(
             # The PAT is injected into the SAME header the server's Backend
             # Authentication uses (same upstream, one header contract). Derived
             # from auth_scheme/auth_header_name; no separate egress header config.
-            header_name, value_prefix = _derive_pat_inject_header(server)
+            header_name, value_prefix = _derive_backend_inject_header(server)
             return EgressTokenResponse(
                 access_token=token,
                 pat_header_name=header_name,
@@ -445,12 +542,19 @@ async def vend_egress_token(
     # token exchange runs in auth_server (which holds the gateway's own IdP
     # credentials and the raw ingress JWT); the registry never sees the JWT and
     # holds no per-user token for this mode. Stateless -- no vault lookup.
-    if egress_mode == "obo_exchange":
+    if egress_mode is EgressAuthMode.OBO_EXCHANGE:
         return EgressTokenResponse(
             mode="obo_exchange",
             obo_target_audience=egress_oauth.get("target_audience"),
             obo_scopes=egress_oauth.get("scopes") or [],
         )
+
+    # Explicit terminal dispatch: only oauth_user may enter the vault flow
+    # below. A future enum mode not handled above fails closed to consent
+    # instead of silently riding the oauth_user path.
+    if egress_mode is not EgressAuthMode.OAUTH_USER:
+        logger.warning("egress vend: unhandled egress mode %r -> consent", egress_mode.value)
+        return EgressTokenResponse(consent_required=True)
 
     svc = get_egress_auth_service()
     try:
@@ -527,7 +631,7 @@ async def vend_egress_token(
 class EgressConfigRequest(BaseModel):
     """Configure egress auth on a server (admin/registrant)."""
 
-    egress_auth_mode: str = "oauth_user"  # "none" | "oauth_user" | "obo_exchange" | "pat"
+    egress_auth_mode: str = "oauth_user"
     egress_provider: str = ""
     client_id: str = ""
     client_secret: str | None = None  # write-only; encrypted, never echoed
@@ -572,10 +676,10 @@ async def configure_egress_auth(
     user_context: Annotated[dict, Depends(nginx_proxied_auth)],
     _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ):
-    """Configure (or disable) per-user egress OAuth on a server. Admin only.
+    """Configure or disable gateway-managed egress auth on a server. Admin only.
 
-    The client_secret is Fernet-encrypted and never returned. Returns the
-    callback URL the operator must register in the provider's OAuth app.
+    OAuth client secrets and Backend Authentication credentials remain encrypted
+    and are never returned. Returns the non-secret configuration view.
     """
     _feature_enabled_or_404()
     _require_admin(user_context)
@@ -587,10 +691,25 @@ async def configure_egress_auth(
     if not server:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="server not found")
 
-    if body.egress_auth_mode == "none":
-        server["egress_auth_mode"] = "none"
+    try:
+        mode = parse_egress_auth_mode(body.egress_auth_mode)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    if mode is EgressAuthMode.NONE:
+        server["egress_auth_mode"] = mode.value
         server["egress_oauth"] = None
-    elif body.egress_auth_mode == "oauth_user":
+    elif mode is EgressAuthMode.OPERATOR_CREDENTIAL:
+        try:
+            validate_operator_credential_backend(
+                server.get("auth_scheme", "none"),
+                server.get("auth_credential_encrypted"),
+            )
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        server["egress_auth_mode"] = mode.value
+        server["egress_oauth"] = None
+    elif mode is EgressAuthMode.OAUTH_USER:
         if body.egress_provider not in list_provider_names():
             raise HTTPException(
                 status.HTTP_400_BAD_REQUEST,
@@ -682,9 +801,9 @@ async def configure_egress_auth(
                 eo["client_secret_encrypted"] = prior
             if not eo["client_secret_encrypted"]:
                 raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="client_secret required")
-        server["egress_auth_mode"] = "oauth_user"
+        server["egress_auth_mode"] = mode.value
         server["egress_oauth"] = eo
-    elif body.egress_auth_mode == "obo_exchange":
+    elif mode is EgressAuthMode.OBO_EXCHANGE:
         target = (body.target_audience or "").strip()
         if not target:
             raise HTTPException(
@@ -698,13 +817,13 @@ async def configure_egress_auth(
             )
         # Same-IdP exchange: no per-server provider/client_id/secret. Only the
         # target audience and (optional) audience-scoped scopes are stored.
-        server["egress_auth_mode"] = "obo_exchange"
+        server["egress_auth_mode"] = mode.value
         server["egress_oauth"] = {
             "target_audience": target,
             "scopes": body.scopes,
         }
-    elif body.egress_auth_mode == "pat":
-        # pat needs only a provider slug as the vault-namespace/display key. No
+    elif mode is EgressAuthMode.PAT:
+        # PAT needs only a provider slug as the vault-namespace/display key. No
         # SSRF check, no client_secret, no resolve_provider (there is no OAuth
         # endpoint). The provider is slug-constrained because it becomes a
         # vault-key segment.
@@ -715,12 +834,13 @@ async def configure_egress_auth(
                 detail="pat mode requires a provider slug matching ^[a-z0-9_-]{1,64}$ "
                 "(namespace/display key)",
             )
-        # The PAT inject header is NOT configured here: it is inherited from the
-        # server's Backend Authentication (auth_scheme/auth_header_name) at vend
-        # time (see _derive_pat_inject_header), since it is the same upstream.
-        server["egress_auth_mode"] = "pat"
+        # The PAT inject header is NOT configured here: it is inherited at vend
+        # time from the server's Backend Authentication settings
+        # (auth_scheme/auth_header_name, see _derive_backend_inject_header),
+        # since it is the same upstream.
+        server["egress_auth_mode"] = mode.value
         server["egress_oauth"] = {"provider": provider, "scopes": body.scopes or []}
-    else:
+    else:  # pragma: no cover - parse_egress_auth_mode exhausts EgressAuthMode
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid egress_auth_mode")
 
     if not await server_service.update_server(server_path, server):

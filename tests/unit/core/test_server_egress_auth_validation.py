@@ -2,6 +2,7 @@
 
 Covers ServerInfo._validate_egress_auth (@model_validator):
 - mode=none: no egress_oauth required.
+- mode=operator_credential: requires encrypted bearer/API-key Backend Authentication.
 - mode=oauth_user: requires egress_oauth.provider (3LO).
 - mode=obo_exchange: requires target_audience; rejects same-app audience.
 - invalid mode string rejected.
@@ -35,6 +36,39 @@ class TestServerEgressAuthValidation:
     def test_invalid_mode_rejected(self):
         with pytest.raises(ValidationError, match="invalid egress_auth_mode"):
             _server(egress_auth_mode="bogus")
+
+    def test_operator_credential_with_encrypted_bearer_accepted(self):
+        s = _server(
+            egress_auth_mode="operator_credential",
+            auth_scheme="bearer",
+            auth_credential_encrypted="encrypted-token",
+        )
+        assert s.egress_auth_mode == "operator_credential"
+        assert s.egress_oauth is None
+
+    def test_operator_credential_requires_backend_auth_scheme(self):
+        with pytest.raises(ValidationError, match="requires Backend Authentication scheme"):
+            _server(
+                egress_auth_mode="operator_credential",
+                auth_scheme="none",
+                auth_credential_encrypted="encrypted-token",
+            )
+
+    def test_operator_credential_requires_encrypted_credential(self):
+        with pytest.raises(ValidationError, match="requires a stored Backend"):
+            _server(
+                egress_auth_mode="operator_credential",
+                auth_scheme="bearer",
+            )
+
+    def test_operator_credential_rejects_per_user_config(self):
+        with pytest.raises(ValidationError, match="must not set egress_oauth"):
+            _server(
+                egress_auth_mode="operator_credential",
+                auth_scheme="api_key",
+                auth_credential_encrypted="encrypted-key",
+                egress_oauth=EgressOAuthConfig(provider="github"),
+            )
 
     def test_oauth_user_requires_provider(self):
         with pytest.raises(ValidationError, match="requires egress_oauth.provider"):

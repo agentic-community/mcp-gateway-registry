@@ -51,9 +51,10 @@ Once registered with credentials, the registry automatically:
 
 1. **Health checks** -- Injects the decrypted credential when checking if the server is reachable
 2. **Tool discovery** -- Uses the credential to call the MCP `tools/list` method on the backend server
-3. **Request proxying** -- When clients connect through the gateway, the credential is injected into proxied requests
 
-This means tool discovery works the same way for protected servers as it does for public ones -- no additional configuration is needed beyond providing the credential at registration time.
+Those two paths are registry-internal. They do **not** by themselves inject the credential on the user tool-call hop (`/mcp-proxy/...`). For that, set `egress_auth_mode` to `operator_credential` after Backend Authentication is stored. See [How do I inject a shared Backend Authentication credential on egress?](configuring-operator-credential-egress.md).
+
+Health checks and tool discovery work the same way for protected servers as for public ones once the credential is registered. User tool calls through the gateway need the explicit egress mode.
 
 ## Manually Providing Tools
 
@@ -112,7 +113,7 @@ curl -X PATCH https://registry.example.com/api/servers/my-protected-server/auth-
 
 - Credentials are **encrypted at rest** using the `SECRET_KEY` configured in your deployment
 - Credentials are **never returned** in API responses or displayed in the UI
-- Credentials are **decrypted only in memory** when needed for health checks, tool discovery, or request proxying
+- Credentials are **decrypted only in memory** when needed for health checks, tool discovery, or (when `egress_auth_mode` is `operator_credential`) the gateway proxy hop
 
 ## Getting a JWT Token
 

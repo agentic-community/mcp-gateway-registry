@@ -7094,14 +7094,12 @@ async def mcp_proxy(
     # We drop the foreign header on this path (see the 401 handling below).
     egress_token_injected = False
 
-    # Per-user egress credential vault. When the feature is on, ask the
-    # registry to vend this user's third-party token for the resolved server. The
-    # registry re-verifies the signed proxy token, enforces per-user/upstream
-    # authz, and returns consent_required for non-oauth_user servers.
-    # On a real vend we strip the user's own gateway credentials/identity
-    # before injecting the vaulted token. On a consent-required miss for an
-    # egress-configured server we DO NOT forward unauthenticated -- we ask the
-    # user to connect via MCP URL-mode elicitation (see _egress_consent_response).
+    # Gateway-managed egress auth. The registry re-verifies the signed proxy
+    # token, binds the request to the registered upstream, and returns either a
+    # shared operator credential, a per-user credential, or an OBO directive.
+    # On a credential hit we strip gateway credentials/identity before injecting
+    # the upstream credential. A per-user miss triggers consent rather than an
+    # unauthenticated forward (see _egress_consent_response).
     if settings.egress_auth_enabled:
         internal_proxy_token = request.headers.get("X-Internal-Token", "")
         if internal_proxy_token:
@@ -7245,12 +7243,11 @@ async def mcp_proxy(
                 # (same cross-resource-PRM protection as the vaulted-token path).
                 egress_token_injected = True
             elif vend and vend.get("access_token"):
-                # Token is vaulted (consent done): strip the user's gateway
-                # credentials/identity and inject the vaulted upstream token.
-                # oauth_user/obo use "Authorization: Bearer"; a pat server may
-                # override the header name + value prefix (e.g. GitLab
-                # "PRIVATE-TOKEN: <t>" bare, or "X-API-Key: <t>"). Defaults
-                # reproduce "Authorization: Bearer <t>".
+                # Strip the caller's gateway credentials/identity and inject the
+                # gateway-managed upstream credential. oauth_user uses
+                # "Authorization: Bearer"; PAT and operator_credential may
+                # inherit another Backend Authentication header (e.g.
+                # "PRIVATE-TOKEN: <t>" or "X-API-Key: <t>").
                 inject_header = vend.get("pat_header_name") or "Authorization"
                 inject_prefix = (
                     vend["pat_value_prefix"]

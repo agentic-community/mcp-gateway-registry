@@ -229,6 +229,52 @@ class TestConfigureEgressUrlValidation:
 
 
 @pytest.mark.unit
+class TestConfigureOperatorCredential:
+    def test_accepts_stored_bearer_backend_credential(self, make_client):
+        client = make_client(
+            server={
+                "path": "/gh",
+                "auth_scheme": "bearer",
+                "auth_credential_encrypted": "enc:service-token",
+                "egress_oauth": {"provider": "github"},
+            }
+        )
+        resp = client.post(
+            "/servers/gh/egress-auth",
+            json={"egress_auth_mode": "operator_credential"},
+        )
+        assert resp.status_code == 200, resp.text
+        assert client._svc.updated_with["egress_auth_mode"] == "operator_credential"
+        assert client._svc.updated_with["egress_oauth"] is None
+
+    def test_rejects_missing_backend_credential(self, make_client):
+        client = make_client(server={"path": "/gh", "auth_scheme": "bearer", "egress_oauth": None})
+        resp = client.post(
+            "/servers/gh/egress-auth",
+            json={"egress_auth_mode": "operator_credential"},
+        )
+        assert resp.status_code == 400
+        assert "stored Backend Authentication credential" in resp.json()["detail"]
+        assert client._svc.updated_with is None
+
+    def test_rejects_none_backend_auth_scheme(self, make_client):
+        client = make_client(
+            server={
+                "path": "/gh",
+                "auth_scheme": "none",
+                "auth_credential_encrypted": "enc:unused",
+                "egress_oauth": None,
+            }
+        )
+        resp = client.post(
+            "/servers/gh/egress-auth",
+            json={"egress_auth_mode": "operator_credential"},
+        )
+        assert resp.status_code == 400
+        assert "requires Backend Authentication scheme" in resp.json()["detail"]
+
+
+@pytest.mark.unit
 class TestConfigurePublicClient:
     """token_endpoint_auth_method=none (custom provider): a public client has
     no secret by design -- the configure route must accept a secretless config,

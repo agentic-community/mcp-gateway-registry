@@ -3886,7 +3886,7 @@ class RegistryClient:
 
         return response.json()
 
-    # Egress Auth Methods (per-user egress credential vault)
+    # Egress Auth Methods
 
     def configure_egress_auth(
         self,
@@ -3903,7 +3903,7 @@ class RegistryClient:
         custom_token_auth_style: str | None = None,
         custom_resource: str | None = None,
     ) -> dict[str, Any]:
-        """Configure per-user egress auth on a server (admin only).
+        """Configure gateway-managed egress auth on a server (admin only).
 
         Wraps POST /api/servers/{path}/egress-auth. Sets the egress auth mode
         and the mode-specific parameters. For ``pat`` mode, pass ``mode="pat"``
@@ -3911,7 +3911,8 @@ class RegistryClient:
 
         Args:
             server_path: Server path (e.g., "/github" or "github").
-            mode: Egress auth mode (none, oauth_user, obo_exchange, pat).
+            mode: Egress auth mode (none, operator_credential, oauth_user,
+                obo_exchange, pat).
             provider: Provider slug/name. Required for oauth_user and pat.
             client_id: OAuth client id (oauth_user only).
             client_secret: OAuth client secret (oauth_user only, write-only).

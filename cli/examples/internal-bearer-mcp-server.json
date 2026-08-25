@@ -1,0 +1,11 @@
+{
+  "server_name": "Internal MCP (shared backend credential)",
+  "description": "Template for an in-cluster or trusted MCP server that authenticates with a static bearer token. Register this file, store the token with server-update-credential (do not put secrets in this JSON), then POST egress-auth with egress_auth_mode=operator_credential. The gateway injects the Backend Authentication credential on the user proxy hop after authorizing the caller. Clients never receive the token. Do not use this mode for hosted third-party MCP servers that should call as the user (GitHub, Slack, Datadog MCP use oauth_user or pat).",
+  "path": "/internal-mcp",
+  "proxy_pass_url": "https://mcp.internal.example.com/mcp",
+  "tags": ["internal", "egress-operator-credential"],
+  "auth_scheme": "bearer",
+  "supported_transports": ["streamable-http"],
+  "status": "active",
+  "visibility": "private"
+}
