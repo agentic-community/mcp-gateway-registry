@@ -275,6 +275,83 @@ class TestConfigureOperatorCredential:
 
 
 @pytest.mark.unit
+class TestConfigureModeDispatch:
+    """Mode parsing and the non-oauth_user branches of the configure route."""
+
+    def test_unknown_server_is_404(self, make_client, monkeypatch):
+        client = make_client()
+
+        async def _missing(path, include_credentials=False):
+            return None
+
+        monkeypatch.setattr(client._svc, "get_server_info", _missing)
+        resp = client.post(
+            "/servers/gh/egress-auth",
+            json={"egress_auth_mode": "none"},
+        )
+        assert resp.status_code == 404
+        assert client._svc.updated_with is None
+
+    def test_invalid_mode_is_400(self, make_client):
+        client = make_client()
+        resp = client.post(
+            "/servers/gh/egress-auth",
+            json={"egress_auth_mode": "not-a-real-mode"},
+        )
+        assert resp.status_code == 400
+        assert client._svc.updated_with is None
+
+    def test_none_resets_mode_and_clears_oauth_config(self, make_client):
+        client = make_client(
+            server={
+                "path": "/gh",
+                "egress_auth_mode": "oauth_user",
+                "egress_oauth": {"provider": "github", "client_id": "Iv1.x"},
+            }
+        )
+        resp = client.post("/servers/gh/egress-auth", json={"egress_auth_mode": "none"})
+        assert resp.status_code == 200, resp.text
+        assert client._svc.updated_with["egress_auth_mode"] == "none"
+        assert client._svc.updated_with["egress_oauth"] is None
+
+    def test_update_failure_is_500(self, make_client, monkeypatch):
+        client = make_client()
+
+        async def _fail(path, server):
+            return False
+
+        monkeypatch.setattr(client._svc, "update_server", _fail)
+        resp = client.post("/servers/gh/egress-auth", json={"egress_auth_mode": "none"})
+        assert resp.status_code == 500
+
+    def test_obo_requires_target_audience(self, make_client):
+        client = make_client()
+        resp = client.post(
+            "/servers/gh/egress-auth",
+            json={"egress_auth_mode": "obo_exchange", "target_audience": "   "},
+        )
+        assert resp.status_code == 400
+        assert "target_audience" in resp.json()["detail"]
+        assert client._svc.updated_with is None
+
+    def test_obo_stores_target_and_scopes(self, make_client):
+        client = make_client()
+        resp = client.post(
+            "/servers/gh/egress-auth",
+            json={
+                "egress_auth_mode": "obo_exchange",
+                "target_audience": "api://backend-api",
+                "scopes": ["read"],
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        assert client._svc.updated_with["egress_auth_mode"] == "obo_exchange"
+        eo = client._svc.updated_with["egress_oauth"]
+        assert eo["target_audience"] == "api://backend-api"
+        assert eo["scopes"] == ["read"]
+
+
+@pytest.mark.unit
 class TestConfigurePublicClient:
     """token_endpoint_auth_method=none (custom provider): a public client has
     no secret by design -- the configure route must accept a secretless config,

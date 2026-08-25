@@ -235,6 +235,31 @@ class TestInternalEgressTokenRoute:
         assert _post(client).status_code == 403
         assert not decrypt_called
 
+    def test_invalid_stored_mode_fails_closed_to_consent(self, make_client):
+        # The model validator rejects a bad mode on write, but an old or
+        # hand-edited document bypasses it; the vend path must degrade to
+        # consent rather than vend or 500.
+        server = _server(egress_auth_mode="not-a-real-mode", egress_oauth=None)
+        client = make_client(_claims(), server)
+        r = _post(client)
+        assert r.status_code == 200
+        assert r.json()["consent_required"] is True
+        assert r.json()["access_token"] is None
+        assert not client._svc.called
+
+    def test_obo_mode_returns_exchange_directive(self, make_client):
+        server = _server(
+            egress_auth_mode="obo_exchange",
+            egress_oauth={"target_audience": "api://backend", "scopes": ["read"]},
+        )
+        r = _post(make_client(_claims(), server))
+        assert r.status_code == 200
+        body = r.json()
+        assert body["mode"] == "obo_exchange"
+        assert body["obo_target_audience"] == "api://backend"
+        assert body["obo_scopes"] == ["read"]
+        assert body["access_token"] is None
+
     def test_server_not_oauth_user_consent(self, make_client):
         client = make_client(_claims(), _server(egress_auth_mode="none", egress_oauth=None))
         r = _post(client)
