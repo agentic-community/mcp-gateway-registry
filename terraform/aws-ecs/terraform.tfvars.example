@@ -1370,6 +1370,6 @@ aws_registry_federation_enabled = true
 # Asymmetric JWT signing (ES256)
 # Store the PEM private key in Secrets Manager, then reference its ARN here.
 # Generate: openssl ecparam -name prime256v1 -genkey -noout | aws secretsmanager create-secret --name mcp-signing-key --secret-string file:///dev/stdin
-# internal_signing_key_secret_arn = "arn:aws:secretsmanager:us-east-1:123456789:secret:mcp-signing-key-AbCdEf"
+# internal_signing_key_secret_arn = "arn:aws:secretsmanager:us-east-1:123456789:secret:mcp-signing-key-AbCdEf" # pragma: allowlist secret
 # internal_signing_key_id = "es256-1"
 # reject_hs256_tokens = false
