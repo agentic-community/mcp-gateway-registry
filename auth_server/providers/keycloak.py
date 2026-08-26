@@ -21,6 +21,11 @@ JWT_AUDIENCE = os.environ.get("JWT_AUDIENCE", "mcp-registry")
 # raises if it is missing rather than silently using a known-bad value.
 SECRET_KEY = os.environ.get("SECRET_KEY")
 
+# Characters that can legally follow an origin in a URL. Used to anchor the
+# internal-URL rewrite at a boundary so an internal base of
+# "http://keycloak:8080" cannot also match "http://keycloak:80801".
+_URL_BOUNDARY_CHARS: frozenset[str] = frozenset({"/", "?", "#"})
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -464,34 +469,76 @@ class KeycloakProvider(AuthProvider):
             logger.error(f"Failed to get M2M token: {e}")
             raise ValueError(f"M2M token generation failed: {e}")
 
+    def _rewrite_internal_url(self, value: str) -> str:
+        """Rewrite one string onto the external host if it is an internal URL.
+
+        The internal URL is only replaced at a real URL boundary. A bare
+        ``startswith`` would let an internal base of ``http://keycloak:8080``
+        also match ``http://keycloak:80801``, i.e. a different port on the same
+        host, and silently rewrite it.
+
+        Args:
+            value: Any string from the discovery document.
+
+        Returns:
+            The rewritten URL, or the input unchanged when it is not an internal
+            Keycloak URL.
+        """
+        if not value.startswith(self.keycloak_url):
+            return value
+        tail = value[len(self.keycloak_url) :]
+        if tail and tail[0] not in _URL_BOUNDARY_CHARS:
+            return value
+        return f"{self.keycloak_external_url}{tail}"
+
+    def _rewrite_internal_urls(self, node: Any) -> Any:
+        """Recursively rewrite every internal Keycloak URL in a JSON structure.
+
+        Returns new containers rather than mutating in place. That matters:
+        ``_get_openid_configuration`` is ``lru_cache``d, so mutating a nested
+        dict would poison the cache for every later caller.
+
+        Args:
+            node: Any JSON value from the discovery document.
+
+        Returns:
+            A structurally equal value with internal URLs rewritten.
+        """
+        if isinstance(node, str):
+            return self._rewrite_internal_url(node)
+        if isinstance(node, dict):
+            return {key: self._rewrite_internal_urls(value) for key, value in node.items()}
+        if isinstance(node, list):
+            return [self._rewrite_internal_urls(value) for value in node]
+        return node
+
     def authorization_server_metadata(self) -> dict[str, Any]:
         """Return Keycloak's RFC 8414 metadata, with internal hostnames rewritten.
 
         Keycloak's OpenID configuration is RFC 8414-shaped already. We fetch it
-        from the internal cluster URL but rewrite any browser-facing endpoints
-        onto the external URL so a discovery client lands on the correct host.
+        from the internal cluster URL but rewrite every endpoint onto the
+        external URL so a discovery client lands on the correct host.
+
+        The rewrite walks the whole document rather than a list of known field
+        names. An allowlist silently left behind every field it did not
+        enumerate -- ``check_session_iframe``, ``pushed_authorization_request_
+        endpoint``, ``backchannel_authentication_endpoint`` and the entire
+        nested ``mtls_endpoint_aliases`` object -- so a client using PAR, CIBA,
+        mTLS client auth or OIDC session management was handed an unreachable
+        internal URL while the primary endpoints looked correct (issue #1649).
+        It also meant every field Keycloak adds in a future release starts out
+        broken by default. Walking the document inverts that: a field is
+        rewritten because it points at the internal host, not because someone
+        remembered to list it.
         """
         config = self._get_openid_configuration()
         if self.keycloak_url == self.keycloak_external_url:
             return dict(config)
 
-        rewritten: dict[str, Any] = dict(config)
-        for field in (
-            "issuer",
-            "authorization_endpoint",
-            "token_endpoint",
-            "userinfo_endpoint",
-            "jwks_uri",
-            "end_session_endpoint",
-            "introspection_endpoint",
-            "registration_endpoint",
-            "revocation_endpoint",
-            "device_authorization_endpoint",
-        ):
-            value = rewritten.get(field)
-            if isinstance(value, str) and value.startswith(self.keycloak_url):
-                rewritten[field] = value.replace(self.keycloak_url, self.keycloak_external_url, 1)
-        return rewritten
+        rewritten = self._rewrite_internal_urls(config)
+        # _rewrite_internal_urls returns a dict for a dict input; assert the
+        # shape for mypy and for a malformed upstream document.
+        return rewritten if isinstance(rewritten, dict) else dict(config)
 
     @lru_cache(maxsize=1)
     def _get_openid_configuration(self) -> dict[str, Any]:
