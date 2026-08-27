@@ -426,6 +426,10 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             ("egress_state_ttl_seconds", "OAuth State TTL (s)", False),
             ("egress_registry_internal_url", "Registry Internal Vend URL", False),
             ("egress_obo_allowed_audiences", "OBO Allowed Audiences", False),
+            # application-layer credential encryption (key is masked; only its
+            # presence/absence is shown, never the value)
+            ("egress_credential_encryption_key", "Credential Encryption Key", True),
+            ("egress_credential_require_encrypted", "Require Encrypted (strict)", False),
             # secrets-manager backend
             ("secrets_manager_kms_key_id", "Secrets Manager KMS Key ID", True),
             ("secrets_manager_path_prefix", "Secrets Manager Path Prefix", False),
@@ -670,7 +674,19 @@ def _build_config_response() -> dict[str, Any]:
         "groups": groups,
         "total_groups": len(groups),
         "is_local_dev": settings.is_local_dev,
+        # Recommended-but-optional settings that apply to this deployment, with
+        # their configured status, so the UI can badge any that are unset. Sourced
+        # from registry.core.recommended_config (same source as the startup warning
+        # and the recommended-config metric). Never contains secret values.
+        "recommendations": _build_recommendations(),
     }
+
+
+def _build_recommendations() -> list[dict[str, Any]]:
+    """Return applicable recommended-config entries with their configured status."""
+    from registry.core.recommended_config import evaluate_recommendations
+
+    return evaluate_recommendations(settings)
 
 
 # ---------------------------------------------------------------------------
