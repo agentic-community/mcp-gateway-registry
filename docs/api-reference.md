@@ -618,7 +618,19 @@ This section implements the official [Anthropic MCP Registry API specification](
 
 ### Internal Admin Endpoints
 
-**Authentication:** HTTP Basic Auth (admin credentials)
+> **Not publicly reachable.** The public gateway listeners (8080/8443) return
+> `404` for the `/api/internal/` prefix. These are legacy service-to-service
+> routes; operator tooling (e.g. `cli/service_mgmt.sh`) now uses the public,
+> user-authenticated `/api/servers/*` siblings (e.g. `POST /api/servers/toggle`)
+> with a gateway JWT. The two subsets that are still called machine-to-machine
+> keep their own dedicated internal paths: the egress-token vend on the internal
+> `registry:8091` listener (auth-server only, never ALB-/Ingress-fronted,
+> unpublished in Compose) and the virtual-server session store via the internal
+> `/_internal/sessions/` nginx subrequest.
+
+**Authentication:** Internal service token — a short-lived, single-use Bearer JWT
+signed with the shared `SECRET_KEY` (`registry.auth.internal`), re-verified by the
+`validate_internal_auth` route gate. Not a user/admin login token.
 
 #### 11. Internal Register Service
 
