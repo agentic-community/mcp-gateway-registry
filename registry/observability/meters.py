@@ -429,6 +429,45 @@ _meter.create_observable_gauge(
 )
 
 
+def _recommended_config_callback(options: Any) -> Any:
+    """ObservableGauge: 1 when a recommended-but-optional setting is NOT set, else 0.
+
+    Runs on the metrics-export cycle (NOT the request path). Reads the current
+    settings each cycle so the gauge self-corrects once an operator configures the
+    setting -- no manual reset. Only recommendations that APPLY to this deployment
+    are emitted (an unused feature is never nagged). Labels are bounded (a fixed,
+    code-defined recommendation list), so cardinality is safe. Lazy imports avoid
+    a startup circular import (settings -> meters).
+    """
+    try:
+        from registry.core.config import settings
+        from registry.core.recommended_config import evaluate_recommendations
+
+        for rec in evaluate_recommendations(settings):
+            yield metrics.Observation(
+                0 if rec["configured"] else 1,
+                {
+                    "setting": rec["id"],
+                    "component": rec["component"],
+                    "severity": rec["severity"],
+                },
+            )
+    except Exception as exc:  # pragma: no cover - defensive; never break export
+        logger.debug("recommended_config callback failed: %s", exc)
+        return
+
+
+_meter.create_observable_gauge(
+    name="mcpgw_registry_recommended_config_not_set",
+    callbacks=[_recommended_config_callback],
+    description=(
+        "1 when a recommended-but-optional setting that applies to this deployment "
+        "is not configured (an active operator nudge), else 0. Labeled by setting."
+    ),
+    unit="1",
+)
+
+
 # Mode-blocked requests (registry/core/metrics.py:43)
 _mode_blocked_requests_counter = _meter.create_counter(
     name="mcpgw_registry_mode_blocked_requests_total",
