@@ -857,6 +857,24 @@ Application-level, identity/group/target-aware request limiting enforced at the 
 
 ---
 
+## Group 33 — Gateway Generic Proxy
+
+Extends gateway reverse-proxying to non-MCP entities (skills, agents, custom entities) through a uniform auth-server hop. **Ships dark:** every flag defaults off/safe, so with `GATEWAY_GENERIC_PROXY_ENABLED=false` no generic-proxy nginx block is rendered, no generic token is minted, and zero extra per-tick DB queries are issued. Consumed by the `registry` (render + SSRF validation) and the `auth-server` (the `/proxy` hop). See [gateway generic proxy design](design/gateway-generic-proxy.md). The Terraform and Helm columns are blank pending the enabling slice that wires the runtime surfaces (this feature is dark today; a `.env` override is sufficient for Docker/local enablement and testing).
+
+| Parameter | Docker (`.env`) | Terraform (`.tfvars`) | Helm (`values.yaml`) | Purpose |
+|-----------|-----------------|-----------------------|----------------------|---------|
+| Generic proxy enabled | `GATEWAY_GENERIC_PROXY_ENABLED` | — (not yet wired) | — (not yet wired) | Master switch for generic-proxy blocks. Default `false` (ships dark). |
+| Canonical namespace enabled | `GATEWAY_CANONICAL_NAMESPACE_ENABLED` | — (not yet wired) | — (not yet wired) | Emit canonical `/entity_type/path` blocks alongside the legacy flat aliases. Placeholder for a later slice. Default `false`. |
+| Allow private targets | `GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS` | — (not yet wired) | — (not yet wired) | SSRF egress policy. `false` rejects loopback/private/reserved targets. Link-local/metadata/unspecified are denied regardless. Default `false`. |
+| Require Bearer for writes | `GATEWAY_GENERIC_REQUIRE_BEARER_FOR_WRITES` | — (not yet wired) | — (not yet wired) | CSRF defense: refuse a state-changing verb under ambient cookie auth (403 before any token mint). Default `true`. |
+| Client max body size | `GATEWAY_GENERIC_CLIENT_MAX_BODY_SIZE` | — (not yet wired) | — (not yet wired) | nginx `client_max_body_size` for generic blocks (inbound request body). nginx size token. Default `1m`. |
+| Upstream response max body | `GENERIC_PROXY_MAX_BODY_BYTES` | — (not yet wired) | — (not yet wired) | Bytes of upstream response the hop buffers before returning. Default `10485760` (10 MiB). |
+| Max concurrency | `GATEWAY_GENERIC_MAX_CONCURRENCY` | — (not yet wired) | — (not yet wired) | Semaphore cap on in-flight generic-hop requests (OOM guard). Default `32`. |
+| TLS verify | `GATEWAY_GENERIC_TLS_VERIFY` | — (not yet wired) | — (not yet wired) | Generic hop TLS verification: `true` / CA-bundle path / `false` (emits a startup WARNING). Default `true`. |
+| Egress self-check enabled | `GATEWAY_EGRESS_SELFCHECK_ENABLED` | — (not yet wired) | — (not yet wired) | Probe metadata IPs at startup; if reachable, disable the feature for the process (not readiness). Default `true`. |
+
+---
+
 ## Checklist for new parameters
 
 When you add a new configuration parameter:

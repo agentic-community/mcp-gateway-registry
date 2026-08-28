@@ -24,14 +24,70 @@ from fastapi import HTTPException  # noqa: E402
 
 from auth_server.server import (  # noqa: E402
     _GATEWAY_SET_SECURITY_HEADERS,
+    _GENERIC_HOP_STRIP_HEADERS,
     _assert_outbound_host_pinned,
     _build_generic_outbound_url,
+    _forward_headers,
     _generic_tls_verify,
     _run_egress_selfcheck,
     _select_forwarded_generic_response_headers,
 )
 
 pytestmark = pytest.mark.unit
+
+
+class TestGenericHopHeaderStrip:
+    """The generic hop fronts arbitrary (third-party) backends, so no gateway
+    identity/credential/routing header may leak to the upstream. Replicates the
+    handler's filter: _forward_headers(...) minus _GENERIC_HOP_STRIP_HEADERS.
+    """
+
+    def _forwarded(self, incoming: dict[str, str]) -> dict[str, str]:
+        return {
+            key: value
+            for key, value in _forward_headers(dict(incoming)).items()
+            if key.lower() not in _GENERIC_HOP_STRIP_HEADERS
+        }
+
+    def test_strips_internal_identity_token_and_markers(self):
+        incoming = {
+            "X-Internal-Token-Generic": "signed.jwt.value",
+            "X-User": "alice",
+            "X-Scopes": "read write",
+            "X-Groups": "admins",
+            "X-Original-URL": "https://gw/skill/skills/x",
+            "X-Generic-Proxy-Kind": "skill",
+            "X-Entity-Path": "skills/x",
+            "Authorization": "Bearer caller-token",
+            "Cookie": "mcp_gateway_session=abc",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+        forwarded_lower = {k.lower() for k in self._forwarded(incoming)}
+        # A proxied backend must never receive the signed internal token, the
+        # caller's identity/scopes, ambient credentials, or the routing markers.
+        for leaked in (
+            "x-internal-token-generic",
+            "x-user",
+            "x-scopes",
+            "x-groups",
+            "x-original-url",
+            "x-generic-proxy-kind",
+            "x-entity-path",
+            "authorization",
+            "cookie",
+        ):
+            assert leaked not in forwarded_lower
+
+    def test_keeps_legitimate_client_headers(self):
+        incoming = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "X-Internal-Token-Generic": "signed.jwt.value",
+        }
+        forwarded = self._forwarded(incoming)
+        assert forwarded.get("Content-Type") == "application/json"
+        assert forwarded.get("Accept") == "application/json"
 
 
 class TestBuildOutboundUrl:

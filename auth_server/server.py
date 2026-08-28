@@ -6618,6 +6618,27 @@ _EGRESS_STRIP_HEADERS: frozenset[str] = frozenset(
 )
 
 
+# Headers stripped before forwarding to a generic-proxy upstream. The generic hop
+# fronts arbitrary (potentially third-party) registered backends, so the caller's
+# gateway identity/scopes and every gateway-internal routing/auth header must be
+# removed -- otherwise a proxied backend would receive the caller's X-User/X-Scopes
+# (identity + authorization-topology disclosure) and a valid signed
+# X-Internal-Token-Generic (replayable for the token TTL). This is the generic-hop
+# analogue of _EGRESS_STRIP_HEADERS (applied on the mcp-proxy vault path); it adds
+# the markers the generic nginx location block injects. Applied on EVERY generic
+# request, since the hop has no notion of a "trusted internal" upstream.
+_GENERIC_HOP_STRIP_HEADERS: frozenset[str] = _EGRESS_STRIP_HEADERS | frozenset(
+    {
+        "x-internal-token-generic",
+        "x-generic-proxy-kind",
+        "x-entity-path",
+        "x-resolved-generic-upstream",
+        "x-resolved-upstream",
+        "x-original-method",
+    }
+)
+
+
 class EgressVendUnavailable(Exception):
     """The registry's egress-token vend failed *transiently* -- the registry was
     unreachable/timed out, or it answered 5xx after riding out its own bounded
@@ -8082,7 +8103,16 @@ async def generic_proxy(
         raise HTTPException(status_code=400, detail="Invalid request body") from exc
 
     max_body_bytes = _read_generic_max_body_bytes()
-    forward_headers = _forward_headers(dict(request.headers))
+    # Strip the gateway-internal identity/routing family before forwarding to the
+    # (possibly third-party) upstream: neither the caller's X-User/X-Scopes nor the
+    # signed X-Internal-Token-Generic may leak to a proxied backend. _forward_headers
+    # already drops cookie/authorization/x-upstream-url/hop-by-hop; this removes the
+    # remaining internal headers the generic nginx block injects.
+    forward_headers = {
+        key: value
+        for key, value in _forward_headers(dict(request.headers)).items()
+        if key.lower() not in _GENERIC_HOP_STRIP_HEADERS
+    }
     verify = _generic_tls_verify()
 
     logger.info(
