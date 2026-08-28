@@ -402,6 +402,9 @@ services:
       - ${HOME}/mcp-gateway/ssl:/etc/ssl:ro
       # Application log files (bind mount to host for Splunk ingestion, Issue #987)
       - /var/log/containers/ai-registry:/var/log/containers/ai-registry
+      # Persist the logto nginx location patch across container recreations
+      # (swap-mcp-registry-idp-to-logto); image-baked template lacks logto blocks
+      - ./docker/nginx_rev_proxy_http_and_https.conf:/app/docker/nginx_rev_proxy_http_and_https.conf:ro
     depends_on:
       auth-server:
         condition: service_started
