@@ -161,7 +161,16 @@ class TestCreateBlock:
 
     def test_location_is_entity_type_namespaced(self):
         block = self._block()
-        assert "location {{ROOT_PATH}}/skill/skills/proxy-demo {" in block
+        assert "location {{ROOT_PATH}}/skill/skills/proxy-demo/ {" in block
+
+    def test_location_has_trailing_slash_no_prefix_hijack(self):
+        # Issue #1501 class: a bare `location /skill/foo` prefix-matches sibling
+        # routes like `/skill/foobar`, pulling them into this entity's /validate
+        # auth subrequest. The rendered location MUST carry a trailing slash so it
+        # only matches the subtree (same guard real/virtual servers apply).
+        block = self._block(path="/skills/foo")
+        assert "location {{ROOT_PATH}}/skill/skills/foo/ {" in block
+        assert "location {{ROOT_PATH}}/skill/skills/foo {" not in block
 
     def test_proxy_pass_targets_auth_server_generic_hop(self):
         block = self._block()
@@ -335,11 +344,14 @@ class TestGenerateGenericBlocks:
             {"entity_type": "skill", "path": "/skills/a", "target_url": "https://a/"},
             {"entity_type": "skill", "path": "/skills/b", "target_url": "https://b/"},
         ]
-        claimed = {"/skill/skills/a"}
+        # Claimed paths carry a trailing slash (that is how MCP/virtual blocks
+        # render their location), and the generic block now normalises to a
+        # trailing slash too — so the exact-match collision dedup catches it.
+        claimed = {"/skill/skills/a/"}
         blocks = await self._generate(resources, claimed)
         # only /skills/b survives; the colliding /skills/a is dropped
         assert len(blocks) == 1
-        assert "/skill/skills/b" in blocks[0]
+        assert "/skill/skills/b/" in blocks[0]
 
     async def test_generic_vs_generic_first_seen_wins(self):
         # Two entities rendering the SAME location path: deterministic first-wins
@@ -351,7 +363,7 @@ class TestGenerateGenericBlocks:
             {"entity_type": "skill", "path": "/skills/dup", "target_url": "https://a/"},
         ]
         # Pre-claim the path; the single generic must be dropped, not duplicated.
-        blocks = await self._generate(resources, {"/skill/skills/dup"})
+        blocks = await self._generate(resources, {"/skill/skills/dup/"})
         assert blocks == []
 
     async def test_invalid_target_skipped_but_others_render(self):

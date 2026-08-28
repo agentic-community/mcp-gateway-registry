@@ -470,6 +470,21 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             ("rum_allowed_hosts", "RUM Allowed Hosts", False),
         ],
     },
+    "gateway_generic_proxy": {
+        "title": "Gateway Generic Proxy",
+        "order": 29,
+        "fields": [
+            ("gateway_generic_proxy_enabled", "Generic Proxy Enabled", False),
+            ("gateway_canonical_namespace_enabled", "Canonical Namespace Enabled", False),
+            ("gateway_proxy_allow_private_targets", "Allow Private Targets", False),
+            ("gateway_generic_require_bearer_for_writes", "Require Bearer for Writes", False),
+            ("gateway_generic_client_max_body_size", "Client Max Body Size (nginx)", False),
+            ("generic_proxy_max_body_bytes", "Upstream Response Max Body Bytes", False),
+            ("gateway_generic_max_concurrency", "Max Concurrency", False),
+            ("gateway_generic_tls_verify", "TLS Verify", False),
+            ("gateway_egress_selfcheck_enabled", "Egress Self-Check Enabled", False),
+        ],
+    },
 }
 
 

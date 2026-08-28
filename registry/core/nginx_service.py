@@ -1863,7 +1863,15 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
         norm_path = path if path.startswith("/") else "/" + path
         entity_path = path.strip("/")
         proxy_target = f"{settings.auth_server_url.rstrip('/')}/proxy/{entity_type}/{entity_path}/"
-        location_path = f"/{entity_type}{norm_path}"
+        # Normalise to a trailing slash for the same reason as real and virtual
+        # servers (issue #1501): a bare `location /skill/foo` prefix-matches
+        # unrelated routes like `/skill/foobar`, hijacking them into this entity's
+        # /validate auth subrequest. `location /skill/foo/` only matches the
+        # subtree, and — paired with the trailing-slash proxy_pass target — appends
+        # a client sub-path cleanly onto the pinned base. It also makes the
+        # cross-block collision dedup exact-match correctly against the MCP/virtual
+        # location paths, which already carry a trailing slash.
+        location_path = f"/{entity_type}{norm_path}".rstrip("/") + "/"
         body_size = settings.gateway_generic_client_max_body_size
         return f"""
     # Proxied {entity_type}: {location_path}
