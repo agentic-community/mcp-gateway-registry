@@ -155,7 +155,7 @@ class LogtoProvider(AuthProvider):
                     claims = jwt.decode(
                         token,
                         signing_key,
-                        algorithms=["RS256"],
+                        algorithms=["ES384", "RS256"],
                         issuer=issuer,
                         audience=accepted_audiences,
                         options={"verify_exp": True, "verify_iat": True, "verify_aud": True},
@@ -227,7 +227,11 @@ class LogtoProvider(AuthProvider):
         # Logto sets the id_token 'aud' to the client that requested it.
         accepted_audiences = [self.client_id, self.m2m_client_id]
         return self._verify_id_token_with_jwks(
-            id_token, valid_issuers, accepted_audiences, expected_nonce=expected_nonce
+            id_token,
+            valid_issuers,
+            accepted_audiences,
+            expected_nonce=expected_nonce,
+            algorithms=["ES384", "RS256"],
         )
 
     def _validate_self_signed_token(self, token: str) -> dict[str, Any]:
@@ -384,7 +388,7 @@ class LogtoProvider(AuthProvider):
         params = {
             "client_id": self.client_id,
             "response_type": "code",
-            "scope": scope or "openid email profile offline_access",
+            "scope": scope or "openid offline_access",
             "redirect_uri": redirect_uri,
             "state": state,
         }

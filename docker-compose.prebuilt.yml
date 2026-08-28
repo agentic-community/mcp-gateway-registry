@@ -424,6 +424,9 @@ services:
     # Local build with the logto provider patch (swap-mcp-registry-idp-to-logto);
     # original: ${ECR_REGISTRY:-public.ecr.aws/p3v1o3c6}/auth-server:${AUTH_SERVER_VERSION:-latest}
     image: mcp-auth-server:logto
+    networks:
+      - default
+      - tokenvault-idp
     environment:
       - REGISTRY_URL=${REGISTRY_URL}
       # Request-source trust (audit client IP + OAuth external-URL host allowlist)
@@ -937,3 +940,8 @@ volumes:
   mongodb-config:
   mongodb-keyfile:
   pingfederate-data:
+
+networks:
+  tokenvault-idp:
+    external: true
+    name: tokenvault-idp_default
