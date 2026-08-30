@@ -156,9 +156,8 @@ providers:
     logout_url: "${LOGTO_EXTERNAL_URL}/oidc/session/end"
     # Logto: first-party apps must NOT request profile/email scopes
     # (full userinfo is returned without them; requesting them is rejected)
-    # Logto: first-party apps must not request email/profile; reserved scope
-    # "all" grants the full user profile (username, email, roles) in /oidc/me
-    scopes: ["openid", "offline_access", "all"]
+    # app must be first-party (is_third_party=false) for these scopes to be allowed
+    scopes: ["openid", "offline_access", "profile", "email", "roles"]
     response_type: "code"
     grant_type: "authorization_code"
     username_claim: "username"

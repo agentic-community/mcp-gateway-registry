@@ -388,7 +388,7 @@ class LogtoProvider(AuthProvider):
         params = {
             "client_id": self.client_id,
             "response_type": "code",
-            "scope": scope or "openid offline_access all",
+            "scope": scope or "openid offline_access profile email roles",
             "redirect_uri": redirect_uri,
             "state": state,
         }
