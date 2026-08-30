@@ -373,6 +373,8 @@ services:
       # Tool-level access control (Issue #1026)
       - MCP_TOOLS_LIST_FILTER_ENABLED=${MCP_TOOLS_LIST_FILTER_ENABLED:-true}
       - TOOL_FILTER_AUDIT_LOG_LEVEL=${TOOL_FILTER_AUDIT_LOG_LEVEL:-INFO}
+      # MCP proxy chain timeout (auth-server inner hop + nginx read timeout)
+      - MCP_PROXY_TIMEOUT=${MCP_PROXY_TIMEOUT:-30}
       # Custom entity types (admin-defined, schema-driven catalog types)
       - CUSTOM_ENTITY_TYPES_ENABLED=${CUSTOM_ENTITY_TYPES_ENABLED:-false}
       - CUSTOM_TYPE_CACHE_TTL_SECONDS=${CUSTOM_TYPE_CACHE_TTL_SECONDS:-60}
