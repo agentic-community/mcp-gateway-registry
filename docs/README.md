@@ -24,3 +24,7 @@ Markdown here in the repository.
 
 Add or edit Markdown files anywhere under `docs/`. Use repository-relative links so they resolve
 both on GitHub and in forks. No build step or navigation config is required.
+
+## Optional TOA register gate
+
+See [toa-optional-register-gate.md](toa-optional-register-gate.md).
