@@ -1371,5 +1371,13 @@ aws_registry_federation_enabled = true
 # Store the PEM private key in Secrets Manager, then reference its ARN here.
 # Generate: openssl ecparam -name prime256v1 -genkey -noout | aws secretsmanager create-secret --name mcp-signing-key --secret-string file:///dev/stdin
 # internal_signing_key_secret_arn = "arn:aws:secretsmanager:us-east-1:123456789:secret:mcp-signing-key-AbCdEf" # pragma: allowlist secret
-# internal_signing_key_id = "es256-1"
+# The kid stamped into ES256 tokens is derived automatically from the key's
+# RFC 7638 JWK thumbprint (stable per key, safe for rotation) -- no kid var.
+# reject_hs256_tokens applies to BOTH the auth-server and registry containers.
 # reject_hs256_tokens = false
+#
+# Optional scoped keys (each an ARN of an operator-provided Secrets Manager
+# secret; empty = SECRET_KEY fallback):
+# csrf_signing_key_secret_arn          = "" # pragma: allowlist secret
+# credential_encryption_key_secret_arn = "" # pragma: allowlist secret
+# session_token_enc_key_secret_arn     = "" # pragma: allowlist secret

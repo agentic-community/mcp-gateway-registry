@@ -38,6 +38,16 @@ logger = logging.getLogger(__name__)
 # rotation eventually takes effect and a stale key can't be trusted forever.
 _MAX_CACHE_STALENESS_SECONDS: int = 86400  # 24h
 
+# How long a kid confirmed-absent by a forced refresh is remembered as unknown,
+# so a stream of tokens carrying random/forged kid headers cannot amplify into
+# repeated forced JWKS fetches (each a 5s network call). Short enough that a
+# genuinely just-rotated kid is still picked up by the next normal TTL refresh.
+_UNKNOWN_KID_NEGATIVE_TTL_SECONDS: int = 30
+
+# Hard bound on the negative-cache size so an attacker streaming unique kids
+# cannot grow it without limit.
+_UNKNOWN_KID_CACHE_MAX: int = 4096
+
 
 class _InternalJwksCache:
     """Thread-safe TTL cache of the auth-server internal JWKS, indexed by kid."""
@@ -47,6 +57,28 @@ class _InternalJwksCache:
         self._keys_by_kid: dict[str, Any] = {}
         self._fetched_at: float = 0.0
         self._have_keys: bool = False
+        # kid -> time it was confirmed absent by a forced refresh (negative cache).
+        self._unknown_kids: dict[str, float] = {}
+
+    def _recently_unknown(self, kid: str, now: float) -> bool:
+        """Whether ``kid`` was confirmed absent within the negative-cache TTL.
+
+        Must be called with self._lock held.
+        """
+        ts = self._unknown_kids.get(kid)
+        return ts is not None and (now - ts) < _UNKNOWN_KID_NEGATIVE_TTL_SECONDS
+
+    def _mark_unknown(self, kid: str, now: float) -> None:
+        """Record ``kid`` as confirmed-absent, pruning/bounding the cache.
+
+        Must be called with self._lock held.
+        """
+        if len(self._unknown_kids) >= _UNKNOWN_KID_CACHE_MAX:
+            cutoff = now - _UNKNOWN_KID_NEGATIVE_TTL_SECONDS
+            self._unknown_kids = {k: t for k, t in self._unknown_kids.items() if t >= cutoff}
+            if len(self._unknown_kids) >= _UNKNOWN_KID_CACHE_MAX:
+                self._unknown_kids.clear()
+        self._unknown_kids[kid] = now
 
     def _fetch(self) -> dict[str, Any]:
         """Fetch and parse the JWKS into a {kid: key_object} map. Raises on failure."""
@@ -74,7 +106,9 @@ class _InternalJwksCache:
 
         Serves cached keys within the TTL. On a cache miss / expiry, refreshes
         once; if the target kid is still unknown after a fresh fetch, forces a
-        second refresh (handles a just-rotated key). On fetch failure, falls
+        second refresh (handles a just-rotated key) — unless that kid was
+        recently confirmed absent (negative cache), which fails fast without a
+        fetch to blunt random/forged-kid amplification. On fetch failure, falls
         back to the last known-good keys up to the max staleness bound.
         """
         now = time.time()
@@ -84,18 +118,35 @@ class _InternalJwksCache:
             fresh_enough = self._have_keys and (now - self._fetched_at) < ttl
             if fresh_enough and kid in self._keys_by_kid:
                 return self._keys_by_kid[kid]
+            # A kid confirmed absent very recently: fail fast, skip the fetch
+            # storm. A genuinely rotated kid is still caught once the normal TTL
+            # refresh below runs after the negative-cache entry expires.
+            if fresh_enough and self._recently_unknown(kid, now):
+                return None
 
         # Need a network fetch (expired, first use, or unknown kid).
         refreshed = self._refresh(now)
         if refreshed is not None and kid in refreshed:
+            with self._lock:
+                self._unknown_kids.pop(kid, None)
             return refreshed[kid]
 
         # Unknown kid after a successful refresh could mean a just-published
-        # rotation the previous fetch missed — force one more refresh.
+        # rotation the previous fetch missed — force one more refresh, unless we
+        # already confirmed this kid absent within the negative-cache window.
         if refreshed is not None and kid not in refreshed:
+            with self._lock:
+                if self._recently_unknown(kid, now):
+                    return None
             forced = self._refresh(time.time(), force=True)
             if forced is not None:
-                return forced.get(kid)
+                key = forced.get(kid)
+                with self._lock:
+                    if key is None:
+                        self._mark_unknown(kid, time.time())
+                    else:
+                        self._unknown_kids.pop(kid, None)
+                return key
 
         # Fetch failed — fall back to last known-good within staleness bound.
         with self._lock:

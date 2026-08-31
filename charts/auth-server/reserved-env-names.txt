@@ -123,3 +123,9 @@ RATE_LIMIT_BACKEND_TIMEOUT_MS
 # Chart-managed security constant: prevents AWS SDK IMDS fallback (rendered as a
 # static env: entry in deployment.yaml, not operator-tunable).
 AWS_EC2_METADATA_DISABLED
+# Internal asymmetric-signing / HS256 cutover (PR #1693). Path is chart-managed
+# (Secret volume mount); the cutover flag and session-encryption key are
+# rendered into the env/shared secret.
+INTERNAL_SIGNING_KEY_PATH
+REJECT_HS256_TOKENS
+SESSION_TOKEN_ENC_KEY

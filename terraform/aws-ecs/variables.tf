@@ -2159,10 +2159,22 @@ variable "internal_signing_key_secret_arn" {
   default     = ""
 }
 
-variable "internal_signing_key_id" {
-  description = "Key ID (kid) stamped into ES256-signed JWTs. Increment on rotation."
+variable "csrf_signing_key_secret_arn" {
+  description = "ARN of a Secrets Manager secret holding CSRF_SIGNING_KEY (registry-only CSRF token signing). Empty = SECRET_KEY fallback."
   type        = string
-  default     = "es256-1"
+  default     = ""
+}
+
+variable "credential_encryption_key_secret_arn" {
+  description = "ARN of a Secrets Manager secret holding CREDENTIAL_ENCRYPTION_KEY (registry-only backend credential encryption). Empty = SECRET_KEY fallback."
+  type        = string
+  default     = ""
+}
+
+variable "session_token_enc_key_secret_arn" {
+  description = "ARN of a Secrets Manager secret holding SESSION_TOKEN_ENC_KEY (id_token-at-rest AES-GCM; shared by auth-server + registry). Empty = SECRET_KEY fallback."
+  type        = string
+  default     = ""
 }
 
 variable "reject_hs256_tokens" {

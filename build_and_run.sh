@@ -388,13 +388,15 @@ ensure_secret AUTH_SERVER_NGINX_MARKER_SECRET 32
 # Live rotation: replace the file and auth-server detects the change (~60s).
 if [ ! -f signing-key.pem ]; then
     log "Generating ES256 signing key (signing-key.pem)..."
-    openssl ecparam -name prime256v1 -genkey -noout -out signing-key.pem 2>/dev/null || {
-        log "WARNING: Failed to generate signing key. Asymmetric signing will be disabled (HS256 fallback)."
-    }
-    if [ -f signing-key.pem ]; then
-        chmod 600 signing-key.pem
-        log "signing-key.pem generated (ES256 P-256). Mount into auth-server container."
+    if ! openssl ecparam -name prime256v1 -genkey -noout -out signing-key.pem; then
+        handle_error "Failed to generate ES256 signing key (openssl returned non-zero). Refusing to start: without a valid key the compose bind mount would create a directory at key.pem and auth-server would silently fall back to HS256."
     fi
+    if [ ! -s signing-key.pem ]; then
+        rm -f signing-key.pem
+        handle_error "ES256 signing key was not produced (signing-key.pem missing or empty). Refusing to start to avoid a silent HS256 fallback."
+    fi
+    chmod 600 signing-key.pem
+    log "signing-key.pem generated (ES256 P-256). Mount into auth-server container."
 else
     log "signing-key.pem already exists"
 fi

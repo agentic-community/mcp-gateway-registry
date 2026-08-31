@@ -29,6 +29,10 @@ app:
   # When deployed via mcp-gateway-registry-stack, the key is shared with registry.
   # Uncomment to use a specific key:
   # secretKey: "your-secure-key-here"
+  # Scoped session-token encryption key (shared with registry). Encrypts
+  # session-token payloads independently of SECRET_KEY. Leave empty to fall
+  # back to SECRET_KEY (default, unchanged behavior).
+  sessionTokenEncKey: "" # pragma: allowlist secret
   sessionCookieSecure: true
   # Session cookie Domain attribute. Leave empty to default to
   # ".<global.domain>" (valid for all subdomains of the deployment
@@ -353,8 +357,6 @@ signingKey:
   existingSecret: ""
   # Key within the Secret that holds the PEM data.
   secretKey: "key.pem"  # pragma: allowlist secret
-  # Key ID stamped into JWT headers (increment on rotation).
-  kid: "es256-1"
   # After all tokens have rotated to ES256 (>24h), set to true to
   # hard-reject legacy HS256 tokens. This closes the SECRET_KEY
   # token-forging window.

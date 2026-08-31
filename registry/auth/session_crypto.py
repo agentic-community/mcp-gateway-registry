@@ -44,8 +44,20 @@ def _derive_token_encryption_key() -> bytes:
     auth-server and registry). Falls back to SECRET_KEY for backwards
     compatibility during migration. Rotating either key invalidates
     stored id_tokens (acceptable — same blast radius as before).
+
+    When SESSION_TOKEN_ENC_KEY is explicitly set it is run through the
+    canonical weak-before-length validator (same as CSRF_SIGNING_KEY /
+    CREDENTIAL_ENCRYPTION_KEY) and fails closed on a weak/short value, so a
+    guessable key can never protect the id_token-at-rest encryption. The
+    SECRET_KEY fallback is already validated at process startup.
     """
-    secret = os.environ.get("SESSION_TOKEN_ENC_KEY") or os.environ.get("SECRET_KEY")
+    scoped = os.environ.get("SESSION_TOKEN_ENC_KEY")
+    if scoped:
+        from registry.common.secret_key import validate_signing_secret
+
+        secret = validate_signing_secret(scoped, "SESSION_TOKEN_ENC_KEY")
+    else:
+        secret = os.environ.get("SECRET_KEY")
     if not secret:
         raise RuntimeError(
             "SESSION_TOKEN_ENC_KEY or SECRET_KEY required for session token encryption"

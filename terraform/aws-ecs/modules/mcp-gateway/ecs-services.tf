@@ -524,10 +524,6 @@ module "ecs_service_auth" {
           value = "true"
         },
         {
-          name  = "INTERNAL_SIGNING_KEY_ID"
-          value = var.internal_signing_key_id
-        },
-        {
           name  = "REJECT_HS256_TOKENS"
           value = tostring(var.reject_hs256_tokens)
         },
@@ -576,6 +572,15 @@ module "ecs_service_auth" {
           {
             name  = "MONGODB_CONNECTION_STRING"
             value = var.mongodb_connection_string
+          }
+        ] : [],
+        # ES256 signing key path — set only when a key is delivered to the
+        # shared volume by the signing-key-init container (below). Empty ARN
+        # leaves it unset so the manager falls back to HS256 (zero-breaking).
+        var.internal_signing_key_secret_arn != "" ? [
+          {
+            name  = "INTERNAL_SIGNING_KEY_PATH"
+            value = "/etc/mcp-gateway/signing-key/key.pem"
           }
         ] : [],
         # Extra environment variables from user (Issue #1000)
@@ -668,10 +673,16 @@ module "ecs_service_auth" {
             name      = "METRICS_API_KEY"
             valueFrom = aws_secretsmanager_secret.metrics_api_key[0].arn
           }
+        ] : [],
+        var.session_token_enc_key_secret_arn != "" ? [
+          {
+            name      = "SESSION_TOKEN_ENC_KEY"
+            valueFrom = var.session_token_enc_key_secret_arn
+          }
         ] : []
       )
 
-      mountPoints = [
+      mountPoints = concat([
         {
           sourceVolume  = "mcp-logs"
           containerPath = "/app/logs"
@@ -682,7 +693,15 @@ module "ecs_service_auth" {
           containerPath = "/efs/auth_config"
           readOnly      = false
         }
-      ]
+        ],
+        var.internal_signing_key_secret_arn != "" ? [
+          {
+            sourceVolume  = "signing-key"
+            containerPath = "/etc/mcp-gateway/signing-key"
+            readOnly      = true
+          }
+        ] : []
+      )
 
       enable_cloudwatch_logging              = true
       cloudwatch_log_group_name              = "/ecs/${local.name_prefix}-auth-server"
@@ -695,6 +714,14 @@ module "ecs_service_auth" {
         retries     = 3
         startPeriod = 60
       }
+
+      # Wait for the init container to fetch + write the ES256 key before start.
+      dependencies = var.internal_signing_key_secret_arn != "" ? [
+        {
+          containerName = "signing-key-init"
+          condition     = "SUCCESS"
+        }
+      ] : []
     }
     },
     var.enable_observability ? {
@@ -728,10 +755,48 @@ module "ecs_service_auth" {
           condition     = "START"
         }]
       }
+    } : {},
+    # Fetch-at-boot delivery of the ES256 signing key: an init container reads
+    # the PEM from Secrets Manager (via the execution role, same mechanism as
+    # every other `secrets` entry) and writes it to a task-scoped shared volume
+    # that auth-server mounts read-only. Fargate cannot mount a Secrets Manager
+    # secret as a file, so this is the file-delivery path. Only created when a
+    # signing-key ARN is configured (otherwise auth-server stays on HS256).
+    var.internal_signing_key_secret_arn != "" ? {
+      signing-key-init = {
+        essential              = false
+        image                  = var.auth_server_image_uri
+        versionConsistency     = "disabled"
+        readonlyRootFilesystem = false
+
+        entrypoint = ["/bin/sh", "-c"]
+        command = [
+          "set -eu; umask 077; printf '%s' \"$SIGNING_KEY_PEM\" > /etc/mcp-gateway/signing-key/key.pem; chmod 600 /etc/mcp-gateway/signing-key/key.pem",
+        ]
+
+        secrets = [
+          {
+            name      = "SIGNING_KEY_PEM"
+            valueFrom = var.internal_signing_key_secret_arn
+          }
+        ]
+
+        mountPoints = [
+          {
+            sourceVolume  = "signing-key"
+            containerPath = "/etc/mcp-gateway/signing-key"
+            readOnly      = false
+          }
+        ]
+
+        enable_cloudwatch_logging              = true
+        cloudwatch_log_group_name              = "/ecs/${local.name_prefix}-auth-signing-key-init"
+        cloudwatch_log_group_retention_in_days = 30
+      }
     } : {}
   )
 
-  volume = {
+  volume = merge({
     mcp-logs = {
       efs_volume_configuration = {
         file_system_id     = module.efs.id
@@ -746,7 +811,13 @@ module "ecs_service_auth" {
         transit_encryption = "ENABLED"
       }
     }
-  }
+    },
+    # Task-scoped ephemeral volume shared between signing-key-init (writer) and
+    # auth-server (reader). No EFS config → local Fargate scratch, wiped on stop.
+    var.internal_signing_key_secret_arn != "" ? {
+      signing-key = {}
+    } : {}
+  )
 
   # No ALB attachment: the public auth (:8888) listener/target-group was removed
   # (registry internal-auth hardening). The auth-server is reached only via
@@ -1420,6 +1491,13 @@ module "ecs_service_registry" {
           name  = "INTERNAL_TOKEN_LEEWAY_SECONDS"
           value = tostring(var.internal_token_leeway_seconds)
         },
+        # Cutover lever mirrored on the registry (verifier) side, not just the
+        # auth-server (minter): the registry rejects legacy HS256 hop tokens
+        # only when this is set, so the flag must reach both containers.
+        {
+          name  = "REJECT_HS256_TOKENS"
+          value = tostring(var.reject_hs256_tokens)
+        },
         # Custom entity types (admin-defined, schema-driven catalog types)
         {
           name  = "CUSTOM_ENTITY_TYPES_ENABLED"
@@ -1980,6 +2058,24 @@ module "ecs_service_registry" {
           {
             name      = "METRICS_API_KEY"
             valueFrom = aws_secretsmanager_secret.metrics_api_key[0].arn
+          }
+        ] : [],
+        var.csrf_signing_key_secret_arn != "" ? [
+          {
+            name      = "CSRF_SIGNING_KEY"
+            valueFrom = var.csrf_signing_key_secret_arn
+          }
+        ] : [],
+        var.credential_encryption_key_secret_arn != "" ? [
+          {
+            name      = "CREDENTIAL_ENCRYPTION_KEY"
+            valueFrom = var.credential_encryption_key_secret_arn
+          }
+        ] : [],
+        var.session_token_enc_key_secret_arn != "" ? [
+          {
+            name      = "SESSION_TOKEN_ENC_KEY"
+            valueFrom = var.session_token_enc_key_secret_arn
           }
         ] : []
       )

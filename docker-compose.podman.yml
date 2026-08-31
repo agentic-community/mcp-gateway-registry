@@ -340,6 +340,7 @@ services:
       - CSRF_SIGNING_KEY=${CSRF_SIGNING_KEY:-}
       - CREDENTIAL_ENCRYPTION_KEY=${CREDENTIAL_ENCRYPTION_KEY:-}
       - SESSION_TOKEN_ENC_KEY=${SESSION_TOKEN_ENC_KEY:-}
+      - REJECT_HS256_TOKENS=${REJECT_HS256_TOKENS:-false}
     ports:
       - "80:8080"   # Map host 80 to container 8080 (non-root nginx)
       - "443:8443"  # Map host 443 to container 8443 (non-root nginx)
@@ -564,7 +565,6 @@ services:
       - INTERNAL_TOKEN_LEEWAY_SECONDS=${INTERNAL_TOKEN_LEEWAY_SECONDS:-5}
       # Asymmetric signing (ES256)
       - INTERNAL_SIGNING_KEY_PATH=${INTERNAL_SIGNING_KEY_PATH:-/etc/mcp-gateway/signing-key/key.pem}
-      - INTERNAL_SIGNING_KEY_ID=${INTERNAL_SIGNING_KEY_ID:-es256-1}
       - REJECT_HS256_TOKENS=${REJECT_HS256_TOKENS:-false}
       - SESSION_TOKEN_ENC_KEY=${SESSION_TOKEN_ENC_KEY:-}
     ports:

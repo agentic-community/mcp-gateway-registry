@@ -10,12 +10,22 @@ and treats the claims as the source of truth for identity/scopes/destination,
 ignoring inbound ``X-User`` / ``X-Scopes`` / ``X-Upstream-Url`` headers entirely.
 """
 
+# Resolve the shared reject-flag helper from self_signed_token, tolerating both
+# the package (auth_server.*) and standalone import contexts. Use importlib to
+# avoid a mypy no-redef warning on the dual-path fallback (see self_signed_token).
+import importlib as _importlib
 import logging
 import os
 import time
 
 import jwt as pyjwt
 from fastapi import HTTPException, Request, status
+
+try:
+    _sst = _importlib.import_module("auth_server.self_signed_token")
+except (ImportError, ModuleNotFoundError):
+    _sst = _importlib.import_module("self_signed_token")
+reject_hs256_tokens = _sst.reject_hs256_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -154,12 +164,14 @@ def _mint_internal_token(
         _isk = importlib.import_module("internal_signing_key")
 
     _km = _isk.get_internal_signing_key_manager()
-    if _km.is_available:
+    _material = _km.get_signing_material() if _km.is_available else None
+    if _material is not None:
+        _signing_key, _signing_kid = _material
         return pyjwt.encode(
             claims,
-            _km.get_signing_key(),
+            _signing_key,
             algorithm="ES256",
-            headers={"kid": _km.get_signing_kid()},
+            headers={"kid": _signing_kid},
         )
     else:
         secret_key = _get_secret_key()
@@ -183,7 +195,7 @@ def _decode_internal_token(
     try:
         header = pyjwt.get_unverified_header(token)
     except Exception as e:
-        raise pyjwt.InvalidTokenError("Malformed token")
+        raise pyjwt.InvalidTokenError("Malformed token") from e
 
     kid = header.get("kid")
 
@@ -222,7 +234,7 @@ def _decode_internal_token(
         )
     else:
         # HS256 legacy path
-        if os.environ.get("REJECT_HS256_TOKENS", "false").lower() == "true":
+        if reject_hs256_tokens():
             raise pyjwt.InvalidTokenError("HS256 internal tokens no longer accepted")
 
         secret_key = _get_secret_key()

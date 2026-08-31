@@ -23,6 +23,7 @@ Never logs token values, decoded claims, or group names.
 
 import logging
 import os
+from typing import Any
 
 import jwt as pyjwt
 
@@ -37,24 +38,38 @@ AUTH_METHOD_SELF_SIGNED: str = "self_signed"
 _MAX_TOKEN_BYTES: int = 8192
 
 
-def _get_secret_key() -> str:
-    """Return SECRET_KEY or raise if unset/empty/weak.
+# Canonical truthy set for env-flag parsing. Must match the registry-side
+# parser in registry/auth/proxied_token.py so REJECT_HS256_TOKENS is enforced
+# identically on both the minting (auth-server) and verifying (registry) sides.
+_TRUTHY_VALUES: tuple[str, ...] = ("1", "true", "yes", "on")
 
-    Uses the canonical validator to reject short (<32 chars) and known-weak
-    placeholder values. Fails closed — a weak SECRET_KEY cannot be used to
-    verify tokens.
+
+def reject_hs256_tokens() -> bool:
+    """Whether legacy HS256 tokens are hard-rejected (post-cutover lever).
+
+    Shared by the self-signed user-token verify path and the internal hop-token
+    minter/verify path so a single env value governs the whole auth-server.
     """
-    key = os.environ.get("SECRET_KEY", "")
-    if not key or not key.strip():
-        raise ValueError("SECRET_KEY is required for self-signed token validation")
-    # Validate strength — reject weak values that could be brute-forced
-    key = key.strip()
-    if len(key) < 32:
-        raise ValueError("SECRET_KEY is too short (minimum 32 characters)")
-    return key
+    return os.environ.get("REJECT_HS256_TOKENS", "false").strip().lower() in _TRUTHY_VALUES
 
 
-def _verify_hs256(token: str) -> dict:
+def _get_secret_key() -> str:
+    """Return the validated SECRET_KEY or raise on unset/empty/weak/short.
+
+    Runs the canonical validator (registry.common.secret_key.validate_secret_key),
+    which rejects unset/empty/whitespace, known-weak placeholder literals
+    (weak-check before length), and values shorter than 32 chars. Fails closed —
+    a weak SECRET_KEY cannot be used to verify tokens.
+    """
+    from registry.common.secret_key import validate_secret_key
+
+    try:
+        return validate_secret_key(os.environ.get("SECRET_KEY"))
+    except RuntimeError as e:
+        raise ValueError(str(e)) from e
+
+
+def _verify_hs256(token: str) -> dict[str, Any]:
     """Verify a token using HS256 (legacy path — SECRET_KEY).
 
     ONLY called when kid is absent (legacy tokens minted before asymmetric signing).
@@ -77,7 +92,7 @@ def _verify_hs256(token: str) -> dict:
     )
 
 
-def _verify_es256(token: str, kid: str) -> dict:
+def _verify_es256(token: str, kid: str) -> dict[str, Any]:
     """Verify a token using ES256 (asymmetric path — from key manager).
 
     ONLY called when kid is present. Looks up the public key by kid from the
@@ -120,7 +135,7 @@ def _verify_es256(token: str, kid: str) -> dict:
     )
 
 
-def verify_self_signed_user_token(token: str) -> dict:
+def verify_self_signed_user_token(token: str) -> dict[str, Any]:
     """Verify a self-signed (user-vended) JWT with kid-based algorithm dispatch.
 
     Handles both legacy HS256 tokens (no kid in header) and new ES256 tokens
@@ -169,7 +184,7 @@ def verify_self_signed_user_token(token: str) -> dict:
         )
         token_issuer = unverified_payload.get("iss", "")
     except Exception:
-        token_issuer = ""
+        token_issuer = ""  # nosec B105 - default issuer string, not a secret
 
     if token_issuer != JWT_ISSUER:
         raise ValueError(f"Token issuer mismatch (expected '{JWT_ISSUER}')")
@@ -184,7 +199,7 @@ def verify_self_signed_user_token(token: str) -> dict:
             # This closes the window where a leaked SECRET_KEY could forge tokens.
             # Keep this as a feature flag (not deletion) for one release so it's
             # revertable if issues arise.
-            if os.environ.get("REJECT_HS256_TOKENS", "false").lower() == "true":
+            if reject_hs256_tokens():
                 raise ValueError(
                     "HS256 tokens are no longer accepted (REJECT_HS256_TOKENS=true). "
                     "Generate a new token."
@@ -215,7 +230,7 @@ def verify_self_signed_user_token(token: str) -> dict:
         scopes = scope_value
 
     # Extract groups (string or list)
-    groups: list[str] = claims.get("groups", [])
+    groups: list[str] = claims.get("groups") or []
     if isinstance(groups, str):
         groups = [groups]
 

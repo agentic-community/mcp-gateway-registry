@@ -4904,9 +4904,9 @@ async def generate_user_token(
                 _isk_mod = importlib.import_module("internal_signing_key")
 
             _key_mgr = _isk_mod.get_internal_signing_key_manager()
-            if _key_mgr.is_available:
-                _signing_key = _key_mgr.get_signing_key()
-                _signing_kid = _key_mgr.get_signing_kid()
+            _material = _key_mgr.get_signing_material() if _key_mgr.is_available else None
+            if _material is not None:
+                _signing_key, _signing_kid = _material
                 access_token = jwt.encode(
                     jwt_claims,
                     _signing_key,

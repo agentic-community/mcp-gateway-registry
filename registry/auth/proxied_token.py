@@ -92,7 +92,12 @@ def _reject_hs256_tokens() -> bool:
     the cutover state. When true, a token with no ``kid`` (HS256) is rejected
     even if the signature would validate.
     """
-    return os.environ.get("REJECT_HS256_TOKENS", "false").lower() in ("1", "true", "yes", "on")
+    return os.environ.get("REJECT_HS256_TOKENS", "false").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
 
 
 def _decode_internal_jwt(token: str, audience: str) -> dict:
