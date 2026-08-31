@@ -76,8 +76,12 @@ def make_client(monkeypatch):
 
 
 def _claims(**over):
+    # Shape of a token minted by the current auth-server: the canonical vault id
+    # travels in ``egress_user``. ``sub`` (the login username) is present but is
+    # NOT a fallback for it -- the vend refuses to cross that namespace.
     base = {
         "sub": "alice",
+        "egress_user": "alice",
         "auth_method": "oauth2",
         "upstream_url": "https://api.githubcopilot.com/mcp",
     }
