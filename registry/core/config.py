@@ -666,6 +666,28 @@ class Settings(BaseSettings):
             "The cloud metadata address 169.254.169.254 is never permitted."
         ),
     )
+
+    # Trusted-IdP allowlist for the credential-bearing OAuth token endpoints used
+    # by per-user egress consent. Deliberately separate from ssrf_allowed_hosts:
+    # an operator proxy-target bypass must never relax a token POST, so this is
+    # its own opt-in, hosts-only, and defaults to empty (no behaviour change).
+    # Needed because a self-hosted IdP (Keycloak, Entra via Private Link, etc.)
+    # legitimately resolves to a private address, yet the gateway is already
+    # required to trust that same IdP for its own authentication via KEYCLOAK_URL.
+    egress_oauth_trusted_idp_hosts: str = Field(
+        default="",
+        description=(
+            "Comma-separated hostnames of operator-controlled OAuth/OIDC identity "
+            "providers whose token endpoints may resolve to private addresses "
+            "(e.g. 'keycloak.internal.example.com'). Applies ONLY to the "
+            "credentialed-OAuth profile used for egress token exchange. Hosts must "
+            "be named exactly; no CIDRs and no wildcards. HTTPS is still required, "
+            "answers are still resolved, classified and pinned, and cloud/workload "
+            "credential, metadata and link-local addresses are never permitted. "
+            "Keep this list tight: entries here receive client secrets, refresh "
+            "tokens and user assertions."
+        ),
+    )
     nginx_config_validation_required: bool = Field(
         default=False,
         description=(
