@@ -142,6 +142,27 @@ Affects only `with-gateway` deployments (nginx reverse proxy).
 
 ---
 
+## Group 4a — Gateway Generic Proxy (proxy any registry resource)
+
+Serve non-MCP registry entities (skills, agents, custom types) through the gateway. **Ships DISABLED** and fails closed. Before enabling `GATEWAY_GENERIC_PROXY_ENABLED` you MUST deploy the auth-server egress NetworkPolicy / security-group (the primary SSRF / DNS-rebind control — see [`charts/auth-server/templates/networkpolicy-egress.yaml`](../charts/auth-server/templates/networkpolicy-egress.yaml)); the auth-server runs a startup egress self-check and disables the hop if a cloud metadata IP is reachable. The 11 variables split by consuming process: 4 registry, 7 auth-server.
+
+| Parameter | Docker (`.env`) | Terraform (`.tfvars`) | Helm (`values.yaml`) | Purpose |
+|-----------|-----------------|-----------------------|----------------------|---------|
+| Enable generic proxy (registry) | `GATEWAY_GENERIC_PROXY_ENABLED` | `gateway_generic_proxy_enabled` | `registry.app.gatewayGenericProxyEnabled` | Master switch for generating generic-proxy nginx location blocks. Default `false`. Do not enable until the egress policy is deployed and registration-time validation + CSRF defenses are in place. |
+| Canonical namespace aliases (registry) | `GATEWAY_CANONICAL_NAMESPACE_ENABLED` | `gateway_canonical_namespace_enabled` | `registry.app.gatewayCanonicalNamespaceEnabled` | Emit `/entity_type/path` canonical blocks alongside legacy aliases. Default `false` until the `/validate` entity-derivation + canonical-alias minting land. |
+| Allow private proxy targets (registry) | `GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS` | `gateway_proxy_allow_private_targets` | `registry.app.gatewayProxyAllowPrivateTargets` | SSRF egress policy. When `false` (default), `proxy_target_url` hosts in loopback/private/reserved ranges are rejected. Link-local/metadata and the unspecified address are denied regardless. Set `true` only for trusted on-cluster targets. |
+| Generic block request-body limit (registry) | `GATEWAY_GENERIC_CLIENT_MAX_BODY_SIZE` | `gateway_generic_client_max_body_size` | `registry.app.gatewayGenericClientMaxBodySize` | nginx `client_max_body_size` for generic location blocks (inbound request body). Default `1m`. Distinct from the auth-server response cap below. |
+| Generic token TTL (auth-server) | `GENERIC_PROXY_TOKEN_TTL_SECONDS` | `generic_proxy_token_ttl_seconds` | `auth-server.app.genericProxyTokenTtlSeconds` | TTL (s) for the generic-proxy internal token. Default `30`. |
+| Generic response-buffer cap (auth-server) | `GENERIC_PROXY_MAX_BODY_BYTES` | `generic_proxy_max_body_bytes` | `auth-server.app.genericProxyMaxBodyBytes` | Max buffered upstream **response** body. Default `10485760` (10 MiB). Worst-case heap ≈ this × max concurrency. |
+| CSRF: require Bearer for writes (auth-server) | `GATEWAY_GENERIC_REQUIRE_BEARER_FOR_WRITES` | `gateway_generic_require_bearer_for_writes` | `auth-server.app.gatewayGenericRequireBearerForWrites` | When `true` (default), a state-changing verb on a generic route under session-cookie auth is refused (403); Bearer callers are unaffected. Relax only for a trusted same-site deployment. |
+| Startup egress self-check (auth-server) | `GATEWAY_EGRESS_SELFCHECK_ENABLED` | `gateway_egress_selfcheck_enabled` | `auth-server.app.gatewayEgressSelfcheckEnabled` | When `true` (default), probe-connects to the metadata IPs at startup; if reachable, disables the generic-proxy feature for the process (not pod readiness) and emits `gateway_egress_policy_unverified=1`. |
+| Generic hop TLS verify (auth-server) | `GATEWAY_GENERIC_TLS_VERIFY` | `gateway_generic_tls_verify` | `auth-server.app.gatewayGenericTlsVerify` | `true` = verify against system trust store (default); a filesystem path = custom CA bundle; `false` = disable verification (not recommended; startup WARNING). |
+| Pinned-target refresh interval (auth-server) | `GATEWAY_PROXY_PIN_REFRESH_SECONDS` | `gateway_proxy_pin_refresh_seconds` | `auth-server.app.gatewayProxyPinRefreshSeconds` | Interval (s) to re-resolve + re-validate pinned hostname targets (DNS-rebind mitigation). Default `300`. |
+| Generic hop concurrency cap (auth-server) | `GATEWAY_GENERIC_MAX_CONCURRENCY` | `gateway_generic_max_concurrency` | `auth-server.app.gatewayGenericMaxConcurrency` | Semaphore cap on in-flight generic requests (OOM guard). Default `32`. |
+| Egress NetworkPolicy (Helm only) | — | SG / VPC egress rules | `auth-server.egress.networkPolicy.enabled` (+ `allowedCidrs`) | The **required** SSRF layer-1 control. CIDR-aware, opt-in, disabled by default. Populate `allowedCidrs` for your cluster before enabling the feature. |
+
+---
+
 ## Group 5 — Registry API Auth (Static Tokens)
 
 Enterprise-perimeter auth for registry APIs without full IdP validation. See [`docs/registry-api-auth.md`](registry-api-auth.md).
@@ -760,6 +781,8 @@ shared in the stack `shared-secret`.
 | Registry internal vend URL | `EGRESS_REGISTRY_INTERNAL_URL` | `egress_registry_internal_url` | `auth-server.egressAuth.registryInternalUrl` | Auth-server → registry's dedicated internal vend listener (default `http://registry:8091`); a ClusterIP-only port / unpublished Compose port, never routed by the public Ingress. |
 | Egress internal listener port | — | — (hardcoded `8091` in the ECS Service Connect entry + SG rule) | `registry.egressAuth.internalPort` | Port of the registry's dedicated internal vend listener. Helm exposes it as a ClusterIP-only Service port; Compose leaves it unpublished; ECS advertises it via Service Connect (`registry:8091`). Topology value, not an app env var. |
 | Egress internal NetworkPolicy | — | — (the `auth_internal` security-group rule: auth-server → registry:8091) | `registry.egressAuth.internalNetworkPolicy.{enabled,fromNamespaceSelector,fromPodSelector}` | K8s NetworkPolicy gating the internal vend port to the auth-server pod. The ECS analogue is the security-group rule; Compose relies on the port being unpublished. Topology value, not an app env var. |
+| Credential encryption key **(secret)** | `EGRESS_CREDENTIAL_ENCRYPTION_KEY` | `egress_credential_encryption_key` | `registry.egressAuth.credentialEncryptionKey` | Application-layer AES-256-GCM root key (>= 32 chars). When set, `StoredToken`s are encrypted per-principal (HKDF-derived key) before reaching either backend; empty = plaintext at rest. Backend-independent; legacy plaintext entries re-encrypt on first read. Keep it **outside** the secret-store trust boundary it protects. Rotation is a destructive cutover today (single active key). |
+| Require encrypted (strict) | `EGRESS_CREDENTIAL_ENCRYPTION_REQUIRE_ENCRYPTED` | — (registry env) | — (registry `extraEnv`) | Terminal strict mode: once set (with the key), reads reject any lingering plaintext entry. Enable after migration. |
 | nginx marker secret **(secret)** | `AUTH_SERVER_NGINX_MARKER_SECRET` | `egress_nginx_marker_secret` | auto-generated in stack `shared-secret`; `*.egressAuth.markerSecret` (standalone) | Marker shared by registry + auth-server; required at startup (both refuse to start without it). |
 | Secrets Manager KMS key **(secret)** | `SECRETS_MANAGER_KMS_KEY_ID` | `egress_secrets_manager_kms_key_id` | `registry.egressAuth.secretsManager.kmsKeyId` | Optional CMK for the vault secrets (secrets-manager backend).     |
 | Secrets Manager path prefix | `SECRETS_MANAGER_PATH_PREFIX` | `egress_secrets_manager_path_prefix` | `registry.egressAuth.secretsManager.pathPrefix` | Secret name prefix; also scopes the ECS task IAM grant.           |
@@ -859,6 +882,24 @@ Application-level, identity/group/target-aware request limiting enforced at the 
 | Backend op timeout | `RATE_LIMIT_BACKEND_TIMEOUT_MS` | `rate_limit_backend_timeout_ms` | `*.app.rateLimiting.backendTimeoutMs` | Hard per-op timeout (ms) for each counter operation; a slow store fails fast into the fail-open/closed policy, never hanging `/validate`. Default `250`. |
 | User floor (per min) | `RATE_LIMIT_USER_FLOOR_PER_MIN` | `rate_limit_user_floor_per_min` | `registry.app.rateLimiting.userFloorPerMin` | Lockout safeguard read by the **registry** at group-definition config time: on windows `<= 60s` a group's `user_max_requests` must be `>=` this floor, else the PUT is rejected. Config-only (no API). Default `20`. |
 | Agent floor (per min) | `RATE_LIMIT_AGENT_FLOOR_PER_MIN` | `rate_limit_agent_floor_per_min` | `registry.app.rateLimiting.agentFloorPerMin` | Same as above for a group's `agent_max_requests`. Config-only (no API). Default `10`. |
+
+---
+
+## Group 33 — Gateway Generic Proxy
+
+Extends gateway reverse-proxying to non-MCP entities (skills, agents, custom entities) through a uniform auth-server hop. **Ships dark:** every flag defaults off/safe, so with `GATEWAY_GENERIC_PROXY_ENABLED=false` no generic-proxy nginx block is rendered, no generic token is minted, and zero extra per-tick DB queries are issued. Consumed by the `registry` (render + SSRF validation) and the `auth-server` (the `/proxy` hop). See [gateway generic proxy design](design/gateway-generic-proxy.md). The Terraform and Helm columns are blank pending the enabling slice that wires the runtime surfaces (this feature is dark today; a `.env` override is sufficient for Docker/local enablement and testing).
+
+| Parameter | Docker (`.env`) | Terraform (`.tfvars`) | Helm (`values.yaml`) | Purpose |
+|-----------|-----------------|-----------------------|----------------------|---------|
+| Generic proxy enabled | `GATEWAY_GENERIC_PROXY_ENABLED` | — (not yet wired) | — (not yet wired) | Master switch for generic-proxy blocks. Default `false` (ships dark). |
+| Canonical namespace enabled | `GATEWAY_CANONICAL_NAMESPACE_ENABLED` | — (not yet wired) | — (not yet wired) | Emit canonical `/entity_type/path` blocks alongside the legacy flat aliases. Placeholder for a later slice. Default `false`. |
+| Allow private targets | `GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS` | — (not yet wired) | — (not yet wired) | SSRF egress policy. `false` rejects loopback/private/reserved targets. Link-local/metadata/unspecified are denied regardless. Default `false`. |
+| Require Bearer for writes | `GATEWAY_GENERIC_REQUIRE_BEARER_FOR_WRITES` | — (not yet wired) | — (not yet wired) | CSRF defense: refuse a state-changing verb under ambient cookie auth (403 before any token mint). Default `true`. |
+| Client max body size | `GATEWAY_GENERIC_CLIENT_MAX_BODY_SIZE` | — (not yet wired) | — (not yet wired) | nginx `client_max_body_size` for generic blocks (inbound request body). nginx size token. Default `1m`. |
+| Upstream response max body | `GENERIC_PROXY_MAX_BODY_BYTES` | — (not yet wired) | — (not yet wired) | Bytes of upstream response the hop buffers before returning. Default `10485760` (10 MiB). |
+| Max concurrency | `GATEWAY_GENERIC_MAX_CONCURRENCY` | — (not yet wired) | — (not yet wired) | Semaphore cap on in-flight generic-hop requests (OOM guard). Default `32`. |
+| TLS verify | `GATEWAY_GENERIC_TLS_VERIFY` | — (not yet wired) | — (not yet wired) | Generic hop TLS verification: `true` / CA-bundle path / `false` (emits a startup WARNING). Default `true`. |
+| Egress self-check enabled | `GATEWAY_EGRESS_SELFCHECK_ENABLED` | — (not yet wired) | — (not yet wired) | Probe metadata IPs at startup; if reachable, disable the feature for the process (not readiness). Default `true`. |
 
 ---
 

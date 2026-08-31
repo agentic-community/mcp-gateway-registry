@@ -106,3 +106,42 @@ class TestEgressCrossFieldValidation:
         monkeypatch.setenv("ENVIRONMENT", "production")
         s = Settings(**_valid_egress_kwargs(secret_store_backend="openbao"))
         assert s.secret_store_backend == "openbao"
+
+
+@pytest.mark.unit
+@pytest.mark.core
+class TestCredentialEncryptionKeyValidation:
+    """@field_validator for EGRESS_CREDENTIAL_ENCRYPTION_KEY."""
+
+    def test_empty_disables_feature(self):
+        assert Settings(egress_credential_encryption_key="").egress_credential_encryption_key == ""
+
+    def test_strong_key_accepted(self):
+        key = "s" * 40
+        assert (
+            Settings(egress_credential_encryption_key=key).egress_credential_encryption_key == key
+        )
+
+    def test_short_key_rejected(self):
+        with pytest.raises(Exception) as exc:
+            Settings(egress_credential_encryption_key="tooshort")
+        assert "EGRESS_CREDENTIAL_ENCRYPTION_KEY" in str(exc.value)
+
+    @pytest.mark.parametrize(
+        "weak",
+        [
+            "change-me-change-me-change-me-change-me",
+            "this-is-a-placeholder-value-please-change",
+        ],
+    )
+    def test_placeholder_rejected_even_if_long(self, weak):
+        assert len(weak) >= 32
+        with pytest.raises(Exception) as exc:
+            Settings(egress_credential_encryption_key=weak)
+        assert "known-weak/placeholder" in str(exc.value)
+
+    def test_key_never_echoed_in_error(self):
+        secret = "supersecretplaceholderkeymaterialxxxxx"  # contains 'placeholder'
+        with pytest.raises(Exception) as exc:
+            Settings(egress_credential_encryption_key=secret)
+        assert secret not in str(exc.value)

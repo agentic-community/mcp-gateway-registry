@@ -175,6 +175,13 @@ def _log_startup_configuration() -> None:
 
     logger.info("=" * 60)
 
+    # Nudge operators about recommended-but-optional settings left unset (e.g. the
+    # egress credential encryption key when the vault is enabled). Same source of
+    # truth as the recommended-config metric and the System Config UI badge.
+    from registry.core.recommended_config import log_recommended_config_warnings
+
+    log_recommended_config_warnings(settings)
+
 
 def _initialize_deployment_metrics() -> None:
     """Initialize deployment mode Prometheus metrics.

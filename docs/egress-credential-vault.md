@@ -366,6 +366,8 @@ and `AUTH_SERVER_NGINX_MARKER_SECRET`.
 | `EGRESS_STATE_TTL_SECONDS` | `600` | Lifetime of the AEAD-encrypted OAuth consent state. |
 | `EGRESS_REGISTRY_INTERNAL_URL` | `http://registry:8091` | URL the auth-server uses to reach the registry's dedicated internal vend listener (never exposed to the host / public Ingress). |
 | `AUTH_SERVER_NGINX_MARKER_SECRET` | _(required)_ | Shared secret nginx force-sets on `/validate`; the auth-server only mints an mcp-proxy token when it matches. **Required at startup** (auth-server and registry refuse to start without it) and must be identical across both. Set a strong random value. **(secret)** |
+| `EGRESS_CREDENTIAL_ENCRYPTION_KEY` | `""` | Application-layer root key. When set (>= 32 chars), `StoredToken` payloads are AES-256-GCM encrypted under a per-principal HKDF-derived key before reaching either backend, so the vault holds ciphertext. Empty = plaintext at rest (legacy). Backend-independent; legacy plaintext entries are re-encrypted on first read. Must live **outside** the secret-store trust boundary it protects. **(secret)** |
+| `EGRESS_CREDENTIAL_ENCRYPTION_REQUIRE_ENCRYPTED` | `false` | Terminal strict mode. When `true` (and the key is set), reads **reject** any remaining legacy plaintext entry instead of accepting it, closing the plaintext-downgrade/injection hole against a write-capable backend. Enable only after read-repair has migrated all entries. |
 | `AWS_SECRETS_REGION` | `""` | AWS region (required when `SECRET_STORE_BACKEND=secrets-manager`). |
 | `SECRETS_MANAGER_KMS_KEY_ID` | `""` | Optional CMK for envelope encryption; empty uses the AWS-managed key. **(secret)** |
 | `SECRETS_MANAGER_PATH_PREFIX` | `mcp/egress` | Secret-name prefix; also scopes the ECS task IAM grant. |
@@ -707,6 +709,36 @@ Users can review and revoke their connections in the UI at **Connected Accounts*
 - **Secret-at-rest.** OAuth app client secrets are Fernet-encrypted with
   `SECRET_KEY`. Per-user tokens live only in the vault backend (OpenBao /
   Secrets Manager), never in the app database.
+- **Application-layer credential encryption (optional, defense in depth).** When
+  `EGRESS_CREDENTIAL_ENCRYPTION_KEY` is set, the whole `StoredToken` (access
+  token, refresh token, client_id, scopes, expiry/status metadata) is AES-256-GCM
+  encrypted in a common codec (`registry/secrets/credential_codec.py`) before it
+  reaches either backend, so Secrets Manager / OpenBao contain a versioned
+  ciphertext envelope, not usable credentials. A per-`(auth_method, user_id)`
+  key is derived from the root key with HKDF-SHA256 (the root key is never used
+  directly), and the AEAD associated data binds the full
+  `(auth_method, user_id, provider, server_path)` address — a ciphertext copied
+  to another user or server fails authentication; the envelope's
+  `version`/`algorithm`/`key_id` are bound into the AAD too, so metadata cannot
+  be tampered to steer decryption. Reads recognize both the new envelope and
+  legacy plaintext; a legacy entry is transparently re-encrypted on first read
+  (**read-repair**, a non-blocking compare-and-set — Secrets Manager under the
+  principal mutation lease, OpenBao via KV v2 `cas` — so a migration never
+  clobbers a concurrent token refresh), so an in-place upgrade migrates without
+  re-consent. A missing/wrong key **fails closed** — credentials are never
+  returned or re-persisted as plaintext, and no plaintext/key material is logged.
+  Set `EGRESS_CREDENTIAL_ENCRYPTION_REQUIRE_ENCRYPTED=true` after migration to
+  make reads **reject** any lingering plaintext (blocks a write-capable backend
+  from downgrading an envelope to plaintext or injecting a plaintext token).
+  **Key custody:** the root key must live outside the secret-store trust boundary
+  it protects; storing it in the same AWS account's Secrets Manager as the egress
+  credentials defeats the isolation. This protects confidentiality against
+  vault/storage compromise; it is not integrity against a compromised application
+  runtime that can read plaintext. **Rotation is a destructive cutover today**
+  (a single active key): changing the key makes existing ciphertext
+  undecryptable (fail-closed) and forces affected users to reconnect — the
+  envelope carries a `key_id` so a future multi-key keyring can decrypt-old /
+  encrypt-new without re-consent, but that keyring is not yet implemented.
 
 ---
 
@@ -725,6 +757,7 @@ Users can review and revoke their connections in the UI at **Connected Accounts*
 | Vend returns 401 from auth-server | Marker secret mismatch. Ensure `AUTH_SERVER_NGINX_MARKER_SECRET` matches on registry + auth-server, and nginx sets it on `/validate`. |
 | OpenBao reads fail with permission denied | The role token lapsed. The store re-authenticates and retries once; persistent failure means a real policy/role gap — verify the `mcp-egress` policy and the role binding to the registry ServiceAccount. |
 | `decrypt` errors on client secret | `SECRET_KEY` was rotated after the server's egress config was saved. Re-save the egress config with the client secret. |
+| Vend/list fails: "Egress credential failed authentication" or "is encrypted but ... not set" | `EGRESS_CREDENTIAL_ENCRYPTION_KEY` is missing, was changed, or does not match the key entries were encrypted under. The store fails closed rather than returning/overwriting plaintext. Restore the original key (rotation needs the old key available to decrypt existing entries). |
 
 ### Related documentation
 

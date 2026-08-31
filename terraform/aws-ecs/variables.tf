@@ -2183,6 +2183,79 @@ variable "internal_jwks_url" {
   default     = ""
 }
 
+variable "egress_credential_encryption_key" {
+  description = "Optional AES-256-GCM key (registry-only) used to encrypt per-user egress credentials at rest before they reach Secrets Manager / OpenBao. Empty disables encryption (legacy plaintext); existing deployments keep working unchanged. Never auto-generated."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+# =============================================================================
+# GATEWAY GENERIC-PROXY FEATURE (ships disabled by default)
+# =============================================================================
+
+# Registry container settings
+variable "gateway_generic_proxy_enabled" {
+  description = "Master switch for the gateway generic-proxy feature (proxying arbitrary resources). Off by default = no behavior change for existing deployments."
+  type        = bool
+  default     = false
+}
+
+variable "gateway_canonical_namespace_enabled" {
+  description = "Enable canonical namespace handling for generic-proxied entities. Off by default."
+  type        = bool
+  default     = false
+}
+
+variable "gateway_proxy_allow_private_targets" {
+  description = "Allow the generic proxy to reach private/internal network targets. Off by default to keep the SSRF egress guard fail-closed."
+  type        = bool
+  default     = false
+}
+
+variable "gateway_generic_client_max_body_size" {
+  description = "Maximum client request body size accepted by the generic-proxy nginx location (nginx client_max_body_size syntax, e.g. '1m')."
+  type        = string
+  default     = "1m"
+}
+
+# Auth-server container settings
+variable "generic_proxy_token_ttl_seconds" {
+  description = "Lifetime (seconds) of the auth-server-minted generic-proxy internal token; the replay-window cap."
+  type        = number
+  default     = 30
+}
+
+variable "generic_proxy_max_body_bytes" {
+  description = "Upper bound (in bytes) on a generic-proxy upstream response body that the auth-server hop will buffer. Default 10485760 (10 MiB)."
+  type        = number
+  default     = 10485760
+}
+
+variable "gateway_generic_require_bearer_for_writes" {
+  description = "Require a bearer token for write (non-GET) requests through the generic proxy. On by default (fail-closed)."
+  type        = bool
+  default     = true
+}
+
+variable "gateway_egress_selfcheck_enabled" {
+  description = "Enable the egress self-check that validates outbound connectivity before enabling generic-proxy targets. On by default (fail-closed)."
+  type        = bool
+  default     = true
+}
+
+variable "gateway_generic_tls_verify" {
+  description = "Whether the generic proxy verifies upstream TLS certificates. Defaults to 'true'; set to 'false' only for trusted internal targets with self-signed certs."
+  type        = string
+  default     = "true"
+}
+
+variable "gateway_proxy_pin_refresh_seconds" {
+  description = "Interval (seconds) at which the generic proxy refreshes pinned upstream resolution/certificate data."
+  type        = number
+  default     = 300
+}
+
 variable "internal_jwks_cache_ttl_seconds" {
   description = "How long the registry caches the internal JWKS before re-fetching (caps kid-rotation propagation)."
   type        = number
@@ -2193,4 +2266,10 @@ variable "reject_hs256_tokens" {
   description = "Hard-reject legacy HS256 tokens. Enable only after all tokens have rotated to ES256 (>24h after signing key deployment)."
   type        = bool
   default     = false
+}
+
+variable "gateway_generic_max_concurrency" {
+  description = "Maximum number of concurrent in-flight generic-proxy requests handled by the auth-server."
+  type        = number
+  default     = 32
 }

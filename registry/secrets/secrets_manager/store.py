@@ -18,6 +18,7 @@ from typing import Protocol
 
 from registry.egress_auth.schemas import StoredToken
 from registry.secrets import keys
+from registry.secrets.credential_codec import CredentialCodec
 from registry.secrets.interfaces import SecretStoreBase, SecretStoreError
 
 logger = logging.getLogger(__name__)
@@ -76,6 +77,7 @@ class SecretsManagerStore(SecretStoreBase):
         mutation_lease: MutationLease | None = None,
         target_payload_bytes: int = _DEFAULT_TARGET_BYTES,
         max_shards: int = _DEFAULT_MAX_SHARDS,
+        codec: CredentialCodec | None = None,
     ) -> None:
         if not 1024 <= target_payload_bytes <= _AWS_SECRET_VALUE_MAX_BYTES:
             raise ValueError("target_payload_bytes must be between 1024 and 65536")
@@ -89,6 +91,10 @@ class SecretsManagerStore(SecretStoreBase):
         self._max_shards = max_shards
         self._local_mutation_lock = asyncio.Lock()
         self._request_limit = asyncio.Semaphore(_MAX_PARALLEL_REQUESTS)
+        self._codec = codec or CredentialCodec(root_key=None)
+        # In-flight non-blocking read-repair migrations (retained so they are
+        # not GC'd; awaited by tests).
+        self._repair_tasks: set[asyncio.Task] = set()
 
     def _secret_name(self, auth_method: str, user_id: str) -> str:
         return f"{self._prefix}/{keys.user_principal(auth_method, user_id)}"
@@ -439,7 +445,8 @@ class SecretsManagerStore(SecretStoreBase):
         token: StoredToken,
     ) -> None:
         root_name = self._secret_name(auth_method, user_id)
-        await self._mutate(root_name, keys.map_key(provider, server_path), token.model_dump())
+        document = self._codec.encode(auth_method, user_id, provider, server_path, token)
+        await self._mutate(root_name, keys.map_key(provider, server_path), document)
 
     async def _read_with_retry(self, operation: Callable):
         """Run a lock-free read, retrying if it races an overflow generation cleanup.
@@ -464,7 +471,7 @@ class SecretsManagerStore(SecretStoreBase):
                     _STALE_READ_RETRIES,
                 )
 
-    async def _get_token_once(self, root_name: str, key: str) -> StoredToken | None:
+    async def _get_raw_once(self, root_name: str, key: str) -> dict | None:
         root = await self._call(self._get_document, root_name)
         if root is None:
             return None
@@ -474,7 +481,7 @@ class SecretsManagerStore(SecretStoreBase):
         else:
             bucket = self._bucket(key, meta["bucket_count"])
             raw = (await self._read_shard(root_name, meta, bucket)).get(key)
-        return StoredToken(**raw) if raw is not None else None
+        return raw if raw is not None else None
 
     async def get_token(
         self,
@@ -485,7 +492,69 @@ class SecretsManagerStore(SecretStoreBase):
     ) -> StoredToken | None:
         root_name = self._secret_name(auth_method, user_id)
         key = keys.map_key(provider, server_path)
-        return await self._read_with_retry(lambda: self._get_token_once(root_name, key))
+        raw = await self._read_with_retry(lambda: self._get_raw_once(root_name, key))
+        if raw is None:
+            return None
+        token = self._codec.decode(auth_method, user_id, provider, server_path, raw)
+        if self._codec.needs_migration(raw):
+            self._schedule_repair(auth_method, user_id, provider, server_path, raw, token)
+        return token
+
+    def _schedule_repair(
+        self,
+        auth_method: str,
+        user_id: str,
+        provider: str,
+        server_path: str,
+        expected_plaintext: dict,
+        token: StoredToken,
+    ) -> None:
+        """Fire-and-forget a read-repair migration.
+
+        Non-blocking so a legacy read never blocks the vend hop on the
+        principal mutation lease (which can wait up to _LEASE_WAIT_SECONDS). The
+        task set retains a reference so it is not garbage-collected.
+        """
+        task = asyncio.ensure_future(
+            self._migrate(auth_method, user_id, provider, server_path, expected_plaintext, token)
+        )
+        self._repair_tasks.add(task)
+        task.add_done_callback(self._repair_tasks.discard)
+
+    async def _migrate(
+        self,
+        auth_method: str,
+        user_id: str,
+        provider: str,
+        server_path: str,
+        expected_plaintext: dict,
+        token: StoredToken,
+    ) -> None:
+        """Re-encrypt a legacy plaintext entry, compare-and-set under the lease.
+
+        Runs the full read-modify-write under the principal mutation lease and
+        rewrites the entry ONLY if it is still byte-identical to the legacy
+        plaintext originally read. A concurrent refresh/consent commit (always an
+        envelope once encryption is enabled) changes the value, so this skips it
+        rather than rolling a freshly-refreshed token back to the stale one.
+        Best-effort: any failure is logged and retried on the next read.
+        """
+        root_name = self._secret_name(auth_method, user_id)
+        key = keys.map_key(provider, server_path)
+        encrypted = self._codec.encode(auth_method, user_id, provider, server_path, token)
+        try:
+            async with self._mutation_guard(root_name) as lease_state:
+                root = await self._call(self._get_document, root_name)
+                entries = await self._load_entries(root_name, root)
+                if entries.get(key) != expected_plaintext:
+                    return  # rewritten/migrated concurrently -> do not clobber
+                entries[key] = encrypted
+                await self._commit_entries(root_name, entries, root, lease_state)
+        except Exception:
+            logger.warning(
+                "Secrets Manager read-repair re-encryption failed for a legacy entry",
+                exc_info=True,
+            )
 
     async def delete_token(
         self,
@@ -497,21 +566,15 @@ class SecretsManagerStore(SecretStoreBase):
         root_name = self._secret_name(auth_method, user_id)
         await self._mutate(root_name, keys.map_key(provider, server_path), None)
 
-    async def _list_for_user_once(self, root_name: str) -> list[tuple[str, str, StoredToken]]:
+    async def _list_raw_once(self, root_name: str) -> list[tuple[str, str, dict]]:
         root = await self._call(self._get_document, root_name)
         entries = await self._load_entries(root_name, root)
-        out: list[tuple[str, str, StoredToken]] = []
+        out: list[tuple[str, str, dict]] = []
         for key, raw in entries.items():
             provider_enc, delimiter, server_enc = key.partition(keys.MAP_KEY_DELIMITER)
             if not delimiter or not provider_enc or not server_enc:
                 raise SecretStoreError("Secrets Manager egress map key is malformed")
-            out.append(
-                (
-                    keys.decode_segment(provider_enc),
-                    keys.decode_segment(server_enc),
-                    StoredToken(**raw),
-                )
-            )
+            out.append((keys.decode_segment(provider_enc), keys.decode_segment(server_enc), raw))
         return out
 
     async def list_for_user(
@@ -520,4 +583,11 @@ class SecretsManagerStore(SecretStoreBase):
         user_id: str,
     ) -> list[tuple[str, str, StoredToken]]:
         root_name = self._secret_name(auth_method, user_id)
-        return await self._read_with_retry(lambda: self._list_for_user_once(root_name))
+        rows = await self._read_with_retry(lambda: self._list_raw_once(root_name))
+        out: list[tuple[str, str, StoredToken]] = []
+        for provider, server_path, raw in rows:
+            token = self._codec.decode(auth_method, user_id, provider, server_path, raw)
+            if self._codec.needs_migration(raw):
+                self._schedule_repair(auth_method, user_id, provider, server_path, raw, token)
+            out.append((provider, server_path, token))
+        return out

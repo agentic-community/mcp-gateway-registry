@@ -431,6 +431,10 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             ("egress_state_ttl_seconds", "OAuth State TTL (s)", False),
             ("egress_registry_internal_url", "Registry Internal Vend URL", False),
             ("egress_obo_allowed_audiences", "OBO Allowed Audiences", False),
+            # application-layer credential encryption (key is masked; only its
+            # presence/absence is shown, never the value)
+            ("egress_credential_encryption_key", "Credential Encryption Key", True),
+            ("egress_credential_require_encrypted", "Require Encrypted (strict)", False),
             # secrets-manager backend
             ("secrets_manager_kms_key_id", "Secrets Manager KMS Key ID", True),
             ("secrets_manager_path_prefix", "Secrets Manager Path Prefix", False),
@@ -469,6 +473,21 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
         "fields": [
             ("rum_snippet_b64", "RUM Snippet (base64)", True),
             ("rum_allowed_hosts", "RUM Allowed Hosts", False),
+        ],
+    },
+    "gateway_generic_proxy": {
+        "title": "Gateway Generic Proxy",
+        "order": 29,
+        "fields": [
+            ("gateway_generic_proxy_enabled", "Generic Proxy Enabled", False),
+            ("gateway_canonical_namespace_enabled", "Canonical Namespace Enabled", False),
+            ("gateway_proxy_allow_private_targets", "Allow Private Targets", False),
+            ("gateway_generic_require_bearer_for_writes", "Require Bearer for Writes", False),
+            ("gateway_generic_client_max_body_size", "Client Max Body Size (nginx)", False),
+            ("generic_proxy_max_body_bytes", "Upstream Response Max Body Bytes", False),
+            ("gateway_generic_max_concurrency", "Max Concurrency", False),
+            ("gateway_generic_tls_verify", "TLS Verify", False),
+            ("gateway_egress_selfcheck_enabled", "Egress Self-Check Enabled", False),
         ],
     },
 }
@@ -675,7 +694,19 @@ def _build_config_response() -> dict[str, Any]:
         "groups": groups,
         "total_groups": len(groups),
         "is_local_dev": settings.is_local_dev,
+        # Recommended-but-optional settings that apply to this deployment, with
+        # their configured status, so the UI can badge any that are unset. Sourced
+        # from registry.core.recommended_config (same source as the startup warning
+        # and the recommended-config metric). Never contains secret values.
+        "recommendations": _build_recommendations(),
     }
+
+
+def _build_recommendations() -> list[dict[str, Any]]:
+    """Return applicable recommended-config entries with their configured status."""
+    from registry.core.recommended_config import evaluate_recommendations
+
+    return evaluate_recommendations(settings)
 
 
 # ---------------------------------------------------------------------------

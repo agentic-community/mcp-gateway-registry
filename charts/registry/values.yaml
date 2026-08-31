@@ -305,6 +305,14 @@ app:
   customTypeCacheTtlSeconds: 60 # TTL (s) for the in-process custom-type descriptor cache
   maxCustomRecordsPerType: 1000 # Soft cap on records per type (0 = unlimited); best-effort, rejects create at cap
   maxCustomTypes: 50 # Cap on number of custom types (0 = unlimited); rejects type create at limit
+  # Gateway generic-proxy feature (registry-consumed). Ships DISABLED. Do NOT
+  # enable gatewayGenericProxyEnabled until the network egress policy (SSRF layer 1)
+  # is deployed and the registration-time validation + CSRF defenses are in place.
+  # The seven auth-server-consumed knobs live in the auth-server chart.
+  gatewayGenericProxyEnabled: false # Master switch for generic-proxy nginx blocks
+  gatewayCanonicalNamespaceEnabled: false # Emit /entity_type/path canonical aliases
+  gatewayProxyAllowPrivateTargets: false # Allow private/loopback proxy targets (metadata always denied)
+  gatewayGenericClientMaxBodySize: "1m" # nginx client_max_body_size for generic blocks
   # Registry-UI internal token verification (the /api/ hop). The auth-server mints
   # the token (using its own INTERNAL_TOKEN_TTL_SECONDS); the registry verifies it
   # and uses the leeway below. Not secrets -- plain env. See docs/unified-parameter-reference.md.
@@ -525,6 +533,13 @@ egressAuth:
   # When empty, a shape rule applies: the target must be an internal app audience
   # (api:// App ID URI or bare client-id/GUID), never an https host URL.
   oboAllowedAudiences: ""
+  # Application-layer AES-256-GCM root key for the per-user egress credential
+  # vault (issue #1665). Registry-only SECRET; injected into the registry env
+  # secret only when non-empty. >=32 chars recommended. Keep this OUTSIDE the
+  # secret-store trust boundary (Secrets Manager / OpenBao) so a compromise of
+  # the store alone does not yield plaintext egress tokens. Empty = disabled
+  # (legacy plaintext storage), so existing deployments keep working unchanged.
+  credentialEncryptionKey: ""
   # nginx marker secret. REQUIRED for standalone deployment (chart render fails
   # if empty) -- it guards all mcp-proxy token minting and the app requires it
   # at startup. Set a strong random value, identical to auth-server's. In the

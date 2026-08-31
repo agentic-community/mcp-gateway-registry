@@ -344,6 +344,19 @@ module "mcp_gateway" {
   internal_jwks_url                    = var.internal_jwks_url
   internal_jwks_cache_ttl_seconds      = var.internal_jwks_cache_ttl_seconds
 
+  # Gateway generic-proxy feature (ships disabled by default)
+  gateway_generic_proxy_enabled             = var.gateway_generic_proxy_enabled
+  gateway_canonical_namespace_enabled       = var.gateway_canonical_namespace_enabled
+  gateway_proxy_allow_private_targets       = var.gateway_proxy_allow_private_targets
+  gateway_generic_client_max_body_size      = var.gateway_generic_client_max_body_size
+  generic_proxy_token_ttl_seconds           = var.generic_proxy_token_ttl_seconds
+  generic_proxy_max_body_bytes              = var.generic_proxy_max_body_bytes
+  gateway_generic_require_bearer_for_writes = var.gateway_generic_require_bearer_for_writes
+  gateway_egress_selfcheck_enabled          = var.gateway_egress_selfcheck_enabled
+  gateway_generic_tls_verify                = var.gateway_generic_tls_verify
+  gateway_proxy_pin_refresh_seconds         = var.gateway_proxy_pin_refresh_seconds
+  gateway_generic_max_concurrency           = var.gateway_generic_max_concurrency
+
   # Custom entity types (admin-defined, schema-driven catalog types)
   custom_entity_types_enabled   = var.custom_entity_types_enabled
   custom_type_cache_ttl_seconds = var.custom_type_cache_ttl_seconds
@@ -429,6 +442,7 @@ module "mcp_gateway" {
   egress_nginx_marker_secret         = var.egress_nginx_marker_secret
   egress_secrets_manager_kms_key_id  = var.egress_secrets_manager_kms_key_id
   egress_secrets_manager_path_prefix = var.egress_secrets_manager_path_prefix
+  egress_credential_encryption_key   = var.egress_credential_encryption_key
 
   # Wait for S3 bucket policy to propagate (30s delay)
   # This prevents "Access Denied" errors when ALB tests write permissions
