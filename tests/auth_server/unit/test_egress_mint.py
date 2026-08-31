@@ -152,6 +152,67 @@ class TestCanonicalEgressUserPaths:
         }
         assert server._canonical_egress_user(vr) == "00000000-sub-attacker"
 
+    def test_self_signed_without_egress_user_is_empty_not_the_username_sub(self):
+        # A gateway-minted self-signed USER token sets sub=login username by
+        # construction (on Keycloak that is the user's email). If the egress_user
+        # claim is absent, falling through to that sub keys the vault on the
+        # USERNAME namespace while the browser-consent path wrote the OIDC sub --
+        # one human, two buckets, and the vend silently reads the empty one ("0
+        # tools", nothing logged). Resolution must fail closed instead.
+        vr = {
+            "method": server.AUTH_METHOD_SELF_SIGNED,
+            "username": "alice@example.com",
+            "data": {"sub": "alice@example.com", "auth_method": "oauth2"},
+        }
+        assert server._canonical_egress_user(vr) == ""
+
+    def test_self_signed_without_egress_user_ignores_every_username_candidate(self):
+        # None of the remaining candidates (data.subject, top-level sub, username)
+        # is an OIDC sub on this token type either -- all of them are the login
+        # handle -- so each must be refused, not just data.sub.
+        vr = {
+            "method": server.AUTH_METHOD_SELF_SIGNED,
+            "sub": "alice@example.com",
+            "username": "alice@example.com",
+            "data": {"subject": "alice@example.com"},
+        }
+        assert server._canonical_egress_user(vr) == ""
+
+    def test_self_signed_with_egress_user_still_resolves(self):
+        # REGRESSION: fail-closed must apply ONLY when the claim is missing. The
+        # normal, correctly-minted self-signed token keeps resolving to the OIDC
+        # sub even though its own sub/username say otherwise.
+        vr = {
+            "method": server.AUTH_METHOD_SELF_SIGNED,
+            "username": "alice@example.com",
+            "data": {"egress_user": "00000000-sub-alice", "sub": "alice@example.com"},
+        }
+        assert server._canonical_egress_user(vr) == "00000000-sub-alice"
+
+    def test_non_self_signed_oidc_chain_unchanged(self):
+        # REGRESSION: the fail-closed rule is scoped to self_signed. An IdP-issued
+        # bearer / cookie session still resolves data.sub then data.subject, byte
+        # for byte as before.
+        bearer_vr = {
+            "method": "keycloak",
+            "username": "alice@example.com",
+            "data": {"sub": "oidc-1"},
+        }
+        cookie_vr = {
+            "method": "session_cookie",
+            "username": "alice@example.com",
+            "data": {"subject": "oidc-1", "auth_method": "oauth2"},
+        }
+        assert server._canonical_egress_user(bearer_vr) == "oidc-1"
+        assert server._canonical_egress_user(cookie_vr) == "oidc-1"
+
+    def test_non_oidc_caller_still_falls_back_to_username(self):
+        # REGRESSION: a non-OIDC, non-self-signed caller with no sub anywhere keeps
+        # its pre-existing username bucket -- documented behavior that must not
+        # change (only the self_signed case changes).
+        vr = {"method": "network-trusted", "username": "svc-account", "data": {}}
+        assert server._canonical_egress_user(vr) == "svc-account"
+
 
 @pytest.mark.unit
 class TestAuditIdentityDisplay:

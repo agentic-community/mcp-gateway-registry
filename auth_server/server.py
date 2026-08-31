@@ -319,6 +319,15 @@ def _canonical_egress_user(validation_result: dict) -> str:
          so it wins over the self-signed token's username ``sub`` -- but ONLY when
          the token is ``self_signed`` (minted by this gateway); it is ignored on
          any other method so an external issuer cannot inject a vault key.
+      1b. On a ``self_signed`` token WITHOUT ``egress_user``, resolution STOPS and
+         returns ``""``. Steps 2-5 below would resolve the login username (that
+         token's ``sub`` is the username by construction, and on Keycloak the
+         login username is the user's email), which is a DIFFERENT identifier
+         namespace from the OIDC sub the consent path wrote. Crossing namespaces
+         silently keys the vault on a second, parallel identity for the same
+         human -> the vend reads an empty bucket and every per-user egress server
+         returns 0 tools with nothing logged. Fail closed instead; the caller
+         re-mints a token that carries the claim.
       2. ``data.sub`` -- the raw IdP subject. Bearer paths expose the verified
          claims here; the cookie path carries the sub persisted into the session
          at login (see create_session ``subject``).
@@ -326,6 +335,8 @@ def _canonical_egress_user(validation_result: dict) -> str:
       4. top-level ``sub`` -- direct-token paths that surface it there.
       5. ``username`` -- fallback for callers with no sub (keeps pre-existing
          non-OIDC behavior unchanged; only OIDC callers change bucket).
+
+    Steps 2-5 are unchanged for every non-``self_signed`` caller.
     """
     data = validation_result.get("data") or {}
     # ``egress_user`` is an identity-keying claim -- it selects which per-user
@@ -337,12 +348,15 @@ def _canonical_egress_user(validation_result: dict) -> str:
     # never set ``egress_user``, so gating it here is a no-op for them and keeps
     # the consent-write path resolving on ``sub``/``subject`` unchanged.
     if validation_result.get("method") == AUTH_METHOD_SELF_SIGNED:
-        egress_user = data.get("egress_user")
-    else:
-        egress_user = None
+        # No ``egress_user`` on a token this gateway minted itself means the claim
+        # was never stamped (a token minted before the claim existed, or a mint
+        # path that failed to resolve it). The remaining candidates below are the
+        # LOGIN USERNAME for this token type, not the OIDC sub -- a different
+        # identifier namespace -- so returning one of them would silently key the
+        # vault on a second identity for the same human. Fail closed.
+        return data.get("egress_user") or ""
     return (
-        egress_user
-        or data.get("sub")
+        data.get("sub")
         or data.get("subject")
         or validation_result.get("sub")
         or validation_result.get("username")

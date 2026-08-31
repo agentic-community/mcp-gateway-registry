@@ -297,6 +297,14 @@ initiate, the OAuth callback's account-swap guard, and list/disconnect — key o
 this one value.
 
 Non-OIDC callers with no `sub` fall back to the username and are unaffected.
+Two places deliberately fail closed rather than cross identifier namespaces: a
+gateway-minted `self_signed` token with no `egress_user` claim resolves to the
+empty string (its `sub` is the login username by construction, not the OIDC sub),
+and the vend refuses a per-user caller whose `egress_user` claim is empty,
+logging a warning instead of keying on that token's `sub`. Both make the
+otherwise-silent "consent succeeds, then 0 tools" failure visible; a token
+minted before the claim existed is refused for at most one token lifetime and
+the next mint carries the claim.
 `auth_method` still canonicalizes across IdP methods (see below), so the full
 key is stable regardless of how the same human authenticated.
 
