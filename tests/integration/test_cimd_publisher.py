@@ -6,12 +6,12 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from registry.api.wellknown_routes import router as wellknown_router
+from registry.api.wellknown_routes import cimd_router
 
 pytestmark = [pytest.mark.integration]
 
 TEST_URL = "https://mcpgateway.test"
-CIMD_PATH = "/.well-known/mcp-client-metadata"
+CIMD_PATH = "/oauth/client-metadata.json"
 
 
 def _app(monkeypatch, **overrides) -> FastAPI:
@@ -20,6 +20,7 @@ def _app(monkeypatch, **overrides) -> FastAPI:
 
     class _Stub:
         registry_url = TEST_URL
+        egress_oauth_callback_base = TEST_URL
         mcp_https_required = True
         cimd_publisher_enabled = True
         cimd_cache_ttl = 3600
@@ -36,7 +37,7 @@ def _app(monkeypatch, **overrides) -> FastAPI:
     monkeypatch.setattr(om, "settings", stub)
 
     app = FastAPI()
-    app.include_router(wellknown_router, prefix="/.well-known")
+    app.include_router(cimd_router)
     return app
 
 
@@ -109,23 +110,39 @@ def test_field_order_is_stable(monkeypatch):
     ]
 
 
+def test_client_id_uses_egress_callback_base_over_registry_url(monkeypatch):
+    """client_id and the default redirect derive from the egress OAuth callback
+    base, not registry_url -- so a deployment whose external callback host differs
+    from registry_url still publishes a reachable client_id/redirect (issue #992)."""
+    client = TestClient(_app(monkeypatch, egress_oauth_callback_base="https://callback.test"))
+    doc = client.get(CIMD_PATH).json()
+    assert doc["client_id"] == f"https://callback.test{CIMD_PATH}"
+    assert doc["client_uri"] == "https://callback.test"
+    assert doc["redirect_uris"] == ["https://callback.test/oauth2/egress/callback"]
+
+
 def test_client_id_path_matches_actual_router_mount():
-    """The client_id constant must equal (router mount prefix + the route's own
-    path), so a future prefix change or route rename can't silently break
-    client_id / served-URL parity -- the drift the in-process tests above (which
-    hardcode the prefix) would otherwise miss."""
+    """The client_id constant must equal the route's served path, so a route
+    rename or an accidental prefix on the mount can't silently break client_id /
+    served-URL parity -- the drift the in-process tests above (which hardcode the
+    path) would otherwise miss."""
     import re
     from pathlib import Path
 
-    from registry.api.wellknown_routes import router
-    from registry.auth.oauth_metadata import WELLKNOWN_CIMD_PATH
+    from registry.api.wellknown_routes import cimd_router
+    from registry.auth.oauth_metadata import CIMD_PATH
 
     route_paths = [
-        r.path for r in router.routes if getattr(r, "name", "") == "get_mcp_client_metadata"
+        r.path for r in cimd_router.routes if getattr(r, "name", "") == "get_oauth_client_metadata"
     ]
-    assert route_paths == ["/mcp-client-metadata"]
+    assert route_paths == [CIMD_PATH]
 
+    # cimd_router MUST be mounted at root (no prefix) so the served path -- and
+    # therefore the client_id -- is exactly CIMD_PATH.
     main_src = (Path(__file__).resolve().parents[2] / "registry" / "main.py").read_text()
-    m = re.search(r"include_router\(\s*wellknown_router\s*,\s*prefix=\"([^\"]+)\"", main_src)
-    assert m, "wellknown_router mount prefix not found in registry/main.py"
-    assert m.group(1) + route_paths[0] == WELLKNOWN_CIMD_PATH
+    assert re.search(r"include_router\(\s*cimd_router\s*,", main_src), (
+        "cimd_router not mounted in registry/main.py"
+    )
+    assert not re.search(r"include_router\(\s*cimd_router\s*,[^)]*prefix=", main_src), (
+        "cimd_router must be mounted at root (no prefix) so client_id == served path"
+    )
