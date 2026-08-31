@@ -48,6 +48,12 @@ _UNKNOWN_KID_NEGATIVE_TTL_SECONDS: int = 30
 # cannot grow it without limit.
 _UNKNOWN_KID_CACHE_MAX: int = 4096
 
+# Minimum seconds between forced (TTL-bypassing) refreshes, process-wide. A
+# flood of unique unknown kids must not translate 1:1 into blocking network
+# fetches; a genuinely rotated kid is still served by the first allowed forced
+# refresh (which fetches the full current JWKS) or the next normal TTL refresh.
+_FORCED_REFRESH_MIN_INTERVAL_SECONDS: int = 5
+
 
 class _InternalJwksCache:
     """Thread-safe TTL cache of the auth-server internal JWKS, indexed by kid."""
@@ -59,6 +65,8 @@ class _InternalJwksCache:
         self._have_keys: bool = False
         # kid -> time it was confirmed absent by a forced refresh (negative cache).
         self._unknown_kids: dict[str, float] = {}
+        # Last time a forced (TTL-bypassing) refresh ran, to rate-limit them.
+        self._last_forced_refresh: float = 0.0
 
     def _recently_unknown(self, kid: str, now: float) -> bool:
         """Whether ``kid`` was confirmed absent within the negative-cache TTL.
@@ -74,10 +82,14 @@ class _InternalJwksCache:
         Must be called with self._lock held.
         """
         if len(self._unknown_kids) >= _UNKNOWN_KID_CACHE_MAX:
+            # Prune expired first; if still at the cap, evict oldest-first so the
+            # map stays bounded WITHOUT dropping the whole negative cache (a full
+            # clear would let a unique-kid flood immediately re-amplify).
             cutoff = now - _UNKNOWN_KID_NEGATIVE_TTL_SECONDS
             self._unknown_kids = {k: t for k, t in self._unknown_kids.items() if t >= cutoff}
-            if len(self._unknown_kids) >= _UNKNOWN_KID_CACHE_MAX:
-                self._unknown_kids.clear()
+            while len(self._unknown_kids) >= _UNKNOWN_KID_CACHE_MAX:
+                oldest = min(self._unknown_kids, key=self._unknown_kids.__getitem__)
+                del self._unknown_kids[oldest]
         self._unknown_kids[kid] = now
 
     def _fetch(self) -> dict[str, Any]:
@@ -138,6 +150,15 @@ class _InternalJwksCache:
             with self._lock:
                 if self._recently_unknown(kid, now):
                     return None
+                # Rate-limit forced refreshes process-wide so a flood of unique
+                # unknown kids cannot each trigger a blocking network fetch. A
+                # real rotated kid is served by the first allowed forced refresh
+                # (which pulls the full current JWKS) or the next TTL refresh.
+                forced_now = time.time()
+                if (forced_now - self._last_forced_refresh) < _FORCED_REFRESH_MIN_INTERVAL_SECONDS:
+                    self._mark_unknown(kid, forced_now)
+                    return None
+                self._last_forced_refresh = forced_now
             forced = self._refresh(time.time(), force=True)
             if forced is not None:
                 key = forced.get(kid)

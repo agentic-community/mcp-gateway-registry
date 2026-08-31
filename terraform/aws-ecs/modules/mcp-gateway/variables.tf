@@ -1921,7 +1921,7 @@ variable "egress_secrets_manager_path_prefix" {
 
 # Asymmetric signing (ES256)
 variable "internal_signing_key_secret_arn" {
-  description = "ARN of the Secrets Manager secret containing the ES256 PEM private key for JWT signing. Empty = HS256 fallback."
+  description = "ARN of the Secrets Manager secret containing the ES256 PEM private key for JWT signing. Empty = HS256 fallback. If the secret is encrypted under a customer-managed KMS key, also grant that key's kms:Decrypt to the ECS task role (the default aws/secretsmanager key needs no extra grant)."
   type        = string
   default     = ""
 }
@@ -1948,4 +1948,16 @@ variable "session_token_enc_key_secret_arn" {
   description = "ARN of a Secrets Manager secret holding SESSION_TOKEN_ENC_KEY (id_token-at-rest AES-GCM; shared by auth-server + registry). Empty = SECRET_KEY fallback."
   type        = string
   default     = ""
+}
+
+variable "internal_jwks_url" {
+  description = "Registry-side URL for auth-server's internal JWKS (ES256 hop-token verification). Empty uses the Service Connect default http://auth-server:8888/.well-known/internal-jwks.json."
+  type        = string
+  default     = ""
+}
+
+variable "internal_jwks_cache_ttl_seconds" {
+  description = "How long the registry caches the internal JWKS before re-fetching (caps kid-rotation propagation)."
+  type        = number
+  default     = 300
 }

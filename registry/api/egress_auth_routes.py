@@ -30,6 +30,7 @@ from urllib.parse import urlencode, urlparse
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
 from registry.auth.csrf import verify_csrf_token_flexible
 from registry.auth.dependencies import nginx_proxied_auth
@@ -347,7 +348,9 @@ async def vend_egress_token(
 
     # Independently re-verify the mcp-proxy token; identity is the verified
     # claim, never an asserted body field.
-    claims = verify_mcp_proxy_token(x_internal_token)
+    # Offload: the verifier may synchronously fetch the JWKS on a cache miss;
+    # keep that blocking I/O off the asyncio event loop.
+    claims = await run_in_threadpool(verify_mcp_proxy_token, x_internal_token)
     # Egress vault user id: the canonical OIDC-sub-based ``egress_user`` claim,
     # which /validate stamps identically into the consent-write and vend tokens
     # so one human maps to one bucket across providers (see _canonical_egress_user

@@ -341,6 +341,8 @@ module "mcp_gateway" {
   csrf_signing_key_secret_arn          = var.csrf_signing_key_secret_arn
   credential_encryption_key_secret_arn = var.credential_encryption_key_secret_arn
   session_token_enc_key_secret_arn     = var.session_token_enc_key_secret_arn
+  internal_jwks_url                    = var.internal_jwks_url
+  internal_jwks_cache_ttl_seconds      = var.internal_jwks_cache_ttl_seconds
 
   # Custom entity types (admin-defined, schema-driven catalog types)
   custom_entity_types_enabled   = var.custom_entity_types_enabled

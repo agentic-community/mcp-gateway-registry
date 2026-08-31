@@ -169,9 +169,9 @@ def verify_self_signed_user_token(token: str) -> dict[str, Any]:
     try:
         header = pyjwt.get_unverified_header(token)
     except pyjwt.exceptions.DecodeError as e:
-        raise ValueError("Malformed token")
+        raise ValueError("Malformed token") from e
     except Exception as e:
-        raise ValueError("Cannot parse token")
+        raise ValueError("Cannot parse token") from e
 
     # 3. Issuer-first check (unverified — defense-in-depth).
     # Reject tokens that don't claim to be from our issuer BEFORE attempting
@@ -209,12 +209,12 @@ def verify_self_signed_user_token(token: str) -> dict[str, Any]:
         else:
             # Asymmetric path: kid present → ES256 (key manager)
             claims = _verify_es256(token, kid)
-    except pyjwt.ExpiredSignatureError:
+    except pyjwt.ExpiredSignatureError as e:
         logger.warning("Self-signed token validation failed: token has expired")
-        raise ValueError("Token has expired")
+        raise ValueError("Token has expired") from e
     except pyjwt.InvalidTokenError as e:
         logger.warning("Self-signed token validation failed: invalid token")
-        raise ValueError("Invalid self-signed token")
+        raise ValueError("Invalid self-signed token") from e
 
     # Validate token_use claim (must be "access")
     token_use = claims.get("token_use")

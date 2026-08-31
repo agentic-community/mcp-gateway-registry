@@ -257,9 +257,61 @@ operator mounts a key, and the HS256 window only closes when an operator flips
 | `INTERNAL_SIGNING_KEY_RETENTION_SECONDS` | auth-server | `MCP_TOKEN_MAX_TTL_HOURS` + 1h | How long a rotated-out key stays in the JWKS. |
 | `MCP_TOKEN_MAX_TTL_HOURS` | registry | 24 (cap 168) | Longest access-token TTL; drives the default JWKS retention. |
 | `REJECT_HS256_TOKENS` | auth-server **and** registry | `false` | Hard-reject legacy HS256 (no-`kid`) tokens. Set on both after the cutover. Truthy: `1`/`true`/`yes`/`on`. |
+| `INTERNAL_JWKS_URL` | registry | `http://auth-server:8888/.well-known/internal-jwks.json` | Where the registry fetches auth-server's public keys. The bare service name resolves on Docker Compose and ECS (Service Connect); the Helm chart defaults it to the in-namespace FQDN (`auth-server.<ns>.svc.cluster.local`) because the bare name does not reliably resolve from the registry pod on EKS. |
+| `INTERNAL_JWKS_CACHE_TTL_SECONDS` | registry | `300` | How long the registry caches the JWKS before re-fetching; caps `kid`-rotation propagation. |
 
 There is **no** operator-set key-id env var: the `kid` is always the key's RFC
 7638 thumbprint.
 
 See [docs/unified-parameter-reference.md](../unified-parameter-reference.md) for
 the full Docker / Terraform / Helm mapping of these parameters.
+
+## Operational runbook & deployment caveats
+
+### Rotating the signing key
+
+1. Write the new PEM to the mounted path (or update the Secrets Manager secret;
+   on ECS the `signing-key-init` container re-fetches it on the next task start).
+   The manager detects the mtime change within
+   `INTERNAL_SIGNING_KEY_RELOAD_SECONDS` (default 60s) and adds the new key to
+   the JWKS **alongside** the old one, signing with the newest.
+2. Both keys stay in the published JWKS for the retention window
+   (`MCP_TOKEN_MAX_TTL_HOURS` + 1h), so tokens signed by the old key keep
+   verifying until they expire. The `kid` is the RFC 7638 thumbprint, so the new
+   key gets a distinct `kid` automatically -- no coordination, no reuse.
+3. Across replicas, each auth-server reloads independently on its own poll, so a
+   brief window exists where a token signed by the new key on one replica may
+   reach the registry before the registry's JWKS fetch sees it. The registry's
+   forced refresh handles this; expect up to one `INTERNAL_JWKS_CACHE_TTL_SECONDS`
+   of propagation lag.
+
+### Enabling `REJECT_HS256_TOKENS` (cutover)
+
+1. Confirm ES256 is active on **every** auth-server replica (a mounted key +
+   `INTERNAL_SIGNING_KEY_PATH`), and that the registry can reach the JWKS.
+2. Wait at least one `MCP_TOKEN_MAX_TTL_HOURS` window so every outstanding HS256
+   token has expired -- otherwise flipping the flag 401s still-valid tokens.
+3. Set `REJECT_HS256_TOKENS=true` on **both** the auth-server and the registry
+   (and, on Helm, `signingKey.rejectHs256` on the auth-server chart **and**
+   `app.rejectHs256` on the registry chart -- flip them together).
+4. **Rollback:** unset `REJECT_HS256_TOKENS` first, and only then remove the
+   signing key. Removing the key while the flag is set would reject the tokens
+   the auth-server is still minting.
+
+### Deployment caveats
+
+- **ECS launch dependency.** With a signing-key ARN configured, auth-server
+  `dependsOn` the `signing-key-init` container with `condition: SUCCESS`. A
+  Secrets Manager outage, a wrong ARN, or a missing IAM grant fails the init and
+  the auth-server task never reaches `RUNNING` (fail-closed). Alarm on the init
+  container's exit code and on the task failing to start.
+- **Customer-managed KMS (CMK).** The ECS task's IAM grant covers
+  `secretsmanager:GetSecretValue` on the configured ARNs and `kms:Decrypt` on the
+  stack's own CMK. If the signing/scoped secret is encrypted under a *different*
+  customer-managed KMS key, grant that key's `kms:Decrypt` to the task role too,
+  or the init container fails with `AccessDenied`. The default
+  `aws/secretsmanager` key needs no extra grant.
+- **Kubernetes file mode.** The signing key is projected into the auth-server pod
+  at `mode: 0440` (group-readable) because the pod runs non-root (`runAsUser`
+  1000 / `fsGroup` 1000) and k8s secret files are owned `root:fsGroup`; `0400`
+  would be root-only and the process would silently fall back to HS256.

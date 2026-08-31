@@ -1498,6 +1498,16 @@ module "ecs_service_registry" {
           name  = "REJECT_HS256_TOKENS"
           value = tostring(var.reject_hs256_tokens)
         },
+        # Registry-side ES256 internal-JWKS fetch. The empty-var default resolves
+        # via the Service Connect alias (auth-server:8888); operators may override.
+        {
+          name  = "INTERNAL_JWKS_URL"
+          value = var.internal_jwks_url != "" ? var.internal_jwks_url : "http://auth-server:8888/.well-known/internal-jwks.json"
+        },
+        {
+          name  = "INTERNAL_JWKS_CACHE_TTL_SECONDS"
+          value = tostring(var.internal_jwks_cache_ttl_seconds)
+        },
         # Custom entity types (admin-defined, schema-driven catalog types)
         {
           name  = "CUSTOM_ENTITY_TYPES_ENABLED"

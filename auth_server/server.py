@@ -3099,7 +3099,10 @@ async def internal_jwks():
     jwks = key_manager.get_public_jwks()
     return JSONResponse(
         content=jwks,
-        headers={"Cache-Control": "public, max-age=600", "Content-Type": "application/json"},
+        # max-age matches the registry's default INTERNAL_JWKS_CACHE_TTL_SECONDS
+        # (300s) so an intermediary/CDN cannot hold a rotated-out key longer than
+        # the registry's own cache would.
+        headers={"Cache-Control": "public, max-age=300", "Content-Type": "application/json"},
     )
 
 

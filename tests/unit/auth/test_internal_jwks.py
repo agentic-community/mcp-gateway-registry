@@ -122,3 +122,40 @@ class TestInternalJwksFetcher:
             patch.object(mod.httpx, "Client", return_value=cm_empty),
         ):
             assert mod.get_internal_verification_key("es256-1") is not None
+
+    def test_negative_cache_dedupes_repeated_unknown_kid(self) -> None:
+        """A repeated unknown kid must not re-trigger the forced JWKS fetch."""
+        mod = _fresh_module()
+        jwk, _ = _jwk_for("es256-1")
+        cm, client = _mock_client({"keys": [jwk]})
+        with patch.object(mod.httpx, "Client", return_value=cm):
+            assert mod.get_internal_verification_key("es256-1") is not None
+            base = client.get.call_count  # cache primed with the known kid
+            # First unknown kid: cache is fresh so the non-force refresh does no
+            # network; exactly one forced fetch runs, then the kid is remembered.
+            assert mod.get_internal_verification_key("ghost") is None
+            after_first = client.get.call_count
+            assert after_first == base + 1
+            # Repeats within the negative-cache TTL do not fetch again.
+            assert mod.get_internal_verification_key("ghost") is None
+            assert mod.get_internal_verification_key("ghost") is None
+            assert client.get.call_count == after_first
+
+    def test_forced_refresh_throttled_across_unique_unknown_kids(self) -> None:
+        """A flood of DISTINCT unknown kids must not amplify 1:1 into fetches."""
+        mod = _fresh_module()
+        jwk, _ = _jwk_for("es256-1")
+        cm, client = _mock_client({"keys": [jwk]})
+        with patch.object(mod.httpx, "Client", return_value=cm):
+            assert mod.get_internal_verification_key("es256-1") is not None
+            base = client.get.call_count
+            # First unknown kid consumes the single allowed forced refresh.
+            assert mod.get_internal_verification_key("ghost-1") is None
+            after_first = client.get.call_count
+            assert after_first == base + 1
+            # A different unknown kid within the min-interval is rate-limited:
+            # the negative cache alone would not catch a new kid, but the
+            # forced-refresh throttle prevents another blocking fetch.
+            assert mod.get_internal_verification_key("ghost-2") is None
+            assert mod.get_internal_verification_key("ghost-3") is None
+            assert client.get.call_count == after_first

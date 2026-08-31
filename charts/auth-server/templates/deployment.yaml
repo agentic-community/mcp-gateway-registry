@@ -261,5 +261,9 @@ spec:
             items:
               - key: {{ .Values.signingKey.secretKey | default "key.pem" }}
                 path: key.pem
-                mode: 0400
+                # 0440 (not 0400): k8s secret files are owned root:fsGroup, and the
+                # pod runs as non-root (runAsUser 1000 / fsGroup 1000). 0400 grants
+                # read only to the root owner, so the uid-1000 process gets EACCES
+                # and silently falls back to HS256. 0440 makes it group-readable.
+                mode: 0440
       {{- end }}

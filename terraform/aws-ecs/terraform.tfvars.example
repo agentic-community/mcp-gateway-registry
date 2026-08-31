@@ -1371,6 +1371,11 @@ aws_registry_federation_enabled = true
 # Store the PEM private key in Secrets Manager, then reference its ARN here.
 # Generate: openssl ecparam -name prime256v1 -genkey -noout | aws secretsmanager create-secret --name mcp-signing-key --secret-string file:///dev/stdin
 # internal_signing_key_secret_arn = "arn:aws:secretsmanager:us-east-1:123456789:secret:mcp-signing-key-AbCdEf" # pragma: allowlist secret
+# The example create-secret command uses the default aws/secretsmanager KMS key,
+# which the ECS task role can already decrypt. If you instead encrypt this secret
+# (or the scoped-key secrets below) under a CUSTOMER-MANAGED KMS key, you must
+# also grant that key's kms:Decrypt to the ECS task role, or the signing-key-init
+# container fails with AccessDenied and (via dependsOn) auth-server never starts.
 # The kid stamped into ES256 tokens is derived automatically from the key's
 # RFC 7638 JWK thumbprint (stable per key, safe for rotation) -- no kid var.
 # reject_hs256_tokens applies to BOTH the auth-server and registry containers.
@@ -1381,3 +1386,8 @@ aws_registry_federation_enabled = true
 # csrf_signing_key_secret_arn          = "" # pragma: allowlist secret
 # credential_encryption_key_secret_arn = "" # pragma: allowlist secret
 # session_token_enc_key_secret_arn     = "" # pragma: allowlist secret
+#
+# Registry-side ES256 internal-JWKS fetch. The empty URL default resolves via
+# the Service Connect alias (auth-server:8888); override only for unusual setups.
+# internal_jwks_url = ""
+# internal_jwks_cache_ttl_seconds = 300

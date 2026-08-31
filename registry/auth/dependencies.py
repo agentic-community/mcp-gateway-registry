@@ -3,6 +3,7 @@ from typing import Annotated, Any
 
 from fastapi import Cookie, Depends, Header, HTTPException, Request, status
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
+from starlette.concurrency import run_in_threadpool
 
 from ..common.log_redaction import redact_headers, redact_mapping
 from ..core.config import settings
@@ -681,7 +682,10 @@ async def _context_from_internal_token(
 
     Raises HTTPException(401) on any token failure (verification raises it directly).
     """
-    claims = verify_registry_ui_token(token)  # raises 401/500 on failure
+    # Offload to a worker thread: the verifier may do a synchronous JWKS fetch
+    # (registry/auth/internal_jwks.py) on a cache miss, which must not block the
+    # asyncio event loop and stall every other request on this worker.
+    claims = await run_in_threadpool(verify_registry_ui_token, token)  # raises 401/500 on failure
     username = claims.get("sub") or ""
     session_id = claims.get("session_id") or ""
 

@@ -64,6 +64,11 @@ app:
   # After all internal JWTs have rotated to ES256, set true to hard-reject
   # legacy HS256 tokens at the registry verifier. Default false = unchanged.
   rejectHs256: false
+  # Registry-side ES256 internal-JWKS fetch (PR #1693). URL defaults to the
+  # in-namespace auth-server FQDN (see secret.yaml); override only for unusual
+  # topologies. TTL caps kid-rotation propagation.
+  internalJwksUrl: ""
+  internalJwksCacheTtlSeconds: 300
 
   # Session cookie Domain attribute. Leave empty to default to
   # ".<global.domain>". See charts/auth-server/values.yaml for a longer

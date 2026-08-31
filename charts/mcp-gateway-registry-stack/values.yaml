@@ -305,6 +305,16 @@ registry:
     # subdomain. Keep this in sync with auth-server.app.sessionCookieDomain
     # below — both services read the same cookie.
     sessionCookieDomain: ""
+    # --- Internal-JWT cutover, scoped keys, and JWKS fetch (PR #1693) ---
+    # rejectHs256 hard-rejects legacy HS256 hop tokens at the registry verifier;
+    # flip it TOGETHER with auth-server.signingKey.rejectHs256 after the cutover
+    # window. Scoped keys fall back to SECRET_KEY when empty (zero-breaking).
+    # rejectHs256: false
+    # csrfSigningKey: ""
+    # credentialEncryptionKey: ""
+    # sessionTokenEncKey: "" # Shared with auth-server.app.sessionTokenEncKey
+    # internalJwksUrl: "" # Defaults to the in-namespace auth-server FQDN
+    # internalJwksCacheTtlSeconds: 300
     # Deployment mode: with-gateway (nginx integration) or registry-only (catalog only)
     deploymentMode: with-gateway
     # Registry mode: full, skills-only, mcp-servers-only, agents-only
@@ -569,6 +579,16 @@ auth-server:
     toolFilterAuditLogLevel: "INFO" # Audit log level for tool-prune events (DEBUG, INFO, WARNING)
     internalTokenTtlSeconds: "30" # Token lifetime (seconds); the replay-window cap (min 5)
     internalTokenLeewaySeconds: "5" # Clock-skew leeway (seconds) on token exp/iat
+  # --- Asymmetric internal JWT signing (ES256), PR #1693 ---
+  # Disabled by default: auth-server signs HS256 with SECRET_KEY (zero-breaking).
+  # To enable ES256, provide a signing key and (after the cutover window) flip
+  # rejectHs256 on BOTH this chart AND registry.app.rejectHs256 together.
+  # signingKey:
+  #   enabled: true
+  #   existingSecret: "" # Secret holding key.pem; default <release>-signing-key
+  #   rejectHs256: false # Hard-reject legacy HS256; flip WITH registry.app.rejectHs256
+  # Scoped id_token-at-rest key (shared with registry; set both to the same value):
+  # app.sessionTokenEncKey: ""
   metrics:
     # Standard OTel SDK var. Setting this activates the OTLP push exporter.
     otelExporterOtlpEndpoint: "" # OTLP endpoint URL (e.g., http://otel-collector:4317)

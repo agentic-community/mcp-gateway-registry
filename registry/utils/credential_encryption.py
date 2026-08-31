@@ -137,19 +137,23 @@ def _get_fernet() -> Fernet | None:
     """
     try:
         from ..core.config import settings
-
-        # Prefer scoped key, fall back to SECRET_KEY
-        secret_key = settings.credential_encryption_key or settings.secret_key
-
-        # Validate strength if using the scoped key (not the fallback)
-        if settings.credential_encryption_key:
-            from ..common.secret_key import validate_signing_secret
-
-            validate_signing_secret(settings.credential_encryption_key, "CREDENTIAL_ENCRYPTION_KEY")
     except Exception as e:
-        logger.error(f"Could not load SECRET_KEY from settings: {e}")
+        logger.error(f"Could not load encryption settings: {e}")
         return None
 
+    # Validate the scoped key's strength when set (fail closed on weak/short).
+    # Attribute the failure to the scoped key, not to SECRET_KEY.
+    if settings.credential_encryption_key:
+        from ..common.secret_key import validate_signing_secret
+
+        try:
+            validate_signing_secret(settings.credential_encryption_key, "CREDENTIAL_ENCRYPTION_KEY")
+        except Exception as e:
+            logger.error(f"CREDENTIAL_ENCRYPTION_KEY rejected (weak or invalid): {e}")
+            return None
+
+    # Prefer the scoped key; fall back to SECRET_KEY during migration.
+    secret_key = settings.credential_encryption_key or settings.secret_key
     if not secret_key:
         return None
 

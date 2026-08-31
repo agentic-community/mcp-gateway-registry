@@ -2177,6 +2177,18 @@ variable "session_token_enc_key_secret_arn" {
   default     = ""
 }
 
+variable "internal_jwks_url" {
+  description = "Registry-side URL for auth-server's internal JWKS (ES256 hop-token verification). Empty uses the Service Connect default http://auth-server:8888/.well-known/internal-jwks.json."
+  type        = string
+  default     = ""
+}
+
+variable "internal_jwks_cache_ttl_seconds" {
+  description = "How long the registry caches the internal JWKS before re-fetching (caps kid-rotation propagation)."
+  type        = number
+  default     = 300
+}
+
 variable "reject_hs256_tokens" {
   description = "Hard-reject legacy HS256 tokens. Enable only after all tokens have rotated to ES256 (>24h after signing key deployment)."
   type        = bool

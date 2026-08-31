@@ -102,6 +102,8 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             ("tool_filter_audit_log_level", "Tool Filter Audit Log Level", False),
             ("internal_token_ttl_seconds", "MCP Proxy Token TTL (seconds)", False),
             ("internal_token_leeway_seconds", "MCP Proxy Token Leeway (seconds)", False),
+            ("internal_jwks_url", "Internal JWKS URL", False),
+            ("internal_jwks_cache_ttl_seconds", "Internal JWKS Cache TTL (seconds)", False),
             ("secret_key", "Secret Key", True),
             ("csrf_signing_key", "CSRF Signing Key", True),
             ("credential_encryption_key", "Credential Encryption Key", True),

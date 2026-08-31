@@ -16,6 +16,7 @@ from fastapi import HTTPException
 
 from registry.auth.proxied_token import (
     _api_auth_request_enabled,
+    _reject_hs256_tokens,
     verify_registry_ui_token,
 )
 
@@ -250,3 +251,31 @@ class TestApiAuthRequestEnabled:
     def test_enabled_values(self, val: str) -> None:
         with patch.dict(os.environ, {"NGINX_DISABLE_API_AUTH_REQUEST": val}, clear=False):
             assert _api_auth_request_enabled() is True
+
+
+class TestRejectHs256TokensParsing:
+    """The cutover flag must parse the SAME truthy set as the auth-server
+    minter (auth_server.self_signed_token.reject_hs256_tokens), or the registry
+    would reject HS256 while the minter still issues it (or vice versa)."""
+
+    def test_default_off(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            assert _reject_hs256_tokens() is False
+
+    @pytest.mark.parametrize("val", ["1", "true", "yes", "on", "TRUE", "On", "  yes  ", "YES"])
+    def test_truthy_values(self, val: str) -> None:
+        with patch.dict(os.environ, {"REJECT_HS256_TOKENS": val}, clear=False):
+            assert _reject_hs256_tokens() is True
+
+    @pytest.mark.parametrize("val", ["false", "0", "no", "off", "", "  ", "nope"])
+    def test_falsy_values(self, val: str) -> None:
+        with patch.dict(os.environ, {"REJECT_HS256_TOKENS": val}, clear=False):
+            assert _reject_hs256_tokens() is False
+
+    def test_matches_auth_server_parser(self) -> None:
+        """Both sides agree value-for-value across the same inputs."""
+        from auth_server.self_signed_token import reject_hs256_tokens
+
+        for val in ["1", "true", "YES", " on ", "false", "0", "", "maybe"]:
+            with patch.dict(os.environ, {"REJECT_HS256_TOKENS": val}, clear=False):
+                assert _reject_hs256_tokens() == reject_hs256_tokens()

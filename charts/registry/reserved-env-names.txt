@@ -242,3 +242,7 @@ REJECT_HS256_TOKENS
 CSRF_SIGNING_KEY
 CREDENTIAL_ENCRYPTION_KEY
 SESSION_TOKEN_ENC_KEY
+# Registry-side ES256 internal-JWKS fetch (PR #1693), rendered from
+# app.internalJwksUrl (FQDN default) / app.internalJwksCacheTtlSeconds.
+INTERNAL_JWKS_URL
+INTERNAL_JWKS_CACHE_TTL_SECONDS

@@ -502,6 +502,10 @@ services:
       - CREDENTIAL_ENCRYPTION_KEY=${CREDENTIAL_ENCRYPTION_KEY:-}
       - SESSION_TOKEN_ENC_KEY=${SESSION_TOKEN_ENC_KEY:-}
       - REJECT_HS256_TOKENS=${REJECT_HS256_TOKENS:-false}
+      # Registry-side ES256 internal-JWKS fetch (unused while auth-server signs
+      # HS256). Default resolves via the compose service name.
+      - INTERNAL_JWKS_URL=${INTERNAL_JWKS_URL:-http://auth-server:8888/.well-known/internal-jwks.json}
+      - INTERNAL_JWKS_CACHE_TTL_SECONDS=${INTERNAL_JWKS_CACHE_TTL_SECONDS:-300}
     ports:
       - "80:8080"   # Map host 80 to container 8080 (non-root nginx)
       - "443:8443"  # Map host 443 to container 8443 (non-root nginx)
