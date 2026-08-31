@@ -1525,6 +1525,35 @@ module "ecs_service_registry" {
           name  = "SSRF_ALLOWED_CIDRS"
           value = var.ssrf_allowed_cidrs
         },
+        # CIMD (Client ID Metadata Document) publisher (ships disabled by default)
+        {
+          name  = "CIMD_PUBLISHER_ENABLED"
+          value = tostring(var.cimd_publisher_enabled)
+        },
+        {
+          name  = "CIMD_CACHE_TTL"
+          value = tostring(var.cimd_cache_ttl)
+        },
+        {
+          name  = "CIMD_CLIENT_NAME"
+          value = var.cimd_client_name
+        },
+        {
+          name  = "CIMD_REDIRECT_URIS"
+          value = var.cimd_redirect_uris
+        },
+        {
+          name  = "CIMD_SCOPE"
+          value = var.cimd_scope
+        },
+        {
+          name  = "CIMD_LOGO_URI"
+          value = var.cimd_logo_uri
+        },
+        {
+          name  = "CIMD_CONTACTS"
+          value = var.cimd_contacts
+        },
         # Gateway generic-proxy feature (ships disabled by default)
         {
           name  = "GATEWAY_GENERIC_PROXY_ENABLED"

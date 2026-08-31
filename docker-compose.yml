@@ -205,6 +205,14 @@ services:
       # metadata address (169.254.169.254) is never permitted by either.
       - SSRF_ALLOWED_HOSTS=${SSRF_ALLOWED_HOSTS:-}
       - SSRF_ALLOWED_CIDRS=${SSRF_ALLOWED_CIDRS:-}
+      # CIMD (Client ID Metadata Document) publisher -- registry-consumed; default off.
+      - CIMD_PUBLISHER_ENABLED=${CIMD_PUBLISHER_ENABLED:-false}
+      - CIMD_CACHE_TTL=${CIMD_CACHE_TTL:-3600}
+      - CIMD_CLIENT_NAME=${CIMD_CLIENT_NAME:-AI Registry Tools}
+      - CIMD_REDIRECT_URIS=${CIMD_REDIRECT_URIS:-}
+      - CIMD_SCOPE=${CIMD_SCOPE:-}
+      - CIMD_LOGO_URI=${CIMD_LOGO_URI:-}
+      - CIMD_CONTACTS=${CIMD_CONTACTS:-}
       # Gateway generic-proxy feature (registry-consumed): ships disabled by default
       - GATEWAY_GENERIC_PROXY_ENABLED=${GATEWAY_GENERIC_PROXY_ENABLED:-false}
       - GATEWAY_CANONICAL_NAMESPACE_ENABLED=${GATEWAY_CANONICAL_NAMESPACE_ENABLED:-false}

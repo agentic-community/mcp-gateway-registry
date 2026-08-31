@@ -1100,6 +1100,17 @@ registry_api_token = "m3zT65wREARMVDToKosg_DgNkKqS_434hNxy3sslGPY"
 # ssrf_allowed_hosts = "flight-booking-agent.mcp-gateway-v2.local"
 # ssrf_allowed_cidrs = ""
 
+# CIMD (Client ID Metadata Document) publisher. Serves the registry's own CIMD at
+# GET /oauth/client-metadata.json so external CIMD-aware IdPs can describe the
+# registry as an OAuth client. Disabled by default (404 when off).
+# cimd_publisher_enabled = false
+# cimd_cache_ttl         = 3600
+# cimd_client_name       = "AI Registry Tools"
+# cimd_redirect_uris     = ""
+# cimd_scope             = ""
+# cimd_logo_uri          = ""
+# cimd_contacts          = ""
+
 # Internal/workshop deployment classification (telemetry labels only; issue #1216).
 # Tags a deployment as one of our own internal/workshop installs so it can be
 # distinguished from community installs in telemetry. Does NOT change access control.

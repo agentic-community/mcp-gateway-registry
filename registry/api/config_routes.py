@@ -485,6 +485,19 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             ("gateway_egress_selfcheck_enabled", "Egress Self-Check Enabled", False),
         ],
     },
+    "cimd": {
+        "title": "CIMD Publisher",
+        "order": 30,
+        "fields": [
+            ("cimd_publisher_enabled", "Enabled", False),
+            ("cimd_cache_ttl", "Cache TTL (s)", False),
+            ("cimd_client_name", "Client Name", False),
+            ("cimd_redirect_uris", "Redirect URIs", False),
+            ("cimd_scope", "Scope", False),
+            ("cimd_logo_uri", "Logo URI", False),
+            ("cimd_contacts", "Contacts", False),
+        ],
+    },
 }
 
 

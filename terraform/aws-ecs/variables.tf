@@ -1752,6 +1752,48 @@ variable "ssrf_allowed_cidrs" {
   default     = ""
 }
 
+variable "cimd_publisher_enabled" {
+  description = "Serve the registry's CIMD at GET /oauth/client-metadata.json (describes the registry as an OAuth client for external CIMD-aware IdPs). Default off; 404 when off."
+  type        = bool
+  default     = false
+}
+
+variable "cimd_cache_ttl" {
+  description = "Public Cache-Control max-age (seconds) for the CIMD document."
+  type        = number
+  default     = 3600
+}
+
+variable "cimd_client_name" {
+  description = "Human-readable client_name in the CIMD document."
+  type        = string
+  default     = "AI Registry Tools"
+}
+
+variable "cimd_redirect_uris" {
+  description = "CSV of allowed callback redirect URIs; default {EGRESS_OAUTH_CALLBACK_BASE_URL or REGISTRY_URL}/oauth2/egress/callback."
+  type        = string
+  default     = ""
+}
+
+variable "cimd_scope" {
+  description = "Space-separated OAuth scopes the client requests; default the advertised OIDC scopes."
+  type        = string
+  default     = ""
+}
+
+variable "cimd_logo_uri" {
+  description = "Optional logo URI in the CIMD document; omitted when empty."
+  type        = string
+  default     = ""
+}
+
+variable "cimd_contacts" {
+  description = "CSV of operator contact emails; optional; omitted when empty."
+  type        = string
+  default     = ""
+}
+
 variable "internal_only_deployment" {
   description = <<-EOT
     Marks this as one of our own internal/workshop deployments (not a community
