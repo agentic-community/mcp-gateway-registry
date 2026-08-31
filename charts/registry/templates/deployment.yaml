@@ -157,6 +157,20 @@ spec:
               value: {{ .Values.app.ssrfAllowedHosts | default "" | quote }}
             - name: SSRF_ALLOWED_CIDRS
               value: {{ .Values.app.ssrfAllowedCidrs | default "" | quote }}
+            - name: CIMD_PUBLISHER_ENABLED
+              value: {{ .Values.app.cimdPublisherEnabled | default false | toString | quote }}
+            - name: CIMD_CACHE_TTL
+              value: {{ .Values.app.cimdCacheTtl | default 3600 | toString | quote }}
+            - name: CIMD_CLIENT_NAME
+              value: {{ .Values.app.cimdClientName | default "" | quote }}
+            - name: CIMD_REDIRECT_URIS
+              value: {{ .Values.app.cimdRedirectUris | default "" | quote }}
+            - name: CIMD_SCOPE
+              value: {{ .Values.app.cimdScope | default "" | quote }}
+            - name: CIMD_LOGO_URI
+              value: {{ .Values.app.cimdLogoUri | default "" | quote }}
+            - name: CIMD_CONTACTS
+              value: {{ .Values.app.cimdContacts | default "" | quote }}
             # A2A reverse-proxy gateway (opt-in; default off). When true, each
             # enabled A2A agent gets nginx location blocks proxying its card +
             # JSON-RPC through the gateway for centralized auth and metrics.

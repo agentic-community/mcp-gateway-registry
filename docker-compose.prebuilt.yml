@@ -75,6 +75,14 @@ services:
       # private IPs (e.g. docker-network hostnames); mirrors docker-compose.yml.
       - SSRF_ALLOWED_HOSTS=${SSRF_ALLOWED_HOSTS:-}
       - SSRF_ALLOWED_CIDRS=${SSRF_ALLOWED_CIDRS:-}
+      # CIMD (Client ID Metadata Document) publisher -- registry-consumed; default off.
+      - CIMD_PUBLISHER_ENABLED=${CIMD_PUBLISHER_ENABLED:-false}
+      - CIMD_CACHE_TTL=${CIMD_CACHE_TTL:-3600}
+      - CIMD_CLIENT_NAME=${CIMD_CLIENT_NAME:-AI Registry Tools}
+      - CIMD_REDIRECT_URIS=${CIMD_REDIRECT_URIS:-}
+      - CIMD_SCOPE=${CIMD_SCOPE:-}
+      - CIMD_LOGO_URI=${CIMD_LOGO_URI:-}
+      - CIMD_CONTACTS=${CIMD_CONTACTS:-}
       # Registry Card Configuration
       - REGISTRY_URL=${REGISTRY_URL:-http://localhost}
       # Request-source trust (audit client IP + OAuth external-URL host allowlist)

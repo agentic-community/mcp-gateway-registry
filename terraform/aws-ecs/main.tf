@@ -368,6 +368,15 @@ module "mcp_gateway" {
   ssrf_allowed_hosts        = var.ssrf_allowed_hosts
   ssrf_allowed_cidrs        = var.ssrf_allowed_cidrs
 
+  # CIMD (Client ID Metadata Document) publisher
+  cimd_publisher_enabled = var.cimd_publisher_enabled
+  cimd_cache_ttl         = var.cimd_cache_ttl
+  cimd_client_name       = var.cimd_client_name
+  cimd_redirect_uris     = var.cimd_redirect_uris
+  cimd_scope             = var.cimd_scope
+  cimd_logo_uri          = var.cimd_logo_uri
+  cimd_contacts          = var.cimd_contacts
+
   # Internal/workshop deployment classification (telemetry labels; issue #1216)
   internal_only_deployment = var.internal_only_deployment
   internal_deployment_type = var.internal_deployment_type

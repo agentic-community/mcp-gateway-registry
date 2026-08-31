@@ -6,6 +6,8 @@ from fastapi.responses import JSONResponse
 
 from ..auth.oauth_metadata import (
     build_canonical_resource_url,
+    build_cimd_client_id_url,
+    build_cimd_document,
     build_per_server_resource_url,
     build_resource_documentation_url,
     derive_supported_scopes,
@@ -21,6 +23,13 @@ from ..services.server_service import server_service
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# CIMD (Client ID Metadata Document) publisher, issue #992. Mounted at ROOT
+# (not /.well-known): a CIMD is a client-published resource at an operator-
+# chosen public path, not a well-known authority document. Rides the public
+# catch-all nginx `location /` (no auth_request), so the AS fetches it
+# unauthenticated with no dedicated nginx block.
+cimd_router = APIRouter()
 
 # Lock to prevent TOCTOU race in registry-card auto-initialization.
 _registry_card_init_lock = asyncio.Lock()
@@ -59,6 +68,30 @@ async def get_ai_catalog(
         "Content-Type": "application/json",
     }
     return JSONResponse(content=payload, headers=headers)
+
+
+@cimd_router.get("/oauth/client-metadata.json")
+async def get_oauth_client_metadata() -> JSONResponse:
+    """Publish this registry's CIMD (Client ID Metadata Document) -- issue #992.
+
+    Describes the registry as an OAuth CLIENT so it can authenticate to external
+    CIMD-aware IdPs; the document's URL is the registry's client_id. Public,
+    unauthenticated, and cacheable (unlike the no-store discovery documents).
+    Served only when cimd_publisher_enabled.
+    """
+    if not settings.cimd_publisher_enabled:
+        raise HTTPException(status_code=404, detail="CIMD publisher is disabled")
+    # The client_id URL is sent to external IdPs; require HTTPS in production.
+    enforce_https(
+        build_cimd_client_id_url(settings.egress_oauth_callback_base),
+        https_required=settings.mcp_https_required,
+    )
+    document = build_cimd_document()
+    headers = {
+        "Cache-Control": f"public, max-age={settings.cimd_cache_ttl}",
+        "Content-Type": "application/json",
+    }
+    return JSONResponse(content=document, headers=headers)
 
 
 async def _auto_initialize_registry_card():

@@ -858,6 +858,13 @@ These have no `.env` equivalent because they describe the infrastructure, not th
 | Enable reverse-proxy | `A2A_REVERSE_PROXY_ENABLED` | `a2a_reverse_proxy_enabled` | `registry.app.a2aReverseProxyEnabled` | Opt-in. When `true`, each enabled agent gets nginx blocks that proxy its A2A traffic (agent card + JSON-RPC) through the gateway for centralized auth and per-agent access control. Default `false` = registry-only discovery, no proxy blocks. Also gated by `with-gateway` deployment mode; force-disabled in `registry-only`. See [A2A reverse-proxy mode](design/a2a-protocol-integration.md#reverse-proxy-mode-proxying-a2a-traffic). |
 | SSRF allowed hosts | `SSRF_ALLOWED_HOSTS` | `ssrf_allowed_hosts` | `registry.app.ssrfAllowedHosts` | Comma-separated exact hostnames or literal IPs that the gateway is permitted to proxy/health-check even though they resolve to private/internal addresses. Needed when agent backends live on internal networks (Docker service names, ECS Service Connect names, in-cluster ClusterIPs), which the SSRF guard blocks by default. Least-privilege: prefer naming hosts here over widening CIDRs. Empty = only public addresses allowed. |
 | SSRF allowed CIDRs | `SSRF_ALLOWED_CIDRS` | `ssrf_allowed_cidrs` | `registry.app.ssrfAllowedCidrs` | Comma-separated CIDR ranges to allow whole internal subnets (e.g. `172.18.0.0/16` for a Docker network, or the cluster service CIDR on EKS). Use only when you cannot enumerate hosts. Empty = no internal subnets allowed. |
+| CIMD publisher enabled | `CIMD_PUBLISHER_ENABLED` | `cimd_publisher_enabled` | `registry.app.cimdPublisherEnabled` | Serve the registry's CIMD at GET /oauth/client-metadata.json (describes the registry as an OAuth client for external CIMD-aware IdPs). Default off; 404 when off. |
+| CIMD cache TTL | `CIMD_CACHE_TTL` | `cimd_cache_ttl` | `registry.app.cimdCacheTtl` | Public Cache-Control max-age (seconds) for the CIMD document. |
+| CIMD client name | `CIMD_CLIENT_NAME` | `cimd_client_name` | `registry.app.cimdClientName` | Human-readable client_name in the CIMD document. |
+| CIMD redirect URIs | `CIMD_REDIRECT_URIS` | `cimd_redirect_uris` | `registry.app.cimdRedirectUris` | CSV of allowed callback redirect URIs; default {EGRESS_OAUTH_CALLBACK_BASE_URL or REGISTRY_URL}/oauth2/egress/callback. |
+| CIMD scope | `CIMD_SCOPE` | `cimd_scope` | `registry.app.cimdScope` | Space-separated OAuth scopes the client requests; default the advertised OIDC scopes. |
+| CIMD logo URI | `CIMD_LOGO_URI` | `cimd_logo_uri` | `registry.app.cimdLogoUri` | Optional logo URI in the CIMD document; omitted when empty. |
+| CIMD contacts | `CIMD_CONTACTS` | `cimd_contacts` | `registry.app.cimdContacts` | CSV of operator contact emails; optional; omitted when empty. |
 
 ---
 
