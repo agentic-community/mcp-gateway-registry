@@ -226,16 +226,24 @@ def build_resource_metadata_url(resource_url: str) -> str:
     return f"{resource_url}{WELLKNOWN_PRM_PATH}"
 
 
-WELLKNOWN_CIMD_PATH: str = "/.well-known/mcp-client-metadata"
+# CIMD is a client-published document at an operator-chosen public HTTPS path
+# (draft-ietf-oauth-client-id-metadata-document do not mandate a .well-known
+# suffix; the ecosystem convention -- MCP's own examples, AT Protocol -- is a
+# plain /oauth/client-metadata.json). The URL IS the client_id, so it must be
+# stable and served publicly (the AS fetches it unauthenticated).
+CIMD_PATH: str = "/oauth/client-metadata.json"
 
 
-def build_cimd_client_id_url(registry_url: str) -> str:
+def build_cimd_client_id_url(base_url: str) -> str:
     """The registry's CIMD client_id: the canonical URL of its published Client
-    ID Metadata Document (issue #992). MUST match byte-for-byte the client_id the
+    ID Metadata Document (issue #992). ``base_url`` is the externally reachable
+    base (the egress OAuth callback base), NOT necessarily ``registry_url``:
+    the IdP fetches this URL and redirects back to a host under the same base,
+    so both must share an origin. MUST match byte-for-byte the client_id the
     registry sends on outbound authorization requests; renaming the endpoint
     changes the client_id and breaks CIMD-aware IdPs mid-flight.
     """
-    return f"{registry_url.rstrip('/')}{WELLKNOWN_CIMD_PATH}"
+    return f"{base_url.rstrip('/')}{CIMD_PATH}"
 
 
 def build_cimd_document() -> dict:
@@ -243,8 +251,8 @@ def build_cimd_document() -> dict:
     (issue #992). Field order is fixed for byte-stable, cacheable output. Reads
     config from the module ``settings`` so callers/tests can patch it.
     """
-    base = settings.registry_url.rstrip("/")
-    client_id = build_cimd_client_id_url(settings.registry_url)
+    base = settings.egress_oauth_callback_base.rstrip("/")
+    client_id = build_cimd_client_id_url(settings.egress_oauth_callback_base)
 
     redirect_uris = [
         u.strip() for u in (settings.cimd_redirect_uris or "").split(",") if u.strip()

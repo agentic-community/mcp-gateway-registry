@@ -54,6 +54,7 @@ from registry.api.skill_routes import router as skill_router
 from registry.api.system_routes import router as system_router
 from registry.api.system_routes import set_server_start_time
 from registry.api.virtual_server_routes import router as virtual_server_router
+from registry.api.wellknown_routes import cimd_router
 from registry.api.wellknown_routes import router as wellknown_router
 
 # Import audit logging
@@ -1212,6 +1213,11 @@ app.include_router(registry_router, prefix="/api/registry", tags=["Registry Card
 
 # Register well-known discovery router
 app.include_router(wellknown_router, prefix="/.well-known", tags=["Discovery"])
+
+# CIMD (Client ID Metadata Document) publisher at /oauth/client-metadata.json.
+# Root-mounted (NOT under /.well-known): a CIMD is a client-published resource,
+# and the document URL is the registry's OAuth client_id.
+app.include_router(cimd_router, tags=["Discovery"])
 
 # Register ARD Registry adapter (POST /api/ard/search, GET /api/ard/agents, issue #1295)
 from fastapi.exceptions import RequestValidationError  # noqa: E402

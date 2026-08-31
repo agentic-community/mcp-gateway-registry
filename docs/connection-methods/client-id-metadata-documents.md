@@ -42,17 +42,21 @@ Two sides, matching how CIMD works in practice:
 When `CIMD_PUBLISHER_ENABLED=true`, the registry serves a Client ID Metadata
 Document at:
 
-    GET /.well-known/mcp-client-metadata
+    GET /oauth/client-metadata.json
 
 That document's URL **is** the registry's `client_id` when it authenticates as
-an OAuth client to an external CIMD-aware IdP. It is public, unauthenticated, and
-cacheable (`Cache-Control: public, max-age=3600`). Configure it with:
+an OAuth client to an external CIMD-aware IdP. Per the CIMD convention it is a
+plain public path (not a `.well-known` document): public, unauthenticated, and
+cacheable (`Cache-Control: public, max-age=3600`). The URL is built from the
+egress OAuth callback base (`EGRESS_OAUTH_CALLBACK_BASE_URL`, falling back to
+`REGISTRY_URL`) so the `client_id` and redirect share the externally reachable
+origin the IdP redirects back to. Configure it with:
 
 | Setting | Purpose |
 | --- | --- |
 | `CIMD_PUBLISHER_ENABLED` | Serve the document (default off; 404 when off). |
 | `CIMD_CLIENT_NAME` | Human-readable client name (default "AI Registry Tools"). |
-| `CIMD_REDIRECT_URIS` | CSV of allowed callbacks (default `{REGISTRY_URL}/oauth2/egress/callback`). |
+| `CIMD_REDIRECT_URIS` | CSV of allowed callbacks (default `{EGRESS_OAUTH_CALLBACK_BASE_URL or REGISTRY_URL}/oauth2/egress/callback`). |
 | `CIMD_SCOPE` | Space-separated requested scopes (default the advertised OIDC scopes). |
 | `CIMD_LOGO_URI`, `CIMD_CONTACTS` | Optional metadata; omitted when unset. |
 

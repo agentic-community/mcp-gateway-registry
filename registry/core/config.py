@@ -469,14 +469,14 @@ class Settings(BaseSettings):
     wellknown_cache_ttl: int = 300  # 5 minutes
 
     # CIMD (Client ID Metadata Document) publisher (issue #992). Default OFF.
-    # When enabled, GET /.well-known/mcp-client-metadata returns a public document
+    # When enabled, GET /oauth/client-metadata.json returns a public document
     # describing THIS registry as an OAuth CLIENT; the document's URL is the
     # client_id the registry presents to external CIMD-aware IdPs. Renaming the
     # endpoint would change that client_id, so the path is stable.
     cimd_publisher_enabled: bool = False
     cimd_cache_ttl: int = 3600  # public max-age for the CIMD document
     cimd_client_name: str = "AI Registry Tools"
-    cimd_redirect_uris: str = ""  # CSV; default {registry_url}/oauth2/egress/callback
+    cimd_redirect_uris: str = ""  # CSV; default {egress_oauth_callback_base}/oauth2/egress/callback
     cimd_scope: str = ""  # space-separated; default advertised OIDC scopes
     cimd_logo_uri: str = ""  # optional; omitted from the document when empty
     cimd_contacts: str = ""  # CSV operator contact emails; optional

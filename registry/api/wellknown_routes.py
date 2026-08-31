@@ -24,6 +24,13 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# CIMD (Client ID Metadata Document) publisher, issue #992. Mounted at ROOT
+# (not /.well-known): a CIMD is a client-published resource at an operator-
+# chosen public path, not a well-known authority document. Rides the public
+# catch-all nginx `location /` (no auth_request), so the AS fetches it
+# unauthenticated with no dedicated nginx block.
+cimd_router = APIRouter()
+
 # Lock to prevent TOCTOU race in registry-card auto-initialization.
 _registry_card_init_lock = asyncio.Lock()
 
@@ -63,8 +70,8 @@ async def get_ai_catalog(
     return JSONResponse(content=payload, headers=headers)
 
 
-@router.get("/mcp-client-metadata")
-async def get_mcp_client_metadata() -> JSONResponse:
+@cimd_router.get("/oauth/client-metadata.json")
+async def get_oauth_client_metadata() -> JSONResponse:
     """Publish this registry's CIMD (Client ID Metadata Document) -- issue #992.
 
     Describes the registry as an OAuth CLIENT so it can authenticate to external
@@ -76,7 +83,7 @@ async def get_mcp_client_metadata() -> JSONResponse:
         raise HTTPException(status_code=404, detail="CIMD publisher is disabled")
     # The client_id URL is sent to external IdPs; require HTTPS in production.
     enforce_https(
-        build_cimd_client_id_url(settings.registry_url),
+        build_cimd_client_id_url(settings.egress_oauth_callback_base),
         https_required=settings.mcp_https_required,
     )
     document = build_cimd_document()
