@@ -24,8 +24,6 @@ State which persona is "speaking" when presenting a theory or counter-argument. 
 
 ## First Principles Debugging
 
-## First Principles Debugging
-
 ### Step 1: Reproduce and observe (do NOT theorize yet)
 
 - What exact error does the user see? (HTTP status, error message, timing)
