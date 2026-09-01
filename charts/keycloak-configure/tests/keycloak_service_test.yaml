@@ -1,0 +1,78 @@
+suite: stable Keycloak service URL
+templates:
+  - secret.yaml
+release:
+  name: test
+  namespace: default
+tests:
+  # Stack-owned "<release>-kc-int" ClusterIP Service (stable VIP,
+  # survives pod rolls; name and 8080 port fixed in the stack template,
+  # not in replaceable values) — NOT the headless Service (pod IP that
+  # nginx pins until restart) and NOT a default :80 port (clients omit
+  # default ports from Host, breaking issuer/discovery matching). Must
+  # match the same assertion in the registry, auth-server, and stack
+  # suites.
+  - it: uses the stack-owned internal Service on port 8080
+    set:
+      global:
+        domain: example.com
+        ingress:
+          routingMode: subdomain
+          tls: false
+          paths:
+            registry: /registry
+    asserts:
+      - equal:
+          path: data.KEYCLOAK_URL
+          value: http://test-kc-int:8080
+          decodeBase64: true
+      - equal:
+          path: data.KEYCLOAK_ADMIN_URL
+          value: http://test-kc-int:8080
+          decodeBase64: true
+
+  # External Keycloak and standalone installs point at their own
+  # Keycloak via the one canonical override, shared with the stack.
+  - it: honors the global internalUrl override
+    set:
+      global:
+        authProvider:
+          keycloak:
+            internalUrl: http://my-own-keycloak.example:8080
+        domain: example.com
+        ingress:
+          routingMode: subdomain
+          tls: false
+          paths:
+            registry: /registry
+    asserts:
+      - equal:
+          path: data.KEYCLOAK_URL
+          value: http://my-own-keycloak.example:8080
+          decodeBase64: true
+      - equal:
+          path: data.KEYCLOAK_ADMIN_URL
+          value: http://my-own-keycloak.example:8080
+          decodeBase64: true
+
+  # At the 53-char release-name maximum the full release name is kept
+  # (53 + 7-char "-kc-int" = 60 <= 63), so long releases sharing a
+  # prefix still get distinct hostnames. Must stay in lockstep with the
+  # stack's keycloakInternalHost helper.
+  - it: keeps the full release name at the maximum length
+    release:
+      name: release-with-a-shared-forty-five-char-prefix-alpha-01
+      namespace: default
+    set:
+      global:
+        domain: example.com
+        ingress:
+          routingMode: subdomain
+          tls: false
+          paths:
+            registry: /registry
+    asserts:
+      - equal:
+          path: data.KEYCLOAK_URL
+          value: http://release-with-a-shared-forty-five-char-prefix-alpha-01-kc-int:8080
+          decodeBase64: true

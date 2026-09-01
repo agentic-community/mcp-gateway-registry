@@ -28,6 +28,10 @@ global:
     keycloak:
       adminUsername: user
       realm: mcp-gateway
+      # In-cluster Keycloak base URL for KEYCLOAK_URL. Empty targets the
+      # umbrella stack's "<release>-kc-int" Service; set it when
+      # installing this chart standalone against your own Keycloak.
+      internalUrl: ""
 # Per-service image configuration
 # Any field left empty falls back to the corresponding global.image.* value.
 image:

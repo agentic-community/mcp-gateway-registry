@@ -77,3 +77,50 @@ Call as: {{- include "registry.validateExtraEnv" . -}}
   {{- $_ := set $seen $e.name $i -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+In-cluster Keycloak HTTP URL.
+
+Nginx proxy_pass interpolates KEYCLOAK_URL as a literal hostname and
+resolves it once at start. The Bitnami headless Service's A record is
+the pod IP, so a Keycloak roll 503s /realms/ until the registry
+restarts. The URL therefore targets the stack-owned ClusterIP Service
+"<release>-kc-int" (stack chart,
+templates/keycloak-internal-service.yaml): a stable VIP whose name and
+8080 port are fixed by the stack chart itself, unlike the Bitnami
+Services whose name follows nameOverride/fullnameOverride and whose
+port list is replaceable user values.
+
+The short in-namespace hostname is deliberate: every consumer runs in
+the release namespace, the resolver search path expands it, and it
+keeps the URL independent of namespace and cluster-domain settings.
+No truncation: Helm caps release names at 53 chars, so with the
+7-char "-kc-int" suffix the name never exceeds the 63-char DNS label
+limit, and keeping the full release name keeps it unique per release.
+
+Port 8080 MUST stay explicit: HTTP clients omit default ports from the
+Host header, Keycloak derives issuer/discovery URLs from Host, and a
+portless issuer breaks auth-server's exact-match issuer allowlist and
+startswith() discovery rewrite. Note the hostname does differ from the
+old headless URL, so tokens minted against the previous internal
+issuer are invalidated when this fix lands; deployments that pin the
+issuer via KC_HOSTNAME are unaffected.
+
+global.authProvider.keycloak.internalUrl is the one canonical
+override, shared with the stack chart (Helm propagates globals to
+subcharts): the stack requires it for external Keycloak
+(keycloak.create=false), and standalone installs of this chart use it
+to point at their own Keycloak. The default assumes the stack
+topology (same release name and namespace as the stack that owns the
+Service). The stack and sibling charts render the same URL from their
+own copies of this helper; each chart's keycloak_service_test.yaml
+pins the string.
+*/}}
+{{- define "registry.keycloakInternalUrl" -}}
+{{- $override := dig "authProvider" "keycloak" "internalUrl" "" (.Values.global | default dict) -}}
+{{- if $override -}}
+{{- $override -}}
+{{- else -}}
+{{- printf "http://%s-kc-int:8080" .Release.Name -}}
+{{- end -}}
+{{- end -}}

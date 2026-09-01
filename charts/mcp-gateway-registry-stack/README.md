@@ -92,15 +92,22 @@ keycloak-configure:
 global:
   authProvider:
     type: keycloak
+    keycloak:
+      realm: mcp-gateway
+      # REQUIRED when keycloak.create=false: base URL of your Keycloak,
+      # reachable from inside the cluster. Without it the chart fails to
+      # render — there is no in-cluster Keycloak Service to default to.
+      internalUrl: https://your-keycloak.example.com
 
 keycloak:
   create: false  # Don't deploy Keycloak
-  externalUrl: https://your-keycloak.example.com
-  realm: mcp-gateway
 
 keycloak-configure:
   enabled: true  # Still configure the external Keycloak
 ```
+
+The configure Job reads the Keycloak admin password from the Secret `<release>-keycloak` (key `admin-password`).
+The bundled Keycloak generates that Secret; with an external instance, create it yourself with the admin password for the account in `keycloak-configure.keycloak.adminUser` — or set `keycloak-configure.enabled=false` and configure the realm manually.
 
 **Optional: Keycloak M2M authentication:**
 

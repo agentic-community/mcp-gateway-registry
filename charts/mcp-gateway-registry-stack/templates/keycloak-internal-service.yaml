@@ -1,0 +1,65 @@
+{{/*
+Stack-owned stable ClusterIP Service in front of the Bitnami Keycloak
+pods. Every internal consumer (registry nginx proxy_pass, auth-server
+issuer validation, keycloak-configure Job) targets it via the
+*.keycloakInternalUrl helpers.
+
+Why not one of the Bitnami-rendered Services:
+  - the headless Service resolves to pod IPs, which registry nginx pins
+    at startup, so /realms/ 503s after a Keycloak pod roll until the
+    registry restarts;
+  - the Bitnami ClusterIP Service's name follows common.names.fullname
+    (keycloak.nameOverride / fullnameOverride) and its port list is
+    plain user values (service.ports.http, service.extraPorts), so a
+    URL derived from those chart internals silently breaks under
+    overrides or `helm upgrade --reuse-values`.
+Owning the Service here puts both the name and the port under this
+chart's control: this template and the URL helpers are the only two
+owners, locked together by the keycloakInternalHost helper and the
+keycloak_service_test.yaml suites.
+
+Rendered only for the bundled Keycloak (keycloak.create=true).
+External-Keycloak installs must set
+global.authProvider.keycloak.internalUrl instead — the URL helper
+fails the render if they don't.
+
+Port 8080 (-> container port "http") keeps an explicit port in the
+Host header. Keycloak derives issuer/discovery URLs from Host, and a
+portless issuer would break auth-server's exact-match issuer allowlist
+and startswith() discovery rewrite. The hostname still differs from
+the pre-fix headless URL, so tokens minted against the old internal
+issuer are invalidated at cutover; deployments that pin the issuer via
+KC_HOSTNAME are unaffected.
+
+The selector deliberately avoids app.kubernetes.io/name (it follows
+keycloak.nameOverride). instance/component/part-of are invariant: the
+Bitnami statefulset hardcodes component and part-of on its pods, and
+instance is always the release name. keycloak_service_test.yaml renders
+the vendored statefulset and asserts these labels, so a Bitnami bump
+that renames them fails CI instead of leaving this Service without
+endpoints. Overrides that would break the selector at deploy time
+(keycloak.podLabels/commonLabels on the selector keys,
+keycloak.namespaceOverride) are rejected by validateKeycloakInternal.
+*/}}
+{{- if .Values.keycloak.create }}
+{{- include "mcp-gateway-registry-stack.validateKeycloakInternal" . }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "mcp-gateway-registry-stack.keycloakInternalHost" . }}
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "mcp-gateway-registry-stack.labels" . | nindent 4 }}
+    app.kubernetes.io/component: keycloak-internal
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: keycloak
+    app.kubernetes.io/part-of: keycloak
+  ports:
+    - name: http
+      port: 8080
+      protocol: TCP
+      targetPort: http
+{{- end }}

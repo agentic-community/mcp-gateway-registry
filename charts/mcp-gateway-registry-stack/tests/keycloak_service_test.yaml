@@ -1,0 +1,292 @@
+suite: stack-owned internal Keycloak Service matches KEYCLOAK_URL
+templates:
+  - templates/keycloak-internal-service.yaml
+  - templates/oauth-provider-secret.yaml
+  - charts/keycloak/templates/statefulset.yaml
+  # statefulset.yaml includes this sibling for its checksum annotation;
+  # helm-unittest only resolves includes for templates listed here.
+  - charts/keycloak/templates/configmap-env-vars.yaml
+release:
+  name: test
+  namespace: default
+tests:
+  # The stack owns both sides of the internal Keycloak endpoint: the
+  # "<release>-kc-int" Service (name and 8080 port fixed in
+  # templates/keycloak-internal-service.yaml, not in replaceable user
+  # values) and the KEYCLOAK_URL that targets it (both render through
+  # the keycloakInternalHost helper, so they cannot drift). These tests
+  # pin that contract and its immunity to Bitnami keycloak.* overrides.
+  - it: renders a release-scoped ClusterIP Service on 8080
+    templates:
+      - templates/keycloak-internal-service.yaml
+    asserts:
+      - equal:
+          path: metadata.name
+          value: test-kc-int
+      - equal:
+          path: spec.type
+          value: ClusterIP
+      - equal:
+          path: spec.ports
+          value:
+            - name: http
+              port: 8080
+              protocol: TCP
+              targetPort: http
+
+  # The selector may only use labels the Bitnami statefulset hardcodes
+  # on its pods (instance/component/part-of) — never
+  # app.kubernetes.io/name, which follows keycloak.nameOverride.
+  - it: selects Keycloak pods by override-immune labels
+    templates:
+      - templates/keycloak-internal-service.yaml
+    asserts:
+      - equal:
+          path: spec.selector
+          value:
+            app.kubernetes.io/instance: test
+            app.kubernetes.io/component: keycloak
+            app.kubernetes.io/part-of: keycloak
+
+  - it: ships a KEYCLOAK_URL that targets that Service and port
+    templates:
+      - templates/oauth-provider-secret.yaml
+    set:
+      global:
+        domain: example.com
+        ingress:
+          routingMode: subdomain
+          tls: true
+    asserts:
+      - equal:
+          path: data.KEYCLOAK_URL
+          value: http://test-kc-int:8080
+          decodeBase64: true
+
+  # Bitnami overrides rename the subchart's own Services and replace
+  # their port lists — the failure mode that ruled out deriving the URL
+  # from the Bitnami Service. The stack-owned endpoint must not move.
+  - it: keeps Service name and port under keycloak overrides
+    templates:
+      - templates/keycloak-internal-service.yaml
+    set:
+      keycloak:
+        fullnameOverride: my-kc
+        nameOverride: kc
+        service:
+          ports:
+            http: 8181
+          extraPorts:
+            - name: custom
+              port: 9999
+              protocol: TCP
+              targetPort: http
+    asserts:
+      - equal:
+          path: metadata.name
+          value: test-kc-int
+      - equal:
+          path: spec.ports
+          value:
+            - name: http
+              port: 8080
+              protocol: TCP
+              targetPort: http
+
+  - it: keeps KEYCLOAK_URL under keycloak overrides
+    templates:
+      - templates/oauth-provider-secret.yaml
+    set:
+      keycloak:
+        fullnameOverride: my-kc
+        nameOverride: kc
+      global:
+        domain: example.com
+        ingress:
+          routingMode: subdomain
+          tls: true
+    asserts:
+      - equal:
+          path: data.KEYCLOAK_URL
+          value: http://test-kc-int:8080
+          decodeBase64: true
+
+  - it: is not rendered when keycloak.create is false
+    templates:
+      - templates/keycloak-internal-service.yaml
+    set:
+      keycloak:
+        create: false
+      # Required for external Keycloak (and the suite renders the shared
+      # Secret too, which enforces that) — the Service must stay absent
+      # regardless.
+      global:
+        authProvider:
+          keycloak:
+            internalUrl: http://keycloak.corp.example:8080
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # External Keycloak (keycloak.create=false): the Service above is not
+  # rendered, so a default KEYCLOAK_URL would be dead on arrival. The
+  # helper fails closed unless the one canonical override,
+  # global.authProvider.keycloak.internalUrl, supplies the real URL.
+  - it: fails external Keycloak without the internalUrl override
+    templates:
+      - templates/oauth-provider-secret.yaml
+    set:
+      keycloak:
+        create: false
+    asserts:
+      - failedTemplate:
+          errorPattern: requires global.authProvider.keycloak.internalUrl
+
+  - it: uses the internalUrl override for external Keycloak
+    templates:
+      - templates/oauth-provider-secret.yaml
+    set:
+      keycloak:
+        create: false
+      global:
+        authProvider:
+          keycloak:
+            internalUrl: http://keycloak.corp.example:8080
+    asserts:
+      - equal:
+          path: data.KEYCLOAK_URL
+          value: http://keycloak.corp.example:8080
+          decodeBase64: true
+
+  # Non-keycloak providers also run with keycloak.create=false but never
+  # emit KEYCLOAK_URL — the fail-closed guard must not fire for them.
+  - it: does not require the override for non-keycloak providers
+    templates:
+      - templates/oauth-provider-secret.yaml
+    set:
+      keycloak:
+        create: false
+      global:
+        authProvider:
+          type: entra
+    asserts:
+      - notExists:
+          path: data.KEYCLOAK_URL
+      - equal:
+          path: data.AUTH_PROVIDER
+          value: entra
+          decodeBase64: true
+
+  # Name uniqueness at the 53-char release-name maximum: the full
+  # release name is kept (53 + 7-char "-kc-int" suffix = 60 <= 63), so
+  # two releases sharing a 45-char prefix still get distinct Services.
+  # Any truncation of the release portion would collapse these two
+  # names into one.
+  - it: keeps the full release name at maximum length (alpha)
+    templates:
+      - templates/keycloak-internal-service.yaml
+    release:
+      name: release-with-a-shared-forty-five-char-prefix-alpha-01
+      namespace: default
+    asserts:
+      - equal:
+          path: metadata.name
+          value: release-with-a-shared-forty-five-char-prefix-alpha-01-kc-int
+
+  - it: keeps the full release name at maximum length (bravo)
+    templates:
+      - templates/keycloak-internal-service.yaml
+    release:
+      name: release-with-a-shared-forty-five-char-prefix-bravo-02
+      namespace: default
+    asserts:
+      - equal:
+          path: metadata.name
+          value: release-with-a-shared-forty-five-char-prefix-bravo-02-kc-int
+
+  # Supported Bitnami overrides that would silently leave the Service
+  # with zero endpoints must fail the render instead (validateKeycloakInternal).
+  - it: rejects selector-label overrides via podLabels
+    templates:
+      - templates/keycloak-internal-service.yaml
+    set:
+      keycloak:
+        podLabels:
+          app.kubernetes.io/instance: hijacked
+    asserts:
+      - failedTemplate:
+          errorPattern: reserved label
+
+  - it: rejects selector-label overrides via commonLabels
+    templates:
+      - templates/keycloak-internal-service.yaml
+    set:
+      keycloak:
+        commonLabels:
+          app.kubernetes.io/component: hijacked
+    asserts:
+      - failedTemplate:
+          errorPattern: reserved label
+
+  - it: rejects keycloak.namespaceOverride pointing elsewhere
+    templates:
+      - templates/keycloak-internal-service.yaml
+    set:
+      keycloak:
+        namespaceOverride: other-ns
+    asserts:
+      - failedTemplate:
+          errorPattern: cannot select pods in another namespace
+
+  - it: accepts benign podLabels without touching the selector
+    templates:
+      - templates/keycloak-internal-service.yaml
+    set:
+      keycloak:
+        podLabels:
+          team: platform
+    asserts:
+      - equal:
+          path: spec.selector
+          value:
+            app.kubernetes.io/instance: test
+            app.kubernetes.io/component: keycloak
+            app.kubernetes.io/part-of: keycloak
+
+  # Contract with the vendored Bitnami chart: the keycloak-internal
+  # Service selects pods purely by instance/component/part-of, so those
+  # labels must keep appearing on the statefulset's pod template. This
+  # renders the vendored subchart, so a `helm dep update` that bumps
+  # Bitnami and renames these labels fails here in CI instead of
+  # shipping a Service with no endpoints.
+  - it: Bitnami pod labels still match the Service selector
+    templates:
+      - charts/keycloak/templates/statefulset.yaml
+    asserts:
+      - equal:
+          path: spec.template.metadata.labels["app.kubernetes.io/instance"]
+          value: test
+      - equal:
+          path: spec.template.metadata.labels["app.kubernetes.io/component"]
+          value: keycloak
+      - equal:
+          path: spec.template.metadata.labels["app.kubernetes.io/part-of"]
+          value: keycloak
+
+  - it: Bitnami pod labels keep matching under name overrides
+    templates:
+      - charts/keycloak/templates/statefulset.yaml
+    set:
+      keycloak:
+        fullnameOverride: my-kc
+        nameOverride: kc
+    asserts:
+      - equal:
+          path: spec.template.metadata.labels["app.kubernetes.io/instance"]
+          value: test
+      - equal:
+          path: spec.template.metadata.labels["app.kubernetes.io/component"]
+          value: keycloak
+      - equal:
+          path: spec.template.metadata.labels["app.kubernetes.io/part-of"]
+          value: keycloak

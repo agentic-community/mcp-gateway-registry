@@ -67,10 +67,12 @@ tests:
           path: metadata.annotations["helm.sh/hook-delete-policy"]
           value: before-hook-creation
 
-  # Internal KEYCLOAK_URL must be bare (no /keycloak suffix) in both
-  # routing modes — the registry pod's nginx handles browser-side path
-  # rewriting, and Keycloak serves from its own root.
-  - it: internal KEYCLOAK_URL has no path suffix in subdomain mode
+  # Internal KEYCLOAK_URL must use the stack-owned "<release>-kc-int"
+  # ClusterIP Service (NOT the headless Service, whose pod-IP A record
+  # nginx pins until restart, 503ing /realms/ after a Keycloak pod
+  # replacement) and remain bare (no /keycloak suffix) in both routing
+  # modes. See keycloak_service_test.yaml for the Service half.
+  - it: internal KEYCLOAK_URL uses the internal Service with no path suffix in subdomain mode
     templates:
       - templates/oauth-provider-secret.yaml
     set:
@@ -82,10 +84,10 @@ tests:
     asserts:
       - equal:
           path: data.KEYCLOAK_URL
-          # base64 of http://test-keycloak-headless.default.svc.cluster.local:8080
-          value: aHR0cDovL3Rlc3Qta2V5Y2xvYWstaGVhZGxlc3MuZGVmYXVsdC5zdmMuY2x1c3Rlci5sb2NhbDo4MDgw
+          value: http://test-kc-int:8080
+          decodeBase64: true
 
-  - it: internal KEYCLOAK_URL has no path suffix in path mode
+  - it: internal KEYCLOAK_URL uses the internal Service with no path suffix in path mode
     templates:
       - templates/oauth-provider-secret.yaml
     set:
@@ -97,7 +99,8 @@ tests:
     asserts:
       - equal:
           path: data.KEYCLOAK_URL
-          value: aHR0cDovL3Rlc3Qta2V5Y2xvYWstaGVhZGxlc3MuZGVmYXVsdC5zdmMuY2x1c3Rlci5sb2NhbDo4MDgw
+          value: http://test-kc-int:8080
+          decodeBase64: true
 
   # KEYCLOAK_EXTERNAL_URL is the BARE host (no /keycloak suffix). Keycloak
   # emits issuer claims and discovery-doc `issuer` fields without the

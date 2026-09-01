@@ -66,9 +66,12 @@ keycloak:
   create: true
 
 # For external Keycloak
+global:
+  authProvider:
+    keycloak:
+      internalUrl: https://your-keycloak.com  # required when create=false
 keycloak:
   create: false
-  externalUrl: https://your-keycloak.com
 
 # For Entra ID
 keycloak:

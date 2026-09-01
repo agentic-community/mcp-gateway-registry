@@ -48,6 +48,13 @@ global:
       adminUsername: &keycloakAdmin "user"
       realm: &keycloakRealm "mcp-gateway"
       # Don't set password here - let Keycloak chart generate it
+      # In-cluster Keycloak base URL for KEYCLOAK_URL, used by the shared
+      # oauth-provider Secret and (via Helm globals) by every subchart.
+      # Leave empty with the bundled Keycloak: it targets the stack-owned
+      # "<release>-kc-int" Service. REQUIRED when keycloak.create=false —
+      # that Service is only rendered for the bundled Keycloak, so the
+      # chart refuses to render a default URL that would point at nothing.
+      internalUrl: ""
     entra:
       adminGroupId: # UUID of Entra admin group
   # Common ingress settings. Only the registry exposes a public ingress.
@@ -226,6 +233,11 @@ keycloak:
       value: edge
     - name: KC_PROXY_HEADERS
       value: xforwarded
+  # NOTE: internal consumers do NOT use the Bitnami-rendered Services.
+  # KEYCLOAK_URL targets the stack-owned "<release>-kc-int" ClusterIP
+  # Service (templates/keycloak-internal-service.yaml), whose name and
+  # 8080 port are fixed in the template rather than in replaceable
+  # values, so service.* overrides here cannot break it.
   ingress:
     enabled: false
   nodeSelector: {}

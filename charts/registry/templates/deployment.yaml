@@ -24,6 +24,14 @@ spec:
       labels:
         app.kubernetes.io/name: {{ .Values.app.name }}
         app.kubernetes.io/component: {{ .Values.app.name }}
+      annotations:
+        # envFrom-sourced env is snapshotted at pod start, so a helm upgrade
+        # that changes the internal Keycloak URL (e.g. headless -> ClusterIP)
+        # updates the Secret but leaves running pods (and their nginx
+        # proxy_pass) on the stale URL until an unrelated restart. Pinning
+        # the helper output here rolls the pods exactly when the chart's
+        # URL definition changes and never otherwise.
+        checksum/keycloak-internal-url: {{ include "registry.keycloakInternalUrl" . | sha256sum }}
     spec:
       # Run as the chart's ServiceAccount so attached roles apply (e.g. OpenBao
       # kubernetes-auth for the egress vault).

@@ -316,7 +316,7 @@ that server's Connect dialog:
 
 | Parameter | Docker (`.env`) | Terraform (`.tfvars`) | Helm (`values.yaml`) | Purpose |
 |-----------|-----------------|-----------------------|----------------------|---------|
-| Internal URL | `KEYCLOAK_URL` | — (templated) | `auth-server.keycloak.externalUrl` + Helm service DNS | Inside container network. |
+| Internal URL | `KEYCLOAK_URL` | — (templated) | — (templated to the stack-owned `<release>-kc-int` ClusterIP Service); override `global.authProvider.keycloak.internalUrl`, required for external Keycloak (`keycloak.create=false`) | Inside container network. Stable VIP so the registry nginx `proxy_pass` survives Keycloak pod rolls. |
 | External URL | `KEYCLOAK_EXTERNAL_URL` | — (from `keycloak_domain` / `base_domain`) | — (templated from `global.domain`) | Browser-reachable URL. |
 | Admin URL | `KEYCLOAK_ADMIN_URL` | — | — | Used by setup scripts. |
 | Realm | `KEYCLOAK_REALM` | — | `global.authProvider.keycloak.realm` / `auth-server.keycloak.realm` | e.g. `mcp-gateway`. |
