@@ -536,6 +536,33 @@ def _reset_os_environ():
 
 
 @pytest.fixture(autouse=True)
+def _reset_url_guard_allowlist_caches():
+    """Reset url_guard's process-wide allowlist caches around every test.
+
+    ``_proxy_allowlist`` / ``_skill_allowlist`` / ``_builtin_airegistry_tools_allowlist``
+    are ``@lru_cache(maxsize=1)`` over ``gateway_proxy_allow_private_targets`` and the
+    SSRF allow/deny lists — built on first use and cached for the whole process. A test
+    that sets ``gateway_proxy_allow_private_targets=True`` (or a broad ssrf allowlist)
+    and populates the cache leaks that relaxed policy into every later test on the same
+    xdist worker: the server-registration SSRF-rejection tests then see private targets
+    as "allowed" and fail nondeterministically depending on worker scheduling. Clearing
+    before and after each test keeps the allowlist hermetic.
+    """
+    from registry.utils import url_guard
+
+    def _clear() -> None:
+        url_guard._proxy_allowlist.cache_clear()
+        url_guard._skill_allowlist.cache_clear()
+        url_guard._builtin_airegistry_tools_allowlist.cache_clear()
+
+    _clear()
+    try:
+        yield
+    finally:
+        _clear()
+
+
+@pytest.fixture(autouse=True)
 def mock_all_repositories(
     mock_scope_repository,
     mock_server_repository,
