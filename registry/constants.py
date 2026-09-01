@@ -166,6 +166,8 @@ RESERVED_CUSTOM_HEADER_NAMES: frozenset[str] = frozenset(
         "x-original-url",
         "x-server-name",
         "x-tool-name",
+        "x-entity-path",
+        "x-original-method",
         "x-internal-token",
         "x-internal-token-generic",
         "x-internal-token-registry",

@@ -51,6 +51,23 @@ roles (RBAC, IRSA, etc.) can be attached to the same SA over time.
 {{- end -}}
 
 {{/*
+Whether the dedicated internal vend listener (nginx :8091, egressAuth.internalPort)
+must be exposed. Two INDEPENDENT features share this listener:
+  - the per-user egress-token vault (egressAuth.enabled), and
+  - the generic-proxy static upstream-header vend
+    (app.gatewayGenericProxyEnabled, /_egress_internal/generic-upstream-headers).
+Either one requires the Service port and its NetworkPolicy, so both the
+service.yaml port block and networkpolicy-egress-internal.yaml gate on this to
+stay in sync. Emits the string "true" when enabled, empty otherwise (use with
+`if`).
+*/}}
+{{- define "registry.internalVendListenerEnabled" -}}
+{{- if or .Values.egressAuth.enabled .Values.app.gatewayGenericProxyEnabled -}}
+true
+{{- end -}}
+{{- end -}}
+
+{{/*
 Validate .Values.extraEnv for the registry chart.
 
 Fails helm template render if any entry:

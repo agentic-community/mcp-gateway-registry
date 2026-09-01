@@ -24,11 +24,13 @@ spec:
     # this Service port narrows the surface, but the real closure is the
     # loopback bind in registry-entrypoint.sh (the app no longer listens on the
     # pod IP) plus the signed-token check in nginx_proxied_auth.
-    {{- if .Values.egressAuth.enabled }}
-    # Dedicated INTERNAL listener for the egress-token vend endpoint. ClusterIP
-    # only and NEVER referenced by the public Ingress (which backends port name
-    # "http"), so it is reachable only in-cluster; networkpolicy-egress-internal
-    # further restricts ingress to the auth-server pod.
+    {{- if include "registry.internalVendListenerEnabled" . }}
+    # Dedicated INTERNAL listener shared by two independent features: the
+    # egress-token vend (egressAuth.enabled) and the generic-proxy static
+    # upstream-header vend (app.gatewayGenericProxyEnabled). ClusterIP only and
+    # NEVER referenced by the public Ingress (which backends port name "http"),
+    # so it is reachable only in-cluster; networkpolicy-egress-internal further
+    # restricts ingress to the auth-server pod.
     - port: {{ .Values.egressAuth.internalPort | default 8091 }}
       targetPort: egress-internal
       protocol: TCP
