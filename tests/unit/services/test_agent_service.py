@@ -513,6 +513,52 @@ class TestUpdateAgent:
 
         scheduler.mark_dirty.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_update_agent_repoint_clears_upstream_headers(
+        self,
+        agent_service: AgentService,
+        fake_repo: InMemoryAgentRepository,
+    ):
+        """Repointing a proxied agent's backend to a different host clears its
+        stored upstream custom headers (credential-misdirection guard)."""
+        await fake_repo.create(
+            AgentCardFactory(
+                path="/proxied-agent",
+                is_proxied=True,
+                proxy_target_url="https://old.example.com",
+                custom_headers_encrypted=[{"name": "X-Api-Key", "value_encrypted": "gAAAAAdummy"}],
+                custom_header_names=["X-Api-Key"],
+                custom_header_overridable_names=["X-Api-Key"],
+                custom_headers_updated_at="2024-01-01T00:00:00Z",
+            )
+        )
+
+        captured: dict[str, Any] = {}
+        original_update = fake_repo.update
+
+        async def spy_update(path: str, updates: dict[str, Any]) -> AgentCard:
+            captured["updates"] = updates
+            return await original_update(path, updates)
+
+        # Patch the proxy validate-and-pin hop to avoid DNS/egress while the
+        # in-service repoint guard (clear_upstream_headers_on_repoint) still runs.
+        with (
+            patch(
+                "registry.services.agent_service._validate_and_pin_agent_proxy",
+                new=AsyncMock(),
+            ),
+            patch.object(fake_repo, "update", new=spy_update),
+        ):
+            await agent_service.update_agent(
+                "/proxied-agent", {"proxy_target_url": "https://new.example.com"}
+            )
+
+        persisted = captured["updates"]
+        assert persisted["custom_headers_encrypted"] is None
+        assert persisted["custom_header_names"] == []
+        assert persisted["custom_header_overridable_names"] == []
+        assert persisted["custom_headers_updated_at"] is None
+
 
 # =============================================================================
 # TEST: Delete Agent

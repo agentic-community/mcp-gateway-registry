@@ -219,3 +219,161 @@ class TestStreamingMidStreamUpstreamError:
         assert sem._value == 1  # slot released even on mid-body upstream failure
         assert client.closed is True
         assert "upstream_error" in [c.args[0] for c in rec.call_args_list]
+
+
+class _AexitRaisesStreamCtx:
+    """Yields a good response but raises from __aexit__ (best-effort close path)."""
+
+    def __init__(self, response):
+        self._response = response
+
+    async def __aenter__(self):
+        return self._response
+
+    async def __aexit__(self, *a):
+        raise RuntimeError("stream close boom")
+
+
+class _AexitRaisesClient:
+    def __init__(self, response):
+        self._response = response
+        self.closed = False
+
+    def stream(self, method, url, **kw):
+        return _AexitRaisesStreamCtx(self._response)
+
+    async def aclose(self):
+        self.closed = True
+
+
+class TestStreamingSetupUrlValidation:
+    async def test_url_validation_error_returns_502_and_records_upstream_error(self):
+        sem = asyncio.Semaphore(1)
+        exc = server_module.UrlValidationError("https://blocked", "denied ip")
+        client = _FakeStreamClient(raise_on_enter=exc)
+        with patch.object(server_module, "record_generic_proxy_stream_outcome") as rec:
+            with pytest.raises(HTTPException) as ei:
+                await _call(sem, client)
+        assert ei.value.status_code == 502
+        assert sem._value == 1  # slot released on fail-closed setup
+        assert client.closed is True
+        assert "upstream_error" in [c.args[0] for c in rec.call_args_list]
+
+
+class TestStreamingSetupDurationExceeded:
+    async def test_duration_exceeded_during_setup_returns_504_duration_timeout(self):
+        sem = asyncio.Semaphore(1)
+        client = _FakeStreamClient(_FakeRawResponse(200, {}, [b"x"]))
+        with (
+            patch.object(
+                server_module, "_read_generic_stream_max_duration_seconds", return_value=0
+            ),
+            patch.object(server_module, "record_generic_proxy_stream_outcome") as rec,
+        ):
+            with pytest.raises(HTTPException) as ei:
+                await _call(sem, client)
+        assert ei.value.status_code == 504
+        assert sem._value == 1  # slot released on setup duration timeout
+        assert client.closed is True
+        assert "duration_timeout" in [c.args[0] for c in rec.call_args_list]
+
+
+class TestStreamingSetupHttpxTimeout:
+    async def test_httpx_timeout_at_headers_returns_504_upstream_error(self):
+        sem = asyncio.Semaphore(1)
+        client = _FakeStreamClient(raise_on_enter=httpx.ConnectTimeout("headers timed out"))
+        with patch.object(server_module, "record_generic_proxy_stream_outcome") as rec:
+            with pytest.raises(HTTPException) as ei:
+                await _call(sem, client)
+        assert ei.value.status_code == 504
+        assert sem._value == 1
+        assert client.closed is True
+        assert "upstream_error" in [c.args[0] for c in rec.call_args_list]
+
+
+class TestStreamingSetupHttpError:
+    async def test_http_error_at_headers_returns_502_upstream_error(self):
+        sem = asyncio.Semaphore(1)
+        client = _FakeStreamClient(raise_on_enter=httpx.ReadError("boom at connect"))
+        with patch.object(server_module, "record_generic_proxy_stream_outcome") as rec:
+            with pytest.raises(HTTPException) as ei:
+                await _call(sem, client)
+        assert ei.value.status_code == 502
+        assert sem._value == 1
+        assert client.closed is True
+        assert "upstream_error" in [c.args[0] for c in rec.call_args_list]
+
+
+class TestStreamingSetupCancelled:
+    async def test_cancelled_at_headers_records_client_closed_and_reraises(self):
+        sem = asyncio.Semaphore(1)
+        client = _FakeStreamClient(raise_on_enter=asyncio.CancelledError())
+        with patch.object(server_module, "record_generic_proxy_stream_outcome") as rec:
+            with pytest.raises(asyncio.CancelledError):
+                await _call(sem, client)
+        assert sem._value == 1  # slot released before reraising cancellation
+        assert client.closed is True
+        assert "client_closed" in [c.args[0] for c in rec.call_args_list]
+
+
+class TestStreamingSetupBaseException:
+    async def test_base_exception_at_headers_cleans_up_and_reraises(self):
+        sem = asyncio.Semaphore(1)
+        client = _FakeStreamClient(raise_on_enter=KeyboardInterrupt())
+        with pytest.raises(KeyboardInterrupt):
+            await _call(sem, client)
+        assert sem._value == 1  # slot released even on BaseException
+        assert client.closed is True
+
+
+class TestStreamingMidStreamDurationTimeout:
+    async def test_deadline_passed_before_first_chunk_records_duration_timeout(self):
+        sem = asyncio.Semaphore(1)
+        client = _FakeStreamClient(
+            _FakeRawResponse(200, {"content-type": "text/event-stream"}, [b"late"])
+        )
+        with (
+            patch.object(
+                server_module, "_read_generic_stream_max_duration_seconds", return_value=0.03
+            ),
+            patch.object(server_module, "record_generic_proxy_stream_outcome") as rec,
+        ):
+            resp = await _call(sem, client)
+            # Let the absolute deadline lapse AFTER headers but BEFORE the body loop.
+            await asyncio.sleep(0.06)
+            with pytest.raises(TimeoutError):
+                await _drain(resp)
+        assert sem._value == 1  # slot released on mid-stream duration timeout
+        assert client.closed is True
+        assert "duration_timeout" in [c.args[0] for c in rec.call_args_list]
+
+
+class TestStreamingBestEffortAexit:
+    async def test_stream_ctx_aexit_error_is_swallowed_and_slot_released(self):
+        sem = asyncio.Semaphore(1)
+        client = _AexitRaisesClient(
+            _FakeRawResponse(200, {"content-type": "text/event-stream"}, [b"ok"])
+        )
+        with patch.object(server_module, "record_generic_proxy_stream_outcome") as rec:
+            resp = await _call(sem, client)
+            body = await _drain(resp)  # __aexit__ raises in finally, must not propagate
+        assert body == b"ok"
+        assert sem._value == 1  # cleanup still ran despite __aexit__ error
+        assert client.closed is True
+        assert "completed" in [c.args[0] for c in rec.call_args_list]
+
+
+class TestStreamingIdempotentCleanup:
+    async def test_second_cleanup_is_noop(self):
+        sem = asyncio.Semaphore(2)
+        client = _FakeStreamClient(
+            _FakeRawResponse(200, {"content-type": "text/event-stream"}, [b"da", b"ta"])
+        )
+        resp = await _call(sem, client)
+        await _drain(resp)  # first _cleanup (via generator finally) releases the slot
+        assert sem._value == 2
+        # BackgroundTask fires _cleanup a second time; the early-return guard must
+        # keep the release idempotent (no double-release inflating the semaphore).
+        await resp.background()
+        assert sem._value == 2
+        assert client.closed is True

@@ -158,3 +158,62 @@ class TestRotateSkillHeaders:
             json={"custom_headers": [{"name": "X-Internal-Token", "value": "x"}]},
         )
         assert resp.status_code == 400
+
+    def test_update_skill_returns_none_404(self, patched, monkeypatch):
+        # get_skill/authz succeed but the underlying update_skill
+        # returns falsy (skill vanished between read and write) -> 404.
+        _patch_build(monkeypatch, {})
+        patched.update_skill = AsyncMock(return_value=None)
+        client = _make_client(OWNER_CTX)
+        resp = client.patch(
+            f"/api/skills/{SKILL_PATH}/upstream-headers", json={"custom_headers": []}
+        )
+        assert resp.status_code == 404
+        patched.update_skill.assert_awaited_once()
+
+
+class TestUpdateSkillDropsHeaders:
+    """The general PUT /skills/{path} must strip upstream header fields from the
+    persisted update (skill_routes.py): custom_headers are only
+    settable at create / via the dedicated rotate PATCH, never on this update."""
+
+    def _put(self, service, body):
+        gate = MagicMock(allowed=True, error_message=None)
+        with (
+            patch.object(skill_routes, "get_skill_service", return_value=service),
+            patch.object(
+                skill_routes,
+                "_user_can_modify_skill",
+                side_effect=lambda skill, ctx, action="modify": (
+                    ctx.get("is_admin") or skill.owner == ctx.get("username")
+                ),
+            ),
+            patch.object(skill_routes, "check_registration_gate", AsyncMock(return_value=gate)),
+        ):
+            client = _make_client(OWNER_CTX)
+            return client.put(f"/api/skills/{SKILL_PATH}", json=body)
+
+    def test_put_strips_custom_headers_before_persist(self, service):
+        resp = self._put(
+            service,
+            {
+                "name": "pdf-tools",
+                "description": "Updated description",
+                "skill_md_url": "https://example.com/SKILL.md",
+                "custom_headers": [{"name": "X-Api-Key", "value": "sk", "overridable": False}],
+            },
+        )
+        assert resp.status_code == 200
+        # The update otherwise succeeds and reaches persistence.
+        service.update_skill.assert_awaited_once()
+        updates = service.update_skill.call_args.args[1]
+        # Non-header fields survive.
+        assert updates["description"] == "Updated description"
+        # All four upstream-header fields are stripped from the $set payload.
+        for hdr in (
+            "custom_headers",
+            "custom_headers_encrypted",
+            "custom_header_names",
+            "custom_header_overridable_names",
+        ):
+            assert hdr not in updates

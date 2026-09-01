@@ -381,3 +381,96 @@ class TestOverridableNamesVended:
         resp = _post(client)
         assert resp.status_code == 500
         assert resp.json()["detail"] == "stored upstream credential metadata is invalid"
+
+
+class TestUrlHelpers:
+    """The private URL helpers that define the upstream comparison surface."""
+
+    def test_base_url_lowercases_scheme_and_netloc_and_drops_path(self):
+        assert routes._base_url("HTTP://Host:8080/path?q=1") == "http://host:8080"
+
+    def test_base_url_bare_origin(self):
+        assert routes._base_url("https://LLM.Example") == "https://llm.example"
+
+    def test_registered_upstreams_unions_proxy_pass_and_versions(self):
+        # versions carries a mix of a plain dict and an attribute-style object;
+        # both contribute their base URL, unioned with the top-level proxy_pass_url.
+        version_obj = SimpleNamespace(proxy_pass_url="HTTPS://V2.Example:443/api")
+        server = {
+            "proxy_pass_url": "http://Primary:9000/mcp",
+            "versions": [
+                {"proxy_pass_url": "https://V1.Example/path"},
+                version_obj,
+                {"proxy_pass_url": None},
+                SimpleNamespace(proxy_pass_url=None),
+            ],
+        }
+        assert routes._registered_upstreams(server) == {
+            "http://primary:9000",
+            "https://v1.example",
+            "https://v2.example:443",
+        }
+
+    def test_registered_upstreams_empty_when_no_upstreams(self):
+        assert routes._registered_upstreams({}) == set()
+        assert routes._registered_upstreams({"versions": []}) == set()
+
+
+class TestProxyableRepoFor:
+    """Each entity-type token routes to the repository that owns it."""
+
+    def test_known_types_route_to_dedicated_repos(self, monkeypatch):
+        agent_repo = object()
+        skill_repo = object()
+        server_repo = object()
+        custom_repo = object()
+        monkeypatch.setattr(routes, "get_agent_repository", lambda: agent_repo)
+        monkeypatch.setattr(routes, "get_skill_repository", lambda: skill_repo)
+        monkeypatch.setattr(routes, "get_server_repository", lambda: server_repo)
+        monkeypatch.setattr(routes, "get_custom_entity_repository", lambda: custom_repo)
+
+        assert routes._proxyable_repo_for("a2a_agent") is agent_repo
+        assert routes._proxyable_repo_for("skill") is skill_repo
+        assert routes._proxyable_repo_for("mcp_server") is server_repo
+
+    def test_unknown_type_routes_to_custom_entity_repo(self, monkeypatch):
+        custom_repo = object()
+        monkeypatch.setattr(routes, "get_custom_entity_repository", lambda: custom_repo)
+        assert routes._proxyable_repo_for("my_custom_type") is custom_repo
+
+
+class TestTargetIdentityErrors:
+    """Target cross-check failure modes distinct from the plain != mismatch."""
+
+    def test_normalize_identity_raising_refuses_403(self, make_client, monkeypatch):
+        # A target that normalize_url_identity cannot canonicalize fails closed at
+        # 403, never leaking headers for an unverifiable upstream.
+        client = make_client(_claims(), _entity())
+
+        def _boom(_url):
+            raise ValueError("unparseable upstream")
+
+        monkeypatch.setattr(routes, "normalize_url_identity", _boom)
+        resp = _post(client)
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == "upstream not registered for this entity"
+
+    def test_non_list_metadata_fails_closed_500(self, make_client):
+        # A bypass-written doc stores a string where a name list is required; the
+        # isinstance guard fails closed before any decryption.
+        client = make_client(
+            _claims(),
+            _entity(custom_header_names="Authorization"),
+        )
+        resp = _post(client)
+        assert resp.status_code == 500
+        assert resp.json()["detail"] == "stored upstream credential metadata is invalid"
+
+    def test_non_list_overridable_metadata_fails_closed_500(self, make_client):
+        client = make_client(
+            _claims(),
+            _entity(custom_header_overridable_names="Authorization"),
+        )
+        resp = _post(client)
+        assert resp.status_code == 500
+        assert resp.json()["detail"] == "stored upstream credential metadata is invalid"

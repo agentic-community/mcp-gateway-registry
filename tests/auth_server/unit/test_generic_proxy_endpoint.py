@@ -273,3 +273,86 @@ class TestHappyPathAndRedirect:
             "?fixed=registered&token=a%2Fb&tag=one&tag=two&other=allowed"
         )
         assert "params" not in captured["request_kwargs"]
+
+
+def _override_claims_upstream_auth(upstream="https://backend.example/", server="skills/proxy-demo"):
+    """Dependency override whose claims mark the entity as having upstream auth."""
+
+    async def _dep(request: Request):
+        request.state.generic_proxy_claims = {
+            "upstream_url": upstream,
+            "server": server,
+            "entity_type": "skill",
+            "scopes": ["s/read"],
+            "sub": "alice",
+            "has_upstream_auth": True,
+        }
+
+    return _dep
+
+
+class TestUpstreamAuthVend:
+    def test_vend_none_fails_closed_502_without_reaching_upstream(self):
+        """has_upstream_auth=True + vend returns None -> 502 'Upstream auth
+        unavailable', and the upstream is never contacted (fail closed)."""
+        app.dependency_overrides[verify_generic_proxy_token] = _override_claims_upstream_auth()
+
+        async def _vend_none(*a, **kw):
+            return None
+
+        def _must_not_call(*a, **kw):
+            raise AssertionError("upstream client must not be created when vend fails")
+
+        with (
+            patch.object(server_module, "_generic_proxy_feature_active", True),
+            patch.object(server_module, "_vend_generic_upstream_headers", _vend_none),
+            patch("auth_server.server.guarded_async_client", _must_not_call),
+        ):
+            client = TestClient(app)
+            resp = client.get("/proxy/skill/skills/proxy-demo")
+        assert resp.status_code == 502
+        assert resp.json()["detail"] == "Upstream auth unavailable"
+
+    def test_vend_success_merges_headers_and_forwards(self):
+        """has_upstream_auth=True + vend returns (defaults, overridable) -> the
+        vended operator header is merged onto egress and the request succeeds."""
+        app.dependency_overrides[verify_generic_proxy_token] = _override_claims_upstream_auth()
+        captured = {}
+        resp_obj = _FakeStreamResponse(200, {"Content-Type": "application/json"}, b"{}")
+
+        async def _vend_ok(*a, **kw):
+            return ({"X-Api-Key": "secret"}, ["x-caller"])
+
+        with (
+            patch.object(server_module, "_generic_proxy_feature_active", True),
+            patch.object(server_module, "_vend_generic_upstream_headers", _vend_ok),
+            patch(
+                "auth_server.server.guarded_async_client",
+                _fake_guarded_async_client(captured, resp_obj),
+            ),
+        ):
+            client = TestClient(app)
+            resp = client.get("/proxy/skill/skills/proxy-demo")
+        assert resp.status_code == 200
+        forwarded = {
+            key.lower(): value for key, value in captured["request_kwargs"]["headers"].items()
+        }
+        assert forwarded["x-api-key"] == "secret"
+
+
+class TestRequestBodyReadError:
+    def test_body_read_failure_returns_400(self):
+        """request.body() raising -> 400 'Invalid request body'."""
+        app.dependency_overrides[verify_generic_proxy_token] = _override_claims()
+
+        async def _raise_body(self):
+            raise RuntimeError("body stream broke")
+
+        with (
+            patch.object(server_module, "_generic_proxy_feature_active", True),
+            patch.object(Request, "body", _raise_body),
+        ):
+            client = TestClient(app)
+            resp = client.post("/proxy/skill/skills/proxy-demo", content=b"payload")
+        assert resp.status_code == 400
+        assert resp.json()["detail"] == "Invalid request body"

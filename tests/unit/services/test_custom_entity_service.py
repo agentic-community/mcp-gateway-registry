@@ -254,3 +254,163 @@ class TestUpdateType:
         result = await svc.update_type("does_not_exist", CustomTypeUpdate(display_name="x"))
         assert result is None
         types.cache.invalidate.assert_not_called()
+
+
+@pytest.mark.unit
+class TestCreateRecordCustomHeaders:
+    async def test_custom_headers_encrypted_and_named(self, service):
+        svc, entities, _, _ = service
+        out = await svc.create_record(
+            TYPE,
+            CustomEntityCreate(
+                name="x",
+                attributes={"title": "t"},
+                custom_headers=[{"name": "X-Api-Key", "value": "secret123"}],
+            ),
+            owner="bob",
+        )
+        entities.create.assert_awaited_once()
+        # Real SECRET_KEY-derived Fernet ran: header stored encrypted, never plaintext.
+        assert out.custom_headers_encrypted
+        assert out.custom_headers_encrypted[0].name == "X-Api-Key"
+        assert out.custom_headers_encrypted[0].value_encrypted != "secret123"
+        assert out.custom_header_names == ["X-Api-Key"]
+        assert out.custom_headers_updated_at is not None
+
+    async def test_reserved_header_name_raises_validation_error(self, service):
+        svc, _, _, _ = service
+        with pytest.raises(CustomEntityValidationError):
+            await svc.create_record(
+                TYPE,
+                CustomEntityCreate(
+                    name="x",
+                    attributes={"title": "t"},
+                    # content-type is gateway-managed -> ValueError -> 400 mapping.
+                    custom_headers=[{"name": "content-type", "value": "text/plain"}],
+                ),
+                owner="bob",
+            )
+
+
+@pytest.mark.unit
+class TestUpdateRecordRepoint:
+    async def test_repoint_clears_upstream_headers(self, service):
+        svc, entities, _, _ = service
+        existing = _record(
+            owner="bob",
+            is_proxied=True,
+            proxy_target_url="https://old.example.com/api",
+            custom_header_names=["X-Api-Key"],
+            custom_headers_encrypted=[{"name": "X-Api-Key", "value_encrypted": "tok"}],
+            custom_headers_updated_at="2020-01-01T00:00:00+00:00",
+        )
+        entities.get = AsyncMock(return_value=existing)
+        entities.update = AsyncMock(return_value=existing)
+        with patch(
+            "registry.services.custom_entity_service.validate_and_pin_proxy_target",
+            new=AsyncMock(
+                return_value={
+                    "proxy_resolved_ips": ["1.2.3.4"],
+                    "proxy_target_host": "new.example.com",
+                }
+            ),
+        ):
+            await svc.update_record(
+                TYPE,
+                f"/{TYPE}/abc",
+                CustomEntityUpdate(proxy_target_url="https://new.example.com/api"),
+                BOB,
+            )
+        updates = entities.update.call_args[0][1]
+        # Host changed -> credential-misdirection guard wipes stored headers.
+        assert updates["custom_headers_encrypted"] is None
+        assert updates["custom_header_names"] == []
+        assert updates["custom_header_overridable_names"] == []
+        assert updates["custom_headers_updated_at"] is None
+
+
+@pytest.mark.unit
+class TestUpdateRecordUpstreamHeaders:
+    async def test_rotate_persists_only_header_fields_and_reindexes(self, service):
+        svc, entities, search, _ = service
+        existing = _record(
+            owner="bob",
+            is_proxied=True,
+            proxy_target_url="https://x.example.com/api",
+        )
+        entities.get = AsyncMock(return_value=existing)
+        entities.update = AsyncMock(return_value=existing)
+        out = await svc.update_record_upstream_headers(
+            TYPE,
+            f"/{TYPE}/abc",
+            [{"name": "X-Api-Key", "value": "secret123"}],
+            BOB,
+        )
+        assert out is existing
+        search.index_custom_entity.assert_awaited_once()
+        updates = entities.update.call_args[0][1]
+        assert set(updates.keys()) == {
+            "custom_headers_encrypted",
+            "custom_header_names",
+            "custom_header_overridable_names",
+            "custom_headers_updated_at",
+        }
+        assert updates["custom_header_names"] == ["X-Api-Key"]
+        assert updates["custom_headers_encrypted"]
+        assert updates["custom_headers_encrypted"][0]["value_encrypted"] != "secret123"
+
+    async def test_missing_entity_raises_not_found(self, service):
+        svc, entities, _, _ = service
+        entities.get = AsyncMock(return_value=None)
+        with pytest.raises(CustomEntityNotFoundError):
+            await svc.update_record_upstream_headers(TYPE, f"/{TYPE}/abc", [], BOB)
+
+    async def test_viewable_but_not_owner_forbidden(self, service):
+        from fastapi import HTTPException
+
+        svc, entities, _, _ = service
+        entities.get = AsyncMock(return_value=_record(owner="bob", visibility="public"))
+        with pytest.raises(HTTPException) as exc:
+            await svc.update_record_upstream_headers(
+                TYPE, f"/{TYPE}/abc", [{"name": "X-Api-Key", "value": "s"}], EVE
+            )
+        assert exc.value.status_code == 403
+
+    async def test_invalid_header_raises_validation_error(self, service):
+        svc, entities, _, _ = service
+        entities.get = AsyncMock(return_value=_record(owner="bob"))
+        with pytest.raises(CustomEntityValidationError):
+            await svc.update_record_upstream_headers(
+                TYPE,
+                f"/{TYPE}/abc",
+                [{"name": "content-type", "value": "text/plain"}],
+                BOB,
+            )
+
+    async def test_concurrent_delete_raises_not_found(self, service):
+        svc, entities, _, _ = service
+        entities.get = AsyncMock(return_value=_record(owner="bob"))
+        entities.update = AsyncMock(return_value=None)
+        with pytest.raises(CustomEntityNotFoundError):
+            await svc.update_record_upstream_headers(
+                TYPE,
+                f"/{TYPE}/abc",
+                [{"name": "X-Api-Key", "value": "s"}],
+                BOB,
+            )
+
+    async def test_reindex_failure_swallowed_after_persist(self, service):
+        svc, entities, search, _ = service
+        existing = _record(owner="bob")
+        entities.get = AsyncMock(return_value=existing)
+        entities.update = AsyncMock(return_value=existing)
+        search.index_custom_entity = AsyncMock(side_effect=RuntimeError("reindex boom"))
+        out = await svc.update_record_upstream_headers(
+            TYPE,
+            f"/{TYPE}/abc",
+            [{"name": "X-Api-Key", "value": "secret123"}],
+            BOB,
+        )
+        assert out is existing
+        entities.update.assert_awaited_once()
+        search.index_custom_entity.assert_awaited_once()

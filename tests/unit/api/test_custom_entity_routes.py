@@ -216,6 +216,28 @@ class TestUpdateDelete:
         )
         assert resp.status_code == 400
 
+    def test_rotate_headers_unknown_type_404(self, patched_service):
+        patched_service.update_record_upstream_headers = AsyncMock(
+            side_effect=UnknownCustomTypeError(TYPE)
+        )
+        client = _make_client(USER_CTX)
+        resp = client.patch(
+            f"/api/custom/{TYPE}/{VALID_UUID}/upstream-headers",
+            json={"custom_headers": [{"name": "X-Api-Key", "value": "sk"}]},
+        )
+        assert resp.status_code == 404
+
+    def test_rotate_headers_not_found_404(self, patched_service):
+        patched_service.update_record_upstream_headers = AsyncMock(
+            side_effect=CustomEntityNotFoundError(f"/{TYPE}/{VALID_UUID}")
+        )
+        client = _make_client(USER_CTX)
+        resp = client.patch(
+            f"/api/custom/{TYPE}/{VALID_UUID}/upstream-headers",
+            json={"custom_headers": [{"name": "X-Api-Key", "value": "sk"}]},
+        )
+        assert resp.status_code == 404
+
     def test_rotate_headers_no_scope_403(self, patched_service):
         client = _make_client(NO_SCOPE_CTX)
         resp = client.patch(
