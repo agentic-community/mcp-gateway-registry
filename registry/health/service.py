@@ -19,6 +19,7 @@ from ..utils.url_guard import (
     PROXY_PROFILE,
     guarded_async_client,
     proxy_profile_for_entity_target,
+    shared_guarded_async_client,
     validate_url,
 )
 
@@ -351,7 +352,6 @@ class HealthMonitoringService:
 
     async def _perform_health_checks(self):
         """Perform health checks on all enabled services."""
-        import httpx
 
         from ..services.server_service import server_service
 
@@ -373,45 +373,43 @@ class HealthMonitoringService:
         HEALTH_CHECK_BATCH_SIZE = 10
         HEALTH_CHECK_BATCH_DELAY_SECONDS = 0.5
 
-        async with (
-            guarded_async_client(
-                profile=PROXY_PROFILE,
-                timeout=httpx.Timeout(settings.health_check_timeout_seconds),
-            ) as client,
-            guarded_async_client(
-                profile=BUILTIN_AIREGISTRY_TOOLS_PROFILE,
-                timeout=httpx.Timeout(settings.health_check_timeout_seconds),
-            ) as builtin_client,
-        ):
-            check_tasks = []
-            for service_path in enabled_services:
-                server_info = await server_service.get_server_info(
-                    service_path, include_credentials=True
+        # Process-lifetime pooled clients (owned by the app lifespan; closed on
+        # shutdown via aclose_shared_clients). Reused across cycles so a server is
+        # not re-handshaked every cycle, and within a cycle the initialize+probe to
+        # one server reuse a connection. Per-request timeouts are passed on each
+        # stream/post below; the SSRF guard still validates+pins every request.
+        client = shared_guarded_async_client(profile=PROXY_PROFILE)
+        builtin_client = shared_guarded_async_client(profile=BUILTIN_AIREGISTRY_TOOLS_PROFILE)
+
+        check_tasks = []
+        for service_path in enabled_services:
+            server_info = await server_service.get_server_info(
+                service_path, include_credentials=True
+            )
+            if server_info and server_info.get("proxy_pass_url"):
+                check_tasks.append((service_path, server_info))
+
+        # Execute health checks in staggered batches
+        for batch_start in range(0, len(check_tasks), HEALTH_CHECK_BATCH_SIZE):
+            batch = check_tasks[batch_start : batch_start + HEALTH_CHECK_BATCH_SIZE]
+            batch_coros = []
+            for path, info in batch:
+                profile = proxy_profile_for_entity_target(
+                    "mcp_server", path, info["proxy_pass_url"]
                 )
-                if server_info and server_info.get("proxy_pass_url"):
-                    check_tasks.append((service_path, server_info))
+                selected_client = (
+                    builtin_client if profile is BUILTIN_AIREGISTRY_TOOLS_PROFILE else client
+                )
+                batch_coros.append(self._check_single_service(selected_client, path, info))
+            results = await asyncio.gather(*batch_coros, return_exceptions=True)
 
-            # Execute health checks in staggered batches
-            for batch_start in range(0, len(check_tasks), HEALTH_CHECK_BATCH_SIZE):
-                batch = check_tasks[batch_start : batch_start + HEALTH_CHECK_BATCH_SIZE]
-                batch_coros = []
-                for path, info in batch:
-                    profile = proxy_profile_for_entity_target(
-                        "mcp_server", path, info["proxy_pass_url"]
-                    )
-                    selected_client = (
-                        builtin_client if profile is BUILTIN_AIREGISTRY_TOOLS_PROFILE else client
-                    )
-                    batch_coros.append(self._check_single_service(selected_client, path, info))
-                results = await asyncio.gather(*batch_coros, return_exceptions=True)
+            for result in results:
+                if isinstance(result, bool) and result:
+                    status_changed = True
 
-                for result in results:
-                    if isinstance(result, bool) and result:
-                        status_changed = True
-
-                # Pause between batches to avoid CPU/connection spikes
-                if batch_start + HEALTH_CHECK_BATCH_SIZE < len(check_tasks):
-                    await asyncio.sleep(HEALTH_CHECK_BATCH_DELAY_SECONDS)
+            # Pause between batches to avoid CPU/connection spikes
+            if batch_start + HEALTH_CHECK_BATCH_SIZE < len(check_tasks):
+                await asyncio.sleep(HEALTH_CHECK_BATCH_DELAY_SECONDS)
 
         # Only broadcast if something actually changed
         if status_changed:

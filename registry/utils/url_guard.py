@@ -95,9 +95,11 @@ Request lifecycle (validate -> resolve -> pin -> re-validate per redirect)::
 from __future__ import annotations
 
 import asyncio
+import http.cookiejar
 import ipaddress
 import logging
 import socket
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import TYPE_CHECKING
@@ -1151,3 +1153,158 @@ def guarded_async_client(
         timeout=resolved_timeout,
         **kwargs,  # type: ignore[arg-type]
     )
+
+
+# ---------------------------------------------------------------------------
+# Pooled, process-lifetime egress clients.
+# ---------------------------------------------------------------------------
+# The per-call ``guarded_async_client`` / ``httpx.AsyncClient(...)`` pattern opens
+# a fresh TCP+TLS connection for every egress request (no keep-alive reuse). The
+# accessors below return process-lifetime, connection-pooled clients safe to share
+# across requests and users:
+#   * SSRF safety is unchanged -- GuardedAsyncTransport validates + pins EVERY
+#     request before pool checkout, and the pool is keyed by the pinned IP, so a
+#     rebound hostname re-resolves to a new key and never reuses a stale connection.
+#     NOTE: because the pool key is the pinned IP (not the hostname), two different
+#     hostnames that both validate to the SAME public IP:port can coalesce onto one
+#     TLS connection whose cert was verified for whichever host opened it. This is
+#     safe -- each request is independently pinned and its Host header is correct,
+#     and reaching host C over host B's connection requires C to already resolve to
+#     that IP -- but it is a behavioral change vs the old per-call clients. Do NOT
+#     enable http2 on these clients (it would coalesce far more aggressively).
+#   * No shared default identity state -- no default auth headers (callers pass the
+#     credential per request). Cookie persistence is disabled via a no-store cookie
+#     jar (see _disable_cookie_persistence / _NoStoreCookieJar): a Set-Cookie is never
+#     stored, so it can never be replayed onto a later OR concurrent request sharing
+#     the client. Credentials never ride cookies on these paths, so this is
+#     defense-in-depth.
+# Timeouts are passed PER REQUEST at the call site; the client default is only a
+# fallback. Owned by each app's FastAPI lifespan (``aclose_shared_clients`` on
+# shutdown). ``verify`` is part of the key so a ``verify=False`` client can never be
+# reused where verification is expected.
+_shared_guarded_clients: dict[tuple[str, bool | str], httpx.AsyncClient] = {}
+_shared_plain_client: httpx.AsyncClient | None = None
+
+
+def _pool_limits() -> httpx.Limits:
+    s = _get_settings()
+    return httpx.Limits(
+        max_connections=s.egress_http_pool_max_connections,
+        max_keepalive_connections=s.egress_http_pool_max_keepalive,
+        keepalive_expiry=s.egress_http_pool_keepalive_expiry_seconds,
+    )
+
+
+class _NoStoreCookieJar(http.cookiejar.CookieJar):
+    """A cookie jar that silently drops every cookie.
+
+    Installing this on a pooled, shared client makes cookie handling stateless: a
+    ``Set-Cookie`` is never stored, so it can never be replayed onto a later or
+    concurrent request sharing the client. This is concurrency-safe by construction
+    (there is no shared cookie state to race), unlike clearing the jar after each
+    response. Credentials never ride cookies on the egress paths; this is
+    defense-in-depth against a future endpoint that sets one.
+    """
+
+    def set_cookie(self, cookie: http.cookiejar.Cookie) -> None:  # noqa: D102
+        return  # never persist
+
+
+def _disable_cookie_persistence(client: httpx.AsyncClient) -> httpx.AsyncClient:
+    """Swap in a no-store cookie jar so the shared client never persists cookies."""
+    client.cookies.jar = _NoStoreCookieJar()
+    return client
+
+
+def shared_guarded_async_client(
+    *,
+    profile: _Profile = SKILL_PROFILE,
+    verify: bool | str = True,
+) -> httpx.AsyncClient:
+    """Return a process-lifetime, connection-pooled, SSRF-guarded client, one per
+    ``(profile, verify)``. Pass the timeout PER REQUEST. Do NOT pass per-client
+    kwargs (``follow_redirects``/``base_url``/``headers``): a caller needing those
+    keeps its own instance client (see the federation clients)."""
+    key = (profile.name, verify)
+    client = _shared_guarded_clients.get(key)
+    if client is None or client.is_closed:
+        client = _disable_cookie_persistence(
+            httpx.AsyncClient(
+                transport=GuardedAsyncTransport(
+                    guard_profile=profile,
+                    verify=verify,
+                    retries=_get_settings().egress_http_pool_connect_retries,
+                ),
+                timeout=_DEFAULT_TIMEOUT_SECONDS,
+                limits=_pool_limits(),
+            )
+        )
+        _shared_guarded_clients[key] = client
+    return client
+
+
+def shared_plain_async_client() -> httpx.AsyncClient:
+    """Return a process-lifetime, connection-pooled PLAIN client for in-cluster,
+    already-trusted hops ONLY (e.g. the registry egress-token vend). NEVER use it
+    for a request/stored-URL-derived target -- use ``shared_guarded_async_client``."""
+    global _shared_plain_client
+    if _shared_plain_client is None or _shared_plain_client.is_closed:
+        _shared_plain_client = _disable_cookie_persistence(
+            httpx.AsyncClient(
+                transport=httpx.AsyncHTTPTransport(
+                    retries=_get_settings().egress_http_pool_connect_retries,
+                ),
+                timeout=_DEFAULT_TIMEOUT_SECONDS,
+                limits=_pool_limits(),
+            )
+        )
+    return _shared_plain_client
+
+
+async def aclose_shared_clients() -> None:
+    """Close all pooled egress clients (call from each app's lifespan shutdown).
+    Accessors lazily rebuild the pool if used again afterwards."""
+    global _shared_plain_client
+    for client in list(_shared_guarded_clients.values()):
+        try:
+            await client.aclose()
+        except Exception:  # noqa: BLE001 - best-effort teardown
+            logger.debug("error closing a shared guarded client", exc_info=True)
+    _shared_guarded_clients.clear()
+    if _shared_plain_client is not None:
+        try:
+            await _shared_plain_client.aclose()
+        except Exception:  # noqa: BLE001 - best-effort teardown
+            logger.debug("error closing the shared plain client", exc_info=True)
+        _shared_plain_client = None
+
+
+def reset_shared_clients_for_tests() -> None:
+    """Drop pooled-client references without closing them (tests only)."""
+    global _shared_plain_client
+    _shared_guarded_clients.clear()
+    _shared_plain_client = None
+
+
+async def post_with_reconnect(
+    client: httpx.AsyncClient,
+    url: str,
+    *,
+    on_reset: Callable[[], None] | None = None,
+    **kwargs: object,
+) -> httpx.Response:
+    """POST with a single transparent retry when a POOLED keep-alive connection was
+    closed server/LB-side while idle. httpx does not auto-retry a non-idempotent
+    POST on a half-open connection, so the first POST after an idle gap can raise
+    ``RemoteProtocolError``. The dominant case (peer sent FIN before the request was
+    written) is a clean re-POST; the rare residual (peer closed after processing)
+    re-POSTs into a terminal error that the caller fails closed on (never a silent
+    corruption). ``retries=`` on the transport covers connect failures; this covers
+    a reset on connection REUSE before the response. Streaming POSTs are NOT wrapped
+    (they are context managers); those rely on ``keepalive_expiry`` alone."""
+    try:
+        return await client.post(url, **kwargs)  # type: ignore[arg-type]
+    except (httpx.RemoteProtocolError, httpx.ConnectError):
+        if on_reset is not None:
+            on_reset()
+        return await client.post(url, **kwargs)  # type: ignore[arg-type]
