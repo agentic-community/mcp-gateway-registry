@@ -2,8 +2,8 @@
 
 How the MCP Gateway lets a user reach an authentication-protected ("auth-based") third-party MCP server — GitHub, Slack, Atlassian, etc. — **as themselves**, without the coding assistant ever handling the third-party token.
 
-- Status of the modes: **`none` (no egress auth), `vault-oauth` (3LO), `token-exchange` (OBO), and `vault-pat` (PAT) are implemented today** (OBO via Microsoft Entra `jwt-bearer`; Keycloak RFC 8693 is the next phase); a **custom-header** egress mode is designed but not yet built (placeholder below).
-- Authoritative implementation references: `registry/egress_auth/`, `registry/secrets/`, `registry/api/egress_auth_routes.py`, `auth_server/server.py` (`mcp_proxy`, `_vend_egress_token`, `_forward_headers`).
+- Status of the modes: **`none` (no egress auth), `vault-oauth` (3LO), `token-exchange` (OBO), and `vault-pat` (PAT) are implemented today** (OBO via Microsoft Entra `jwt-bearer`; Keycloak RFC 8693 is the next phase). The **static operator upstream auth headers** capability that the old `custom-header` placeholder anticipated is now **implemented** for the generic proxy — encrypted at rest and vended registry -> auth-server (see the modes table and the [gateway generic proxy design](gateway-generic-proxy.md)).
+- Authoritative implementation references: `registry/egress_auth/`, `registry/secrets/`, `registry/api/egress_auth_routes.py`, `auth_server/server.py` (`mcp_proxy`, `_vend_egress_token`, `_forward_headers`, `_merge_generic_upstream_headers`, `_assert_generic_authorization_not_gateway_cred`).
 
 ---
 
@@ -13,7 +13,9 @@ Everything below rests on one rule. Every auth header a client sends (`Authoriza
 
 The upstream credential (when the server needs one) is supplied **by the gateway**, from the egress vault — never by relaying a client header. This is what makes "no third-party token on the laptop" true by construction.
 
-**The one exception** is the gateway's own built-in, same-trust-domain registry-tools server (`airegistry-tools`, proxied to the bundled mcpgw). A hardcoded, non-configurable constant (`_INTERNAL_INGRESS_RELAY_SERVERS` in `auth_server/server.py`) relays the ingress `Authorization` to it (never `X-Authorization`/`Cookie`). This is internal plumbing, not a user-facing relay feature — a server registrant cannot enable it.
+**Exception 1 — the internal relay.** The gateway's own built-in, same-trust-domain registry-tools server (`airegistry-tools`, proxied to the bundled mcpgw). A hardcoded, non-configurable constant (`_INTERNAL_INGRESS_RELAY_SERVERS` in `auth_server/server.py`) relays the ingress `Authorization` to it (never `X-Authorization`/`Cookie`). This is internal plumbing, not a user-facing relay feature — a server registrant cannot enable it.
+
+**Exception 2 — the per-header `overridable` caller-passthrough slot (generic proxy).** A proxied entity's operator may mark an individual static upstream header `overridable`, which turns a specific, named header into a sanctioned caller-passthrough slot on the generic hop. This is deliberately narrow and fail-closed: only the exact names the operator opted in (`custom_header_overridable_names`) survive, reserved gateway/ingress names can never be opted in (`RESERVED_CUSTOM_HEADER_NAMES`), and the one high-risk name that *is* allowed — `Authorization` — is additionally guarded by an A2A-parity equal-token check (`_assert_generic_authorization_not_gateway_cred`) that 401s if the outbound `Authorization` equals the caller's gateway credential. See [Caller header passthrough](#caller-header-passthrough-the-second-ingress-exception) below. Unlike Exception 1 this *is* operator-configurable per entity, but only for entities served through the generic proxy, and only for the explicitly enumerated header names.
 
 ---
 
@@ -241,7 +243,7 @@ Wire the chosen value on the **registry** container across your deployment surfa
 
 ## The egress modes
 
-`egress_auth_mode` on the server entry selects how the gateway obtains the outbound credential. Today the **no-auth**, **vault-OAuth (3LO)**, **token-exchange (OBO)**, and **vault-PAT** paths are implemented; the **custom-header** mode is designed and reserved.
+`egress_auth_mode` on the server entry selects how the gateway obtains the outbound credential for the **MCP** egress hop. Today the **no-auth**, **vault-OAuth (3LO)**, **token-exchange (OBO)**, and **vault-PAT** paths are implemented. The old **custom-header** *egress-mode* idea has since shipped in a different, operator-scoped shape — **static upstream auth headers on the generic proxy** (see below and [gateway generic proxy](gateway-generic-proxy.md)) — rather than as a per-user `egress_auth_mode`.
 
 | Mode | Vault used? | How the egress credential is obtained | Status |
 |------|-------------|----------------------------------------|--------|
@@ -249,7 +251,7 @@ Wire the chosen value on the **registry** container across your deployment surfa
 | **`vault-oauth` (3LO)** | Yes | User completes provider OAuth (3LO) out of band; the gateway vaults the per-user token and injects it. This document's main flow. | **Implemented** (`egress_auth_mode = "oauth_user"`) |
 | **`token-exchange` (OBO)** | No | For same-trust-domain backends, the gateway exchanges the user's ingress token for a backend-audience token (Entra `jwt-bearer` / Keycloak RFC 8693). `sub` preserved; nothing stored. | **Implemented** (`egress_auth_mode = "obo_exchange"`; Entra `jwt-bearer` today, Keycloak RFC 8693 next) |
 | **`vault-pat` (PAT)** | Yes | A per-user static Personal Access Token / API key is stored in the vault (bounded TTL) and injected into the same header the server's backend auth uses. No OAuth dance. Admin seed-on-behalf supported. | **Implemented** (`egress_auth_mode = "pat"`) |
-| **custom-header** | Yes | A per-user credential the operator specifies by header **name + value**, stored in the vault and injected verbatim on egress. For backends with a bespoke/out-of-band auth scheme. Generalizes `vault-pat`. | **Placeholder — not implemented (planned with PAT)** |
+| **static upstream auth headers** (generic proxy) | No (SECRET_KEY Fernet at rest) | The **operator** specifies static header **name(s) + value(s)** on a proxied entity; values are encrypted at rest and vended registry -> auth-server, then injected on the generic egress hop. Operator-scoped (not per-user), independent of the egress vault. Supersedes the old per-user `custom-header` idea. | **Implemented** (generic proxy; see below) |
 
 > **Internal relay (not a configurable mode).** The built-in `airegistry-tools` server receives the relayed ingress `Authorization` via a hardcoded constant (see "First principle" above). It is not an `egress_auth_mode` value and is not selectable per server — external servers that need an upstream credential use the vault modes above.
 
@@ -282,9 +284,32 @@ Key properties:
 
 Endpoints: `PUT`/`GET`/`DELETE /servers/{path}/egress-pat` (registry). Vend: a `pat` branch in `/internal/egress-token` placed before `oauth_user` so a PAT server (stored with `client_id=None`) never routes through the OAuth refresh path.
 
-### custom-header — placeholder (planned)
+### static upstream auth headers (generic proxy) — implemented
 
-> Not yet implemented. Design intent: the replacement for "I did the auth out of band and just want to send a token to this upstream" where the header is not derivable from the server's backend-auth scheme. The operator specifies the header **name** and **value** in the registry UI/API; the value is stored in the same secrets vault (keyed by the 4-tuple) and injected verbatim under that header name on egress — like `vault-pat`, but for a backend whose scheme is a fully bespoke format the backend-auth inheritance cannot express. This is the sanctioned way to reach a custom-auth upstream now that client-header relay is ingress-only; it is a relay-free follow-on to the shipped `vault-pat` mode.
+The replacement for "I did the auth out of band and just want the gateway to present a fixed token to this upstream" where the credential is not derivable from a server's backend-auth scheme. Unlike the per-user vault modes above, these are **operator-scoped**: the operator specifies one or more static header **name(s) + value(s)** on a proxied entity (via a plaintext `custom_headers` list on create/update), and the same fixed value is presented for every caller. It applies to entities served through the **generic proxy** (`a2a_agent` / `skill` / custom types), not to the legacy MCP hop.
+
+Guards (fail-closed at every layer):
+
+- **Encrypted at rest, never surfaced.** Values are stored as `{name, value_encrypted}` with a `SECRET_KEY`-derived Fernet (`registry/utils/credential_encryption.py`) — a mechanism **independent of the per-user egress vault** used by 3LO/PAT. The plaintext values are NEVER serialized to API consumers, rendered into nginx, or logged; reads expose only `custom_header_names` / `custom_header_overridable_names`.
+- **Reserved-name denylist.** A custom header whose lowercased name is in `RESERVED_CUSTOM_HEADER_NAMES` (`registry/constants.py`) is rejected at registration and stripped at the hop as a backstop for any bypass-written document. This blocks hop-by-hop/framing headers, ingress credentials (`cookie`, `x-authorization`, `proxy-authorization`), and the gateway-internal identity/routing/signed-token family (`x-user`, `x-internal-token*`, `x-generic-*`, `x-resolved-*`, …) so a registrant can never cause the gateway's own identity or signed token to be forwarded to a registrant-controlled backend. `Authorization` is the sole reserved name permitted (its fixed operator form is validated, and its bearer is additionally guarded by the equal-token check — see caller passthrough below).
+- **Vended over an internal listener, service-token gated.** At request time the generic hop fetches the decrypted headers from the registry's internal vend endpoint `/internal/generic-upstream-headers` (reached over the dedicated internal nginx listener on port 8091 at `/_egress_internal/generic-upstream-headers`), authenticated by a fresh internal service token (`validate_internal_auth`). The plaintext values leave the registry ONLY over this internal, service-token-gated hop.
+- **Vend-time canonical-URL cross-check.** The vend re-verifies the forwarded `X-Internal-Token-Generic` and takes the entity identity and pinned upstream from the **signed claims, not the request body**. The token's `upstream_url` is cross-checked against the entity's registered effective target on the **full canonical URL** (`normalize_url_identity`: scheme, host, effective port, path, and query — not just origin), so credentials registered for `/v1` or one tenant query are never vended to `/v2` or another tenant on the same host, and a forged upstream marker cannot cause headers to be vended for an attacker-chosen host.
+- **Fail-closed vend.** Missing, inactive, targetless, federated, mismatched, or undecryptable entities return a non-2xx; an empty 200 is reserved for a live entity that genuinely has no configured credential headers. Credential headers additionally require an **HTTPS** target (checked on storage presence, before decryption). A `None` result at the hop is fatal — the request is refused rather than forwarded unauthenticated.
+- **Repoint clears the credential.** An update that repoints the entity's target (`clear_upstream_headers_on_repoint`) clears the stored encrypted headers so a credential minted for one destination cannot follow the route to a new one.
+
+Fields live on `ProxyableMixin` (`custom_headers_encrypted`, `custom_header_names`, `custom_header_overridable_names`, `custom_headers_updated_at`). Vend: `vend_generic_upstream_headers` in `registry/api/egress_auth_routes.py`; injection: `_fetch_generic_upstream_headers` + `_merge_generic_upstream_headers` in `auth_server/server.py`.
+
+### Caller header passthrough (the second ingress exception)
+
+The static-header model above is the *fixed operator credential* case. Each registered header may instead be marked **`overridable`**, which is the second sanctioned exception to "client auth headers are ingress-only" (see the First principle). An `overridable` header name is the granular unit of caller passthrough on the generic hop, and each name can be in one of three shapes:
+
+- **Fixed operator credential** — registered, NOT overridable. The stored value is authoritative and overwrites any caller copy of that name.
+- **Operator default the caller may override** — registered AND overridable, with a stored encrypted value. The operator default is injected unless the caller supplies the same-named header, in which case the caller's value wins.
+- **Caller-only slot** — registered AND overridable, with NO stored value. Nothing is injected by default; the header is forwarded only if the caller sends it.
+
+On egress `_merge_generic_upstream_headers` re-admits a caller-supplied header **only if its name is in the entity's vended `overridable_names` allowlist** (`custom_header_overridable_names`); every other caller header outside the small protocol baseline (`_FORWARDED_GENERIC_REQUEST_HEADERS`: `accept`, `content-type`, `range`, conditional headers, …) is dropped. The allowlist is names-only — it never carries a value — and reserved names still cannot appear in it.
+
+**The Authorization slot and its equal-token guard.** An operator may opt an `Authorization` passthrough slot in (the one reserved name allowed). Because the gateway credential itself is a bearer, this slot is guarded by `_assert_generic_authorization_not_gateway_cred`, the generic-hop parity of the A2A equal-token check: it 401s if the outbound `Authorization` equals the caller's gateway credential (compared by bearer VALUE, so a duplicate differing only by scheme/whitespace is caught). The caller therefore MUST send the **gateway credential in `X-Authorization`** (ingress auth) and the **backend token in `Authorization`** (the passthrough value). If both carry the same bearer the request is refused, fail-closed, so a caller can never make the gateway forward its own gateway credential to a registrant-controlled backend where it could be replayed against the gateway.
 
 ---
 

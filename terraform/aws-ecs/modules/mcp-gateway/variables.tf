@@ -1824,7 +1824,7 @@ variable "registry_extra_env" {
         "GATEWAY_GENERIC_CLIENT_MAX_BODY_SIZE",
         "GATEWAY_PROXY_PREFIX",
         "GATEWAY_GENERIC_STREAM_READ_TIMEOUT_SECONDS",
-      ], entry.name)
+      ], upper(trimspace(entry.name)))
     ])
     error_message = "registry_extra_env must not override Terraform-managed generic-proxy variables."
   }

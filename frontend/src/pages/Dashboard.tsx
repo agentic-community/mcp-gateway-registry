@@ -44,6 +44,7 @@ import ServerRegisterModal, {
 } from '../components/entities/forms/ServerRegisterModal';
 import { useEntityToggle } from '../hooks/useEntityToggle';
 import { filterEntities } from '../utils/entityFilters';
+import { upstreamHeaderRowError } from '../components/formFields';
 
 // Federated-registry header accents (local groups are always green/emerald).
 const SERVER_REGISTRY_ACCENT: RegistryAccent = {
@@ -1896,6 +1897,21 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
       return;
     }
 
+    // Block submit client-side on any known-invalid upstream header row
+    // (reserved name, fixed Authorization, value-less fixed header) so this
+    // credential form fails fast with a specific message rather than a generic
+    // backend reject. Only when proxied and there are rows. The backend still
+    // re-validates the full policy — it remains the security boundary.
+    if (skillForm.is_proxied) {
+      for (const h of skillForm.custom_headers) {
+        const rowError = upstreamHeaderRowError(h, !!editingSkill);
+        if (rowError) {
+          showToast(rowError, 'error');
+          return;
+        }
+      }
+    }
+
     try {
       setSkillFormLoading(true);
 
@@ -1946,14 +1962,16 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
       }
 
       // Upstream headers, only meaningful when proxied. Drop fully-blank rows
-      // (no name). A blank value is preserved server-side (write-only UX) on
-      // edit; on create it must be a caller-only overridable slot.
+      // (no name); trim the name and (non-blank) value so stray whitespace is
+      // never persisted. A blank value is preserved server-side (write-only UX)
+      // on edit; on create it must be a caller-only overridable slot. An
+      // all-whitespace value trims to blank and keeps that keep-stored meaning.
       const upstreamHeaders = skillForm.is_proxied
         ? skillForm.custom_headers
             .filter((h) => h.name.trim())
             .map((h) => ({
               name: h.name.trim(),
-              value: h.value,
+              value: h.value.trim(),
               overridable: h.overridable,
             }))
         : [];

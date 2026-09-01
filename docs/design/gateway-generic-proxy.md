@@ -251,6 +251,160 @@ and export means peer data can never become a live local route.
 
 ---
 
+## Response streaming (SSE / chunked)
+
+A proxied entity may opt into **response streaming** by setting `proxy_streaming=true`
+(field on `ProxyableMixin`). The default (`false`) keeps the unary, buffered hop that
+reads the whole bounded response before replying. Streaming is for long-lived or
+token-streaming backends — e.g. an LLM proxied as a custom type, or an agent SSE
+session.
+
+Like every other per-request decision, streaming is **bound into the signed
+generic-proxy token**, never trusted from an inbound header. The nginx render sets a
+fixed `$generic_streaming "1"` marker on the streaming route; `/validate` forwards it
+and mints it into the token; the hop switches to a `StreamingResponse` only when the
+SIGNED claim says so. A client cannot force streaming by spoofing a header.
+
+What the streaming route and hop do differently:
+
+- **nginx buffering off.** The streaming location emits `proxy_buffering off` plus
+  `proxy_read_timeout {gateway_generic_stream_read_timeout_seconds}s` and
+  `proxy_set_header Connection ""`, so SSE/chunked bytes flow to the client
+  incrementally instead of being held until complete.
+- **Isolated concurrency pool.** Streaming acquires a **separate** semaphore
+  (`gateway_generic_stream_max_concurrency`, default 8) from the buffered hop's
+  `gateway_generic_max_concurrency`, so a burst of long-lived streams can never
+  starve unary requests (or vice versa).
+- **Acquire timeout.** Waiting for a stream slot is bounded by
+  `gateway_generic_acquire_timeout_seconds` (default 5.0s, floored at 0.1s); exceeding
+  it returns `503` rather than queueing unboundedly.
+- **Absolute duration ceiling.** `gateway_generic_stream_max_duration_seconds`
+  (default 3600s) is an absolute lifetime cap covering client construction, response
+  headers, and the complete body. It is enforced with an explicit deadline checked
+  before each chunk (`asyncio.wait_for`), so a stream is severed even if it keeps
+  dribbling data.
+- **Byte cap.** `gateway_generic_stream_max_bytes` (default 100 MiB) hard-caps the raw
+  bytes forwarded by one streaming response; exceeding it aborts with `413`.
+- **Idle read timeout (time-to-first-byte and inter-chunk).**
+  `gateway_generic_stream_read_timeout_seconds` (default 3600s) bounds how long the
+  hop waits for the response headers AND between chunks, applied at the auth-server
+  hop as `asyncio.wait_for(anext(...), min(remaining, read_timeout))` on top of the
+  absolute duration deadline. It is the SAME knob that drives nginx
+  `proxy_read_timeout`, so the hop and nginx agree, and a connect-then-stall upstream
+  can no longer pin a stream slot for the full absolute duration. The 1h default is
+  loose enough for a slow-first-token LLM; lower it to detect a dead upstream sooner.
+  The underlying httpx per-read timeout stays `None` — the idle bound is enforced by
+  the explicit `wait_for`, not httpx — so the bound applies uniformly to headers and
+  every chunk.
+- **Deterministic cleanup.** The httpx client and open response outlive the handler
+  (a `StreamingResponse` consumes its body generator after the handler returns), so
+  the transport is opened manually and closed — plus the semaphore released — in an
+  idempotent cleanup run from a `BackgroundTask` and the generator's `finally`, so a
+  client disconnect or a limit breach mid-stream never leaks a stream slot.
+- **Same egress guards.** Streaming still uses `guarded_async_client` (PROXY_PROFILE,
+  `follow_redirects=False`, IP-pinned), the response-header allowlist, and the
+  gateway's own security headers — identical to the buffered path. A connect-time
+  egress block is a `502`, a duration/setup timeout a `504`.
+
+> **Operator note — long-lived agent SSE beyond 1h.** Both the absolute duration
+> ceiling and the nginx read timeout default to 3600s (1h). To proxy an SSE session
+> that must stay open longer, raise **both**
+> `GATEWAY_GENERIC_STREAM_MAX_DURATION_SECONDS` **and**
+> `GATEWAY_GENERIC_STREAM_READ_TIMEOUT_SECONDS` together — raising only one still
+> severs the stream at the lower of the two (nginx or the hop's idle read timeout
+> closes a quiet upstream, or the hop's absolute deadline fires).
+
+Implementation: `_generic_proxy_streaming` in `auth_server/server.py`;
+`_create_generic_proxy_block` streaming variant in `registry/core/nginx_service.py`.
+
+---
+
+## Static upstream auth headers
+
+A proxied entity can carry **operator-configured static upstream auth headers** —
+e.g. a fixed API key for an LLM or SaaS backend proxied as a custom type — presented
+by the gateway on the egress hop. This is operator-scoped (the same value for every
+caller), distinct from the per-user egress vault described in
+[egress-auth-design.md](egress-auth-design.md); the two can coexist.
+
+- **Stored encrypted, never surfaced.** Values are accepted on create/update via a
+  plaintext `custom_headers` list and stored as `{name, value_encrypted}` on
+  `custom_headers_encrypted` (`ProxyableMixin`) using a `SECRET_KEY`-derived Fernet
+  (`registry/utils/credential_encryption.py`). Plaintext values are NEVER serialized
+  to API consumers, rendered into nginx, or logged. Reads expose only
+  `custom_header_names` / `custom_header_overridable_names`. The nginx render only ever
+  sets a fixed `$generic_has_upstream_auth "1"` marker (bound into the token) — the
+  secret never enters the config.
+- **Vended over an internal listener at request time.** When the token's
+  `has_upstream_auth` claim is set, the hop fetches the decrypted headers from the
+  registry's internal vend endpoint `/internal/generic-upstream-headers`, reached over
+  the dedicated internal nginx listener on **port 8091** at
+  `/_egress_internal/generic-upstream-headers` and gated by a fresh internal service
+  token (`validate_internal_auth`). This is the same trust boundary as the egress
+  vault; the plaintext values leave the registry only over this hop.
+- **Vend-time canonical-URL cross-check.** The vend re-verifies the forwarded
+  `X-Internal-Token-Generic`, takes the entity identity and pinned upstream from the
+  **signed claims (not the request body)**, and cross-checks the token's `upstream_url`
+  against the entity's registered effective target on the **full canonical URL**
+  (`normalize_url_identity`: scheme, host, effective port, path, query — not just
+  origin). Credentials registered for `/v1` or one tenant query are never vended to
+  `/v2` or another tenant on the same host, and a forged upstream marker cannot vend
+  headers for an attacker-chosen host.
+- **Reserved-name denylist.** Names in `RESERVED_CUSTOM_HEADER_NAMES`
+  (`registry/constants.py`) — hop-by-hop/framing headers, ingress credentials, and the
+  gateway-internal identity/routing/signed-token family (`x-user`, `x-internal-token*`,
+  `x-generic-*`, `x-resolved-*`, …) — are rejected at registration and stripped at the
+  hop, so a registrant can never make the gateway forward its own identity or signed
+  token to a registrant-controlled backend. `Authorization` is the sole reserved name
+  permitted (see caller passthrough).
+- **Fail-closed vend.** Missing, inactive, targetless, federated, mismatched, or
+  undecryptable entities return a non-2xx; an empty 200 is reserved for a live entity
+  with genuinely no credential headers. Credential headers additionally require an
+  **HTTPS** target (checked on storage presence, before decryption). A `None` result at
+  the hop is fatal — the request is refused rather than forwarded unauthenticated.
+- **Repoint clears the credential.** An update that repoints the target
+  (`clear_upstream_headers_on_repoint`) clears the stored encrypted headers, so a
+  credential minted for one destination cannot follow the route to a new one.
+
+Vend: `vend_generic_upstream_headers` in `registry/api/egress_auth_routes.py`;
+injection: `_fetch_generic_upstream_headers` + `_merge_generic_upstream_headers` in
+`auth_server/server.py`.
+
+## Caller header passthrough (overridable slots)
+
+Each static header may instead be marked **`overridable`**. This is the **second
+sanctioned exception** to the gateway's "client auth headers are ingress-only" rule
+(the first being the internal `airegistry-tools` relay — see
+[egress-auth-design.md](egress-auth-design.md)). An overridable name is the granular
+unit of caller passthrough on the generic hop, and lands in one of three shapes:
+
+| Shape | Registered | Overridable | Stored value | Egress behavior |
+|---|---|---|---|---|
+| Fixed operator credential | yes | no | yes | Operator value is authoritative; overwrites any caller copy |
+| Operator default, caller may override | yes | yes | yes | Operator default injected unless the caller sends the same name, in which case the caller's value wins |
+| Caller-only slot | yes | yes | no | Nothing injected by default; forwarded only if the caller sends it |
+
+`_merge_generic_upstream_headers` re-admits a caller-supplied header **only if its name
+is in the entity's vended `overridable_names` allowlist** (`custom_header_overridable_names`).
+Every other caller header outside the small protocol baseline
+(`_FORWARDED_GENERIC_REQUEST_HEADERS`: `accept`, `content-type`, `range`, conditional
+headers, …) is dropped. The allowlist is names-only — never a value — and reserved
+names can never appear in it.
+
+**The Authorization slot and its equal-token guard.** An operator may opt an
+`Authorization` passthrough slot in (the one reserved name allowed). Because the gateway
+credential is itself a bearer, this slot is guarded by
+`_assert_generic_authorization_not_gateway_cred` — the generic-hop parity of the A2A
+equal-token check — which `401`s if the outbound `Authorization` equals the caller's
+gateway credential (compared by bearer VALUE, catching duplicates that differ only by
+scheme/whitespace). The caller therefore MUST send the **gateway credential in
+`X-Authorization`** and the **backend token in `Authorization`**; if both carry the same
+bearer the request is refused, fail-closed, so a caller can never make the gateway
+forward its own credential to a registrant-controlled backend for replay against the
+gateway.
+
+---
+
 ## Configuration (all fail-closed)
 
 | Setting | Default | Purpose |
@@ -260,7 +414,12 @@ and export means peer data can never become a live local route.
 | `gateway_proxy_allow_private_targets` | `false` | relax loopback/private/CGNAT only (metadata never overridable) |
 | `gateway_generic_require_bearer_for_writes` | `true` | refuse state-changing verbs under ambient cookie auth |
 | `gateway_generic_client_max_body_size` | `1m` | inbound body cap (strict nginx size-token validator) |
-| `gateway_generic_max_concurrency` | (set) | in-flight cap on the hop |
+| `gateway_generic_max_concurrency` | (set) | in-flight cap on the buffered hop |
+| `gateway_generic_stream_max_concurrency` | `8` | isolated in-flight cap for the streaming hop (a separate pool from the buffered one, so long-lived streams cannot starve unary requests) |
+| `gateway_generic_acquire_timeout_seconds` | `5.0` | max wait to acquire either concurrency slot before `503` (floored at 0.1s) |
+| `gateway_generic_stream_max_duration_seconds` | `3600` | absolute lifetime ceiling for one streaming response (setup + headers + full body); exceeding it aborts the stream |
+| `gateway_generic_stream_max_bytes` | `104857600` (100 MiB) | hard byte cap on one streaming response; exceeding it returns/aborts with `413` |
+| `gateway_generic_stream_read_timeout_seconds` | `3600` | Idle read bound at the auth-server hop (time-to-first-byte + inter-chunk) AND nginx `proxy_read_timeout` on the streaming route; see streaming section |
 | `gateway_generic_tls_verify` | (set) | upstream TLS verification mode |
 | `gateway_egress_selfcheck_enabled` | (set) | probe metadata IPs at startup; disable feature if egress not enforced |
 

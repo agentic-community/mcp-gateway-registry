@@ -28,7 +28,6 @@ from auth_server.server import (  # noqa: E402
     _assert_outbound_host_pinned,
     _build_generic_outbound_url,
     _effective_ingress_gateway_credential,
-    _forward_headers,
     _generic_tls_verify,
     _merge_generic_upstream_headers,
     _run_egress_selfcheck,
@@ -44,11 +43,15 @@ pytestmark = pytest.mark.unit
 class TestGenericHopHeaderStrip:
     """The generic hop fronts arbitrary (third-party) backends, so no gateway
     identity/credential/routing header may leak to the upstream. Replicates the
-    handler's filter: _strip_generic_internal_headers(_forward_headers(...)).
+    handler's real egress pipeline: the positive protocol allowlist
+    (_select_forwarded_generic_request_headers) followed by the defense-in-depth
+    backstop (_strip_generic_internal_headers).
     """
 
     def _forwarded(self, incoming: dict[str, str]) -> dict[str, str]:
-        return _strip_generic_internal_headers(_forward_headers(dict(incoming)))
+        return _strip_generic_internal_headers(
+            _select_forwarded_generic_request_headers(dict(incoming))
+        )
 
     def test_strips_internal_identity_token_and_markers(self):
         incoming = {
@@ -324,7 +327,9 @@ class TestStripGenericInternalHeaders:
         # base strip runs first and removed it; the caller's copy is gone, so the
         # merge cannot re-admit it as an upstream value.
         incoming = {"X-Internal-Token-Generic": "signed-generic"}
-        fwd = _strip_generic_internal_headers(_forward_headers(dict(incoming)))
+        fwd = _strip_generic_internal_headers(
+            _select_forwarded_generic_request_headers(dict(incoming))
+        )
         assert "X-Internal-Token-Generic" not in fwd
         _merge_generic_upstream_headers(
             fwd, incoming, {}, overridable_names=["X-Internal-Token-Generic"]
@@ -335,15 +340,17 @@ class TestStripGenericInternalHeaders:
 class TestMergeGenericUpstreamHeaders:
     """The per-header overridable merge policy on the generic egress hop.
 
-    forward_headers is what _forward_headers already produced (gateway creds
-    stripped, benign caller headers kept); the merge applies operator defaults +
-    caller passthrough on top.
+    forward_headers is what the protocol allowlist
+    (_select_forwarded_generic_request_headers) already produced (gateway creds and
+    caller identity excluded, benign caller headers kept); the merge applies operator
+    defaults + caller passthrough on top.
     """
 
     def _base(self, incoming: dict) -> dict:
-        # Mirror the handler: run the raw request headers through _forward_headers
-        # first, then merge. This exercises the real interaction (Authorization /
-        # X-Authorization are stripped by _forward_headers before the merge).
+        # Mirror the handler base: run the raw request headers through the protocol
+        # allowlist (_select_forwarded_generic_request_headers). Authorization /
+        # X-Authorization are not in the allowlist, so they are absent before the
+        # merge and re-admitted only via an explicitly overridable slot.
         return _select_forwarded_generic_request_headers(incoming)
 
     def test_fixed_header_overwrites_caller(self):
@@ -432,11 +439,11 @@ class TestMergeGenericUpstreamHeaders:
         assert fwd == {}
 
     def test_authorization_readmitted_only_when_overridable(self):
-        # _forward_headers strips Authorization; it is re-admitted from incoming
-        # ONLY when authorization is overridable and the caller supplied it.
+        # Authorization is not in the protocol allowlist, so it is absent from the
+        # base; it is re-admitted from incoming ONLY when overridable and supplied.
         incoming = {"Authorization": "Bearer caller-token"}
         fwd = self._base(incoming)
-        assert "Authorization" not in fwd  # stripped by _forward_headers
+        assert "Authorization" not in fwd  # not selected by the protocol allowlist
 
         _merge_generic_upstream_headers(fwd, incoming, {}, overridable_names=["Authorization"])
         assert fwd["Authorization"] == "Bearer caller-token"

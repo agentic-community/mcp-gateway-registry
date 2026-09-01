@@ -115,4 +115,27 @@ describe('SkillFormModal', () => {
       screen.getByRole('button', { name: 'Registering & Scanning...' }),
     ).toBeDisabled();
   });
+
+  it('renders the upstream-headers editor with per-row labels when proxied', () => {
+    render(
+      <Harness
+        initial={{
+          ...baseForm,
+          is_proxied: true,
+          proxy_target_url: 'https://backend.example.com/',
+          custom_headers: [
+            { name: 'X-Api-Key', value: 'sk', overridable: false },
+            // Fixed Authorization is invalid — the field flags it inline so the
+            // operator sees why the Dashboard save will refuse it.
+            { name: 'Authorization', value: 'Bearer x', overridable: false },
+          ],
+        }}
+      />,
+    );
+    // Per-row accessible names are unique.
+    expect(screen.getByLabelText('Header name (row 1)')).toHaveValue('X-Api-Key');
+    expect(screen.getByLabelText('Header name (row 2)')).toHaveValue('Authorization');
+    // The invalid fixed-Authorization row surfaces its inline error.
+    expect(screen.getByText(/caller-overridable/)).toBeInTheDocument();
+  });
 });

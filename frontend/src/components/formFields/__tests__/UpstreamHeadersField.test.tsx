@@ -81,16 +81,24 @@ describe('upstreamHeaderRowError', () => {
   });
 });
 
-function Harness({ initial = [] as UpstreamHeader[] }) {
+function Harness({
+  initial = [] as UpstreamHeader[],
+  editMode = false,
+}: {
+  initial?: UpstreamHeader[];
+  editMode?: boolean;
+}) {
   const [headers, setHeaders] = useState<UpstreamHeader[]>(initial);
-  return <UpstreamHeadersField headers={headers} onChange={setHeaders} />;
+  return (
+    <UpstreamHeadersField headers={headers} onChange={setHeaders} editMode={editMode} />
+  );
 }
 
 describe('UpstreamHeadersField', () => {
   it('adds a header row on "Add header"', () => {
     render(<Harness />);
     fireEvent.click(screen.getByText('+ Add header'));
-    expect(screen.getByLabelText('Header name')).toBeInTheDocument();
+    expect(screen.getByLabelText('Header name (row 1)')).toBeInTheDocument();
   });
 
   it('shows the inline error for a fixed header with no value', () => {
@@ -109,9 +117,26 @@ describe('UpstreamHeadersField', () => {
 
   it('removes a row on "Remove"', () => {
     render(<Harness initial={[{ name: 'X-A', value: 'v', overridable: false }]} />);
-    expect(screen.getByLabelText('Header name')).toBeInTheDocument();
-    fireEvent.click(screen.getByText('Remove'));
-    expect(screen.queryByLabelText('Header name')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Header name (row 1)')).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('Remove header (row 1)'));
+    expect(screen.queryByLabelText('Header name (row 1)')).not.toBeInTheDocument();
+  });
+
+  it('gives each row a unique accessible name', () => {
+    render(
+      <Harness
+        initial={[
+          { name: 'X-A', value: 'a', overridable: false },
+          { name: 'X-B', value: 'b', overridable: false },
+        ]}
+      />,
+    );
+    expect(screen.getByLabelText('Header name (row 1)')).toBeInTheDocument();
+    expect(screen.getByLabelText('Header name (row 2)')).toBeInTheDocument();
+    expect(screen.getByLabelText('Header value (row 1)')).toBeInTheDocument();
+    expect(screen.getByLabelText('Header value (row 2)')).toBeInTheDocument();
+    expect(screen.getByLabelText('Remove header (row 1)')).toBeInTheDocument();
+    expect(screen.getByLabelText('Remove header (row 2)')).toBeInTheDocument();
   });
 
   it('toggles the overridable flag', () => {
@@ -120,6 +145,34 @@ describe('UpstreamHeadersField', () => {
     expect(screen.getByText(/fixed header needs a value/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('checkbox'));
     // Now a caller-only slot = valid, error gone.
+    expect(screen.queryByText(/fixed header needs a value/)).not.toBeInTheDocument();
+  });
+
+  it('renders edit-mode rows rebuilt from names with blank (write-only) values', () => {
+    // On edit the parent maps custom_header_names -> rows with value:'' and the
+    // overridable flag from custom_header_overridable_names. The field must show
+    // the name, keep the value blank, and hint that blank keeps the stored value.
+    render(
+      <Harness
+        editMode
+        initial={[
+          { name: 'X-Api-Key', value: '', overridable: false },
+          { name: 'X-Tenant', value: '', overridable: true },
+        ]}
+      />,
+    );
+    // Names are populated from the mapping...
+    expect(screen.getByLabelText('Header name (row 1)')).toHaveValue('X-Api-Key');
+    expect(screen.getByLabelText('Header name (row 2)')).toHaveValue('X-Tenant');
+    // ...values stay blank (never echoed back), with the keep-stored placeholder.
+    const value1 = screen.getByLabelText('Header value (row 1)');
+    expect(value1).toHaveValue('');
+    expect(value1).toHaveAttribute('placeholder', 'Blank = keep stored value');
+    // The overridable flag maps through per row.
+    const [override1, override2] = screen.getAllByRole('checkbox');
+    expect(override1).not.toBeChecked();
+    expect(override2).toBeChecked();
+    // A blank write-only value on edit is NOT an error (keep-stored, no gating).
     expect(screen.queryByText(/fixed header needs a value/)).not.toBeInTheDocument();
   });
 });

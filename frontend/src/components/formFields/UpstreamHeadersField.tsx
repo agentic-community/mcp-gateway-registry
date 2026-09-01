@@ -79,9 +79,18 @@ const RESERVED_LOWER = new Set(
 
 /**
  * Compute the inline validation message for a single header row, or null when
- * the row is valid. Exported for unit testing the policy without a full render.
+ * the row is valid. Exported so callers can GATE submit on the same policy the
+ * field shows inline (the backend re-validates — it is the security boundary).
+ *
+ * On edit, values are write-only: a blank value means "keep the stored value",
+ * so a value-less fixed header is legitimate (its ciphertext persists). Pass
+ * `editMode` to suppress the "fixed header needs a value" requirement; the
+ * reserved-name and fixed-Authorization checks still apply.
  */
-export function upstreamHeaderRowError(h: UpstreamHeader): string | null {
+export function upstreamHeaderRowError(
+  h: UpstreamHeader,
+  editMode = false,
+): string | null {
   const name = h.name.trim();
   if (!name) {
     // An all-blank row is ignored on submit, not an error.
@@ -94,7 +103,7 @@ export function upstreamHeaderRowError(h: UpstreamHeader): string | null {
   if (RESERVED_LOWER.has(lower)) {
     return `"${name}" is managed by the gateway and cannot be a custom upstream header.`;
   }
-  if (!h.value.trim() && !h.overridable) {
+  if (!h.value.trim() && !h.overridable && !editMode) {
     return 'A fixed header needs a value (or enable "Caller can override" for a caller-supplied slot).';
   }
   return null;
@@ -135,7 +144,7 @@ const UpstreamHeadersField: React.FC<UpstreamHeadersFieldProps> = ({
     >
       <div className="space-y-3">
         {headers.map((h, idx) => {
-          const err = upstreamHeaderRowError(h);
+          const err = upstreamHeaderRowError(h, editMode);
           const isAuth = h.name.trim().toLowerCase() === 'authorization';
           return (
             <div
@@ -145,7 +154,7 @@ const UpstreamHeadersField: React.FC<UpstreamHeadersFieldProps> = ({
               <div className="flex gap-2">
                 <input
                   type="text"
-                  aria-label="Header name"
+                  aria-label={`Header name (row ${idx + 1})`}
                   placeholder="X-Api-Key"
                   value={h.name}
                   onChange={(e) => update(idx, { name: e.target.value })}
@@ -153,6 +162,7 @@ const UpstreamHeadersField: React.FC<UpstreamHeadersFieldProps> = ({
                 />
                 <button
                   type="button"
+                  aria-label={`Remove header (row ${idx + 1})`}
                   onClick={() => remove(idx)}
                   className="px-3 py-2 text-sm text-red-600 hover:text-red-800 dark:text-red-400"
                 >
@@ -161,7 +171,7 @@ const UpstreamHeadersField: React.FC<UpstreamHeadersFieldProps> = ({
               </div>
               <input
                 type="password"
-                aria-label="Header value"
+                aria-label={`Header value (row ${idx + 1})`}
                 placeholder={
                   editMode
                     ? // On edit a blank value keeps the stored value (write-only).

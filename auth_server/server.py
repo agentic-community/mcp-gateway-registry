@@ -53,9 +53,16 @@ from metrics_middleware import add_auth_metrics_middleware
 from starlette.background import BackgroundTask
 
 try:
-    from observability.meters import redirect_rejected_total, token_mint_total
+    from observability.meters import (
+        record_generic_proxy_slot_rejected,
+        record_generic_proxy_stream_outcome,
+        redirect_rejected_total,
+        token_mint_total,
+    )
 except ImportError:
     from auth_server.observability.meters import (
+        record_generic_proxy_slot_rejected,
+        record_generic_proxy_stream_outcome,
         redirect_rejected_total,
         token_mint_total,
     )
@@ -6861,7 +6868,14 @@ def _egress_vend_timeout_seconds() -> float:
         from registry.secrets.openbao.store import transient_retry_budget_seconds
 
         return transient_retry_budget_seconds() + _EGRESS_VEND_TIMEOUT_HEADROOM_SECONDS
-    except Exception:  # pragma: no cover - defensive; keep a sane coupled default
+    except Exception as exc:  # defensive; keep a sane coupled default
+        logger.warning(
+            "vend timeout: could not read transient_retry_budget_seconds (%s); "
+            "falling back to %.1fs -- verify the registry retry-budget coupling was "
+            "not decoupled by a refactor",
+            type(exc).__name__,
+            _EGRESS_VEND_TIMEOUT_FALLBACK_SECONDS,
+        )
         return _EGRESS_VEND_TIMEOUT_FALLBACK_SECONDS
 
 
@@ -7016,7 +7030,7 @@ async def _vend_generic_upstream_headers(
         return None
 
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=_egress_vend_timeout_seconds()) as client:
             resp = await client.post(
                 f"{base}/_egress_internal/generic-upstream-headers",
                 json={"entity_type": entity_type, "registered_path": registered_path},
@@ -8203,7 +8217,24 @@ def _read_generic_stream_max_bytes() -> int:
         return 100 * 1024 * 1024
 
 
-async def _acquire_generic_proxy_slot(semaphore: asyncio.Semaphore) -> None:
+def _read_generic_stream_read_timeout_seconds() -> float:
+    """Idle read bound for the streaming hop: max wait for the response headers
+    (time-to-first-byte) AND between subsequent chunks. Reuses the same knob that
+    drives nginx proxy_read_timeout so the auth-server hop and nginx agree, and so
+    a connect-then-stall upstream cannot hold a stream slot for the full absolute
+    duration. The absolute duration ceiling still caps total lifetime."""
+    try:
+        return max(
+            float(getattr(settings, "gateway_generic_stream_read_timeout_seconds", 3600)),
+            1.0,
+        )
+    except (TypeError, ValueError):
+        return 3600.0
+
+
+async def _acquire_generic_proxy_slot(
+    semaphore: asyncio.Semaphore, *, pool: str = "buffered"
+) -> None:
     """Acquire a generic concurrency slot within the configured queue bound."""
     try:
         await asyncio.wait_for(
@@ -8211,6 +8242,7 @@ async def _acquire_generic_proxy_slot(semaphore: asyncio.Semaphore) -> None:
             timeout=_read_generic_acquire_timeout_seconds(),
         )
     except TimeoutError as exc:
+        record_generic_proxy_slot_rejected(pool)
         raise HTTPException(
             status_code=503,
             detail="Generic proxy is at capacity",
@@ -8481,7 +8513,8 @@ async def _generic_proxy_streaming(
     # Hold a semaphore slot for the WHOLE stream lifetime (acquired here, released
     # in the cleanup task), so long-lived streams still count against the
     # concurrency cap rather than being released the instant the handler returns.
-    await _acquire_generic_proxy_slot(semaphore)
+    await _acquire_generic_proxy_slot(semaphore, pool="stream")
+    record_generic_proxy_stream_outcome("started")
     deadline = asyncio.get_running_loop().time() + _read_generic_stream_max_duration_seconds()
     client: httpx.AsyncClient | None = None
     released = False
@@ -8520,20 +8553,26 @@ async def _generic_proxy_streaming(
         remaining = deadline - asyncio.get_running_loop().time()
         if remaining <= 0:
             raise TimeoutError("generic proxy stream duration exceeded before headers")
-        upstream_response = await asyncio.wait_for(stream_ctx.__aenter__(), timeout=remaining)
+        upstream_response = await asyncio.wait_for(
+            stream_ctx.__aenter__(),
+            timeout=min(remaining, _read_generic_stream_read_timeout_seconds()),
+        )
     except UrlValidationError as exc:
         # Guarded transport blocked the outbound at connect time (denied/rebound
         # IP). Release the semaphore/client, then surface a deliberate 502 instead
         # of an opaque 500. Log the reason only, never the raw target.
         await _cleanup()
+        record_generic_proxy_stream_outcome("upstream_error")
         logger.warning("generic_proxy(stream): egress blocked: %s", exc.reason)
         raise HTTPException(status_code=502, detail="Upstream not permitted") from exc
     except TimeoutError as exc:
         await _cleanup()
+        record_generic_proxy_stream_outcome("duration_timeout")
         logger.warning("generic_proxy(stream): absolute duration exceeded before response headers")
         raise HTTPException(status_code=504, detail="Upstream timed out") from exc
     except httpx.TimeoutException as exc:
         await _cleanup()
+        record_generic_proxy_stream_outcome("upstream_error")
         logger.error(
             "generic_proxy(stream): upstream timeout for %s (%s)",
             redact_url(outbound_url),
@@ -8542,6 +8581,7 @@ async def _generic_proxy_streaming(
         raise HTTPException(status_code=504, detail="Upstream timed out") from exc
     except httpx.HTTPError as exc:
         await _cleanup()
+        record_generic_proxy_stream_outcome("upstream_error")
         logger.error(
             "generic_proxy(stream): upstream error for %s (%s)",
             redact_url(outbound_url),
@@ -8568,19 +8608,25 @@ async def _generic_proxy_streaming(
                 if remaining <= 0:
                     raise TimeoutError("generic proxy stream duration exceeded")
                 try:
-                    chunk = await asyncio.wait_for(anext(iterator), timeout=remaining)
+                    chunk = await asyncio.wait_for(
+                        anext(iterator),
+                        timeout=min(remaining, _read_generic_stream_read_timeout_seconds()),
+                    )
                 except StopAsyncIteration:
                     break
                 if chunk:
                     total_bytes += len(chunk)
                     max_bytes = _read_generic_stream_max_bytes()
                     if total_bytes > max_bytes:
+                        record_generic_proxy_stream_outcome("byte_cap")
                         raise HTTPException(
                             status_code=413,
                             detail=f"Upstream stream exceeded {max_bytes} bytes",
                         )
                     yield chunk
+            record_generic_proxy_stream_outcome("completed")
         except TimeoutError:
+            record_generic_proxy_stream_outcome("duration_timeout")
             logger.warning("generic_proxy(stream): absolute stream duration exceeded")
             raise
         finally:
@@ -8658,6 +8704,15 @@ async def generic_proxy(
     # considered separately below with a local reserved-name backstop.
     incoming_headers = dict(request.headers)
     forward_headers = _select_forwarded_generic_request_headers(incoming_headers)
+    # Defense-in-depth egress backstop (independent of the positive allowlist above
+    # and of the registration denylist): unconditionally drop every gateway-internal
+    # identity / signed-token / routing-marker header from the caller baseline before
+    # it can reach the registrant-controlled backend. This is a strict no-op while the
+    # allowlist stays protocol-only, but fails closed if the allowlist is ever widened
+    # to admit an internal name. Operator/caller upstream-auth headers (incl. an
+    # explicitly-vended Authorization) are injected AFTER this by
+    # _merge_generic_upstream_headers, so legitimate credentials still reach the backend.
+    forward_headers = _strip_generic_internal_headers(forward_headers)
     verify = _generic_tls_verify()
     # Streaming is read from the SIGNED token claim (bound at /validate from the
     # server-set X-Generic-Streaming marker), never a forgeable inbound header.

@@ -17,6 +17,7 @@ import {
   fieldClass,
   ProxyField,
   UpstreamHeadersField,
+  upstreamHeaderRowError,
   type UpstreamHeader,
 } from './formFields';
 
@@ -347,15 +348,30 @@ const CustomEntityForm: React.FC<CustomEntityFormProps> = ({
       ...(isProxied ? { proxy_target_url: proxyTargetUrl.trim() } : {}),
     };
 
-    // Upstream headers only apply when proxied. Drop fully-blank rows; a blank
-    // value is preserved server-side (write-only UX) on edit, or must be a
-    // caller-only overridable slot on create.
+    // Upstream headers only apply when proxied. Block submit client-side on any
+    // known-invalid row (reserved name, fixed Authorization, value-less fixed
+    // header) so a credential form fails fast with a specific message rather
+    // than a generic backend reject. The backend remains the security boundary.
+    if (isProxied) {
+      for (const h of customHeaders) {
+        const rowError = upstreamHeaderRowError(h, isEditMode);
+        if (rowError) {
+          setFormError(rowError);
+          return;
+        }
+      }
+    }
+
+    // Drop fully-blank rows; trim the name and (non-blank) value so stray
+    // whitespace is never persisted. A blank value is preserved server-side
+    // (write-only UX) on edit, or must be a caller-only overridable slot on
+    // create; an all-whitespace value trims to blank and keeps that meaning.
     const upstreamHeaders = isProxied
       ? customHeaders
           .filter((h) => h.name.trim())
           .map((h) => ({
             name: h.name.trim(),
-            value: h.value,
+            value: h.value.trim(),
             overridable: h.overridable,
           }))
       : [];
