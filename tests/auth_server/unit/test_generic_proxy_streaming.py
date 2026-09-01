@@ -24,6 +24,7 @@ import auth_server.server as server_module  # noqa: E402
 
 pytestmark = pytest.mark.unit
 
+
 class _FakeRawResponse:
     def __init__(self, status_code, headers, chunks):
         self.status_code = status_code
@@ -179,7 +180,9 @@ class TestStreamingDurationTimeout:
         sem = asyncio.Semaphore(1)
         client = _FakeStreamClient(_StallRawResponse(200, {"content-type": "text/event-stream"}))
         with (
-            patch.object(server_module, "_read_generic_stream_read_timeout_seconds", return_value=0.01),
+            patch.object(
+                server_module, "_read_generic_stream_read_timeout_seconds", return_value=0.01
+            ),
             patch.object(server_module, "record_generic_proxy_stream_outcome") as rec,
         ):
             resp = await _call(sem, client)

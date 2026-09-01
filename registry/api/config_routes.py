@@ -484,7 +484,11 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             ("gateway_generic_max_concurrency", "Max Concurrency", False),
             ("gateway_generic_tls_verify", "TLS Verify", False),
             ("gateway_generic_stream_max_concurrency", "Streaming Max Concurrency", False),
-            ("gateway_generic_acquire_timeout_seconds", "Stream Slot Acquire Timeout (seconds)", False),
+            (
+                "gateway_generic_acquire_timeout_seconds",
+                "Stream Slot Acquire Timeout (seconds)",
+                False,
+            ),
             ("gateway_generic_stream_max_duration_seconds", "Stream Max Duration (seconds)", False),
             ("gateway_generic_stream_max_bytes", "Stream Max Bytes", False),
             ("gateway_generic_stream_read_timeout_seconds", "Stream Read Timeout (seconds)", False),
