@@ -1,0 +1,196 @@
+{{- if .Values.create }}
+{{- $adminSecret := include "keycloak.adminSecretName" . }}
+{{- $pgSecret := include "keycloak.pgSecretName" . }}
+{{- $rel := .Values.httpRelativePath | default "/" }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "keycloak.headlessName" . }}
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "keycloak.commonLabels" . | nindent 4 }}
+    {{- include "keycloak.serverSelectorLabels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  selector:
+    {{- include "keycloak.serverSelectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.service.containerPort }}
+      targetPort: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "keycloak.fullname" . }}
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "keycloak.commonLabels" . | nindent 4 }}
+    {{- include "keycloak.serverSelectorLabels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "keycloak.serverSelectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.service.httpPort }}
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "keycloak.fullname" . }}
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "keycloak.commonLabels" . | nindent 4 }}
+    {{- include "keycloak.serverSelectorLabels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicas }}
+  selector:
+    matchLabels:
+      {{- include "keycloak.serverSelectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "keycloak.commonLabels" . | nindent 8 }}
+        {{- include "keycloak.serverSelectorLabels" . | nindent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      initContainers:
+        - name: wait-for-postgres
+          image: "{{ .Values.postgres.image.repository }}:{{ .Values.postgres.image.tag }}"
+          imagePullPolicy: {{ .Values.postgres.image.pullPolicy }}
+          command:
+            - /bin/sh
+            - -c
+            - |
+              until pg_isready -h {{ include "keycloak.postgresName" . }} -p 5432 -U {{ .Values.postgres.username }}; do
+                echo "waiting for postgres..."; sleep 3
+              done
+      containers:
+        - name: keycloak
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["start", "--optimized=false"]
+          env:
+            - name: KC_BOOTSTRAP_ADMIN_USERNAME
+              value: {{ .Values.auth.adminUser | quote }}
+            - name: KC_BOOTSTRAP_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $adminSecret }}
+                  key: {{ .Values.auth.existingSecretPasswordKey }}
+            - name: KC_DB
+              value: postgres
+            - name: KC_DB_URL_HOST
+              value: {{ include "keycloak.postgresName" . }}
+            - name: KC_DB_URL_PORT
+              value: "5432"
+            - name: KC_DB_URL_DATABASE
+              value: {{ .Values.postgres.database | quote }}
+            - name: KC_DB_USERNAME
+              value: {{ .Values.postgres.username | quote }}
+            - name: KC_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $pgSecret }}
+                  key: {{ .Values.postgres.existingSecretPasswordKey }}
+            - name: KC_DB_SCHEMA
+              value: public
+            - name: KC_HTTP_ENABLED
+              value: "true"
+            - name: KC_PROXY_HEADERS
+              value: {{ .Values.proxyHeaders | quote }}
+            - name: KC_HOSTNAME_STRICT
+              value: {{ .Values.hostnameStrict | toString | quote }}
+            - name: KC_HEALTH_ENABLED
+              value: "true"
+            - name: KC_CACHE
+              value: {{ .Values.cache | quote }}
+            {{- if ne $rel "/" }}
+            - name: KC_HTTP_RELATIVE_PATH
+              value: {{ $rel | quote }}
+            {{- end }}
+            {{- if .Values.features }}
+            - name: KC_FEATURES
+              value: {{ .Values.features | quote }}
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.containerPort }}
+            - name: management
+              containerPort: {{ .Values.service.managementPort }}
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: management
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: management
+            initialDelaySeconds: 60
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 10
+          {{- if .Values.sslInit.enabled }}
+          # Preserve the realm SSL-disable init: relax sslRequired on the admin
+          # realm so the admin console works over HTTP behind the edge proxy.
+          lifecycle:
+            postStart:
+              exec:
+                command:
+                  - /bin/bash
+                  - -c
+                  - |
+                    (
+                      SERVER="http://localhost:{{ .Values.service.containerPort }}${KC_HTTP_RELATIVE_PATH:-}"
+                      echo "PostStart: setting sslRequired=NONE on realm {{ .Values.adminRealm }} via ${SERVER}"
+                      # No curl in the Keycloak image: poll with kcadm itself, which
+                      # only succeeds once the server is up and the admin is bootstrapped.
+                      for i in $(seq 1 120); do
+                        if /opt/keycloak/bin/kcadm.sh config credentials \
+                             --config /tmp/kcadm.config --server "${SERVER}" \
+                             --realm {{ .Values.adminRealm }} \
+                             --user "$KC_BOOTSTRAP_ADMIN_USERNAME" \
+                             --password "$KC_BOOTSTRAP_ADMIN_PASSWORD" > /dev/null 2>&1; then
+                          /opt/keycloak/bin/kcadm.sh update realms/{{ .Values.adminRealm }} \
+                            --config /tmp/kcadm.config -s sslRequired=NONE \
+                            && echo "sslRequired=NONE set on realm {{ .Values.adminRealm }} after $i attempts" \
+                            && break
+                        fi
+                        sleep 5
+                      done
+                    ) > /tmp/poststart-config.log 2>&1 &
+          {{- end }}
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
