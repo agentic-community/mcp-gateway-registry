@@ -1373,6 +1373,12 @@ aws_registry_federation_enabled = true
 # App ID URI / bare client-id only, no https host URLs or GUIDs), so shared
 # first-party APIs (Graph/ARM/Key Vault) are rejected at registration.
 # egress_obo_allowed_audiences       = "api://outlook-mcp-server api://calendar-mcp-server"
+# Hostnames of operator-controlled IdPs whose OAuth token endpoints may resolve to
+# private addresses. Needed for a self-hosted IdP (Keycloak, or Entra over Private
+# Link), where the token endpoint resolves to RFC1918 and egress consent would
+# otherwise fail as blocked by security policy. Exact hostnames only, no CIDRs or
+# wildcards, and it does not inherit ssrf_allowed_hosts. Empty permits none.
+# egress_oauth_trusted_idp_hosts     = "keycloak.internal.example.com"
 # egress_registry_internal_url       = "http://registry:8091"   # dedicated internal vend listener (not the ALB-fronted :8080)
 # egress_secrets_manager_kms_key_id  = ""   # optional CMK; empty uses the AWS-managed key
 # egress_secrets_manager_path_prefix = "mcp/egress"

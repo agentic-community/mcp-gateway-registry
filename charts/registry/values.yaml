@@ -519,6 +519,17 @@ egressAuth:
   # When empty, a shape rule applies: the target must be an internal app audience
   # (api:// App ID URI or bare client-id/GUID), never an https host URL.
   oboAllowedAudiences: ""
+  # Comma-separated hostnames of operator-controlled OAuth/OIDC identity providers
+  # whose token endpoints may resolve to private addresses. Optional; empty means
+  # the credentialed-OAuth SSRF profile permits no private-resolving token endpoint,
+  # which is the default posture. Set this when the IdP is self-hosted (Keycloak, or
+  # Entra reached over Private Link), where the token endpoint legitimately resolves
+  # to RFC1918 and consent would otherwise fail with a blocked-by-security-policy
+  # error. Exact hostnames only: no CIDRs, no wildcards, and this deliberately does
+  # not inherit ssrfAllowedHosts, so a proxy-target bypass can never relax a token
+  # POST. HTTPS is still required and metadata/link-local addresses stay denied.
+  # Entries receive client secrets, refresh tokens and user assertions.
+  oauthTrustedIdpHosts: ""
   # Application-layer AES-256-GCM root key for the per-user egress credential
   # vault (issue #1665). Registry-only SECRET; injected into the registry env
   # secret only when non-empty. >=32 chars recommended. Keep this OUTSIDE the
