@@ -758,6 +758,7 @@ const IAMGroups: React.FC<IAMGroupsProps> = ({ onShowToast }) => {
     onAddServerEntry={addServerEntry}
     onRemoveServerEntry={removeServerEntry}
     onUpdateServerEntry={updateServerEntry}
+    onServerChange={handleServerChange}
     onToggleMethod={toggleMethod}
     renderToolsSelector={(entry, idx) => (
     <ServerToolsSelector
@@ -943,6 +944,7 @@ const IAMGroups: React.FC<IAMGroupsProps> = ({ onShowToast }) => {
     onAddServerEntry={addServerEntry}
     onRemoveServerEntry={removeServerEntry}
     onUpdateServerEntry={updateServerEntry}
+    onServerChange={handleServerChange}
     onToggleMethod={toggleMethod}
     renderToolsSelector={(entry, idx) => (
       <ServerToolsSelector

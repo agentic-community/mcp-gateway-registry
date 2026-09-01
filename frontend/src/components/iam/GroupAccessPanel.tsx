@@ -103,6 +103,10 @@ interface GroupAccessPanelProps {
   onAddServerEntry: () => void;
   onRemoveServerEntry: (idx: number) => void;
   onUpdateServerEntry: (idx: number, field: keyof ServerAccessEntry, value: string | string[]) => void;
+  // Called when the selected server itself changes. Resets tools AND methods,
+  // since the method value-space flips between MCP method tokens and HTTP verbs
+  // when switching between an MCP entity and a proxied entity.
+  onServerChange: (idx: number, val: string) => void;
   onToggleMethod: (idx: number, method: string) => void;
   renderToolsSelector: (entry: ServerAccessEntry, idx: number) => React.ReactNode;
   // agents tab
@@ -208,8 +212,9 @@ const grantedPermCount = Object.entries(props.uiPermissions)
                         }))}
                         value={entry.server}
                         onChange={(val) => {
-                          props.onUpdateServerEntry(idx, 'server', val);
-                          props.onUpdateServerEntry(idx, 'tools', []); // reset tools on server change
+                          // Resets server + tools + methods (method value-space
+                          // flips MCP <-> HTTP when the entity kind changes).
+                          props.onServerChange(idx, val);
                         }}
                         placeholder="Search servers..."
                         isLoading={props.serversLoading}
