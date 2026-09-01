@@ -1440,6 +1440,14 @@ async def list_agents(
         f"(total: {total_count}, offset: {offset}, limit: {limit})"
     )
 
+    # Redact the internal backend origin (proxy_target_url) for non-admins,
+    # mirroring the single-agent read and the MCP server endpoints. is_proxied
+    # and the derived proxy_client_url stay visible.
+    from ..services.visibility import redact_proxy_backend_url
+
+    for agent_info in page_agents:
+        redact_proxy_backend_url(agent_info, user_context)
+
     return {
         "agents": [agent.model_dump() for agent in page_agents],
         "total_count": total_count,
@@ -2207,11 +2215,14 @@ async def get_agent(
     # mode; admins and registry-only mode see it. Mirrors MCP-server redaction.
     from ..services.visibility import (
         redact_agent_backend_fields,
+        redact_proxy_backend_url,
         should_redact_backend_urls,
     )
 
     if should_redact_backend_urls(user_context):
         redact_agent_backend_fields(agent_dict)
+    # Also strip the generic gateway-proxy backend origin (proxy_target_url).
+    redact_proxy_backend_url(agent_dict, user_context)
 
     # Apply metadata field projection
     _metadata_paths = parse_and_validate_metadata_fields(metadata_fields)

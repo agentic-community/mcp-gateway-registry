@@ -60,8 +60,14 @@ export function applyUiPermSync(
     'list_tools',
     'call_tool',
   ];
-  if (mcpServerPaths.length > 0) {
-    for (const k of MCP_PERM_KEYS) perms[k] = mcpServerPaths;
+  // The UI "All servers" option is the literal '*', but the auth-server treats
+  // 'all' (not '*') as the wildcard token for these MCP ui_permissions
+  // (registry/auth/dependencies.py, asset_permissions.py). Promote '*' -> 'all'
+  // so an "All servers" grant actually matches; otherwise it silently grants
+  // nothing. ('*' is only a literal server name.)
+  const mcpServiceResources = mcpServerPaths.includes('*') ? ['all'] : mcpServerPaths;
+  if (mcpServiceResources.length > 0) {
+    for (const k of MCP_PERM_KEYS) perms[k] = mcpServiceResources;
   } else {
     for (const k of MCP_PERM_KEYS) delete perms[k];
   }

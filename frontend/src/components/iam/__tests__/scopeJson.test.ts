@@ -46,6 +46,15 @@ describe('applyUiPermSync', () => {
     expect(perms['call_tool']).toEqual(['currenttime']);
   });
 
+  it('promotes the "*" (All servers) selection to the "all" wildcard token', () => {
+    const perms: Record<string, string[]> = {};
+    applyUiPermSync(perms, [entry('*')], [], PROXIED);
+    // The auth-server treats 'all' (not '*') as the wildcard for MCP ui_permissions.
+    expect(perms['list_service']).toEqual(['all']);
+    expect(perms['get_service']).toEqual(['all']);
+    expect(perms['call_tool']).toEqual(['all']);
+  });
+
   it('does NOT sync a proxied entity into MCP permissions', () => {
     const perms: Record<string, string[]> = {};
     applyUiPermSync(perms, [entry('skill/skills/proxy-demo')], [], PROXIED);

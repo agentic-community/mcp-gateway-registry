@@ -476,6 +476,7 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
         "fields": [
             ("gateway_generic_proxy_enabled", "Generic Proxy Enabled", False),
             ("gateway_canonical_namespace_enabled", "Canonical Namespace Enabled", False),
+            ("gateway_proxy_prefix", "Proxy URL Prefix", False),
             ("gateway_proxy_allow_private_targets", "Allow Private Targets", False),
             ("gateway_generic_require_bearer_for_writes", "Require Bearer for Writes", False),
             ("gateway_generic_client_max_body_size", "Client Max Body Size (nginx)", False),
