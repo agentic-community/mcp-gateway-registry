@@ -339,11 +339,28 @@ async def vend_egress_token(
     missing/invalid; a clean miss (no connection, non-per-user caller, upstream
     mismatch, etc.) returns ``consent_required=True`` with no token.
     """
-    if not settings.egress_auth_enabled:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="egress auth disabled")
-
     if not x_internal_token:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="missing X-Internal-Token")
+
+    # Static bearer fast-path: when egress_auth is disabled but the server has
+    # a stored bearer credential, vend it without requiring the full vault stack.
+    if not settings.egress_auth_enabled:
+        server_path = body.server_path if body.server_path.startswith("/") else "/" + body.server_path
+        server = await get_server_repository().get(server_path)
+        if server is not None and server.get("auth_scheme") == "bearer":
+            encrypted = server.get("auth_credential_encrypted")
+            if encrypted:
+                from ..utils.credential_encryption import decrypt_credential
+
+                credential = decrypt_credential(encrypted)
+                if credential:
+                    header_name, value_prefix = _derive_pat_inject_header(server)
+                    return EgressTokenResponse(
+                        access_token=credential,
+                        pat_header_name=header_name,
+                        pat_value_prefix=value_prefix,
+                    )
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="egress auth disabled")
 
     # Independently re-verify the mcp-proxy token; identity is the verified
     # claim, never an asserted body field.
@@ -375,6 +392,25 @@ async def vend_egress_token(
 
     # Per-server enablement: a misconfigured/half-deleted server never vends.
     egress_mode = server.get("egress_auth_mode")
+
+    # Static bearer: server has a stored encrypted credential (auth_scheme=bearer)
+    # but no per-user egress flow. Decrypt and vend directly — no vault required.
+    auth_scheme = server.get("auth_scheme", "none")
+    if egress_mode not in ("oauth_user", "obo_exchange", "pat") and auth_scheme == "bearer":
+        encrypted = server.get("auth_credential_encrypted")
+        if encrypted:
+            from ..utils.credential_encryption import decrypt_credential
+
+            credential = decrypt_credential(encrypted)
+            if credential:
+                header_name, value_prefix = _derive_pat_inject_header(server)
+                return EgressTokenResponse(
+                    access_token=credential,
+                    pat_header_name=header_name,
+                    pat_value_prefix=value_prefix,
+                )
+        return EgressTokenResponse(consent_required=True)
+
     if egress_mode not in ("oauth_user", "obo_exchange", "pat") or not server.get("egress_oauth"):
         return EgressTokenResponse(consent_required=True)
 
