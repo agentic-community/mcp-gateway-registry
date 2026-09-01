@@ -13,6 +13,7 @@ round-trip needs a live upstream; these lock the guards):
 - _run_egress_selfcheck: reachable metadata IP => unsafe (feature must disable).
 """
 
+import asyncio
 import os
 from unittest.mock import patch
 
@@ -22,14 +23,26 @@ os.environ.setdefault("SECRET_KEY", "test-secret-key-that-is-definitely-long-eno
 
 from fastapi import HTTPException  # noqa: E402
 
+import auth_server.server as server  # noqa: E402
+from auth_server.observability.meters import (  # noqa: E402
+    record_generic_proxy_slot_rejected,
+    record_generic_proxy_stream_outcome,
+)
 from auth_server.server import (  # noqa: E402
     _GATEWAY_SET_SECURITY_HEADERS,
     _assert_generic_authorization_not_gateway_cred,
     _assert_outbound_host_pinned,
+    _bearer_value,
     _build_generic_outbound_url,
     _effective_ingress_gateway_credential,
     _generic_tls_verify,
+    _get_generic_proxy_stream_semaphore,
     _merge_generic_upstream_headers,
+    _pop_header_ci,
+    _read_generic_acquire_timeout_seconds,
+    _read_generic_stream_max_bytes,
+    _read_generic_stream_max_duration_seconds,
+    _read_generic_stream_read_timeout_seconds,
     _run_egress_selfcheck,
     _select_forwarded_generic_request_headers,
     _select_forwarded_generic_response_headers,
@@ -577,3 +590,81 @@ class TestEgressSelfCheck:
 
         with patch("auth_server.server.asyncio.open_connection", side_effect=_fake_open):
             assert await _run_egress_selfcheck() is True
+
+
+class TestGenericConfigReaderFallbacks:
+    """Each config reader clamps a numeric setting but MUST fail soft to its
+    documented default when the stored value is non-numeric (TypeError/ValueError)."""
+
+    def test_acquire_timeout_falls_back_to_default(self):
+        with patch("auth_server.server.settings") as s:
+            s.gateway_generic_acquire_timeout_seconds = "not-a-number"
+            assert _read_generic_acquire_timeout_seconds() == 5.0
+
+    def test_stream_max_duration_falls_back_to_default(self):
+        with patch("auth_server.server.settings") as s:
+            s.gateway_generic_stream_max_duration_seconds = "not-a-number"
+            assert _read_generic_stream_max_duration_seconds() == 3600.0
+
+    def test_stream_max_bytes_falls_back_to_default(self):
+        with patch("auth_server.server.settings") as s:
+            s.gateway_generic_stream_max_bytes = "not-a-number"
+            assert _read_generic_stream_max_bytes() == 100 * 1024 * 1024
+
+    def test_stream_read_timeout_falls_back_to_default(self):
+        with patch("auth_server.server.settings") as s:
+            s.gateway_generic_stream_read_timeout_seconds = "not-a-number"
+            assert _read_generic_stream_read_timeout_seconds() == 3600.0
+
+
+class TestGenericStreamSemaphoreLazyInit:
+    """The streaming pool semaphore is lazily created once and cached."""
+
+    def test_lazy_init_and_cache(self):
+        original = server._generic_proxy_stream_semaphore
+        server._generic_proxy_stream_semaphore = None
+        try:
+            first = _get_generic_proxy_stream_semaphore()
+            assert isinstance(first, asyncio.Semaphore)
+            second = _get_generic_proxy_stream_semaphore()
+            assert second is first
+        finally:
+            server._generic_proxy_stream_semaphore = original
+
+
+class TestGenericProxyMeterRecorders:
+    """The record helpers wrap counter.add and must execute the happy path
+    without raising (metrics must never break the hop)."""
+
+    def test_record_slot_rejected(self):
+        record_generic_proxy_slot_rejected("buffered")
+
+    def test_record_stream_outcome(self):
+        record_generic_proxy_stream_outcome("completed")
+
+
+class TestGenericHeaderHelperBranches:
+    """Small header-helper branches on the generic hop."""
+
+    def test_bearer_value_empty_on_missing_header(self):
+        assert _bearer_value(None) == ""
+        assert _bearer_value("") == ""
+
+    def test_pop_header_ci_removes_matching_case_insensitively(self):
+        headers = {"X-Api-Key": "a", "Other": "b"}
+        _pop_header_ci(headers, "x-api-key")
+        assert "X-Api-Key" not in headers
+        assert headers == {"Other": "b"}
+
+    def test_merge_skips_unsafe_vended_default(self):
+        # A hop-by-hop vended default is not a safe generic header, so the merge
+        # loop must skip it rather than forward it upstream.
+        forward: dict[str, str] = {}
+        _merge_generic_upstream_headers(
+            forward_headers=forward,
+            incoming={},
+            vended_defaults={"Connection": "keep-alive"},
+            overridable_names=[],
+        )
+        assert "Connection" not in forward
+        assert forward == {}
