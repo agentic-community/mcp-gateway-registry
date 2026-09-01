@@ -9,7 +9,6 @@ Covers:
 - Missing gateway credentials -> config error.
 """
 
-from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -52,12 +51,10 @@ class _FakeResponse:
 
 
 def _patch_post(monkeypatch, response, capture: dict):
-    """Patch the SSRF-guarded client so .post records its args and returns `response`.
-
-    obo_exchange routes the IdP token POST through
-    ``registry.utils.url_guard.guarded_async_client`` (imported lazily inside the
-    function), so we patch it at its source module. `capture` is filled with
-    {"url":..., "data":..., "calls": n}.
+    """Patch the pooled SSRF-guarded client so .post records its args and returns
+    `response`. obo_exchange resolves ``shared_guarded_async_client`` lazily from
+    ``registry.utils.url_guard`` and drives it via ``post_with_reconnect``, so we
+    patch the accessor at its source module. `capture` gets {"url","data","calls"}.
     """
     capture["calls"] = 0
 
@@ -67,13 +64,12 @@ def _patch_post(monkeypatch, response, capture: dict):
         capture["data"] = data
         return response
 
-    @asynccontextmanager
-    async def _fake_client(*args, **kwargs):
+    def _fake_shared(*, profile, verify=True):
         client = MagicMock()
         client.post = AsyncMock(side_effect=_post)
-        yield client
+        return client
 
-    monkeypatch.setattr("registry.utils.url_guard.guarded_async_client", _fake_client)
+    monkeypatch.setattr("registry.utils.url_guard.shared_guarded_async_client", _fake_shared)
 
 
 @pytest.mark.unit
@@ -201,12 +197,21 @@ class TestSsrfGuard:
         never sends the assertion/client_secret."""
         from registry.exceptions import UrlValidationError
 
-        def _blocking_client(*args, **kwargs):
-            # The guard validates the target when the context manager is created
-            # (before any bytes leave), so raising here models a rejected endpoint.
-            raise UrlValidationError("https://169.254.169.254/token", "resolves to metadata IP")
+        def _blocking_shared(*, profile, verify=True):
+            del profile, verify
+            # The guarded transport validates+pins at request time, so the
+            # rejection surfaces from .post (before any bytes leave).
+            client = MagicMock()
+            client.post = AsyncMock(
+                side_effect=UrlValidationError(
+                    "https://169.254.169.254/token", "resolves to metadata IP"
+                )
+            )
+            return client
 
-        monkeypatch.setattr("registry.utils.url_guard.guarded_async_client", _blocking_client)
+        monkeypatch.setattr(
+            "registry.utils.url_guard.shared_guarded_async_client", _blocking_shared
+        )
 
         with pytest.raises(OboExchangeError, match="security policy"):
             await obo_exchange(_FakeEntraProvider(), subject_token="j", target_audience="api://srv")
@@ -234,16 +239,13 @@ class TestSsrfGuard:
     async def test_uses_dedicated_empty_allowlist_profile(self, monkeypatch):
         profile_capture: dict = {}
 
-        from contextlib import asynccontextmanager
-
-        @asynccontextmanager
-        async def strict_client(*, profile, timeout):
+        def strict_shared(*, profile, verify=True):
             profile_capture["profile"] = profile
             client = MagicMock()
             client.post = AsyncMock(return_value=_FakeResponse(200, {"access_token": "ok"}))
-            yield client
+            return client
 
-        monkeypatch.setattr("registry.utils.url_guard.guarded_async_client", strict_client)
+        monkeypatch.setattr("registry.utils.url_guard.shared_guarded_async_client", strict_shared)
         token = await obo_exchange(
             _FakeEntraProvider(), subject_token="j", target_audience="api://srv"
         )
@@ -257,7 +259,7 @@ class TestSsrfGuard:
         provider = _FakeEntraProvider()
         provider.token_url = "http://93.184.216.34/token"
         client = MagicMock(side_effect=AssertionError("client must not open"))
-        monkeypatch.setattr("registry.utils.url_guard.guarded_async_client", client)
+        monkeypatch.setattr("registry.utils.url_guard.shared_guarded_async_client", client)
         with pytest.raises(OboExchangeError, match="security policy"):
             await obo_exchange(provider, subject_token="assertion", target_audience="api://srv")
         client.assert_not_called()
