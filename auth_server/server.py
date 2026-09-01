@@ -2276,7 +2276,13 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # Shutdown: Add cleanup code here if needed in the future
+    # Shutdown: close the pooled egress HTTP clients (built lazily on first use).
+    try:
+        from registry.utils.url_guard import aclose_shared_clients
+
+        await aclose_shared_clients()
+    except Exception as e:  # noqa: BLE001 - best-effort teardown
+        logger.error(f"Error closing pooled egress clients: {e}", exc_info=True)
     logger.info("Shutting down auth server")
 
 
@@ -6729,16 +6735,26 @@ async def _vend_egress_token(
         return None
 
     try:
-        async with httpx.AsyncClient(timeout=_egress_vend_timeout_seconds()) as client:
-            resp = await client.post(
-                f"{base}/_egress_internal/egress-token",
-                json={"server_path": server_first_segment},
-                headers={
-                    "Authorization": f"Bearer {service_token}",
-                    "X-Internal-Token": internal_proxy_token,
-                    "Content-Type": "application/json",
-                },
-            )
+        # Pooled, process-lifetime PLAIN client for this in-cluster registry hop
+        # (already-trusted internal target). Timeout per-request; a keep-alive
+        # closed while idle is transparently re-POSTed once (the registry
+        # re-derives + re-vends per request, so the POST is idempotent).
+        from auth_server.observability.meters import record_egress_conn_reset
+        from registry.utils.url_guard import post_with_reconnect, shared_plain_async_client
+
+        client = shared_plain_async_client()
+        resp = await post_with_reconnect(
+            client,
+            f"{base}/_egress_internal/egress-token",
+            json={"server_path": server_first_segment},
+            headers={
+                "Authorization": f"Bearer {service_token}",
+                "X-Internal-Token": internal_proxy_token,
+                "Content-Type": "application/json",
+            },
+            timeout=_egress_vend_timeout_seconds(),
+            on_reset=lambda: record_egress_conn_reset("vend"),
+        )
     except httpx.HTTPError as exc:
         # Transport failure or timeout: the registry never gave a definitive
         # answer, so this is transient by nature -- do not degrade to a tokenless
@@ -7636,33 +7652,39 @@ async def mcp_proxy(
     # traffic keeps the plain client (no injected credential to protect, and many
     # internal upstreams legitimately resolve to private addresses).
     from registry.exceptions import UrlValidationError
-    from registry.utils.url_guard import EGRESS_UPSTREAM_PROFILE, guarded_async_client
-
-    proxy_client = (
-        guarded_async_client(profile=EGRESS_UPSTREAM_PROFILE, timeout=proxy_timeout)
-        if egress_token_injected
-        else httpx.AsyncClient(timeout=proxy_timeout)
+    from registry.utils.url_guard import (
+        EGRESS_UPSTREAM_PROFILE,
+        shared_guarded_async_client,
     )
+
+    # egress-injected: pooled + SSRF-guarded (keep-alive reuse; this pooled client
+    # is process-lived and must NOT be closed per request). non-egress: no injected
+    # credential to protect and many internal upstreams are private, so keep the
+    # per-call plain client (closed in the finally). Timeout is passed per-request.
+    if egress_token_injected:
+        proxy_client = shared_guarded_async_client(profile=EGRESS_UPSTREAM_PROFILE)
+        close_proxy_client = False
+    else:
+        proxy_client = httpx.AsyncClient(timeout=proxy_timeout)
+        close_proxy_client = True
     try:
-        async with proxy_client as client:
-            async with client.stream(
-                "POST",
-                upstream_url,
-                content=request_body,
-                headers=forward_headers,
-                params=dict(request.query_params),
-            ) as upstream_response:
-                # Buffer with the same cap whether or not we filter, so a
-                # pathological upstream cannot DoS the proxy.
-                body_bytes = await _read_bounded(upstream_response, max_body_bytes)
-                status_code = upstream_response.status_code
-                content_type = upstream_response.headers.get("content-type", "application/json")
-                # Snapshot upstream headers BEFORE leaving the stream
-                # context. httpx releases response.headers when the
-                # async-with block exits; reading them afterwards returns
-                # an empty mapping and Mcp-Session-Id is silently lost.
-                # Capture MCP session headers before the response stream closes
-                upstream_headers = dict(upstream_response.headers)
+        async with proxy_client.stream(
+            "POST",
+            upstream_url,
+            content=request_body,
+            headers=forward_headers,
+            params=dict(request.query_params),
+            timeout=proxy_timeout,
+        ) as upstream_response:
+            # Buffer with the same cap whether or not we filter, so a
+            # pathological upstream cannot DoS the proxy.
+            body_bytes = await _read_bounded(upstream_response, max_body_bytes)
+            status_code = upstream_response.status_code
+            content_type = upstream_response.headers.get("content-type", "application/json")
+            # Snapshot upstream headers BEFORE leaving the stream context. httpx
+            # releases response.headers when the async-with block exits; reading
+            # them afterwards returns an empty mapping and Mcp-Session-Id is lost.
+            upstream_headers = dict(upstream_response.headers)
     except HTTPException:
         raise
     except UrlValidationError as exc:
@@ -7690,6 +7712,11 @@ async def mcp_proxy(
             status_code=502,
             detail="Upstream MCP server error",
         ) from exc
+    finally:
+        # The pooled (shared) client is process-lived and reused; only the
+        # per-call non-egress client is closed here.
+        if close_proxy_client:
+            await proxy_client.aclose()
 
     # Only filter successful tools/list JSON responses.
     should_filter = (

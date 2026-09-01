@@ -443,6 +443,11 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             ("openbao_kv_mount", "OpenBao KV Mount", False),
             ("openbao_auth_method", "OpenBao Auth Method", False),
             ("openbao_role", "OpenBao Role", False),
+            # egress HTTP connection pooling (shared clients; not sensitive)
+            ("egress_http_pool_max_connections", "HTTP Pool Max Connections", False),
+            ("egress_http_pool_max_keepalive", "HTTP Pool Max Keep-Alive", False),
+            ("egress_http_pool_keepalive_expiry_seconds", "HTTP Pool Keep-Alive Expiry (s)", False),
+            ("egress_http_pool_connect_retries", "HTTP Pool Connect Retries", False),
         ],
     },
     "a2a_reverse_proxy": {

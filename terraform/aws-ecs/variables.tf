@@ -2115,6 +2115,30 @@ variable "egress_state_ttl_seconds" {
   default     = 600
 }
 
+variable "egress_http_pool_max_connections" {
+  description = "Max total connections per egress httpx client pool (shared by url_guard)."
+  type        = number
+  default     = 100
+}
+
+variable "egress_http_pool_max_keepalive" {
+  description = "Max idle keepalive connections kept warm per egress httpx client pool."
+  type        = number
+  default     = 20
+}
+
+variable "egress_http_pool_keepalive_expiry_seconds" {
+  description = "Seconds an idle keepalive egress connection survives; keep below the shortest upstream/LB idle timeout."
+  type        = number
+  default     = 30
+}
+
+variable "egress_http_pool_connect_retries" {
+  description = "Connection-establishment retries for egress httpx clients on failure."
+  type        = number
+  default     = 1
+}
+
 variable "egress_obo_allowed_audiences" {
   description = <<-EOT
     Optional allowlist (whitespace-separated) for obo_exchange target_audience

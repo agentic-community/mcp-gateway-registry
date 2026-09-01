@@ -597,6 +597,24 @@ module "ecs_service_auth" {
           # private-resolving token endpoint. Mirrors the registry container.
           name  = "EGRESS_OAUTH_TRUSTED_IDP_HOSTS"
           value = var.egress_oauth_trusted_idp_hosts
+        },
+        # Egress httpx client connection pooling (shared by url_guard). Keep the
+        # keepalive expiry below the shortest upstream/LB idle timeout.
+        {
+          name  = "EGRESS_HTTP_POOL_MAX_CONNECTIONS"
+          value = tostring(var.egress_http_pool_max_connections)
+        },
+        {
+          name  = "EGRESS_HTTP_POOL_MAX_KEEPALIVE"
+          value = tostring(var.egress_http_pool_max_keepalive)
+        },
+        {
+          name  = "EGRESS_HTTP_POOL_KEEPALIVE_EXPIRY_SECONDS"
+          value = tostring(var.egress_http_pool_keepalive_expiry_seconds)
+        },
+        {
+          name  = "EGRESS_HTTP_POOL_CONNECT_RETRIES"
+          value = tostring(var.egress_http_pool_connect_retries)
         }
         ],
         # PR #947: MongoDB connection string override (plain-text variant).
@@ -1839,6 +1857,24 @@ module "ecs_service_registry" {
         {
           name  = "EGRESS_STATE_TTL_SECONDS"
           value = tostring(var.egress_state_ttl_seconds)
+        },
+        # Egress httpx client connection pooling (shared by url_guard). Keep the
+        # keepalive expiry below the shortest upstream/LB idle timeout.
+        {
+          name  = "EGRESS_HTTP_POOL_MAX_CONNECTIONS"
+          value = tostring(var.egress_http_pool_max_connections)
+        },
+        {
+          name  = "EGRESS_HTTP_POOL_MAX_KEEPALIVE"
+          value = tostring(var.egress_http_pool_max_keepalive)
+        },
+        {
+          name  = "EGRESS_HTTP_POOL_KEEPALIVE_EXPIRY_SECONDS"
+          value = tostring(var.egress_http_pool_keepalive_expiry_seconds)
+        },
+        {
+          name  = "EGRESS_HTTP_POOL_CONNECT_RETRIES"
+          value = tostring(var.egress_http_pool_connect_retries)
         },
         # obo_exchange target_audience allowlist (whitespace-separated). When set,
         # the authoritative positive control; when empty a shape rule applies

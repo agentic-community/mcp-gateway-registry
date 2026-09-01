@@ -463,21 +463,20 @@ class TestPostTokenSsrfGuard:
 @pytest.mark.unit
 class TestCredentialedOAuthTransportProfile:
     async def test_post_uses_https_only_empty_allowlist_profile(self, monkeypatch):
-        from contextlib import asynccontextmanager
         from unittest.mock import AsyncMock, MagicMock
 
         captured = {}
 
-        @asynccontextmanager
-        async def fake_client(*, profile, timeout):
+        def fake_shared(*, profile, verify=True):
             captured["profile"] = profile
+            captured["verify"] = verify
             response = MagicMock(status_code=200)
             response.json.return_value = {"access_token": "ok"}
             client = MagicMock()
             client.post = AsyncMock(return_value=response)
-            yield client
+            return client
 
-        monkeypatch.setattr(oauth_engine, "guarded_async_client", fake_client)
+        monkeypatch.setattr(oauth_engine, "shared_guarded_async_client", fake_shared)
         cfg = OAuthProviderConfig(
             name="custom",
             display_name="Custom",
@@ -489,18 +488,22 @@ class TestCredentialedOAuthTransportProfile:
         assert captured["profile"].allowlist_factory().hosts == frozenset()
 
     async def test_guard_error_detail_is_not_propagated(self, monkeypatch):
-        from contextlib import asynccontextmanager
+        from unittest.mock import AsyncMock, MagicMock
 
-        @asynccontextmanager
-        async def blocked_client(*, profile, timeout):
-            del profile, timeout
-            raise oauth_engine.UrlValidationError(
-                "https://tokens.example/token?api_key=query-secret",
-                "raw-exception-secret",
+        # The guarded transport raises UrlValidationError at request time (on the
+        # pinned .post), before any credential is sent.
+        def blocked_shared(*, profile, verify=True):
+            del profile, verify
+            client = MagicMock()
+            client.post = AsyncMock(
+                side_effect=oauth_engine.UrlValidationError(
+                    "https://tokens.example/token?api_key=query-secret",
+                    "raw-exception-secret",
+                )
             )
-            yield  # pragma: no cover
+            return client
 
-        monkeypatch.setattr(oauth_engine, "guarded_async_client", blocked_client)
+        monkeypatch.setattr(oauth_engine, "shared_guarded_async_client", blocked_shared)
         cfg = OAuthProviderConfig(
             name="custom",
             display_name="Custom",
@@ -515,19 +518,17 @@ class TestCredentialedOAuthTransportProfile:
         assert "query-secret" not in str(exc_info.value)
 
     async def test_transport_error_detail_is_not_propagated(self, monkeypatch):
-        from contextlib import asynccontextmanager
         from unittest.mock import AsyncMock, MagicMock
 
-        @asynccontextmanager
-        async def failing_client(*, profile, timeout):
-            del profile, timeout
+        def failing_shared(*, profile, verify=True):
+            del profile, verify
             client = MagicMock()
             client.post = AsyncMock(
                 side_effect=oauth_engine.httpx.ConnectError("raw-exception-secret")
             )
-            yield client
+            return client
 
-        monkeypatch.setattr(oauth_engine, "guarded_async_client", failing_client)
+        monkeypatch.setattr(oauth_engine, "shared_guarded_async_client", failing_shared)
         cfg = OAuthProviderConfig(
             name="custom",
             display_name="Custom",

@@ -30,7 +30,10 @@ from registry.egress_auth.schemas import (
     TokenEndpointAuthStyle,
 )
 from registry.exceptions import UrlValidationError
-from registry.utils.url_guard import CREDENTIALED_OAUTH_PROFILE, guarded_async_client
+from registry.utils.url_guard import (
+    CREDENTIALED_OAUTH_PROFILE,
+    shared_guarded_async_client,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -232,11 +235,15 @@ async def _post_token(cfg: OAuthProviderConfig, data: dict, headers: dict) -> di
     # requires HTTPS, so proxy allowlist entries cannot weaken this path.
     # Built-in providers resolve to public HTTPS hosts and pass unchanged.
     try:
-        async with guarded_async_client(
-            profile=CREDENTIALED_OAUTH_PROFILE,
-            timeout=_HTTP_TIMEOUT,
-        ) as client:
-            resp = await client.post(cfg.token_url, data=data, headers=headers)
+        # Pooled, process-lifetime SSRF-guarded client (keep-alive reuse across
+        # exchange/refresh calls). Timeout is per-request. NOTE: unlike the OBO and
+        # vend hops, this is NOT wrapped in a keep-alive reconnect retry: both grant
+        # types here are single-use/rotating (an authorization_code is single-use; a
+        # refresh_token rotates), so a blind re-POST after a connection reset could
+        # double-spend the grant -> invalid_grant. A reset instead surfaces as a
+        # transient "unreachable" error the refresh worker / caller retries safely.
+        client = shared_guarded_async_client(profile=CREDENTIALED_OAUTH_PROFILE)
+        resp = await client.post(cfg.token_url, data=data, headers=headers, timeout=_HTTP_TIMEOUT)
     except UrlValidationError as exc:
         # The pinned guard rejected the target before sending any credential.
         # Keep the wrapped detail out of higher-level logs and browser responses.

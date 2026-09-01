@@ -161,6 +161,27 @@ redirect_rejected_total = _meter.create_counter(
 
 
 # =============================================================================
+# Egress pooled-client keep-alive reset metrics
+# =============================================================================
+
+egress_conn_reset_total = _meter.create_counter(
+    name="mcpgw_registry_egress_conn_reset_total",
+    description=(
+        "Pooled egress HTTP requests that hit a closed keep-alive connection and "
+        "were transparently retried once, labeled by site (obo | vend). A rising "
+        "count means EGRESS_HTTP_POOL_KEEPALIVE_EXPIRY_SECONDS is set above an "
+        "upstream/LB idle timeout."
+    ),
+    unit="1",
+)
+
+
+def record_egress_conn_reset(site: str) -> None:
+    """Record a pooled-client keep-alive reconnect retry for the given site."""
+    egress_conn_reset_total.add(1, {"site": site})
+
+
+# =============================================================================
 # Self-observability of the migration itself
 # =============================================================================
 

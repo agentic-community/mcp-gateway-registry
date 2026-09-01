@@ -430,6 +430,10 @@ module "mcp_gateway" {
   egress_oauth_callback_base_url     = var.egress_oauth_callback_base_url
   egress_token_refresh_skew_seconds  = var.egress_token_refresh_skew_seconds
   egress_state_ttl_seconds           = var.egress_state_ttl_seconds
+  egress_http_pool_max_connections          = var.egress_http_pool_max_connections
+  egress_http_pool_max_keepalive            = var.egress_http_pool_max_keepalive
+  egress_http_pool_keepalive_expiry_seconds = var.egress_http_pool_keepalive_expiry_seconds
+  egress_http_pool_connect_retries          = var.egress_http_pool_connect_retries
   egress_obo_allowed_audiences       = var.egress_obo_allowed_audiences
   egress_oauth_trusted_idp_hosts     = var.egress_oauth_trusted_idp_hosts
   egress_registry_internal_url       = var.egress_registry_internal_url
