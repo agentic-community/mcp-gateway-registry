@@ -412,6 +412,9 @@ services:
       # secret store, so no SECRET_STORE/AWS/OPENBAO vars here).
       - EGRESS_AUTH_ENABLED=${EGRESS_AUTH_ENABLED:-false}
       - EGRESS_REGISTRY_INTERNAL_URL=${EGRESS_REGISTRY_INTERNAL_URL:-http://registry:8091}
+      # OBO (same-IdP) token exchange against a self-hosted IdP: allowlist its
+      # private-resolving token endpoint. Must match the registry's value.
+      - EGRESS_OAUTH_TRUSTED_IDP_HOSTS=${EGRESS_OAUTH_TRUSTED_IDP_HOSTS:-}
       - AUTH_SERVER_NGINX_MARKER_SECRET=${AUTH_SERVER_NGINX_MARKER_SECRET:-}
       - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID}
       - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET}

@@ -223,6 +223,12 @@ egressAuth:
   # global.domain + the ingress routing mode (see templates/configmap-egress.yaml);
   # set it only to point at a custom public front door.
   oauthCallbackBaseUrl: ""
+  # Trusted IdP hosts for the OBO (same-IdP) token exchange. When the gateway IdP
+  # is self-hosted on a private address, its token endpoint is otherwise rejected
+  # by the credentialed-OAuth SSRF profile. Comma-separated exact hostnames, no
+  # CIDRs. MUST match registry.egressAuth.oauthTrustedIdpHosts. Entries receive
+  # client secrets / user assertions, so keep the list tight.
+  oauthTrustedIdpHosts: ""
   # nginx marker secret. REQUIRED for standalone deployment (chart render fails
   # if empty) -- it guards all mcp-proxy token minting and the app requires it
   # at startup. Set a strong random value, identical to the registry's. In the

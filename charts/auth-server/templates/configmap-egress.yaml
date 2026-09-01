@@ -41,4 +41,13 @@ data:
   EGRESS_AUTH_ENABLED: {{ .Values.egressAuth.enabled | toString | quote }}
   EGRESS_REGISTRY_INTERNAL_URL: {{ .Values.egressAuth.registryInternalUrl | default "http://registry:8091" | quote }}
   EGRESS_OAUTH_CALLBACK_BASE_URL: {{ $callbackBaseUrl | quote }}
+  {{- if .Values.egressAuth.oauthTrustedIdpHosts }}
+  # Hosts whose OAuth token endpoints may resolve to private addresses, for the
+  # OBO (same-IdP) token exchange against a self-hosted IdP (Keycloak, Entra via
+  # Private Link). Without it the credentialed-OAuth SSRF profile rejects every
+  # private-resolving token endpoint. Exact hostnames only, no CIDRs. Entries
+  # receive client secrets / user assertions, so keep the list tight. MUST match
+  # the registry chart's registry.egressAuth.oauthTrustedIdpHosts.
+  EGRESS_OAUTH_TRUSTED_IDP_HOSTS: {{ .Values.egressAuth.oauthTrustedIdpHosts | quote }}
+  {{- end }}
 {{- end }}
