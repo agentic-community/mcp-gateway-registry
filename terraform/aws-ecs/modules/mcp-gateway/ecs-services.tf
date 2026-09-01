@@ -591,6 +591,12 @@ module "ecs_service_auth" {
         {
           name  = "EGRESS_REGISTRY_INTERNAL_URL"
           value = var.egress_registry_internal_url
+        },
+        {
+          # OBO (same-IdP) token exchange against a self-hosted IdP: allowlist its
+          # private-resolving token endpoint. Mirrors the registry container.
+          name  = "EGRESS_OAUTH_TRUSTED_IDP_HOSTS"
+          value = var.egress_oauth_trusted_idp_hosts
         }
         ],
         # PR #947: MongoDB connection string override (plain-text variant).
