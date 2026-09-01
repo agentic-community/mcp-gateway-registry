@@ -8588,6 +8588,12 @@ async def _generic_proxy_streaming(
             type(exc).__name__,
         )
         raise HTTPException(status_code=502, detail="Upstream error") from exc
+    except asyncio.CancelledError:
+        # Client disconnected before response headers: release the slot, record the
+        # terminal so `started` reconciles, then propagate the cancellation.
+        await _cleanup()
+        record_generic_proxy_stream_outcome("client_closed")
+        raise
     except BaseException:
         await _cleanup()
         raise
@@ -8628,6 +8634,19 @@ async def _generic_proxy_streaming(
         except TimeoutError:
             record_generic_proxy_stream_outcome("duration_timeout")
             logger.warning("generic_proxy(stream): absolute stream duration exceeded")
+            raise
+        except (GeneratorExit, asyncio.CancelledError):
+            # Client disconnected mid-stream (generator closed / task cancelled). The
+            # slot is released in `finally`; record the terminal so in-flight =
+            # started - terminals stays reconcilable, then re-raise.
+            record_generic_proxy_stream_outcome("client_closed")
+            raise
+        except httpx.HTTPError:
+            # Upstream failed AFTER headers were sent (dropped mid-body). The status
+            # line is already on the wire, so we cannot turn this into a 5xx; record
+            # the terminal and abort the stream.
+            record_generic_proxy_stream_outcome("upstream_error")
+            logger.error("generic_proxy(stream): mid-stream upstream error")
             raise
         finally:
             # Exit the stream context (the BackgroundTask closes the client and

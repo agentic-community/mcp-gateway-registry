@@ -202,7 +202,8 @@ generic_proxy_stream_outcome_total = _meter.create_counter(
     name="mcpgw_registry_generic_proxy_stream_outcome_total",
     description=(
         "Generic-proxy streaming request outcomes, labeled by outcome "
-        "(started | completed | duration_timeout | byte_cap | upstream_error). "
+        "(started | completed | duration_timeout | byte_cap | upstream_error | "
+        "client_closed). "
         "duration_timeout/byte_cap track the new stream ceilings."
     ),
     unit="1",
