@@ -57,6 +57,18 @@ if ALLOWED_IDP_GROUPS_RAW:
     logger.info("ALLOWED_IDP_GROUPS allowlist active: %d entries", len(ALLOWED_IDP_GROUPS))
 
 
+def _normalize_group_name(name: str) -> str:
+    """Strip leading/trailing slashes for group-name comparison.
+
+    Some IdPs (e.g. Keycloak's Group Membership mapper with "Full group path"
+    enabled) emit the full group path, such as '/mcp-admins', while scope
+    mappings are seeded without the leading slash. Mirrors
+    auth_server.server._normalize_server_name, which handles the identical
+    slash mismatch for server names.
+    """
+    return name.strip("/") if name else name
+
+
 async def _filter_by_scope_mappings(
     groups: list[str],
     username_hash: str,
@@ -88,6 +100,7 @@ async def _filter_by_scope_mappings(
         )
         return groups
 
+    mapped = {_normalize_group_name(g) for g in mapped}
     filtered = [g for g in groups if g in mapped]
     logger.info(
         "Group filter (scope-derived) user=%s: %d -> %d",
@@ -115,9 +128,11 @@ async def filter_session_groups(
     if not groups:
         return groups
 
+    groups = [_normalize_group_name(g) for g in groups]
+
     # Design B takes precedence when configured.
     if ALLOWED_IDP_GROUPS:
-        allowed = set(ALLOWED_IDP_GROUPS)
+        allowed = {_normalize_group_name(g) for g in ALLOWED_IDP_GROUPS}
         filtered = [g for g in groups if g in allowed]
         logger.info(
             "Group filter (allowlist) user=%s: %d -> %d",

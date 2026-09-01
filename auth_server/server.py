@@ -1470,6 +1470,18 @@ def safe_identity_summary(claims: dict) -> dict:
     return summary
 
 
+def _normalize_group_name(name: str) -> str:
+    """Strip leading/trailing slashes for group-name comparison.
+
+    Some IdPs (e.g. Keycloak's Group Membership mapper with "Full group path"
+    enabled) emit the full group path, such as '/mcp-admins', while scope
+    mappings are seeded without the leading slash. Mirrors
+    _normalize_server_name, which handles the identical slash mismatch for
+    server names.
+    """
+    return name.strip("/") if name else name
+
+
 async def map_groups_to_scopes(groups: list[str]) -> list[str]:
     """
     Map identity provider groups to MCP scopes by querying DocumentDB directly.
@@ -1481,6 +1493,7 @@ async def map_groups_to_scopes(groups: list[str]) -> list[str]:
         List of MCP scopes
     """
     scopes = []
+    groups = [_normalize_group_name(g) for g in groups]
 
     # Resolve all groups to scopes in a single query. Issuing one query per
     # group serialized a DB round-trip per group on every authenticated
