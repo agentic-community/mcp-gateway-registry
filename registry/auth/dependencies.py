@@ -3,6 +3,7 @@ from typing import Annotated, Any
 
 from fastapi import Cookie, Depends, Header, HTTPException, Request, status
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
+from starlette.concurrency import run_in_threadpool
 
 from ..common.log_redaction import redact_headers, redact_mapping
 from ..core.config import settings
@@ -29,34 +30,41 @@ async def resolve_session_from_cookie(
 ) -> dict[str, Any] | None:
     """Resolve a session cookie to its server-side record.
 
-    Returns None for any non-recoverable failure: missing cookie, bad
-    signature, expired signature, legacy dict-payload (pre-server-side
-    rollout — forces re-login), or store unavailable. Callers must translate
-    None into 401, never into 500.
+    The session cookie carries only a 256-bit random session_id (hex-encoded,
+    64 chars). Security rests on:
+    - Unguessability: 2^256 space makes brute-force infeasible
+    - DB lookup: a tampered id simply misses → 401 (fail closed)
+    - TTL: expires_at in the DB record + TTL index enforce session lifetime
+
+    Returns None for any non-recoverable failure: missing, malformed, unknown,
+    or expired session. Callers translate None into 401.
     """
+    import re
+
     if not cookie_value:
         return None
 
-    try:
-        payload = signer.loads(cookie_value, max_age=settings.session_max_age_seconds)
-    except SignatureExpired:
-        logger.debug("Session cookie has expired")
-        return None
-    except BadSignature:
-        logger.debug("Session cookie has invalid signature")
-        return None
-    except Exception as e:
-        logger.warning(f"Unexpected error decoding session cookie: {e}")
-        return None
+    # Format check: reject anything that isn't a valid 64-char hex session_id.
+    # This avoids a DB roundtrip for garbage/attack traffic without needing
+    # a signing key. No secrets, no state, no ambiguity.
+    session_id = cookie_value.strip()
+    if not re.fullmatch(r"[0-9a-f]{64}", session_id):
+        # Try legacy path: signed cookie from before this change.
+        # Accept during the overlap window so existing sessions don't break.
+        try:
+            payload = signer.loads(cookie_value, max_age=settings.session_max_age_seconds)
+            if isinstance(payload, str) and re.fullmatch(r"[0-9a-f]{64}", payload):
+                session_id = payload
+            else:
+                logger.debug("Legacy session cookie format; forcing re-login")
+                return None
+        except (SignatureExpired, BadSignature):
+            logger.debug("Session cookie is not a valid session_id and signature check failed")
+            return None
+        except Exception:
+            return None
 
-    # Legacy cookies signed before this rollout carried a dict payload. With
-    # the server-side store, the cookie holds only an opaque session_id
-    # string. Anything else is a stale cookie and the user must re-login.
-    if not isinstance(payload, str):
-        logger.debug("Legacy session cookie format detected; forcing re-login")
-        return None
-
-    return await _store_resolve_session(payload)
+    return await _store_resolve_session(session_id)
 
 
 async def get_current_user(
@@ -674,7 +682,10 @@ async def _context_from_internal_token(
 
     Raises HTTPException(401) on any token failure (verification raises it directly).
     """
-    claims = verify_registry_ui_token(token)  # raises 401/500 on failure
+    # Offload to a worker thread: the verifier may do a synchronous JWKS fetch
+    # (registry/auth/internal_jwks.py) on a cache miss, which must not block the
+    # asyncio event loop and stall every other request on this worker.
+    claims = await run_in_threadpool(verify_registry_ui_token, token)  # raises 401/500 on failure
     username = claims.get("sub") or ""
     session_id = claims.get("session_id") or ""
 

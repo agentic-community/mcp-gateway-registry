@@ -351,6 +351,12 @@ services:
       # Registry-UI internal token verification (the /api/ hop; mints in auth-server)
       - INTERNAL_TOKEN_TTL_SECONDS=${INTERNAL_TOKEN_TTL_SECONDS:-30}
       - INTERNAL_TOKEN_LEEWAY_SECONDS=${INTERNAL_TOKEN_LEEWAY_SECONDS:-5}
+      - CSRF_SIGNING_KEY=${CSRF_SIGNING_KEY:-}
+      - CREDENTIAL_ENCRYPTION_KEY=${CREDENTIAL_ENCRYPTION_KEY:-}
+      - SESSION_TOKEN_ENC_KEY=${SESSION_TOKEN_ENC_KEY:-}
+      - REJECT_HS256_TOKENS=${REJECT_HS256_TOKENS:-false}
+      - INTERNAL_JWKS_URL=${INTERNAL_JWKS_URL:-http://auth-server:8888/.well-known/internal-jwks.json}
+      - INTERNAL_JWKS_CACHE_TTL_SECONDS=${INTERNAL_JWKS_CACHE_TTL_SECONDS:-300}
     ports:
       - "80:8080"   # Map host 80 to container 8080 (non-root nginx)
       - "443:8443"  # Map host 443 to container 8443 (non-root nginx)
@@ -530,6 +536,10 @@ services:
       - TOOL_FILTER_AUDIT_LOG_LEVEL=${TOOL_FILTER_AUDIT_LOG_LEVEL:-INFO}
       - INTERNAL_TOKEN_TTL_SECONDS=${INTERNAL_TOKEN_TTL_SECONDS:-30}
       - INTERNAL_TOKEN_LEEWAY_SECONDS=${INTERNAL_TOKEN_LEEWAY_SECONDS:-5}
+      # Asymmetric signing (ES256)
+      - INTERNAL_SIGNING_KEY_PATH=${INTERNAL_SIGNING_KEY_PATH:-/etc/mcp-gateway/signing-key/key.pem}
+      - REJECT_HS256_TOKENS=${REJECT_HS256_TOKENS:-false}
+      - SESSION_TOKEN_ENC_KEY=${SESSION_TOKEN_ENC_KEY:-}
     # Fronted by nginx; published on loopback only so callers cannot bypass the
     # auth front door from the network (in-cluster: auth-server:8888).
     ports:
@@ -548,6 +558,8 @@ services:
       - ${HOME}/mcp-gateway/logs:/app/logs
       # Application log files (bind mount to host for Splunk ingestion, Issue #987)
       - /var/log/containers/ai-registry:/var/log/containers/ai-registry
+      # ES256 signing key for asymmetric JWT signing
+      - ./signing-key.pem:/etc/mcp-gateway/signing-key/key.pem:ro
     depends_on:
       mongodb-init:
         condition: service_completed_successfully

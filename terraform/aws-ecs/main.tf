@@ -335,6 +335,14 @@ module "mcp_gateway" {
 
   internal_token_ttl_seconds    = var.internal_token_ttl_seconds
   internal_token_leeway_seconds = var.internal_token_leeway_seconds
+  # Asymmetric signing (ES256)
+  internal_signing_key_secret_arn      = var.internal_signing_key_secret_arn
+  reject_hs256_tokens                  = var.reject_hs256_tokens
+  csrf_signing_key_secret_arn          = var.csrf_signing_key_secret_arn
+  credential_encryption_key_secret_arn = var.credential_encryption_key_secret_arn
+  session_token_enc_key_secret_arn     = var.session_token_enc_key_secret_arn
+  internal_jwks_url                    = var.internal_jwks_url
+  internal_jwks_cache_ttl_seconds      = var.internal_jwks_cache_ttl_seconds
 
   # Gateway generic-proxy feature (ships disabled by default)
   gateway_generic_proxy_enabled             = var.gateway_generic_proxy_enabled

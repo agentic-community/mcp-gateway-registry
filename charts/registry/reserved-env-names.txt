@@ -238,6 +238,17 @@ EMBEDDINGS_IDP_TIMEOUT_SECONDS
 EMBEDDINGS_IDP_ALLOW_INSECURE
 # Rendered from embeddings.responseFormat when set (independent of authMode; #1415 follow-up).
 EMBEDDINGS_RESPONSE_FORMAT
+# Internal-JWT HS256 cutover flag and scoped signing/encryption keys (PR #1693).
+# Rendered into the registry secret from app.rejectHs256 / app.csrfSigningKey /
+# app.credentialEncryptionKey / app.sessionTokenEncKey.
+REJECT_HS256_TOKENS
+CSRF_SIGNING_KEY
+CREDENTIAL_ENCRYPTION_KEY
+SESSION_TOKEN_ENC_KEY
+# Registry-side ES256 internal-JWKS fetch (PR #1693), rendered from
+# app.internalJwksUrl (FQDN default) / app.internalJwksCacheTtlSeconds.
+INTERNAL_JWKS_URL
+INTERNAL_JWKS_CACHE_TTL_SECONDS
 GATEWAY_GENERIC_PROXY_ENABLED
 GATEWAY_CANONICAL_NAMESPACE_ENABLED
 GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS

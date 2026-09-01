@@ -737,25 +737,69 @@ class TestSessionCookieValidation:
     """Tests for session cookie validation."""
 
     @pytest.mark.asyncio
-    async def test_validate_session_cookie_valid(self, auth_env_vars, valid_session_cookie):
-        """Test validating a valid session cookie.
+    async def test_validate_session_cookie_valid_raw_id(self, auth_env_vars):
+        """A raw 256-bit hex session_id cookie validates via a store lookup.
 
-        With server-side sessions, validation does signer.loads(cookie) →
-        session_id (string), then store.resolve_session(session_id) →
-        hydrated record. We mock the store lookup.
+        This is the PRODUCTION path after the signature was dropped: the cookie
+        carries only the raw session_id (no signing). The auth-server verifier
+        MUST accept it exactly like registry/auth/dependencies.py does — the
+        regression that broke login was auth-server still requiring a signature
+        here. See project_phaseb_cookie_verifier_gap.
         """
+        import secrets
+
+        from auth_server.server import validate_session_cookie
+
+        raw_id = secrets.token_hex(32)  # 64-char hex, production format
+
+        async def _fake_resolve(session_id):
+            assert session_id == raw_id  # the raw id is passed straight through
+            return {
+                "session_id": session_id,
+                "username": "testuser",
+                "email": "testuser@example.com",
+                "groups": ["users", "developers"],
+                "provider": "cognito",
+                "auth_method": "oauth2",
+            }
+
+        # Intent guard: NO signer patched. A raw-id cookie must validate with no
+        # signing key at all — if this needs `signer`, the signature-drop is
+        # incomplete and login loops.
+        with (
+            patch("auth_server.server.signer", None),
+            patch("session_store.resolve_session", _fake_resolve),
+        ):
+            result = await validate_session_cookie(raw_id)
+
+            assert result["valid"] is True
+            assert result["username"] == "testuser"
+            assert result["method"] == "session_cookie"
+            assert "users" in result["groups"]
+
+    @pytest.mark.asyncio
+    async def test_validate_session_cookie_legacy_signed_id(self, auth_env_vars):
+        """A legacy signed cookie wrapping a raw hex id still validates.
+
+        During the signature-drop overlap window, pre-cutover signed cookies
+        must keep working so logged-in users are not 401'd mid-rollout.
+        """
+        import secrets
+
         from itsdangerous import URLSafeTimedSerializer
 
         from auth_server.server import validate_session_cookie
 
+        raw_id = secrets.token_hex(32)
         test_signer = URLSafeTimedSerializer(auth_env_vars["SECRET_KEY"])
+        legacy_cookie = test_signer.dumps(raw_id)  # signed wrapper around the id
 
-        async def _fake_resolve(_session_id):
+        async def _fake_resolve(session_id):
+            assert session_id == raw_id  # unwrapped id is what gets resolved
             return {
-                "session_id": _session_id,
-                "username": "testuser",
-                "email": "testuser@example.com",
-                "groups": ["users", "developers"],
+                "session_id": session_id,
+                "username": "legacyuser",
+                "groups": ["users"],
                 "provider": "cognito",
                 "auth_method": "oauth2",
             }
@@ -764,12 +808,10 @@ class TestSessionCookieValidation:
             patch("auth_server.server.signer", test_signer),
             patch("session_store.resolve_session", _fake_resolve),
         ):
-            result = await validate_session_cookie(valid_session_cookie)
+            result = await validate_session_cookie(legacy_cookie)
 
             assert result["valid"] is True
-            assert result["username"] == "testuser"
-            assert result["method"] == "session_cookie"
-            assert "users" in result["groups"]
+            assert result["username"] == "legacyuser"
 
     @pytest.mark.asyncio
     async def test_validate_session_cookie_expired(self, auth_env_vars):
@@ -796,16 +838,40 @@ class TestSessionCookieValidation:
                 await validate_session_cookie(old_cookie)
 
     @pytest.mark.asyncio
-    async def test_validate_session_cookie_invalid_signature(self, auth_env_vars):
-        """Test validating cookie with invalid signature."""
+    async def test_validate_session_cookie_garbage_rejected(self, auth_env_vars):
+        """A cookie that is neither a raw hex id nor a valid signed cookie is rejected.
+
+        'invalid.signature.data' is not 64-char hex, so it takes the legacy
+        branch; with a signer present it fails the signature check → reject.
+        Fail closed.
+        """
+        from itsdangerous import URLSafeTimedSerializer
+
         from auth_server.server import validate_session_cookie
 
-        # Arrange
+        test_signer = URLSafeTimedSerializer(auth_env_vars["SECRET_KEY"])
         invalid_cookie = "invalid.signature.data"
 
-        # Act & Assert
-        with pytest.raises(ValueError, match="Invalid session cookie"):
-            await validate_session_cookie(invalid_cookie)
+        with patch("auth_server.server.signer", test_signer):
+            with pytest.raises(ValueError, match="Invalid session cookie"):
+                await validate_session_cookie(invalid_cookie)
+
+    @pytest.mark.asyncio
+    async def test_validate_session_cookie_unknown_raw_id_fails_closed(self, auth_env_vars):
+        """A well-formed raw id that resolves to no session is rejected (fail closed)."""
+        import secrets
+
+        from auth_server.server import validate_session_cookie
+
+        async def _fake_resolve(_session_id):
+            return None  # tampered/unknown id → no record
+
+        with (
+            patch("auth_server.server.signer", None),
+            patch("session_store.resolve_session", _fake_resolve),
+        ):
+            with pytest.raises(ValueError, match="Session not found or expired"):
+                await validate_session_cookie(secrets.token_hex(32))
 
 
 # =============================================================================
@@ -2537,7 +2603,7 @@ class TestOAuth2CallbackTokenStorage:
         # Cookie payload is the signed opaque session_id, never user data.
         session_cookie = response.cookies.get("mcp_gateway_session")
         assert session_cookie is not None, "Session cookie not set in response"
-        assert signer.loads(session_cookie) == "fake-session-id"
+        assert session_cookie == "fake-session-id"  # Raw session_id, no signature
 
         return captured, session_cookie
 

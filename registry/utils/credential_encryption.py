@@ -126,19 +126,34 @@ def _derive_fernet_key(
 
 
 def _get_fernet() -> Fernet | None:
-    """Get a Fernet instance derived from the application SECRET_KEY.
+    """Get a Fernet instance for credential encryption.
+
+    Uses CREDENTIAL_ENCRYPTION_KEY when set (registry-only, scoped key).
+    Falls back to SECRET_KEY for backwards compatibility during migration.
+    Fail closed: a scoped key that is set but weak is rejected at first use.
 
     Returns:
-        Fernet instance, or None if SECRET_KEY is not available.
+        Fernet instance, or None if no key is available.
     """
     try:
         from ..core.config import settings
-
-        secret_key = settings.secret_key
     except Exception as e:
-        logger.error(f"Could not load SECRET_KEY from settings: {e}")
+        logger.error(f"Could not load encryption settings: {e}")
         return None
 
+    # Validate the scoped key's strength when set (fail closed on weak/short).
+    # Attribute the failure to the scoped key, not to SECRET_KEY.
+    if settings.credential_encryption_key:
+        from ..common.secret_key import validate_signing_secret
+
+        try:
+            validate_signing_secret(settings.credential_encryption_key, "CREDENTIAL_ENCRYPTION_KEY")
+        except Exception as e:
+            logger.error(f"CREDENTIAL_ENCRYPTION_KEY rejected (weak or invalid): {e}")
+            return None
+
+    # Prefer the scoped key; fall back to SECRET_KEY during migration.
+    secret_key = settings.credential_encryption_key or settings.secret_key
     if not secret_key:
         return None
 

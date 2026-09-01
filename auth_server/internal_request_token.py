@@ -10,12 +10,22 @@ and treats the claims as the source of truth for identity/scopes/destination,
 ignoring inbound ``X-User`` / ``X-Scopes`` / ``X-Upstream-Url`` headers entirely.
 """
 
+# Resolve the shared reject-flag helper from self_signed_token, tolerating both
+# the package (auth_server.*) and standalone import contexts. Use importlib to
+# avoid a mypy no-redef warning on the dual-path fallback (see self_signed_token).
+import importlib as _importlib
 import logging
 import os
 import time
 
 import jwt as pyjwt
 from fastapi import HTTPException, Request, status
+
+try:
+    _sst = _importlib.import_module("auth_server.self_signed_token")
+except (ImportError, ModuleNotFoundError):
+    _sst = _importlib.import_module("self_signed_token")
+reject_hs256_tokens = _sst.reject_hs256_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -108,7 +118,11 @@ def _mint_internal_token(
     extra_claims: dict | None = None,
     ttl_seconds: int | None = None,
 ) -> str:
-    """Mint a short-lived HS256 internal JWT signed with SECRET_KEY.
+    """Mint a short-lived internal JWT.
+
+    Uses ES256 (asymmetric, from key manager) when configured, falling back
+    to HS256 (SECRET_KEY) when not. Internal tokens carry a kid header when
+    signed with ES256, which verifiers use to dispatch to the correct path.
 
     Args:
         audience: The intended verifier (e.g. "mcp-proxy").
@@ -122,14 +136,11 @@ def _mint_internal_token(
         Encoded JWT string.
 
     Raises:
-        ValueError: If ``SECRET_KEY`` is unset or ``subject`` is empty.
+        ValueError: If ``SECRET_KEY`` is unset (and no ES256 key) or ``subject`` is empty.
     """
     if not subject:
-        # An empty subject would mint an anonymous-but-valid token. Refuse, so
-        # /validate returns 200 without a token, nginx forwards none, and the
-        # backend route rejects (fail-closed) rather than trusting "".
         raise ValueError("Cannot mint internal token with empty subject")
-    secret_key = _get_secret_key()
+
     now = int(time.time())
     base_claims: dict = {
         "iss": _ISSUER,
@@ -143,30 +154,105 @@ def _mint_internal_token(
     # a reserved base claim (aud/exp/iss/sub/...). Callers pass server-derived
     # constants today, but this makes the invariant structural, not a convention.
     claims: dict = {**(extra_claims or {}), **base_claims}
-    return pyjwt.encode(claims, secret_key, algorithm="HS256")
+
+    # Use ES256 when the key manager is available, HS256 fallback otherwise
+    import importlib
+
+    try:
+        _isk = importlib.import_module("auth_server.internal_signing_key")
+    except (ImportError, ModuleNotFoundError):
+        _isk = importlib.import_module("internal_signing_key")
+
+    _km = _isk.get_internal_signing_key_manager()
+    _material = _km.get_signing_material() if _km.is_available else None
+    if _material is not None:
+        _signing_key, _signing_kid = _material
+        return pyjwt.encode(
+            claims,
+            _signing_key,
+            algorithm="ES256",
+            headers={"kid": _signing_kid},
+        )
+    else:
+        secret_key = _get_secret_key()
+        return pyjwt.encode(claims, secret_key, algorithm="HS256")
 
 
 def _decode_internal_token(
     token: str,
     audience: str,
 ) -> dict:
-    """Decode and validate an internal JWT. Raises ``pyjwt`` errors on failure."""
-    secret_key = _get_secret_key()
-    return pyjwt.decode(
-        token,
-        secret_key,
-        algorithms=["HS256"],
-        issuer=_ISSUER,
-        audience=audience,
-        leeway=_leeway_seconds(),
-        options={
-            "verify_signature": True,
-            "verify_exp": True,
-            "verify_iat": True,
-            "verify_iss": True,
-            "verify_aud": True,
-        },
-    )
+    """Decode and validate an internal JWT with kid-based algorithm dispatch.
+
+    kid present → ES256 (public key from key manager)
+    kid absent → HS256 (SECRET_KEY, legacy)
+    """
+    # Size bound (defense-in-depth)
+    if len(token) > 8192:
+        raise pyjwt.InvalidTokenError("Token exceeds maximum size")
+
+    # Read kid from header
+    try:
+        header = pyjwt.get_unverified_header(token)
+    except Exception as e:
+        raise pyjwt.InvalidTokenError("Malformed token") from e
+
+    kid = header.get("kid")
+
+    if kid is not None:
+        # ES256 path: verify with public key from key manager
+        import importlib
+
+        try:
+            _isk = importlib.import_module("auth_server.internal_signing_key")
+        except (ImportError, ModuleNotFoundError):
+            _isk = importlib.import_module("internal_signing_key")
+
+        _km = _isk.get_internal_signing_key_manager()
+        if not _km.is_available:
+            raise pyjwt.InvalidTokenError("Token has kid but asymmetric signing not configured")
+
+        verification_keys = _km.get_verification_keys()
+        public_key = verification_keys.get(kid)
+        if public_key is None:
+            raise pyjwt.InvalidTokenError("Unknown key id in internal token")
+
+        return pyjwt.decode(
+            token,
+            public_key,
+            algorithms=["ES256"],
+            issuer=_ISSUER,
+            audience=audience,
+            leeway=_leeway_seconds(),
+            options={
+                "verify_signature": True,
+                "verify_exp": True,
+                "verify_iat": True,
+                "verify_iss": True,
+                "verify_aud": True,
+            },
+        )
+    else:
+        # HS256 legacy path
+        if reject_hs256_tokens():
+            raise pyjwt.InvalidTokenError("HS256 internal tokens no longer accepted")
+
+        secret_key = _get_secret_key()
+        return pyjwt.decode(
+            token,
+            secret_key,
+            algorithms=["HS256"],
+            issuer=_ISSUER,
+            audience=audience,
+            leeway=_leeway_seconds(),
+            options={
+                "verify_signature": True,
+                "verify_exp": True,
+                "verify_iat": True,
+                "verify_iss": True,
+                "verify_aud": True,
+            },
+        )
 
 
 # --------------------------------------------------------------------------- #

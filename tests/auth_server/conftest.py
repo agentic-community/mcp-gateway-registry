@@ -516,28 +516,26 @@ def mock_entra_provider():
 
 
 @pytest.fixture
-def valid_session_cookie(auth_env_vars) -> str:
+def valid_session_cookie(valid_session_id) -> str:
     """Create a valid session cookie for testing.
 
-    With server-side sessions, the cookie payload is a signed opaque
-    session_id. Tests that exercise validate_session_cookie must also patch
-    the session_store to return a hydrated record for that id; see the
-    `valid_session_id` fixture for the matching id.
+    After the signature was dropped, the production cookie carries the RAW
+    256-bit hex session_id with no signing. Tests that exercise
+    validate_session_cookie must also patch the session_store to return a
+    hydrated record for this id; see the `valid_session_id` fixture.
     """
-    from itsdangerous import URLSafeTimedSerializer
-
-    signer = URLSafeTimedSerializer(auth_env_vars["SECRET_KEY"])
-    return signer.dumps("test-session-id")
+    return valid_session_id
 
 
 @pytest.fixture
 def valid_session_id() -> str:
-    """The session_id embedded in `valid_session_cookie`.
+    """The raw session_id carried by `valid_session_cookie`.
 
-    Use with `patch("auth_server.session_store.resolve_session", ...)` to
-    return a hydrated record for this id.
+    A 64-char hex string matching production format (secrets.token_hex(32)).
+    Use with `patch("session_store.resolve_session", ...)` to return a
+    hydrated record for this id.
     """
-    return "test-session-id"
+    return "a" * 64
 
 
 @pytest.fixture

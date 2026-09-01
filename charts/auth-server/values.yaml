@@ -29,6 +29,10 @@ app:
   # When deployed via mcp-gateway-registry-stack, the key is shared with registry.
   # Uncomment to use a specific key:
   # secretKey: "your-secure-key-here"
+  # Scoped session-token encryption key (shared with registry). Encrypts
+  # session-token payloads independently of SECRET_KEY. Leave empty to fall
+  # back to SECRET_KEY (default, unchanged behavior).
+  sessionTokenEncKey: "" # pragma: allowlist secret
   sessionCookieSecure: true
   # Session cookie Domain attribute. Leave empty to default to
   # ".<global.domain>" (valid for all subdomains of the deployment
@@ -374,3 +378,27 @@ egress:
           - "169.254.0.0/16" # link-local incl. cloud metadata 169.254.169.254
           - "0.0.0.0/32" # unspecified
 nodeSelector: {}
+
+# =============================================================================
+# Internal Signing Key (Asymmetric JWT signing - ES256)
+# =============================================================================
+# When enabled, auth-server signs user-vended JWTs with ES256 instead of HS256.
+# The private key is mounted as a file from a Kubernetes Secret.
+#
+# To generate a key:
+#   openssl ecparam -name prime256v1 -genkey -noout -out signing-key.pem
+#   kubectl create secret generic my-release-signing-key --from-file=key.pem=signing-key.pem
+#
+# Live rotation: update the Secret, kubelet propagates to pods (~60s).
+signingKey:
+  # Enable asymmetric signing (mount the key file, set env vars)
+  enabled: false
+  # Name of an existing Secret containing the PEM private key.
+  # If empty, defaults to "<release-name>-signing-key".
+  existingSecret: ""
+  # Key within the Secret that holds the PEM data.
+  secretKey: "key.pem"  # pragma: allowlist secret
+  # After all tokens have rotated to ES256 (>24h), set to true to
+  # hard-reject legacy HS256 tokens. This closes the SECRET_KEY
+  # token-forging window.
+  rejectHs256: false

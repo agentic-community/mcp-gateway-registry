@@ -170,14 +170,14 @@ class TestBestEffortSessionIdentity:
         self.signer = signer
         self.cookie_name = settings.session_cookie_name
 
-    def _signed_session_id_cookie(self, session_id: str = "sid-1") -> str:
+    def _signed_session_id_cookie(self, session_id: str = "b" * 64) -> str:
         return self.signer.dumps(session_id)
 
     @pytest.mark.asyncio
     async def test_fallback_recovers_username_from_valid_cookie(self, monkeypatch):
         async def _fake(_session_id):
             return {
-                "session_id": "sid-1",
+                "session_id": "b" * 64,
                 "username": "alice",
                 "auth_method": "oauth2",
                 "provider": "keycloak",
@@ -230,7 +230,7 @@ class TestBestEffortSessionIdentity:
     async def test_fallback_does_not_mutate_request_state(self, monkeypatch):
         async def _fake(_session_id):
             return {
-                "session_id": "sid-1",
+                "session_id": "b" * 64,
                 "username": "alice",
                 "auth_method": "oauth2",
                 "provider": "keycloak",
@@ -248,7 +248,7 @@ class TestBestEffortSessionIdentity:
         """Store returns a record without a username — treated as anonymous."""
 
         async def _fake(_session_id):
-            return {"session_id": "sid-1", "auth_method": "oauth2"}
+            return {"session_id": "b" * 64, "auth_method": "oauth2"}
 
         monkeypatch.setattr("registry.auth.dependencies._store_resolve_session", _fake)
         request = MockRequest(cookies={self.cookie_name: self._signed_session_id_cookie()})
@@ -262,7 +262,7 @@ class TestBestEffortSessionIdentity:
     async def test_fallback_anonymous_when_cookie_missing_username(self, monkeypatch):
         # Backward-compat alias for the previous test name; same behavior.
         async def _fake(_session_id):
-            return {"session_id": "sid-1", "auth_method": "oauth2"}
+            return {"session_id": "b" * 64, "auth_method": "oauth2"}
 
         monkeypatch.setattr("registry.auth.dependencies._store_resolve_session", _fake)
         request = MockRequest(cookies={self.cookie_name: self._signed_session_id_cookie()})

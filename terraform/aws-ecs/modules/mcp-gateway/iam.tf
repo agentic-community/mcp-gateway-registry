@@ -46,6 +46,13 @@ resource "aws_iam_policy" "ecs_secrets_access" {
             aws_secretsmanager_secret.grafana_admin_password[0].arn
           ] : [],
           var.enable_observability && var.otel_otlp_endpoint != "" ? [aws_secretsmanager_secret.otlp_exporter_headers[0].arn] : [],
+          # ES256 signing key (delivered to auth-server via the signing-key-init
+          # container) + optional scoped keys (registry + shared). All are
+          # operator-provided ARNs, wired only when set.
+          var.internal_signing_key_secret_arn != "" ? [var.internal_signing_key_secret_arn] : [],
+          var.csrf_signing_key_secret_arn != "" ? [var.csrf_signing_key_secret_arn] : [],
+          var.credential_encryption_key_secret_arn != "" ? [var.credential_encryption_key_secret_arn] : [],
+          var.session_token_enc_key_secret_arn != "" ? [var.session_token_enc_key_secret_arn] : [],
           var.egress_credential_encryption_key != "" ? [aws_secretsmanager_secret.egress_credential_encryption_key[0].arn] : []
         )
       },

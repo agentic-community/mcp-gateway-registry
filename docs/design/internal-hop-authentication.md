@@ -7,6 +7,7 @@
 - [Authentication and Authorization Design](authentication-design.md) - how the *external* caller is authenticated
 - [Session flow (cookie-based)](session-flow-cookie-based.md) and [Session flow (JWT bearer)](session-flow-jwt-bearer.md)
 - [Reverse-proxy vs application-layer gateway](architectural-decision-reverse-proxy-vs-application-layer-gateway.md)
+- [Asymmetric signing of internal hop tokens (ES256 + JWKS)](asymmetric-signing.md) - how the auth-server ES256-signs these tokens and publishes a JWKS
 
 ---
 
@@ -81,7 +82,7 @@ Client --> nginx --> (auth_request) auth-server /validate --> back to nginx
 | Audience (`aud`) | `mcp-proxy` | `mcp-registry-ui` |
 | Carries | identity + scopes + **bound upstream URL** | identity only (**no scopes**) |
 | Authorization | scopes are in the token | registry derives scopes from groups **server-side** |
-| Signing | HS256 with the shared `SECRET_KEY` | HS256 with the shared `SECRET_KEY` |
+| Signing | ES256 (auth-server private key) when a signing key is configured, else HS256 with the shared `SECRET_KEY` (legacy) | same |
 | On failure | fail-closed 401 | fail-closed 401 |
 | nginx mechanism | `auth_request_set` captures the minted token and forwards it | same |
 
@@ -120,8 +121,15 @@ to a server, of which `tools/call` is just one method.**
 
 ### Minting and verification
 
-- The token is a short-lived **HS256 JWT** signed with the shared `SECRET_KEY` (the same key the
-  registry and auth-server share for other internal signing; not a dedicated secret for this hop).
+- The token is a short-lived JWT. When a signing key is configured
+  (`INTERNAL_SIGNING_KEY_PATH`), the auth-server signs with **ES256** using a
+  private key it alone holds and stamps a `kid` header; every other service
+  verifies with the public half published at `/.well-known/internal-jwks.json`.
+  When no key is configured it falls back to a **HS256** JWT signed with the
+  shared `SECRET_KEY` (the legacy path; not a dedicated secret for this hop).
+  Verifiers dispatch on the `kid` header: **present -> ES256** from the JWKS,
+  **absent -> HS256** legacy, unless `REJECT_HS256_TOKENS` hard-rejects the
+  legacy path post-cutover. See [asymmetric signing](asymmetric-signing.md).
 - TTL and clock-skew leeway come from `INTERNAL_TOKEN_TTL_SECONDS` (default 30, floor 5) and
   `INTERNAL_TOKEN_LEEWAY_SECONDS` (default 5). Both the minter (auth-server) and the verifiers read
   the *same* env vars so they cannot drift.
@@ -264,16 +272,21 @@ fallback is the session cookie - so the flag is a migration aid, not a way to re
 This is the safe answer to upgrade ordering: a deployment can roll the registry and auth-server
 independently without a window where signed requests are rejected.
 
-### Threat model and a known limitation
+### Threat model
 
 - **In scope:** an attacker who can reach the internal registry/auth-server ports but does **not**
-  hold `SECRET_KEY` cannot forge identity - their headers are ignored and they cannot mint a valid
-  token. Short TTL plus audience scoping bound replay.
-- **Out of scope (by design):** HS256 with a shared `SECRET_KEY` authenticates "came from a holder of
-  `SECRET_KEY`", not specifically "came from `/validate`". A fully compromised registry or
-  auth-server already holds the key. Asymmetric signing (auth-server signs with a private key;
-  registry verifies with the public key) would tighten the registry<->auth-server trust boundary; it
-  is not required for the header-forgery / SSRF threat this design addresses.
+  hold the signing key cannot forge identity - their headers are ignored and they cannot mint a
+  valid token. Short TTL plus audience scoping bound replay.
+- **Shared-`SECRET_KEY` forgery (now addressed by ES256 asymmetric signing):** HS256 with a shared
+  `SECRET_KEY` authenticates "came from a holder of `SECRET_KEY`", not specifically "came from
+  `/validate`" - and every verifier also holds that key, so a leaked `SECRET_KEY` could forge hop
+  tokens. This is now closed by **ES256 asymmetric signing**: the auth-server signs with a private
+  key it alone holds and every other service verifies with the public key from
+  `/.well-known/internal-jwks.json`, so a verifier's state can no longer mint tokens. The `kid` is
+  the key's RFC 7638 thumbprint, and rotated-out keys stay in the JWKS for a retention window `>=`
+  the maximum token TTL. During the transition both algorithms verify (`kid` present -> ES256,
+  absent -> HS256 legacy); `REJECT_HS256_TOKENS` closes the HS256 window once every token has
+  rotated. See [asymmetric signing](asymmetric-signing.md) for the full design.
 
 ---
 
@@ -284,7 +297,9 @@ independently without a window where signed requests are rejected.
 | `INTERNAL_TOKEN_TTL_SECONDS` | 30 (floor 5) | Lifetime of the minted internal-hop tokens; the replay-window cap. |
 | `INTERNAL_TOKEN_LEEWAY_SECONDS` | 5 | Clock-skew leeway on `exp`/`iat`. |
 | `NGINX_DISABLE_API_AUTH_REQUEST` | false | Deployment-mode gate for the registry `/api/` hop (cookie-only fallback; headers still ignored). |
-| `SECRET_KEY` | required | Shared HMAC key used to sign and verify all internal-hop tokens (the same key used elsewhere in the registry/auth-server; not specific to this feature). |
+| `SECRET_KEY` | required | Shared HMAC key for the **HS256 legacy** signing path and for other internal signing in the registry/auth-server. When ES256 asymmetric signing is configured, hop tokens are signed with the private key instead (though `SECRET_KEY` is still required for the rest of the system). |
+| `INTERNAL_SIGNING_KEY_PATH` | unset | Path to the auth-server's ES256 PEM private key (default mount `/etc/mcp-gateway/signing-key/key.pem`). Set = ES256 signing + JWKS; unset = HS256 legacy. `kid` = RFC 7638 thumbprint. See [asymmetric signing](asymmetric-signing.md). |
+| `REJECT_HS256_TOKENS` | false | Hard-reject legacy HS256 (no-`kid`) hop tokens. Read by **both** the auth-server (minter) and the registry (verifier); must be set on both. Truthy: `1`/`true`/`yes`/`on`. |
 
 See [docs/unified-parameter-reference.md](../unified-parameter-reference.md) for the full
 Docker / Terraform / Helm mapping of these parameters.

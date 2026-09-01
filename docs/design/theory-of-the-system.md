@@ -215,13 +215,18 @@ Negative space is part of the theory. Each of these is a stated non-goal, not a 
 - **It is single-tenant, not multi-tenant SaaS.** The cookie/session design explicitly assumes a
   single tenant and documents subdomain risks as acceptable only under that assumption
   ([`docs/design/cookie-security-design.md`](cookie-security-design.md)).
-- **The session cookie carries no identity payload** — only an opaque signed `session_id`; groups,
-  scopes, and the id_token live server-side ([`docs/design/session-flow-cookie-based.md`](session-flow-cookie-based.md)).
+- **The session cookie carries no identity payload** — only a raw 256-bit random `session_id`
+  (unsigned; validated by a mandatory server-side store lookup); groups, scopes, and the id_token
+  live server-side ([`docs/design/session-flow-cookie-based.md`](session-flow-cookie-based.md)).
 - **Third-party egress tokens never touch the user's machine.** The gateway injects upstream
   credentials from a vault; client auth headers are ingress-only and stripped on egress
   ([`docs/design/egress-auth-design.md`](egress-auth-design.md)).
-- **Internal HS256 hop tokens prove key-possession, not origin.** Asymmetric per-hop signing is a
-  documented deferral, not an accident ([`docs/design/internal-hop-authentication.md`](internal-hop-authentication.md)).
+- **Internal hop tokens are ES256-signed and origin-verifiable when a signing key is configured.**
+  auth-server alone holds the private key and publishes the public key(s) at
+  `/.well-known/internal-jwks.json`; other services verify by `kid` (RFC 7638 thumbprint) and fall
+  back to legacy HS256 only for a no-`kid` token while `REJECT_HS256_TOKENS` is off. With no key
+  configured the default stays HS256 (zero-breaking) ([`docs/design/internal-hop-authentication.md`](internal-hop-authentication.md),
+  [`docs/design/asymmetric-signing.md`](asymmetric-signing.md)).
 - **Virtual MCP servers do not stream (no SSE) and do no per-backend load balancing**
   ([`docs/design/virtual-mcp-server.md`](virtual-mcp-server.md)).
 - **New IdP support is a code change, not zero-config discovery** (§2.7).
@@ -271,9 +276,10 @@ One line each; read the doc for the full rationale.
 - [federation-architecture.md](federation-architecture.md) — symmetric peer-to-peer pull sync, Fernet-encrypted static tokens, `peer_id`-namespaced read-only items.
 - [hybrid-search-architecture.md](hybrid-search-architecture.md) — vector + keyword fused with Reciprocal Rank Fusion (k=60), replacing saturating additive scoring.
 - [idp-provider-support.md](idp-provider-support.md) — multi-IdP via a closed factory keyed on `AUTH_PROVIDER`; new provider = new code.
-- [internal-hop-authentication.md](internal-hop-authentication.md) — short-lived HS256 per-hop tokens, audience-scoped, fail closed, ignore plaintext `X-User`.
+- [internal-hop-authentication.md](internal-hop-authentication.md) — short-lived per-hop tokens, audience-scoped, fail closed, ignore plaintext `X-User`; ES256 + JWKS `kid` dispatch with HS256 legacy fallback.
+- [asymmetric-signing.md](asymmetric-signing.md) — ES256 internal JWT signing: mounted PEM private key, RFC 7638 thumbprint `kid`, JWKS publication + rotation, registry-side fetch/cache, and the HS256→ES256 cutover via `REJECT_HS256_TOKENS`.
 - [server-versioning.md](server-versioning.md) — versions as separate documents; nginx `map` routing; only active version indexed/health-checked.
-- [session-flow-cookie-based.md](session-flow-cookie-based.md) — opaque signed `session_id`; payload server-side in Mongo; id_token AES-GCM encrypted.
+- [session-flow-cookie-based.md](session-flow-cookie-based.md) — raw 256-bit `session_id` (unsigned) resolved by a mandatory server-side lookup; payload server-side in Mongo; id_token AES-GCM encrypted.
 - [session-flow-jwt-bearer.md](session-flow-jwt-bearer.md) — stateless programmatic access validated only at `/validate`; four token kinds converge on one user-context derivation.
 - [storage-architecture-mongodb-documentdb.md](storage-architecture-mongodb-documentdb.md) — MongoDB CE (dev) and DocumentDB (prod) share one repository; sole divergence is vector search.
 - [virtual-mcp-server.md](virtual-mcp-server.md) / [virtual-mcp-server-explained.md](virtual-mcp-server-explained.md) — one aggregating endpoint fronting many backends, routed in nginx Lua; no SSE, no per-backend LB.

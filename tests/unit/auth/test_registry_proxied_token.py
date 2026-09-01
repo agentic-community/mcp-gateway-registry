@@ -16,6 +16,7 @@ from fastapi import HTTPException
 
 from registry.auth.proxied_token import (
     _api_auth_request_enabled,
+    _reject_hs256_tokens,
     verify_registry_ui_token,
 )
 
@@ -131,6 +132,111 @@ class TestVerifyRegistryUiToken:
             assert exc.value.status_code == 500
 
 
+class TestVerifyRegistryUiTokenES256:
+    """The registry MUST accept ES256 internal tokens (kid present), verified
+    against auth-server's published internal JWKS.
+
+    Regression guard for the login loop: auth-server switched the minter to
+    ES256 (Phase A) but the registry verifier was HS256-only, so it rejected
+    every real token ("alg not allowed") -> /api/auth/me 401 -> login loop.
+    See project_phasea_registry_verifier_gap.
+    """
+
+    @staticmethod
+    def _es256_keypair():
+        from cryptography.hazmat.primitives.asymmetric import ec
+
+        priv = ec.generate_private_key(ec.SECP256R1())
+        return priv, priv.public_key()
+
+    @staticmethod
+    def _make_es256_token(priv, *, kid="es256-1", audience=_AUDIENCE, token_use="mcp-registry-ui"):
+        now = int(time.time())
+        claims = {
+            "iss": _ISSUER,
+            "aud": audience,
+            "sub": "alice",
+            "session_id": "sess-1",
+            "groups": ["g1"],
+            "auth_method": "keycloak",
+            "client_id": "ui",
+            "token_use": token_use,
+            "iat": now,
+            "exp": now + 30,
+        }
+        return pyjwt.encode(claims, priv, algorithm="ES256", headers={"kid": kid})
+
+    def test_es256_token_verifies_via_jwks(self) -> None:
+        priv, pub = self._es256_keypair()
+        token = self._make_es256_token(priv, kid="es256-1")
+
+        # Intent: the kid is looked up in the internal JWKS and the token is
+        # verified with the matching public key — NO SECRET_KEY involved.
+        with patch(
+            "registry.auth.internal_jwks.get_internal_verification_key",
+            return_value=pub,
+        ) as mock_get:
+            claims = verify_registry_ui_token(token)
+        assert claims["sub"] == "alice"
+        assert claims["groups"] == ["g1"]
+        mock_get.assert_called_once_with("es256-1")
+
+    def test_es256_unknown_kid_rejected(self) -> None:
+        priv, _pub = self._es256_keypair()
+        token = self._make_es256_token(priv, kid="es256-rotated-away")
+
+        # JWKS has no such kid (fetch returns None) -> fail closed.
+        with patch(
+            "registry.auth.internal_jwks.get_internal_verification_key",
+            return_value=None,
+        ):
+            with pytest.raises(HTTPException) as exc:
+                verify_registry_ui_token(token)
+        assert exc.value.status_code == 401
+
+    def test_es256_wrong_key_rejected(self) -> None:
+        priv, _pub = self._es256_keypair()
+        _other_priv, other_pub = self._es256_keypair()
+        token = self._make_es256_token(priv, kid="es256-1")
+
+        # JWKS returns a DIFFERENT public key for the kid -> signature fails.
+        with patch(
+            "registry.auth.internal_jwks.get_internal_verification_key",
+            return_value=other_pub,
+        ):
+            with pytest.raises(HTTPException) as exc:
+                verify_registry_ui_token(token)
+        assert exc.value.status_code == 401
+
+    def test_es256_does_not_need_secret_key(self) -> None:
+        # A pure-ES256 deployment may not set SECRET_KEY at all; verification
+        # must still work (the whole point of isolating minting to a keypair).
+        priv, pub = self._es256_keypair()
+        token = self._make_es256_token(priv, kid="es256-1")
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch(
+                "registry.auth.internal_jwks.get_internal_verification_key",
+                return_value=pub,
+            ),
+        ):
+            claims = verify_registry_ui_token(token)
+        assert claims["sub"] == "alice"
+
+    def test_hs256_rejected_when_cutover_flag_set(self) -> None:
+        # After the cutover, a legacy HS256 (no-kid) token is hard-rejected.
+        token = _make_token()  # HS256, no kid
+        with patch.dict(os.environ, {"REJECT_HS256_TOKENS": "true"}, clear=False):
+            with pytest.raises(HTTPException) as exc:
+                verify_registry_ui_token(token)
+        assert exc.value.status_code == 401
+
+    def test_oversized_token_rejected(self) -> None:
+        with pytest.raises(HTTPException) as exc:
+            verify_registry_ui_token("x" * 9000)
+        assert exc.value.status_code == 401
+
+
 class TestApiAuthRequestEnabled:
     def test_default_enabled(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
@@ -145,3 +251,31 @@ class TestApiAuthRequestEnabled:
     def test_enabled_values(self, val: str) -> None:
         with patch.dict(os.environ, {"NGINX_DISABLE_API_AUTH_REQUEST": val}, clear=False):
             assert _api_auth_request_enabled() is True
+
+
+class TestRejectHs256TokensParsing:
+    """The cutover flag must parse the SAME truthy set as the auth-server
+    minter (auth_server.self_signed_token.reject_hs256_tokens), or the registry
+    would reject HS256 while the minter still issues it (or vice versa)."""
+
+    def test_default_off(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            assert _reject_hs256_tokens() is False
+
+    @pytest.mark.parametrize("val", ["1", "true", "yes", "on", "TRUE", "On", "  yes  ", "YES"])
+    def test_truthy_values(self, val: str) -> None:
+        with patch.dict(os.environ, {"REJECT_HS256_TOKENS": val}, clear=False):
+            assert _reject_hs256_tokens() is True
+
+    @pytest.mark.parametrize("val", ["false", "0", "no", "off", "", "  ", "nope"])
+    def test_falsy_values(self, val: str) -> None:
+        with patch.dict(os.environ, {"REJECT_HS256_TOKENS": val}, clear=False):
+            assert _reject_hs256_tokens() is False
+
+    def test_matches_auth_server_parser(self) -> None:
+        """Both sides agree value-for-value across the same inputs."""
+        from auth_server.self_signed_token import reject_hs256_tokens
+
+        for val in ["1", "true", "YES", " on ", "false", "0", "", "maybe"]:
+            with patch.dict(os.environ, {"REJECT_HS256_TOKENS": val}, clear=False):
+                assert _reject_hs256_tokens() == reject_hs256_tokens()

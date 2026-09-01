@@ -1936,6 +1936,13 @@ variable "egress_secrets_manager_path_prefix" {
   default     = "mcp/egress"
 }
 
+# Asymmetric signing (ES256)
+variable "internal_signing_key_secret_arn" {
+  description = "ARN of the Secrets Manager secret containing the ES256 PEM private key for JWT signing. Empty = HS256 fallback. If the secret is encrypted under a customer-managed KMS key, also grant that key's kms:Decrypt to the ECS task role (the default aws/secretsmanager key needs no extra grant)."
+  type        = string
+  default     = ""
+}
+
 variable "egress_credential_encryption_key" {
   description = "Optional AES-256-GCM key (registry-only) used to encrypt per-user egress credentials at rest before they reach Secrets Manager / OpenBao. Empty disables encryption (legacy plaintext); existing deployments keep working unchanged. Never auto-generated."
   type        = string
@@ -1954,6 +1961,41 @@ variable "gateway_generic_proxy_enabled" {
   default     = false
 }
 
+variable "reject_hs256_tokens" {
+  description = "Hard-reject legacy HS256 tokens after ES256 cutover (>24h). Applied to both the auth-server (minter) and registry (verifier) containers. Default false."
+  type        = bool
+  default     = false
+}
+
+variable "csrf_signing_key_secret_arn" {
+  description = "ARN of a Secrets Manager secret holding CSRF_SIGNING_KEY (registry-only CSRF token signing). Empty = SECRET_KEY fallback."
+  type        = string
+  default     = ""
+}
+
+variable "credential_encryption_key_secret_arn" {
+  description = "ARN of a Secrets Manager secret holding CREDENTIAL_ENCRYPTION_KEY (registry-only backend credential encryption). Empty = SECRET_KEY fallback."
+  type        = string
+  default     = ""
+}
+
+variable "session_token_enc_key_secret_arn" {
+  description = "ARN of a Secrets Manager secret holding SESSION_TOKEN_ENC_KEY (id_token-at-rest AES-GCM; shared by auth-server + registry). Empty = SECRET_KEY fallback."
+  type        = string
+  default     = ""
+}
+
+variable "internal_jwks_url" {
+  description = "Registry-side URL for auth-server's internal JWKS (ES256 hop-token verification). Empty uses the Service Connect default http://auth-server:8888/.well-known/internal-jwks.json."
+  type        = string
+  default     = ""
+}
+
+variable "internal_jwks_cache_ttl_seconds" {
+  description = "How long the registry caches the internal JWKS before re-fetching (caps kid-rotation propagation)."
+  type        = number
+  default     = 300
+}
 variable "gateway_canonical_namespace_enabled" {
   description = "Enable canonical namespace handling for generic-proxied entities. Off by default."
   type        = bool

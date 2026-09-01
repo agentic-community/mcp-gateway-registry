@@ -183,6 +183,12 @@ class Settings(BaseSettings):
 
     # Auth settings
     secret_key: str = ""
+    # Scoped signing keys (fall back to secret_key when not explicitly set)
+    csrf_signing_key: str = ""  # Registry-only, for CSRF token signing
+    credential_encryption_key: str = ""  # Registry-only, for backend credential encryption
+    session_token_enc_key: str = (
+        ""  # Shared (auth-server + registry), for id_token encryption at rest
+    )
     session_cookie_name: str = "mcp_gateway_session"
     session_max_age_seconds: int = 60 * 60 * 8  # 8 hours
     # Secure-by-default: the session cookie carries the Secure flag so browsers
@@ -1278,6 +1284,27 @@ class Settings(BaseSettings):
         ge=0,
         description=(
             "Clock-skew leeway (seconds) on the /mcp-proxy internal token exp/iat checks."
+        ),
+    )
+    internal_jwks_url: str = Field(
+        default="http://auth-server:8888/.well-known/internal-jwks.json",
+        description=(
+            "URL of the auth-server internal JWKS endpoint. The registry fetches "
+            "the ES256 public key(s) here to verify internal hop tokens "
+            "(registry-ui / mcp-proxy audiences) that auth-server signs with its "
+            "private key. Internal-only endpoint over the in-cluster network; not "
+            "the same as the external federation JWKS. When auth-server signs with "
+            "HS256 (no INTERNAL_SIGNING_KEY_PATH), tokens carry no kid and this is "
+            "unused."
+        ),
+    )
+    internal_jwks_cache_ttl_seconds: int = Field(
+        default=300,
+        ge=0,
+        description=(
+            "How long the registry caches the auth-server internal JWKS before "
+            "re-fetching. Caps kid-rotation propagation. On fetch failure the last "
+            "known-good keys are served up to a bounded staleness."
         ),
     )
 

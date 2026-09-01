@@ -54,6 +54,21 @@ app:
   # When deployed via mcp-gateway-registry-stack, the key is shared with auth-server.
   # Uncomment to use a specific key:
   # secretKey: "your-secure-key-here"
+  # Scoped signing/encryption keys (PR #1693). Each is independent of SECRET_KEY
+  # and falls back to SECRET_KEY when left empty, so an unconfigured deploy is
+  # unchanged. Rendered into the registry secret only when set.
+  csrfSigningKey: "" # pragma: allowlist secret
+  credentialEncryptionKey: "" # pragma: allowlist secret
+  # Shared with auth-server (must match when both are set).
+  sessionTokenEncKey: "" # pragma: allowlist secret
+  # After all internal JWTs have rotated to ES256, set true to hard-reject
+  # legacy HS256 tokens at the registry verifier. Default false = unchanged.
+  rejectHs256: false
+  # Registry-side ES256 internal-JWKS fetch (PR #1693). URL defaults to the
+  # in-namespace auth-server FQDN (see secret.yaml); override only for unusual
+  # topologies. TTL caps kid-rotation propagation.
+  internalJwksUrl: ""
+  internalJwksCacheTtlSeconds: 300
 
   # Session cookie Domain attribute. Leave empty to default to
   # ".<global.domain>". See charts/auth-server/values.yaml for a longer
