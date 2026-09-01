@@ -12,10 +12,13 @@ IMPORTANT — this is NOT a blanket "deny all private ranges". The auth-server
 legitimately needs egress to its OWN in-cluster dependencies (Keycloak/IdP,
 MongoDB/DocumentDB, the registry) which sit on RFC-1918 IPs. A naive private-range
 deny would break the auth-server itself. This policy is therefore CIDR-aware and
-environment-specific: you MUST populate egress.allowedCidrs with the cluster
+environment-specific: you MUST populate egress.networkPolicy.allowedCidrs with the cluster
 service CIDRs the auth-server needs, plus the public Internet range(s) for the
 proxied backends, while the `except` list carves out the metadata/link-local/
-unspecified ranges that must never be reachable.
+unspecified ranges that must never be reachable. At minimum block EC2 IMDS
+(169.254.169.254 and fd00:ec2::254), ECS task credentials (169.254.170.2),
+EKS Pod Identity (169.254.170.23 and fd00:ec2::23), IPv4/IPv6 link-local, and
+unspecified addresses.
 
 Kubernetes NetworkPolicy egress is ALLOW-list based: with an egress rule present,
 only the listed destinations are permitted. Because CNIs differ (kind / EKS

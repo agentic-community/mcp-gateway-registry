@@ -78,6 +78,8 @@ describe('CustomEntityForm', () => {
     await waitFor(() =>
       expect(onSave).toHaveBeenCalledWith(
         expect.objectContaining({ name: 'my-dataset', visibility: 'private' }),
+        // Second arg: the upstream-header rows (empty when not proxied).
+        expect.anything(),
       ),
     );
   });
@@ -110,6 +112,7 @@ describe('CustomEntityForm', () => {
           is_proxied: true,
           proxy_target_url: 'https://backend.example.com/',
         }),
+        expect.anything(),
       ),
     );
     // And they must NOT leak into the attributes bag.
@@ -133,6 +136,61 @@ describe('CustomEntityForm', () => {
       ).toBeInTheDocument(),
     );
     expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it('blocks submit when a proxied entity has an invalid upstream header row', async () => {
+    const onSave = jest.fn();
+    render(
+      <CustomEntityForm descriptor={descriptor} onSave={onSave} onCancel={jest.fn()} />,
+    );
+    const nameInput = screen.getAllByRole('textbox')[0];
+    fireEvent.change(nameInput, { target: { value: 'proxied-ds' } });
+    // Enable proxying (single checkbox at this point), give a valid target.
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.change(screen.getByPlaceholderText('https://backend.example.com/'), {
+      target: { value: 'https://backend.example.com/' },
+    });
+    // Add a fixed Authorization row — invalid unless caller-overridable.
+    fireEvent.click(screen.getByText('+ Add header'));
+    fireEvent.change(screen.getByLabelText('Header name (row 1)'), {
+      target: { value: 'Authorization' },
+    });
+    fireEvent.change(screen.getByLabelText('Header value (row 1)'), {
+      target: { value: 'Bearer x' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    // The row error is surfaced both inline on the row and in the form's error
+    // banner (two nodes) and gates save.
+    await waitFor(() =>
+      expect(screen.getAllByText(/caller-overridable/).length).toBeGreaterThan(0),
+    );
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it('trims a non-blank upstream header value before submit', async () => {
+    const onSave = jest.fn().mockResolvedValue(undefined);
+    render(
+      <CustomEntityForm descriptor={descriptor} onSave={onSave} onCancel={jest.fn()} />,
+    );
+    fireEvent.change(screen.getAllByRole('textbox')[0], { target: { value: 'proxied-ds' } });
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.change(screen.getByPlaceholderText('https://backend.example.com/'), {
+      target: { value: 'https://backend.example.com/' },
+    });
+    fireEvent.click(screen.getByText('+ Add header'));
+    fireEvent.change(screen.getByLabelText('Header name (row 1)'), {
+      target: { value: 'X-Api-Key' },
+    });
+    fireEvent.change(screen.getByLabelText('Header value (row 1)'), {
+      target: { value: '  secret  ' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    await waitFor(() =>
+      expect(onSave).toHaveBeenCalledWith(
+        expect.objectContaining({ is_proxied: true }),
+        [{ name: 'X-Api-Key', value: 'secret', overridable: false }],
+      ),
+    );
   });
 
   it('does not render a raw widget for a descriptor field colliding with a reserved proxy key', () => {

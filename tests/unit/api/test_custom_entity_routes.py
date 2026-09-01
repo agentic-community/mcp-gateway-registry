@@ -83,6 +83,7 @@ def service() -> MagicMock:
     svc.get_record = AsyncMock(return_value=_record())
     svc.create_record = AsyncMock(return_value=_record())
     svc.update_record = AsyncMock(return_value=_record("updated"))
+    svc.update_record_upstream_headers = AsyncMock(return_value=_record("rotated"))
     svc.delete_record = AsyncMock(return_value=None)
     return svc
 
@@ -182,6 +183,68 @@ class TestUpdateDelete:
         client = _make_client(USER_CTX)
         resp = client.put(f"/api/custom/{TYPE}/{VALID_UUID}", json={"name": "x"})
         assert resp.status_code == 404
+
+    def test_rotate_headers_ok(self, patched_service):
+        client = _make_client(USER_CTX)
+        resp = client.patch(
+            f"/api/custom/{TYPE}/{VALID_UUID}/upstream-headers",
+            json={"custom_headers": [{"name": "X-Api-Key", "value": "sk"}]},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["name"] == "rotated"
+        # The plaintext header list is forwarded to the service positionally.
+        args = patched_service.update_record_upstream_headers.call_args.args
+        assert [{"name": "X-Api-Key", "value": "sk"}] in args
+        # And the encrypted field is never echoed back to the client.
+        assert "custom_headers_encrypted" not in resp.json()
+
+    def test_rotate_headers_empty_clears(self, patched_service):
+        client = _make_client(USER_CTX)
+        resp = client.patch(
+            f"/api/custom/{TYPE}/{VALID_UUID}/upstream-headers", json={"custom_headers": []}
+        )
+        assert resp.status_code == 200
+
+    def test_rotate_headers_validation_400(self, patched_service):
+        patched_service.update_record_upstream_headers = AsyncMock(
+            side_effect=CustomEntityValidationError("custom_headers", "managed by the gateway")
+        )
+        client = _make_client(USER_CTX)
+        resp = client.patch(
+            f"/api/custom/{TYPE}/{VALID_UUID}/upstream-headers",
+            json={"custom_headers": [{"name": "Cookie", "value": "x"}]},
+        )
+        assert resp.status_code == 400
+
+    def test_rotate_headers_unknown_type_404(self, patched_service):
+        patched_service.update_record_upstream_headers = AsyncMock(
+            side_effect=UnknownCustomTypeError(TYPE)
+        )
+        client = _make_client(USER_CTX)
+        resp = client.patch(
+            f"/api/custom/{TYPE}/{VALID_UUID}/upstream-headers",
+            json={"custom_headers": [{"name": "X-Api-Key", "value": "sk"}]},
+        )
+        assert resp.status_code == 404
+
+    def test_rotate_headers_not_found_404(self, patched_service):
+        patched_service.update_record_upstream_headers = AsyncMock(
+            side_effect=CustomEntityNotFoundError(f"/{TYPE}/{VALID_UUID}")
+        )
+        client = _make_client(USER_CTX)
+        resp = client.patch(
+            f"/api/custom/{TYPE}/{VALID_UUID}/upstream-headers",
+            json={"custom_headers": [{"name": "X-Api-Key", "value": "sk"}]},
+        )
+        assert resp.status_code == 404
+
+    def test_rotate_headers_no_scope_403(self, patched_service):
+        client = _make_client(NO_SCOPE_CTX)
+        resp = client.patch(
+            f"/api/custom/{TYPE}/{VALID_UUID}/upstream-headers", json={"custom_headers": []}
+        )
+        assert resp.status_code == 403
+        patched_service.update_record_upstream_headers.assert_not_awaited()
 
     def test_delete_ok(self, patched_service):
         client = _make_client(USER_CTX)

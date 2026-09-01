@@ -7,6 +7,7 @@ pattern (indexing failure is logged, never fatal to the write).
 """
 
 import logging
+from typing import Any
 
 from ..api.custom_entity_visibility import (
     _build_visibility_filter,
@@ -31,7 +32,10 @@ from ..schemas.custom_entity_models import (
     CustomTypeDescriptor,
     CustomTypeUpdate,
 )
-from ..schemas.proxy_mixin import validate_and_pin_proxy_target
+from ..schemas.proxy_mixin import (
+    clear_upstream_headers_on_repoint,
+    validate_and_pin_proxy_target,
+)
 from .custom_entity_errors import (
     CustomEntityNotFoundError,
     CustomEntityValidationError,
@@ -195,6 +199,36 @@ class CustomEntityService:
                 raise CustomTypeRecordCapError(type_name, cap)
 
         cleaned = validate_attributes(descriptor, request.attributes)
+
+        # Encrypt static upstream auth headers for the proxy hop (plaintext
+        # {name, value} -> {name, value_encrypted}); never persisted in plaintext.
+        custom_headers_encrypted = None
+        custom_header_names: list[str] = []
+        custom_header_overridable_names: list[str] = []
+        custom_headers_updated_at = None
+        if getattr(request, "custom_headers", None):
+            from ..utils.credential_encryption import (
+                encrypt_custom_headers_in_server_dict,
+                validate_custom_headers,
+            )
+
+            # Same header policy as the MCP-server route (reserved-name block +
+            # count cap, + the per-header overridable rules): a custom entity must
+            # not register a gateway-managed header for injection. Surface a
+            # validation error as 400, not 500. Both validate and encrypt live under
+            # the boundary so their ValueError (bad header, or SECRET_KEY missing)
+            # maps to 4xx consistently with the skill create path.
+            try:
+                validate_custom_headers(request.custom_headers)
+                _ch: dict[str, Any] = {"custom_headers": request.custom_headers}
+                encrypt_custom_headers_in_server_dict(_ch)
+            except ValueError as e:
+                raise CustomEntityValidationError("custom_headers", str(e)) from e
+            custom_headers_encrypted = _ch.get("custom_headers_encrypted")
+            custom_header_names = _ch.get("custom_header_names", [])
+            custom_header_overridable_names = _ch.get("custom_header_overridable_names", [])
+            custom_headers_updated_at = _ch.get("custom_headers_updated_at")
+
         record = CustomEntityRecord(
             entity_type=type_name,
             name=request.name,
@@ -207,6 +241,11 @@ class CustomEntityService:
             # Gateway-proxy opt-in (validated on the request model; carried through).
             is_proxied=request.is_proxied,
             proxy_target_url=request.proxy_target_url,
+            proxy_streaming=getattr(request, "proxy_streaming", False),
+            custom_headers_encrypted=custom_headers_encrypted,
+            custom_header_names=custom_header_names,
+            custom_header_overridable_names=custom_header_overridable_names,
+            custom_headers_updated_at=custom_headers_updated_at,
         )
         record.assign_path()
         # Gateway-proxy SSRF layer 2: when proxied, resolve the target hostname and
@@ -313,6 +352,14 @@ class CustomEntityService:
             updates["proxy_resolved_ips"] = pin.get("proxy_resolved_ips", [])
             updates["proxy_target_host"] = pin.get("proxy_target_host")
             updates["proxy_disabled_reason"] = None
+            # Credential-misdirection guard: clear create-time upstream headers if
+            # the effective target host changed (don't send the old host's secret
+            # to a new host). See clear_upstream_headers_on_repoint.
+            clear_upstream_headers_on_repoint(
+                updates,
+                existing_target=existing.proxy_target_url,
+                new_target=str(merged_target) if merged_target else None,
+            )
 
         updated = await self._get_entities().update(path, updates)
         if updated is None:
@@ -322,6 +369,59 @@ class CustomEntityService:
             await self._get_search().index_custom_entity(record=updated, descriptor=descriptor)
         except Exception:
             logger.exception("Failed to re-index custom entity %s (update persisted)", path)
+        return updated
+
+    async def update_record_upstream_headers(
+        self,
+        type_name: str,
+        path: str,
+        custom_headers: list[dict],
+        user_context: dict,
+    ) -> CustomEntityRecord:
+        """Rotate a record's upstream custom headers (proxy-hop credentials).
+
+        Dedicated, narrowly-scoped mutation (the mirror of the skill rotation
+        endpoint / the MCP-server auth-credential PATCH): validate + encrypt the
+        full header set and persist ONLY the four header storage fields. An empty
+        list clears all headers. Same authz as ``update_record`` (viewable +
+        owner-or-admin). Raises CustomEntityValidationError (-> 400) on any policy
+        violation so the plaintext-secret path never yields a 500.
+
+        Note: rotation does NOT re-run the proxy-target repoint guard -- it only
+        touches header fields, not the target, so there is no host change to
+        misdirect against. The headers are always re-scoped to the CURRENT target.
+        """
+        existing = await self._get_entities().get(path)
+        if existing is None or not _user_can_view(existing, user_context):
+            raise CustomEntityNotFoundError(path)  # 404 — don't disclose existence
+        _require_owner_or_admin(existing, user_context)  # 403 if viewable-but-not-owned
+
+        from ..utils.credential_encryption import build_custom_headers_storage_fields
+
+        # Preserve-by-name: a blank submitted value keeps the existing ciphertext
+        # (write-only value convention).
+        existing_encrypted = [
+            h.model_dump() if hasattr(h, "model_dump") else dict(h)
+            for h in (existing.custom_headers_encrypted or [])
+        ]
+        try:
+            updates = build_custom_headers_storage_fields(
+                custom_headers, existing_encrypted=existing_encrypted
+            )
+        except ValueError as e:
+            raise CustomEntityValidationError("custom_headers", str(e)) from e
+
+        updated = await self._get_entities().update(path, updates)
+        if updated is None:
+            raise CustomEntityNotFoundError(path)  # concurrent delete
+        try:
+            descriptor = await self.cache.get_for_write(type_name)
+            if descriptor is not None:
+                await self._get_search().index_custom_entity(record=updated, descriptor=descriptor)
+        except Exception:
+            logger.exception(
+                "Failed to re-index custom entity %s (header rotation persisted)", path
+            )
         return updated
 
     async def delete_record(

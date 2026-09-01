@@ -12,13 +12,29 @@ import {
   MAX_TEXT_LEN,
 } from '../types/customEntity';
 import { labelFor } from '../utils/humanize';
-import { FormField, fieldClass, ProxyField } from './formFields';
+import {
+  FormField,
+  fieldClass,
+  ProxyField,
+  UpstreamHeadersField,
+  upstreamHeaderRowError,
+  type UpstreamHeader,
+} from './formFields';
 
 interface CustomEntityFormProps {
   descriptor: CustomTypeDescriptor;
   /** Existing record for edit mode; null/undefined for create. */
   record?: CustomEntityRecord | null;
-  onSave: (body: CustomEntityCreate | CustomEntityUpdate) => Promise<void>;
+  /**
+   * Persist the record. ``customHeaders`` carries the upstream-header editor
+   * rows (only when proxied); the parent routes them to the create payload
+   * (create) or the dedicated rotation PATCH (edit). Undefined = not proxied /
+   * no header edits.
+   */
+  onSave: (
+    body: CustomEntityCreate | CustomEntityUpdate,
+    customHeaders?: UpstreamHeader[],
+  ) => Promise<void>;
   onCancel: () => void;
 }
 
@@ -114,6 +130,9 @@ const CustomEntityForm: React.FC<CustomEntityFormProps> = ({
   const [proxyTargetUrl, setProxyTargetUrl] = useState('');
   // Read-only, server-derived client path (present on edit once saved).
   const [proxyClientUrl, setProxyClientUrl] = useState('');
+  // Upstream headers (per-header overridable). On edit these are the registered
+  // names with blank values (write-only); the backend preserves unchanged ones.
+  const [customHeaders, setCustomHeaders] = useState<UpstreamHeader[]>([]);
 
   // --- attributes state (per-type) ---
   const [attributes, setAttributes] = useState<Record<string, unknown>>({});
@@ -144,6 +163,14 @@ const CustomEntityForm: React.FC<CustomEntityFormProps> = ({
           (typeof attrs.proxy_target_url === 'string' ? attrs.proxy_target_url : ''),
       );
       setProxyClientUrl(record.proxy_client_url ?? '');
+      // Rebuild header editor rows from the registered NAMES (values write-only).
+      setCustomHeaders(
+        (record.custom_header_names ?? []).map((name) => ({
+          name,
+          value: '',
+          overridable: (record.custom_header_overridable_names ?? []).includes(name),
+        })),
+      );
       delete attrs.is_proxied;
       delete attrs.proxy_target_url;
       setAttributes(attrs);
@@ -321,9 +348,37 @@ const CustomEntityForm: React.FC<CustomEntityFormProps> = ({
       ...(isProxied ? { proxy_target_url: proxyTargetUrl.trim() } : {}),
     };
 
+    // Upstream headers only apply when proxied. Block submit client-side on any
+    // known-invalid row (reserved name, fixed Authorization, value-less fixed
+    // header) so a credential form fails fast with a specific message rather
+    // than a generic backend reject. The backend remains the security boundary.
+    if (isProxied) {
+      for (const h of customHeaders) {
+        const rowError = upstreamHeaderRowError(h, isEditMode);
+        if (rowError) {
+          setFormError(rowError);
+          return;
+        }
+      }
+    }
+
+    // Drop fully-blank rows; trim the name and (non-blank) value so stray
+    // whitespace is never persisted. A blank value is preserved server-side
+    // (write-only UX) on edit, or must be a caller-only overridable slot on
+    // create; an all-whitespace value trims to blank and keeps that meaning.
+    const upstreamHeaders = isProxied
+      ? customHeaders
+          .filter((h) => h.name.trim())
+          .map((h) => ({
+            name: h.name.trim(),
+            value: h.value.trim(),
+            overridable: h.overridable,
+          }))
+      : [];
+
     setSaving(true);
     try {
-      await onSave(payload);
+      await onSave(payload, upstreamHeaders);
     } catch (err: unknown) {
       const detail = axios.isAxiosError(err) ? err.response?.data?.detail : undefined;
       if (Array.isArray(detail)) {
@@ -445,6 +500,15 @@ const CustomEntityForm: React.FC<CustomEntityFormProps> = ({
             error={fieldErrors.proxy_target_url}
             clientUrl={proxyClientUrl}
           />
+
+          {isProxied && (
+            <UpstreamHeadersField
+              headers={customHeaders}
+              onChange={setCustomHeaders}
+              accent="teal"
+              editMode={!!record}
+            />
+          )}
 
           {/* --- Per-type attributes (descriptor-driven) --- */}
           {renderableFields.length > 0 && (

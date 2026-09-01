@@ -185,6 +185,48 @@ def record_emission_path(path: str) -> None:
 
 
 # =============================================================================
+# Generic reverse-proxy (gateway-proxy-any-resource) hop metrics
+# =============================================================================
+
+generic_proxy_slot_rejected_total = _meter.create_counter(
+    name="mcpgw_registry_generic_proxy_slot_rejected_total",
+    description=(
+        "Generic-proxy requests rejected with 503 because a concurrency slot "
+        "could not be acquired within the acquire timeout, labeled by pool "
+        "(buffered | stream). A non-zero rate means the pool is saturated."
+    ),
+    unit="1",
+)
+
+generic_proxy_stream_outcome_total = _meter.create_counter(
+    name="mcpgw_registry_generic_proxy_stream_outcome_total",
+    description=(
+        "Generic-proxy streaming request outcomes, labeled by outcome "
+        "(started | completed | duration_timeout | byte_cap | upstream_error | "
+        "client_closed). "
+        "duration_timeout/byte_cap track the new stream ceilings."
+    ),
+    unit="1",
+)
+
+
+def record_generic_proxy_slot_rejected(pool: str) -> None:
+    """Record a generic-proxy capacity rejection (503) for the given pool."""
+    try:
+        generic_proxy_slot_rejected_total.add(1, {"pool": pool})
+    except Exception:  # pragma: no cover - metrics must never break the hop
+        pass
+
+
+def record_generic_proxy_stream_outcome(outcome: str) -> None:
+    """Record a start/terminal outcome for a streaming generic-proxy request."""
+    try:
+        generic_proxy_stream_outcome_total.add(1, {"outcome": outcome})
+    except Exception:  # pragma: no cover - metrics must never break the hop
+        pass
+
+
+# =============================================================================
 # Public helpers
 # =============================================================================
 

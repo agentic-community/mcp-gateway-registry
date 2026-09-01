@@ -733,8 +733,9 @@ working in those areas.
 - **Use the canonical helper, never reinvent/copy-paste** (see the "Canonical
   helpers" section in the guidelines doc): outbound HTTP from user/registry URLs →
   `registry/utils/url_guard.py` `guarded_client`/`guarded_async_client` (never a
-  bare `httpx` client), IP categories/unwrapping → `registry/utils/url_guard.py`,
-  URL identity/logging → `normalize_url_identity`/`sanitized_url_for_log`; CSRF →
+  bare `httpx` client), IP categories/literal and tunnel unwrapping →
+  `registry/utils/url_guard.py`, URL identity → `normalize_url_identity`, URL log
+  redaction → `registry/common/log_redaction.py` `redact_url`; CSRF →
   `registry/auth/csrf.py`; internal service auth →
   `registry/auth/internal.py`; signing-secret validation →
   `registry/common/secret_key.py`; read redaction → `registry/services/visibility.py`;

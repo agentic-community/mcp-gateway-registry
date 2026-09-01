@@ -234,3 +234,39 @@ class TestInternalDeploymentType:
         monkeypatch.chdir(tmp_path)
         monkeypatch.delenv("INTERNAL_ONLY_DEPLOYMENT", raising=False)
         assert Settings().internal_only_deployment is False
+
+
+@pytest.mark.unit
+@pytest.mark.core
+class TestGenericProxyResourceLimits:
+    """Generic streams have isolated, validated resource ceilings."""
+
+    def test_safe_defaults(self, monkeypatch, tmp_path) -> None:
+        monkeypatch.chdir(tmp_path)
+        settings = Settings()
+
+        assert settings.gateway_generic_max_concurrency == 32
+        assert settings.gateway_generic_stream_max_concurrency == 8
+        assert settings.gateway_generic_acquire_timeout_seconds == 5.0
+        assert settings.gateway_generic_stream_max_duration_seconds == 3600
+        assert settings.gateway_generic_stream_max_bytes == 100 * 1024 * 1024
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("gateway_generic_stream_max_concurrency", 0),
+            ("gateway_generic_acquire_timeout_seconds", 0),
+            ("gateway_generic_stream_max_duration_seconds", 0),
+            ("gateway_generic_stream_max_bytes", 1023),
+        ],
+    )
+    def test_rejects_non_positive_or_too_small_limits(
+        self,
+        monkeypatch,
+        tmp_path,
+        field: str,
+        value: int,
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        with pytest.raises(ValidationError):
+            Settings(**{field: value})

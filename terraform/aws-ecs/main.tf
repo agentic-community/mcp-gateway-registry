@@ -337,18 +337,22 @@ module "mcp_gateway" {
   internal_token_leeway_seconds = var.internal_token_leeway_seconds
 
   # Gateway generic-proxy feature (ships disabled by default)
-  gateway_generic_proxy_enabled             = var.gateway_generic_proxy_enabled
-  gateway_canonical_namespace_enabled       = var.gateway_canonical_namespace_enabled
-  gateway_proxy_allow_private_targets       = var.gateway_proxy_allow_private_targets
-  gateway_generic_client_max_body_size      = var.gateway_generic_client_max_body_size
-  gateway_proxy_prefix                      = var.gateway_proxy_prefix
-  generic_proxy_token_ttl_seconds           = var.generic_proxy_token_ttl_seconds
-  generic_proxy_max_body_bytes              = var.generic_proxy_max_body_bytes
-  gateway_generic_require_bearer_for_writes = var.gateway_generic_require_bearer_for_writes
-  gateway_egress_selfcheck_enabled          = var.gateway_egress_selfcheck_enabled
-  gateway_generic_tls_verify                = var.gateway_generic_tls_verify
-  gateway_proxy_pin_refresh_seconds         = var.gateway_proxy_pin_refresh_seconds
-  gateway_generic_max_concurrency           = var.gateway_generic_max_concurrency
+  gateway_generic_proxy_enabled               = var.gateway_generic_proxy_enabled
+  gateway_canonical_namespace_enabled         = var.gateway_canonical_namespace_enabled
+  gateway_proxy_allow_private_targets         = var.gateway_proxy_allow_private_targets
+  gateway_generic_client_max_body_size        = var.gateway_generic_client_max_body_size
+  gateway_proxy_prefix                        = var.gateway_proxy_prefix
+  gateway_generic_stream_read_timeout_seconds = var.gateway_generic_stream_read_timeout_seconds
+  generic_proxy_token_ttl_seconds             = var.generic_proxy_token_ttl_seconds
+  generic_proxy_max_body_bytes                = var.generic_proxy_max_body_bytes
+  gateway_generic_require_bearer_for_writes   = var.gateway_generic_require_bearer_for_writes
+  gateway_egress_selfcheck_enabled            = var.gateway_egress_selfcheck_enabled
+  gateway_generic_tls_verify                  = var.gateway_generic_tls_verify
+  gateway_generic_max_concurrency             = var.gateway_generic_max_concurrency
+  gateway_generic_stream_max_concurrency      = var.gateway_generic_stream_max_concurrency
+  gateway_generic_acquire_timeout_seconds     = var.gateway_generic_acquire_timeout_seconds
+  gateway_generic_stream_max_duration_seconds = var.gateway_generic_stream_max_duration_seconds
+  gateway_generic_stream_max_bytes            = var.gateway_generic_stream_max_bytes
 
   # Custom entity types (admin-defined, schema-driven catalog types)
   custom_entity_types_enabled   = var.custom_entity_types_enabled

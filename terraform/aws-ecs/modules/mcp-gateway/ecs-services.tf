@@ -549,12 +549,24 @@ module "ecs_service_auth" {
           value = tostring(var.gateway_generic_tls_verify)
         },
         {
-          name  = "GATEWAY_PROXY_PIN_REFRESH_SECONDS"
-          value = tostring(var.gateway_proxy_pin_refresh_seconds)
-        },
-        {
           name  = "GATEWAY_GENERIC_MAX_CONCURRENCY"
           value = tostring(var.gateway_generic_max_concurrency)
+        },
+        {
+          name  = "GATEWAY_GENERIC_STREAM_MAX_CONCURRENCY"
+          value = tostring(var.gateway_generic_stream_max_concurrency)
+        },
+        {
+          name  = "GATEWAY_GENERIC_ACQUIRE_TIMEOUT_SECONDS"
+          value = tostring(var.gateway_generic_acquire_timeout_seconds)
+        },
+        {
+          name  = "GATEWAY_GENERIC_STREAM_MAX_DURATION_SECONDS"
+          value = tostring(var.gateway_generic_stream_max_duration_seconds)
+        },
+        {
+          name  = "GATEWAY_GENERIC_STREAM_MAX_BYTES"
+          value = tostring(var.gateway_generic_stream_max_bytes)
         },
         {
           name  = "METRICS_LEGACY_HTTP_POST"
@@ -781,6 +793,16 @@ module "ecs_service_auth" {
   subnet_ids = var.private_subnet_ids
   # No ALB ingress rule needed: Service Connect proxy-to-proxy traffic is allowed
   # by the registry->auth rule defined separately below.
+  #
+  # The generic proxy may target operator-approved Internet endpoints, so this
+  # service needs broad egress. Security groups are allow-only and cannot express
+  # "0.0.0.0/0 except link-local". Fargate does not expose EC2 IMDS; the task's
+  # 169.254.170.2 container-credential endpoint must remain reachable for its IAM
+  # role. The auth task disables SDK EC2-IMDS fallback, and the proxy URL guard
+  # hard-denies 169.254.169.254, 169.254.170.2, 169.254.170.23,
+  # fd00:ec2::254, and fd00:ec2::23 before any allowlist relaxation. Deploy an
+  # AWS Network Firewall/NACL equivalent when network-layer deny rules are
+  # required for an EC2-backed capacity provider.
   security_group_egress_rules = {
     all = {
       ip_protocol = "-1"
@@ -1545,6 +1567,10 @@ module "ecs_service_registry" {
         {
           name  = "GATEWAY_PROXY_PREFIX"
           value = tostring(var.gateway_proxy_prefix)
+        },
+        {
+          name  = "GATEWAY_GENERIC_STREAM_READ_TIMEOUT_SECONDS"
+          value = tostring(var.gateway_generic_stream_read_timeout_seconds)
         },
         # Internal/workshop deployment classification (telemetry labels; issue #1216)
         {

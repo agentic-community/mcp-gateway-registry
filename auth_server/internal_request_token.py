@@ -225,6 +225,9 @@ def mint_generic_proxy_token(
     entity_type: str,
     registered_path: str,
     upstream_url: str,
+    http_method: str,
+    streaming: bool = False,
+    has_upstream_auth: bool = False,
 ) -> str:
     """Mint the per-request /proxy/{entity_type}/{path} token in /validate's 200 path.
 
@@ -237,7 +240,22 @@ def mint_generic_proxy_token(
 
     ``upstream_url`` is the resolved backend the generic hop forwards to,
     cryptographically pinned so the handler ignores forgeable headers.
+
+    ``http_method`` binds the exact normalized ingress verb so a token minted for
+    a safe method cannot be replayed with a state-changing method.
+
+    ``streaming`` binds the entity's proxy_streaming opt-in into the token so the
+    hop streams only on the signed claim, never on a forgeable inbound header;
+    runtime concurrency, duration, and byte limits bound the stream.
+
+    ``has_upstream_auth`` binds whether the entity has registered upstream auth
+    headers, so the hop vends + injects them (from the registry's internal
+    endpoint) only on the signed claim.
     """
+    method = http_method.strip().upper()
+    if not method:
+        raise ValueError("http_method is required for a generic proxy token")
+
     return _mint_internal_token(
         audience=GENERIC_PROXY_AUDIENCE,
         subject=subject,
@@ -246,6 +264,9 @@ def mint_generic_proxy_token(
             "entity_type": entity_type,
             "server": registered_path,  # FULL registered path, not first-segment
             "upstream_url": upstream_url,
+            "method": method,
+            "streaming": bool(streaming),
+            "has_upstream_auth": bool(has_upstream_auth),
             "token_use": GENERIC_PROXY_TOKEN_USE,
         },
         ttl_seconds=_generic_ttl_seconds(),
@@ -370,6 +391,7 @@ async def verify_generic_proxy_token(request: Request) -> None:
     ``entity_path``. Rejects (401) unless:
       - a valid, unexpired, GENERIC_PROXY_AUDIENCE / GENERIC_PROXY_TOKEN_USE token;
       - an upstream binding is present;
+      - claims["method"] exactly matches the normalized request method;
       - claims["entity_type"] == route entity_type (blocks cross-type replay,
         e.g. a skill token used on an /a2a_agent/ route); AND
       - the route entity_path equals the bound registered path OR is a sub-path
@@ -416,6 +438,16 @@ async def verify_generic_proxy_token(request: Request) -> None:
         raise HTTPException(
             status.HTTP_401_UNAUTHORIZED, detail="Internal proxy token missing upstream"
         )
+
+    bound_method = str(claims.get("method") or "").upper()
+    request_method = str(request.method or "").upper()
+    if not bound_method or not request_method or bound_method != request_method:
+        logger.warning(
+            "generic_proxy: method claim/request mismatch (claim=%r request=%r)",
+            bound_method,
+            request_method,
+        )
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Method claim/request mismatch")
 
     # Cross-type replay guard: the bound entity_type must match the route.
     route_entity_type = request.path_params.get("entity_type") or ""

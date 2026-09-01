@@ -131,8 +131,11 @@ app:
   gatewayGenericRequireBearerForWrites: true # CSRF: refuse cookie auth for write verbs
   gatewayEgressSelfcheckEnabled: true # Probe metadata IPs at startup; disable feature if reachable
   gatewayGenericTlsVerify: "true" # true | false | /path/to/ca-bundle.pem
-  gatewayProxyPinRefreshSeconds: 300 # Interval (s) to re-resolve+revalidate pinned hostname targets
-  gatewayGenericMaxConcurrency: 32 # Semaphore cap on in-flight generic-hop requests (OOM guard)
+  gatewayGenericMaxConcurrency: 32 # Semaphore cap on buffered generic-hop requests (OOM guard)
+  gatewayGenericStreamMaxConcurrency: 8 # Separate semaphore cap for long-lived streams
+  gatewayGenericAcquireTimeoutSeconds: 5 # Max wait (s) for either concurrency pool before 503
+  gatewayGenericStreamMaxDurationSeconds: 3600 # Absolute lifetime (s) for one stream
+  gatewayGenericStreamMaxBytes: "104857600" # Raw response-byte ceiling per stream (100 MiB)
 # Authentication Provider Configuration
 # Choose ONE provider: keycloak, entra, okta, auth0, cognito, or pingfederate
 authProvider:
@@ -353,6 +356,11 @@ metricsScrape:
 # Disabled by default: enabling it without correct CIDRs would break the
 # auth-server's own egress to Keycloak/Mongo/registry.
 egress:
+  # Set true ONLY when an equivalent policy is managed outside this chart and
+  # verified to block every metadata/workload-credential endpoint listed below.
+  # Enabling the generic proxy while both this and networkPolicy.enabled are
+  # false makes Helm rendering fail closed.
+  externalEgressPolicyAcknowledged: false
   networkPolicy:
     enabled: false
     # kube-dns / CoreDNS selector so hostname targets can resolve. Adjust to your
@@ -363,14 +371,21 @@ egress:
       fromPodSelector:
         k8s-app: kube-dns
     # Allowed destination CIDRs. Each entry is an ipBlock with an optional `except`
-    # list. The example below allows all IPv4 while carving out the metadata IP,
-    # link-local, and the unspecified address — you SHOULD tighten `cidr` to your
-    # cluster service CIDR(s) + the specific egress range for proxied backends
-    # rather than 0.0.0.0/0. Add an IPv6 entry (with fd00:ec2::254/128 excepted)
-    # if the pod has IPv6 egress.
+    # list. These broad entries are examples: tighten them to cluster service
+    # CIDRs plus specific backend egress ranges. The exclusions hard-block EC2
+    # IMDS (169.254.169.254 / fd00:ec2::254), ECS task credentials
+    # (169.254.170.2), EKS Pod Identity (169.254.170.23 / fd00:ec2::23), all
+    # link-local addresses, and unspecified addresses. Keep equivalent exclusions
+    # in any externally managed policy.
     allowedCidrs:
       - cidr: "0.0.0.0/0"
         except:
-          - "169.254.0.0/16" # link-local incl. cloud metadata 169.254.169.254
+          - "169.254.0.0/16" # link-local; includes IMDS, ECS credentials, EKS Pod Identity
           - "0.0.0.0/32" # unspecified
+      - cidr: "::/0"
+        except:
+          - "fe80::/10" # IPv6 link-local
+          - "fd00:ec2::254/128" # EC2 IMDS IPv6
+          - "fd00:ec2::23/128" # EKS Pod Identity IPv6
+          - "::/128" # unspecified
 nodeSelector: {}

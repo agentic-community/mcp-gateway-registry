@@ -8,7 +8,7 @@ record path is ``/{type}/{uuid}``), so both are constrained at the signature
 """
 
 import logging
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import (
     APIRouter,
@@ -54,6 +54,11 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/custom", tags=["custom-entities"])
 
+# Encrypted upstream-header values are WRITE-ONLY: accepted on create, never
+# echoed on read. Excluded from every CustomEntityRecord response (the model
+# keeps the field so the internal vend endpoint can still decrypt it).
+_CUSTOM_RECORD_EXCLUDE = {"custom_headers_encrypted"}
+
 # NoSQL-injection guards: both segments compose the record path
 # /{type}/{uuid} interpolated into find({"_id": path}) / find({"entity_type": type}).
 TYPE_PARAM = Path(..., pattern=r"^[a-z0-9_-]+$", max_length=64)
@@ -67,6 +72,17 @@ class RatingRequest(BaseModel):
     """Body for POST /api/custom/{type}/{uuid}/rate."""
 
     rating: int
+
+
+class UpstreamHeadersUpdateRequest(BaseModel):
+    """Body for PATCH /api/custom/{type}/{uuid}/upstream-headers.
+
+    Replaces the record's ENTIRE upstream custom-header set (rotation semantics).
+    Each entry is ``{name, value?, overridable?}`` -- same policy as create. An
+    empty list clears all upstream headers. Values are write-only.
+    """
+
+    custom_headers: list[dict[str, Any]] = []
 
 
 def _get_service() -> CustomEntityService:
@@ -209,7 +225,13 @@ async def list_custom_entities(
 
     # Redact the internal backend origin (proxy_target_url) for non-admins,
     # mirroring the skill/agent read endpoints. is_proxied + proxy_client_url stay.
-    records = [redact_proxy_backend_url(r.model_dump(mode="json"), user_context) for r in items]
+    # Encrypted upstream headers (custom_headers_encrypted) are never listed.
+    records = [
+        redact_proxy_backend_url(
+            r.model_dump(mode="json", exclude=_CUSTOM_RECORD_EXCLUDE), user_context
+        )
+        for r in items
+    ]
 
     return {
         "records": records,
@@ -222,6 +244,7 @@ async def list_custom_entities(
 @router.get(
     "/{type}/{uuid}",
     response_model=CustomEntityRecord,
+    response_model_exclude=_CUSTOM_RECORD_EXCLUDE,
     summary="Get a custom record",
 )
 async def get_custom_entity(
@@ -244,6 +267,7 @@ async def get_custom_entity(
 @router.post(
     "/{type}",
     response_model=CustomEntityRecord,
+    response_model_exclude=_CUSTOM_RECORD_EXCLUDE,
     status_code=status.HTTP_201_CREATED,
     summary="Create a custom record",
 )
@@ -281,6 +305,7 @@ async def create_custom_entity(
 @router.put(
     "/{type}/{uuid}",
     response_model=CustomEntityRecord,
+    response_model_exclude=_CUSTOM_RECORD_EXCLUDE,
     summary="Update a custom record",
 )
 async def update_custom_entity(
@@ -311,6 +336,51 @@ async def update_custom_entity(
         "custom_entity",
         resource_id=path,
         description=f"Update {type} {updated.name}",
+    )
+    return updated
+
+
+@router.patch(
+    "/{type}/{uuid}/upstream-headers",
+    response_model=CustomEntityRecord,
+    response_model_exclude=_CUSTOM_RECORD_EXCLUDE,
+    summary="Rotate a custom record's upstream proxy headers",
+)
+async def update_custom_entity_upstream_headers(
+    http_request: Request,
+    body: UpstreamHeadersUpdateRequest,
+    user_context: Annotated[dict, Depends(nginx_proxied_auth)],
+    type: str = TYPE_PARAM,
+    uuid: str = UUID_PARAM,
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
+) -> CustomEntityRecord:
+    """Replace a record's upstream custom headers (the proxy-hop credentials).
+
+    Dedicated rotation surface (mirror of the skill / MCP-server credential
+    PATCH) so headers can be rotated after create. Type-level modify scope + the
+    service's per-record owner-or-admin gate. An empty ``custom_headers`` list
+    clears all upstream headers. 400 on any policy violation.
+    """
+    _require_mutate_scope("modify", type, user_context)
+    service = _get_service()
+    path = f"/{type}/{uuid}"
+    try:
+        updated = await service.update_record_upstream_headers(
+            type, path, body.custom_headers, user_context
+        )
+    except UnknownCustomTypeError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except CustomEntityNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except CustomEntityValidationError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=e.errors)
+
+    set_audit_action(
+        http_request,
+        "update",
+        "custom_entity_upstream_headers",
+        resource_id=path,
+        description=f"Rotate upstream headers for {type} {updated.name}",
     )
     return updated
 

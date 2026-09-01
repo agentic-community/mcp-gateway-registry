@@ -1810,30 +1810,50 @@ variable "github_api_base_url" {
 # =============================================================================
 
 variable "registry_extra_env" {
-  description = "Extra environment variables for registry service. List of objects with 'name' and 'value' string fields. AWS_EC2_METADATA_DISABLED is Terraform-managed and cannot be overridden. Reserved-name validation is otherwise performed at the root module (see terraform/aws-ecs/variables.tf)."
+  description = "Extra environment variables for registry service. List of objects with 'name' and 'value' string fields. Terraform-managed generic-proxy names cannot be overridden here; AWS_EC2_METADATA_DISABLED and comprehensive reserved-name validation are enforced at the root module (see terraform/aws-ecs/variables.tf)."
   type        = list(object({ name = string, value = string }))
   default     = []
   sensitive   = true
 
   validation {
     condition = alltrue([
-      for entry in var.registry_extra_env : upper(trimspace(entry.name)) != "AWS_EC2_METADATA_DISABLED"
+      for entry in var.registry_extra_env : !contains([
+        "GATEWAY_GENERIC_PROXY_ENABLED",
+        "GATEWAY_CANONICAL_NAMESPACE_ENABLED",
+        "GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS",
+        "GATEWAY_GENERIC_CLIENT_MAX_BODY_SIZE",
+        "GATEWAY_PROXY_PREFIX",
+        "GATEWAY_GENERIC_STREAM_READ_TIMEOUT_SECONDS",
+      ], upper(trimspace(entry.name)))
     ])
-    error_message = "registry_extra_env must not override Terraform-managed AWS_EC2_METADATA_DISABLED."
+    error_message = "registry_extra_env must not override Terraform-managed generic-proxy variables."
   }
 }
 
 variable "auth_server_extra_env" {
-  description = "Extra environment variables for auth-server service. AWS_EC2_METADATA_DISABLED is Terraform-managed and cannot be overridden."
+  description = "Extra environment variables for auth-server service. Terraform-managed generic-proxy and metadata-hardening names cannot be overridden."
   type        = list(object({ name = string, value = string }))
   default     = []
   sensitive   = true
 
   validation {
     condition = alltrue([
-      for entry in var.auth_server_extra_env : upper(trimspace(entry.name)) != "AWS_EC2_METADATA_DISABLED"
+      for entry in var.auth_server_extra_env : !contains([
+        "GATEWAY_GENERIC_PROXY_ENABLED",
+        "GENERIC_PROXY_TOKEN_TTL_SECONDS",
+        "GENERIC_PROXY_MAX_BODY_BYTES",
+        "GATEWAY_GENERIC_REQUIRE_BEARER_FOR_WRITES",
+        "GATEWAY_EGRESS_SELFCHECK_ENABLED",
+        "GATEWAY_GENERIC_TLS_VERIFY",
+        "GATEWAY_GENERIC_MAX_CONCURRENCY",
+        "GATEWAY_GENERIC_STREAM_MAX_CONCURRENCY",
+        "GATEWAY_GENERIC_ACQUIRE_TIMEOUT_SECONDS",
+        "GATEWAY_GENERIC_STREAM_MAX_DURATION_SECONDS",
+        "GATEWAY_GENERIC_STREAM_MAX_BYTES",
+        "AWS_EC2_METADATA_DISABLED",
+      ], upper(trimspace(entry.name)))
     ])
-    error_message = "auth_server_extra_env must not override Terraform-managed AWS_EC2_METADATA_DISABLED."
+    error_message = "auth_server_extra_env must not override Terraform-managed generic-proxy or metadata-hardening variables; use the canonical variables instead."
   }
 }
 
@@ -1978,6 +1998,12 @@ variable "gateway_proxy_prefix" {
   default     = "gateway"
 }
 
+variable "gateway_generic_stream_read_timeout_seconds" {
+  description = "nginx proxy_read_timeout (seconds) for generic-proxy routes whose entity has proxy_streaming=true (SSE / token streams). Only affects streaming routes."
+  type        = number
+  default     = 3600
+}
+
 # Auth-server container settings
 variable "generic_proxy_token_ttl_seconds" {
   description = "Lifetime (seconds) of the auth-server-minted generic-proxy internal token; the replay-window cap."
@@ -2009,14 +2035,57 @@ variable "gateway_generic_tls_verify" {
   default     = "true"
 }
 
-variable "gateway_proxy_pin_refresh_seconds" {
-  description = "Interval (seconds) at which the generic proxy refreshes pinned upstream resolution/certificate data."
-  type        = number
-  default     = 300
-}
-
 variable "gateway_generic_max_concurrency" {
-  description = "Maximum number of concurrent in-flight generic-proxy requests handled by the auth-server."
+  description = "Maximum number of concurrent buffered generic-proxy requests handled by the auth-server."
   type        = number
   default     = 32
+
+  validation {
+    condition     = var.gateway_generic_max_concurrency >= 1
+    error_message = "gateway_generic_max_concurrency must be at least 1."
+  }
+}
+
+variable "gateway_generic_stream_max_concurrency" {
+  description = "Maximum number of concurrent long-lived generic-proxy streams; isolated from buffered request capacity."
+  type        = number
+  default     = 8
+
+  validation {
+    condition     = var.gateway_generic_stream_max_concurrency >= 1
+    error_message = "gateway_generic_stream_max_concurrency must be at least 1."
+  }
+}
+
+variable "gateway_generic_acquire_timeout_seconds" {
+  description = "Maximum seconds a generic request waits for either concurrency pool before returning 503."
+  type        = number
+  default     = 5
+
+  validation {
+    condition     = var.gateway_generic_acquire_timeout_seconds > 0
+    error_message = "gateway_generic_acquire_timeout_seconds must be greater than 0."
+  }
+}
+
+variable "gateway_generic_stream_max_duration_seconds" {
+  description = "Absolute lifetime in seconds for one generic-proxy stream, even while chunks continue to arrive."
+  type        = number
+  default     = 3600
+
+  validation {
+    condition     = var.gateway_generic_stream_max_duration_seconds >= 1
+    error_message = "gateway_generic_stream_max_duration_seconds must be at least 1."
+  }
+}
+
+variable "gateway_generic_stream_max_bytes" {
+  description = "Maximum raw response bytes forwarded by one generic-proxy stream."
+  type        = number
+  default     = 104857600
+
+  validation {
+    condition     = var.gateway_generic_stream_max_bytes >= 1024
+    error_message = "gateway_generic_stream_max_bytes must be at least 1024."
+  }
 }

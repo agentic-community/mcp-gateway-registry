@@ -2,19 +2,20 @@
 
 _assert_egress_allowed is a best-effort STATIC egress check that delegates to the
 canonical registry.utils.url_guard (PROXY_PROFILE, resolve=False), whose inline
-IP classifier is exhaustively tested in tests/unit/utils/test_url_guard.py. It is deliberately
-weaker than the fetch-time pinned transport (it does not resolve DNS); the
-authoritative rebind defense is that transport + the network egress policy. These
-tests confirm the guard is wired into the model edge correctly and rejects
-literal-IP bypasses; they do not claim it is the sole SSRF control. They lock in
-the vectors so a future edit cannot silently weaken it:
+IP classifier is exhaustively tested in tests/unit/utils/test_url_guard.py. It is
+deliberately weaker than the fetch-time pinned transport (it does not resolve
+DNS); the authoritative rebind defense is that transport + the network egress
+policy. These tests confirm the guard is wired into the model edge correctly and
+rejects literal-IP bypasses; they do not claim it is the sole SSRF control. They
+lock in the vectors so a future edit cannot silently weaken it:
 
 - always-denied regardless of the allow-private flag: link-local (incl. the cloud
   metadata IP 169.254.169.254), IPv6 link-local, and the unspecified address
   (0.0.0.0 / ::) which Linux routes to localhost on connect();
 - IPv4-mapped IPv6 (::ffff:169.254.169.254) normalized BEFORE the category check
   so the metadata IP cannot be smuggled past the guard;
-- loopback / private / reserved / multicast denied unless allow-private is set;
+- loopback / private denied unless allow-private is set; reserved / multicast stay
+  hard-denied;
 - hostnames pass the static guard (DNS is resolved downstream; the network-layer
   egress policy is the real rebind defense) — documented best-effort behavior;
 - non-http(s) schemes rejected.
@@ -26,7 +27,9 @@ from registry.schemas.proxy_mixin import (
     EgressPolicyError,
     ProxyableMixin,
     _assert_egress_allowed,
+    _target_identity,
     build_proxy_client_path,
+    effective_proxy_target,
     resolve_proxy_target,
 )
 
@@ -381,3 +384,70 @@ class TestGatewayProxyPrefixValidator:
 
         with pytest.raises(ValidationError):
             Settings(gateway_proxy_prefix=bad)
+
+
+@pytest.mark.unit
+class TestTargetIdentity:
+    """_target_identity: normalized credential identity, fail-closed on invalid."""
+
+    def test_none_returns_empty_string(self):
+        assert _target_identity(None) == ""
+
+    def test_empty_string_returns_empty_string(self):
+        assert _target_identity("") == ""
+
+    def test_valid_url_returns_normalized_identity(self):
+        # Scheme/host lower-cased, default port dropped, empty path -> "/".
+        assert _target_identity("HTTPS://Agent.Example.COM:443") == "https://agent.example.com/"
+
+    def test_invalid_url_returns_fail_closed_marker(self):
+        # A rejected scheme raises UrlValidationError inside normalize_url_identity,
+        # so the identity falls back to an "invalid:<url>" marker.
+        assert _target_identity("ftp://x/") == "invalid:ftp://x/"
+
+    def test_invalid_url_marker_preserves_original_value(self):
+        # Userinfo is rejected; the original malformed value is embedded verbatim
+        # so an unchanged row stays stable while any edit changes identity.
+        result = _target_identity("http://user:pass@host/")
+        assert result.startswith("invalid:")
+        assert result == "invalid:http://user:pass@host/"
+
+    def test_monkeypatched_rejection_returns_marker(self, monkeypatch):
+        from registry.exceptions import UrlValidationError
+        from registry.utils import url_guard
+
+        def _boom(url):
+            raise UrlValidationError(url, "forced")
+
+        monkeypatch.setattr(url_guard, "normalize_url_identity", _boom, raising=True)
+        assert _target_identity("https://ok.example/") == "invalid:https://ok.example/"
+
+
+@pytest.mark.unit
+class TestEffectiveProxyTarget:
+    """effective_proxy_target: target-identity derivation WITHOUT routability gates."""
+
+    def test_explicit_target_short_circuits(self):
+        # Set even for a disabled entity; identity ignores is_proxied.
+        doc = {"is_proxied": False, "proxy_target_url": "https://x.example/"}
+        assert effective_proxy_target("skill", doc) == "https://x.example/"
+
+    def test_mcp_server_local_deployment_returns_none(self):
+        doc = {"deployment": "local", "proxy_pass_url": "http://x/"}
+        assert effective_proxy_target("mcp_server", doc) is None
+
+    def test_mcp_server_falls_back_to_proxy_pass_url(self):
+        doc = {"proxy_pass_url": "https://backend:9000/"}
+        assert effective_proxy_target("mcp_server", doc) == "https://backend:9000/"
+
+    def test_a2a_agent_falls_back_to_url(self):
+        # a2a_agent native fallback is doc['url'].
+        doc = {"url": "https://agent.example/"}
+        assert effective_proxy_target("a2a_agent", doc) == "https://agent.example/"
+
+    def test_skill_without_explicit_target_returns_none(self):
+        # No proxy_target_url and no native fallback for this type.
+        assert effective_proxy_target("skill", {}) is None
+
+    def test_unknown_entity_type_returns_none(self):
+        assert effective_proxy_target("mystery", {"url": "https://x/"}) is None

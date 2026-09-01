@@ -89,6 +89,7 @@ class TestAgentListProxied:
         assert projection["url"] == 1  # agent native fallback
         assert projection["sync_metadata"] == 1  # federation guard
         assert projection["is_enabled"] == 1
+        assert projection["custom_headers_encrypted"] == 1  # fail-closed auth marker
         assert rows[0]["path"] == "/a1"
 
 
@@ -106,6 +107,7 @@ class TestSkillListProxied:
         assert "url" not in projection and "proxy_pass_url" not in projection
         assert projection["sync_metadata"] == 1  # federation guard
         assert projection["is_enabled"] == 1
+        assert projection["custom_headers_encrypted"] == 1  # fail-closed auth marker
         assert rows[0]["path"] == "/skills/x"
 
 
@@ -145,6 +147,7 @@ class TestCustomEntityListProxied:
         assert projection["entity_type"] == 1  # type token spans records
         assert projection["sync_metadata"] == 1  # federation guard
         assert projection["is_enabled"] == 1
+        assert projection["custom_headers_encrypted"] == 1  # fail-closed auth marker
         assert rows[0]["path"] == "/workflow/uuid"
         assert rows[0]["entity_type"] == "workflow"
 

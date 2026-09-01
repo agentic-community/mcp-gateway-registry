@@ -34,7 +34,8 @@ from pydantic import BaseModel, Field
 from registry.auth.csrf import verify_csrf_token_flexible
 from registry.auth.dependencies import nginx_proxied_auth
 from registry.auth.internal import validate_internal_auth
-from registry.auth.proxied_token import verify_mcp_proxy_token
+from registry.auth.proxied_token import verify_generic_proxy_token, verify_mcp_proxy_token
+from registry.common.log_redaction import redact_url
 from registry.core.config import settings
 from registry.core.schemas import _is_gateway_own_audience
 from registry.egress_auth.factory import get_egress_auth_service
@@ -51,14 +52,25 @@ from registry.egress_auth.upstream_binding import (
     registered_upstreams,
 )
 from registry.exceptions import UrlValidationError
-from registry.repositories.factory import get_server_repository
+from registry.repositories.factory import (
+    get_agent_repository,
+    get_custom_entity_repository,
+    get_server_repository,
+    get_skill_repository,
+)
+from registry.schemas.proxy_mixin import resolve_proxy_target
 from registry.secrets.factory import get_secret_store
 from registry.secrets.interfaces import SecretStoreError
 from registry.services.server_service import server_service
-from registry.utils.credential_encryption import encrypt_credential
+from registry.utils.credential_encryption import (
+    decrypt_custom_headers,
+    encrypt_credential,
+    validate_custom_header_name,
+)
 from registry.utils.url_guard import (
     CREDENTIALED_OAUTH_PROFILE,
     PROXY_PROFILE,
+    normalize_url_identity,
     validate_url,
 )
 
@@ -325,6 +337,313 @@ class EgressTokenResponse(BaseModel):
         default=None,
         description="pat: value prefix before the PAT (e.g. 'Bearer ' or '' for a bare token).",
     )
+
+
+def _base_url(url: str) -> str:
+    """scheme://host[:port] of a URL, lowercased -- the comparison surface for the upstream cross-check.
+
+    The mcp_proxy sub-path append is confined to the bound host, so the cross-check
+    compares the BASE (scheme+host+port), not the full post-append path.
+    """
+    p = urlparse(url)
+    return f"{(p.scheme or '').lower()}://{(p.netloc or '').lower()}"
+
+
+def _registered_upstreams(server: dict) -> set[str]:
+    """The legal upstream base-URL set for a server: proxy_pass_url ∪ versions[*]."""
+    bases: set[str] = set()
+    if server.get("proxy_pass_url"):
+        bases.add(_base_url(server["proxy_pass_url"]))
+    for ver in server.get("versions") or []:
+        ppu = (
+            ver.get("proxy_pass_url")
+            if isinstance(ver, dict)
+            else getattr(ver, "proxy_pass_url", None)
+        )
+        if ppu:
+            bases.add(_base_url(ppu))
+    return bases
+
+
+class GenericUpstreamHeadersRequest(BaseModel):
+    """Body for POST /internal/generic-upstream-headers.
+
+    entity_type + registered_path identify the proxied entity whose stored
+    upstream headers are vended. Identity and the pinned upstream are NOT trusted
+    from the body -- they are re-derived from the forwarded generic-proxy token.
+    """
+
+    entity_type: str
+    registered_path: str
+
+
+class GenericUpstreamHeadersResponse(BaseModel):
+    """Decrypted upstream auth headers for the generic hop to inject on egress.
+
+    ``headers`` is empty only when the live, exactly matched entity has no stored
+    operator defaults (for example, it has only valid caller-overridable slots
+    on HTTPS, or has no credential-header configuration at all).
+    Missing/inactive/targetless entities and credential failures are errors,
+    never empty successful responses.
+
+    ``overridable_names`` is the caller passthrough allowlist (the entity's
+    ``custom_header_overridable_names``): on egress the hop forwards a
+    caller-supplied header ONLY if its name is in this set, and lets the caller's
+    value win over an operator default of the same name. Names only, no secret --
+    they gate which caller headers survive; they never carry a value.
+    """
+
+    headers: dict[str, str] = Field(default_factory=dict)
+    overridable_names: list[str] = Field(default_factory=list)
+
+
+def _proxyable_repo_for(entity_type: str):
+    """Return the repository that owns an entity type, or None for unknown types.
+
+    a2a_agent/skill/mcp_server map to their dedicated repos; every other token is
+    a custom-entity descriptor name and lives in the custom-entity repo.
+    """
+    if entity_type == "a2a_agent":
+        return get_agent_repository()
+    if entity_type == "skill":
+        return get_skill_repository()
+    if entity_type == "mcp_server":
+        return get_server_repository()
+    # Custom entities carry their descriptor name as the type token.
+    return get_custom_entity_repository()
+
+
+@router.post(
+    "/internal/generic-upstream-headers",
+    response_model=GenericUpstreamHeadersResponse,
+)
+async def vend_generic_upstream_headers(
+    body: GenericUpstreamHeadersRequest,
+    _caller: Annotated[str, Depends(validate_internal_auth)],
+    x_internal_token: Annotated[str | None, Header(alias="X-Internal-Token-Generic")] = None,
+) -> GenericUpstreamHeadersResponse:
+    """Vend an entity's decrypted static upstream headers for the generic hop.
+
+    Security model (mirrors POST /internal/egress-token):
+    - validate_internal_auth gates the caller (auth_server presents a fresh
+      internal service token) -- bound to the internal network.
+    - The forwarded X-Internal-Token-Generic is RE-VERIFIED here; the entity
+      identity (entity_type/server) and the pinned upstream come from the
+      verified claims, never from the request body.
+    - The token's upstream_url is cross-checked against the entity's registered
+      effective target, so a forged X-Resolved-Generic-Upstream (minted via a
+      direct /validate call) cannot cause headers to be vended for an
+      attacker-controlled host.
+    - The plaintext header VALUES leave the registry ONLY over this internal,
+      service-token-gated hop; they are never rendered into nginx or logged.
+
+    Missing, inactive, targetless, mismatched, or undecryptable entities fail
+    closed with a non-2xx response. An empty 200 is reserved for a live entity
+    that genuinely has no configured upstream credential headers.
+    """
+    if not x_internal_token:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="missing X-Internal-Token-Generic")
+
+    # Independently re-verify the generic-proxy token; identity + pinned upstream
+    # are the verified claims, never asserted body fields.
+    claims = verify_generic_proxy_token(x_internal_token)
+    entity_type = claims.get("entity_type") or ""
+    registered_path = claims.get("server") or ""
+    token_upstream = claims.get("upstream_url") or ""
+
+    # The body must agree with the signed claims (defence-in-depth; the claims win).
+    if body.entity_type != entity_type or body.registered_path != registered_path:
+        logger.warning(
+            "generic upstream-headers: body/token mismatch (body=%s/%s token=%s/%s); refusing",
+            body.entity_type,
+            body.registered_path,
+            entity_type,
+            registered_path,
+        )
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail="entity mismatch")
+
+    # Registered path is the entity's stored id (skills/custom/agents key on it).
+    path = registered_path if registered_path.startswith("/") else "/" + registered_path
+
+    repo = _proxyable_repo_for(entity_type)
+    entity = await repo.get(path)
+    if entity is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="proxied entity not found")
+
+    doc = entity.model_dump() if hasattr(entity, "model_dump") else dict(entity)
+
+    # Must still be a live proxied entity resolving to a target (not disabled,
+    # auto-disabled, federated, or targetless). An empty 200 here would make the
+    # proxy forward without credentials, silently downgrading authentication.
+    effective_target = resolve_proxy_target(entity_type, doc)
+    if not effective_target:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, detail="proxied entity is inactive or has no target"
+        )
+
+    # Compare the complete canonical target (scheme, host, effective port, path,
+    # and query), not only the origin. Credentials registered for /v1 or one
+    # tenant query must never be vended to /v2 or another tenant on the same host.
+    try:
+        token_target = normalize_url_identity(token_upstream)
+        registered_target = normalize_url_identity(effective_target)
+    except Exception as exc:
+        logger.warning(
+            "generic upstream-headers REFUSED: invalid target identity for %s/%s: %s",
+            entity_type,
+            registered_path,
+            type(exc).__name__,
+        )
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, detail="upstream not registered for this entity"
+        ) from exc
+    if token_target != registered_target:
+        logger.warning(
+            "generic upstream-headers REFUSED: token target %r does not exactly match "
+            "registered target %r for %s/%s",
+            redact_url(token_upstream),
+            redact_url(effective_target),
+            entity_type,
+            registered_path,
+        )
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, detail="upstream not registered for this entity"
+        )
+
+    # Backstop the stored set against the never-forward gateway-cred/internal
+    # denylist (registration validation already blocks these, but a bypass-written
+    # doc -- direct DB write, migration -- must not slip one through). Applies to
+    # BOTH the operator DEFAULTS and the overridable allowlist: only
+    # ``Authorization`` is allowed among reserved names (its fixed form is rejected
+    # at validation and its bearer is guarded by the equal-token check at the hop);
+    # every other reserved name is dropped so the hop can never inject / forward a
+    # gateway-internal header (X-Internal-Token*, X-User, ...) to the backend.
+    from registry.constants import RESERVED_CUSTOM_HEADER_NAMES
+
+    def _allowed_upstream_name(name: str) -> bool:
+        lower = name.lower()
+        return lower not in RESERVED_CUSTOM_HEADER_NAMES or lower == "authorization"
+
+    raw_registered = doc.get("custom_header_names") or []
+    raw_overridable = doc.get("custom_header_overridable_names") or []
+    raw_encrypted = doc.get("custom_headers_encrypted") or []
+    if not isinstance(raw_registered, list) or not isinstance(raw_overridable, list):
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="stored upstream credential metadata is invalid",
+        )
+    try:
+        registered_names = [validate_custom_header_name(name) for name in raw_registered]
+        overridable_names = [validate_custom_header_name(name) for name in raw_overridable]
+    except ValueError as exc:
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="stored upstream credential metadata is invalid",
+        ) from exc
+
+    registered_names = [name for name in registered_names if _allowed_upstream_name(name)]
+    overridable_names = [name for name in overridable_names if _allowed_upstream_name(name)]
+    registered_lower = [name.lower() for name in registered_names]
+    overridable_lower_list = [name.lower() for name in overridable_names]
+    if (
+        len(set(registered_lower)) != len(registered_lower)
+        or len(set(overridable_lower_list)) != len(overridable_lower_list)
+        or not set(overridable_lower_list).issubset(registered_lower)
+    ):
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="stored upstream credential metadata is invalid",
+        )
+
+    # Never vend a stored secret OR permit a caller credential passthrough to a
+    # cleartext target. Check storage presence before decryption so corrupted
+    # ciphertext cannot bypass the transport requirement.
+    has_credential_headers = bool(raw_encrypted or registered_names or overridable_names)
+    if has_credential_headers and urlparse(registered_target).scheme != "https":
+        logger.warning(
+            "generic upstream-headers REFUSED: credential headers configured for non-HTTPS "
+            "target on %s/%s",
+            entity_type,
+            registered_path,
+        )
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            detail="upstream credential headers require an HTTPS target",
+        )
+
+    try:
+        decrypted = decrypt_custom_headers(raw_encrypted, strict=True)
+    except ValueError as exc:
+        logger.error(
+            "generic upstream-headers REFUSED: stored credential decryption failed for %s/%s: %s",
+            entity_type,
+            registered_path,
+            exc,
+        )
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="stored upstream credentials are unavailable",
+        ) from exc
+
+    allowed_decrypted = [header for header in decrypted if _allowed_upstream_name(header["name"])]
+    decrypted_lower_list = [header["name"].lower() for header in allowed_decrypted]
+    if len(set(decrypted_lower_list)) != len(decrypted_lower_list):
+        logger.error(
+            "generic upstream-headers REFUSED: duplicate stored credential names for %s/%s",
+            entity_type,
+            registered_path,
+        )
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="stored upstream credential metadata is invalid",
+        )
+
+    headers = {header["name"]: header["value"] for header in allowed_decrypted}
+    unexpected_headers = sorted(
+        name for name in headers if name.lower() not in set(registered_lower)
+    )
+    if unexpected_headers:
+        logger.error(
+            "generic upstream-headers REFUSED: inconsistent stored credential names for %s/%s",
+            entity_type,
+            registered_path,
+        )
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="stored upstream credential metadata is invalid",
+        )
+
+    # Every non-overridable registered name is a fixed operator header and must
+    # have produced a plaintext value. Overridable names with no encrypted row
+    # are legitimate caller-only slots and therefore are intentionally excluded
+    # from this expectation.
+    overridable_lower = {name.lower() for name in overridable_names}
+    expected_fixed = {
+        name.lower(): name for name in registered_names if name.lower() not in overridable_lower
+    }
+    decrypted_lower = {name.lower() for name in headers}
+    missing_fixed = [name for lower, name in expected_fixed.items() if lower not in decrypted_lower]
+    if missing_fixed:
+        logger.error(
+            "generic upstream-headers REFUSED: missing stored fixed header values for %s/%s: %s",
+            entity_type,
+            registered_path,
+            sorted(missing_fixed),
+        )
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="stored upstream credentials are incomplete",
+        )
+
+    # Log names + count only -- never the header values.
+    logger.info(
+        "generic upstream-headers vended for %s/%s: defaults=%s overridable=%s",
+        entity_type,
+        registered_path,
+        sorted(headers.keys()),
+        sorted(overridable_names),
+    )
+    return GenericUpstreamHeadersResponse(headers=headers, overridable_names=overridable_names)
 
 
 @router.post("/internal/egress-token", response_model=EgressTokenResponse)

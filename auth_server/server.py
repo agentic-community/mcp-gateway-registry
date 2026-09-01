@@ -37,7 +37,7 @@ import uvicorn
 import yaml
 from botocore.exceptions import ClientError
 from fastapi import APIRouter, Cookie, Depends, FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse, RedirectResponse, Response
+from fastapi.responses import JSONResponse, RedirectResponse, Response, StreamingResponse
 
 # Import metrics middleware
 from internal_request_token import (
@@ -50,11 +50,19 @@ from internal_request_token import (
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from jwt.api_jwk import PyJWK
 from metrics_middleware import add_auth_metrics_middleware
+from starlette.background import BackgroundTask
 
 try:
-    from observability.meters import redirect_rejected_total, token_mint_total
+    from observability.meters import (
+        record_generic_proxy_slot_rejected,
+        record_generic_proxy_stream_outcome,
+        redirect_rejected_total,
+        token_mint_total,
+    )
 except ImportError:
     from auth_server.observability.meters import (
+        record_generic_proxy_slot_rejected,
+        record_generic_proxy_stream_outcome,
         redirect_rejected_total,
         token_mint_total,
     )
@@ -94,6 +102,7 @@ from registry.audit.models import Identity, MCPServer, TokenMintAuditRecord
 from registry.audit.request_id import new_audit_request_id, sanitize_correlation_id
 from registry.audit.service import AuditLogger, NonDurableAuditError, enforce_durable_audit_sink
 from registry.audit.sink import emit_audit_event
+from registry.common.log_redaction import redact_url
 from registry.common.scopes_loader import reload_scopes_config
 from registry.common.secret_key import validate_secret_key, validate_signing_secret
 from registry.core.config import settings
@@ -449,6 +458,9 @@ def _attach_generic_proxy_token(
     scopes: list[str],
     entity_type: str,
     registered_path: str,
+    http_method: str,
+    streaming: bool = False,
+    has_upstream_auth: bool = False,
 ) -> None:
     """Mint and attach the X-Internal-Token-Generic for the generic-proxy hop.
 
@@ -471,13 +483,37 @@ def _attach_generic_proxy_token(
     header). If minting fails (e.g. empty subject), no token is attached: the
     generic hop then rejects (fail-closed).
 
+    ``streaming`` (from the server-set ``X-Generic-Streaming`` marker) is bound
+    into the token so the hop switches to a chunk-forwarding StreamingResponse
+    only when the SIGNED claim says so -- a client cannot force streaming by
+    spoofing a header. Separate concurrency, duration, and byte caps bound it.
+
+    ``has_upstream_auth`` (from the server-set ``X-Generic-Has-Upstream-Auth``
+    marker) is likewise bound in so the hop fetches + injects the entity's
+    decrypted upstream headers only on the signed claim.
+
     SECURITY: the caller MUST ensure this is wired ONLY into the main 200-path,
     never the static-credential short-circuits (federation-static / network-
     trusted), which compute no cookie/Bearer discriminator and thus cannot run
     the CSRF gate. See validate_request.
+
+    The token is minted ONLY when nginx force-set the matching
+    ``X-Validate-Source-Secret`` on the subrequest. The marker secret is required
+    at startup, so a direct auth-server caller cannot forge the resolved-upstream
+    header and obtain a token that could trigger credential vending.
     """
     resolved_upstream = request.headers.get("X-Resolved-Generic-Upstream", "")
     if not resolved_upstream:
+        return
+
+    marker = settings.auth_server_nginx_marker_secret
+    if not marker or not secrets.compare_digest(
+        request.headers.get("X-Validate-Source-Secret", ""), marker
+    ):
+        logger.warning(
+            "/validate: X-Resolved-Generic-Upstream present but nginx marker missing/mismatched; "
+            "refusing to mint generic-proxy token (possible direct-:8888 bypass)"
+        )
         return
     try:
         response.headers["X-Internal-Token-Generic"] = mint_generic_proxy_token(
@@ -486,9 +522,12 @@ def _attach_generic_proxy_token(
             entity_type=entity_type,
             registered_path=registered_path,
             upstream_url=resolved_upstream,
+            http_method=http_method,
+            streaming=streaming,
+            has_upstream_auth=has_upstream_auth,
         )
     except ValueError as exc:
-        logger.error(f"/validate: could not mint generic-proxy token: {exc}")
+        logger.error("/validate: could not mint generic-proxy token (%s)", type(exc).__name__)
 
 
 def _attach_registry_ui_token(
@@ -2272,7 +2311,7 @@ async def lifespan(app: FastAPI):
     try:
         await initialize_generic_proxy_feature()
     except Exception as e:
-        logger.error(f"Generic-proxy feature init failed during startup: {e}", exc_info=True)
+        logger.error("Generic-proxy feature init failed during startup (%s)", type(e).__name__)
 
     yield
 
@@ -3234,6 +3273,16 @@ async def validate_request(request: Request):
         # (not from client headers). See the marker-spoof invariant in the LLD.
         generic_proxy_kind = (request.headers.get("X-Generic-Proxy-Kind") or "").strip()
         generic_entity_path = (request.headers.get("X-Entity-Path") or "").strip()
+        # "1" only when the streaming generic location set it; nginx redefines it
+        # from $generic_streaming (map default ""), so a client cannot spoof it.
+        # Bound into the token below so the hop trusts the signed claim, not this.
+        generic_streaming = (request.headers.get("X-Generic-Streaming") or "").strip() == "1"
+        # "1" only when the entity has registered upstream headers; same nginx-set
+        # trust as above. Bound into the token so the hop fetches+injects them only
+        # on the signed claim, never a forgeable header.
+        generic_has_upstream_auth = (
+            request.headers.get("X-Generic-Has-Upstream-Auth") or ""
+        ).strip() == "1"
         original_method = (request.headers.get("X-Original-Method") or "").strip().upper()
         is_generic_request = bool(generic_proxy_kind)
 
@@ -4319,6 +4368,9 @@ async def validate_request(request: Request):
             scopes=user_scopes,
             entity_type=generic_proxy_kind,
             registered_path=generic_entity_path,
+            http_method=original_method,
+            streaming=generic_streaming,
+            has_upstream_auth=generic_has_upstream_auth,
         )
 
         # Registry /api/ hop token. Discriminate cookie vs JWT-bearer: the cookie
@@ -6610,6 +6662,105 @@ def _forward_headers(
     return forwarded
 
 
+def _bearer_value(header: str | None) -> str:
+    """Return a header's bearer token value (scheme + whitespace stripped).
+
+    Module-level twin of the nested helper in the /validate handler, reused by the
+    generic hop's equal-token guard so a duplicate that differs only by the
+    ``Bearer `` prefix or surrounding whitespace is still caught.
+    """
+    if not header:
+        return ""
+    value = header.strip()
+    if value.lower().startswith("bearer "):
+        value = value[len("bearer ") :].strip()
+    return value
+
+
+def _get_header_ci(headers: Mapping[str, str], name: str) -> str | None:
+    """Return an HTTP header value regardless of the caller's casing."""
+    lower = name.lower()
+    return next((value for key, value in headers.items() if key.lower() == lower), None)
+
+
+def _pop_header_ci(headers: dict[str, str], name: str) -> None:
+    """Remove every entry of ``headers`` whose name case-insensitively equals ``name``.
+
+    HTTP header names are case-insensitive (RFC 9110 5.1), but a plain dict is not:
+    a caller-sent ``x-api-key`` and an operator-injected ``X-Api-Key`` would both
+    survive an ``update()`` and BOTH be sent upstream. Callers use this to drop any
+    caller-cased copy before injecting the operator's value, so the operator's
+    header is the only one on the wire.
+    """
+    lower = name.lower()
+    for key in [k for k in headers if k.lower() == lower]:
+        del headers[key]
+
+
+def _merge_generic_upstream_headers(
+    forward_headers: dict[str, str],
+    incoming: dict[str, str],
+    vended_defaults: dict[str, str],
+    overridable_names: list[str],
+) -> None:
+    """Merge operator defaults and explicitly allowed caller headers.
+
+    ``forward_headers`` contains only the safe generic protocol baseline. Fixed
+    operator headers are authoritative. For every safe name explicitly vended as
+    overridable, a caller value is re-admitted and wins over an operator default.
+    The local name check is a backstop against malformed stored registrations.
+    """
+    caller_ci = {key.lower(): value for key, value in incoming.items()}
+
+    safe_overridable: dict[str, str] = {}
+    for name in overridable_names:
+        lower = name.lower()
+        if not _is_safe_generic_registered_header(lower):
+            continue
+        safe_overridable.setdefault(lower, name)
+        caller_value = caller_ci.get(lower)
+        if caller_value is not None:
+            _pop_header_ci(forward_headers, name)
+            forward_headers[name] = caller_value
+
+    overridable_lower = set(safe_overridable)
+    caller_names_lower = set(caller_ci)
+    for name, value in vended_defaults.items():
+        lower = name.lower()
+        if not _is_safe_generic_registered_header(lower):
+            continue
+        if lower in overridable_lower and lower in caller_names_lower:
+            continue
+        _pop_header_ci(forward_headers, name)
+        forward_headers[name] = value
+
+
+def _assert_generic_authorization_not_gateway_cred(
+    forward_headers: dict[str, str],
+    ingress_gateway_credential: str | None,
+) -> None:
+    """Reject (401) if the outbound Authorization equals the gateway credential.
+
+    A2A parity (see the /validate equal-token guard): a caller must not be able to
+    make the gateway forward its OWN gateway bearer (presented as X-Authorization)
+    to a registrant-controlled backend via an overridable Authorization slot, where
+    it could be replayed against the gateway. Compares bearer VALUES so a duplicate
+    differing only by scheme/whitespace is caught. Fail closed.
+    """
+    if not ingress_gateway_credential:
+        return
+    outbound = _get_header_ci(forward_headers, "Authorization")
+    if outbound and _bearer_value(outbound) == _bearer_value(ingress_gateway_credential):
+        logger.warning(
+            "generic_proxy: outbound Authorization duplicates the gateway credential; "
+            "refusing so the gateway credential cannot leak to the backend."
+        )
+        raise HTTPException(
+            status_code=401,
+            detail="Authorization must not duplicate the gateway credential",
+        )
+
+
 # Headers that MUST be stripped before injecting a vaulted egress token:
 # the user's gateway IdP JWT / session cookie / X-Authorization are full gateway
 # credentials and must never reach a third-party SaaS upstream; the X-User*/
@@ -6637,23 +6788,48 @@ _EGRESS_STRIP_HEADERS: frozenset[str] = frozenset(
 )
 
 
-# Headers stripped before forwarding to a generic-proxy upstream. The generic hop
-# fronts arbitrary (potentially third-party) registered backends, so the caller's
-# gateway identity/scopes and every gateway-internal routing/auth header must be
-# removed -- otherwise a proxied backend would receive the caller's X-User/X-Scopes
-# (identity + authorization-topology disclosure) and a valid signed
-# X-Internal-Token-Generic (replayable for the token TTL). This is the generic-hop
-# analogue of _EGRESS_STRIP_HEADERS (applied on the mcp-proxy vault path); it adds
-# the markers the generic nginx location block injects. Applied on EVERY generic
-# request, since the hop has no notion of a "trusted internal" upstream.
-_GENERIC_HOP_STRIP_HEADERS: frozenset[str] = _EGRESS_STRIP_HEADERS | frozenset(
+# The gateway-internal headers that /validate sets on the auth_request subresponse
+# and nginx copies onto the proxied request. On the GENERIC hop the backend is
+# always registrant-controlled, so these are stripped UNCONDITIONALLY (before any
+# operator/caller header merge) -- neither the caller's identity/scopes/groups nor
+# the gateway's own signed internal tokens may ever reach the backend, where they
+# could be replayed against the registry (the #1391 leak class). This is the
+# egress backstop; registration also rejects these names (RESERVED_CUSTOM_HEADER_
+# NAMES), but the strip must not depend on that (a bypass-written doc, or a future
+# code path, must still fail closed). Superset of _EGRESS_STRIP_HEADERS covering
+# the generic-proxy markers (incl. x-entity-path / x-original-method) + both extra
+# internal-token variants; Authorization / X-Authorization / Cookie are already
+# dropped by _forward_headers, kept here for an explicit, self-contained invariant.
+_GENERIC_INTERNAL_STRIP_HEADERS: frozenset[str] = frozenset(
     {
-        "x-internal-token-generic",
-        "x-generic-proxy-kind",
-        "x-entity-path",
-        "x-resolved-generic-upstream",
-        "x-resolved-upstream",
+        "authorization",
+        "x-authorization",
+        "proxy-authorization",
+        "cookie",
+        "x-user",
+        "x-username",
+        "x-scopes",
+        "x-auth-method",
+        "x-groups",
+        "x-client-id",
+        "x-user-pool-id",
+        "x-region",
+        "x-original-url",
         "x-original-method",
+        "x-server-name",
+        "x-tool-name",
+        "x-entity-path",
+        "x-internal-token",
+        "x-internal-token-generic",
+        "x-internal-token-registry",
+        "x-generic-proxy-kind",
+        "x-generic-streaming",
+        "x-generic-has-upstream-auth",
+        "x-resolved-upstream",
+        "x-resolved-generic-upstream",
+        "x-upstream-url",
+        "x-body",
+        "x-body-uninspectable",
     }
 )
 
@@ -6692,7 +6868,14 @@ def _egress_vend_timeout_seconds() -> float:
         from registry.secrets.openbao.store import transient_retry_budget_seconds
 
         return transient_retry_budget_seconds() + _EGRESS_VEND_TIMEOUT_HEADROOM_SECONDS
-    except Exception:  # pragma: no cover - defensive; keep a sane coupled default
+    except Exception as exc:  # defensive; keep a sane coupled default
+        logger.warning(
+            "vend timeout: could not read transient_retry_budget_seconds (%s); "
+            "falling back to %.1fs -- verify the registry retry-budget coupling was "
+            "not decoupled by a refactor",
+            type(exc).__name__,
+            _EGRESS_VEND_TIMEOUT_FALLBACK_SECONDS,
+        )
         return _EGRESS_VEND_TIMEOUT_FALLBACK_SECONDS
 
 
@@ -6700,6 +6883,60 @@ def _egress_vend_timeout_seconds() -> float:
 # terminal outcome: transport failures raise below, and the registry now answers
 # 503 when its own token store fails transiently (see vend_egress_token).
 _EGRESS_VEND_TRANSIENT_STATUSES: frozenset[int] = frozenset({502, 503, 504})
+
+
+# Small, deliberately protocol-only caller header baseline for generic targets.
+# Arbitrary X-* and browser context headers do not cross this trust boundary. An
+# operator can explicitly opt a safe additional name in through the per-entity
+# overridable list vended by the registry.
+_FORWARDED_GENERIC_REQUEST_HEADERS: frozenset[str] = frozenset(
+    {
+        "accept",
+        "accept-language",
+        "content-language",
+        "content-type",
+        "if-match",
+        "if-modified-since",
+        "if-none-match",
+        "if-unmodified-since",
+        "range",
+    }
+)
+
+
+def _is_safe_generic_registered_header(lower_name: str) -> bool:
+    """Return whether a vended registered header may cross the generic hop."""
+    if lower_name == "authorization":
+        return True
+    return (
+        lower_name not in _GENERIC_INTERNAL_STRIP_HEADERS and lower_name not in _HOP_BY_HOP_HEADERS
+    )
+
+
+def _select_forwarded_generic_request_headers(
+    incoming: Mapping[str, str],
+) -> dict[str, str]:
+    """Select only the safe generic caller protocol baseline."""
+    return {
+        key: value
+        for key, value in incoming.items()
+        if key.lower() in _FORWARDED_GENERIC_REQUEST_HEADERS
+    }
+
+
+def _effective_ingress_gateway_credential(incoming: Mapping[str, str]) -> str | None:
+    """Mirror /validate precedence for the credential that authenticated ingress."""
+    return _get_header_ci(incoming, "X-Authorization") or _get_header_ci(incoming, "Authorization")
+
+
+def _strip_generic_internal_headers(headers: dict[str, str]) -> dict[str, str]:
+    """Drop every gateway-internal header (case-insensitively) from ``headers``.
+
+    Returns a new dict; used by the generic hop as the egress backstop so the
+    caller's identity and the gateway's signed internal tokens never reach a
+    registrant-controlled backend, independent of the registration denylist.
+    """
+    return {k: v for k, v in headers.items() if k.lower() not in _GENERIC_INTERNAL_STRIP_HEADERS}
 
 
 async def _vend_egress_token(
@@ -6759,6 +6996,73 @@ async def _vend_egress_token(
         return resp.json()
     except ValueError:
         return None
+
+
+async def _vend_generic_upstream_headers(
+    generic_token: str,
+    entity_type: str,
+    registered_path: str,
+) -> tuple[dict[str, str], list[str]] | None:
+    """Fetch a proxied entity's decrypted upstream headers + caller allowlist.
+
+    Forwards the verified X-Internal-Token-Generic; the registry re-verifies it,
+    re-derives entity_type/server/upstream from the signed claims, runs the
+    upstream cross-check, decrypts the entity's custom headers, and returns them.
+
+    Returns ``(defaults, overridable_names)`` -- the operator-injected header
+    values (possibly empty) and the caller passthrough allowlist (possibly empty)
+    -- or None on a transport/registry error. The caller FAILS CLOSED on None: it
+    must not forward the request unauthenticated when the entity was flagged as
+    having upstream auth but the vend failed.
+    """
+    from registry.auth.internal import generate_internal_token
+
+    base = settings.egress_registry_internal_url.rstrip("/")
+    try:
+        service_token = generate_internal_token(
+            subject="auth-server", purpose="generic-upstream-headers-vend"
+        )
+    except ValueError as exc:
+        logger.error(
+            "generic upstream-headers vend: cannot mint internal service token (%s)",
+            type(exc).__name__,
+        )
+        return None
+
+    try:
+        async with httpx.AsyncClient(timeout=_egress_vend_timeout_seconds()) as client:
+            resp = await client.post(
+                f"{base}/_egress_internal/generic-upstream-headers",
+                json={"entity_type": entity_type, "registered_path": registered_path},
+                headers={
+                    "Authorization": f"Bearer {service_token}",
+                    "X-Internal-Token-Generic": generic_token,
+                    "Content-Type": "application/json",
+                },
+            )
+    except httpx.HTTPError as exc:
+        logger.error("generic upstream-headers vend: registry unreachable (%s)", type(exc).__name__)
+        return None
+
+    if resp.status_code != 200:
+        logger.warning(f"generic upstream-headers vend: registry returned {resp.status_code}")
+        return None
+    try:
+        data = resp.json()
+    except ValueError:
+        return None
+    headers = data.get("headers")
+    if not isinstance(headers, dict):
+        return None
+    # Coerce to str->str; drop any non-string entries defensively.
+    defaults = {str(k): str(v) for k, v in headers.items() if isinstance(k, str)}
+    raw_overridable = data.get("overridable_names")
+    overridable = (
+        [str(n) for n in raw_overridable if isinstance(n, str)]
+        if isinstance(raw_overridable, list)
+        else []
+    )
+    return defaults, overridable
 
 
 # JSON-RPC client requests on which MCP permits an InputRequiredResult (MRTR
@@ -7838,7 +8142,7 @@ _FORWARDED_GENERIC_RESPONSE_HEADERS: frozenset[str] = frozenset(
 # origin while dropping the backend's CSP, these keep backend HTML/JS from running
 # with gateway-origin privileges (reading same-origin endpoints, riding the cookie).
 _GATEWAY_SET_SECURITY_HEADERS: dict[str, str] = {
-    "Content-Security-Policy": "default-src 'self'; frame-ancestors 'none'",
+    "Content-Security-Policy": "default-src 'none'; sandbox; frame-ancestors 'none'",
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
 }
@@ -7859,15 +8163,91 @@ _generic_proxy_feature_active: bool | None = None
 # Concurrency guard (OOM): bounds in-flight generic requests so worst-case heap =
 # generic_proxy_max_body_bytes * cap. Lazily created so the cap reads live config.
 _generic_proxy_semaphore: asyncio.Semaphore | None = None
+_generic_proxy_stream_semaphore: asyncio.Semaphore | None = None
 
 
 def _get_generic_proxy_semaphore() -> asyncio.Semaphore:
-    """Return the process-wide generic-hop concurrency semaphore (lazy init)."""
+    """Return the process-wide unary generic-hop semaphore (lazy init)."""
     global _generic_proxy_semaphore
     if _generic_proxy_semaphore is None:
         cap = getattr(settings, "gateway_generic_max_concurrency", 32)
         _generic_proxy_semaphore = asyncio.Semaphore(max(1, int(cap)))
     return _generic_proxy_semaphore
+
+
+def _get_generic_proxy_stream_semaphore() -> asyncio.Semaphore:
+    """Return the separate process-wide streaming generic-hop semaphore."""
+    global _generic_proxy_stream_semaphore
+    if _generic_proxy_stream_semaphore is None:
+        cap = getattr(settings, "gateway_generic_stream_max_concurrency", 8)
+        _generic_proxy_stream_semaphore = asyncio.Semaphore(max(1, int(cap)))
+    return _generic_proxy_stream_semaphore
+
+
+def _read_generic_acquire_timeout_seconds() -> float:
+    """Bound how long a request may wait for either generic concurrency pool."""
+    try:
+        return max(
+            float(getattr(settings, "gateway_generic_acquire_timeout_seconds", 5.0)),
+            0.1,
+        )
+    except (TypeError, ValueError):
+        return 5.0
+
+
+def _read_generic_stream_max_duration_seconds() -> float:
+    """Absolute lifetime cap for a streaming upstream response."""
+    try:
+        return max(
+            float(getattr(settings, "gateway_generic_stream_max_duration_seconds", 3600)),
+            1.0,
+        )
+    except (TypeError, ValueError):
+        return 3600.0
+
+
+def _read_generic_stream_max_bytes() -> int:
+    """Maximum raw bytes forwarded by one streaming upstream response."""
+    try:
+        return max(
+            int(getattr(settings, "gateway_generic_stream_max_bytes", 100 * 1024 * 1024)),
+            1024,
+        )
+    except (TypeError, ValueError):
+        return 100 * 1024 * 1024
+
+
+def _read_generic_stream_read_timeout_seconds() -> float:
+    """Idle read bound for the streaming hop: max wait for the response headers
+    (time-to-first-byte) AND between subsequent chunks. Reuses the same knob that
+    drives nginx proxy_read_timeout so the auth-server hop and nginx agree, and so
+    a connect-then-stall upstream cannot hold a stream slot for the full absolute
+    duration. The absolute duration ceiling still caps total lifetime."""
+    try:
+        return max(
+            float(getattr(settings, "gateway_generic_stream_read_timeout_seconds", 3600)),
+            1.0,
+        )
+    except (TypeError, ValueError):
+        return 3600.0
+
+
+async def _acquire_generic_proxy_slot(
+    semaphore: asyncio.Semaphore, *, pool: str = "buffered"
+) -> None:
+    """Acquire a generic concurrency slot within the configured queue bound."""
+    try:
+        await asyncio.wait_for(
+            semaphore.acquire(),
+            timeout=_read_generic_acquire_timeout_seconds(),
+        )
+    except TimeoutError as exc:
+        record_generic_proxy_slot_rejected(pool)
+        raise HTTPException(
+            status_code=503,
+            detail="Generic proxy is at capacity",
+            headers={"Retry-After": "1"},
+        ) from exc
 
 
 def _read_generic_max_body_bytes() -> int:
@@ -7898,16 +8278,22 @@ def _generic_tls_verify() -> bool | str:
 
 def _select_forwarded_generic_response_headers(
     upstream_headers: Mapping[str, str],
+    *,
+    preserve_body_framing: bool = False,
 ) -> dict[str, str]:
-    """Apply the wider generic-hop response-header allowlist (case-insensitive).
+    """Select safe response headers with framing matched to body handling.
 
-    Anything outside _FORWARDED_GENERIC_RESPONSE_HEADERS (Set-Cookie, HSTS, CSP,
-    framing headers, and Starlette-managed framing) is dropped. Original casing is
-    preserved on the returned dict.
+    Buffered responses use ``aiter_bytes`` (decoded), so stale upstream length,
+    encoding, and range metadata is dropped and Starlette recomputes framing.
+    Streaming responses use raw bytes and may explicitly preserve that metadata.
     """
+    decoded_body_framing = {"content-length", "content-encoding", "content-range"}
     selected: dict[str, str] = {}
     for key, value in upstream_headers.items():
-        if key.lower() in _FORWARDED_GENERIC_RESPONSE_HEADERS:
+        lower = key.lower()
+        if lower in decoded_body_framing and not preserve_body_framing:
+            continue
+        if lower in _FORWARDED_GENERIC_RESPONSE_HEADERS:
             selected[key] = value
     return selected
 
@@ -7943,23 +8329,19 @@ def _build_generic_outbound_url(
     upstream_url: str,
     entity_path: str,
     bound_registered_path: str,
+    caller_query_items: list[tuple[str, str]] | None = None,
 ) -> str:
-    """Append the confined sub-path (route path beyond the registered entity path)
-    to the PINNED upstream base, or return the base unchanged when there is none.
+    """Build the final confined outbound URL, including caller query items.
+
+    The route subpath is appended only to the registered URL's path. The
+    registered query string is retained byte-for-byte and its keys are fixed:
+    caller items with the same key are ignored. Non-conflicting caller items are
+    appended in their original order, including duplicate and blank values.
 
     Confinement (SSRF): the sub-path is the route's entity_path with the bound
     registered prefix removed. Reject any sub-path segment that is '..' or that
-    contains a scheme ('://') or userinfo ('@') before appending — then the caller
-    asserts post-join host equality. The pinned base host is never overridden.
-
-    NOTE: entity_path arrives from Starlette's ``{entity_path:path}`` route param,
-    which is already query/fragment-split — so it cannot contain a raw '?' or '#'
-    (those become request.query_params, forwarded separately). A protocol-relative
-    '//host' remainder cannot reassign the host either, because it is always
-    appended after ``base + '/'`` (never at the authority position) and the
-    post-join host-equality assertion is the backstop. Encoded dots ('%2e%2e') are
-    not decoded before the socket, so at worst they hit an odd path on the *pinned*
-    backend, not a different host.
+    contains a scheme ('://') or userinfo ('@') before appending, then assert
+    post-build host equality at the call site. The pinned host is never replaced.
     """
     norm_route = entity_path.strip("/")
     norm_bound = bound_registered_path.strip("/")
@@ -7968,16 +8350,41 @@ def _build_generic_outbound_url(
     elif norm_bound and norm_route.startswith(norm_bound + "/"):
         sub = norm_route[len(norm_bound) + 1 :]
     else:
-        # Should not happen (verify_generic_proxy_token already enforced the
-        # prefix), but fail closed rather than append an unconfined remainder.
         raise HTTPException(status_code=400, detail="Entity path outside bound prefix")
 
-    if not sub:
-        return upstream_url
-    if ".." in sub.split("/") or "://" in sub or "@" in sub:
+    if sub and (".." in sub.split("/") or "://" in sub or "@" in sub):
         logger.warning("generic_proxy: illegal sub-path %r", sub)
         raise HTTPException(status_code=400, detail="Illegal sub-path")
-    return upstream_url.rstrip("/") + "/" + sub
+
+    parsed = urllib.parse.urlsplit(upstream_url)
+    outbound_path = parsed.path
+    if sub:
+        outbound_path = outbound_path.rstrip("/") + "/" + sub
+
+    # Fixed registered keys are parsed conservatively across both RFC '&' and
+    # legacy ';' separators. Some upstream frameworks still treat semicolons as
+    # parameter delimiters; recognizing both avoids a parser differential where
+    # a caller appends a duplicate key that the upstream resolves last-wins.
+    # Percent-decoding and case-folding further prevent encoded/case variants from
+    # bypassing the conflict check. The original registered query bytes are kept.
+    registered_keys = {
+        urllib.parse.unquote_plus(component.partition("=")[0]).casefold()
+        for component in re.split(r"[&;]", parsed.query)
+        if component
+    }
+    caller_items = [
+        (key, value)
+        for key, value in (caller_query_items or [])
+        if key.casefold() not in registered_keys
+    ]
+    caller_query = urllib.parse.urlencode(caller_items)
+    outbound_query = parsed.query
+    if caller_query:
+        outbound_query = f"{outbound_query}&{caller_query}" if outbound_query else caller_query
+
+    return urllib.parse.urlunsplit(
+        (parsed.scheme, parsed.netloc, outbound_path, outbound_query, parsed.fragment)
+    )
 
 
 async def _run_egress_selfcheck() -> bool:
@@ -8080,6 +8487,189 @@ def _set_egress_unverified_metric(value: int) -> None:
         logger.debug("could not set gateway_egress_policy_unverified: %s", exc)
 
 
+async def _generic_proxy_streaming(
+    *,
+    semaphore: "asyncio.Semaphore",
+    method: str,
+    outbound_url: str,
+    request_body: bytes,
+    forward_headers: dict[str, str],
+    verify: bool | str,
+) -> StreamingResponse:
+    """Forward a proxied entity's response to the client incrementally (SSE/chunked).
+
+    Only reached when the SIGNED token claim ``streaming`` is true (an entity with
+    proxy_streaming=true). Unlike the buffered path, the httpx client and the open
+    response are NOT closed via ``async with`` here: a StreamingResponse consumes
+    its body generator AFTER this function returns, so the transport must outlive
+    the handler. We open both manually, hand the byte iterator to StreamingResponse,
+    and close them (plus release the concurrency semaphore) in a BackgroundTask that
+    runs when the response finishes -- normally or on client disconnect.
+
+    Streaming has its own concurrency pool plus bounded queue wait, absolute
+    duration, and raw-byte ceilings. follow_redirects stays False: a 30x is
+    streamed back verbatim and the next hop re-enters the gateway for re-auth.
+    """
+    # Hold a semaphore slot for the WHOLE stream lifetime (acquired here, released
+    # in the cleanup task), so long-lived streams still count against the
+    # concurrency cap rather than being released the instant the handler returns.
+    await _acquire_generic_proxy_slot(semaphore, pool="stream")
+    record_generic_proxy_stream_outcome("started")
+    deadline = asyncio.get_running_loop().time() + _read_generic_stream_max_duration_seconds()
+    client: httpx.AsyncClient | None = None
+    released = False
+
+    async def _cleanup() -> None:
+        nonlocal released
+        if released:
+            return
+        released = True
+        try:
+            if client is not None:
+                await client.aclose()
+        finally:
+            semaphore.release()
+
+    try:
+        # A streaming upstream is idle between chunks by design, so the READ
+        # timeout is disabled. The absolute deadline below still bounds client
+        # construction, response headers, and the complete body lifetime.
+        stream_timeout = httpx.Timeout(10.0, read=None)
+        client = guarded_async_client(
+            profile=PROXY_PROFILE,
+            timeout=stream_timeout,
+            follow_redirects=False,
+            verify=verify,
+        )
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            raise TimeoutError("generic proxy stream duration exceeded during setup")
+        stream_ctx = client.stream(
+            method,
+            outbound_url,
+            content=request_body,
+            headers=forward_headers,
+        )
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            raise TimeoutError("generic proxy stream duration exceeded before headers")
+        upstream_response = await asyncio.wait_for(
+            stream_ctx.__aenter__(),
+            timeout=min(remaining, _read_generic_stream_read_timeout_seconds()),
+        )
+    except UrlValidationError as exc:
+        # Guarded transport blocked the outbound at connect time (denied/rebound
+        # IP). Release the semaphore/client, then surface a deliberate 502 instead
+        # of an opaque 500. Log the reason only, never the raw target.
+        await _cleanup()
+        record_generic_proxy_stream_outcome("upstream_error")
+        logger.warning("generic_proxy(stream): egress blocked: %s", exc.reason)
+        raise HTTPException(status_code=502, detail="Upstream not permitted") from exc
+    except TimeoutError as exc:
+        await _cleanup()
+        record_generic_proxy_stream_outcome("duration_timeout")
+        logger.warning("generic_proxy(stream): absolute duration exceeded before response headers")
+        raise HTTPException(status_code=504, detail="Upstream timed out") from exc
+    except httpx.TimeoutException as exc:
+        await _cleanup()
+        record_generic_proxy_stream_outcome("upstream_error")
+        logger.error(
+            "generic_proxy(stream): upstream timeout for %s (%s)",
+            redact_url(outbound_url),
+            type(exc).__name__,
+        )
+        raise HTTPException(status_code=504, detail="Upstream timed out") from exc
+    except httpx.HTTPError as exc:
+        await _cleanup()
+        record_generic_proxy_stream_outcome("upstream_error")
+        logger.error(
+            "generic_proxy(stream): upstream error for %s (%s)",
+            redact_url(outbound_url),
+            type(exc).__name__,
+        )
+        raise HTTPException(status_code=502, detail="Upstream error") from exc
+    except asyncio.CancelledError:
+        # Client disconnected before response headers: release the slot, record the
+        # terminal so `started` reconciles, then propagate the cancellation.
+        await _cleanup()
+        record_generic_proxy_stream_outcome("client_closed")
+        raise
+    except BaseException:
+        await _cleanup()
+        raise
+
+    status_code = upstream_response.status_code
+    content_type = upstream_response.headers.get("content-type", "application/octet-stream")
+    response_headers = _select_forwarded_generic_response_headers(
+        dict(upstream_response.headers), preserve_body_framing=True
+    )
+    response_headers.update(_GATEWAY_SET_SECURITY_HEADERS)
+
+    async def _body_iterator():
+        total_bytes = 0
+        iterator = upstream_response.aiter_raw().__aiter__()
+        try:
+            while True:
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    raise TimeoutError("generic proxy stream duration exceeded")
+                try:
+                    chunk = await asyncio.wait_for(
+                        anext(iterator),
+                        timeout=min(remaining, _read_generic_stream_read_timeout_seconds()),
+                    )
+                except StopAsyncIteration:
+                    break
+                if chunk:
+                    total_bytes += len(chunk)
+                    max_bytes = _read_generic_stream_max_bytes()
+                    if total_bytes > max_bytes:
+                        record_generic_proxy_stream_outcome("byte_cap")
+                        raise HTTPException(
+                            status_code=413,
+                            detail=f"Upstream stream exceeded {max_bytes} bytes",
+                        )
+                    yield chunk
+            record_generic_proxy_stream_outcome("completed")
+        except TimeoutError:
+            record_generic_proxy_stream_outcome("duration_timeout")
+            logger.warning("generic_proxy(stream): absolute stream duration exceeded")
+            raise
+        except (GeneratorExit, asyncio.CancelledError):
+            # Client disconnected mid-stream (generator closed / task cancelled). The
+            # slot is released in `finally`; record the terminal so in-flight =
+            # started - terminals stays reconcilable, then re-raise.
+            record_generic_proxy_stream_outcome("client_closed")
+            raise
+        except httpx.HTTPError:
+            # Upstream failed AFTER headers were sent (dropped mid-body). The status
+            # line is already on the wire, so we cannot turn this into a 5xx; record
+            # the terminal and abort the stream.
+            record_generic_proxy_stream_outcome("upstream_error")
+            logger.error("generic_proxy(stream): mid-stream upstream error")
+            raise
+        finally:
+            # Exit the stream context (the BackgroundTask closes the client and
+            # releases the semaphore). Errors here are best-effort cleanup.
+            try:
+                await stream_ctx.__aexit__(None, None, None)
+            except Exception:  # nosec B110 # noqa: BLE001 - best-effort stream close on generator exit
+                pass
+            finally:
+                # BackgroundTask is not guaranteed to run if iteration raises
+                # after response headers started (duration/byte limit or client
+                # disconnect). Idempotent cleanup prevents a leaked stream slot.
+                await _cleanup()
+
+    return StreamingResponse(
+        _body_iterator(),
+        status_code=status_code,
+        media_type=content_type,
+        headers=response_headers,
+        background=BackgroundTask(_cleanup),
+    )
+
+
 @app.api_route(
     "/proxy/{entity_type}/{entity_path:path}",
     methods=_GENERIC_PROXY_METHODS,
@@ -8112,37 +8702,101 @@ async def generic_proxy(
     # Build the confined outbound URL (sub-path appended to the pinned base) and
     # assert it stayed on the pinned host — belt (segment reject) and suspenders
     # (post-join host-equality).
-    outbound_url = _build_generic_outbound_url(upstream_url, entity_path, bound_registered_path)
+    outbound_url = _build_generic_outbound_url(
+        upstream_url,
+        entity_path,
+        bound_registered_path,
+        request.query_params.multi_items(),
+    )
     _assert_outbound_host_pinned(outbound_url, upstream_url)
 
     try:
         request_body = await request.body()
     except Exception as exc:
-        logger.error(f"generic_proxy: failed to read request body: {exc}")
+        logger.error("generic_proxy: failed to read request body (%s)", type(exc).__name__)
         raise HTTPException(status_code=400, detail="Invalid request body") from exc
 
     max_body_bytes = _read_generic_max_body_bytes()
-    # Strip the gateway-internal identity/routing family before forwarding to the
-    # (possibly third-party) upstream: neither the caller's X-User/X-Scopes nor the
-    # signed X-Internal-Token-Generic may leak to a proxied backend. _forward_headers
-    # already drops cookie/authorization/x-upstream-url/hop-by-hop; this removes the
-    # remaining internal headers the generic nginx block injects.
-    forward_headers = {
-        key: value
-        for key, value in _forward_headers(dict(request.headers)).items()
-        if key.lower() not in _GENERIC_HOP_STRIP_HEADERS
-    }
+    # Start from a small protocol-only caller baseline. Arbitrary caller headers,
+    # ingress credentials, and gateway-internal identity/tokens do not cross this
+    # registrant-controlled boundary. Explicitly vended overridable names are
+    # considered separately below with a local reserved-name backstop.
+    incoming_headers = dict(request.headers)
+    forward_headers = _select_forwarded_generic_request_headers(incoming_headers)
+    # Defense-in-depth egress backstop (independent of the positive allowlist above
+    # and of the registration denylist): unconditionally drop every gateway-internal
+    # identity / signed-token / routing-marker header from the caller baseline before
+    # it can reach the registrant-controlled backend. This is a strict no-op while the
+    # allowlist stays protocol-only, but fails closed if the allowlist is ever widened
+    # to admit an internal name. Operator/caller upstream-auth headers (incl. an
+    # explicitly-vended Authorization) are injected AFTER this by
+    # _merge_generic_upstream_headers, so legitimate credentials still reach the backend.
+    forward_headers = _strip_generic_internal_headers(forward_headers)
     verify = _generic_tls_verify()
+    # Streaming is read from the SIGNED token claim (bound at /validate from the
+    # server-set X-Generic-Streaming marker), never a forgeable inbound header.
+    streaming = bool(claims.get("streaming"))
+
+    # Upstream auth: when the SIGNED claim says the entity has registered upstream
+    # headers, fetch the DECRYPTED operator values + the caller passthrough
+    # allowlist from the registry's internal vend endpoint and merge them on
+    # egress. The claim is bound from the server-set X-Generic-Has-Upstream-Auth
+    # marker (never a forgeable header); the secret values only cross via the
+    # service-token-gated internal hop. FAIL CLOSED: if the vend fails, do NOT
+    # forward the request unauthenticated.
+    if claims.get("has_upstream_auth"):
+        generic_token = request.headers.get("X-Internal-Token-Generic", "")
+        vended = await _vend_generic_upstream_headers(
+            generic_token, entity_type, bound_registered_path
+        )
+        if vended is None:
+            logger.error(
+                "generic_proxy: upstream-headers vend failed for %s/%s; refusing to "
+                "forward unauthenticated",
+                entity_type,
+                bound_registered_path,
+            )
+            raise HTTPException(status_code=502, detail="Upstream auth unavailable")
+        vended_defaults, overridable_names = vended
+        # Apply the per-header overridable policy: fixed operator headers overwrite
+        # any caller copy; overridable headers let the caller's value win (or fall
+        # back to the operator default). Every safe caller header is re-admitted
+        # only when the operator explicitly opted that name in.
+        _merge_generic_upstream_headers(
+            forward_headers,
+            incoming_headers,
+            vended_defaults,
+            overridable_names,
+        )
+        # Never let the effective gateway credential (X-Authorization first,
+        # otherwise standard Authorization) reach the backend through an
+        # overridable Authorization slot.
+        _assert_generic_authorization_not_gateway_cred(
+            forward_headers,
+            _effective_ingress_gateway_credential(request.headers),
+        )
 
     logger.info(
-        "generic_proxy: type=%s path=/%s method=%s",
+        "generic_proxy: type=%s path=/%s method=%s streaming=%s",
         entity_type,
         entity_path,
         request.method,
+        streaming,
     )
 
+    if streaming:
+        return await _generic_proxy_streaming(
+            semaphore=_get_generic_proxy_stream_semaphore(),
+            method=request.method,
+            outbound_url=outbound_url,
+            request_body=request_body,
+            forward_headers=forward_headers,
+            verify=verify,
+        )
+
     semaphore = _get_generic_proxy_semaphore()
-    async with semaphore:
+    await _acquire_generic_proxy_slot(semaphore)
+    try:
         try:
             # SSRF/rebinding-safe client (CLAUDE.md invariant): the guarded
             # transport resolves + validates + PINS the connection IP inside the
@@ -8166,7 +8820,6 @@ async def generic_proxy(
                     outbound_url,
                     content=request_body,
                     headers=forward_headers,
-                    params=dict(request.query_params),
                 ) as upstream_response:
                     body_bytes = await _read_bounded(upstream_response, max_body_bytes)
                     status_code = upstream_response.status_code
@@ -8191,11 +8844,21 @@ async def generic_proxy(
             )
             raise HTTPException(status_code=502, detail="Upstream not permitted") from exc
         except httpx.TimeoutException as exc:
-            logger.error(f"generic_proxy: upstream timeout for {outbound_url}: {exc}")
+            logger.error(
+                "generic_proxy: upstream timeout for %s (%s)",
+                redact_url(outbound_url),
+                type(exc).__name__,
+            )
             raise HTTPException(status_code=504, detail="Upstream timed out") from exc
         except httpx.HTTPError as exc:
-            logger.error(f"generic_proxy: upstream error for {outbound_url}: {exc}")
+            logger.error(
+                "generic_proxy: upstream error for %s (%s)",
+                redact_url(outbound_url),
+                type(exc).__name__,
+            )
             raise HTTPException(status_code=502, detail="Upstream error") from exc
+    finally:
+        semaphore.release()
 
     response_headers = _select_forwarded_generic_response_headers(upstream_headers)
     # Gateway-set security headers win over anything the backend tried to set

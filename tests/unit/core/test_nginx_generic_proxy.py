@@ -146,6 +146,37 @@ class TestFetchFlagGate:
                 result = await _fetch_generic_proxied_resources()
         assert [r["path"] for r in result] == ["/skills/ok"]
 
+    async def test_orphaned_ciphertext_still_forces_strict_vending(self):
+        corrupt = AsyncMock()
+        corrupt.list_proxied.return_value = [
+            {
+                "path": "/skills/corrupt",
+                "is_proxied": True,
+                "proxy_target_url": "https://backend.example/",
+                "custom_header_names": [],
+                "custom_header_overridable_names": [],
+                "custom_headers_encrypted": [
+                    {"name": "X-Api-Key", "value_encrypted": "orphaned-ciphertext"}
+                ],
+            }
+        ]
+        empty = AsyncMock()
+        empty.list_proxied.return_value = []
+        with patch("registry.core.nginx_service.settings") as s:
+            s.gateway_generic_proxy_enabled = True
+            with (
+                patch("registry.repositories.factory.get_agent_repository", return_value=empty),
+                patch("registry.repositories.factory.get_skill_repository", return_value=corrupt),
+                patch(
+                    "registry.repositories.factory.get_custom_entity_repository",
+                    return_value=empty,
+                ),
+            ):
+                result = await _fetch_generic_proxied_resources()
+
+        assert result[0]["path"] == "/skills/corrupt"
+        assert result[0]["has_upstream_auth"] is True
+
 
 # --------------------------------------------------------------------------- #
 # _create_generic_proxy_block — shape
@@ -153,12 +184,22 @@ class TestFetchFlagGate:
 
 
 class TestCreateBlock:
-    def _block(self, entity_type="skill", path="/skills/proxy-demo", target="https://b.example/"):
+    def _block(
+        self,
+        entity_type="skill",
+        path="/skills/proxy-demo",
+        target="https://b.example/",
+        streaming=False,
+        has_upstream_auth=False,
+    ):
         with patch("registry.core.nginx_service.settings") as s:
             s.auth_server_url = "http://auth-server:8888"
             s.gateway_generic_client_max_body_size = "1m"
             s.gateway_proxy_prefix = "gateway"
-            return _service()._create_generic_proxy_block(entity_type, path, target)
+            s.gateway_generic_stream_read_timeout_seconds = 3600
+            return _service()._create_generic_proxy_block(
+                entity_type, path, target, streaming, has_upstream_auth
+            )
 
     def test_location_is_prefixed_type_name(self):
         # Client-facing path = /{prefix}/{type}/{name} (namespace segment stripped
@@ -224,6 +265,37 @@ class TestCreateBlock:
         # must NOT forward the generic token under the MCP header name
         assert "proxy_set_header X-Internal-Token $auth_internal_token_generic;" not in block
 
+    def test_non_streaming_block_has_no_streaming_directives(self):
+        # Default (buffered) route: no streaming marker, no buffering-off, so the
+        # hop keeps the bounded/buffered path and nginx buffers normally.
+        block = self._block(streaming=False)
+        assert 'set $generic_streaming "1";' not in block
+        assert "proxy_buffering off;" not in block
+
+    def test_streaming_block_emits_marker_and_buffering_off(self):
+        # Streaming route (proxy_streaming=true entity): sets the $generic_streaming
+        # marker (forwarded on /validate, bound into the token), disables nginx
+        # buffering, and raises the read timeout for long-lived SSE / token streams.
+        block = self._block(streaming=True)
+        assert 'set $generic_streaming "1";' in block
+        assert "proxy_buffering off;" in block
+        assert "proxy_read_timeout 3600s;" in block
+        assert 'proxy_set_header Connection "";' in block
+
+    def test_no_upstream_auth_block_has_no_marker(self):
+        # Default: no upstream-auth marker, so the hop won't vend/inject headers.
+        block = self._block(has_upstream_auth=False)
+        assert 'set $generic_has_upstream_auth "1";' not in block
+
+    def test_upstream_auth_block_emits_marker_only(self):
+        # Entity with registered upstream headers: sets the bool marker (bound into
+        # the token so the hop vends+injects). The marker is a fixed literal -- the
+        # secret VALUES never appear in the rendered nginx config.
+        block = self._block(has_upstream_auth=True)
+        assert 'set $generic_has_upstream_auth "1";' in block
+        # Defence: no decrypted header value leaks into the config.
+        assert "value_encrypted" not in block
+
     def test_auth_server_url_trailing_slash_not_doubled(self):
         with patch("registry.core.nginx_service.settings") as s:
             s.auth_server_url = "http://auth-server:8888/"
@@ -261,6 +333,17 @@ class TestSafeBlock:
         assert (
             self._safe("skill", "/skills/x", "http://169.254.169.254/", allow_private=True) is None
         )
+
+    @pytest.mark.parametrize(
+        "entity_type,path",
+        [
+            ("skill", "/skills/fake"),
+            ("a2a_agent", "/agents/fake"),
+            ("workflow", "/workflow/fake"),
+        ],
+    )
+    def test_arbitrary_mcpgw_server_target_skipped(self, entity_type, path):
+        assert self._safe(entity_type, path, "http://mcpgw-server:8003/") is None
 
     def test_private_target_skipped_when_flag_false(self):
         assert self._safe("skill", "/skills/x", "http://10.0.0.5/", allow_private=False) is None

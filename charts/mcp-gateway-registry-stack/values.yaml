@@ -434,13 +434,14 @@ registry:
     mcpToolsListFilterEnabled: true # Registry-side awareness of the MCP tools/list filter (also read by auth-server)
     toolFilterAuditLogLevel: "INFO" # Audit log level for tool-prune events (DEBUG, INFO, WARNING)
     # Gateway generic-proxy feature (registry-consumed). Ships DISABLED. See the
-    # auth-server section for the seven auth-server-consumed knobs + the egress
+    # auth-server section for the eleven auth-server-consumed knobs + the egress
     # NetworkPolicy that MUST be deployed before enabling.
     gatewayGenericProxyEnabled: false
     gatewayCanonicalNamespaceEnabled: false
     gatewayProxyAllowPrivateTargets: false
     gatewayGenericClientMaxBodySize: "1m"
     gatewayProxyPrefix: "gateway" # URL path prefix for auto-generated client routes (/{prefix}/{type}/{name})
+    gatewayGenericStreamReadTimeoutSeconds: 3600 # nginx proxy_read_timeout (s) for proxy_streaming routes
     # Registry-UI internal token verification (the /api/ hop; minted by auth-server)
     internalTokenTtlSeconds: "30" # Token lifetime (seconds); the replay-window cap (min 5)
     internalTokenLeewaySeconds: "5" # Clock-skew leeway (seconds) on token exp/iat
@@ -581,14 +582,19 @@ auth-server:
     # SHARED master switch is true AND the startup egress self-check passes. Keep
     # it in sync with registry.app.gatewayGenericProxyEnabled above. Deploy
     # auth-server.egress.networkPolicy first.
-    gatewayGenericProxyEnabled: false # Master switch; match registry.app.gatewayGenericProxyEnabled
+    # SHARED master switch. Stack rendering fails unless this exactly matches
+    # registry.app.gatewayGenericProxyEnabled and an egress policy is declared.
+    gatewayGenericProxyEnabled: false
     genericProxyTokenTtlSeconds: 30
     genericProxyMaxBodyBytes: "10485760" # string to avoid Helm float sci-notation
     gatewayGenericRequireBearerForWrites: true
     gatewayEgressSelfcheckEnabled: true
     gatewayGenericTlsVerify: "true"
-    gatewayProxyPinRefreshSeconds: 300
     gatewayGenericMaxConcurrency: 32
+    gatewayGenericStreamMaxConcurrency: 8
+    gatewayGenericAcquireTimeoutSeconds: 5
+    gatewayGenericStreamMaxDurationSeconds: 3600
+    gatewayGenericStreamMaxBytes: "104857600" # string to avoid Helm float sci-notation
   metrics:
     # Standard OTel SDK var. Setting this activates the OTLP push exporter.
     otelExporterOtlpEndpoint: "" # OTLP endpoint URL (e.g., http://otel-collector:4317)
@@ -656,3 +662,10 @@ auth-server:
   # subchart unchanged.
   extraEnv: []
   extraEnvFrom: []
+  # Generic-proxy egress prerequisite. Prefer the chart-managed NetworkPolicy.
+  # Set the acknowledgement only after an equivalent external CNI/platform
+  # policy blocks metadata and workload-credential endpoints over IPv4 + IPv6.
+  egress:
+    externalEgressPolicyAcknowledged: false
+    networkPolicy:
+      enabled: false
