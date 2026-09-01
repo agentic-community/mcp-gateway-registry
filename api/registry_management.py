@@ -6725,11 +6725,11 @@ Examples:
     )
     server_connect_config_parser.add_argument("--json", action="store_true", help="Output raw JSON")
 
-    # Egress Auth Commands (per-user egress credential vault)
+    # Egress Auth Commands
 
     # Configure egress auth command
     egress_configure_parser = subparsers.add_parser(
-        "egress-configure", help="Configure per-user egress auth on a server (admin only)"
+        "egress-configure", help="Configure gateway-managed egress auth on a server (admin only)"
     )
     egress_configure_parser.add_argument(
         "--path", required=True, help="Server path (e.g., /github)"
@@ -6737,7 +6737,7 @@ Examples:
     egress_configure_parser.add_argument(
         "--mode",
         required=True,
-        choices=["none", "oauth_user", "obo_exchange", "pat"],
+        choices=["none", "operator_credential", "oauth_user", "obo_exchange", "pat"],
         help="Egress auth mode",
     )
     egress_configure_parser.add_argument(

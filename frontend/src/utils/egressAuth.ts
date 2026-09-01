@@ -7,6 +7,94 @@
  */
 import axios from 'axios';
 
+export type EgressAuthMode =
+  | 'none'
+  | 'operator_credential'
+  | 'oauth_user'
+  | 'obo_exchange'
+  | 'pat';
+
+export interface EgressAuthConfigForm {
+  egress_auth_mode: EgressAuthMode;
+  egress_provider: string;
+  egress_client_id: string;
+  egress_client_secret: string;
+  egress_scopes: string;
+  egress_custom_authorize_url: string;
+  egress_custom_token_url: string;
+  egress_custom_token_auth_style: string;
+  egress_custom_resource: string;
+  egress_target_audience: string;
+}
+
+type EgressAuthConfigPayload = {
+  egress_auth_mode: EgressAuthMode;
+  [key: string]: string | string[] | undefined;
+};
+
+const EGRESS_AUTH_MODES = new Set<EgressAuthMode>([
+  'none',
+  'operator_credential',
+  'oauth_user',
+  'obo_exchange',
+  'pat',
+]);
+
+export function normalizeEgressAuthMode(value: unknown): EgressAuthMode {
+  return typeof value === 'string' && EGRESS_AUTH_MODES.has(value as EgressAuthMode)
+    ? (value as EgressAuthMode)
+    : 'none';
+}
+
+export function isGatewayManagedEgress(value: unknown): boolean {
+  // Connect configs must fail closed: only explicit none/empty is unmanaged.
+  // An unrecognized future mode still injects upstream, so never emit a
+  // client server-auth placeholder for it.
+  if (typeof value !== 'string') {
+    return false;
+  }
+  const mode = value.trim();
+  return mode !== '' && mode !== 'none';
+}
+
+export function buildEgressAuthConfigPayload(
+  form: EgressAuthConfigForm
+): EgressAuthConfigPayload {
+  const mode = form.egress_auth_mode;
+  const scopes = form.egress_scopes
+    .split(/[,\s]+/)
+    .map(scope => scope.trim())
+    .filter(Boolean);
+
+  if (mode === 'operator_credential' || mode === 'none') {
+    return { egress_auth_mode: mode };
+  }
+  if (mode === 'obo_exchange') {
+    return {
+      egress_auth_mode: mode,
+      target_audience: form.egress_target_audience.trim(),
+      scopes,
+    };
+  }
+  if (mode === 'pat') {
+    return {
+      egress_auth_mode: mode,
+      egress_provider: form.egress_provider.trim(),
+    };
+  }
+  return {
+    egress_auth_mode: mode,
+    egress_provider: form.egress_provider.trim(),
+    client_id: form.egress_client_id.trim(),
+    client_secret: form.egress_client_secret || undefined,
+    scopes,
+    custom_authorize_url: form.egress_custom_authorize_url || undefined,
+    custom_token_url: form.egress_custom_token_url || undefined,
+    custom_token_auth_style: form.egress_custom_token_auth_style || undefined,
+    custom_resource: form.egress_custom_resource || undefined,
+  };
+}
+
 export interface EgressConnection {
   provider: string;
   server_path: string;

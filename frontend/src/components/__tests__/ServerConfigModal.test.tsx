@@ -256,6 +256,32 @@ describe('ServerConfigModal IDE OAuth login (oauth_client_id)', () => {
     expect(serverConfig.auth).toBeUndefined();
   });
 
+  test('Cursor: shared backend credential omits server token placeholder', async () => {
+    connectConfig = { custom_headers: [], egress_auth_mode: 'operator_credential' };
+
+    renderModal({ auth_scheme: 'bearer' } as Partial<Server>);
+
+    await waitFor(() => {
+      const serverConfig = getDisplayedConfig().mcpServers['test-server'];
+      expect(serverConfig.headers['X-Authorization']).toContain('Bearer');
+    });
+    const serverConfig = getDisplayedConfig().mcpServers['test-server'];
+    expect(serverConfig.headers.Authorization).toBeUndefined();
+  });
+
+  test('Cursor: unknown egress mode omits server token placeholder', async () => {
+    connectConfig = { custom_headers: [], egress_auth_mode: 'future_mode' };
+
+    renderModal({ auth_scheme: 'bearer' } as Partial<Server>);
+
+    await waitFor(() => {
+      const serverConfig = getDisplayedConfig().mcpServers['test-server'];
+      expect(serverConfig.headers['X-Authorization']).toContain('Bearer');
+    });
+    const serverConfig = getDisplayedConfig().mcpServers['test-server'];
+    expect(serverConfig.headers.Authorization).toBeUndefined();
+  });
+
   test('registry-only deployment never enables OAuth login', async () => {
     mockUseRegistryConfig.mockReturnValue(registryOnlyConfig());
     connectConfig = { custom_headers: [], oauth_client_id: 'mcp-gateway' };

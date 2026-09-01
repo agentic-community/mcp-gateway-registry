@@ -71,7 +71,13 @@ import type {
 } from '../types/customEntity';
 import axios from 'axios';
 import { getBaseURL } from '../utils/basePath';
-import { isEgressAuthEnabled, loadEgressCardState, type EgressCardState } from '../utils/egressAuth';
+import {
+  buildEgressAuthConfigPayload,
+  isEgressAuthEnabled,
+  loadEgressCardState,
+  normalizeEgressAuthMode,
+  type EgressCardState,
+} from '../utils/egressAuth';
 import { EgressConnectProvider } from '../contexts/EgressConnectContext';
 import {
   buildLocalRuntimeForm,
@@ -311,7 +317,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
     },
     custom_headers: [] as Array<{ name: string; value: string }>,
     // Egress auth to the upstream (admin config).
-    egress_auth_mode: 'none' as 'none' | 'oauth_user' | 'obo_exchange' | 'pat',
+    egress_auth_mode: 'none',
     egress_provider: '',
     egress_client_id: '',
     egress_client_secret: '',  // write-only; blank on edit keeps the stored one
@@ -1310,7 +1316,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         deployment,
         local_runtime: buildLocalRuntimeForm(localRuntimeRaw),
         custom_headers: (serverDetails.custom_header_names || []).map((name: string) => ({ name, value: '' })),
-        egress_auth_mode: (serverDetails.egress_auth_mode || 'none') as 'none' | 'oauth_user' | 'obo_exchange' | 'pat',
+        egress_auth_mode: normalizeEgressAuthMode(serverDetails.egress_auth_mode),
         egress_provider: serverDetails.egress_oauth?.provider || '',
         egress_client_id: serverDetails.egress_oauth?.client_id || '',
         egress_client_secret: '',  // never round-trip the secret
@@ -1541,56 +1547,12 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
           const csrf = await axios.get('/api/auth/csrf-token');
           const csrfHeaders: Record<string, string> = {};
           if (csrf.data?.csrf_token) csrfHeaders['X-CSRF-Token'] = csrf.data.csrf_token;
-          const mode = editForm.egress_auth_mode;
-          const scopesList = editForm.egress_scopes
-            .split(/[,\s]+/)
-            .map(s => s.trim())
-            .filter(Boolean);
-          if (mode === 'obo_exchange') {
-            await axios.post(
-              `/api/servers${editingServer.path}/egress-auth`,
-              {
-                egress_auth_mode: 'obo_exchange',
-                target_audience: editForm.egress_target_audience.trim(),
-                scopes: scopesList,
-              },
-              { headers: csrfHeaders }
-            );
-          } else if (mode === 'oauth_user') {
-            await axios.post(
-              `/api/servers${editingServer.path}/egress-auth`,
-              {
-                egress_auth_mode: 'oauth_user',
-                egress_provider: editForm.egress_provider.trim(),
-                client_id: editForm.egress_client_id.trim(),
-                // Blank secret on edit keeps the stored one (backend semantics).
-                client_secret: editForm.egress_client_secret || undefined,
-                scopes: scopesList,
-                custom_authorize_url: editForm.egress_custom_authorize_url || undefined,
-                custom_token_url: editForm.egress_custom_token_url || undefined,
-                custom_token_auth_style: editForm.egress_custom_token_auth_style || undefined,
-                custom_resource: editForm.egress_custom_resource || undefined,
-              },
-              { headers: csrfHeaders }
-            );
-          } else if (mode === 'pat') {
-            await axios.post(
-              `/api/servers${editingServer.path}/egress-auth`,
-              {
-                egress_auth_mode: 'pat',
-                egress_provider: editForm.egress_provider.trim(),
-                // The inject header is inherited from Backend Authentication at
-                // vend time, so it is not sent here.
-              },
-              { headers: csrfHeaders }
-            );
-          } else {
-            await axios.post(
-              `/api/servers${editingServer.path}/egress-auth`,
-              { egress_auth_mode: 'none' },
-              { headers: csrfHeaders }
-            );
-          }
+          const egressPayload = buildEgressAuthConfigPayload(editForm);
+          await axios.post(
+            `/api/servers${editingServer.path}/egress-auth`,
+            egressPayload,
+            { headers: csrfHeaders }
+          );
         } catch (egressErr: any) {
           // Surface but don't lose the successful server edit.
           const d = egressErr.response?.data?.detail;

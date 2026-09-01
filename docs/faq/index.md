@@ -60,3 +60,4 @@ Common questions and answers about the MCP Gateway Registry.
 - [How do I generate an MCP access token that lasts longer than 8 hours?](generate-token-longer-than-8-hours.md)
 - [How do I pass an M2M token from Entra to the registration gate?](oauth2-token-for-registration-gate.md)
 - [How does an admin seed per-user egress PATs for a `pat` server?](seeding-per-user-egress-pats-as-admin.md)
+- [How do I inject a shared Backend Authentication credential on egress?](configuring-operator-credential-egress.md)

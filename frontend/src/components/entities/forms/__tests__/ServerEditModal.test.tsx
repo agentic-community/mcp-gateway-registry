@@ -161,6 +161,20 @@ describe('ServerEditModal', () => {
     expect(screen.queryByText('Client ID')).not.toBeInTheDocument();
   });
 
+  it('describes shared backend credential injection in operator mode', () => {
+    render(
+      <Harness
+        initial={{ ...baseForm, egress_auth_mode: 'operator_credential' }}
+        egressEnabled
+      />
+    );
+    expect(
+      screen.getByText(/Clients receive neither the credential nor a server-auth placeholder/)
+    ).toBeInTheDocument();
+    expect(screen.queryByText('Provider')).not.toBeInTheDocument();
+    expect(screen.queryByText('Target Audience')).not.toBeInTheDocument();
+  });
+
   it('shows token auth style and resource fields for a custom provider', () => {
     render(
       <Harness

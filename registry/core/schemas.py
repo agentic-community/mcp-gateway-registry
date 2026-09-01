@@ -6,6 +6,11 @@ from uuid import uuid4
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from registry.constants import DeploymentType, LocalRuntimeType, TransportType
+from registry.egress_auth.schemas import (
+    EgressAuthMode,
+    parse_egress_auth_mode,
+    validate_operator_credential_backend,
+)
 from registry.schemas.agent_models import AgentProvider
 from registry.schemas.proxy_mixin import (
     ProxyableMixin,
@@ -686,12 +691,12 @@ class ServerInfo(ProxyableMixin):
         description="ISO timestamp of last custom-headers update.",
     )
 
-    # Per-user egress credential vault (third-party OBO). Default 'none' keeps
-    # today's behavior; the registration write path is not yet implemented.
     egress_auth_mode: str = Field(
         default="none",
-        description="Egress auth to the upstream: 'none', 'oauth_user' (3LO vault), "
-        "or 'obo_exchange' (same-IdP OBO).",
+        description="Egress auth to the upstream: 'none' (strip ingress auth, "
+        "inject nothing), 'operator_credential' (shared registered backend "
+        "credential), 'oauth_user' (3LO vault), 'obo_exchange' (same-IdP OBO), "
+        "or 'pat' (per-user static token).",
     )
     egress_oauth: EgressOAuthConfig | None = Field(
         default=None,
@@ -822,6 +827,8 @@ class ServerInfo(ProxyableMixin):
     def _validate_egress_auth(self) -> "ServerInfo":
         """Enforce per-mode egress config invariants.
 
+        - operator_credential: requires a bearer/API-key Backend Authentication
+          credential and no per-user egress_oauth config.
         - oauth_user: requires egress_oauth with a provider (3LO needs a provider).
         - obo_exchange: requires egress_oauth.target_audience, and that audience
           MUST (a) differ from the gateway's own IdP client id / app ID URI (Entra
@@ -832,21 +839,24 @@ class ServerInfo(ProxyableMixin):
           exfiltrated to the server's upstream. Both are rejected at registration
           rather than at the first live request.
         """
-        mode = self.egress_auth_mode
-        if mode not in ("none", "oauth_user", "obo_exchange", "pat"):
-            raise ValueError(
-                f"invalid egress_auth_mode {mode!r}; expected 'none', 'oauth_user', "
-                "'obo_exchange', or 'pat'"
+        mode = parse_egress_auth_mode(self.egress_auth_mode)
+        if mode is EgressAuthMode.NONE:
+            return self
+        if mode is EgressAuthMode.OPERATOR_CREDENTIAL:
+            validate_operator_credential_backend(
+                self.auth_scheme,
+                self.auth_credential_encrypted,
             )
-        if mode == "none":
+            if self.egress_oauth is not None:
+                raise ValueError("egress_auth_mode='operator_credential' must not set egress_oauth")
             return self
         if self.egress_oauth is None:
-            raise ValueError(f"egress_auth_mode={mode!r} requires egress_oauth config")
-        if mode == "oauth_user":
+            raise ValueError(f"egress_auth_mode={mode.value!r} requires egress_oauth config")
+        if mode is EgressAuthMode.OAUTH_USER:
             if not self.egress_oauth.provider:
                 raise ValueError("egress_auth_mode='oauth_user' requires egress_oauth.provider")
             return self
-        if mode == "pat":
+        if mode is EgressAuthMode.PAT:
             # pat needs a provider only as a vault-namespace/display key; no OAuth
             # endpoints, client_id, or secret are required.
             if not self.egress_oauth.provider:

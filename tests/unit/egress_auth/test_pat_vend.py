@@ -79,6 +79,7 @@ def _claims(**over):
     base = {
         "sub": "alice",
         "auth_method": "oauth2",
+        "server": "github",
         "upstream_url": "https://api.githubcopilot.com/mcp",
     }
     base.update(over)

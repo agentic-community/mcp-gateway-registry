@@ -2,7 +2,7 @@
 
 How the MCP Gateway lets a user reach an authentication-protected ("auth-based") third-party MCP server — GitHub, Slack, Atlassian, etc. — **as themselves**, without the coding assistant ever handling the third-party token.
 
-- Status of the modes: **`none` (no egress auth), `vault-oauth` (3LO), `token-exchange` (OBO), and `vault-pat` (PAT) are implemented today** (OBO via Microsoft Entra `jwt-bearer`; Keycloak RFC 8693 is the next phase); a **custom-header** egress mode is designed but not yet built (placeholder below).
+- Status of the modes: **`none` (no egress auth), `operator-credential` (shared registered credential), `vault-oauth` (3LO), `token-exchange` (OBO), and `vault-pat` (PAT) are implemented today** (OBO via Microsoft Entra `jwt-bearer`; Keycloak RFC 8693 is the next phase); a **custom-header** per-user mode is designed but not yet built (placeholder below).
 - Authoritative implementation references: `registry/egress_auth/`, `registry/secrets/`, `registry/api/egress_auth_routes.py`, `auth_server/server.py` (`mcp_proxy`, `_vend_egress_token`, `_forward_headers`).
 
 ---
@@ -241,11 +241,12 @@ Wire the chosen value on the **registry** container across your deployment surfa
 
 ## The egress modes
 
-`egress_auth_mode` on the server entry selects how the gateway obtains the outbound credential. Today the **no-auth**, **vault-OAuth (3LO)**, **token-exchange (OBO)**, and **vault-PAT** paths are implemented; the **custom-header** mode is designed and reserved.
+`egress_auth_mode` on the server entry selects how the gateway obtains the outbound credential. Today the **no-auth**, **shared operator credential**, **vault-OAuth (3LO)**, **token-exchange (OBO)**, and **vault-PAT** paths are implemented; the **custom-header** per-user mode is designed and reserved.
 
 | Mode | Vault used? | How the egress credential is obtained | Status |
 |------|-------------|----------------------------------------|--------|
 | **`none` (no egress auth)** | No | The server needs no upstream credential. All client auth headers are stripped on egress; nothing is injected. The default for every server. | **Implemented** (`egress_auth_mode = "none"`) |
+| **`operator-credential` (shared service account)** | No per-user vault | The gateway decrypts the server's registered Backend Authentication credential after caller authorization and registered-upstream binding, then injects it for every authorized caller. | **Implemented** (`egress_auth_mode = "operator_credential"`) |
 | **`vault-oauth` (3LO)** | Yes | User completes provider OAuth (3LO) out of band; the gateway vaults the per-user token and injects it. This document's main flow. | **Implemented** (`egress_auth_mode = "oauth_user"`) |
 | **`token-exchange` (OBO)** | No | For same-trust-domain backends, the gateway exchanges the user's ingress token for a backend-audience token (Entra `jwt-bearer` / Keycloak RFC 8693). `sub` preserved; nothing stored. | **Implemented** (`egress_auth_mode = "obo_exchange"`; Entra `jwt-bearer` today, Keycloak RFC 8693 next) |
 | **`vault-pat` (PAT)** | Yes | A per-user static Personal Access Token / API key is stored in the vault (bounded TTL) and injected into the same header the server's backend auth uses. No OAuth dance. Admin seed-on-behalf supported. | **Implemented** (`egress_auth_mode = "pat"`) |
@@ -256,6 +257,10 @@ Wire the chosen value on the **registry** container across your deployment surfa
 ### `none` (no egress auth) — implemented
 
 The default. The server needs no upstream credential (or it is a public endpoint). On egress the client's ingress auth headers are stripped (`_forward_headers`) and nothing is injected. Most registered servers are `none`.
+
+### `operator-credential` (shared service account) — implemented
+
+Set `egress_auth_mode = "operator_credential"` after registering a bearer token or API key under Backend Authentication. The registry re-verifies the signed proxy token and confirms its upstream host is registered for that server before decrypting the credential. The auth server strips ingress credentials and injects the operator credential using the configured Backend Authentication header. This mode is server-scoped rather than user-scoped, so it supports authorized human, M2M, and network-trusted callers without distributing the upstream service credential to clients. Operator walkthrough: [FAQ: How do I inject a shared Backend Authentication credential on egress?](../faq/configuring-operator-credential-egress.md).
 
 ### `vault-oauth` (3LO) — implemented
 

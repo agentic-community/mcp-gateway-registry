@@ -10,6 +10,7 @@ import { isSafeUrl } from '../utils/safeUrl';
 import {
   initiateConsent,
   disconnect as disconnectEgress,
+  isGatewayManagedEgress,
   type EgressCardState,
 } from '../utils/egressAuth';
 
@@ -245,17 +246,13 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
   // Per-server override for the trailing '/mcp' transport segment on the gateway
   // URL. null = auto-detect from proxy_pass_url.
   const [appendMcpPath, setAppendMcpPath] = useState<boolean | null>(null);
-  // Per-user egress credential vault mode ('none' | 'oauth_user'). When
-  // 'oauth_user' the gateway injects the user's vaulted upstream token on
-  // egress, so the Connect config must emit NO server Authorization/API-key
-  // header (the client sends none; a placeholder would be forwarded verbatim
-  // and break the connection).
-  const [egressAuthMode, setEgressAuthMode] = useState<string>('none');
+  // Gateway-managed egress mode. Any non-'none' value (including an unknown
+  // future mode) means the gateway supplies the upstream credential, so Connect
+  // configs must not ask clients for a second server Authorization/API-key.
+  const [egressAuthMode, setEgressAuthMode] = useState<unknown>('none');
 
   const useOAuthLogin = !!oauthClientId && !isRegistryOnly;
-  // True when the gateway supplies the upstream credential itself (egress 3LO),
-  // so the client must not send any server-auth header.
-  const egressManaged = egressAuthMode === 'oauth_user';
+  const egressManaged = isGatewayManagedEgress(egressAuthMode);
 
   // Fetch JWT token when modal opens (only in gateway mode, and only for remote servers).
   // Local stdio servers don't go through the gateway — no token needed.
@@ -503,7 +500,7 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
     // token is omitted - the IDE obtains it through the OAuth/PKCE flow.
     // The server-auth header is dropped (default includeServerAuth) in two
     // cases, for every IDE that emits it: (1) OAuth-login mode, and (2)
-    // egress-managed servers (egress_auth_mode == 'oauth_user'). In both the
+    // egress-managed servers (any non-'none' egress_auth_mode). In both the
     // gateway injects the upstream credential itself, so the client must NOT
     // send a server Authorization/API-key header (the [YOUR_SERVER_AUTH_TOKEN]
     // placeholder would be forwarded as-is and break the connection). IDEs that

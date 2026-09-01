@@ -12,6 +12,10 @@ import {
   LABEL,
 } from '../../formFields';
 import Button from '../../Button';
+import {
+  normalizeEgressAuthMode,
+  type EgressAuthMode,
+} from '../../../utils/egressAuth';
 
 /**
  * Shape of the server edit form state. Owned by the Dashboard (kept as state
@@ -34,8 +38,8 @@ export interface ServerEditForm {
   deployment: 'remote' | 'local';
   local_runtime: LocalRuntimeFormData;
   custom_headers: Array<{ name: string; value: string }>;
-  // Egress auth to the upstream (admin config). 'none' | 'oauth_user' | 'obo_exchange' | 'pat'.
-  egress_auth_mode: 'none' | 'oauth_user' | 'obo_exchange' | 'pat';
+  // Egress auth to the upstream (admin config).
+  egress_auth_mode: EgressAuthMode;
   // oauth_user (3LO vault) fields:
   egress_provider: string;
   egress_client_id: string;
@@ -228,6 +232,8 @@ const ServerEditModal: React.FC<ServerEditModalProps> = ({
               </h4>
               <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
                 How the gateway authenticates to this upstream on the user&apos;s behalf.
+                <strong> Shared backend credential</strong> injects the credential configured
+                in Backend Authentication for every caller authorized to use this server.
                 <strong> Per-user OAuth (3LO)</strong> has each user connect a third-party
                 account (GitHub, Slack, …) whose token the gateway injects.
                 <strong> OBO exchange</strong> re-audiences the user&apos;s gateway token to an
@@ -241,17 +247,25 @@ const ServerEditModal: React.FC<ServerEditModalProps> = ({
                     onChange={(e) =>
                       setForm((prev) => ({
                         ...prev,
-                        egress_auth_mode: e.target.value as ServerEditForm['egress_auth_mode'],
+                        egress_auth_mode: normalizeEgressAuthMode(e.target.value),
                       }))
                     }
                     className={FIELD}
                   >
                     <option value="none">Disabled</option>
+                    <option value="operator_credential">Shared backend credential</option>
                     <option value="oauth_user">Per-user OAuth (3LO)</option>
                     <option value="obo_exchange">OBO exchange (same IdP)</option>
                     <option value="pat">Per-user PAT / API key</option>
                   </select>
                 </div>
+                {form.egress_auth_mode === 'operator_credential' && (
+                  <p className="text-xs text-gray-500 dark:text-gray-400">
+                    The gateway injects the Backend Authentication credential
+                    above after authorizing each caller. Clients receive
+                    neither the credential nor a server-auth placeholder.
+                  </p>
+                )}
                 {form.egress_auth_mode === 'obo_exchange' && (
                   <div>
                     <label className={LABEL}>Target Audience</label>

@@ -19,19 +19,67 @@ from pydantic import BaseModel, Field
 
 
 class EgressAuthMode(str, Enum):
-    """How the gateway authenticates to the upstream MCP server on egress.
-
-    ``operator_credential`` is intentionally NOT included in this feature: it
-    would require net-new decrypt-and-inject logic in ``mcp_proxy`` (the #542
-    credential is not wired on the egress hop today), so shipping the enum
-    value without that implementation would silently behave as ``none``. It is
-    deferred to a follow-on that lands the injection code and tests.
-    """
+    """How the gateway authenticates to the upstream MCP server on egress."""
 
     NONE = "none"  # no egress auth
+    OPERATOR_CREDENTIAL = "operator_credential"  # shared registered backend credential
     OAUTH_USER = "oauth_user"  # per-user 3LO token from the vault
     OBO_EXCHANGE = "obo_exchange"  # same-IdP OBO token exchange; stateless, no vault
     PAT = "pat"  # per-user static PAT/API-key from the vault
+
+
+EGRESS_MODES_REQUIRING_OAUTH_CONFIG: frozenset[EgressAuthMode] = frozenset(
+    {
+        EgressAuthMode.OAUTH_USER,
+        EgressAuthMode.OBO_EXCHANGE,
+        EgressAuthMode.PAT,
+    }
+)
+
+
+def parse_egress_auth_mode(
+    value: str,
+) -> EgressAuthMode:
+    """Parse an egress mode with a stable, actionable validation error.
+
+    Args:
+        value: The raw ``egress_auth_mode`` value.
+
+    Returns:
+        The matching ``EgressAuthMode`` member.
+
+    Raises:
+        ValueError: If ``value`` is not a recognized egress mode; the message
+            lists the accepted values.
+    """
+    try:
+        return EgressAuthMode(value)
+    except ValueError as exc:
+        expected = ", ".join(repr(mode.value) for mode in EgressAuthMode)
+        raise ValueError(f"invalid egress_auth_mode {value!r}; expected {expected}") from exc
+
+
+def validate_operator_credential_backend(
+    auth_scheme: str,
+    encrypted_credential: str | None,
+) -> None:
+    """Validate the Backend Authentication fields used by operator mode.
+
+    Args:
+        auth_scheme: The server's Backend Authentication scheme.
+        encrypted_credential: The stored encrypted credential, if any.
+
+    Raises:
+        ValueError: If the scheme is not ``bearer``/``api_key`` or no
+            encrypted credential is stored.
+    """
+    if auth_scheme not in ("bearer", "api_key"):
+        raise ValueError(
+            "egress_auth_mode='operator_credential' requires Backend "
+            "Authentication scheme 'bearer' or 'api_key'"
+        )
+    if not encrypted_credential:
+        raise ValueError("operator_credential requires a stored Backend Authentication credential")
 
 
 class TokenEndpointAuthStyle(str, Enum):
