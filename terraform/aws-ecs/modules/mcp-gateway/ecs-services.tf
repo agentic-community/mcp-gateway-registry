@@ -1842,6 +1842,14 @@ module "ecs_service_registry" {
           name  = "EGRESS_OBO_ALLOWED_AUDIENCES"
           value = var.egress_obo_allowed_audiences
         },
+        # Hosts whose OAuth token endpoints may resolve to private addresses, for a
+        # self-hosted IdP (Keycloak, Entra over Private Link). Exact hostnames only;
+        # does not inherit ssrf_allowed_hosts, so a proxy-target bypass can never
+        # relax a token POST. Empty by default, which permits none.
+        {
+          name  = "EGRESS_OAUTH_TRUSTED_IDP_HOSTS"
+          value = var.egress_oauth_trusted_idp_hosts
+        },
         # AUTH_SERVER_NGINX_MARKER_SECRET is injected via secrets/valueFrom below
         # (required unconditionally, not just for egress).
         {

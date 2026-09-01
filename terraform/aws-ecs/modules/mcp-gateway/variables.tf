@@ -1894,6 +1894,23 @@ variable "egress_obo_allowed_audiences" {
   default     = ""
 }
 
+variable "egress_oauth_trusted_idp_hosts" {
+  description = <<-EOT
+    Optional comma-separated hostnames of operator-controlled OAuth/OIDC identity
+    providers whose token endpoints may resolve to private addresses. Empty (the
+    default) means the credentialed-OAuth SSRF profile permits no private-resolving
+    token endpoint. Set this when the IdP is self-hosted (Keycloak, or Entra reached
+    over Private Link), where the token endpoint legitimately resolves to RFC1918
+    and egress consent would otherwise fail as blocked by security policy. Exact
+    hostnames only: no CIDRs, no wildcards, and this does not inherit
+    ssrf_allowed_hosts, so a proxy-target bypass can never relax a token POST.
+    HTTPS stays required and metadata/link-local addresses stay denied. Entries
+    receive client secrets, refresh tokens and user assertions, so keep it tight.
+  EOT
+  type        = string
+  default     = ""
+}
+
 variable "egress_registry_internal_url" {
   description = "URL the auth-server uses to reach the registry internal vend endpoint."
   type        = string
