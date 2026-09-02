@@ -45,6 +45,7 @@ def client(monkeypatch):
         *,
         server=None,
         consent_url="https://github.com/login/oauth/authorize?x=1",
+        consent_error=None,
         enabled=True,
         registry_url=REGISTRY_URL,
     ):
@@ -69,6 +70,8 @@ def client(monkeypatch):
         class _Svc:
             def build_consent_url(self, **kwargs):
                 _Svc.last_session_id = kwargs.get("session_id")
+                if consent_error is not None:
+                    raise consent_error
                 return consent_url
 
         monkeypatch.setattr(facade, "get_egress_auth_service", lambda: _Svc())
@@ -191,6 +194,17 @@ class TestConnectRoute:
         c = client(server=_server(), enabled=False)
         r = c.get("/oauth2/egress/connect", params={"server": "/github"})
         assert r.status_code == 404
+
+    def test_connect_unregistered_dcr_client_400(self, client):
+        # A requires_dcr provider whose client_id has not been registered yet makes
+        # build_consent_url raise EgressAuthError -> clean 400, not a KeyError/500.
+        c = client(
+            server=_server(),
+            consent_error=facade.EgressAuthError("egress client is not registered yet"),
+        )
+        r = c.get("/oauth2/egress/connect", params={"server": "/github"})
+        assert r.status_code == 400
+        assert r.json()["error"] == "invalid_request"
 
     def test_connect_accepts_resource_param_form(self, client):
         # A client may pass the resource identifier instead of ?server.
