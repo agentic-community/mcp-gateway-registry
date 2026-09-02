@@ -513,6 +513,12 @@ egressAuth:
   tokenRefreshSkewSeconds: "300"
   refreshWorkerIntervalSeconds: "300"
   stateTtlSeconds: "600"
+  # Egress httpx client connection pooling (shared by url_guard). Keep
+  # httpPoolKeepaliveExpirySeconds below the shortest upstream/LB idle timeout.
+  httpPoolMaxConnections: "100"
+  httpPoolMaxKeepalive: "20"
+  httpPoolKeepaliveExpirySeconds: "30"
+  httpPoolConnectRetries: "1"
   # obo_exchange target_audience allowlist (whitespace-separated). Optional.
   # When set, an obo server may only use a listed audience (authoritative positive
   # control against a confused-deputy that points obo at a shared first-party API).

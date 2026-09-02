@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Annotated
 from urllib.parse import urlparse
 
-from pydantic import Field, field_validator
+from pydantic import Field, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from registry.common.secret_key import validate_secret_key
@@ -1558,6 +1558,55 @@ class Settings(BaseSettings):
         default=600,
         description="Lifetime of the signed+encrypted OAuth consent state.",
     )
+    egress_http_pool_max_connections: int = Field(
+        default=100,
+        ge=1,
+        le=10000,
+        description=(
+            "Max total connections per pooled egress httpx client (shared across "
+            "OBO/3LO/vend/OAuth-callback/MCP-proxy-stream/health). Bounds FD and "
+            "ephemeral-port use under burst."
+        ),
+    )
+    egress_http_pool_max_keepalive: int = Field(
+        default=20,
+        ge=0,
+        le=10000,
+        description=(
+            "Max idle keep-alive connections per pooled egress client. Clamped to "
+            "egress_http_pool_max_connections at startup."
+        ),
+    )
+    egress_http_pool_keepalive_expiry_seconds: float = Field(
+        default=30.0,
+        ge=0,
+        le=600,
+        description=(
+            "Idle keep-alive expiry (seconds) for pooled egress clients. Set below "
+            "the shortest upstream/LB idle timeout to minimize keep-alive resets."
+        ),
+    )
+    egress_http_pool_connect_retries: int = Field(
+        default=1,
+        ge=0,
+        le=5,
+        description=(
+            "httpx transport connect-establishment retries for pooled egress "
+            "clients (covers connect failures; an app-level single retry covers a "
+            "reset on keep-alive reuse)."
+        ),
+    )
+
+    @field_validator("egress_http_pool_max_keepalive")
+    @classmethod
+    def _clamp_egress_pool_keepalive(cls, v: int, info: ValidationInfo) -> int:
+        # max_keepalive must not exceed max_connections; the field is declared
+        # after max_connections, so info.data carries the validated value.
+        max_conn = info.data.get("egress_http_pool_max_connections")
+        if isinstance(max_conn, int) and v > max_conn:
+            return max_conn
+        return v
+
     egress_consent_use_elicitation: bool = Field(
         default=False,
         description=(

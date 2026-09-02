@@ -1368,6 +1368,12 @@ aws_registry_federation_enabled = true
 # egress_oauth_callback_base_url     = "https://mcpgateway.example.com"
 # egress_token_refresh_skew_seconds  = 300
 # egress_state_ttl_seconds           = 600
+# Egress httpx client connection pooling (shared by url_guard; registry + auth-server).
+# Keep the keepalive expiry below the shortest upstream/LB idle timeout.
+# egress_http_pool_max_connections          = 100
+# egress_http_pool_max_keepalive            = 20
+# egress_http_pool_keepalive_expiry_seconds = 30
+# egress_http_pool_connect_retries          = 1
 # obo_exchange target_audience allowlist (whitespace-separated). When set, an obo
 # server may only use a listed audience; when empty a shape rule applies (api://
 # App ID URI / bare client-id only, no https host URLs or GUIDs), so shared

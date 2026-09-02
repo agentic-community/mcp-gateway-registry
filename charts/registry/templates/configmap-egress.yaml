@@ -46,6 +46,12 @@ data:
   EGRESS_TOKEN_REFRESH_SKEW_SECONDS: {{ .Values.egressAuth.tokenRefreshSkewSeconds | default "300" | quote }}
   EGRESS_REFRESH_WORKER_INTERVAL_SECONDS: {{ .Values.egressAuth.refreshWorkerIntervalSeconds | default "300" | quote }}
   EGRESS_STATE_TTL_SECONDS: {{ .Values.egressAuth.stateTtlSeconds | default "600" | quote }}
+  # Egress httpx client connection pooling (shared by url_guard). Keep the
+  # keepalive expiry below the shortest upstream/LB idle timeout.
+  EGRESS_HTTP_POOL_MAX_CONNECTIONS: {{ .Values.egressAuth.httpPoolMaxConnections | default "100" | quote }}
+  EGRESS_HTTP_POOL_MAX_KEEPALIVE: {{ .Values.egressAuth.httpPoolMaxKeepalive | default "20" | quote }}
+  EGRESS_HTTP_POOL_KEEPALIVE_EXPIRY_SECONDS: {{ .Values.egressAuth.httpPoolKeepaliveExpirySeconds | default "30" | quote }}
+  EGRESS_HTTP_POOL_CONNECT_RETRIES: {{ .Values.egressAuth.httpPoolConnectRetries | default "1" | quote }}
   {{- if .Values.egressAuth.oboAllowedAudiences }}
   # obo_exchange target_audience allowlist (whitespace-separated). When set, the
   # authoritative positive control: an obo server may only use a listed audience.

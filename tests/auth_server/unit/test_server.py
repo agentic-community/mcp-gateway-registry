@@ -4084,7 +4084,24 @@ def _capture_upstream_headers():
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=False)
 
-    return patch("auth_server.server.httpx.AsyncClient", return_value=mock_client), captured
+    # The egress (token-injected) stream uses the pooled shared_guarded_async_client;
+    # the non-egress stream uses server.httpx.AsyncClient. Patch BOTH to the same
+    # mock so either path records the forwarded headers.
+    from contextlib import contextmanager
+
+    @contextmanager
+    def _patch_both():
+        with (
+            patch("auth_server.server.httpx.AsyncClient", return_value=mock_client),
+            patch(
+                "registry.utils.url_guard.shared_guarded_async_client",
+                return_value=mock_client,
+            ),
+        ):
+            yield
+
+    captured["client"] = mock_client
+    return _patch_both(), captured
 
 
 class _FakeEntraProvider:
@@ -4153,6 +4170,9 @@ class TestMcpProxyOboExchange:
         assert "x-authorization" not in sent
         assert "cookie" not in sent
         assert "x-internal-token" not in sent
+        # The pooled (shared) egress client must NOT be closed per request; only
+        # the per-call non-egress client is. This is the egress path (guarded pool).
+        captured["client"].aclose.assert_not_called()
 
     def test_obo_no_bearer_jwt_is_terminal_no_consent(self, monkeypatch):
         """Session-cookie / M2M caller (no bearer ingress JWT) -> terminal error,
@@ -4313,7 +4333,6 @@ class TestMcpProxyOboExchange:
         global httpx.AsyncClient, so a SINGLE unified mock client serves both and
         httpx is patched exactly once (two patches would collide on the same name).
         """
-        from contextlib import asynccontextmanager
 
         import auth_server.server as server_module
 
@@ -4339,26 +4358,23 @@ class TestMcpProxyOboExchange:
             captured["headers"] = kwargs.get("headers", {})
             return upstream_cm
 
-        @asynccontextmanager
-        async def _unified_client(*a, **k):
+        def _unified_client(*a, **k):
             c = MagicMock()
-            c.post = idp_post  # engine's IdP token call
-            c.stream = MagicMock(side_effect=_stream)  # upstream proxy call
-            yield c
+            c.post = idp_post  # engine's IdP token call (driven via post_with_reconnect)
+            c.stream = MagicMock(side_effect=_stream)  # upstream proxy stream
+            return c
 
         ingress_jwt = _obo_ingress_jwt("test-user")
 
-        # The engine's IdP token POST now goes through the SSRF-guarded client
-        # (registry.utils.url_guard.guarded_async_client), imported lazily inside
-        # egress_obo.obo_exchange, so patch it at its source module. The upstream
-        # proxy hop still uses server_module.httpx.AsyncClient. Both are pointed at
-        # the same unified mock client so a single fake serves the two calls.
+        # Both the engine's IdP token POST (egress_obo) and the upstream proxy
+        # stream now flow through the pooled ``shared_guarded_async_client`` in
+        # registry.utils.url_guard (imported lazily inside both call sites). One
+        # unified fake client serves the .post and .stream calls.
         with (
             patch.object(server_module.settings, "egress_auth_enabled", True),
             patch.object(server_module, "_vend_egress_token", self._obo_directive_vend),
             patch.object(server_module, "get_auth_provider", lambda *a, **k: _FakeEntraProvider()),
-            patch.object(server_module.httpx, "AsyncClient", _unified_client),
-            patch("registry.utils.url_guard.guarded_async_client", _unified_client),
+            patch("registry.utils.url_guard.shared_guarded_async_client", _unified_client),
             patch.object(server_module, "_read_mcp_filter_enabled", return_value=False),
             _patch_scope_repo_allow_all(),
         ):
@@ -5880,9 +5896,9 @@ class TestEntraLogoutQueryStringGuard:
 
 
 def _patch_vend_httpx(*, status_code=None, json_body=None, raise_exc=None):
-    """Patch auth_server.server.httpx.AsyncClient for the vend POST path
-    (``async with httpx.AsyncClient(...) as c: await c.post(...)``)."""
-    mock_client = AsyncMock()
+    """Patch the pooled shared_plain_async_client for the vend POST path
+    (``client = shared_plain_async_client(); await post_with_reconnect(client, ...)``)."""
+    mock_client = MagicMock()
     if raise_exc is not None:
         mock_client.post = AsyncMock(side_effect=raise_exc)
     else:
@@ -5890,9 +5906,7 @@ def _patch_vend_httpx(*, status_code=None, json_body=None, raise_exc=None):
         resp.status_code = status_code
         resp.json = MagicMock(return_value=json_body)
         mock_client.post = AsyncMock(return_value=resp)
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
-    return patch("auth_server.server.httpx.AsyncClient", return_value=mock_client)
+    return patch("registry.utils.url_guard.shared_plain_async_client", return_value=mock_client)
 
 
 class TestVendEgressTokenTransientClassification:
@@ -6282,3 +6296,42 @@ class TestToolsListFilterDiagnostics:
             kept = asyncio.run(filter_tools_list_response("office-docs", ["grp"], [{"name": "t1"}]))
 
         assert [t["name"] for t in kept] == ["t1"]
+
+
+async def test_callback_uses_pooled_plain_client_not_closed(monkeypatch):
+    """The login callback token/userinfo calls use the pooled PLAIN client:
+    guarding them would reject an in-cluster http:// Keycloak token endpoint.
+    The shared client MUST NOT be closed per request (a per-call ``aclose``
+    would break every subsequent login)."""
+    import auth_server.server as server_module
+
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json = MagicMock(return_value={"access_token": "tok"})
+    mock_client = MagicMock()
+    mock_client.post = AsyncMock(return_value=mock_resp)
+    mock_client.get = AsyncMock(return_value=mock_resp)
+    mock_client.aclose = AsyncMock()
+    monkeypatch.setattr("registry.utils.url_guard.shared_plain_async_client", lambda: mock_client)
+
+    provider_config = {
+        "grant_type": "authorization_code",
+        "client_id": "cid",
+        "client_secret": "secret",
+        "token_url": "http://keycloak:8080/realms/x/protocol/openid-connect/token",
+        "user_info_url": "http://keycloak:8080/realms/x/protocol/openid-connect/userinfo",
+    }
+
+    token = await server_module.exchange_code_for_token(
+        "keycloak", "code123", provider_config, auth_server_url="http://localhost:8888"
+    )
+    assert token == {"access_token": "tok"}
+    mock_client.post.assert_awaited_once()
+    assert mock_client.post.await_args.args[0] == provider_config["token_url"]
+
+    info = await server_module.get_user_info("tok", provider_config)
+    assert info == {"access_token": "tok"}
+    mock_client.get.assert_awaited_once()
+
+    # Pooled client is process-lifetime; never closed by the callback handlers.
+    mock_client.aclose.assert_not_called()

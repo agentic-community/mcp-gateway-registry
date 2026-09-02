@@ -944,6 +944,12 @@ async def lifespan(app: FastAPI):
 
         # Shutdown services gracefully
         await health_service.shutdown()
+
+        # Close pooled egress HTTP clients AFTER the health loop is drained, so no
+        # health/telemetry/peer/update egress call runs on an already-closed client.
+        from registry.utils.url_guard import aclose_shared_clients
+
+        await aclose_shared_clients()
         logger.info("Shutdown completed successfully!")
     except Exception as e:
         logger.error(f"❌ Error during shutdown: {e}", exc_info=True)

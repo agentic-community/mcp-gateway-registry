@@ -212,14 +212,22 @@ async def obo_exchange(
     # private/metadata IP (including a post-config DNS rebind) at connect time.
     # Resolve from the canonical module at request time so policy instrumentation
     # and tests cannot be bypassed by a stale imported client reference.
-    from registry.utils.url_guard import guarded_async_client
+    from auth_server.observability.meters import record_egress_conn_reset
+    from registry.utils.url_guard import post_with_reconnect, shared_guarded_async_client
 
     try:
-        async with guarded_async_client(
-            profile=CREDENTIALED_OAUTH_PROFILE,
+        # Pooled, process-lifetime SSRF-guarded client (keep-alive reuse across
+        # token exchanges). Timeout is per-request; a keep-alive that was closed
+        # while idle is transparently re-POSTed once (a token exchange is safe to
+        # re-POST; a residual failure fails closed below).
+        client = shared_guarded_async_client(profile=CREDENTIALED_OAUTH_PROFILE)
+        resp = await post_with_reconnect(
+            client,
+            token_url,
+            data=body,
             timeout=_TOKEN_EXCHANGE_TIMEOUT_SECONDS,
-        ) as client:
-            resp = await client.post(token_url, data=body)
+            on_reset=lambda: record_egress_conn_reset("obo"),
+        )
     except UrlValidationError as exc:
         # Guard rejected the target WITHOUT sending the credential/assertion.
         logger.error("obo_exchange: token endpoint blocked by security policy")

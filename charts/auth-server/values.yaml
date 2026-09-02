@@ -229,6 +229,13 @@ egressAuth:
   # CIDRs. MUST match registry.egressAuth.oauthTrustedIdpHosts. Entries receive
   # client secrets / user assertions, so keep the list tight.
   oauthTrustedIdpHosts: ""
+  # Egress httpx client connection pooling (shared by url_guard). Keep
+  # httpPoolKeepaliveExpirySeconds below the shortest upstream/LB idle timeout.
+  # MUST match registry.egressAuth.httpPool* values.
+  httpPoolMaxConnections: "100"
+  httpPoolMaxKeepalive: "20"
+  httpPoolKeepaliveExpirySeconds: "30"
+  httpPoolConnectRetries: "1"
   # nginx marker secret. REQUIRED for standalone deployment (chart render fails
   # if empty) -- it guards all mcp-proxy token minting and the app requires it
   # at startup. Set a strong random value, identical to the registry's. In the

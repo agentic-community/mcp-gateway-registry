@@ -41,6 +41,13 @@ data:
   EGRESS_AUTH_ENABLED: {{ .Values.egressAuth.enabled | toString | quote }}
   EGRESS_REGISTRY_INTERNAL_URL: {{ .Values.egressAuth.registryInternalUrl | default "http://registry:8091" | quote }}
   EGRESS_OAUTH_CALLBACK_BASE_URL: {{ $callbackBaseUrl | quote }}
+  # Egress httpx client connection pooling (shared by url_guard). Keep the
+  # keepalive expiry below the shortest upstream/LB idle timeout. MUST match the
+  # registry chart's registry.egressAuth.httpPool* values.
+  EGRESS_HTTP_POOL_MAX_CONNECTIONS: {{ .Values.egressAuth.httpPoolMaxConnections | default "100" | quote }}
+  EGRESS_HTTP_POOL_MAX_KEEPALIVE: {{ .Values.egressAuth.httpPoolMaxKeepalive | default "20" | quote }}
+  EGRESS_HTTP_POOL_KEEPALIVE_EXPIRY_SECONDS: {{ .Values.egressAuth.httpPoolKeepaliveExpirySeconds | default "30" | quote }}
+  EGRESS_HTTP_POOL_CONNECT_RETRIES: {{ .Values.egressAuth.httpPoolConnectRetries | default "1" | quote }}
   {{- if .Values.egressAuth.oauthTrustedIdpHosts }}
   # Hosts whose OAuth token endpoints may resolve to private addresses, for the
   # OBO (same-IdP) token exchange against a self-hosted IdP (Keycloak, Entra via

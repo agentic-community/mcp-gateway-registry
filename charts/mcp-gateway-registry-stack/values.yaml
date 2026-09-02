@@ -465,6 +465,17 @@ registry:
     ideOauthCallbackPort: 0
     # Demo server configuration
     disableAiRegistryToolsServer: false # Set to true to disable auto-registration of the built-in airegistry-tools server
+  # Egress HTTP connection pooling (operational tuning). Surfaced here because these
+  # are the egress knobs an operator tunes on a LIVE deployment -- keep
+  # httpPoolKeepaliveExpirySeconds below the shortest upstream/LB idle timeout. The
+  # rest of the egress credential-vault config (oauthTrustedIdpHosts, secretsManager,
+  # callback URLs) is set-once feature config and stays subchart-defaulted. These MUST
+  # match auth-server.egressAuth below.
+  egressAuth:
+    httpPoolMaxConnections: "100" # Max total egress connections in the pool
+    httpPoolMaxKeepalive: "20" # Max idle keep-alive connections retained
+    httpPoolKeepaliveExpirySeconds: "30" # Idle keep-alive lifetime (s); below LB idle timeout
+    httpPoolConnectRetries: "1" # Transport-level connect retries
   # AWS Agent Registry Federation
   awsRegistry:
     federationEnabled: false # Enable AWS Agent Registry federation (overrides MongoDB config on startup)
@@ -589,6 +600,14 @@ auth-server:
     gatewayGenericTlsVerify: "true"
     gatewayProxyPinRefreshSeconds: 300
     gatewayGenericMaxConcurrency: 32
+  # Egress HTTP connection pooling (operational tuning). MUST match
+  # registry.egressAuth above. See that block for guidance; the rest of egressAuth
+  # (oauthTrustedIdpHosts, secretsManager, callback URLs) stays subchart-defaulted.
+  egressAuth:
+    httpPoolMaxConnections: "100" # Max total egress connections in the pool
+    httpPoolMaxKeepalive: "20" # Max idle keep-alive connections retained
+    httpPoolKeepaliveExpirySeconds: "30" # Idle keep-alive lifetime (s); below LB idle timeout
+    httpPoolConnectRetries: "1" # Transport-level connect retries
   metrics:
     # Standard OTel SDK var. Setting this activates the OTLP push exporter.
     otelExporterOtlpEndpoint: "" # OTLP endpoint URL (e.g., http://otel-collector:4317)
