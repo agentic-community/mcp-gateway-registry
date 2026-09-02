@@ -10,6 +10,7 @@ import json
 from datetime import UTC, datetime
 from urllib.parse import parse_qs, urlparse
 
+import httpx
 import pytest
 
 from registry.egress_auth import oauth_engine
@@ -410,6 +411,389 @@ class TestQuirkParsers:
         assert data["client_secret"] == "sec"
         assert "Authorization" not in headers
         assert headers["Accept"] == "application/json"
+
+
+@pytest.mark.unit
+class TestDynamicClientRegistration:
+    """RFC 7591 DCR: discovery (RFC 9728 -> RFC 8414) + public/confidential register."""
+
+    def _atlassian_cfg(self):
+        return PROVIDER_REGISTRY["atlassian"]
+
+    async def test_discovery_walks_prm_then_as_metadata(self, monkeypatch):
+        seen: list[str] = []
+
+        async def fake_get_json(url):
+            seen.append(url)
+            if "protected-resource" in url:
+                return {"authorization_servers": ["https://auth.atlassian.com/TENANT"]}
+            return {"registration_endpoint": "https://auth.atlassian.com/TENANT/dcr/register"}
+
+        monkeypatch.setattr(oauth_engine, "_get_json", fake_get_json)
+        url = await oauth_engine._discover_registration_url(self._atlassian_cfg())
+        assert url == "https://auth.atlassian.com/TENANT/dcr/register"
+        assert seen[0].endswith("/oauth-protected-resource/v1/mcp/authv2")
+        assert seen[1] == "https://auth.atlassian.com/TENANT/.well-known/oauth-authorization-server"
+
+    async def test_discovery_prefers_pinned_registration_url(self, monkeypatch):
+        async def boom(url):  # must not be called when registration_url is pinned
+            raise AssertionError("discovery should be skipped")
+
+        monkeypatch.setattr(oauth_engine, "_get_json", boom)
+        cfg = OAuthProviderConfig(
+            name="p",
+            display_name="P",
+            authorize_url="https://i/a",
+            token_url="https://i/t",
+            requires_dcr=True,
+            registration_url="https://i/register",
+        )
+        assert await oauth_engine._discover_registration_url(cfg) == "https://i/register"
+
+    async def test_discovery_no_source_raises(self):
+        cfg = OAuthProviderConfig(
+            name="p",
+            display_name="P",
+            authorize_url="https://i/a",
+            token_url="https://i/t",
+            requires_dcr=True,
+        )
+        with pytest.raises(oauth_engine.OAuthEngineError, match="registration_url"):
+            await oauth_engine._discover_registration_url(cfg)
+
+    async def test_register_public_client_no_secret(self, monkeypatch):
+        captured: dict = {}
+
+        async def fake_disc(cfg, prm=None):
+            return "https://auth.atlassian.com/TENANT/dcr/register"
+
+        async def fake_post(reg_url, body):
+            captured["reg_url"] = reg_url
+            captured["body"] = body
+            return {"client_id": "DCRID", "client_secret_expires_at": 0}
+
+        monkeypatch.setattr(oauth_engine, "_discover_registration_url", fake_disc)
+        monkeypatch.setattr(oauth_engine, "_post_dcr", fake_post)
+        cid, secret = await oauth_engine.register_dcr_client(
+            self._atlassian_cfg(),
+            redirect_uri="https://gw/oauth2/egress/callback",
+            scopes=["read:jira-work", "offline_access"],
+        )
+        assert cid == "DCRID"
+        assert secret is None  # public client
+        assert captured["body"]["token_endpoint_auth_method"] == "none"
+        assert captured["body"]["redirect_uris"] == ["https://gw/oauth2/egress/callback"]
+        assert captured["body"]["scope"] == "read:jira-work offline_access"
+        assert "authorization_code" in captured["body"]["grant_types"]
+
+    async def test_register_confidential_client_returns_secret(self, monkeypatch):
+        async def fake_disc(cfg, prm=None):
+            return "https://idp/register"
+
+        async def fake_post(reg_url, body):
+            assert body["token_endpoint_auth_method"] == "client_secret_post"
+            return {"client_id": "CID", "client_secret": "SEC"}
+
+        cfg = OAuthProviderConfig(
+            name="p",
+            display_name="P",
+            authorize_url="https://i/a",
+            token_url="https://i/t",
+            requires_dcr=True,
+            registration_url="https://idp/register",
+        )
+        monkeypatch.setattr(oauth_engine, "_discover_registration_url", fake_disc)
+        monkeypatch.setattr(oauth_engine, "_post_dcr", fake_post)
+        cid, secret = await oauth_engine.register_dcr_client(cfg, "https://gw/cb", [])
+        assert (cid, secret) == ("CID", "SEC")
+
+    async def test_register_missing_client_id_raises(self, monkeypatch):
+        async def fake_disc(cfg, prm=None):
+            return "https://idp/register"
+
+        async def fake_post(reg_url, body):
+            return {"client_secret": "SEC"}  # no client_id
+
+        monkeypatch.setattr(oauth_engine, "_discover_registration_url", fake_disc)
+        monkeypatch.setattr(oauth_engine, "_post_dcr", fake_post)
+        with pytest.raises(oauth_engine.OAuthEngineError, match="missing client_id"):
+            await oauth_engine.register_dcr_client(self._atlassian_cfg(), "https://gw/cb", [])
+
+    async def test_discovery_no_authorization_servers_raises(self, monkeypatch):
+        async def fake_get_json(url):
+            return {"authorization_servers": []}
+
+        monkeypatch.setattr(oauth_engine, "_get_json", fake_get_json)
+        with pytest.raises(oauth_engine.OAuthEngineError, match="no authorization_servers"):
+            await oauth_engine._discover_registration_url(self._atlassian_cfg())
+
+    async def test_discovery_no_registration_endpoint_raises(self, monkeypatch):
+        async def fake_get_json(url):
+            if "protected-resource" in url:
+                return {"authorization_servers": ["https://auth.atlassian.com/T"]}
+            return {}  # AS metadata without registration_endpoint
+
+        monkeypatch.setattr(oauth_engine, "_get_json", fake_get_json)
+        with pytest.raises(oauth_engine.OAuthEngineError, match="no registration_endpoint"):
+            await oauth_engine._discover_registration_url(self._atlassian_cfg())
+
+    async def test_register_end_to_end_through_guarded_client(self, monkeypatch):
+        # Exercise the real _discover_registration_url + _post_dcr bodies (only the
+        # guarded transport is faked), so discovery + registration are covered
+        # end-to-end rather than monkeypatched away.
+        prm = {"authorization_servers": ["https://auth.atlassian.com/T"]}
+        as_meta = {"registration_endpoint": "https://auth.atlassian.com/T/dcr/register"}
+        dcr = {"client_id": "DCRID"}
+        rec: dict = {}
+        monkeypatch.setattr(
+            oauth_engine,
+            "guarded_async_client",
+            _fake_guarded_sequence([_FakeResp(prm), _FakeResp(as_meta), _FakeResp(dcr)], rec),
+        )
+        cid, secret = await oauth_engine.register_dcr_client(
+            self._atlassian_cfg(), "https://gw/cb", ["read:jira-work"]
+        )
+        assert (cid, secret) == ("DCRID", None)
+        assert rec["post_url"] == "https://auth.atlassian.com/T/dcr/register"
+        assert rec["post_json"]["token_endpoint_auth_method"] == "none"
+
+
+# --------------------------------------------------------------------------- #
+# Fakes for the guarded transport (covers the real _get_json / _post_dcr bodies)
+# --------------------------------------------------------------------------- #
+
+
+class _FakeResp:
+    def __init__(self, payload, status_code=200, non_json=False):
+        self._payload = payload
+        self.status_code = status_code
+        self._non_json = non_json
+
+    def json(self):
+        if self._non_json:
+            raise ValueError("not json")
+        return self._payload
+
+
+def _fake_guarded_sequence(responses, rec=None):
+    """A guarded_async_client stand-in that hands back queued responses in order."""
+    it = iter(responses)
+
+    class _Client:
+        async def get(self, url, headers=None):
+            if rec is not None:
+                rec["get_url"] = url
+            return next(it)
+
+        async def post(self, url, json=None, headers=None):
+            if rec is not None:
+                rec["post_url"] = url
+                rec["post_json"] = json
+            return next(it)
+
+    class _CM:
+        async def __aenter__(self):
+            return _Client()
+
+        async def __aexit__(self, *a):
+            return False
+
+    def _factory(*a, **k):
+        return _CM()
+
+    return _factory
+
+
+def _fake_guarded_raising(exc):
+    """A guarded_async_client stand-in whose get/post raise ``exc`` (transport error)."""
+
+    class _Client:
+        async def get(self, url, headers=None):
+            raise exc
+
+        async def post(self, url, json=None, headers=None):
+            raise exc
+
+    class _CM:
+        async def __aenter__(self):
+            return _Client()
+
+        async def __aexit__(self, *a):
+            return False
+
+    def _factory(*a, **k):
+        return _CM()
+
+    return _factory
+
+
+@pytest.mark.unit
+class TestDcrTransport:
+    """The real _get_json / _post_dcr bodies: happy path, non-JSON, error, SSRF guard."""
+
+    async def test_get_json_happy_path(self, monkeypatch):
+        monkeypatch.setattr(
+            oauth_engine, "guarded_async_client", _fake_guarded_sequence([_FakeResp({"a": 1})])
+        )
+        assert await oauth_engine._get_json("https://as/meta") == {"a": 1}
+
+    async def test_get_json_non_json_raises(self, monkeypatch):
+        monkeypatch.setattr(
+            oauth_engine,
+            "guarded_async_client",
+            _fake_guarded_sequence([_FakeResp(None, non_json=True)]),
+        )
+        with pytest.raises(oauth_engine.OAuthEngineError, match="non-JSON"):
+            await oauth_engine._get_json("https://as/meta")
+
+    async def test_get_json_ssrf_guard_fails_closed(self):
+        # A metadata-IP discovery URL must be blocked by the real guarded client.
+        with pytest.raises(oauth_engine.OAuthEngineError, match="SSRF guard"):
+            await oauth_engine._get_json("http://169.254.169.254/latest/meta-data/")
+
+    async def test_post_dcr_happy_path(self, monkeypatch):
+        rec: dict = {}
+        monkeypatch.setattr(
+            oauth_engine,
+            "guarded_async_client",
+            _fake_guarded_sequence([_FakeResp({"client_id": "X"})], rec),
+        )
+        out = await oauth_engine._post_dcr("https://as/register", {"client_name": "n"})
+        assert out == {"client_id": "X"}
+        assert rec["post_json"] == {"client_name": "n"}
+
+    async def test_post_dcr_error_payload_raises(self, monkeypatch):
+        monkeypatch.setattr(
+            oauth_engine,
+            "guarded_async_client",
+            _fake_guarded_sequence([_FakeResp({"error": "invalid_redirect_uri"}, status_code=400)]),
+        )
+        with pytest.raises(oauth_engine.OAuthEngineError, match="invalid_redirect_uri"):
+            await oauth_engine._post_dcr("https://as/register", {})
+
+    async def test_post_dcr_non_json_raises(self, monkeypatch):
+        monkeypatch.setattr(
+            oauth_engine,
+            "guarded_async_client",
+            _fake_guarded_sequence([_FakeResp(None, non_json=True)]),
+        )
+        with pytest.raises(oauth_engine.OAuthEngineError, match="non-JSON"):
+            await oauth_engine._post_dcr("https://as/register", {})
+
+    async def test_post_dcr_ssrf_guard_fails_closed(self):
+        with pytest.raises(oauth_engine.OAuthEngineError, match="SSRF guard"):
+            await oauth_engine._post_dcr("http://169.254.169.254/register", {})
+
+    async def test_get_json_http_error_wrapped(self, monkeypatch):
+        monkeypatch.setattr(
+            oauth_engine, "guarded_async_client", _fake_guarded_raising(httpx.ConnectError("boom"))
+        )
+        with pytest.raises(oauth_engine.OAuthEngineError, match="unreachable"):
+            await oauth_engine._get_json("https://as/meta")
+
+    async def test_post_dcr_http_error_wrapped(self, monkeypatch):
+        monkeypatch.setattr(
+            oauth_engine, "guarded_async_client", _fake_guarded_raising(httpx.ConnectError("boom"))
+        )
+        with pytest.raises(oauth_engine.OAuthEngineError, match="unreachable"):
+            await oauth_engine._post_dcr("https://as/register", {})
+
+
+@pytest.mark.unit
+class TestScopeValidation:
+    """validate_scopes_against_prm and fetch_protected_resource_metadata."""
+
+    _SUPPORTED = ["read:me", "read:account", "offline_access", "read:jira-work"]
+
+    def test_all_supported_returns_empty(self):
+        prm = {"scopes_supported": self._SUPPORTED}
+        assert oauth_engine.validate_scopes_against_prm(["read:me", "read:account"], prm) == []
+
+    def test_unsupported_scope_returned(self):
+        prm = {"scopes_supported": self._SUPPORTED}
+        bad = oauth_engine.validate_scopes_against_prm(
+            ["read:me", "read:jira-user", "read:confluence-content.all"], prm
+        )
+        assert set(bad) == {"read:jira-user", "read:confluence-content.all"}
+
+    def test_empty_scopes_always_valid(self):
+        prm = {"scopes_supported": self._SUPPORTED}
+        assert oauth_engine.validate_scopes_against_prm([], prm) == []
+
+    def test_no_scopes_supported_skips_validation(self):
+        # A PRM without scopes_supported must not reject anything.
+        assert oauth_engine.validate_scopes_against_prm(["anything"], {}) == []
+        assert (
+            oauth_engine.validate_scopes_against_prm(["anything"], {"scopes_supported": []}) == []
+        )
+
+    async def test_fetch_prm_returns_document(self, monkeypatch):
+        async def fake_get_json(url):
+            assert (
+                url
+                == "https://mcp.atlassian.com/.well-known/oauth-protected-resource/v1/mcp/authv2"
+            )
+            return {"scopes_supported": self._SUPPORTED}
+
+        monkeypatch.setattr(oauth_engine, "_get_json", fake_get_json)
+        cfg = PROVIDER_REGISTRY["atlassian"]
+        prm = await oauth_engine.fetch_protected_resource_metadata(cfg)
+        assert prm["scopes_supported"] == self._SUPPORTED
+
+    async def test_fetch_prm_no_url_raises(self):
+        from registry.egress_auth.schemas import OAuthProviderConfig
+
+        cfg = OAuthProviderConfig(
+            name="x",
+            display_name="X",
+            authorize_url="https://x/a",
+            token_url="https://x/t",
+        )
+        with pytest.raises(oauth_engine.OAuthEngineError, match="protected_resource_metadata_url"):
+            await oauth_engine.fetch_protected_resource_metadata(cfg)
+
+    async def test_discovery_uses_provided_prm_without_refetch(self, monkeypatch):
+        # When a pre-fetched PRM is passed, _get_json must NOT be called for the
+        # PRM URL -- only for the AS metadata URL.
+        fetched: list[str] = []
+
+        async def fake_get_json(url):
+            fetched.append(url)
+            if "oauth-authorization-server" in url:
+                return {"registration_endpoint": "https://auth.example.com/register"}
+            raise AssertionError(f"unexpected URL fetched: {url}")
+
+        monkeypatch.setattr(oauth_engine, "_get_json", fake_get_json)
+        prm = {
+            "authorization_servers": ["https://auth.example.com/TENANT"],
+            "scopes_supported": ["read:me"],
+        }
+        cfg = PROVIDER_REGISTRY["atlassian"]
+        reg_url = await oauth_engine._discover_registration_url(cfg, prm=prm)
+        assert reg_url == "https://auth.example.com/register"
+        # Only the AS metadata URL was fetched -- the PRM URL was not re-fetched.
+        assert len(fetched) == 1
+        assert "oauth-authorization-server" in fetched[0]
+
+
+@pytest.mark.unit
+class TestAtlassianAuthorizeUrl:
+    def test_authorize_url_has_no_audience_or_resource(self):
+        # authv2: the classic ``audience`` param is dropped and no RFC 8707
+        # ``resource`` is sent (the AS ignores it / rejects it on the token leg).
+        url = oauth_engine.build_authorize_url(
+            PROVIDER_REGISTRY["atlassian"],
+            client_id="DCRID",
+            redirect_uri="https://gw/oauth2/egress/callback",
+            scopes=["read:jira-work", "offline_access"],
+            state="S",
+            pkce_challenge="CHAL",
+        )
+        q = parse_qs(urlparse(url).query)
+        assert "audience" not in q
+        assert "resource" not in q
+        assert q["code_challenge_method"] == ["S256"]
+        assert q["prompt"] == ["consent"]
 
 
 @pytest.mark.unit
