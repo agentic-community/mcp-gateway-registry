@@ -81,6 +81,48 @@ class OAuthProviderConfig(BaseModel):
         default=None,
         description="Name of a registered parser for non-JSON token responses (e.g. 'github_form').",
     )
+    requires_dcr: bool = Field(
+        default=False,
+        description="Provider mandates RFC 7591 Dynamic Client Registration: the "
+        "gateway registers its OWN client at the Authorization Server instead of "
+        "the operator supplying a static client_id/secret. Used by Atlassian's "
+        "Rovo MCP authv2, whose AS (Atlassian Identity, from 2026-05-27) only "
+        "mints MCP-audience tokens to DCR clients -- a static classic-3LO app is "
+        "rejected at the MCP tool layer.",
+    )
+    registration_url: str | None = Field(
+        default=None,
+        description="RFC 7591 client-registration endpoint. When absent and "
+        "requires_dcr is set, it is discovered from protected_resource_metadata_url "
+        "(RFC 9728 -> RFC 8414).",
+    )
+    protected_resource_metadata_url: str | None = Field(
+        default=None,
+        description="RFC 9728 protected-resource-metadata URL used to discover the "
+        "Authorization Server (and its registration endpoint) for a requires_dcr "
+        "provider when registration_url is not pinned.",
+    )
+    dcr_client_name: str = Field(
+        default="MCP Gateway (egress)",
+        description="client_name sent on the RFC 7591 registration request.",
+    )
+    default_scopes: list[str] = Field(
+        default_factory=list,
+        description="Scopes used when the server config carries no explicit scope "
+        "list. Explicit operator scopes always win; these are a fallback only. See "
+        "required_scopes for scopes the provider cannot function without.",
+    )
+    required_scopes: list[str] = Field(
+        default_factory=list,
+        description="Scopes the Authorization Server mandates, unioned into every "
+        "authorize request regardless of what the operator configured. Unlike "
+        "default_scopes (a fallback that an explicit list overrides), these cannot "
+        "be opted out of, because omitting them breaks the flow outright. Needed "
+        "where the requirement is not discoverable from metadata: Atlassian Rovo "
+        "authv2 rejects any authorize request lacking read:account, and does so "
+        "only after the user submits consent, with an opaque invalid_request and "
+        "no indication of the offending scope.",
+    )
     is_builtin: bool = True
 
 

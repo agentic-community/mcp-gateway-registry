@@ -324,6 +324,14 @@ class TestPublicClientFlow:
         assert "client_secret" not in captured
         assert captured["resource"] == egress_oauth_public["custom_resource"]
 
+    def test_build_consent_url_unregistered_dcr_raises(self, svc):
+        # A requires_dcr provider (atlassian) whose client_id has not been
+        # registered yet must fail with a clear, actionable error rather than a
+        # KeyError/500 when someone starts consent before the config-time DCR ran.
+        eo = {"provider": "atlassian", "scopes": ["read:me"]}  # no client_id yet
+        with pytest.raises(service.EgressAuthError, match="not registered yet"):
+            svc.build_consent_url("oauth2", "alice", "aud", "sess", "/atlassian", eo)
+
 
 @pytest.mark.unit
 class TestVendRefreshDisconnect:

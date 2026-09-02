@@ -334,3 +334,157 @@ async def refresh_token(
     data, headers = _build_token_request(cfg, client_id, client_secret, form)
     payload = await _post_token(cfg, data, headers)
     return _to_stored_token(cfg, payload, client_id, fallback_refresh=refresh_token_value)
+
+
+# --------------------------------------------------------------------------- #
+# Dynamic Client Registration (RFC 7591)
+# --------------------------------------------------------------------------- #
+
+
+async def _get_json(url: str) -> dict:
+    """GET a discovery document through the SSRF/rebinding-safe guarded client.
+
+    Uses CREDENTIALED_OAUTH_PROFILE (same as the token endpoint) because the
+    discovery chain for a ``requires_dcr`` provider can be derived from a
+    registrant-influenced protected-resource metadata document; pinning to a
+    validated public IP blocks a DNS rebind to a private/metadata address.
+    """
+    try:
+        async with guarded_async_client(
+            profile=CREDENTIALED_OAUTH_PROFILE, timeout=_HTTP_TIMEOUT
+        ) as client:
+            resp = await client.get(url, headers={"Accept": "application/json"})
+    except UrlValidationError as exc:
+        raise OAuthEngineError(f"discovery blocked by SSRF guard: {exc}") from exc
+    except httpx.HTTPError as exc:
+        raise OAuthEngineError(f"discovery endpoint unreachable: {exc}") from exc
+    try:
+        return resp.json()
+    except ValueError as exc:
+        raise OAuthEngineError(
+            f"discovery endpoint returned non-JSON (status {resp.status_code})"
+        ) from exc
+
+
+async def fetch_protected_resource_metadata(cfg: OAuthProviderConfig) -> dict:
+    """Fetch the RFC 9728 protected-resource metadata document for a ``requires_dcr`` provider.
+
+    Returns the full PRM dict so callers can inspect both ``authorization_servers``
+    (needed for the discovery walk in ``_discover_registration_url``) and
+    ``scopes_supported`` (needed for config-time scope validation) from a
+    **single** network round-trip.  Uses the same SSRF-safe guarded client as all
+    other discovery fetches.
+    """
+    if not cfg.protected_resource_metadata_url:
+        raise OAuthEngineError("protected_resource_metadata_url is not configured")
+    return await _get_json(cfg.protected_resource_metadata_url)
+
+
+def validate_scopes_against_prm(scopes: list[str], prm: dict) -> list[str]:
+    """Return the subset of ``scopes`` not listed in ``prm['scopes_supported']``.
+
+    An empty return value means all requested scopes are valid (or the PRM does
+    not advertise ``scopes_supported``, in which case validation is skipped and
+    the empty list is returned regardless).  The caller decides whether to treat
+    unsupported scopes as an error.
+    """
+    supported = prm.get("scopes_supported") or []
+    if not supported:
+        return []
+    supported_set = set(supported)
+    return [s for s in scopes if s not in supported_set]
+
+
+async def _discover_registration_url(
+    cfg: OAuthProviderConfig,
+    prm: dict | None = None,
+) -> str:
+    """Resolve the RFC 7591 registration endpoint for a ``requires_dcr`` provider.
+
+    Pinned ``registration_url`` wins; otherwise walk RFC 9728 (protected-resource
+    metadata) -> RFC 8414 (authorization-server metadata) -> ``registration_endpoint``.
+    The AS metadata is read at the append form (``{as}/.well-known/oauth-authorization-server``)
+    that Atlassian's authv2 AS serves.
+
+    ``prm`` may be a pre-fetched PRM dict (from ``fetch_protected_resource_metadata``).
+    When provided, the PRM fetch is skipped so the caller can reuse a document
+    already retrieved for another purpose (e.g. scope validation) without a
+    second network round-trip.
+    """
+    if cfg.registration_url:
+        return cfg.registration_url
+    if not cfg.protected_resource_metadata_url:
+        raise OAuthEngineError(
+            "DCR required but neither registration_url nor "
+            "protected_resource_metadata_url is configured"
+        )
+    if prm is None:
+        prm = await _get_json(cfg.protected_resource_metadata_url)
+    servers = prm.get("authorization_servers") or []
+    if not servers:
+        raise OAuthEngineError("protected-resource metadata lists no authorization_servers")
+    as_meta_url = str(servers[0]).rstrip("/") + "/.well-known/oauth-authorization-server"
+    as_meta = await _get_json(as_meta_url)
+    reg = as_meta.get("registration_endpoint")
+    if not reg:
+        raise OAuthEngineError("authorization-server metadata has no registration_endpoint")
+    return reg
+
+
+async def _post_dcr(reg_url: str, body: dict) -> dict:
+    """POST an RFC 7591 registration request through the guarded client."""
+    try:
+        async with guarded_async_client(
+            profile=CREDENTIALED_OAUTH_PROFILE, timeout=_HTTP_TIMEOUT
+        ) as client:
+            resp = await client.post(reg_url, json=body, headers={"Accept": "application/json"})
+    except UrlValidationError as exc:
+        raise OAuthEngineError(f"DCR endpoint blocked by SSRF guard: {exc}") from exc
+    except httpx.HTTPError as exc:
+        raise OAuthEngineError(f"DCR endpoint unreachable: {exc}") from exc
+    try:
+        payload = resp.json()
+    except ValueError as exc:
+        raise OAuthEngineError(
+            f"DCR endpoint returned non-JSON (status {resp.status_code})"
+        ) from exc
+    if resp.status_code >= 400 or payload.get("error"):
+        raise OAuthEngineError(f"DCR failed: {payload.get('error', f'http {resp.status_code}')}")
+    return payload
+
+
+async def register_dcr_client(
+    cfg: OAuthProviderConfig,
+    redirect_uri: str,
+    scopes: list[str],
+    prm: dict | None = None,
+) -> tuple[str, str | None]:
+    """RFC 7591 Dynamic Client Registration. Returns ``(client_id, client_secret|None)``.
+
+    Registers the gateway as an OAuth client at the provider's Authorization
+    Server so a static operator app is not required. When the provider's
+    ``token_endpoint_auth_style`` is ``NONE`` the registration requests
+    ``token_endpoint_auth_method=none`` (public PKCE client); otherwise
+    ``client_secret_post`` (confidential client). ``redirect_uri`` MUST be the
+    gateway callback the consent/exchange legs use, or the AS rejects the later
+    authorize request.
+
+    ``prm`` may be a pre-fetched PRM dict; when provided it is forwarded to
+    ``_discover_registration_url`` so the PRM is not fetched a second time.
+    """
+    is_none_style = cfg.token_endpoint_auth_style == TokenEndpointAuthStyle.NONE
+    reg_url = await _discover_registration_url(cfg, prm=prm)
+    body: dict = {
+        "client_name": cfg.dcr_client_name,
+        "redirect_uris": [redirect_uri],
+        "grant_types": ["authorization_code", "refresh_token"],
+        "response_types": ["code"],
+        "token_endpoint_auth_method": "none" if is_none_style else "client_secret_post",
+    }
+    if scopes:
+        body["scope"] = cfg.scope_separator.join(scopes)
+    payload = await _post_dcr(reg_url, body)
+    client_id = payload.get("client_id")
+    if not client_id:
+        raise OAuthEngineError("DCR response missing client_id")
+    return client_id, (payload.get("client_secret") or None)

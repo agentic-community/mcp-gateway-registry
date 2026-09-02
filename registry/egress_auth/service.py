@@ -265,6 +265,16 @@ class EgressAuthService:
     ) -> str:
         """Build the provider authorize URL with an AEAD-encrypted, single-use state."""
         cfg = resolve_provider(egress_oauth)
+        # A requires_dcr provider has no static client_id: the gateway registers its
+        # own at config time and persists it on the server entry. If that has not
+        # happened yet, fail with a clear, actionable error instead of a KeyError/500.
+        # Kept DCR-specific so a plain misconfigured provider is not told to re-save
+        # for a registration that would never run.
+        if cfg.requires_dcr and not egress_oauth.get("client_id"):
+            raise EgressAuthError(
+                "egress client is not registered yet -- re-save the server's egress "
+                "config to trigger dynamic client registration"
+            )
         verifier = oauth_engine.generate_pkce_verifier() if cfg.use_pkce else None
         challenge = oauth_engine.pkce_challenge_s256(verifier) if verifier else None
         state = OAuthState(
