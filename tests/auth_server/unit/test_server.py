@@ -6296,3 +6296,42 @@ class TestToolsListFilterDiagnostics:
             kept = asyncio.run(filter_tools_list_response("office-docs", ["grp"], [{"name": "t1"}]))
 
         assert [t["name"] for t in kept] == ["t1"]
+
+
+async def test_callback_uses_pooled_plain_client_not_closed(monkeypatch):
+    """The login callback token/userinfo calls use the pooled PLAIN client:
+    guarding them would reject an in-cluster http:// Keycloak token endpoint.
+    The shared client MUST NOT be closed per request (a per-call ``aclose``
+    would break every subsequent login)."""
+    import auth_server.server as server_module
+
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json = MagicMock(return_value={"access_token": "tok"})
+    mock_client = MagicMock()
+    mock_client.post = AsyncMock(return_value=mock_resp)
+    mock_client.get = AsyncMock(return_value=mock_resp)
+    mock_client.aclose = AsyncMock()
+    monkeypatch.setattr("registry.utils.url_guard.shared_plain_async_client", lambda: mock_client)
+
+    provider_config = {
+        "grant_type": "authorization_code",
+        "client_id": "cid",
+        "client_secret": "secret",
+        "token_url": "http://keycloak:8080/realms/x/protocol/openid-connect/token",
+        "user_info_url": "http://keycloak:8080/realms/x/protocol/openid-connect/userinfo",
+    }
+
+    token = await server_module.exchange_code_for_token(
+        "keycloak", "code123", provider_config, auth_server_url="http://localhost:8888"
+    )
+    assert token == {"access_token": "tok"}
+    mock_client.post.assert_awaited_once()
+    assert mock_client.post.await_args.args[0] == provider_config["token_url"]
+
+    info = await server_module.get_user_info("tok", provider_config)
+    assert info == {"access_token": "tok"}
+    mock_client.get.assert_awaited_once()
+
+    # Pooled client is process-lifetime; never closed by the callback handlers.
+    mock_client.aclose.assert_not_called()

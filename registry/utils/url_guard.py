@@ -1244,9 +1244,14 @@ def shared_guarded_async_client(
 
 
 def shared_plain_async_client() -> httpx.AsyncClient:
-    """Return a process-lifetime, connection-pooled PLAIN client for in-cluster,
-    already-trusted hops ONLY (e.g. the registry egress-token vend). NEVER use it
-    for a request/stored-URL-derived target -- use ``shared_guarded_async_client``."""
+    """Return a process-lifetime, connection-pooled PLAIN (un-SSRF-guarded) client
+    for operator-configured, already-trusted targets ONLY: the in-cluster registry
+    egress-token vend and the login IdP token/userinfo endpoints (from
+    ``oauth2_providers.yml``, keyed by ``KEYCLOAK_URL`` etc.). Those are static
+    operator config -- they may be in-cluster and HTTP, so they cannot use the
+    HTTPS-only credentialed-OAuth guard -- and they are never request- or
+    stored-URL-derived. NEVER use this for a request/stored-URL-derived target (a
+    registrant proxy_pass_url, a federation peer): use ``shared_guarded_async_client``."""
     global _shared_plain_client
     if _shared_plain_client is None or _shared_plain_client.is_closed:
         _shared_plain_client = _disable_cookie_persistence(
@@ -1304,7 +1309,7 @@ async def post_with_reconnect(
     (they are context managers); those rely on ``keepalive_expiry`` alone."""
     try:
         return await client.post(url, **kwargs)  # type: ignore[arg-type]
-    except (httpx.RemoteProtocolError, httpx.ConnectError):
+    except httpx.RemoteProtocolError:
         if on_reset is not None:
             on_reset()
         return await client.post(url, **kwargs)  # type: ignore[arg-type]

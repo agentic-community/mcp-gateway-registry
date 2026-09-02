@@ -6220,34 +6220,53 @@ async def exchange_code_for_token(
             os.environ.get("AUTH_SERVER_URL", "http://localhost:8888").rstrip("/") + ROOT_PATH
         )
 
-    async with httpx.AsyncClient() as client:
-        token_data = {
-            "grant_type": provider_config["grant_type"],
-            "client_id": provider_config["client_id"],
-            "client_secret": provider_config["client_secret"],
-            "code": code,
-            "redirect_uri": f"{auth_server_url}/oauth2/callback/{provider}",
-        }
-        if code_verifier:
-            token_data["code_verifier"] = code_verifier
+    # The login token exchange targets the operator-configured IdP from
+    # oauth2_providers.yml. For Keycloak/PingFederate that is the in-cluster
+    # ${KEYCLOAK_URL}/${PINGFEDERATE_BASE_URL} base, which defaults to http:// -- so
+    # this uses the pooled PLAIN client, NOT the HTTPS-only credentialed-OAuth guard
+    # (which would reject an http:// in-cluster token endpoint and break login).
+    # The target is static config, never request-derived; timeout preserved at
+    # httpx's historic 5s default.
+    from registry.utils.url_guard import shared_plain_async_client
 
-        headers = {"Accept": "application/json"}
-        if provider == "github":
-            headers["Accept"] = "application/json"
+    client = shared_plain_async_client()
+    token_data = {
+        "grant_type": provider_config["grant_type"],
+        "client_id": provider_config["client_id"],
+        "client_secret": provider_config["client_secret"],
+        "code": code,
+        "redirect_uri": f"{auth_server_url}/oauth2/callback/{provider}",
+    }
+    if code_verifier:
+        token_data["code_verifier"] = code_verifier
 
-        response = await client.post(provider_config["token_url"], data=token_data, headers=headers)
-        response.raise_for_status()
-        return response.json()
+    headers = {"Accept": "application/json"}
+    if provider == "github":
+        headers["Accept"] = "application/json"
+
+    response = await client.post(
+        provider_config["token_url"],
+        data=token_data,
+        headers=headers,
+        timeout=httpx.Timeout(5.0),
+    )
+    response.raise_for_status()
+    return response.json()
 
 
 async def get_user_info(access_token: str, provider_config: dict) -> dict:
     """Get user information from OAuth2 provider"""
-    async with httpx.AsyncClient() as client:
-        headers = {"Authorization": f"Bearer {access_token}"}
+    # Same operator-configured IdP as exchange_code_for_token (userinfo endpoint), so
+    # the pooled PLAIN client is used here too (5s timeout preserved).
+    from registry.utils.url_guard import shared_plain_async_client
 
-        response = await client.get(provider_config["user_info_url"], headers=headers)
-        response.raise_for_status()
-        return response.json()
+    client = shared_plain_async_client()
+    headers = {"Authorization": f"Bearer {access_token}"}
+    response = await client.get(
+        provider_config["user_info_url"], headers=headers, timeout=httpx.Timeout(5.0)
+    )
+    response.raise_for_status()
+    return response.json()
 
 
 def map_user_info(user_info: dict, provider_config: dict) -> dict:
