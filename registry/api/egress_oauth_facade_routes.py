@@ -36,7 +36,7 @@ from registry.auth.dependencies import nginx_proxied_auth
 from registry.core.config import settings
 from registry.egress_auth import as_facade
 from registry.egress_auth.factory import get_egress_auth_service
-from registry.egress_auth.service import is_per_user_auth_method
+from registry.egress_auth.service import EgressAuthError, is_per_user_auth_method
 from registry.services.server_service import server_service
 
 logger = logging.getLogger(__name__)
@@ -175,14 +175,22 @@ async def egress_connect(
     # Provider consent leg, via the existing web Connected-Accounts path: the
     # callback stores the token + shows the close-tab page. No client-side code
     # exchange -- the client just retries the original tool call.
-    provider_authorize_url = get_egress_auth_service().build_consent_url(
-        auth_method=auth_method,
-        user_id=egress_user_id,
-        client_id_audit=user_context.get("client_id") or "",
-        session_id=user_context.get("session_id") or "",
-        server_path=server_path,
-        egress_oauth=server_info["egress_oauth"],
-    )
+    try:
+        provider_authorize_url = get_egress_auth_service().build_consent_url(
+            auth_method=auth_method,
+            user_id=egress_user_id,
+            client_id_audit=user_context.get("client_id") or "",
+            session_id=user_context.get("session_id") or "",
+            server_path=server_path,
+            egress_oauth=server_info["egress_oauth"],
+        )
+    except EgressAuthError as exc:
+        # e.g. a requires_dcr provider whose client_id has not been registered yet:
+        # a clean 400 ("re-save egress config to register") beats a KeyError/500.
+        return JSONResponse(
+            {"error": "invalid_request", "error_description": str(exc)},
+            status_code=400,
+        )
     logger.info(
         "egress connect: user=%s server=%s -> provider consent",
         egress_user_id,
