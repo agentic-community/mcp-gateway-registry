@@ -35,9 +35,68 @@ PROVIDER_REGISTRY: dict[str, OAuthProviderConfig] = {
     "atlassian": OAuthProviderConfig(
         name="atlassian",
         display_name="Atlassian",
+        # Atlassian Rovo MCP authv2. From 2026-05-27 the Rovo MCP resource is
+        # served by a new AS (Atlassian Identity) that only issues MCP-audience
+        # tokens to RFC 7591 DCR clients; the token's audience binds to the DCR
+        # client_id + the user's site/workspace ARIs, NOT to ``api.atlassian.com``.
+        # A static classic-3LO app authenticates but is rejected at the MCP tool
+        # layer. The gateway DCR-registers its own public client (NONE style) per
+        # server. The registration endpoint is discovered from the Rovo MCP
+        # protected-resource metadata (RFC 9728) because it is tenant-scoped and
+        # Atlassian advises against hardcoding it. No RFC 8707 ``resource`` param:
+        # the authv2 AS ignores it and rejects it on the token leg (``invalid_target``).
+        #
+        # Token leg (confirmed live): the exchange succeeds as a public client --
+        # PKCE only, no client_secret, HTTP 200. Atlassian's DCR endpoint returns
+        # a ``client_secret`` (``client_secret_expires_at: 0``) even when
+        # ``token_endpoint_auth_method`` is ``"none"``, but it is deliberately
+        # NOT persisted -- PKCE is the proof of possession.
+        #
+        # ``read:account`` is MANDATORY (confirmed live by a controlled sweep).
+        # An authorize request without it is rejected -- but only after the user
+        # submits consent, with ``invalid_request`` / "Incorrect request parameters"
+        # and no indication of which scope is at fault. Nothing advertises this:
+        # RFC 9728 has no "required scopes" field, so it is not discoverable from
+        # the protected-resource or AS metadata. Evidence (same client, same
+        # redirect, one variable):
+        #
+        #   scopes without read:account, consent groups untouched  -> FAIL
+        #   scopes without read:account, Search group unticked     -> FAIL
+        #   scopes with    read:account, Search group unticked     -> SUCCESS
+        #   scopes with    read:account, consent groups untouched  -> SUCCESS
+        #
+        # It is therefore in ``required_scopes``, not merely ``default_scopes``: a
+        # default is only a fallback, so an operator-supplied list omitting it would
+        # walk back into the same opaque failure.
+        #
+        # The consent screen's three permission groups (Read / Write / Search) are
+        # a red herring -- ticking them has no effect on the outcome in either
+        # direction, as rows 2 and 4 above show.
+        #
+        # NOTE: classic 3LO scopes such as ``read:jira-user`` and
+        # ``read:confluence-content.all`` are NOT in scopes_supported for authv2 --
+        # requesting them is rejected at the consent screen.
         authorize_url="https://auth.atlassian.com/authorize",
         token_url="https://auth.atlassian.com/oauth/token",  # nosec B106 - public OAuth token endpoint URL, not a credential
-        extra_authorize_params={"audience": "api.atlassian.com", "prompt": "consent"},
+        token_endpoint_auth_style=TokenEndpointAuthStyle.NONE,
+        extra_authorize_params={"prompt": "consent"},
+        requires_dcr=True,
+        protected_resource_metadata_url=(
+            "https://mcp.atlassian.com/.well-known/oauth-protected-resource/v1/mcp/authv2"
+        ),
+        # Verified end to end with exactly this set: token minted PKCE-only, and
+        # real data tools (getVisibleJiraProjects, getJiraIssue, atlassianUserInfo)
+        # all returned 200. Confluence scopes are deliberately NOT defaulted --
+        # add them per-server when Confluence tools are wanted. All values come
+        # from scopes_supported at the protected_resource_metadata_url above.
+        default_scopes=[
+            "read:me",
+            "read:account",
+            "offline_access",
+            "read:jira-work",
+            "write:jira-work",
+        ],
+        required_scopes=["read:account"],
     ),
     "microsoft": OAuthProviderConfig(
         name="microsoft",
