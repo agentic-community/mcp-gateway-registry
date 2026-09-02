@@ -290,6 +290,15 @@ app:
   customTypeCacheTtlSeconds: 60 # TTL (s) for the in-process custom-type descriptor cache
   maxCustomRecordsPerType: 1000 # Soft cap on records per type (0 = unlimited); best-effort, rejects create at cap
   maxCustomTypes: 50 # Cap on number of custom types (0 = unlimited); rejects type create at limit
+  # Gateway generic-proxy feature (registry-consumed). Ships DISABLED. Do NOT
+  # enable gatewayGenericProxyEnabled until the network egress policy (SSRF layer 1)
+  # is deployed and the registration-time validation + CSRF defenses are in place.
+  # The seven auth-server-consumed knobs live in the auth-server chart.
+  gatewayGenericProxyEnabled: false # Master switch for generic-proxy nginx blocks
+  gatewayCanonicalNamespaceEnabled: false # Emit /entity_type/path canonical aliases
+  gatewayProxyAllowPrivateTargets: false # Allow private/loopback proxy targets (metadata always denied)
+  gatewayGenericClientMaxBodySize: "1m" # nginx client_max_body_size for generic blocks
+  gatewayProxyPrefix: "gateway" # URL path prefix for auto-generated client routes (/{prefix}/{type}/{name})
   # Registry-UI internal token verification (the /api/ hop). The auth-server mints
   # the token (using its own INTERNAL_TOKEN_TTL_SECONDS); the registry verifies it
   # and uses the leeway below. Not secrets -- plain env. See docs/unified-parameter-reference.md.
@@ -483,6 +492,19 @@ cognito:
 # auth, no static token). The registry owns the FULL var set.
 egressAuth:
   enabled: false
+  # Dedicated internal nginx listener (port 8091) that serves ONLY the
+  # egress-token vend endpoint. The registry Service exposes it as a
+  # ClusterIP-only port (never referenced by the public Ingress); the
+  # NetworkPolicy below restricts ingress to it to the auth-server pod.
+  internalPort: 8091
+  internalNetworkPolicy:
+    enabled: true
+    # Default: only the auth-server pod in the SAME namespace may reach the vend
+    # listener. Leave fromNamespaceSelector empty for same-namespace; set it to
+    # cross-namespace labels only if auth-server runs in another namespace.
+    fromNamespaceSelector: {}
+    fromPodSelector:
+      app.kubernetes.io/name: auth-server
   # Secret store for per-user tokens: openbao | secrets-manager.
   secretStoreBackend: "openbao"
   # Public base URL for the OAuth callback ({base}/oauth2/egress/callback).
@@ -497,6 +519,24 @@ egressAuth:
   # When empty, a shape rule applies: the target must be an internal app audience
   # (api:// App ID URI or bare client-id/GUID), never an https host URL.
   oboAllowedAudiences: ""
+  # Comma-separated hostnames of operator-controlled OAuth/OIDC identity providers
+  # whose token endpoints may resolve to private addresses. Optional; empty means
+  # the credentialed-OAuth SSRF profile permits no private-resolving token endpoint,
+  # which is the default posture. Set this when the IdP is self-hosted (Keycloak, or
+  # Entra reached over Private Link), where the token endpoint legitimately resolves
+  # to RFC1918 and consent would otherwise fail with a blocked-by-security-policy
+  # error. Exact hostnames only: no CIDRs, no wildcards, and this deliberately does
+  # not inherit ssrfAllowedHosts, so a proxy-target bypass can never relax a token
+  # POST. HTTPS is still required and metadata/link-local addresses stay denied.
+  # Entries receive client secrets, refresh tokens and user assertions.
+  oauthTrustedIdpHosts: ""
+  # Application-layer AES-256-GCM root key for the per-user egress credential
+  # vault (issue #1665). Registry-only SECRET; injected into the registry env
+  # secret only when non-empty. >=32 chars recommended. Keep this OUTSIDE the
+  # secret-store trust boundary (Secrets Manager / OpenBao) so a compromise of
+  # the store alone does not yield plaintext egress tokens. Empty = disabled
+  # (legacy plaintext storage), so existing deployments keep working unchanged.
+  credentialEncryptionKey: ""
   # nginx marker secret. REQUIRED for standalone deployment (chart render fails
   # if empty) -- it guards all mcp-proxy token minting and the app requires it
   # at startup. Set a strong random value, identical to auth-server's. In the

@@ -18,6 +18,14 @@ _G._VR_TEST = true
 
 local cjson = require("cjson")
 
+-- Environment guard (issue #1532): the empty-array fix relies on
+-- cjson.empty_array_mt, an OpenResty lua-cjson extension. If this suite is ever
+-- run against a cjson without it (e.g. Debian lua-cjson 2.1.0, which is what the
+-- registry image used to ship), the schema-array assertions below would give a
+-- false sense of safety. Fail loudly instead of passing on the wrong runtime.
+assert(cjson.empty_array_mt,
+    "cjson.empty_array_mt is missing -- these tests require OpenResty's lua-cjson")
+
 local failures = 0
 local function check(cond, msg)
     if cond then
@@ -49,7 +57,13 @@ _G.ngx = {
     location = {
         capture = function(loc, _opts) return capture_responses[loc] end,
     },
-    req = { set_header = function() end },
+    -- Stateful request-header mock so tests can seed a client-supplied header
+    -- and observe whether set_header overwrote it or clear_header removed it.
+    req = {
+        _headers = {},
+        set_header = function(k, v) _G.ngx.req._headers[k] = v end,
+        clear_header = function(k) _G.ngx.req._headers[k] = nil end,
+    },
     log = function() end,
     ERR = 4,
     WARN = 5,
@@ -150,6 +164,104 @@ do
 
     M._handle_tools_list("1", mapping, "", nil, "srv2")
     check(dict._store["tools_enriched:srv2"] ~= nil, "fully-discovered result IS cached")
+end
+
+-- ---------------------------------------------------------------------------
+print("test: _forward_identity_headers overwrites a spoofed client X-User")
+do
+    -- Client tries to spoof identity; a validated user is present.
+    ngx.req._headers = { ["X-User"] = "attacker", ["X-Username"] = "attacker" }
+    ngx.var.auth_user = "alice"
+    ngx.var.auth_username = "alice@corp"
+    M._forward_identity_headers()
+    check(ngx.req._headers["X-User"] == "alice",
+        "validated auth_user overwrites the client-supplied X-User")
+    check(ngx.req._headers["X-Username"] == "alice@corp",
+        "validated auth_username overwrites the client-supplied X-Username")
+end
+
+-- ---------------------------------------------------------------------------
+print("test: _forward_identity_headers CLEARS a spoofed X-User when auth_user is empty")
+do
+    -- M2M / client-credentials token: authenticates but carries no user, so
+    -- nginx auth_request_set yields "" for $auth_user. A client-supplied X-User
+    -- must NOT survive to the backend (this is the fail-open bug from #1627).
+    ngx.req._headers = { ["X-User"] = "attacker", ["X-Username"] = "attacker" }
+    ngx.var.auth_user = ""
+    ngx.var.auth_username = ""
+    M._forward_identity_headers()
+    check(ngx.req._headers["X-User"] == nil,
+        "empty auth_user clears the client-supplied X-User (no spoof passthrough)")
+    check(ngx.req._headers["X-Username"] == nil,
+        "empty auth_username clears the client-supplied X-Username")
+end
+
+-- ---------------------------------------------------------------------------
+print("test: _forward_identity_headers CLEARS a spoofed X-User when auth_user is nil")
+do
+    ngx.req._headers = { ["X-User"] = "attacker", ["X-Username"] = "attacker" }
+    ngx.var.auth_user = nil
+    ngx.var.auth_username = nil
+    M._forward_identity_headers()
+    check(ngx.req._headers["X-User"] == nil,
+        "nil auth_user clears the client-supplied X-User")
+    check(ngx.req._headers["X-Username"] == nil,
+        "nil auth_username clears the client-supplied X-Username")
+end
+
+-- ---------------------------------------------------------------------------
+print("test: _handle_tools_list keeps empty schema arrays as [] (issue #1532)")
+do
+    dict._store["tools_enriched:srv3"] = nil
+    local mapping = { required_scopes = nil, tools = {
+        { name = "no_arg", original_name = "no_arg", backend_location = "/ok" },
+        { name = "one_arg", original_name = "one_arg", backend_location = "/ok" },
+    } }
+    capture_responses = {}
+    capture_responses["/ok"] = { status = 200, body = cjson.encode({ result = { tools = {
+        { name = "no_arg", inputSchema = {
+            type = "object", properties = {},
+            required = setmetatable({}, cjson.empty_array_mt) } },
+        { name = "one_arg", inputSchema = {
+            type = "object",
+            properties = { q = { type = "string",
+                                 enum = setmetatable({}, cjson.empty_array_mt) } },
+            required = { "q" } } },
+    } } }) }
+
+    local body = M._handle_tools_list("1", mapping, "", nil, "srv3")
+    check(body:find('"required":[]', 1, true) ~= nil,
+        "empty required serializes as [] not {}")
+    check(body:find('"required":["q"]', 1, true) ~= nil,
+        "non-empty required is still an array")
+    check(body:find('"properties":{}', 1, true) ~= nil,
+        "empty properties stays an object")
+    check(body:find('"enum":[]', 1, true) ~= nil,
+        "empty enum nested under properties serializes as []")
+
+    -- The cached path decodes and re-encodes, so it must hold the same shape.
+    local cached_body = M._handle_tools_list("1", mapping, "", nil, "srv3")
+    check(dict._store["tools_enriched:srv3"] ~= nil, "result was cached")
+    check(cached_body:find('"required":[]', 1, true) ~= nil,
+        "empty required is still [] when served from cache")
+end
+
+-- ---------------------------------------------------------------------------
+print("test: a property named like a schema keyword stays an object")
+do
+    dict._store["tools_enriched:srv4"] = nil
+    local mapping = { required_scopes = nil, tools = {
+        { name = "odd", original_name = "odd", backend_location = "/ok" },
+    } }
+    capture_responses = {}
+    capture_responses["/ok"] = { status = 200, body = cjson.encode({ result = { tools = {
+        { name = "odd", inputSchema = {
+            type = "object", properties = { required = { type = "object" } } } },
+    } } }) }
+
+    local body = M._handle_tools_list("1", mapping, "", nil, "srv4")
+    check(body:find('"required":[]', 1, true) == nil,
+        "a property called 'required' is not coerced into an array")
 end
 
 -- ---------------------------------------------------------------------------

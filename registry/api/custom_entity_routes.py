@@ -42,6 +42,7 @@ from ..services.custom_entity_scopes import (
     list_grant_record_paths,
 )
 from ..services.custom_entity_service import CustomEntityService
+from ..services.visibility import redact_proxy_backend_url
 
 # Configure logging
 logging.basicConfig(
@@ -206,8 +207,12 @@ async def list_custom_entities(
     except UnknownCustomTypeError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
 
+    # Redact the internal backend origin (proxy_target_url) for non-admins,
+    # mirroring the skill/agent read endpoints. is_proxied + proxy_client_url stay.
+    records = [redact_proxy_backend_url(r.model_dump(mode="json"), user_context) for r in items]
+
     return {
-        "records": [r.model_dump(mode="json") for r in items],
+        "records": records,
         "total_count": total,
         "skip": skip,
         "limit": limit,
@@ -229,7 +234,9 @@ async def get_custom_entity(
     _require_view_scope(type, user_context, record_path=path)
     service = _get_service()
     try:
-        return await service.get_record(path, user_context)
+        record = await service.get_record(path, user_context)
+        # Redact the internal backend origin for non-admins (mirrors skill/agent reads).
+        return redact_proxy_backend_url(record, user_context)
     except CustomEntityNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
 

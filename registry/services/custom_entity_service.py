@@ -31,6 +31,7 @@ from ..schemas.custom_entity_models import (
     CustomTypeDescriptor,
     CustomTypeUpdate,
 )
+from ..schemas.proxy_mixin import validate_and_pin_proxy_target
 from .custom_entity_errors import (
     CustomEntityNotFoundError,
     CustomEntityValidationError,
@@ -203,8 +204,27 @@ class CustomEntityService:
             allowed_groups=request.allowed_groups,
             tags=request.tags,
             attributes=cleaned,
+            # Gateway-proxy opt-in (validated on the request model; carried through).
+            is_proxied=request.is_proxied,
+            proxy_target_url=request.proxy_target_url,
         )
         record.assign_path()
+        # Gateway-proxy SSRF layer 2: when proxied, resolve the target hostname and
+        # validate every resolved IP against the egress policy, then pin the IPs.
+        # Rejects a metadata/private target at registration. Custom records carry
+        # their own type token as the entity_type.
+        if record.is_proxied:
+            pin = await validate_and_pin_proxy_target(
+                record.entity_type,
+                {
+                    "is_proxied": record.is_proxied,
+                    "proxy_target_url": record.proxy_target_url,
+                    "proxy_disabled_reason": record.proxy_disabled_reason,
+                },
+            )
+            if pin:
+                record.proxy_resolved_ips = pin["proxy_resolved_ips"]
+                record.proxy_target_host = pin["proxy_target_host"]
         created = await self._get_entities().create(record)
         try:
             await self._get_search().index_custom_entity(record=created, descriptor=descriptor)
@@ -240,6 +260,10 @@ class CustomEntityService:
             updates["allowed_groups"] = request.allowed_groups
         if request.tags is not None:
             updates["tags"] = request.tags
+        if request.is_proxied is not None:
+            updates["is_proxied"] = request.is_proxied
+        if request.proxy_target_url is not None:
+            updates["proxy_target_url"] = request.proxy_target_url
         if request.attributes is not None:
             # Merge-then-validate: merge client patch into stored bag, then validate.
             merged_attrs = dict(existing.attributes)
@@ -258,6 +282,37 @@ class CustomEntityService:
                 "allowed_groups",
                 "group-restricted visibility requires at least one allowed_group",
             )
+
+        # Proxy target-required invariant on the MERGED state (a PUT may set
+        # is_proxied without a target, or clear the target while proxied). Must
+        # run BEFORE persist: the repo write-then-reconstruct would otherwise
+        # store an invalid state, then CustomEntityRecord(**doc) raises on every
+        # subsequent read and the record vanishes from listings.
+        merged_is_proxied = updates.get("is_proxied", existing.is_proxied)
+        merged_target = updates.get("proxy_target_url", existing.proxy_target_url)
+        if merged_is_proxied and not merged_target and not existing.proxy_disabled_reason:
+            raise CustomEntityValidationError(
+                "proxy_target_url",
+                "is_proxied=true requires a proxy_target_url for a custom entity",
+            )
+
+        # Gateway-proxy SSRF layer 2: when this update touches the proxy opt-in or
+        # target, resolve+validate the MERGED target and refresh the pin bookkeeping
+        # (or clear it when no longer a live proxy). Runs BEFORE persist so a
+        # metadata/private target is rejected at update time. Re-enabling clears any
+        # prior auto-disable.
+        if "is_proxied" in updates or "proxy_target_url" in updates:
+            pin = await validate_and_pin_proxy_target(
+                existing.entity_type,
+                {
+                    "is_proxied": merged_is_proxied,
+                    "proxy_target_url": merged_target,
+                    "proxy_disabled_reason": None,
+                },
+            )
+            updates["proxy_resolved_ips"] = pin.get("proxy_resolved_ips", [])
+            updates["proxy_target_host"] = pin.get("proxy_target_host")
+            updates["proxy_disabled_reason"] = None
 
         updated = await self._get_entities().update(path, updates)
         if updated is None:

@@ -272,6 +272,8 @@ from registry_client import (
     RatingInfoResponse,
     RatingResponse,
     RegistryClient,
+    RescanResponse,
+    SecurityScanResult,
     ServerUpdateResponse,
     Skill,
     SkillRegistrationRequest,
@@ -874,6 +876,7 @@ def cmd_register(args: argparse.Namespace) -> int:
             overwrite=args.overwrite,
             mcp_endpoint=config.get("mcp_endpoint"),
             sse_endpoint=config.get("sse_endpoint"),
+            append_mcp_path=config.get("append_mcp_path"),
             metadata=config.get("metadata", {}),
             provider_organization=config.get("provider_organization"),
             provider_url=config.get("provider_url"),
@@ -927,6 +930,9 @@ def cmd_list(args: argparse.Namespace) -> int:
             params: dict[str, str | int] = {"limit": limit, "offset": offset}
             if query:
                 params["query"] = query
+            metadata_fields = getattr(args, "metadata_fields", None)
+            if metadata_fields:
+                params["metadata_fields"] = metadata_fields
             raw_response = client._make_request(
                 method="GET", endpoint="/api/servers", params=params
             )
@@ -2317,7 +2323,11 @@ def cmd_server_search(args: argparse.Namespace) -> int:
     """
     try:
         client = _create_client(args)
-        response = client.semantic_search(query=args.query, max_results=args.max_results)
+        response = client.semantic_search(
+            query=args.query,
+            max_results=args.max_results,
+            metadata_fields=getattr(args, "metadata_fields", None),
+        )
 
         if args.json:
             # Output raw JSON
@@ -2699,6 +2709,9 @@ def cmd_agent_list(args: argparse.Namespace) -> int:
                 params["visibility"] = args.visibility
             if hasattr(args, "allowed_groups") and args.allowed_groups:
                 params["allowed_groups"] = args.allowed_groups
+            metadata_fields = getattr(args, "metadata_fields", None)
+            if metadata_fields:
+                params["metadata_fields"] = metadata_fields
             raw_response = client._make_request(method="GET", endpoint="/api/agents", params=params)
             print(json.dumps(raw_response.json(), indent=2, default=str))
             return 0
@@ -3528,6 +3541,7 @@ def cmd_skill_list(args: argparse.Namespace) -> int:
             tag=args.tag if hasattr(args, "tag") else None,
             limit=limit,
             offset=offset,
+            metadata_fields=getattr(args, "metadata_fields", None),
         )
 
         if hasattr(args, "json") and args.json:
@@ -6310,6 +6324,10 @@ Examples:
     list_parser.add_argument(
         "--offset", type=int, default=0, help="Number of servers to skip (default 0)"
     )
+    list_parser.add_argument(
+        "--metadata-fields",
+        help="Comma-separated metadata field paths to include (dot-notation). Example: 'owner,config.region'",
+    )
     list_parser.add_argument("--json", action="store_true", help="Print raw JSON response")
 
     # Toggle command
@@ -6836,6 +6854,10 @@ Examples:
         help="Maximum number of results per entity type (default: 10)",
     )
     server_search_parser.add_argument(
+        "--metadata-fields",
+        help="Comma-separated metadata field paths to include in results (dot-notation). Example: 'owner,config.region'",
+    )
+    server_search_parser.add_argument(
         "--json", action="store_true", help="Output raw JSON with all entity types"
     )
 
@@ -6978,11 +7000,19 @@ Examples:
         "--allowed-groups",
         help="Filter by allowed_groups (comma-separated). Returns only group-restricted agents matching these groups.",
     )
+    agent_list_parser.add_argument(
+        "--metadata-fields",
+        help="Comma-separated metadata field paths to include (dot-notation). Example: 'owner,config.region'",
+    )
     agent_list_parser.add_argument("--json", action="store_true", help="Output raw JSON response")
 
     # Agent get command
     agent_get_parser = subparsers.add_parser("agent-get", help="Get agent details")
     agent_get_parser.add_argument("--path", required=True, help="Agent path (e.g., /code-reviewer)")
+    agent_get_parser.add_argument(
+        "--metadata-fields",
+        help="Comma-separated metadata field paths to include (dot-notation). Example: 'owner,config.region'",
+    )
 
     # Agent update command
     agent_update_parser = subparsers.add_parser("agent-update", help="Update an existing agent")
@@ -7205,6 +7235,10 @@ Examples:
     )
     skill_list_parser.add_argument(
         "--offset", type=int, default=0, help="Number of skills to skip (default 0)"
+    )
+    skill_list_parser.add_argument(
+        "--metadata-fields",
+        help="Comma-separated metadata field paths to include (dot-notation). Example: 'author,extra.team'",
     )
     skill_list_parser.add_argument("--json", action="store_true", help="Output raw JSON response")
 

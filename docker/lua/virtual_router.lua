@@ -87,11 +87,81 @@ local function _auth_user_id()
 end
 
 
+-- Forward the validated caller identity to backend subrequests, fail-closed.
+--
+-- auth_request_set variables ($auth_user, $auth_username) are scoped to the
+-- parent request and do NOT propagate into ngx.location.capture subrequests
+-- via proxy_set_header, so we copy them onto request headers here; the
+-- _vs_backend_* locations then forward them to the upstream MCP server via
+-- $http_x_user/$http_x_username, enabling backends to enforce write-gates and
+-- record audit attribution.
+--
+-- SECURITY: $http_x_user is a CLIENT-controllable request header. The backend
+-- value must be the gateway-validated identity or nothing -- never a value the
+-- caller supplied. When auth_user is empty (e.g. an M2M / client-credentials
+-- token that authenticates with a client_id but no user), we must CLEAR any
+-- inbound X-User rather than leave it intact, otherwise a caller could spoof
+-- X-User to the backend. This mirrors the direct-server path, which forwards
+-- `proxy_set_header X-User $auth_user;` unconditionally so a client header can
+-- never survive. Always overwrite or clear; never pass through.
+local function _forward_identity_headers()
+    local auth_user = ngx.var.auth_user
+    local auth_username = ngx.var.auth_username
+    if auth_user and auth_user ~= "" then
+        ngx.req.set_header("X-User", auth_user)
+    else
+        ngx.req.clear_header("X-User")
+    end
+    if auth_username and auth_username ~= "" then
+        ngx.req.set_header("X-Username", auth_username)
+    else
+        ngx.req.clear_header("X-Username")
+    end
+end
+
+
+-- JSON Schema keywords whose value must serialize as an array.
+local SCHEMA_ARRAY_KEYS = {
+    required = true, enum = true, allOf = true, anyOf = true,
+    oneOf = true, examples = true, prefixItems = true,
+}
+
+-- Keywords holding a map of caller-chosen names to subschemas. A member named
+-- "required" there is a property name, not the keyword, so descend into the
+-- members without matching their names against SCHEMA_ARRAY_KEYS.
+local SCHEMA_MAP_KEYS = {
+    properties = true, patternProperties = true,
+    definitions = true, ["$defs"] = true,
+}
+
+-- cjson decodes an empty JSON array to a bare table, which re-encodes as {}.
+-- Tag those tables so the keywords above survive the round trip as [].
+local function _tag_empty_schema_arrays(node, depth)
+    if type(node) ~= "table" or depth > 16 then
+        return
+    end
+    for key, value in pairs(node) do
+        if type(value) == "table" then
+            if SCHEMA_MAP_KEYS[key] then
+                for _, subschema in pairs(value) do
+                    _tag_empty_schema_arrays(subschema, depth + 1)
+                end
+            elseif SCHEMA_ARRAY_KEYS[key] and next(value) == nil then
+                setmetatable(value, empty_array_mt)
+            else
+                _tag_empty_schema_arrays(value, depth + 1)
+            end
+        end
+    end
+end
+
+
 -- Ensure inputSchema has "type": "object" as required by MCP spec
 local function _ensure_mcp_schema(schema)
     if not schema or type(schema) ~= "table" then
         return { type = "object", properties = {} }
     end
+    _tag_empty_schema_arrays(schema, 0)
     if schema.type == "object" then
         return schema
     end
@@ -962,6 +1032,10 @@ function _M.route()
     -- all ngx.location.capture subrequests to backends inherit it.
     ngx.req.set_header("Accept", "application/json, text/event-stream")
 
+    -- Forward the validated caller identity to backend subrequests (fail-closed:
+    -- always the gateway-validated value or cleared, never a client-supplied one).
+    _forward_identity_headers()
+
     local request_method = ngx.var.request_method
 
     -- Handle HTTP GET: per MCP Streamable HTTP 2025-11-25 spec section 3.3,
@@ -1199,6 +1273,7 @@ if _G._VR_TEST then
     _M._fetch_backend_tools_list = _fetch_backend_tools_list
     _M._append_mapping_tools_for_backend = _append_mapping_tools_for_backend
     _M._handle_tools_list = _handle_tools_list
+    _M._forward_identity_headers = _forward_identity_headers
     return _M
 end
 

@@ -624,35 +624,38 @@ class HealthMonitoringService:
                 },
             }
 
-            response = await client.post(
+            # Streamed: a streamable-http server can hold the connection open (SSE/
+            # chunked) past the initialize response, and .post() would block reading
+            # the full body even though the headers we need already arrived.
+            async with client.stream(
+                "POST",
                 endpoint,
                 headers=init_headers,
                 json=initialize_payload,
                 timeout=httpx.Timeout(5.0),
                 follow_redirects=True,
-            )
+            ) as response:
+                # Check if initialize succeeded
+                if response.status_code not in [200, 201]:
+                    logger.warning(
+                        f"MCP initialize failed endpoint={redact_url(endpoint)} status={response.status_code}",
+                    )
+                    return None
 
-            # Check if initialize succeeded
-            if response.status_code not in [200, 201]:
-                logger.warning(
-                    f"MCP initialize failed endpoint={redact_url(endpoint)} status={response.status_code}",
+                # Get session ID from response headers (server-generated)
+                server_session_id = response.headers.get("Mcp-Session-Id") or response.headers.get(
+                    "mcp-session-id"
                 )
-                return None
-
-            # Get session ID from response headers (server-generated)
-            server_session_id = response.headers.get("Mcp-Session-Id") or response.headers.get(
-                "mcp-session-id"
-            )
-            if server_session_id:
-                logger.debug(f"Server returned session ID: {server_session_id}")
-                return server_session_id
-            else:
-                # If server doesn't return a session ID, generate one for stateless servers
-                client_session_id = str(uuid.uuid4())
-                logger.debug(
-                    f"Server did not return session ID, using client-generated: {client_session_id}"
-                )
-                return client_session_id
+                if server_session_id:
+                    logger.debug(f"Server returned session ID: {server_session_id}")
+                    return server_session_id
+                else:
+                    # If server doesn't return a session ID, generate one for stateless servers
+                    client_session_id = str(uuid.uuid4())
+                    logger.debug(
+                        f"Server did not return session ID, using client-generated: {client_session_id}"
+                    )
+                    return client_session_id
 
         except Exception as e:
             logger.warning(
@@ -708,6 +711,45 @@ class HealthMonitoringService:
                 f"Ping without auth failed for {redact_url(endpoint)}: {type(e).__name__}"
             )
             return False
+
+    async def _probe_mcp_endpoint(
+        self,
+        client: httpx.AsyncClient,
+        endpoint: str,
+        headers: dict[str, str],
+        payload: str,
+    ) -> httpx.Response:
+        """POST an MCP probe and return the response with its head available.
+
+        Streamed, not buffered. A streamable-http server may answer with
+        Content-Type: text/event-stream and hold the connection open past the
+        response we care about; client.post() blocks until that body completes
+        and burns the whole health-check timeout. Only the response head is
+        needed -- except on a 400, the sole status whose body decides health
+        (the JSON-RPC -32600 check in _is_mcp_endpoint_healthy_streamable). A
+        400 is a finite error response that closes normally, so reading it is
+        safe.
+
+        Args:
+            client: httpx AsyncClient instance
+            endpoint: The MCP endpoint URL
+            headers: Headers to send with the request
+            payload: Raw JSON-RPC request body
+
+        Returns:
+            The response. Its body is read only when the status is 400.
+        """
+        async with client.stream(
+            "POST",
+            endpoint,
+            headers=headers,
+            content=payload,
+            follow_redirects=True,
+            timeout=httpx.Timeout(settings.health_check_timeout_seconds),
+        ) as response:
+            if response.status_code == 400:
+                await response.aread()
+            return response
 
     async def _check_server_endpoint_transport_aware(
         self, client: httpx.AsyncClient, proxy_pass_url: str, server_info: dict
@@ -883,9 +925,7 @@ class HealthMonitoringService:
 
                 logger.info(f"[TRACE] Sending ping to endpoint: {redact_url(endpoint)}")
                 logger.debug(f"Health request header names={sorted(headers)}")
-                response = await client.post(
-                    endpoint, headers=headers, content=ping_payload, follow_redirects=True
-                )
+                response = await self._probe_mcp_endpoint(client, endpoint, headers, ping_payload)
                 logger.info(f"[TRACE] Response status: {response.status_code}")
 
                 # Check for auth failures first
@@ -995,9 +1035,7 @@ class HealthMonitoringService:
             try:
                 logger.info(f"[TRACE] Trying default endpoint: {redact_url(endpoint)}")
                 logger.debug(f"Health request header names={sorted(headers)}")
-                response = await client.post(
-                    endpoint, headers=headers, content=ping_payload, follow_redirects=True
-                )
+                response = await self._probe_mcp_endpoint(client, endpoint, headers, ping_payload)
                 logger.info(f"[TRACE] Response status: {response.status_code}")
                 if self._is_mcp_endpoint_healthy_streamable(response):
                     logger.info(f"Health check succeeded at {redact_url(endpoint)}")

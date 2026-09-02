@@ -579,3 +579,52 @@ class TestPathUtils:
         assert validate_skill_name("-test") is False
         assert validate_skill_name("test-") is False
         assert validate_skill_name("test_skill") is False
+
+
+class TestSkillMetadataProjection:
+    """Integration tests for metadata_fields validation on skill endpoints (Issue #1277).
+
+    Full projection logic is tested by 76 unit tests in
+    tests/unit/utils/test_metadata_projection.py. These tests verify that the
+    endpoint wiring rejects invalid input before reaching the service layer.
+    """
+
+    @pytest.fixture
+    def skill_test_client(self):
+        """TestClient with admin auth overrides for skills."""
+        from fastapi.testclient import TestClient
+
+        from registry.auth.dependencies import nginx_proxied_auth
+        from registry.main import app
+
+        admin_context = {
+            "username": "admin",
+            "groups": ["mcp-registry-admin"],
+            "scopes": ["mcp-servers-unrestricted/read"],
+            "is_admin": True,
+            "accessible_services": ["all"],
+            "ui_permissions": {"list_service": ["all"]},
+            "auth_method": "session",
+        }
+
+        app.dependency_overrides[nginx_proxied_auth] = lambda: admin_context
+        client = TestClient(app)
+        yield client
+        app.dependency_overrides.clear()
+
+    @pytest.mark.parametrize(
+        "invalid_input,expected_fragment",
+        [
+            ("$inject", "must not start with '$'"),
+            ("a.b.c.d.e.f", "too deep"),
+            ("extra..team", "empty parts"),
+        ],
+        ids=["dollar-prefix", "too-deep", "empty-segment"],
+    )
+    def test_invalid_metadata_fields_returns_422(
+        self, skill_test_client, invalid_input, expected_fragment
+    ):
+        """Invalid metadata_fields values return 422 with a descriptive error."""
+        response = skill_test_client.get(f"/api/skills?metadata_fields={invalid_input}")
+        assert response.status_code == 422
+        assert expected_fragment in response.json()["detail"].lower()

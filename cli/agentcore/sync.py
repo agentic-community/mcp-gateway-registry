@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import sys
+from typing import TYPE_CHECKING
 
 from .models import (
     DEFAULT_MANIFEST_PATH,
@@ -29,6 +30,9 @@ from .security import (
     require_secure_registry_url,
     validate_account_ids,
 )
+
+if TYPE_CHECKING:
+    import boto3
 
 logger = logging.getLogger(__name__)
 

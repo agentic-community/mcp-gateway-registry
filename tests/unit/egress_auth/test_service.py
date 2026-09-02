@@ -49,6 +49,11 @@ EGRESS_OAUTH = {
     "scopes": ["repo", "read:user"],
 }
 
+# A registered upstream base for these orchestration tests: the consent write
+# binds the credential to this set and the vend must request the same base.
+BOUND = "https://api.example.com"
+BOUND_DD = "https://mcp.example.net"
+
 
 @pytest.fixture(autouse=True)
 def _reset_cipher():
@@ -172,11 +177,14 @@ class TestConsentAndCallback:
             egress_oauth=egress_oauth,
             current_user_id="alice",
             current_auth_method="oauth2",
+            bound_upstreams=[BOUND],
         )
         assert conn.provider == "github" and conn.server_path == "/github-mcp"
 
         # vend hits (same canonical key the consent wrote under)
-        token = await svc.get_valid_token("oauth2", "alice", "/github-mcp", egress_oauth)
+        token = await svc.get_valid_token(
+            "oauth2", "alice", "/github-mcp", egress_oauth, requested_upstream=BOUND
+        )
         assert token == "at_new"
 
     async def test_replay_is_rejected(self, svc, egress_oauth, monkeypatch):
@@ -185,9 +193,13 @@ class TestConsentAndCallback:
             "oauth2", "alice", "Iv1.testclient", "sess-1", "/github-mcp", egress_oauth
         )
         state_blob = _extract_state(url)
-        await svc.handle_callback("c", state_blob, egress_oauth, "alice", "oauth2")
+        await svc.handle_callback(
+            "c", state_blob, egress_oauth, "alice", "oauth2", bound_upstreams=[BOUND]
+        )
         with pytest.raises(service.EgressAuthError, match="replay"):
-            await svc.handle_callback("c", state_blob, egress_oauth, "alice", "oauth2")
+            await svc.handle_callback(
+                "c", state_blob, egress_oauth, "alice", "oauth2", bound_upstreams=[BOUND]
+            )
 
     async def test_account_swap_rejected(self, svc, egress_oauth, monkeypatch):
         _stub_exchange(monkeypatch)
@@ -197,7 +209,9 @@ class TestConsentAndCallback:
         state_blob = _extract_state(url)
         # different user finishes the callback
         with pytest.raises(service.EgressAuthError, match="user mismatch"):
-            await svc.handle_callback("c", state_blob, egress_oauth, "mallory", "oauth2")
+            await svc.handle_callback(
+                "c", state_blob, egress_oauth, "mallory", "oauth2", bound_upstreams=[BOUND]
+            )
 
     async def test_same_user_new_session_accepted(self, svc, egress_oauth, monkeypatch):
         # account-swap guard binds to (user_id, auth_method), NOT session_id, so a
@@ -207,12 +221,16 @@ class TestConsentAndCallback:
             "oauth2", "alice", "Iv1.testclient", "sess-OLD", "/github-mcp", egress_oauth
         )
         state_blob = _extract_state(url)
-        conn = await svc.handle_callback("c", state_blob, egress_oauth, "alice", "oauth2")
+        conn = await svc.handle_callback(
+            "c", state_blob, egress_oauth, "alice", "oauth2", bound_upstreams=[BOUND]
+        )
         assert conn.provider == "github"
 
     async def test_tampered_state_rejected(self, svc, egress_oauth):
         with pytest.raises(service.EgressAuthError, match="invalid state"):
-            await svc.handle_callback("c", "garbage-state", egress_oauth, "alice", "oauth2")
+            await svc.handle_callback(
+                "c", "garbage-state", egress_oauth, "alice", "oauth2", bound_upstreams=[BOUND]
+            )
 
     async def test_confidential_provider_still_requires_secret(self, svc, monkeypatch):
         # A confidential (github) config whose stored secret is missing must
@@ -224,7 +242,9 @@ class TestConsentAndCallback:
             "oauth2", "alice", "Iv1.testclient", "sess-1", "/github-mcp", secretless
         )
         with pytest.raises(service.EgressAuthError, match="client_secret_encrypted missing"):
-            await svc.handle_callback("c", _extract_state(url), secretless, "alice", "oauth2")
+            await svc.handle_callback(
+                "c", _extract_state(url), secretless, "alice", "oauth2", bound_upstreams=[BOUND]
+            )
 
 
 @pytest.mark.unit
@@ -257,7 +277,12 @@ class TestPublicClientFlow:
             egress_oauth_public,
         )
         conn = await svc.handle_callback(
-            "the-code", _extract_state(url), egress_oauth_public, "alice", "oauth2"
+            "the-code",
+            _extract_state(url),
+            egress_oauth_public,
+            "alice",
+            "oauth2",
+            bound_upstreams=[BOUND_DD],
         )
         assert conn.provider == "custom" and conn.server_path == "/datadog-user"
         assert "client_secret" not in captured
@@ -265,7 +290,9 @@ class TestPublicClientFlow:
         assert captured["code_verifier"]  # PKCE verifier always sent
         assert captured["resource"] == egress_oauth_public["custom_resource"]
 
-        token = await svc.get_valid_token("oauth2", "alice", "/datadog-user", egress_oauth_public)
+        token = await svc.get_valid_token(
+            "oauth2", "alice", "/datadog-user", egress_oauth_public, requested_upstream=BOUND_DD
+        )
         assert token == "at_public"
 
     async def test_refresh_without_secret(self, svc, egress_oauth_public, monkeypatch):
@@ -286,9 +313,12 @@ class TestPublicClientFlow:
                 refresh_token="rt_old",
                 expires_at="2000-01-01T00:00:00+00:00",
                 client_id="dcr-public-client-id",
+                bound_upstreams=[BOUND_DD],
             ),
         )
-        token = await svc.get_valid_token("oauth2", "alice", "/datadog-user", egress_oauth_public)
+        token = await svc.get_valid_token(
+            "oauth2", "alice", "/datadog-user", egress_oauth_public, requested_upstream=BOUND_DD
+        )
         assert token == "at_refreshed"
         assert captured["grant_type"] == "refresh_token"
         assert "client_secret" not in captured
@@ -298,7 +328,12 @@ class TestPublicClientFlow:
 @pytest.mark.unit
 class TestVendRefreshDisconnect:
     async def test_vend_miss_returns_none(self, svc, egress_oauth):
-        assert await svc.get_valid_token("oauth2", "nobody", "/github-mcp", egress_oauth) is None
+        assert (
+            await svc.get_valid_token(
+                "oauth2", "nobody", "/github-mcp", egress_oauth, requested_upstream=BOUND
+            )
+            is None
+        )
 
     async def test_non_per_user_never_vends(self, svc, egress_oauth, monkeypatch):
         _stub_exchange(monkeypatch)
@@ -308,7 +343,9 @@ class TestVendRefreshDisconnect:
             "network-trusted", "alice", "github", "/github-mcp", StoredToken(access_token="x")
         )
         assert (
-            await svc.get_valid_token("network-trusted", "alice", "/github-mcp", egress_oauth)
+            await svc.get_valid_token(
+                "network-trusted", "alice", "/github-mcp", egress_oauth, requested_upstream=BOUND
+            )
             is None
         )
 
@@ -324,10 +361,13 @@ class TestVendRefreshDisconnect:
                 refresh_token="rt_old",
                 expires_at="2000-01-01T00:00:00+00:00",
                 client_id="Iv1.testclient",
+                bound_upstreams=[BOUND],
             ),
         )
         _stub_exchange(monkeypatch, access_token="at_refreshed")
-        token = await svc.get_valid_token("oauth2", "alice", "/github-mcp", egress_oauth)
+        token = await svc.get_valid_token(
+            "oauth2", "alice", "/github-mcp", egress_oauth, requested_upstream=BOUND
+        )
         assert token == "at_refreshed"
 
     async def test_dead_refresh_marks_failed_and_then_misses(self, svc, egress_oauth, monkeypatch):
@@ -341,6 +381,7 @@ class TestVendRefreshDisconnect:
                 refresh_token="rt_dead",
                 expires_at="2000-01-01T00:00:00+00:00",
                 client_id="Iv1.testclient",
+                bound_upstreams=[BOUND],
             ),
         )
 
@@ -348,11 +389,21 @@ class TestVendRefreshDisconnect:
             raise oauth_engine.DeadRefreshTokenError("invalid_grant")
 
         monkeypatch.setattr(oauth_engine, "_post_token", dead_post)
-        assert await svc.get_valid_token("oauth2", "alice", "/github-mcp", egress_oauth) is None
+        assert (
+            await svc.get_valid_token(
+                "oauth2", "alice", "/github-mcp", egress_oauth, requested_upstream=BOUND
+            )
+            is None
+        )
         # entry is now refresh_failed -> still a miss (consent needed), no retry storm
         stored = await svc._store.get_token("oauth2", "alice", "github", "/github-mcp")
         assert stored.status == "refresh_failed"
-        assert await svc.get_valid_token("oauth2", "alice", "/github-mcp", egress_oauth) is None
+        assert (
+            await svc.get_valid_token(
+                "oauth2", "alice", "/github-mcp", egress_oauth, requested_upstream=BOUND
+            )
+            is None
+        )
 
     async def test_rotated_client_id_forces_reconsent(self, svc, egress_oauth):
         await svc._store.put_token(
@@ -360,17 +411,24 @@ class TestVendRefreshDisconnect:
             "alice",
             "github",
             "/github-mcp",
-            StoredToken(access_token="a", client_id="OLD-client-id"),
+            StoredToken(access_token="a", client_id="OLD-client-id", bound_upstreams=[BOUND]),
         )
         # configured client_id is Iv1.testclient != OLD-client-id -> no vend
-        assert await svc.get_valid_token("oauth2", "alice", "/github-mcp", egress_oauth) is None
+        assert (
+            await svc.get_valid_token(
+                "oauth2", "alice", "/github-mcp", egress_oauth, requested_upstream=BOUND
+            )
+            is None
+        )
 
     async def test_list_and_disconnect(self, svc, egress_oauth, monkeypatch):
         _stub_exchange(monkeypatch)
         url = svc.build_consent_url(
             "oauth2", "alice", "Iv1.testclient", "s", "/github-mcp", egress_oauth
         )
-        await svc.handle_callback("c", _extract_state(url), egress_oauth, "alice", "oauth2")
+        await svc.handle_callback(
+            "c", _extract_state(url), egress_oauth, "alice", "oauth2", bound_upstreams=[BOUND]
+        )
 
         conns = await svc.list_connections("oauth2", "alice")
         assert [(c.provider, c.server_path) for c in conns] == [("github", "/github-mcp")]

@@ -121,6 +121,18 @@ app:
     quarantineFailClosed: false
     definitionsCacheTtlSeconds: 30
     backendTimeoutMs: 250
+  # Gateway generic-proxy feature (auth-server-consumed). The auth-server runs a
+  # startup egress self-check and disables the hop if a metadata IP is reachable.
+  # Keep this shared master switch equal to the registry chart value; otherwise
+  # the auth-server /proxy hop remains inactive and fails closed with 503.
+  gatewayGenericProxyEnabled: false
+  genericProxyTokenTtlSeconds: 30 # TTL (s) for the generic-proxy internal token
+  genericProxyMaxBodyBytes: "10485760" # Max upstream RESPONSE body the generic hop buffers (string to avoid Helm float sci-notation)
+  gatewayGenericRequireBearerForWrites: true # CSRF: refuse cookie auth for write verbs
+  gatewayEgressSelfcheckEnabled: true # Probe metadata IPs at startup; disable feature if reachable
+  gatewayGenericTlsVerify: "true" # true | false | /path/to/ca-bundle.pem
+  gatewayProxyPinRefreshSeconds: 300 # Interval (s) to re-resolve+revalidate pinned hostname targets
+  gatewayGenericMaxConcurrency: 32 # Semaphore cap on in-flight generic-hop requests (OOM guard)
 # Authentication Provider Configuration
 # Choose ONE provider: keycloak, entra, okta, auth0, cognito, or pingfederate
 authProvider:
@@ -197,20 +209,26 @@ cognito:
 # registry subchart.
 egressAuth:
   enabled: false
-  # URL of the registry's internal vend endpoint (cluster-internal). MUST match
-  # the registry Service name + port (charts/registry: service.port=8000, which
-  # targets the in-pod nginx). The old default of :8080 is the registry pod's
-  # INTERNAL nginx listen port, NOT the Service port -- it is unreachable
-  # cross-pod, so the egress token vend silently fails and the gateway forwards
-  # to the upstream without the user's vaulted token (upstream 400/401). Keep
-  # this aligned with mcpgw.registryUrl (also http://registry:8000).
-  registryInternalUrl: "http://registry:8000"
+  # URL of the registry's DEDICATED internal egress-token vend listener
+  # (cluster-internal). The registry chart exposes egressAuth.internalPort (8091)
+  # as a ClusterIP-only Service port that the public Ingress never routes, gated
+  # by a NetworkPolicy admitting only this auth-server pod. This is deliberately
+  # NOT the public 8000/http Service port: the vend runs on a separate listener
+  # so it is unreachable from the internet-facing ingress. MUST match the registry
+  # chart's egressAuth.internalPort.
+  registryInternalUrl: "http://registry:8091"
   # Public base URL for the egress OAuth callback ({base}/oauth2/egress/callback).
   # The auth-server imports registry.core.config, whose startup validation
   # REQUIRES this when egressAuth.enabled. Leave empty to derive it from
   # global.domain + the ingress routing mode (see templates/configmap-egress.yaml);
   # set it only to point at a custom public front door.
   oauthCallbackBaseUrl: ""
+  # Trusted IdP hosts for the OBO (same-IdP) token exchange. When the gateway IdP
+  # is self-hosted on a private address, its token endpoint is otherwise rejected
+  # by the credentialed-OAuth SSRF profile. Comma-separated exact hostnames, no
+  # CIDRs. MUST match registry.egressAuth.oauthTrustedIdpHosts. Entries receive
+  # client secrets / user assertions, so keep the list tight.
+  oauthTrustedIdpHosts: ""
   # nginx marker secret. REQUIRED for standalone deployment (chart render fails
   # if empty) -- it guards all mcp-proxy token minting and the app requires it
   # at startup. Set a strong random value, identical to the registry's. In the
@@ -332,4 +350,33 @@ metricsScrape:
       kubernetes.io/metadata.name: monitoring
     fromPodSelector:
       app.kubernetes.io/name: prometheus
+
+# Egress NetworkPolicy for the generic-proxy SSRF defense (LLD Step 7a layer 1).
+# This is the PRIMARY DNS-rebind control and a REQUIRED prerequisite before
+# enabling the generic proxy (registry chart's gatewayGenericProxyEnabled). It is
+# environment-specific and CIDR-aware — the values below are EXAMPLES; review and
+# populate allowedCidrs for your cluster (see networkpolicy-egress.yaml header).
+# Disabled by default: enabling it without correct CIDRs would break the
+# auth-server's own egress to Keycloak/Mongo/registry.
+egress:
+  networkPolicy:
+    enabled: false
+    # kube-dns / CoreDNS selector so hostname targets can resolve. Adjust to your
+    # cluster (common: namespace kube-system, pod k8s-app=kube-dns).
+    dnsSelector:
+      fromNamespaceSelector:
+        kubernetes.io/metadata.name: kube-system
+      fromPodSelector:
+        k8s-app: kube-dns
+    # Allowed destination CIDRs. Each entry is an ipBlock with an optional `except`
+    # list. The example below allows all IPv4 while carving out the metadata IP,
+    # link-local, and the unspecified address — you SHOULD tighten `cidr` to your
+    # cluster service CIDR(s) + the specific egress range for proxied backends
+    # rather than 0.0.0.0/0. Add an IPv6 entry (with fd00:ec2::254/128 excepted)
+    # if the pod has IPv6 egress.
+    allowedCidrs:
+      - cidr: "0.0.0.0/0"
+        except:
+          - "169.254.0.0/16" # link-local incl. cloud metadata 169.254.169.254
+          - "0.0.0.0/32" # unspecified
 nodeSelector: {}

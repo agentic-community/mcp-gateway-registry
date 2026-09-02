@@ -68,7 +68,11 @@ from ..utils.credential_encryption import (
     encrypt_credential_in_server_dict,
     strip_credentials_from_dict,
 )
-from ..utils.metadata import flatten_metadata_to_text
+from ..utils.metadata import (
+    flatten_metadata_to_text,
+    parse_and_validate_metadata_fields,
+    project_metadata,
+)
 from ._etag_utils import parse_if_match, updated_ms, weak_etag_for_timestamp
 
 logger = logging.getLogger(__name__)
@@ -756,6 +760,14 @@ async def get_servers_json(
             "behavior (active and beta shown; draft and deprecated excluded)."
         ),
     ),
+    metadata_fields: list[str] | None = Query(
+        None,
+        description=(
+            "Comma-separated metadata field paths to include (dot-notation for nested). "
+            "Example: 'owner,config.region'. Only the listed metadata fields are returned; "
+            "all other metadata keys are omitted. Omit to return full metadata."
+        ),
+    ),
     user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
 ):
     """Get servers data as JSON for React frontend and external API.
@@ -800,6 +812,9 @@ async def get_servers_json(
     service_data = []
     search_query = query.lower() if query else ""
 
+    # Parse and validate metadata_fields projection (Issue #1277)
+    _metadata_paths = parse_and_validate_metadata_fields(metadata_fields)
+
     # Determine if user has unrestricted access (no servers will be filtered out)
     is_admin = user_context.get("is_admin", False) if user_context else False
     accessible_servers_list = user_context.get("accessible_servers", []) if user_context else []
@@ -819,7 +834,10 @@ async def get_servers_json(
         # FAST PATH: DB-level pagination -- correct because no servers are filtered out
         # and no field filters need a full scan for accurate total_count
         all_servers, db_total = await server_service.get_servers_paginated(
-            skip=offset, limit=limit, exclude_tool_list=not include_tools
+            skip=offset,
+            limit=limit,
+            exclude_tool_list=not include_tools,
+            metadata_paths=_metadata_paths,
         )
     else:
         # FALLBACK PATH: full fetch needed
@@ -927,7 +945,7 @@ async def get_servers_json(
                     "health_status": normalized_status,
                     "last_checked_iso": health_data["last_checked_iso"],
                     "mcp_endpoint": server_info.get("mcp_endpoint"),
-                    "metadata": server_info.get("metadata", {}),
+                    "metadata": project_metadata(server_info.get("metadata", {}), _metadata_paths),
                     "version": current_version,
                     "versions": versions if len(versions) > 1 else None,
                     "default_version": current_version,
@@ -1229,6 +1247,57 @@ def _normalize_server_path(path: str) -> str:
     if len(path) > 1 and path.endswith("/"):
         path = path.rstrip("/")
     return path
+
+
+def _build_provider_entry(
+    provider_organization: str | None,
+    provider_url: str | None,
+) -> dict[str, Any] | None:
+    """Build the nested provider object from the two provider form fields.
+
+    The pair is optional as a whole but meaningless half-filled: per the A2A
+    specification, and per ``AgentProvider``'s own required fields, a provider
+    that is present must carry both an organization and a URL.
+
+    A blank or whitespace-only field counts as absent. An HTML form submits an
+    empty string for a field the user left alone, so treating ``""`` as a value
+    would store a provider with an empty organization -- valid to Pydantic,
+    useless to a reader.
+
+    Args:
+        provider_organization: Raw ``provider_organization`` form field.
+        provider_url: Raw ``provider_url`` form field.
+
+    Returns:
+        The serialized provider object, or None when neither field was supplied
+        so the caller omits ``provider`` entirely.
+
+    Raises:
+        HTTPException: 400 naming the missing field when exactly one is given.
+            Building ``AgentProvider`` with a None field raises a Pydantic
+            ValidationError that no handler catches, which surfaces as a 500
+            with nothing to indicate which field was at fault (issue #1651).
+    """
+    from ..schemas.agent_models import AgentProvider
+
+    organization = (provider_organization or "").strip() or None
+    url = (provider_url or "").strip() or None
+
+    if organization is None and url is None:
+        return None
+
+    if organization is None or url is None:
+        missing = "provider_organization" if organization is None else "provider_url"
+        supplied = "provider_url" if organization is None else "provider_organization"
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"'{missing}' is required when '{supplied}' is supplied. "
+                f"Provider organization and URL must be given together, or both left empty."
+            ),
+        )
+
+    return AgentProvider(organization=organization, url=url).model_dump()
 
 
 def _to_dt(value: Any) -> datetime | None:
@@ -1668,14 +1737,11 @@ async def register_service(
     if effective_status:
         server_entry["status"] = effective_status
 
-    # Add provider information (stored as nested AgentProvider object)
-    if provider_organization or provider_url:
-        from ..schemas.agent_models import AgentProvider
-
-        server_entry["provider"] = AgentProvider(
-            organization=provider_organization,
-            url=provider_url,
-        ).model_dump()
+    # Add provider information (stored as nested AgentProvider object).
+    # A half-filled pair is rejected with a 400 naming the missing field.
+    provider_entry = _build_provider_entry(provider_organization, provider_url)
+    if provider_entry is not None:
+        server_entry["provider"] = provider_entry
 
     # Add source timestamps
     if source_created_at:
@@ -2791,7 +2857,16 @@ async def token_generation_page(
 
 @router.get("/server_details/{service_path:path}")
 async def get_server_details(
-    request: Request, service_path: str, user_context: Annotated[dict, Depends(enhanced_auth)]
+    request: Request,
+    service_path: str,
+    user_context: Annotated[dict, Depends(enhanced_auth)],
+    metadata_fields: list[str] | None = Query(
+        None,
+        description=(
+            "Comma-separated metadata field paths to include (dot-notation for nested). "
+            "Example: 'owner,config.region'. Omit to return full metadata."
+        ),
+    ),
 ):
     """Get server details by path, or all servers if path is 'all' (filtered by permissions)."""
     # Normalize the path to ensure it starts with '/'
@@ -2852,6 +2927,11 @@ async def get_server_details(
     # access but a restricted tool set must not see tool names outside that
     # set. filter_tools_for_user fails closed and passes through admin/wildcard.
     _apply_tool_visibility(server_info, service_path, user_context, endpoint="server_details")
+
+    # Apply metadata projection if requested (Issue #1277)
+    _metadata_paths = parse_and_validate_metadata_fields(metadata_fields)
+    if _metadata_paths is not None:
+        server_info["metadata"] = project_metadata(server_info.get("metadata"), _metadata_paths)
 
     # Local (stdio) servers don't support multi-version routing — early-return
     # avoids guarding the synthesis block below. _build_versions_list() also
@@ -4207,14 +4287,11 @@ async def register_service_api(
     if effective_status:
         server_entry["status"] = effective_status
 
-    # Add provider information
-    if provider_organization or provider_url:
-        from ..schemas.agent_models import AgentProvider
-
-        server_entry["provider"] = AgentProvider(
-            organization=provider_organization,
-            url=provider_url,
-        ).model_dump()
+    # Add provider information. A half-filled pair is rejected with a 400
+    # naming the missing field.
+    provider_entry = _build_provider_entry(provider_organization, provider_url)
+    if provider_entry is not None:
+        server_entry["provider"] = provider_entry
 
     # Add source timestamps
     if source_created_at:

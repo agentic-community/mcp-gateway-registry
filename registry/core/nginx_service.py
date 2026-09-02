@@ -8,16 +8,21 @@ import os
 import re
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 from urllib.parse import urlparse
 
 import httpx
 
 from registry.constants import REGISTRY_CONSTANTS, DeploymentType, HealthStatus
+from registry.schemas.proxy_mixin import _assert_egress_allowed, build_proxy_client_path
 
 from .config import settings
 from .endpoint_utils import get_endpoint_url_from_server_info
-from .metrics import NGINX_CONFIG_WRITES, NGINX_UPDATES_SKIPPED
+from .metrics import (
+    GATEWAY_GENERIC_BLOCKS_DROPPED,
+    NGINX_CONFIG_WRITES,
+    NGINX_UPDATES_SKIPPED,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1339,10 +1344,31 @@ class NginxConfigService:
                         else virtual_backend_locations
                     )
 
+                # Generic-proxy blocks (proxied non-MCP entities). These join the
+                # VIRTUAL_SERVER_BLOCKS placeholder; nginx concatenates both
+                # placeholders into one server{} block, so a generic location that
+                # collides with ANY higher-precedence block (legacy MCP in
+                # location_blocks, or virtual above) must be dropped. Seed
+                # claimed_paths with both sources so the collision check spans them.
+                # Flag-gated inside _fetch_generic_proxied_resources: zero DB queries
+                # (and no-op here) when the feature is disabled.
+                claimed_paths: set[str] = set()
+                for mcp_block in location_blocks:
+                    claimed_paths |= self._location_paths_in(mcp_block)
+                claimed_paths |= self._location_paths_in(virtual_blocks)
+
+                generic_blocks = await self._generate_generic_proxy_blocks(claimed_paths)
+                if generic_blocks:
+                    generic_text = "\n".join(generic_blocks)
+                    virtual_blocks = (
+                        virtual_blocks + "\n" + generic_text if virtual_blocks else generic_text
+                    )
+
                 config_content = config_content.replace("{{VIRTUAL_SERVER_BLOCKS}}", virtual_blocks)
 
                 logger.info(
-                    f"Generated virtual server config with {len(virtual_servers)} virtual servers"
+                    f"Generated virtual server config with {len(virtual_servers)} virtual "
+                    f"servers and {len(generic_blocks)} generic-proxy blocks"
                 )
             except Exception as e:
                 logger.error(f"Failed to generate virtual server config: {e}", exc_info=True)
@@ -1778,6 +1804,221 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
             logger.error(f"Failed to generate virtual server blocks: {e}", exc_info=True)
             return ""
 
+    # Matches a `location [=] <path> {` directive so a generated block's nginx
+    # location path can be extracted for collision dedup. The path is a greedy
+    # run of non-whitespace and MUST be followed by whitespace then the opening
+    # brace — otherwise a `{{ROOT_PATH}}` placeholder's own brace would be
+    # mistaken for the block opener. Tolerates the unsubstituted `{{ROOT_PATH}}`
+    # prefix (stripped by the caller before comparison).
+    _LOCATION_DIRECTIVE_RE = re.compile(r"^\s*location\s+(?:=\s+)?(\S+)\s+\{", re.MULTILINE)
+
+    @classmethod
+    def _location_paths_in(
+        cls,
+        block_text: str,
+    ) -> set[str]:
+        """Extract the set of nginx location paths declared in a block string.
+
+        Used to detect cross-block ``location`` collisions (duplicate location
+        directives fail ``nginx -t`` and block the reload for the whole replica).
+        Commented-out location lines (leading ``#``) are ignored — they are not
+        live directives. The ``{{ROOT_PATH}}`` placeholder is stripped so paths
+        compare on their post-substitution value.
+        """
+        paths: set[str] = set()
+        for line in block_text.splitlines():
+            stripped = line.lstrip()
+            if stripped.startswith("#"):
+                continue
+            m = cls._LOCATION_DIRECTIVE_RE.match(line)
+            if m:
+                paths.add(m.group(1).replace("{{ROOT_PATH}}", ""))
+        return paths
+
+    def _create_generic_proxy_block(
+        self,
+        entity_type: str,
+        path: str,
+        target_url: str,
+    ) -> str:
+        """Render one nginx location block routing a proxied non-MCP entity.
+
+        The block proxies to the auth-server's generic hop
+        (``{auth_server_url}/proxy/{entity_type}/{path}/``), NOT to the backend
+        target directly — nginx never dials the registered target. The target URL
+        is forwarded as ``X-Upstream-Url`` (via a SEPARATE ``$generic_backend_url``
+        variable, never ``$backend_url``, to avoid tripping the MCP token mint) so
+        ``/validate`` can cryptographically pin it into the generic-proxy token;
+        IP-pinning and TLS SNI for the backend happen at the auth-server httpx
+        layer, not here.
+
+        Args:
+            entity_type: Canonical entity type (e.g. "skill", "a2a_agent").
+            path: The registered entity path (e.g. "/skills/proxy-demo").
+            target_url: The resolved, egress-validated backend URL.
+
+        Returns:
+            The nginx location block string (with ``{{ROOT_PATH}}`` placeholder).
+        """
+        entity_path = path.strip("/")
+        proxy_target = f"{settings.auth_server_url.rstrip('/')}/proxy/{entity_type}/{entity_path}/"
+        # Client-facing location = {prefix}/{type}/{name} (auto-derived, never
+        # hand-entered). This is ONLY the outward path; the authz key is unchanged
+        # — it still keys off $generic_proxy_kind ($entity_path) below and the
+        # /proxy/{type}/{entity_path}/ proxy_pass, both of which use the FULL
+        # registered path. Changing this line does not invalidate existing scopes.
+        #
+        # Normalise to a trailing slash (issue #1501): a bare location prefix-matches
+        # unrelated routes (e.g. /gateway/skill/foobar), hijacking them into this
+        # entity's /validate auth subrequest. A trailing-slash location matches only
+        # the subtree and dedups exactly against the MCP/virtual location paths.
+        location_path = (
+            build_proxy_client_path(entity_type, path, settings.gateway_proxy_prefix).rstrip("/")
+            + "/"
+        )
+        body_size = settings.gateway_generic_client_max_body_size
+        return f"""
+    # Proxied {entity_type}: {location_path}
+    location {{{{ROOT_PATH}}}}{location_path} {{
+        client_max_body_size {body_size};
+        auth_request /validate;
+        auth_request_set $auth_internal_token_generic $upstream_http_x_internal_token_generic;
+        auth_request_set $auth_user $upstream_http_x_user;
+        auth_request_set $auth_scopes $upstream_http_x_scopes;
+
+        # SEPARATE upstream variable ($generic_backend_url), NOT $backend_url: keeps
+        # X-Resolved-Upstream empty on generic requests so the MCP token mint never
+        # fires and exactly one (generic-audience) token is issued per request.
+        set $generic_backend_url "{target_url}";
+        set $generic_proxy_kind "{entity_type}";
+        set $entity_path "{entity_path}";
+        proxy_set_header X-Upstream-Url $generic_backend_url;
+
+        proxy_pass {proxy_target};
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        # The generic hop's verify_generic_proxy_token reads X-Internal-Token-Generic
+        # (distinct from the MCP hop's X-Internal-Token so they never collide). Must
+        # match that header name exactly, or the hop 401s "Missing internal proxy token".
+        proxy_set_header X-Internal-Token-Generic $auth_internal_token_generic;
+        proxy_set_header Authorization $http_authorization;
+        proxy_set_header X-User $auth_user;
+        proxy_set_header X-Scopes $auth_scopes;
+        proxy_set_header X-Original-URL $scheme://$host$request_uri;
+        proxy_pass_request_headers on;
+        error_page 401 = @auth_error;
+        error_page 403 = @forbidden_error;
+    }}"""
+
+    def _safe_generic_block(
+        self,
+        entity_type: str,
+        path: str,
+        target_url: str,
+    ) -> str | None:
+        """Return a generic block, or None to SKIP if the target is invalid/denied.
+
+        Render-time defense: a single malformed or SSRF-denied target
+        that rendered a broken block would fail ``nginx -t`` and block the reload
+        for EVERY route on the replica. Every guard here skips-with-WARNING and
+        never raises into the render. Runs IN ADDITION to registration-time
+        validation, because a stored row may predate the policy or have arrived
+        via a path that bypassed the edge validators.
+
+        Guards (defense-in-depth; registration validators are the primary line,
+        but a stored row may predate the policy, be corrupt, or have arrived via a
+        bypass path — this is the LAST gate before a live nginx config):
+          - auth_server_url is set (else proxy_pass would be a relative self-loop);
+          - scheme is http(s);
+          - _assert_egress_allowed(target_url) passes (SSRF egress policy);
+          - entity_type matches the strict token grammar (it is interpolated into
+            the location path AND three directives; a corrupt value would break
+            out even though canonical/custom types are validated at registration);
+          - no ``..`` path segment (would path-traverse on the auth-server hop
+            after nginx normalizes the proxy_pass URI);
+          - neither the target, path, nor entity_type contains a character that
+            could break out of the location/proxy_pass/set directive. ``$`` is
+            denied in the target because it is placed inside a double-quoted
+            ``set`` value where nginx would otherwise expand it as a variable.
+        """
+        try:
+            if not settings.auth_server_url:
+                raise ValueError("auth_server_url is not configured")
+            if not (target_url.startswith("http://") or target_url.startswith("https://")):
+                raise ValueError(f"non-http(s) target: {target_url!r}")
+            _assert_egress_allowed(target_url)
+            if not re.fullmatch(r"[a-z0-9_-]+", entity_type):
+                raise ValueError(f"illegal entity_type token: {entity_type!r}")
+            if ".." in path.split("/"):
+                raise ValueError(f"path-traversal segment in path: {path!r}")
+            # Chars that could break out of a location/proxy_pass/set directive.
+            # ``$`` is target-only (nginx would expand it inside the quoted set
+            # value); the rest apply to path and entity_type too.
+            structural = ("\n", "\r", '"', ";", "{", "}", " ", "\t", "\\")
+            if any(c in target_url for c in (*structural, "$")):
+                raise ValueError("illegal character in target")
+            if any(c in path for c in structural):
+                raise ValueError("illegal character in path")
+            return self._create_generic_proxy_block(entity_type, path, target_url)
+        except Exception as e:
+            logger.warning("Skipping generic block for %s%s: %s", entity_type, path, e)
+            GATEWAY_GENERIC_BLOCKS_DROPPED.labels(reason="invalid").inc()
+            return None
+
+    async def _generate_generic_proxy_blocks(
+        self,
+        claimed_paths: set[str],
+    ) -> list[str]:
+        """Generate generic-proxy location blocks for proxied non-MCP entities.
+
+        Fetches the flag-gated proxied-resource list (zero DB queries when the
+        feature is disabled), renders a safe block per entity, and drops any block
+        whose nginx location path collides with an already-claimed path.
+
+        Precedence: legacy MCP and virtual blocks are generated first and
+        their paths passed in via ``claimed_paths``; generic is the LOWEST tier, so
+        a generic block is dropped (never overrides) on collision — including
+        generic-vs-generic, where the first-seen entity wins deterministically
+        (resources are sorted by location path for stable ordering).
+
+        Args:
+            claimed_paths: nginx location paths already taken by higher-precedence
+                (MCP / virtual) blocks. Mutated in place as generic paths are
+                claimed, so later generic blocks see earlier ones.
+
+        Returns:
+            List of rendered generic location block strings (possibly empty).
+        """
+        resources = await _fetch_generic_proxied_resources()
+        if not resources:
+            return []
+
+        blocks: list[str] = []
+        for res in sorted(resources, key=lambda r: (r["entity_type"], r["path"])):
+            block = self._safe_generic_block(res["entity_type"], res["path"], res["target_url"])
+            if block is None:
+                continue  # _safe_generic_block already logged + counted the drop
+            block_paths = self._location_paths_in(block)
+            collision = block_paths & claimed_paths
+            if collision:
+                logger.warning(
+                    "Dropping generic block for %s%s: location path(s) %s already "
+                    "claimed by a higher-precedence (MCP/virtual/earlier) block",
+                    res["entity_type"],
+                    res["path"],
+                    sorted(collision),
+                )
+                GATEWAY_GENERIC_BLOCKS_DROPPED.labels(reason="collision").inc()
+                continue
+            claimed_paths |= block_paths
+            blocks.append(block)
+
+        logger.info(f"Generated {len(blocks)} generic-proxy location blocks")
+        return blocks
+
     async def _generate_virtual_backend_locations(
         self,
         virtual_servers: list,
@@ -1899,6 +2140,12 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
         # forwarding the caller's credential.
         proxy_set_header Authorization "";
         proxy_set_header Cookie "";
+        # Forward the validated caller identity so backends can attribute
+        # write operations to the authenticated user.  These are set as
+        # request headers by virtual_router.lua (ngx.req.set_header) before
+        # the ngx.location.capture subrequest.
+        proxy_set_header X-User $http_x_user;
+        proxy_set_header X-Username $http_x_username;
         proxy_buffering off;
         proxy_set_header Accept "application/json, text/event-stream";
         proxy_set_header Content-Type $content_type;
@@ -2749,6 +2996,68 @@ async def _fetch_all_enabled_servers() -> dict[str, Any]:
         if info:
             enabled_servers[path] = info
     return enabled_servers
+
+
+# Non-MCP entity types that route through the generic proxy hop. MCP servers keep
+# their existing legacy path; virtual servers are alias-only (this feature does not
+# emit generic blocks for them). Each maps to the repository factory getter.
+_GENERIC_PROXY_ENTITY_TYPES: tuple[str, ...] = ("a2a_agent", "skill", "custom")
+
+
+class _ProxiedRepository(Protocol):
+    """Structural type shared by repositories queried for proxied records."""
+
+    async def list_proxied(self) -> list[dict[str, Any]]: ...
+
+
+async def _fetch_generic_proxied_resources() -> list[dict[str, Any]]:
+    """Collect non-MCP entities that opt into the generic gateway proxy.
+
+    Returns a list of ``{"entity_type", "path", "target_url"}`` for every
+    agent/skill/custom entity that is proxied AND resolves to a target (via
+    ``resolve_proxy_target``, which drops federated / disabled / auto-disabled /
+    targetless rows). SSRF is NOT re-checked here — the render-time
+    ``_safe_generic_block`` guard does that before emitting a block.
+
+    SRE gate: when ``gateway_generic_proxy_enabled`` is false this
+    issues ZERO DB queries — an upgraded deployment that hasn't enabled the
+    feature pays no new per-tick fan-out. Block-generation gating alone is not
+    enough; the FETCH itself is skipped.
+    """
+    if not settings.gateway_generic_proxy_enabled:
+        return []
+
+    # MCP servers keep their legacy /path block (handled by the enabled-server
+    # path); only agents/skills/custom entities route through the generic hop.
+    from registry.repositories.factory import (
+        get_agent_repository,
+        get_custom_entity_repository,
+        get_skill_repository,
+    )
+    from registry.schemas.proxy_mixin import resolve_proxy_target
+
+    repos: dict[str, _ProxiedRepository] = {
+        "a2a_agent": get_agent_repository(),
+        "skill": get_skill_repository(),
+        "custom": get_custom_entity_repository(),
+    }
+    resources: list[dict[str, Any]] = []
+    for entity_type, repo in repos.items():
+        try:
+            rows = await repo.list_proxied()
+        except Exception as e:  # noqa: BLE001 - one repo failing must not break the render
+            logger.error("list_proxied failed for %s: %s", entity_type, e, exc_info=True)
+            continue
+        for doc in rows:
+            # Custom records carry their own type token; use it so the canonical
+            # /{type}/{path} namespace matches the record's actual type.
+            row_type = doc.get("entity_type") or entity_type
+            target = resolve_proxy_target(row_type, doc)
+            if not target:
+                # Not renderable (federated / disabled / auto-disabled / no target).
+                continue
+            resources.append({"entity_type": row_type, "path": doc["path"], "target_url": target})
+    return resources
 
 
 # Module-level singleton

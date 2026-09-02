@@ -382,6 +382,91 @@ _nginx_config_writes_counter = _meter.create_counter(
 )
 nginx_config_writes_total = _CounterAdapter(_nginx_config_writes_counter)
 
+# Generic-proxy blocks dropped at render (invalid target / SSRF-denied / location
+# collision). A non-zero value means one or more proxied entities did NOT get a
+# route this render — surfaced as a metric because the drop is a WARNING log
+# otherwise easy to miss on a busy replica. Label `reason`: invalid | collision.
+_gateway_generic_blocks_dropped_counter = _meter.create_counter(
+    name="mcpgw_registry_gateway_generic_blocks_dropped_total",
+    description="Generic-proxy nginx blocks dropped at render (invalid target or location collision)",
+    unit="1",
+)
+gateway_generic_blocks_dropped_total = _CounterAdapter(_gateway_generic_blocks_dropped_counter)
+
+
+# Egress-policy verification gauge. 1 = the startup egress self-check found a
+# cloud metadata IP reachable (network egress policy NOT enforced; the generic
+# proxy feature has been disabled for this process). 0 = verified/clean or the
+# check was opted out. A permanent 1 is the operator's signal that an enabled
+# generic-proxy feature is running without its required DNS-rebind defense.
+# Backed by an ObservableGauge over a module-local value that the auth-server
+# self-check sets via the _EgressUnverifiedGauge adapter's .set().
+
+
+class _EgressUnverifiedGauge:
+    """Minimal settable-gauge shim: .set(v) stores; an ObservableGauge emits it."""
+
+    def __init__(self) -> None:
+        self._value: int = 0
+
+    def set(self, value: int) -> None:  # noqa: A003 - mirroring prometheus_client API
+        self._value = int(value)
+
+    def _observe(self, _options: Any) -> Any:
+        yield metrics.Observation(self._value, {})
+
+
+gateway_egress_policy_unverified = _EgressUnverifiedGauge()
+
+_meter.create_observable_gauge(
+    name="mcpgw_registry_gateway_egress_policy_unverified",
+    callbacks=[gateway_egress_policy_unverified._observe],
+    description=(
+        "1 if the generic-proxy egress self-check found a metadata IP reachable "
+        "(policy unverified; feature disabled for this process), else 0"
+    ),
+    unit="1",
+)
+
+
+def _recommended_config_callback(options: Any) -> Any:
+    """ObservableGauge: 1 when a recommended-but-optional setting is NOT set, else 0.
+
+    Runs on the metrics-export cycle (NOT the request path). Reads the current
+    settings each cycle so the gauge self-corrects once an operator configures the
+    setting -- no manual reset. Only recommendations that APPLY to this deployment
+    are emitted (an unused feature is never nagged). Labels are bounded (a fixed,
+    code-defined recommendation list), so cardinality is safe. Lazy imports avoid
+    a startup circular import (settings -> meters).
+    """
+    try:
+        from registry.core.config import settings
+        from registry.core.recommended_config import evaluate_recommendations
+
+        for rec in evaluate_recommendations(settings):
+            yield metrics.Observation(
+                0 if rec["configured"] else 1,
+                {
+                    "setting": rec["id"],
+                    "component": rec["component"],
+                    "severity": rec["severity"],
+                },
+            )
+    except Exception as exc:  # pragma: no cover - defensive; never break export
+        logger.debug("recommended_config callback failed: %s", exc)
+        return
+
+
+_meter.create_observable_gauge(
+    name="mcpgw_registry_recommended_config_not_set",
+    callbacks=[_recommended_config_callback],
+    description=(
+        "1 when a recommended-but-optional setting that applies to this deployment "
+        "is not configured (an active operator nudge), else 0. Labeled by setting."
+    ),
+    unit="1",
+)
+
 
 # Mode-blocked requests (registry/core/metrics.py:43)
 _mode_blocked_requests_counter = _meter.create_counter(

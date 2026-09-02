@@ -205,6 +205,12 @@ services:
       # metadata address (169.254.169.254) is never permitted by either.
       - SSRF_ALLOWED_HOSTS=${SSRF_ALLOWED_HOSTS:-}
       - SSRF_ALLOWED_CIDRS=${SSRF_ALLOWED_CIDRS:-}
+      # Gateway generic-proxy feature (registry-consumed): ships disabled by default
+      - GATEWAY_GENERIC_PROXY_ENABLED=${GATEWAY_GENERIC_PROXY_ENABLED:-false}
+      - GATEWAY_CANONICAL_NAMESPACE_ENABLED=${GATEWAY_CANONICAL_NAMESPACE_ENABLED:-false}
+      - GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS=${GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS:-false}
+      - GATEWAY_GENERIC_CLIENT_MAX_BODY_SIZE=${GATEWAY_GENERIC_CLIENT_MAX_BODY_SIZE:-1m}
+      - GATEWAY_PROXY_PREFIX=${GATEWAY_PROXY_PREFIX:-gateway}
       - SECRET_KEY=${SECRET_KEY}
       # Per-user egress credential vault (off by default)
       - EGRESS_AUTH_ENABLED=${EGRESS_AUTH_ENABLED:-false}
@@ -213,6 +219,9 @@ services:
       - EGRESS_TOKEN_REFRESH_SKEW_SECONDS=${EGRESS_TOKEN_REFRESH_SKEW_SECONDS:-300}
       - EGRESS_STATE_TTL_SECONDS=${EGRESS_STATE_TTL_SECONDS:-600}
       - EGRESS_OBO_ALLOWED_AUDIENCES=${EGRESS_OBO_ALLOWED_AUDIENCES:-}
+      - EGRESS_OAUTH_TRUSTED_IDP_HOSTS=${EGRESS_OAUTH_TRUSTED_IDP_HOSTS:-}
+      - EGRESS_CREDENTIAL_ENCRYPTION_KEY=${EGRESS_CREDENTIAL_ENCRYPTION_KEY:-}
+      - EGRESS_CREDENTIAL_ENCRYPTION_REQUIRE_ENCRYPTED=${EGRESS_CREDENTIAL_ENCRYPTION_REQUIRE_ENCRYPTED:-false}
       - EGRESS_CONSENT_USE_ELICITATION=${EGRESS_CONSENT_USE_ELICITATION:-false}
       - AUTH_SERVER_NGINX_MARKER_SECRET=${AUTH_SERVER_NGINX_MARKER_SECRET:-}
       - AWS_SECRETS_REGION=${AWS_SECRETS_REGION:-}
@@ -624,7 +633,10 @@ services:
       # registry (it does NOT touch the secret store, so no SECRET_STORE/AWS/
       # OPENBAO vars here).
       - EGRESS_AUTH_ENABLED=${EGRESS_AUTH_ENABLED:-false}
-      - EGRESS_REGISTRY_INTERNAL_URL=${EGRESS_REGISTRY_INTERNAL_URL:-http://registry:8080}
+      - EGRESS_REGISTRY_INTERNAL_URL=${EGRESS_REGISTRY_INTERNAL_URL:-http://registry:8091}
+      # OBO (same-IdP) token exchange against a self-hosted IdP: allowlist its
+      # private-resolving token endpoint. Must match the registry's value.
+      - EGRESS_OAUTH_TRUSTED_IDP_HOSTS=${EGRESS_OAUTH_TRUSTED_IDP_HOSTS:-}
       - EGRESS_CONSENT_USE_ELICITATION=${EGRESS_CONSENT_USE_ELICITATION:-false}
       - AUTH_SERVER_NGINX_MARKER_SECRET=${AUTH_SERVER_NGINX_MARKER_SECRET:-}
       - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID}
@@ -640,6 +652,14 @@ services:
       - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
       - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
       - GOOGLE_ENABLED=${GOOGLE_ENABLED:-false}
+      # Gateway generic-proxy feature (auth-server-consumed): ships disabled by default
+      - GENERIC_PROXY_TOKEN_TTL_SECONDS=${GENERIC_PROXY_TOKEN_TTL_SECONDS:-30}
+      - GENERIC_PROXY_MAX_BODY_BYTES=${GENERIC_PROXY_MAX_BODY_BYTES:-10485760}
+      - GATEWAY_GENERIC_REQUIRE_BEARER_FOR_WRITES=${GATEWAY_GENERIC_REQUIRE_BEARER_FOR_WRITES:-true}
+      - GATEWAY_EGRESS_SELFCHECK_ENABLED=${GATEWAY_EGRESS_SELFCHECK_ENABLED:-true}
+      - GATEWAY_GENERIC_TLS_VERIFY=${GATEWAY_GENERIC_TLS_VERIFY:-true}
+      - GATEWAY_PROXY_PIN_REFRESH_SECONDS=${GATEWAY_PROXY_PIN_REFRESH_SECONDS:-300}
+      - GATEWAY_GENERIC_MAX_CONCURRENCY=${GATEWAY_GENERIC_MAX_CONCURRENCY:-32}
       # Metrics configuration
       - METRICS_SERVICE_URL=http://metrics-service:8890
       - METRICS_API_KEY=${METRICS_API_KEY_AUTH_SERVER}
@@ -1029,6 +1049,9 @@ services:
       # Logging
       KC_LOG_LEVEL: INFO
 
+      # Health endpoints (required for /health/ready on the management port)
+      KC_HEALTH_ENABLED: 'true'
+
     # start-dev serves plain HTTP with a bootstrap admin account, so the
     # published port is bound to loopback: the browser reaches it via
     # http://localhost:8080 on the same host, and in-cluster services use the
@@ -1051,11 +1074,23 @@ services:
       - ./keycloak/import:/opt/keycloak/data/import
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health/ready"]
+      # The Keycloak image deliberately ships without curl (upstream removes HTTP
+      # clients to cut attack surface), so a curl-based check can never succeed
+      # and leaves the container permanently unhealthy. Use bash's /dev/tcp
+      # redirection, which is what the Keycloak health guide documents for
+      # HEALTHCHECK. Since Keycloak 25 the health endpoints are served on the
+      # management port (9000), not on the main HTTP port.
+      test:
+        - CMD
+        - /bin/bash
+        - -c
+        - "{ printf 'HEAD /health/ready HTTP/1.0\\r\\n\\r\\n' >&0; grep 'HTTP/1.[01] 200'; } 0<>/dev/tcp/localhost/9000"
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 60s
+      # First boot runs the Keycloak DB schema migration; a short start_period
+      # reports the container unhealthy during an otherwise normal startup.
+      start_period: 120s
 
   pingfederate:
     # Pinned to a specific version rather than :latest so the image is

@@ -45,6 +45,11 @@ from registry.egress_auth.service import (
     EgressAuthService,
     is_per_user_auth_method,
 )
+from registry.egress_auth.upstream_binding import (
+    base_url,
+    bound_upstreams,
+    registered_upstreams,
+)
 from registry.exceptions import UrlValidationError
 from registry.repositories.factory import get_server_repository
 from registry.secrets.factory import get_secret_store
@@ -322,32 +327,6 @@ class EgressTokenResponse(BaseModel):
     )
 
 
-def _base_url(url: str) -> str:
-    """scheme://host[:port] of a URL, lowercased -- the comparison surface for the upstream cross-check.
-
-    The mcp_proxy sub-path append is confined to the bound host, so the cross-check
-    compares the BASE (scheme+host+port), not the full post-append path.
-    """
-    p = urlparse(url)
-    return f"{(p.scheme or '').lower()}://{(p.netloc or '').lower()}"
-
-
-def _registered_upstreams(server: dict) -> set[str]:
-    """The legal upstream base-URL set for a server: proxy_pass_url ∪ versions[*]."""
-    bases: set[str] = set()
-    if server.get("proxy_pass_url"):
-        bases.add(_base_url(server["proxy_pass_url"]))
-    for ver in server.get("versions") or []:
-        ppu = (
-            ver.get("proxy_pass_url")
-            if isinstance(ver, dict)
-            else getattr(ver, "proxy_pass_url", None)
-        )
-        if ppu:
-            bases.add(_base_url(ppu))
-    return bases
-
-
 @router.post("/internal/egress-token", response_model=EgressTokenResponse)
 async def vend_egress_token(
     body: EgressTokenRequest,
@@ -402,11 +381,12 @@ async def vend_egress_token(
     # The bound upstream MUST match a registered upstream for this server. This
     # cross-check applies to BOTH egress modes: an OBO directive must only be
     # handed out for a legitimately-bound upstream, same as a vault vend.
-    legal = _registered_upstreams(server)
-    if _base_url(token_upstream) not in legal:
+    legal = registered_upstreams(server)
+    requested_upstream = base_url(token_upstream)
+    if requested_upstream not in legal:
         logger.warning(
             "egress vend REFUSED: upstream %r not in registered set %r for %s",
-            _base_url(token_upstream),
+            requested_upstream,
             legal,
             server_path,
         )
@@ -428,6 +408,7 @@ async def vend_egress_token(
             user_id=sub,
             provider=provider,
             server_path=server_path,
+            requested_upstream=requested_upstream,
         )
         if token is not None:
             # The PAT is injected into the SAME header the server's Backend
@@ -459,6 +440,7 @@ async def vend_egress_token(
             user_id=sub,
             server_path=server_path,
             egress_oauth=egress_oauth,
+            requested_upstream=requested_upstream,
         )
     except SecretStoreError as exc:
         # The store already rode out a bounded backoff (transient Vault/OpenBao
@@ -854,6 +836,7 @@ async def set_egress_pat(
         token_type="Bearer",  # nosec B106 - token type label, not a credential
         created_at=now.isoformat(),
         expires_at=(now + timedelta(seconds=ttl_seconds)).isoformat(),
+        bound_upstreams=bound_upstreams(server),
     )
     try:
         await get_secret_store().put_token(auth_method, sub, provider, server_path, token)
@@ -1151,6 +1134,7 @@ async def egress_callback(
             egress_oauth=server["egress_oauth"],
             current_user_id=current_user,
             current_auth_method=current_method,
+            bound_upstreams=bound_upstreams(server),
         )
     except EgressAuthError as exc:
         # Detail to server logs only. Do NOT reflect the exception text into the

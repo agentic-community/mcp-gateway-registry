@@ -74,7 +74,11 @@ from ..services.lifecycle_events import (
 )
 from ..services.registration_gate_service import check_registration_gate
 from ..services.webhook_service import send_registration_webhook
-from ..utils.metadata import flatten_metadata_to_text
+from ..utils.metadata import (
+    flatten_metadata_to_text,
+    parse_and_validate_metadata_fields,
+    project_metadata,
+)
 from ..utils.request_utils import get_client_ip
 from ..utils.url_guard import PROXY_PROFILE, guarded_async_client, validate_agent_url
 from ._etag_utils import (
@@ -1083,6 +1087,9 @@ async def register_agent(
             source_created_at=source_created_dt,
             source_updated_at=source_updated_dt,
             external_tags=external_tag_list,
+            # Gateway-proxy opt-in (validated on the request model; carried through).
+            is_proxied=request.is_proxied,
+            proxy_target_url=request.proxy_target_url,
             **optional_card_kwargs,
         )
 
@@ -1254,6 +1261,10 @@ async def list_agents(
     ),
     limit: int = Query(20, ge=1, le=2000, description="Number of agents to return (max 2000)"),
     offset: int = Query(0, ge=0, description="Number of agents to skip"),
+    metadata_fields: list[str] | None = Query(
+        None,
+        description="Comma-separated metadata field paths to include (dot-notation for nested). Example: 'owner,config.region'. Omit to return full metadata.",
+    ),
     user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
 ):
     """
@@ -1268,6 +1279,7 @@ async def list_agents(
         visibility: Filter by visibility level
         limit: Number of agents to return (1-500, default 20)
         offset: Number of agents to skip (default 0)
+        metadata_fields: Comma-separated metadata field paths to include
         user_context: Authenticated user context
 
     Returns:
@@ -1275,6 +1287,8 @@ async def list_agents(
     """
     # Set audit action for agent list
     set_audit_action(request, "list", "agent", description="List all agents")
+
+    _metadata_paths = parse_and_validate_metadata_fields(metadata_fields)
 
     logger.debug(
         f"list_agents called: limit={limit}, offset={offset}, "
@@ -1398,7 +1412,14 @@ async def list_agents(
                 visibility=getattr(agent, "visibility", "public"),
                 allowed_groups=getattr(agent, "allowed_groups", []),
                 supported_protocol=getattr(agent, "supported_protocol", None),
-                metadata=agent.metadata if agent.metadata else {},
+                metadata=project_metadata(
+                    agent.metadata if agent.metadata else {}, _metadata_paths
+                ),
+                # Gateway-proxy opt-in: carry through so the card badge + edit
+                # modal reflect stored state (proxy_client_url is server-derived).
+                is_proxied=getattr(agent, "is_proxied", False),
+                proxy_target_url=getattr(agent, "proxy_target_url", None),
+                proxy_client_url=getattr(agent, "proxy_client_url", None),
             )
             filtered_agents.append(agent_info)
 
@@ -1418,6 +1439,14 @@ async def list_agents(
         f"User {user_context['username']} listed {len(page_agents)} agents "
         f"(total: {total_count}, offset: {offset}, limit: {limit})"
     )
+
+    # Redact the internal backend origin (proxy_target_url) for non-admins,
+    # mirroring the single-agent read and the MCP server endpoints. is_proxied
+    # and the derived proxy_client_url stay visible.
+    from ..services.visibility import redact_proxy_backend_url
+
+    for agent_info in page_agents:
+        redact_proxy_backend_url(agent_info, user_context)
 
     return {
         "agents": [agent.model_dump() for agent in page_agents],
@@ -2135,6 +2164,10 @@ async def get_agent(
     path: str,
     response: Response,
     user_context: Annotated[dict, Depends(nginx_proxied_auth)],
+    metadata_fields: list[str] | None = Query(
+        None,
+        description="Comma-separated metadata field paths to include (dot-notation for nested). Example: 'owner,config.region'. Omit to return full metadata.",
+    ),
 ):
     """
     Get a single agent by path.
@@ -2182,11 +2215,19 @@ async def get_agent(
     # mode; admins and registry-only mode see it. Mirrors MCP-server redaction.
     from ..services.visibility import (
         redact_agent_backend_fields,
+        redact_proxy_backend_url,
         should_redact_backend_urls,
     )
 
     if should_redact_backend_urls(user_context):
         redact_agent_backend_fields(agent_dict)
+    # Also strip the generic gateway-proxy backend origin (proxy_target_url).
+    redact_proxy_backend_url(agent_dict, user_context)
+
+    # Apply metadata field projection
+    _metadata_paths = parse_and_validate_metadata_fields(metadata_fields)
+    agent_dict["metadata"] = project_metadata(agent_dict.get("metadata") or {}, _metadata_paths)
+
     return agent_dict
 
 
@@ -2271,6 +2312,10 @@ async def update_agent(
             allowed_groups=request.allowed_groups,
             trust_level=request.trust_level,
             supported_protocol=request.supported_protocol,
+            # Gateway-proxy opt-in: carry from the request (PUT is full-replacement),
+            # else an unrelated edit would silently reset the opt-in to defaults.
+            is_proxied=request.is_proxied,
+            proxy_target_url=request.proxy_target_url,
             registered_by=existing_agent.registered_by,
             registered_at=existing_agent.registered_at,
             is_enabled=existing_agent.is_enabled,

@@ -1,4 +1,5 @@
 import logging
+import re
 from datetime import UTC
 from enum import Enum
 from pathlib import Path
@@ -671,6 +672,28 @@ class Settings(BaseSettings):
             "The cloud metadata address 169.254.169.254 is never permitted."
         ),
     )
+
+    # Trusted-IdP allowlist for the credential-bearing OAuth token endpoints used
+    # by per-user egress consent. Deliberately separate from ssrf_allowed_hosts:
+    # an operator proxy-target bypass must never relax a token POST, so this is
+    # its own opt-in, hosts-only, and defaults to empty (no behaviour change).
+    # Needed because a self-hosted IdP (Keycloak, Entra via Private Link, etc.)
+    # legitimately resolves to a private address, yet the gateway is already
+    # required to trust that same IdP for its own authentication via KEYCLOAK_URL.
+    egress_oauth_trusted_idp_hosts: str = Field(
+        default="",
+        description=(
+            "Comma-separated hostnames of operator-controlled OAuth/OIDC identity "
+            "providers whose token endpoints may resolve to private addresses "
+            "(e.g. 'keycloak.internal.example.com'). Applies ONLY to the "
+            "credentialed-OAuth profile used for egress token exchange. Hosts must "
+            "be named exactly; no CIDRs and no wildcards. HTTPS is still required, "
+            "answers are still resolved, classified and pinned, and cloud/workload "
+            "credential, metadata and link-local addresses are never permitted. "
+            "Keep this list tight: entries here receive client secrets, refresh "
+            "tokens and user assertions."
+        ),
+    )
     nginx_config_validation_required: bool = Field(
         default=False,
         description=(
@@ -1264,6 +1287,166 @@ class Settings(BaseSettings):
         ),
     )
 
+    # --- Gateway generic-proxy feature (registry-consumed subset) ---------------
+    # These four are read by the registry (nginx config generation + egress
+    # validation at registration). The seven runtime knobs consumed by the
+    # auth-server live in the auth_server config. All security-relevant toggles
+    # default to the SAFE value: the feature ships disabled and fails closed.
+    gateway_generic_proxy_enabled: bool = Field(
+        default=False,
+        description=(
+            "Master switch for generating generic-proxy nginx location blocks "
+            "for proxied non-MCP entities. Defaults false: the feature ships "
+            "dark. When false, only MCP/virtual blocks are generated (pre-feature "
+            "behavior) and NO extra per-tick DB queries are issued. Do not enable "
+            "until the network egress policy (SSRF layer 1) is deployed and the "
+            "registration-time resolve-and-validate + CSRF defenses are in place."
+        ),
+    )
+    gateway_canonical_namespace_enabled: bool = Field(
+        default=False,
+        description=(
+            "Emit canonical /entity_type/path nginx blocks alongside the legacy "
+            "flat /path aliases. Defaults false until the /validate "
+            "entity-derivation and canonical-alias minting changes land "
+            "(otherwise canonical MCP aliases 401 and existing scopes 403 on "
+            "canonical URLs)."
+        ),
+    )
+    gateway_proxy_prefix: str = Field(
+        default="gateway",
+        description=(
+            "URL path segment that namespaces every auto-generated client-facing "
+            "proxy route. The client connects to /{prefix}/{entity_type}/{name}; "
+            "the registry derives this path automatically from the entity's type "
+            "and registered path, so operators never hand-enter the client path "
+            "(they only provide the backend/origin proxy_target_url). Rendered "
+            "verbatim into nginx location directives, so it is restricted to a "
+            "single URL-safe path segment (letters, digits, hyphen, underscore)."
+        ),
+    )
+
+    @field_validator("gateway_proxy_prefix")
+    @classmethod
+    def _validate_gateway_proxy_prefix(
+        cls,
+        v: str,
+    ) -> str:
+        """Reject anything that is not a single URL-safe path segment.
+
+        This value is rendered verbatim into an nginx ``location`` path, so a
+        slash, whitespace, or config-special character would either break the
+        reload or open a path-injection surface. Enforce a strict single-segment
+        grammar (no leading/trailing slash, no embedded separators) at load time.
+        """
+        stripped = v.strip().strip("/")
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", stripped):
+            raise ValueError(
+                f"gateway_proxy_prefix={v!r} is not a valid path segment "
+                "(expected letters, digits, hyphen, or underscore; no slashes)"
+            )
+        return stripped
+
+    gateway_proxy_allow_private_targets: bool = Field(
+        default=False,
+        description=(
+            "SSRF egress policy. When false (default), proxy_target_url hosts in "
+            "loopback/private/reserved ranges are rejected at registration and "
+            "render. Link-local/metadata (169.254.0.0/16, fe80::/10) and the "
+            "unspecified address (0.0.0.0, ::) are denied regardless of this "
+            "flag. Set true only for trusted on-cluster service URLs."
+        ),
+    )
+    gateway_generic_client_max_body_size: str = Field(
+        default="1m",
+        description=(
+            "nginx client_max_body_size for generic-proxy location blocks — "
+            "bounds the inbound REQUEST body. Distinct from the auth-server's "
+            "GENERIC_PROXY_MAX_BODY_BYTES response cap. nginx defaults to 1m; "
+            "raise for upload-heavy proxied backends. Must be an nginx size "
+            "token: digits with an optional k/m/g suffix (e.g. 1m, 512k, 2G)."
+        ),
+    )
+
+    @field_validator("gateway_generic_client_max_body_size")
+    @classmethod
+    def _validate_client_max_body_size(
+        cls,
+        v: str,
+    ) -> str:
+        """Reject anything that is not a valid nginx size token.
+
+        This value is rendered verbatim into an nginx ``client_max_body_size``
+        directive, so an invalid token would break the config reload for every
+        route on the replica, and an unsanitized value would be a config-injection
+        surface. Enforce the strict nginx size grammar at config-load time.
+        """
+        if not re.fullmatch(r"\d+[kKmMgG]?", v):
+            raise ValueError(
+                f"gateway_generic_client_max_body_size={v!r} is not a valid nginx "
+                "size token (expected digits with an optional k/m/g suffix, e.g. 1m)"
+            )
+        return v
+
+    gateway_generic_require_bearer_for_writes: bool = Field(
+        default=True,
+        description=(
+            "CSRF defense for the generic-proxy hop. When true (default), a "
+            "state-changing verb (anything but GET/HEAD/OPTIONS) on a generic "
+            "route is refused (403 at /validate, before any token mint) if the "
+            "caller authenticated with a session cookie rather than a Bearer "
+            "token. A browser carrying only an ambient mcp_gateway_session cookie "
+            "therefore cannot perform cross-site DELETE/PUT/PATCH; programmatic "
+            "Bearer callers are unaffected. Relax only for a trusted same-site "
+            "deployment. Consumed by the auth-server."
+        ),
+    )
+    generic_proxy_max_body_bytes: int = Field(
+        default=10 * 1024 * 1024,
+        ge=1024,
+        description=(
+            "Upper bound (bytes) on the buffered UPSTREAM RESPONSE body the "
+            "generic hop reads before returning (mirrors MCP_PROXY_MAX_BODY_BYTES). "
+            "The hop is unary/response-buffering in v1, so worst-case transient "
+            "heap is roughly this times gateway_generic_max_concurrency — size "
+            "both against the auth-server memory limit. Distinct from the nginx "
+            "gateway_generic_client_max_body_size (inbound request body). "
+            "Consumed by the auth-server."
+        ),
+    )
+    gateway_generic_max_concurrency: int = Field(
+        default=32,
+        ge=1,
+        description=(
+            "Semaphore cap on in-flight generic-hop requests (OOM guard). "
+            "Worst-case auth-server heap from buffering approx = "
+            "generic_proxy_max_body_bytes * this. Tune down for memory-"
+            "constrained single-replica deployments. Consumed by the auth-server."
+        ),
+    )
+    gateway_generic_tls_verify: str = Field(
+        default="true",
+        description=(
+            "TLS verification for the generic hop's httpx client to HTTPS "
+            "targets. 'true' = verify against the system trust store (default); a "
+            "filesystem path = custom CA bundle (private-CA dashboards); 'false' = "
+            "disable verification (NOT recommended; emits a startup WARNING). "
+            "Passed to httpx.AsyncClient(verify=...). Consumed by the auth-server."
+        ),
+    )
+    gateway_egress_selfcheck_enabled: bool = Field(
+        default=True,
+        description=(
+            "Startup egress self-check. When the generic proxy is enabled, the "
+            "auth-server probe-connects to the cloud metadata IPs; if EITHER is "
+            "reachable (egress not actually restricted), it logs CRITICAL, emits "
+            "gateway_egress_policy_unverified=1, and DISABLES the generic-proxy "
+            "feature for this process (NOT pod readiness). Opt out only where the "
+            "metadata IP is legitimately reachable but proxying is constrained "
+            "another way. Consumed by the auth-server."
+        ),
+    )
+
     @property
     def nginx_updates_enabled(self) -> bool:
         """Check if nginx updates should be performed."""
@@ -1393,12 +1576,13 @@ class Settings(BaseSettings):
         ),
     )
     egress_registry_internal_url: str = Field(
-        default="http://registry:8080",
+        default="http://registry:8091",
         description=(
-            "Internal URL auth_server uses to reach the registry's "
-            "/_internal/egress-token vend endpoint. The registry app binds loopback, "
-            "so this goes through nginx (registry:8080 -> :80 -> 127.0.0.1:7860), "
-            "which fronts the internal-only location."
+            "Internal URL auth_server uses to reach the registry's egress-token "
+            "vend endpoint. The registry app binds loopback, so this goes through "
+            "nginx on a DEDICATED INTERNAL listener (registry:8091 -> 127.0.0.1:7860) "
+            "that is never published to the host / routed by the public Ingress, so "
+            "the vend is unreachable except by the auth_server over the cluster network."
         ),
     )
     egress_obo_allowed_audiences: str = Field(
@@ -1438,6 +1622,33 @@ class Settings(BaseSettings):
     secrets_manager_path_prefix: str = Field(
         default="mcp/egress",
         description="Secret name prefix for the egress vault in Secrets Manager.",
+    )
+    egress_credential_encryption_key: str = Field(
+        default="",
+        description=(
+            "Application-layer root key for AEAD encryption of per-user egress "
+            "credentials before they are handed to the secret-store backend "
+            "(Secrets Manager / OpenBao). When set (>= 32 chars), StoredToken "
+            "payloads are AES-256-GCM encrypted under a per-principal HKDF-derived "
+            "key; the vault holds ciphertext only. When empty, credentials are "
+            "persisted as plaintext (legacy behavior). Must be kept OUTSIDE the "
+            "secret-store trust boundary this feature protects. NOTE: key "
+            "rotation is a destructive cutover -- there is currently a single "
+            "active key, so changing this value makes existing ciphertext "
+            "undecryptable (fail-closed) and forces affected users to reconnect."
+        ),
+    )
+    egress_credential_require_encrypted: bool = Field(
+        default=False,
+        description=(
+            "Terminal strict mode for the egress credential vault. When true "
+            "(and EGRESS_CREDENTIAL_ENCRYPTION_KEY is set), reads REJECT any "
+            "legacy plaintext entry instead of accepting it, so a write-capable "
+            "attacker on the secret-store backend cannot downgrade an encrypted "
+            "entry to plaintext (or inject a plaintext token) and have it vended. "
+            "Enable only AFTER migration has re-encrypted all existing entries "
+            "(new writes and read-repair happen automatically once the key is set)."
+        ),
     )
     openbao_addr: str = Field(
         default="",
@@ -1882,7 +2093,45 @@ class Settings(BaseSettings):
                 "strong random value at least 32 bytes long, identical across all auth_server "
                 "and registry replicas (see chart values.yaml)."
             )
+        self.egress_credential_encryption_key = self._validate_credential_encryption_key(
+            self.egress_credential_encryption_key
+        )
         self._validate_egress_auth_config()
+
+    @staticmethod
+    def _validate_credential_encryption_key(value: str | None) -> str:
+        """Validate + normalize EGRESS_CREDENTIAL_ENCRYPTION_KEY without leaking it.
+
+        Runs in __init__ (not a @field_validator) deliberately: a pydantic
+        ValidationError echoes the offending ``input_value`` in its message, which
+        would print this secret. A plain ValueError raised here carries only our
+        message, so the key material never reaches logs/exceptions.
+
+        Empty/None -> "" (feature disabled, legacy plaintext). A set value must be
+        >= 32 bytes and not a known placeholder, since it is HKDF input keying
+        material for per-user AES-256-GCM egress-credential encryption.
+        """
+        if not value or not value.strip():
+            return ""
+        stripped = value.strip()
+        if len(stripped.encode("utf-8")) < 32:
+            raise ValueError(
+                "EGRESS_CREDENTIAL_ENCRYPTION_KEY must be at least 32 bytes. Generate a "
+                'high-entropy value with `python3 -c "import secrets; '
+                'print(secrets.token_urlsafe(32))"` and keep it outside the secret-store '
+                "trust boundary it protects."
+            )
+        normalized = stripped.lower()
+        if any(
+            marker in normalized
+            for marker in ("change-me", "changeme", "change-this", "changethis", "placeholder")
+        ):
+            raise ValueError(
+                "EGRESS_CREDENTIAL_ENCRYPTION_KEY is set to a known-weak/placeholder value. "
+                'Set it to a unique, high-entropy secret (e.g. `python3 -c "import secrets; '
+                'print(secrets.token_urlsafe(32))"`).'
+            )
+        return stripped
 
     def _validate_egress_auth_config(self) -> None:
         """Cross-field startup checks for the egress credential vault.

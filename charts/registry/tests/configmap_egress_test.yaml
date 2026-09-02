@@ -96,3 +96,21 @@ tests:
       - equal:
           path: data.EGRESS_OBO_ALLOWED_AUDIENCES
           value: "api://outlook-mcp-server api://calendar-mcp-server"
+
+  - it: omits the trusted IdP host allowlist by default (no private token endpoint permitted)
+    set:
+      egressAuth:
+        enabled: true
+    asserts:
+      - notExists:
+          path: data.EGRESS_OAUTH_TRUSTED_IDP_HOSTS
+
+  - it: renders the trusted IdP host allowlist when set
+    set:
+      egressAuth:
+        enabled: true
+        oauthTrustedIdpHosts: "keycloak.internal.example.com,login.corp.example.net"
+    asserts:
+      - equal:
+          path: data.EGRESS_OAUTH_TRUSTED_IDP_HOSTS
+          value: "keycloak.internal.example.com,login.corp.example.net"

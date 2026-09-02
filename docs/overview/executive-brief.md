@@ -1,7 +1,5 @@
 # Executive Brief
 
-*A one-page overview for decision-makers evaluating adoption. Every quantitative claim is
-verifiable against the repository; figures are stated with an "as of" date.*
 
 ## The problem
 
@@ -55,12 +53,12 @@ endpoints for monitoring. See [Observability](../OBSERVABILITY.md).
 
 ## Maturity signals
 
-*As of 2026-07-08:*
+*As of 2026-08-21:*
 
-- **Tests:** 4,940 test functions across 252 test files (`grep -rc "def test_" tests/`).
-- **Releases:** 30 versioned release notes in [`docs/release-notes/`](../release-notes/1.26.0.md),
-  the latest being **1.26.0** (July 2026).
-- **Community:** 775 GitHub stars and 205 forks
+- **Tests:** 6,407 test functions across 327 test files (`grep -rc "def test_" tests/`).
+- **Releases:** 35 versioned release notes in [`docs/release-notes/`](../release-notes/1.30.0.md),
+  the latest being **1.30.0** (August 2026).
+- **Community:** 869 GitHub stars, 221 forks, and 58 contributors
   ([repository](https://github.com/agentic-community/mcp-gateway-registry)).
 - **Hands-on training:** an
   [AWS Workshop Studio lab](https://catalog.us-east-1.prod.workshops.aws/workshops/0c3265a6-1a4a-467b-ae56-e4d019184b0e/en-US)
@@ -73,6 +71,13 @@ endpoints for monitoring. See [Observability](../OBSERVABILITY.md).
 2. Watch the end-to-end demo in [Demo Videos](../demo-videos.md).
 3. Read the [Theory of the System](../design/theory-of-the-system.md) to understand the design and
    its invariants.
+
+## Further reading
+
+- **Source code, issues, and pull requests:** [agentic-community/mcp-gateway-registry](https://github.com/agentic-community/mcp-gateway-registry) on GitHub.
+- **Slide deck:** [MCP Gateway & Registry presentation](../slides/mcp-gateway-registry-presentation.pdf).
+- **AWS Open Source Blog:** [Governing AI Assets at Scale with MCP Gateway and Registry](https://aws.amazon.com/blogs/opensource/governing-ai-assets-at-scale-with-mcp-gateway-and-registry/).
+- **AWS Machine Learning Blog:** [Securing AI agents: How AWS and Cisco AI Defense scale MCP and A2A deployments](https://aws.amazon.com/blogs/machine-learning/securing-ai-agents-how-aws-and-cisco-ai-defense-scale-mcp-and-a2a-deployments/).
 
 ## License and community
 

@@ -90,4 +90,66 @@ describe('CustomEntityForm', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(onCancel).toHaveBeenCalled();
   });
+
+  it('folds the proxy opt-in into the attributes bag on submit', async () => {
+    const onSave = jest.fn().mockResolvedValue(undefined);
+    render(
+      <CustomEntityForm descriptor={descriptor} onSave={onSave} onCancel={jest.fn()} />,
+    );
+    const nameInput = screen.getAllByRole('textbox')[0];
+    fireEvent.change(nameInput, { target: { value: 'proxied-ds' } });
+    // Enable proxying, which reveals the backend URL input.
+    fireEvent.click(screen.getByRole('checkbox'));
+    const urlInput = screen.getByPlaceholderText('https://backend.example.com/');
+    fireEvent.change(urlInput, { target: { value: 'https://backend.example.com/' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    // Proxy fields are TOP-LEVEL on the wire (mixin fields), NOT in attributes.
+    await waitFor(() =>
+      expect(onSave).toHaveBeenCalledWith(
+        expect.objectContaining({
+          is_proxied: true,
+          proxy_target_url: 'https://backend.example.com/',
+        }),
+      ),
+    );
+    // And they must NOT leak into the attributes bag.
+    const saved = onSave.mock.calls[0][0];
+    expect(saved.attributes).not.toHaveProperty('is_proxied');
+    expect(saved.attributes).not.toHaveProperty('proxy_target_url');
+  });
+
+  it('blocks submit when proxying is on but the target URL is blank', async () => {
+    const onSave = jest.fn();
+    render(
+      <CustomEntityForm descriptor={descriptor} onSave={onSave} onCancel={jest.fn()} />,
+    );
+    const nameInput = screen.getAllByRole('textbox')[0];
+    fireEvent.change(nameInput, { target: { value: 'proxied-ds' } });
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    await waitFor(() =>
+      expect(
+        screen.getByText(/Proxy target URL is required when proxying is enabled/),
+      ).toBeInTheDocument(),
+    );
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it('does not render a raw widget for a descriptor field colliding with a reserved proxy key', () => {
+    const collidingDescriptor = {
+      name: 'dataset',
+      display_name: 'Dataset',
+      fields: [
+        { name: 'owner', datatype: 'string', required: true },
+        // Admin mis-configuration: a descriptor field named like a reserved key.
+        { name: 'is_proxied', datatype: 'bool', required: false },
+      ],
+    } as CustomTypeDescriptor;
+    render(
+      <CustomEntityForm descriptor={collidingDescriptor} onSave={jest.fn()} onCancel={jest.fn()} />,
+    );
+    // Exactly one proxy control (the ProxyField's checkbox), not two — the
+    // colliding descriptor field must not spawn a second raw bool widget.
+    expect(screen.getAllByRole('checkbox')).toHaveLength(1);
+  });
 });

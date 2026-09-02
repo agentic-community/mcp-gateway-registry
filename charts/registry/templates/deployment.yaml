@@ -51,6 +51,12 @@ spec:
               name: http
             - containerPort: 8443
               name: https
+            # Dedicated internal nginx listener serving only the egress-token
+            # vend endpoint (informational; nginx binds it via the conf template).
+            # Exposed as a ClusterIP-only Service port + NetworkPolicy when
+            # egressAuth.enabled; never routed by the public Ingress.
+            - containerPort: 8091
+              name: egress-internal
             # The raw uvicorn app port (7860) is intentionally NOT declared here.
             # The app binds 127.0.0.1:7860 and is reached only over loopback by the
             # in-pod nginx; it is not a Service port and probes hit 8080 (nginx).
@@ -328,6 +334,18 @@ spec:
               value: {{ .Values.app.mcpTokenDefaultTtlHours | default "8" | toString | quote }}
             - name: MCP_TOKEN_MAX_TTL_HOURS
               value: {{ .Values.app.mcpTokenMaxTtlHours | default "24" | toString | quote }}
+            # Gateway generic-proxy feature (registry-consumed): ships disabled by default.
+            # The four auth-server-consumed knobs live in the auth-server chart.
+            - name: GATEWAY_GENERIC_PROXY_ENABLED
+              value: {{ .Values.app.gatewayGenericProxyEnabled | default false | toString | quote }}
+            - name: GATEWAY_CANONICAL_NAMESPACE_ENABLED
+              value: {{ .Values.app.gatewayCanonicalNamespaceEnabled | default false | toString | quote }}
+            - name: GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS
+              value: {{ .Values.app.gatewayProxyAllowPrivateTargets | default false | toString | quote }}
+            - name: GATEWAY_GENERIC_CLIENT_MAX_BODY_SIZE
+              value: {{ .Values.app.gatewayGenericClientMaxBodySize | default "1m" | quote }}
+            - name: GATEWAY_PROXY_PREFIX
+              value: {{ .Values.app.gatewayProxyPrefix | default "gateway" | quote }}
             {{- if .Values.app.registryApiKeysExistingSecret }}
             - name: REGISTRY_API_KEYS
               valueFrom:

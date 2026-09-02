@@ -129,8 +129,9 @@ tests:
       # RATE_LIMIT_USER_FLOOR_PER_MIN, RATE_LIMIT_AGENT_FLOOR_PER_MIN);
       # the MCP token TTL pair (MCP_TOKEN_DEFAULT_TTL_HOURS,
       # MCP_TOKEN_MAX_TTL_HOURS, always rendered) is env[40]/env[41];
+      # the five unconditional GATEWAY_* generic-proxy vars are env[42]-env[46];
       # AWS_EC2_METADATA_DISABLED (chart-managed security constant, always
-      # rendered) is env[42];
+      # rendered) is env[47];
       # user extraEnv entries are appended at the end.
       #
       # NOTE: The indices below assume global.authProvider.type=keycloak
@@ -236,12 +237,27 @@ tests:
           value: MCP_TOKEN_MAX_TTL_HOURS
       - equal:
           path: spec.template.spec.containers[0].env[42].name
-          value: AWS_EC2_METADATA_DISABLED
+          value: GATEWAY_GENERIC_PROXY_ENABLED
       - equal:
           path: spec.template.spec.containers[0].env[43].name
-          value: MY_FLAG
+          value: GATEWAY_CANONICAL_NAMESPACE_ENABLED
       - equal:
           path: spec.template.spec.containers[0].env[44].name
+          value: GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS
+      - equal:
+          path: spec.template.spec.containers[0].env[45].name
+          value: GATEWAY_GENERIC_CLIENT_MAX_BODY_SIZE
+      - equal:
+          path: spec.template.spec.containers[0].env[46].name
+          value: GATEWAY_PROXY_PREFIX
+      - equal:
+          path: spec.template.spec.containers[0].env[47].name
+          value: AWS_EC2_METADATA_DISABLED
+      - equal:
+          path: spec.template.spec.containers[0].env[48].name
+          value: MY_FLAG
+      - equal:
+          path: spec.template.spec.containers[0].env[49].name
           value: MY_SECRET_VAR
 
   - it: appends extraEnvFrom entries after chart-managed envFrom sources

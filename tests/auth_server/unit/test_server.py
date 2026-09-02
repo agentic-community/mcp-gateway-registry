@@ -3588,7 +3588,13 @@ def _patch_scope_repo_allow_all():
             return [{"server": "*", "methods": ["*"], "tools": ["*"]}]
         return []
 
+    async def _get_server_scopes_bulk(scope_names: list[str]):
+        return {s: await _get_server_scopes(s) for s in scope_names if await _get_server_scopes(s)}
+
     repo.get_server_scopes.side_effect = _get_server_scopes
+    # filter_tools_list_response's diagnostic (_scopes_with_server_entry) reads
+    # the bulk method; without a stub it would get a bare AsyncMock return value.
+    repo.get_server_scopes_bulk.side_effect = _get_server_scopes_bulk
     return patch("auth_server.server.get_scope_repository", return_value=repo)
 
 
@@ -5038,6 +5044,57 @@ class TestForwardHeadersIngressStrip:
         assert "authorization" not in {k.lower() for k in out}
 
 
+class TestForwardHeadersProxyContextStrip:
+    """Ingress proxy-context headers (issue #1625) describe the client -> Gateway
+    hop and must not leak onto the separate Gateway -> upstream MCP server hop,
+    or an upstream that trusts them can see a stale scheme and redirect-loop.
+    """
+
+    def _forward(self, incoming):
+        from auth_server.server import _forward_headers
+
+        return _forward_headers(incoming)
+
+    def test_strips_each_proxy_context_header(self):
+        for name in (
+            "X-Forwarded-Proto",
+            "X-Forwarded-Host",
+            "X-Forwarded-Port",
+            "X-Forwarded-Prefix",
+            "Forwarded",
+            "X-Original-URI",
+            "X-Original-URL",
+        ):
+            out = self._forward({name: "x", "Accept": "y"})
+            assert name.lower() not in {k.lower() for k in out}, name
+            assert out.get("Accept") == "y"
+
+    def test_case_insensitive(self):
+        out = self._forward({"x-forwarded-proto": "http", "x-original-url": "u"})
+        assert "x-forwarded-proto" not in {k.lower() for k in out}
+        assert "x-original-url" not in {k.lower() for k in out}
+
+    def test_stale_ingress_scheme_does_not_reach_the_egress_hop(self):
+        """The issue's own repro: an HTTPS ingress request that arrives carrying
+        a stale X-Forwarded-Proto: http must not forward it to an HTTPS upstream."""
+        out = self._forward(
+            {
+                "X-Forwarded-Proto": "http",
+                "X-Forwarded-Host": "gateway.example.com",
+                "X-Forwarded-Prefix": "/my-server",
+                "Mcp-Session-Id": "vs-abc",
+                "Accept": "application/json",
+            }
+        )
+        assert set(k.lower() for k in out) == {"mcp-session-id", "accept"}
+
+    def test_x_forwarded_for_is_not_stripped(self):
+        """X-Forwarded-For is a client-IP hint, not routing/scheme context, and
+        the issue explicitly asks that it stay untouched (compatibility)."""
+        out = self._forward({"X-Forwarded-For": "203.0.113.5"})
+        assert out.get("X-Forwarded-For") == "203.0.113.5"
+
+
 class TestInternalRelayDecision:
     """The mcp_proxy relay decision keys on the verified `server` claim (first
     path segment), matches the hardcoded internal set exactly, and normalizes
@@ -6004,3 +6061,237 @@ class TestMcpProxyEgressUnavailable:
 
         assert response.status_code == 403
         assert vend_called["n"] == 0  # denial happened before any vend/outbound work
+
+
+# =============================================================================
+# TOOLS/LIST FILTER SCOPE-KEY NORMALIZATION (issue #1647)
+# =============================================================================
+
+
+def _patch_scope_repo(rules_by_scope: dict[str, list[dict]]):
+    """Patch get_scope_repository with an explicit scope -> server_access map.
+
+    Stubs both the per-scope and the bulk lookup, because
+    validate_server_tool_access uses the former and the filter's diagnostic uses
+    the latter; stubbing only one lets a test pass for the wrong reason.
+    """
+    repo = AsyncMock()
+
+    async def _get_server_scopes(scope_name: str):
+        return rules_by_scope.get(scope_name, [])
+
+    async def _get_server_scopes_bulk(scope_names: list[str]):
+        return {s: rules_by_scope[s] for s in scope_names if rules_by_scope.get(s)}
+
+    repo.get_server_scopes.side_effect = _get_server_scopes
+    repo.get_server_scopes_bulk.side_effect = _get_server_scopes_bulk
+    return patch("auth_server.server.get_scope_repository", return_value=repo)
+
+
+class TestToolsListFilterScopeKey:
+    """The tools/list filter must get the registered name, not the proxy path.
+
+    The access check earlier in the same request strips the transport suffix via
+    _registered_server_from_proxy_path, but the filter call site did not. A scope
+    document keyed on the registered name then matched nothing, so every tool was
+    removed and the client got a valid JSON-RPC response with an empty tools
+    array: no error, connector looks healthy, server listed with no tools.
+    """
+
+    @pytest.mark.parametrize(
+        ("proxy_path", "expected_scope_key"),
+        [
+            ("office-docs/mcp", "office-docs"),
+            ("office-docs/sse", "office-docs"),
+            ("office-docs/messages", "office-docs"),
+            ("office-docs", "office-docs"),
+        ],
+    )
+    def test_filter_receives_normalized_server_name(self, proxy_path, expected_scope_key):
+        """The suffixed proxy path must be stripped before the filter sees it."""
+        import auth_server.server as server_module
+
+        seen: dict[str, str] = {}
+
+        async def _capture(server_name, user_scopes, tools):
+            seen["server_name"] = server_name
+            return tools
+
+        upstream_resp = _build_mock_upstream_response(
+            status_code=200,
+            headers={"content-type": "application/json"},
+            body=b'{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"t1"}]}}',
+        )
+
+        with (
+            _patch_httpx_async_client(upstream_resp),
+            _patch_scope_repo_allow_all(),
+            patch.object(server_module, "_read_mcp_filter_enabled", return_value=True),
+            patch.object(server_module, "filter_tools_list_response", side_effect=_capture),
+        ):
+            client = TestClient(server_module.app)
+            response = client.post(
+                f"/mcp-proxy/{proxy_path}",
+                json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+                headers=_mcp_proxy_token_headers(server_name="office-docs"),
+            )
+
+        assert response.status_code == 200
+        assert seen["server_name"] == expected_scope_key
+
+    def test_federated_peer_server_key_is_preserved(self):
+        """Only the transport tail is stripped; peer/server must survive intact."""
+        import auth_server.server as server_module
+
+        seen: dict[str, str] = {}
+
+        async def _capture(server_name, user_scopes, tools):
+            seen["server_name"] = server_name
+            return tools
+
+        upstream_resp = _build_mock_upstream_response(
+            status_code=200,
+            headers={"content-type": "application/json"},
+            body=b'{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"t1"}]}}',
+        )
+
+        with (
+            _patch_httpx_async_client(upstream_resp),
+            _patch_scope_repo_allow_all(),
+            patch.object(server_module, "_read_mcp_filter_enabled", return_value=True),
+            patch.object(server_module, "filter_tools_list_response", side_effect=_capture),
+        ):
+            client = TestClient(server_module.app)
+            response = client.post(
+                "/mcp-proxy/peer-lob-1/cloudflare-docs/mcp",
+                json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+                headers=_mcp_proxy_token_headers(server_name="peer-lob-1/cloudflare-docs"),
+            )
+
+        assert response.status_code == 200
+        assert seen["server_name"] == "peer-lob-1/cloudflare-docs"
+
+    def test_suffixed_key_would_have_filtered_everything(self):
+        """Pin the failure mode itself, so the bug cannot come back unnoticed.
+
+        A scope document keyed on the registered name grants nothing when looked
+        up under the suffixed path. This asserts the mechanism the fix avoids,
+        independently of which call site does the stripping.
+        """
+        import asyncio
+
+        from auth_server.server import filter_tools_list_response
+
+        rules = {"grp": [{"server": "office-docs", "methods": ["*"], "tools": ["t1", "t2"]}]}
+        tools = [{"name": "t1"}, {"name": "t2"}]
+
+        with _patch_scope_repo(rules):
+            normalized = asyncio.run(filter_tools_list_response("office-docs", ["grp"], tools))
+            suffixed = asyncio.run(filter_tools_list_response("office-docs/mcp", ["grp"], tools))
+
+        assert len(normalized) == 2
+        assert suffixed == []
+
+
+class TestToolsListFilterDiagnostics:
+    """A silently empty tools array must be distinguishable from a real denial.
+
+    The filter fails closed either way -- that is not negotiable -- but "no
+    server_access entry exists for this server" is a configuration error, while
+    "an entry exists and grants no tools" is a correct empty allowlist. They look
+    identical to the client, so the logs have to separate them.
+    """
+
+    def test_missing_scope_entry_logs_error(self, caplog):
+        """No entry anywhere for the server: log ERROR naming the server."""
+        import asyncio
+
+        from auth_server.server import filter_tools_list_response
+
+        rules = {"grp": [{"server": "some-other-server", "methods": ["*"], "tools": ["*"]}]}
+        tools = [{"name": "t1"}, {"name": "t2"}]
+
+        with _patch_scope_repo(rules), caplog.at_level(logging.ERROR, logger="auth_server.server"):
+            kept = asyncio.run(filter_tools_list_response("office-docs", ["grp"], tools))
+
+        assert kept == []  # still fails closed
+        errors = [r.message for r in caplog.records if r.levelno == logging.ERROR]
+        assert any("office-docs" in m and "no server_access entry" in m for m in errors), errors
+
+    def test_empty_allowlist_does_not_log_error(self, caplog):
+        """An entry that grants no tools is legitimate, so no ERROR."""
+        import asyncio
+
+        from auth_server.server import filter_tools_list_response
+
+        rules = {"grp": [{"server": "office-docs", "methods": ["tools/list"], "tools": []}]}
+        tools = [{"name": "t1"}]
+
+        with _patch_scope_repo(rules), caplog.at_level(logging.ERROR, logger="auth_server.server"):
+            kept = asyncio.run(filter_tools_list_response("office-docs", ["grp"], tools))
+
+        assert kept == []
+        assert not [r for r in caplog.records if r.levelno == logging.ERROR]
+
+    def test_no_error_when_tools_survive(self, caplog):
+        """A successful filter must not log an ERROR."""
+        import asyncio
+
+        from auth_server.server import filter_tools_list_response
+
+        rules = {"grp": [{"server": "office-docs", "methods": ["*"], "tools": ["t1"]}]}
+        tools = [{"name": "t1"}, {"name": "t2"}]
+
+        with _patch_scope_repo(rules), caplog.at_level(logging.INFO, logger="auth_server.server"):
+            kept = asyncio.run(filter_tools_list_response("office-docs", ["grp"], tools))
+
+        assert [t["name"] for t in kept] == ["t1"]
+        assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
+
+    def test_info_line_names_the_matching_scope(self, caplog):
+        """before/after counts alone cannot diagnose a scope-key mismatch.
+
+        Logging which scope entry matched is what turns this class of bug from a
+        multi-day hunt into a single grep.
+        """
+        import asyncio
+
+        from auth_server.server import filter_tools_list_response
+
+        rules = {
+            "grp-a": [{"server": "office-docs", "methods": ["*"], "tools": ["t1"]}],
+            "grp-b": [{"server": "some-other-server", "methods": ["*"], "tools": ["*"]}],
+        }
+        tools = [{"name": "t1"}]
+
+        with (
+            _patch_scope_repo(rules),
+            caplog.at_level(logging.INFO, logger="auth_server.server"),
+        ):
+            asyncio.run(filter_tools_list_response("office-docs", ["grp-a", "grp-b"], tools))
+
+        lines = [r.message for r in caplog.records if "filter_tools_list_response:" in r.message]
+        assert any("scopes_matched=['grp-a']" in m for m in lines), lines
+
+    def test_diagnostic_never_breaks_the_filter(self):
+        """A broken scope repository must not turn tools/list into a 500.
+
+        The filter documents "never raises"; the diagnostic is only a log line,
+        so a lookup failure or an unexpected shape has to stay swallowed.
+        """
+        import asyncio
+
+        from auth_server.server import filter_tools_list_response
+
+        repo = AsyncMock()
+
+        async def _get_server_scopes(scope_name: str):
+            return [{"server": "office-docs", "methods": ["*"], "tools": ["*"]}]
+
+        repo.get_server_scopes.side_effect = _get_server_scopes
+        repo.get_server_scopes_bulk.side_effect = RuntimeError("scope store unreachable")
+
+        with patch("auth_server.server.get_scope_repository", return_value=repo):
+            kept = asyncio.run(filter_tools_list_response("office-docs", ["grp"], [{"name": "t1"}]))
+
+        assert [t["name"] for t in kept] == ["t1"]

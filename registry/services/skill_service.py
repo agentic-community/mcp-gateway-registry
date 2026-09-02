@@ -34,6 +34,7 @@ from ..repositories.interfaces import (
     SearchRepositoryBase,
     SkillRepositoryBase,
 )
+from ..schemas.proxy_mixin import validate_and_pin_proxy_target
 from ..schemas.skill_models import (
     ContentIntegrity,
     FileHash,
@@ -1200,6 +1201,9 @@ def _build_skill_card(
         content_integrity=content_integrity,
         created_at=datetime.now(UTC),
         updated_at=datetime.now(UTC),
+        # Gateway-proxy opt-in (validated on the request model; carried through).
+        is_proxied=request.is_proxied,
+        proxy_target_url=request.proxy_target_url,
     )
 
 
@@ -1225,6 +1229,32 @@ class SkillService:
         if self._search_repo is None:
             self._search_repo = get_search_repository()
         return self._search_repo
+
+    async def _validate_and_pin_skill_proxy(
+        self,
+        skill: SkillCard,
+    ) -> None:
+        """Resolve+validate the skill's proxy target and pin the resolved IPs.
+
+        No-op when the skill is not proxied / has no resolvable target. Raises
+        (ValueError / EgressPolicyError, surfaced as a 4xx by the route) when the
+        target resolves to a denied IP, so a bad target is rejected at
+        registration rather than silently dropped at render. On success the
+        resolved IPs + host are written back onto the skill for pin bookkeeping.
+        """
+        if not skill.is_proxied:
+            return
+        pin = await validate_and_pin_proxy_target(
+            "skill",
+            {
+                "is_proxied": skill.is_proxied,
+                "proxy_target_url": skill.proxy_target_url,
+                "proxy_disabled_reason": skill.proxy_disabled_reason,
+            },
+        )
+        if pin:
+            skill.proxy_resolved_ips = pin["proxy_resolved_ips"]
+            skill.proxy_target_host = pin["proxy_target_host"]
 
     async def register_skill(
         self,
@@ -1302,6 +1332,12 @@ class SkillService:
             resource_manifest=resource_manifest,
             content_integrity=content_integrity,
         )
+
+        # Gateway-proxy SSRF layer 2: when opting into proxying, resolve the target
+        # hostname and validate every resolved IP against the egress policy, then
+        # pin the resolved IPs. Rejects a metadata/private target at registration
+        # (clear error) rather than silently dropping the route at render.
+        await self._validate_and_pin_skill_proxy(skill)
 
         # Save to repository
         repo = self._get_repo()
@@ -1393,6 +1429,11 @@ class SkillService:
                 health_status=s.health_status,
                 last_checked_time=s.last_checked_time,
                 status=s.status,
+                # Gateway-proxy opt-in: carry through so listings show the badge
+                # and the edit modal populates (proxy_client_url is server-derived).
+                is_proxied=s.is_proxied,
+                proxy_target_url=s.proxy_target_url,
+                proxy_client_url=s.proxy_client_url,
             )
             for s in skills
         ]
@@ -1491,6 +1532,32 @@ class SkillService:
         """Update a skill."""
         normalized = normalize_skill_path(path)
         repo = self._get_repo()
+
+        # Gateway-proxy SSRF layer 2: if this update changes the proxy opt-in or
+        # target, resolve+validate the MERGED target (existing values overlaid with
+        # the update) and pin the resolved IPs, before persisting. Rejects a
+        # metadata/private target at update time. Only reads the DB when a proxy
+        # field is actually touched, so non-proxy updates pay no cost.
+        if "is_proxied" in updates or "proxy_target_url" in updates:
+            existing = await repo.get(normalized)
+            if existing is not None:
+                merged_is_proxied = updates.get("is_proxied", existing.is_proxied)
+                merged_target = updates.get("proxy_target_url", existing.proxy_target_url)
+                pin = await validate_and_pin_proxy_target(
+                    "skill",
+                    {
+                        "is_proxied": merged_is_proxied,
+                        "proxy_target_url": merged_target,
+                        # An update re-enabling proxying must clear a prior auto-disable.
+                        "proxy_disabled_reason": None,
+                    },
+                )
+                # Refresh the pin bookkeeping to match the (re)validated target, or
+                # clear it when the merged state is no longer a live proxy.
+                updates["proxy_resolved_ips"] = pin.get("proxy_resolved_ips", [])
+                updates["proxy_target_host"] = pin.get("proxy_target_host")
+                updates["proxy_disabled_reason"] = None
+
         updated = await repo.update(normalized, updates)
 
         if updated:

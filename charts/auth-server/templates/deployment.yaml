@@ -228,6 +228,37 @@ spec:
             - name: AWS_EC2_METADATA_DISABLED
               value: "true"
             {{- end }}
+            # Gateway generic-proxy feature (auth-server-consumed): ships disabled by
+            # default. The remaining registry-consumed knobs live in the registry chart.
+            # GATEWAY_GENERIC_PROXY_ENABLED is a SHARED master switch: the registry
+            # reads it to render blocks, and the auth-server reads it to activate the
+            # /proxy hop + run the startup egress self-check (LLD Step 7a). Both
+            # containers must see it, so it is set here too (mirrors the registry value).
+            - name: GATEWAY_GENERIC_PROXY_ENABLED
+              value: {{ .Values.app.gatewayGenericProxyEnabled | default false | toString | quote }}
+            - name: GENERIC_PROXY_TOKEN_TTL_SECONDS
+              value: {{ .Values.app.genericProxyTokenTtlSeconds | default 30 | toString | quote }}
+            # int64 (not toString): Helm parses a large YAML integer as float64 and
+            # toString renders it in scientific notation (1.048576e+07), which the
+            # int-typed setting rejects. int64 forces plain-integer formatting for
+            # both a quoted-string values.yaml default and a numeric --set override.
+            - name: GENERIC_PROXY_MAX_BODY_BYTES
+              value: {{ .Values.app.genericProxyMaxBodyBytes | default 10485760 | int64 | quote }}
+            # hasKey/ternary (NOT `| default true`): these default TRUE but must be
+            # overridable to false. `false | default true` would wrongly re-enable
+            # them (sprig `default` treats false as empty). values.yaml always sets
+            # the key, so the ternary reads the real value; the `true` fallback only
+            # applies if an operator omits the key entirely.
+            - name: GATEWAY_GENERIC_REQUIRE_BEARER_FOR_WRITES
+              value: {{ (hasKey .Values.app "gatewayGenericRequireBearerForWrites" | ternary .Values.app.gatewayGenericRequireBearerForWrites true) | toString | quote }}
+            - name: GATEWAY_EGRESS_SELFCHECK_ENABLED
+              value: {{ (hasKey .Values.app "gatewayEgressSelfcheckEnabled" | ternary .Values.app.gatewayEgressSelfcheckEnabled true) | toString | quote }}
+            - name: GATEWAY_GENERIC_TLS_VERIFY
+              value: {{ .Values.app.gatewayGenericTlsVerify | default "true" | quote }}
+            - name: GATEWAY_PROXY_PIN_REFRESH_SECONDS
+              value: {{ .Values.app.gatewayProxyPinRefreshSeconds | default 300 | toString | quote }}
+            - name: GATEWAY_GENERIC_MAX_CONCURRENCY
+              value: {{ .Values.app.gatewayGenericMaxConcurrency | default 32 | toString | quote }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

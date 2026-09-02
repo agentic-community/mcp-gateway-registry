@@ -2127,10 +2127,27 @@ variable "egress_obo_allowed_audiences" {
   default     = ""
 }
 
-variable "egress_registry_internal_url" {
-  description = "URL the auth-server uses to reach the registry internal vend endpoint."
+variable "egress_oauth_trusted_idp_hosts" {
+  description = <<-EOT
+    Optional comma-separated hostnames of operator-controlled OAuth/OIDC identity
+    providers whose token endpoints may resolve to private addresses. Empty (the
+    default) means the credentialed-OAuth SSRF profile permits no private-resolving
+    token endpoint. Set this when the IdP is self-hosted (Keycloak, or Entra reached
+    over Private Link), where the token endpoint legitimately resolves to RFC1918
+    and egress consent would otherwise fail as blocked by security policy. Exact
+    hostnames only: no CIDRs, no wildcards, and this does not inherit
+    ssrf_allowed_hosts, so a proxy-target bypass can never relax a token POST.
+    HTTPS stays required and metadata/link-local addresses stay denied. Entries
+    receive client secrets, refresh tokens and user assertions, so keep it tight.
+  EOT
   type        = string
-  default     = "http://registry:8080"
+  default     = ""
+}
+
+variable "egress_registry_internal_url" {
+  description = "URL the auth-server uses to reach the registry's dedicated internal egress-token vend listener. Served on a separate nginx port (8091) that the ALB never fronts; reached task-to-task via Service Connect (registry:8091), gated by the auth-server->registry security-group rule."
+  type        = string
+  default     = "http://registry:8091"
 }
 
 variable "egress_nginx_marker_secret" {
@@ -2150,4 +2167,89 @@ variable "egress_secrets_manager_path_prefix" {
   description = "Secrets Manager name prefix for the egress vault (also scopes the task IAM grant)."
   type        = string
   default     = "mcp/egress"
+}
+
+variable "egress_credential_encryption_key" {
+  description = "Optional AES-256-GCM key (registry-only) used to encrypt per-user egress credentials at rest before they reach Secrets Manager / OpenBao. Empty disables encryption (legacy plaintext); existing deployments keep working unchanged. Never auto-generated."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+# =============================================================================
+# GATEWAY GENERIC-PROXY FEATURE (ships disabled by default)
+# =============================================================================
+
+# Registry container settings
+variable "gateway_generic_proxy_enabled" {
+  description = "Master switch for the gateway generic-proxy feature (proxying arbitrary resources). Off by default = no behavior change for existing deployments."
+  type        = bool
+  default     = false
+}
+
+variable "gateway_canonical_namespace_enabled" {
+  description = "Enable canonical namespace handling for generic-proxied entities. Off by default."
+  type        = bool
+  default     = false
+}
+
+variable "gateway_proxy_allow_private_targets" {
+  description = "Allow the generic proxy to reach private/internal network targets. Off by default to keep the SSRF egress guard fail-closed."
+  type        = bool
+  default     = false
+}
+
+variable "gateway_generic_client_max_body_size" {
+  description = "Maximum client request body size accepted by the generic-proxy nginx location (nginx client_max_body_size syntax, e.g. '1m')."
+  type        = string
+  default     = "1m"
+}
+
+variable "gateway_proxy_prefix" {
+  description = "URL path prefix for auto-generated client-facing proxy routes (/{prefix}/{entity_type}/{name}). Single URL-safe path segment; the registry derives the client path automatically."
+  type        = string
+  default     = "gateway"
+}
+
+# Auth-server container settings
+variable "generic_proxy_token_ttl_seconds" {
+  description = "Lifetime (seconds) of the auth-server-minted generic-proxy internal token; the replay-window cap."
+  type        = number
+  default     = 30
+}
+
+variable "generic_proxy_max_body_bytes" {
+  description = "Upper bound (in bytes) on a generic-proxy upstream response body that the auth-server hop will buffer. Default 10485760 (10 MiB)."
+  type        = number
+  default     = 10485760
+}
+
+variable "gateway_generic_require_bearer_for_writes" {
+  description = "Require a bearer token for write (non-GET) requests through the generic proxy. On by default (fail-closed)."
+  type        = bool
+  default     = true
+}
+
+variable "gateway_egress_selfcheck_enabled" {
+  description = "Enable the egress self-check that validates outbound connectivity before enabling generic-proxy targets. On by default (fail-closed)."
+  type        = bool
+  default     = true
+}
+
+variable "gateway_generic_tls_verify" {
+  description = "Whether the generic proxy verifies upstream TLS certificates. Defaults to 'true'; set to 'false' only for trusted internal targets with self-signed certs."
+  type        = string
+  default     = "true"
+}
+
+variable "gateway_proxy_pin_refresh_seconds" {
+  description = "Interval (seconds) at which the generic proxy refreshes pinned upstream resolution/certificate data."
+  type        = number
+  default     = 300
+}
+
+variable "gateway_generic_max_concurrency" {
+  description = "Maximum number of concurrent in-flight generic-proxy requests handled by the auth-server."
+  type        = number
+  default     = 32
 }

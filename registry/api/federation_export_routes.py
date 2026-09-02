@@ -284,19 +284,27 @@ def _item_to_dict(
     item: Any,
 ) -> dict[str, Any]:
     """
-    Convert item to dictionary, supporting both dict and object types.
+    Convert item to a dictionary for federation export, supporting dict and
+    Pydantic-model inputs.
+
+    Strips the gateway-proxy fields (is_proxied/proxy_target_url + refresh
+    bookkeeping): proxy config is local-only and must never be advertised to a
+    peer — in particular proxy_target_url is an internal backend URL. See
+    registry.schemas.proxy_mixin.strip_proxy_fields.
 
     Args:
         item: Dict or Pydantic model
 
     Returns:
-        Dictionary representation
+        Dictionary representation with proxy fields removed
     """
+    from registry.schemas.proxy_mixin import strip_proxy_fields
+
     if isinstance(item, dict):
-        return item
+        return strip_proxy_fields(item)
     if hasattr(item, "model_dump"):
-        return item.model_dump()
-    return dict(item)
+        return strip_proxy_fields(item.model_dump())
+    return strip_proxy_fields(dict(item))
 
 
 def _paginate(

@@ -1341,6 +1341,23 @@ aws_registry_federation_enabled = true
 # only the configured client ids / application id URI (fail closed).
 # pingfederate_m2m_allowed_audiences = ""
 
+# ============================================================================
+# Gateway generic-proxy feature (ships disabled by default)
+# ============================================================================
+# Registry container settings
+# gateway_generic_proxy_enabled             = false     # master switch for the generic-proxy feature
+# gateway_canonical_namespace_enabled       = false     # canonical namespace handling for proxied entities
+# gateway_proxy_allow_private_targets       = false     # allow proxy to reach private/internal targets (SSRF guard)
+# gateway_generic_client_max_body_size      = "1m"      # nginx client_max_body_size for the generic-proxy location
+# Auth-server container settings
+# generic_proxy_token_ttl_seconds           = 30        # lifetime (seconds) of the minted generic-proxy token
+# generic_proxy_max_body_bytes              = 10485760  # max upstream response body buffered (bytes; 10 MiB)
+# gateway_generic_require_bearer_for_writes = true      # require bearer token for write requests (fail-closed)
+# gateway_egress_selfcheck_enabled          = true      # run egress self-check before enabling targets (fail-closed)
+# gateway_generic_tls_verify                = "true"    # verify upstream TLS certs; "false" only for trusted internal
+# gateway_proxy_pin_refresh_seconds         = 300       # interval (seconds) to refresh pinned upstream resolution
+# gateway_generic_max_concurrency           = 32        # max concurrent in-flight generic-proxy requests
+
 # ---------------------------------------------------------------------------
 # Per-user egress credential vault (third-party OBO support). Off by default.
 # On ECS the secret store is AWS Secrets Manager; enabling this grants the
@@ -1356,9 +1373,21 @@ aws_registry_federation_enabled = true
 # App ID URI / bare client-id only, no https host URLs or GUIDs), so shared
 # first-party APIs (Graph/ARM/Key Vault) are rejected at registration.
 # egress_obo_allowed_audiences       = "api://outlook-mcp-server api://calendar-mcp-server"
-# egress_registry_internal_url       = "http://registry:8080"
+# Hostnames of operator-controlled IdPs whose OAuth token endpoints may resolve to
+# private addresses. Needed for a self-hosted IdP (Keycloak, or Entra over Private
+# Link), where the token endpoint resolves to RFC1918 and egress consent would
+# otherwise fail as blocked by security policy. Exact hostnames only, no CIDRs or
+# wildcards, and it does not inherit ssrf_allowed_hosts. Empty permits none.
+# egress_oauth_trusted_idp_hosts     = "keycloak.internal.example.com"
+# egress_registry_internal_url       = "http://registry:8091"   # dedicated internal vend listener (not the ALB-fronted :8080)
 # egress_secrets_manager_kms_key_id  = ""   # optional CMK; empty uses the AWS-managed key
 # egress_secrets_manager_path_prefix = "mcp/egress"
+# Registry-only AES-256-GCM key that encrypts per-user egress credentials at rest
+# before they reach Secrets Manager / OpenBao. Empty (the default) disables
+# encryption (legacy plaintext) so existing deployments are unaffected; set a
+# strong value to enable. Never auto-generated. When set, it is provisioned as a
+# dedicated Secrets Manager secret and injected into the registry task.
+# egress_credential_encryption_key   = ""
 
 # nginx marker secret shared by auth-server + registry. REQUIRED unconditionally
 # (both services refuse to start without it), NOT egress-specific -- it guards all

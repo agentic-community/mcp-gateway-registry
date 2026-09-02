@@ -6,6 +6,7 @@ import StatusField from '../StatusField';
 import VisibilityField from '../VisibilityField';
 import MetadataField from '../MetadataField';
 import AuthSchemeFields from '../AuthSchemeFields';
+import ProxyField from '../ProxyField';
 import { fieldClass } from '../formClasses';
 
 describe('FormField', () => {
@@ -144,5 +145,88 @@ describe('AuthSchemeFields', () => {
     render(<AuthSchemeFields scheme="api_key" {...base} />);
     expect(document.querySelector('input[type="password"]')).toBeInTheDocument();
     expect(screen.getByText('Header Name')).toBeInTheDocument();
+  });
+});
+
+describe('ProxyField', () => {
+  const base = {
+    proxyTargetUrl: '',
+    onIsProxiedChange: jest.fn(),
+    onProxyTargetUrlChange: jest.fn(),
+  };
+
+  it('hides the backend URL input until proxying is enabled', () => {
+    const { rerender } = render(<ProxyField isProxied={false} {...base} />);
+    expect(screen.queryByText('Backend URL')).not.toBeInTheDocument();
+    rerender(<ProxyField isProxied={true} {...base} />);
+    expect(screen.getByText('Backend URL')).toBeInTheDocument();
+  });
+
+  it('pops up the client URL as plain text when proxied and provided', () => {
+    render(
+      <ProxyField isProxied={true} {...base} clientUrl="/gateway/skill/demo" />,
+    );
+    // The client path is shown as read-only text (a <code> element), NOT an
+    // editable/disabled input the user might mistake for a field.
+    const code = screen.getByText('/gateway/skill/demo');
+    expect(code.tagName).toBe('CODE');
+    expect(screen.getByText(/Clients connect at/)).toBeInTheDocument();
+  });
+
+  it('shows a generated-on-save note when no client URL exists yet', () => {
+    // Create path: no clientUrl available; show the affordance as plain text.
+    render(<ProxyField isProxied={true} {...base} />);
+    expect(
+      screen.getByText(/generated automatically when you save/),
+    ).toBeInTheDocument();
+  });
+
+  it('hides the client-URL popup entirely when not proxied', () => {
+    render(<ProxyField isProxied={false} {...base} clientUrl="/gateway/skill/demo" />);
+    expect(screen.queryByText('/gateway/skill/demo')).not.toBeInTheDocument();
+  });
+
+  it('reports checkbox toggles through onIsProxiedChange', () => {
+    const onIsProxiedChange = jest.fn();
+    render(
+      <ProxyField isProxied={false} {...base} onIsProxiedChange={onIsProxiedChange} />,
+    );
+    fireEvent.click(screen.getByRole('checkbox'));
+    expect(onIsProxiedChange).toHaveBeenCalledWith(true);
+  });
+
+  it('warns about a missing target only when targetRequired and blank', () => {
+    const { rerender } = render(
+      <ProxyField isProxied={true} {...base} targetRequired />,
+    );
+    expect(
+      screen.getByText(/A proxy target URL is required when proxying is enabled/),
+    ).toBeInTheDocument();
+    // A filled target clears the warning.
+    rerender(
+      <ProxyField
+        isProxied={true}
+        {...base}
+        targetRequired
+        proxyTargetUrl="https://backend.example.com/"
+      />,
+    );
+    expect(
+      screen.queryByText(/A proxy target URL is required when proxying is enabled/),
+    ).not.toBeInTheDocument();
+  });
+
+  it('does not warn when the target is optional (native URL fallback)', () => {
+    render(<ProxyField isProxied={true} {...base} />);
+    expect(
+      screen.queryByText(/A proxy target URL is required when proxying is enabled/),
+    ).not.toBeInTheDocument();
+  });
+
+  it('surfaces an explicit validation error on the target field', () => {
+    render(
+      <ProxyField isProxied={true} {...base} targetRequired error="Bad URL" />,
+    );
+    expect(screen.getByText('Bad URL')).toBeInTheDocument();
   });
 });

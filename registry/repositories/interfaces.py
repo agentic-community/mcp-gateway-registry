@@ -63,6 +63,7 @@ class ServerRepositoryBase(ABC):
         skip: int = 0,
         limit: int = 100,
         exclude_tool_list: bool = False,
+        metadata_paths: list[str] | None = None,
     ) -> dict[str, dict[str, Any]]:
         """List servers with DB-level pagination.
 
@@ -71,6 +72,9 @@ class ServerRepositoryBase(ABC):
             limit: Maximum number of documents to return.
             exclude_tool_list: If True, omit the heavy ``tool_list`` field from
                 each document (DB-side projection). ``num_tools`` is unaffected.
+            metadata_paths: If provided, rebuild the ``metadata`` subdocument to
+                contain only these dot-paths (DB-side projection); falls back to
+                full metadata + Python prune on any pipeline error (Issue #1277).
 
         Returns:
             Dictionary mapping server path to server info for the requested page.
@@ -320,6 +324,16 @@ class ServerRepositoryBase(ABC):
         """
         ...
 
+    async def list_proxied(self) -> list[dict[str, Any]]:
+        """Return proxy-relevant projections of every gateway-proxied entity.
+
+        Indexed ``is_proxied=True`` query with a field projection (only the
+        columns the nginx render + ``resolve_proxy_target`` need) for the config
+        regeneration hot path. Default returns ``[]`` (safe no-op for legacy /
+        non-overriding backends); DocumentDB overrides with the projected query.
+        """
+        return []
+
     async def find_by_identity_url(
         self,
         identity_url: str,
@@ -514,6 +528,13 @@ class AgentRepositoryBase(ABC):
             Dict mapping path -> document data for matching documents
         """
         ...
+
+    async def list_proxied(self) -> list[dict[str, Any]]:
+        """Return proxy-relevant projections of every gateway-proxied agent.
+
+        See ServerRepositoryBase.list_proxied. Default ``[]``; DocumentDB overrides.
+        """
+        return []
 
     async def find_by_identity_url(
         self,
@@ -1722,6 +1743,25 @@ class SkillRepositoryBase(ABC):
         pass
 
     @abstractmethod
+    async def list_by_paths(
+        self,
+        paths: list[str],
+    ) -> dict[str, dict[str, Any]]:
+        """List skills whose _id is in the given set of paths.
+
+        Returns raw documents (not ``SkillCard`` objects) for metadata
+        projection use cases where the full Pydantic parse is not needed
+        (Issue #1277).
+
+        Args:
+            paths: Exact skill paths to fetch.
+
+        Returns:
+            Dictionary mapping skill path to raw skill document for found paths.
+        """
+        pass
+
+    @abstractmethod
     async def list_filtered(
         self,
         include_disabled: bool = False,
@@ -1800,6 +1840,13 @@ class SkillRepositoryBase(ABC):
             Total number of skills in the repository.
         """
         pass
+
+    async def list_proxied(self) -> list[dict[str, Any]]:
+        """Return proxy-relevant projections of every gateway-proxied skill.
+
+        See ServerRepositoryBase.list_proxied. Default ``[]``; DocumentDB overrides.
+        """
+        return []
 
     async def find_by_identity_url(
         self,
@@ -2094,6 +2141,15 @@ class VirtualServerRepositoryBase(ABC):
         """
         pass
 
+    async def list_proxied(self) -> list[dict[str, Any]]:
+        """Return proxy-relevant projections of every proxied virtual server.
+
+        Virtual-server proxying is alias-only (no proxy_target_url); list_proxied
+        surfaces the is_proxied flag so the render can emit the canonical alias.
+        See ServerRepositoryBase.list_proxied. Default ``[]``; DocumentDB overrides.
+        """
+        return []
+
     @abstractmethod
     async def update_rating(
         self,
@@ -2289,6 +2345,14 @@ class CustomEntityRepositoryBase(ABC):
     ) -> int:
         """Count records of a type, applying the SAME optional filter as list."""
         pass
+
+    async def list_proxied(self) -> list[dict[str, Any]]:
+        """Return proxy-relevant projections of every gateway-proxied record.
+
+        Spans all custom types (each record carries its own ``entity_type``).
+        See ServerRepositoryBase.list_proxied. Default ``[]``; DocumentDB overrides.
+        """
+        return []
 
     @abstractmethod
     async def count_all(self) -> int:

@@ -894,3 +894,313 @@ class TestKeycloakAuthorizationServerMetadata:
         assert (
             provider.authorization_server_issuer() == "https://auth.example.com/realms/test-realm"
         )
+
+
+class TestKeycloakMetadataRewritesEveryUrl:
+    """No internal URL may survive anywhere in the discovery document.
+
+    The rewrite used to enumerate ten field names, so everything it did not list
+    kept the internal Docker URL: ``check_session_iframe``, ``pushed_authorization_
+    request_endpoint``, ``backchannel_authentication_endpoint`` and the whole
+    nested ``mtls_endpoint_aliases`` object. The primary endpoints looked
+    correct, so a client using PAR, CIBA, mTLS client auth or OIDC session
+    management failed in a way that is hard to attribute (issue #1649).
+    """
+
+    INTERNAL = "http://keycloak:8080"
+    EXTERNAL = "https://gateway.example.com"
+
+    def _full_openid_config(self, base_url: str) -> dict:
+        """A discovery document covering the fields the allowlist missed."""
+        realm = f"{base_url}/realms/test-realm"
+        oidc = f"{realm}/protocol/openid-connect"
+        return {
+            "issuer": realm,
+            "authorization_endpoint": f"{oidc}/auth",
+            "token_endpoint": f"{oidc}/token",
+            "userinfo_endpoint": f"{oidc}/userinfo",
+            "jwks_uri": f"{oidc}/certs",
+            "end_session_endpoint": f"{oidc}/logout",
+            "introspection_endpoint": f"{oidc}/token/introspect",
+            "revocation_endpoint": f"{oidc}/revoke",
+            "device_authorization_endpoint": f"{oidc}/auth/device",
+            "registration_endpoint": f"{base_url}/realms/test-realm/clients-registrations/openid-connect",
+            # Fields the allowlist never covered:
+            "check_session_iframe": f"{oidc}/login-status-iframe.html",
+            "backchannel_authentication_endpoint": f"{oidc}/ext/ciba/auth",
+            "pushed_authorization_request_endpoint": f"{oidc}/ext/par/request",
+            "mtls_endpoint_aliases": {
+                "token_endpoint": f"{oidc}/token",
+                "revocation_endpoint": f"{oidc}/revoke",
+                "introspection_endpoint": f"{oidc}/token/introspect",
+                "device_authorization_endpoint": f"{oidc}/auth/device",
+                "registration_endpoint": f"{base_url}/realms/test-realm/clients-registrations/openid-connect",
+                "userinfo_endpoint": f"{oidc}/userinfo",
+                "pushed_authorization_request_endpoint": f"{oidc}/ext/par/request",
+                "backchannel_authentication_endpoint": f"{oidc}/ext/ciba/auth",
+            },
+            # Non-URL values that must survive untouched.
+            "response_types_supported": ["code", "id_token"],
+            "request_parameter_supported": True,
+            "require_request_uri_registration": False,
+        }
+
+    def _provider(self, mock_get, config: dict, external: str | None = None):
+        from auth_server.providers.keycloak import KeycloakProvider
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = config
+        mock_response.raise_for_status = MagicMock()
+        mock_get.return_value = mock_response
+        return KeycloakProvider(
+            keycloak_url=self.INTERNAL,
+            keycloak_external_url=self.EXTERNAL if external is None else external,
+            realm="test-realm",
+            client_id="c",
+            client_secret="s",
+        )
+
+    @staticmethod
+    def _all_strings(node):
+        """Yield every string anywhere in a nested JSON structure."""
+        if isinstance(node, str):
+            yield node
+        elif isinstance(node, dict):
+            for value in node.values():
+                yield from TestKeycloakMetadataRewritesEveryUrl._all_strings(value)
+        elif isinstance(node, list):
+            for value in node:
+                yield from TestKeycloakMetadataRewritesEveryUrl._all_strings(value)
+
+    @patch("auth_server.providers.keycloak.requests.get")
+    def test_no_internal_url_survives_anywhere(self, mock_get):
+        """The whole-document invariant, stated once.
+
+        Asserting on the document as a whole rather than on named fields is the
+        point of the fix: a field Keycloak adds in a future release is covered
+        without anyone updating a list.
+        """
+        provider = self._provider(mock_get, self._full_openid_config(self.INTERNAL))
+
+        metadata = provider.authorization_server_metadata()
+
+        leaked = [s for s in self._all_strings(metadata) if self.INTERNAL in s]
+        assert not leaked, f"internal URL survived in {len(leaked)} value(s): {leaked}"
+
+    @pytest.mark.parametrize(
+        "field",
+        [
+            "check_session_iframe",
+            "backchannel_authentication_endpoint",
+            "pushed_authorization_request_endpoint",
+        ],
+    )
+    @patch("auth_server.providers.keycloak.requests.get")
+    def test_previously_missed_top_level_fields(self, mock_get, field):
+        """Each field the reporter found still internal on 1.29.0."""
+        provider = self._provider(mock_get, self._full_openid_config(self.INTERNAL))
+
+        metadata = provider.authorization_server_metadata()
+
+        assert metadata[field].startswith(self.EXTERNAL), metadata[field]
+
+    @patch("auth_server.providers.keycloak.requests.get")
+    def test_nested_mtls_endpoint_aliases_rewritten(self, mock_get):
+        """The nested object was not walked at all, so every key inside leaked."""
+        provider = self._provider(mock_get, self._full_openid_config(self.INTERNAL))
+
+        aliases = provider.authorization_server_metadata()["mtls_endpoint_aliases"]
+
+        assert aliases, "mtls_endpoint_aliases missing from the rewritten document"
+        for key, value in aliases.items():
+            assert value.startswith(self.EXTERNAL), f"{key} -> {value}"
+
+    @patch("auth_server.providers.keycloak.requests.get")
+    def test_non_url_values_are_untouched(self, mock_get):
+        """Lists, booleans and unrelated strings must pass through unchanged."""
+        config = self._full_openid_config(self.INTERNAL)
+        provider = self._provider(mock_get, config)
+
+        metadata = provider.authorization_server_metadata()
+
+        assert metadata["response_types_supported"] == ["code", "id_token"]
+        assert metadata["request_parameter_supported"] is True
+        assert metadata["require_request_uri_registration"] is False
+
+    @patch("auth_server.providers.keycloak.requests.get")
+    def test_rewrite_anchors_on_a_url_boundary(self, mock_get):
+        """A different port on the same host must not be rewritten.
+
+        "http://keycloak:8080" is a string prefix of "http://keycloak:80801",
+        which is a different service. A bare startswith would rewrite it.
+        """
+        config = self._full_openid_config(self.INTERNAL)
+        config["token_endpoint"] = "http://keycloak:80801/realms/test-realm/token"
+        provider = self._provider(mock_get, config)
+
+        metadata = provider.authorization_server_metadata()
+
+        assert metadata["token_endpoint"] == "http://keycloak:80801/realms/test-realm/token"
+
+    @patch("auth_server.providers.keycloak.requests.get")
+    def test_bare_internal_origin_is_rewritten(self, mock_get):
+        """An exact match with no path is a boundary too, not a near-miss."""
+        config = self._full_openid_config(self.INTERNAL)
+        config["issuer"] = self.INTERNAL
+        provider = self._provider(mock_get, config)
+
+        assert provider.authorization_server_metadata()["issuer"] == self.EXTERNAL
+
+    @patch("auth_server.providers.keycloak.requests.get")
+    def test_cached_configuration_is_not_mutated(self, mock_get):
+        """The rewrite must not poison the lru_cache it reads from.
+
+        _get_openid_configuration is lru_cached, so rewriting nested objects in
+        place would corrupt the document for every later caller -- including the
+        internal-URL consumers that must keep pointing at the cluster host.
+        """
+        provider = self._provider(mock_get, self._full_openid_config(self.INTERNAL))
+
+        first = provider.authorization_server_metadata()
+        cached = provider._get_openid_configuration()
+        second = provider.authorization_server_metadata()
+
+        assert cached["token_endpoint"].startswith(self.INTERNAL)
+        assert cached["mtls_endpoint_aliases"]["token_endpoint"].startswith(self.INTERNAL)
+        assert first == second
+
+    @patch("auth_server.providers.keycloak.requests.get")
+    def test_passthrough_when_internal_equals_external(self, mock_get):
+        """No external URL configured: the document is returned as-is."""
+        config = self._full_openid_config(self.INTERNAL)
+        provider = self._provider(mock_get, config, external=self.INTERNAL)
+
+        assert provider.authorization_server_metadata() == config
+
+
+# =============================================================================
+# KEYCLOAK_EXTERNAL_URL STARTUP DIAGNOSTIC
+# =============================================================================
+
+
+class TestKeycloakExternalUrlDiagnostic:
+    """The factory must say so at startup when the advertised URL cannot work.
+
+    The registry and the auth server publish KEYCLOAK_EXTERNAL_URL in their OAuth
+    discovery documents. A value that resolves only inside the container network
+    yields a well-formed metadata document that no external MCP client can act
+    on: nothing fails server-side and the client reports a generic OAuth error,
+    so without a startup line the misconfiguration is effectively invisible.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _reset_diagnostic_dedup(self):
+        """The diagnostic logs each (url, configured) state once per process; clear
+        that de-dup state before every test so cases stay independent."""
+        from auth_server.providers import factory
+
+        factory._reset_external_url_diagnostic()
+        yield
+        factory._reset_external_url_diagnostic()
+
+    def _create(self, monkeypatch, external_url: str | None):
+        """Build a Keycloak provider through the factory with a patched env."""
+        from auth_server.providers import factory
+
+        monkeypatch.setenv("KEYCLOAK_URL", "http://keycloak:8080")
+        monkeypatch.setenv("KEYCLOAK_CLIENT_ID", "test-client")
+        monkeypatch.setenv("KEYCLOAK_CLIENT_SECRET", "test-secret")
+        if external_url is None:
+            monkeypatch.delenv("KEYCLOAK_EXTERNAL_URL", raising=False)
+        else:
+            monkeypatch.setenv("KEYCLOAK_EXTERNAL_URL", external_url)
+        return factory._create_keycloak_provider()
+
+    def test_unset_external_url_warns(self, monkeypatch, caplog):
+        """An unset variable silently advertises the internal URL, so warn."""
+        with caplog.at_level(logging.WARNING, logger="auth_server.providers.factory"):
+            provider = self._create(monkeypatch, None)
+
+        assert provider.keycloak_external_url == "http://keycloak:8080"
+        warnings = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+        assert any("KEYCLOAK_EXTERNAL_URL is not set" in m for m in warnings), warnings
+
+    @pytest.mark.parametrize(
+        "external_url",
+        [
+            "http://keycloak:8080",  # container DNS name, the reported case
+            "http://10.0.1.5:8080",  # RFC 1918
+            "http://192.168.1.10:8080",  # RFC 1918
+            "http://169.254.10.10:8080",  # link-local
+            "http://203.0.113.10:8080",  # RFC 5737 documentation range
+        ],
+    )
+    def test_unroutable_external_url_warns(self, monkeypatch, caplog, external_url):
+        """A set-but-unroutable value is the same outage with a different cause."""
+        with caplog.at_level(logging.WARNING, logger="auth_server.providers.factory"):
+            self._create(monkeypatch, external_url)
+
+        warnings = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+        assert any("fail discovery" in m for m in warnings), warnings
+
+    @pytest.mark.parametrize(
+        "external_url",
+        [
+            "https://gateway.example.com",
+            "https://gateway.example.com:8443",
+            "http://93.184.216.34:8080",  # globally routable literal
+        ],
+    )
+    def test_routable_external_url_is_silent(self, monkeypatch, caplog, external_url):
+        """A correctly configured deployment must not emit a warning every boot."""
+        with caplog.at_level(logging.WARNING, logger="auth_server.providers.factory"):
+            self._create(monkeypatch, external_url)
+
+        warnings = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+        assert not warnings, warnings
+
+    @pytest.mark.parametrize(
+        "external_url",
+        ["http://localhost:8080", "http://127.0.0.1:8080"],
+    )
+    def test_loopback_external_url_is_not_a_warning(self, monkeypatch, caplog, external_url):
+        """Loopback is the shipped default for local dev, so it must not warn.
+
+        It is still worth an INFO line, because it does exclude remote clients.
+        """
+        with caplog.at_level(logging.INFO, logger="auth_server.providers.factory"):
+            self._create(monkeypatch, external_url)
+
+        assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+        infos = [r.message for r in caplog.records if r.levelno == logging.INFO]
+        assert any("only works for clients on this host" in m for m in infos), infos
+
+    def test_diagnostic_logs_once_per_config(self, monkeypatch, caplog):
+        """The factory runs per OAuth-discovery request; the warning must not repeat.
+
+        `.well-known` endpoints are public and crawled anonymously, so a warning
+        on every hit is noise. The same misconfiguration should log exactly once.
+        """
+        with caplog.at_level(logging.WARNING, logger="auth_server.providers.factory"):
+            for _ in range(5):
+                self._create(monkeypatch, "http://keycloak:8080")
+
+        warnings = [
+            r.message
+            for r in caplog.records
+            if r.levelno == logging.WARNING and "fail discovery" in r.message
+        ]
+        assert len(warnings) == 1, warnings
+
+    def test_distinct_configs_each_log(self, monkeypatch, caplog):
+        """A genuinely new (url, configured) state still logs, even after another."""
+        with caplog.at_level(logging.WARNING, logger="auth_server.providers.factory"):
+            self._create(monkeypatch, "http://keycloak:8080")  # single-label WARNING
+            self._create(monkeypatch, "http://10.0.1.5:8080")  # private-address WARNING
+
+        warnings = [
+            r.message
+            for r in caplog.records
+            if r.levelno == logging.WARNING and "fail discovery" in r.message
+        ]
+        assert len(warnings) == 2, warnings

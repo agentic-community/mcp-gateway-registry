@@ -449,6 +449,9 @@ registry_metrics.csv
 # Local-only security-audit skill (not committed); findings live under the git-ignored .scratchpad/
 .claude/skills/security-audit/
 
+# Local-only writing skill (not committed)
+.claude/skills/writing/
+
 # Stress test generated data and results (may move to a separate repo later)
 tests/stress/data/
 tests/stress/results/

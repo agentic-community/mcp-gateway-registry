@@ -18,6 +18,26 @@ logger = logging.getLogger(__name__)
 _secret_store: SecretStoreBase | None = None
 
 
+def _build_credential_codec():
+    """Build the shared credential codec from EGRESS_CREDENTIAL_ENCRYPTION_KEY.
+
+    Empty key -> disabled (legacy plaintext) codec. The setting is already
+    length/placeholder-validated at config load, so no re-validation here.
+    """
+    from .credential_codec import build_credential_codec
+
+    codec = build_credential_codec(
+        settings.egress_credential_encryption_key,
+        require_encrypted=settings.egress_credential_require_encrypted,
+    )
+    logger.info(
+        "Egress credential application-layer encryption: %s%s",
+        "ENABLED (AES-256-GCM)" if codec.enabled else "disabled (plaintext at rest)",
+        ", strict (reject plaintext)" if codec.require_encrypted else "",
+    )
+    return codec
+
+
 def _build_secrets_manager() -> SecretStoreBase:
     import boto3
 
@@ -54,6 +74,7 @@ def _build_secrets_manager() -> SecretStoreBase:
         prefix=settings.secrets_manager_path_prefix,
         kms_key_id=settings.secrets_manager_kms_key_id or None,
         mutation_lease=EgressOperationalRepository(),
+        codec=_build_credential_codec(),
     )
 
 
@@ -120,6 +141,7 @@ def _build_openbao() -> SecretStoreBase:
         mount_point=settings.openbao_kv_mount,
         prefix=settings.secrets_manager_path_prefix,
         reauthenticate=_login,
+        codec=_build_credential_codec(),
     )
 
 

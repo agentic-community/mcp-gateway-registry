@@ -433,6 +433,14 @@ registry:
     # Tool-level access control (issue #1026)
     mcpToolsListFilterEnabled: true # Registry-side awareness of the MCP tools/list filter (also read by auth-server)
     toolFilterAuditLogLevel: "INFO" # Audit log level for tool-prune events (DEBUG, INFO, WARNING)
+    # Gateway generic-proxy feature (registry-consumed). Ships DISABLED. See the
+    # auth-server section for the seven auth-server-consumed knobs + the egress
+    # NetworkPolicy that MUST be deployed before enabling.
+    gatewayGenericProxyEnabled: false
+    gatewayCanonicalNamespaceEnabled: false
+    gatewayProxyAllowPrivateTargets: false
+    gatewayGenericClientMaxBodySize: "1m"
+    gatewayProxyPrefix: "gateway" # URL path prefix for auto-generated client routes (/{prefix}/{type}/{name})
     # Registry-UI internal token verification (the /api/ hop; minted by auth-server)
     internalTokenTtlSeconds: "30" # Token lifetime (seconds); the replay-window cap (min 5)
     internalTokenLeewaySeconds: "5" # Clock-skew leeway (seconds) on token exp/iat
@@ -569,6 +577,18 @@ auth-server:
     toolFilterAuditLogLevel: "INFO" # Audit log level for tool-prune events (DEBUG, INFO, WARNING)
     internalTokenTtlSeconds: "30" # Token lifetime (seconds); the replay-window cap (min 5)
     internalTokenLeewaySeconds: "5" # Clock-skew leeway (seconds) on token exp/iat
+    # Gateway generic-proxy feature (auth-server-consumed). Only active when this
+    # SHARED master switch is true AND the startup egress self-check passes. Keep
+    # it in sync with registry.app.gatewayGenericProxyEnabled above. Deploy
+    # auth-server.egress.networkPolicy first.
+    gatewayGenericProxyEnabled: false # Master switch; match registry.app.gatewayGenericProxyEnabled
+    genericProxyTokenTtlSeconds: 30
+    genericProxyMaxBodyBytes: "10485760" # string to avoid Helm float sci-notation
+    gatewayGenericRequireBearerForWrites: true
+    gatewayEgressSelfcheckEnabled: true
+    gatewayGenericTlsVerify: "true"
+    gatewayProxyPinRefreshSeconds: 300
+    gatewayGenericMaxConcurrency: 32
   metrics:
     # Standard OTel SDK var. Setting this activates the OTLP push exporter.
     otelExporterOtlpEndpoint: "" # OTLP endpoint URL (e.g., http://otel-collector:4317)
