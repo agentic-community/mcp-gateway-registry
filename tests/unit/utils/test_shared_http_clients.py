@@ -155,10 +155,19 @@ async def test_post_with_reconnect_no_retry_on_success():
 
 
 async def test_post_with_reconnect_reraises_when_retry_also_fails():
-    client = _FakeClient(fail_times=2, exc=httpx.ConnectError("down"))
-    with pytest.raises(httpx.ConnectError):
+    client = _FakeClient(fail_times=2, exc=httpx.RemoteProtocolError("down"))
+    with pytest.raises(httpx.RemoteProtocolError):
         await post_with_reconnect(client, "https://idp/token")
     assert client.calls == 2  # original + one retry, then gives up
+
+
+async def test_post_with_reconnect_does_not_retry_connect_error():
+    # A connect failure is retried by the transport's ``retries=``, not here, so
+    # post_with_reconnect must NOT double-retry it -- it propagates on the first call.
+    client = _FakeClient(fail_times=1, exc=httpx.ConnectError("connect"))
+    with pytest.raises(httpx.ConnectError):
+        await post_with_reconnect(client, "https://idp/token")
+    assert client.calls == 1  # no reconnect retry for a connect failure
 
 
 async def test_pinning_coalesces_hostnames_sharing_an_ip(monkeypatch):
