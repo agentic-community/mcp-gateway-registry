@@ -52,6 +52,11 @@ data:
   EGRESS_HTTP_POOL_MAX_KEEPALIVE: {{ .Values.egressAuth.httpPoolMaxKeepalive | default "20" | quote }}
   EGRESS_HTTP_POOL_KEEPALIVE_EXPIRY_SECONDS: {{ .Values.egressAuth.httpPoolKeepaliveExpirySeconds | default "30" | quote }}
   EGRESS_HTTP_POOL_CONNECT_RETRIES: {{ .Values.egressAuth.httpPoolConnectRetries | default "1" | quote }}
+  # Opt-in exchanged-OBO-token cache. Cache off by default preserves
+  # the stateless per-request exchange; the skew must stay below the max TTL.
+  EGRESS_OBO_CACHE_ENABLED: {{ .Values.egressAuth.oboCacheEnabled | default "false" | quote }}
+  EGRESS_OBO_CACHE_MAX_TTL_SECONDS: {{ .Values.egressAuth.oboCacheMaxTtlSeconds | default "300" | quote }}
+  EGRESS_OBO_CACHE_EXPIRY_SKEW_SECONDS: {{ .Values.egressAuth.oboCacheExpirySkewSeconds | default "30" | quote }}
   {{- if .Values.egressAuth.oboAllowedAudiences }}
   # obo_exchange target_audience allowlist (whitespace-separated). When set, the
   # authoritative positive control: an obo server may only use a listed audience.

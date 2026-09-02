@@ -228,6 +228,10 @@ services:
       - EGRESS_TOKEN_REFRESH_SKEW_SECONDS=${EGRESS_TOKEN_REFRESH_SKEW_SECONDS:-300}
       - EGRESS_STATE_TTL_SECONDS=${EGRESS_STATE_TTL_SECONDS:-600}
       - EGRESS_OBO_ALLOWED_AUDIENCES=${EGRESS_OBO_ALLOWED_AUDIENCES:-}
+      # Opt-in OBO exchanged-token cache. Off by default.
+      - EGRESS_OBO_CACHE_ENABLED=${EGRESS_OBO_CACHE_ENABLED:-false}
+      - EGRESS_OBO_CACHE_MAX_TTL_SECONDS=${EGRESS_OBO_CACHE_MAX_TTL_SECONDS:-300}
+      - EGRESS_OBO_CACHE_EXPIRY_SKEW_SECONDS=${EGRESS_OBO_CACHE_EXPIRY_SKEW_SECONDS:-30}
       - EGRESS_OAUTH_TRUSTED_IDP_HOSTS=${EGRESS_OAUTH_TRUSTED_IDP_HOSTS:-}
       - EGRESS_CREDENTIAL_ENCRYPTION_KEY=${EGRESS_CREDENTIAL_ENCRYPTION_KEY:-}
       - EGRESS_CREDENTIAL_ENCRYPTION_REQUIRE_ENCRYPTED=${EGRESS_CREDENTIAL_ENCRYPTION_REQUIRE_ENCRYPTED:-false}
@@ -662,13 +666,35 @@ services:
       - MCP_TOKEN_DEFAULT_TTL_HOURS=${MCP_TOKEN_DEFAULT_TTL_HOURS:-8}
       - MCP_TOKEN_MAX_TTL_HOURS=${MCP_TOKEN_MAX_TTL_HOURS:-24}
       # Egress vault: auth-server does the marker check + the vend call to the
-      # registry (it does NOT touch the secret store, so no SECRET_STORE/AWS/
-      # OPENBAO vars here).
+      # registry. With the opt-in OBO token cache it also becomes a
+      # secret-store client, so it needs the same SECRET_STORE/AWS/OPENBAO vars as
+      # the registry (added below).
       - EGRESS_AUTH_ENABLED=${EGRESS_AUTH_ENABLED:-false}
       - EGRESS_REGISTRY_INTERNAL_URL=${EGRESS_REGISTRY_INTERNAL_URL:-http://registry:8091}
       # OBO (same-IdP) token exchange against a self-hosted IdP: allowlist its
       # private-resolving token endpoint. Must match the registry's value.
       - EGRESS_OAUTH_TRUSTED_IDP_HOSTS=${EGRESS_OAUTH_TRUSTED_IDP_HOSTS:-}
+      # Opt-in OBO exchanged-token cache. Off by default. When
+      # enabled, auth-server reuses still-valid exchanged tokens from the per-user
+      # SecretStore, which is why it now needs the secret-store backend config
+      # below (previously registry-only).
+      - EGRESS_OBO_CACHE_ENABLED=${EGRESS_OBO_CACHE_ENABLED:-false}
+      - EGRESS_OBO_CACHE_MAX_TTL_SECONDS=${EGRESS_OBO_CACHE_MAX_TTL_SECONDS:-300}
+      - EGRESS_OBO_CACHE_EXPIRY_SKEW_SECONDS=${EGRESS_OBO_CACHE_EXPIRY_SKEW_SECONDS:-30}
+      - SECRET_STORE_BACKEND=${SECRET_STORE_BACKEND:-openbao}
+      - AWS_SECRETS_REGION=${AWS_SECRETS_REGION:-}
+      - SECRETS_MANAGER_KMS_KEY_ID=${SECRETS_MANAGER_KMS_KEY_ID:-}
+      - SECRETS_MANAGER_PATH_PREFIX=${SECRETS_MANAGER_PATH_PREFIX:-mcp/egress}
+      # Default to the in-stack OpenBao container (dev mode). Override for an
+      # external vault.
+      - OPENBAO_ADDR=${OPENBAO_ADDR:-http://openbao:8200}
+      - OPENBAO_NAMESPACE=${OPENBAO_NAMESPACE:-}
+      - OPENBAO_KV_MOUNT=${OPENBAO_KV_MOUNT:-secret}
+      - OPENBAO_AUTH_METHOD=${OPENBAO_AUTH_METHOD:-token}
+      - OPENBAO_ROLE=${OPENBAO_ROLE:-}
+      # Static token for OPENBAO_AUTH_METHOD=token; matches the dev OpenBao root
+      # token. Required for token auth (kubernetes auth is EKS-only).
+      - OPENBAO_TOKEN=${OPENBAO_TOKEN:?Set OPENBAO_TOKEN in .env (a strong random value; do not reuse the old dev-root-token default)}
       - EGRESS_CONSENT_USE_ELICITATION=${EGRESS_CONSENT_USE_ELICITATION:-false}
       # Egress httpx client connection pooling (shared by url_guard). Keep
       # keepalive_expiry below the shortest upstream/LB idle timeout.

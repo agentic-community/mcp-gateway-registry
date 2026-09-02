@@ -431,6 +431,9 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             ("egress_state_ttl_seconds", "OAuth State TTL (s)", False),
             ("egress_registry_internal_url", "Registry Internal Vend URL", False),
             ("egress_obo_allowed_audiences", "OBO Allowed Audiences", False),
+            ("egress_obo_cache_enabled", "OBO Cache Enabled", False),
+            ("egress_obo_cache_max_ttl_seconds", "OBO Cache Max TTL (s)", False),
+            ("egress_obo_cache_expiry_skew_seconds", "OBO Cache Expiry Skew (s)", False),
             # trusted-IdP allowlist for the credentialed-OAuth SSRF profile; not
             # sensitive (hostnames only) but shown here because entries receive
             # client secrets and refresh tokens

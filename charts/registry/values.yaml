@@ -544,6 +544,18 @@ egressAuth:
   httpPoolMaxKeepalive: "20"
   httpPoolKeepaliveExpirySeconds: "30"
   httpPoolConnectRetries: "1"
+  # Opt-in exchanged-OBO-token cache. When enabled, exchanged OBO
+  # tokens are cached in the per-user SecretStore so repeated calls by the same
+  # principal to the same audience reuse a still-valid token instead of
+  # re-exchanging. Default off preserves the stateless per-request exchange.
+  oboCacheEnabled: "false"
+  # Hard cap (seconds) on the OBO cache reuse window, applied below the token's
+  # real expiry. Bounds revocation / conditional-access re-evaluation latency on
+  # cache hits.
+  oboCacheMaxTtlSeconds: "300"
+  # Never reuse a cached OBO token within this many seconds of its expiry. Must be
+  # < oboCacheMaxTtlSeconds.
+  oboCacheExpirySkewSeconds: "30"
   # obo_exchange target_audience allowlist (whitespace-separated). Optional.
   # When set, an obo server may only use a listed audience (authoritative positive
   # control against a confused-deputy that points obo at a shared first-party API).

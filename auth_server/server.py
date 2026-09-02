@@ -2695,6 +2695,10 @@ def check_rate_limit(username: str) -> bool:
 # The auth-path flush task, held so the lifespan can cancel it on shutdown and so
 # the loop is not garbage-collected mid-flight.
 _auth_path_flush_task: asyncio.Task | None = None
+# OBO exchanged-token cache; built in the lifespan. None -> the OBO
+# hop falls back to the stateless obo_exchange (e.g. a test harness that does not
+# run the lifespan).
+_obo_cache = None
 
 
 @asynccontextmanager
@@ -2763,6 +2767,53 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error("Generic-proxy feature init failed during startup (%s)", type(e).__name__)
 
+    # Build the optional OBO exchanged-token cache. Default-off;
+    # construction never crashes startup -- any error leaves _obo_cache None and
+    # the OBO hop runs the stateless per-request exchange.
+    global _obo_cache
+    try:
+        try:
+            from obo_token_cache import OboTokenCache
+        except ImportError:
+            from auth_server.obo_token_cache import OboTokenCache
+        if settings.egress_obo_cache_enabled:
+            from registry.egress_auth.factory import get_egress_lease_manager
+            from registry.egress_auth.service import _InProcessLeaseManager
+            from registry.secrets.factory import get_secret_store
+
+            lease_mgr = get_egress_lease_manager()
+            if isinstance(lease_mgr, _InProcessLeaseManager):
+                logger.warning(
+                    "OBO token cache: cross-replica lease manager unavailable; "
+                    "single-flight is per-replica only (a cold-miss herd across "
+                    "auth-server replicas may issue one exchange per replica)."
+                )
+            _obo_cache = OboTokenCache(
+                store=get_secret_store(),
+                lease_manager=lease_mgr,
+                enabled=True,
+                max_ttl_s=settings.egress_obo_cache_max_ttl_seconds,
+                skew_s=settings.egress_obo_cache_expiry_skew_seconds,
+            )
+            logger.info(
+                "OBO token cache ENABLED (max_ttl=%ss, skew=%ss)",
+                settings.egress_obo_cache_max_ttl_seconds,
+                settings.egress_obo_cache_expiry_skew_seconds,
+            )
+        else:
+            _obo_cache = OboTokenCache(
+                store=None,
+                lease_manager=None,
+                enabled=False,
+                max_ttl_s=settings.egress_obo_cache_max_ttl_seconds,
+                skew_s=settings.egress_obo_cache_expiry_skew_seconds,
+            )
+    except Exception as exc:
+        logger.error(
+            "OBO token cache init failed (%s); OBO exchange runs stateless", exc, exc_info=True
+        )
+        _obo_cache = None
+
     yield
 
     # Shutdown: close the pooled egress HTTP clients (built lazily on first use).
@@ -2773,6 +2824,9 @@ async def lifespan(app: FastAPI):
     except Exception as e:  # noqa: BLE001 - best-effort teardown
         logger.error(f"Error closing pooled egress clients: {e}", exc_info=True)
     logger.info("Shutting down auth server")
+    # Drop the OBO cache with the app: it holds the SecretStore/lease-manager
+    # handles, and a stale instance must not outlive the lifespan that built it.
+    _obo_cache = None
 
     # Stop the periodic flush, then flush once more: a graceful stop would
     # otherwise drop whatever accumulated since the last tick.
@@ -8394,12 +8448,21 @@ async def mcp_proxy(
                 # the record is unjoined, exactly as before, never dropped.
                 obo_correlation_id = _audit_request_id_from_token(claims)
                 try:
-                    obo_token = await obo_exchange(
-                        get_auth_provider(),
-                        subject_token=subject_token,
-                        target_audience=obo_target_audience,
-                        scopes=obo_scopes,
-                    )
+                    if _obo_cache is not None:
+                        obo_token = await _obo_cache.get_or_exchange(
+                            idp_provider=get_auth_provider(),
+                            subject_token=subject_token,
+                            egress_user=str((claims or {}).get("egress_user") or ""),
+                            target_audience=obo_target_audience,
+                            scopes=obo_scopes,
+                        )
+                    else:
+                        obo_token, _ = await obo_exchange(
+                            get_auth_provider(),
+                            subject_token=subject_token,
+                            target_audience=obo_target_audience,
+                            scopes=obo_scopes,
+                        )
                 except OboExchangeError as exc:
                     logger.warning(
                         "mcp_proxy: obo_exchange failed for server=%s: %s", server_name, exc
