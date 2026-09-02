@@ -235,6 +235,77 @@ class ServerRepositoryBase(ABC):
         ...
 
     @abstractmethod
+    async def get_tool_overrides(
+        self,
+        path: str,
+    ) -> dict[str, Any]:
+        """Get the raw per-tool override map for a server.
+
+        Args:
+            path: Server path/ID
+
+        Returns:
+            The tool_overrides map, or {} when the server has none.
+            Raises on backend failure so callers can fail closed.
+        """
+        ...
+
+    @abstractmethod
+    async def get_blocked_tools(
+        self,
+        path: str,
+    ) -> set[str]:
+        """Get the names of tools currently blocked on a server.
+
+        Args:
+            path: Server path/ID
+
+        Returns:
+            Set of blocked tool names (empty when none are blocked).
+        """
+        ...
+
+    @abstractmethod
+    async def set_tool_override(
+        self,
+        path: str,
+        tool_name: str,
+        override: dict[str, Any],
+    ) -> bool:
+        """Set the override entry for a single tool.
+
+        Args:
+            path: Server path/ID
+            tool_name: Name of the tool, validated by the caller against
+                the server's tool_list and rejected if unusable as a
+                Mongo field key
+            override: The override entry (blocked, source, reason, timestamps)
+
+        Returns:
+            True if the server was found and updated
+        """
+        ...
+
+    @abstractmethod
+    async def replace_tool_overrides(
+        self,
+        path: str,
+        overrides: dict[str, Any],
+    ) -> bool:
+        """Replace a server's entire tool override map in one write.
+
+        Used by rescan reconciliation, which recomputes the full map.
+
+        Args:
+            path: Server path/ID
+            overrides: The complete replacement map
+
+        Returns:
+            True if the server was found and updated
+        """
+        ...
+
+    @abstractmethod
     async def find_with_filter(
         self,
         filter_dict: dict[str, Any],

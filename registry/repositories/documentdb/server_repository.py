@@ -683,6 +683,82 @@ class DocumentDBServerRepository(ServerRepositoryBase):
 
         return result.modified_count > 0
 
+    @staticmethod
+    def _path_variants(path: str) -> list[str]:
+        """Both trailing-slash forms of a server path.
+
+        Server ``_id``s are stored inconsistently (e.g. ``/airegistry-tools/``),
+        and callers may pass a bare name. Matching both forms in one query is
+        equivalent to the alternate-path fallback in ``get``, without the
+        second round trip.
+        """
+        stem = "/" + path.strip("/")
+        return [stem, stem + "/"]
+
+    async def get_tool_overrides(self, path: str) -> dict[str, Any]:
+        """Get the raw tool_overrides map for a server ({} when unset)."""
+        collection = await self._get_collection()
+        doc = await collection.find_one(
+            {"_id": {"$in": self._path_variants(path)}},
+            {"tool_overrides": 1},
+        )
+        if not doc:
+            return {}
+        overrides = doc.get("tool_overrides") or {}
+        return overrides if isinstance(overrides, dict) else {}
+
+    async def get_blocked_tools(self, path: str) -> set[str]:
+        """Get the set of currently blocked tool names for a server."""
+        overrides = await self.get_tool_overrides(path)
+        return {
+            name
+            for name, entry in overrides.items()
+            if isinstance(entry, dict) and entry.get("blocked") is True
+        }
+
+    async def set_tool_override(
+        self,
+        path: str,
+        tool_name: str,
+        override: dict[str, Any],
+    ) -> bool:
+        """Set one tool's override entry. Returns False if the server is unknown."""
+        collection = await self._get_collection()
+        result = await collection.update_one(
+            {"_id": {"$in": self._path_variants(path)}},
+            {
+                "$set": {
+                    f"tool_overrides.{tool_name}": override,
+                    "updated_at": datetime.utcnow().isoformat(),
+                }
+            },
+        )
+        if result.matched_count == 0:
+            logger.error(f"Server at '{path}' not found in DocumentDB")
+            return False
+        return True
+
+    async def replace_tool_overrides(
+        self,
+        path: str,
+        overrides: dict[str, Any],
+    ) -> bool:
+        """Replace the whole tool_overrides map in one write (rescan reconciliation)."""
+        collection = await self._get_collection()
+        result = await collection.update_one(
+            {"_id": {"$in": self._path_variants(path)}},
+            {
+                "$set": {
+                    "tool_overrides": overrides,
+                    "updated_at": datetime.utcnow().isoformat(),
+                }
+            },
+        )
+        if result.matched_count == 0:
+            logger.error(f"Server at '{path}' not found in DocumentDB")
+            return False
+        return True
+
     async def find_with_filter(
         self,
         filter_dict: dict[str, Any],
