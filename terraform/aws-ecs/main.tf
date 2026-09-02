@@ -470,12 +470,19 @@ module "mcp_gateway" {
   egress_http_pool_keepalive_expiry_seconds = var.egress_http_pool_keepalive_expiry_seconds
   egress_http_pool_connect_retries          = var.egress_http_pool_connect_retries
   egress_obo_allowed_audiences              = var.egress_obo_allowed_audiences
+  egress_obo_cache_enabled                  = var.egress_obo_cache_enabled
+  egress_obo_cache_max_ttl_seconds          = var.egress_obo_cache_max_ttl_seconds
+  egress_obo_cache_expiry_skew_seconds      = var.egress_obo_cache_expiry_skew_seconds
   egress_oauth_trusted_idp_hosts            = var.egress_oauth_trusted_idp_hosts
   egress_registry_internal_url              = var.egress_registry_internal_url
   egress_nginx_marker_secret                = var.egress_nginx_marker_secret
   egress_secrets_manager_kms_key_id         = var.egress_secrets_manager_kms_key_id
   egress_secrets_manager_path_prefix        = var.egress_secrets_manager_path_prefix
   egress_credential_encryption_key          = var.egress_credential_encryption_key
+
+  # Wait for S3 bucket policy to propagate (30s delay)
+  # This prevents "Access Denied" errors when ALB tests write permissions
+  depends_on = [time_sleep.wait_for_bucket_policy]
 }
 
 # When storage_backend is a non-documentdb MongoDB variant (mongodb-ce,

@@ -5060,7 +5060,7 @@ class TestMcpProxyOboExchange:
         async def _fake_exchange(provider, subject_token, target_audience, scopes=None):
             assert subject_token == ingress_jwt
             assert target_audience == "api://outlook-mcp-server"
-            return "exchanged-obo-token"
+            return "exchanged-obo-token", 3600
 
         patch_httpx, captured = _capture_upstream_headers()
         with (
@@ -5130,7 +5130,7 @@ class TestMcpProxyOboExchange:
         ingress_jwt = _obo_ingress_jwt("test-user")
 
         async def _fake_exchange(provider, subject_token, target_audience, scopes=None):
-            return "exchanged-obo-token"
+            return "exchanged-obo-token", 3600
 
         patch_httpx, _ = _capture_upstream_headers()
         patch_audit, emitted = self._capture_mint_audit(server_module)
@@ -5196,7 +5196,7 @@ class TestMcpProxyOboExchange:
         )
 
         async def _fake_exchange(provider, subject_token, target_audience, scopes=None):
-            return "exchanged-obo-token"
+            return "exchanged-obo-token", 3600
 
         patch_httpx, _ = _capture_upstream_headers()
         patch_audit, emitted = self._capture_mint_audit(server_module)
@@ -5245,7 +5245,7 @@ class TestMcpProxyOboExchange:
         import auth_server.server as server_module
 
         async def _fake_exchange(provider, subject_token, target_audience, scopes=None):
-            return "exchanged-obo-token"
+            return "exchanged-obo-token", 3600
 
         patch_httpx, _ = _capture_upstream_headers()
         patch_audit, emitted = self._capture_mint_audit(server_module)
@@ -5290,7 +5290,7 @@ class TestMcpProxyOboExchange:
         forged_jwt = _forged_ingress_jwt("test-user", upn="ceo@example.com")
 
         async def _fake_exchange(provider, subject_token, target_audience, scopes=None):
-            return "exchanged-obo-token"
+            return "exchanged-obo-token", 3600
 
         patch_httpx, _ = _capture_upstream_headers()
         patch_audit, emitted = self._capture_mint_audit(server_module)
@@ -5349,7 +5349,7 @@ class TestMcpProxyOboExchange:
         ingress_jwt = _obo_ingress_jwt("test-user")
 
         async def _fake_exchange(provider, subject_token, target_audience, scopes=None):
-            return "exchanged-obo-token"
+            return "exchanged-obo-token", 3600
 
         patch_httpx, _ = _capture_upstream_headers()
         patch_audit, emitted = self._capture_mint_audit(server_module)
@@ -5402,7 +5402,7 @@ class TestMcpProxyOboExchange:
         ingress_jwt = _obo_ingress_jwt("test-user")
 
         async def _fake_exchange(provider, subject_token, target_audience, scopes=None):
-            return "exchanged-obo-token"
+            return "exchanged-obo-token", 3600
 
         patch_httpx, _ = _capture_upstream_headers()
         patch_audit, emitted = self._capture_mint_audit(server_module)
@@ -5482,7 +5482,7 @@ class TestMcpProxyOboExchange:
 
         async def _fake_exchange(provider, subject_token, target_audience, scopes=None):
             exchange_called["n"] += 1
-            return "should-not-be-reached"
+            return "should-not-be-reached", 3600
 
         # A JWT for a DIFFERENT principal than the internal token's sub (test-user).
         mismatched_jwt = _obo_ingress_jwt("attacker-user")

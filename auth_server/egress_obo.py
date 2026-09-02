@@ -96,6 +96,23 @@ def _idp_kind(idp_provider: object) -> str:
     return "unsupported"
 
 
+def _coerce_expires_in(value: object) -> int | None:
+    """Coerce an IdP ``expires_in`` to a positive int, else None.
+
+    The Entra ``jwt-bearer`` exchange response carries ``expires_in`` (seconds);
+    A missing, non-numeric, or non-positive value must never raise into the hot
+    path nor be treated as a lifetime. ``None`` means "unknown lifetime" so the
+    OBO cache declines to store (fail-closed); non-caching callers ignore it.
+    """
+    if not isinstance(value, int | float | str):
+        return None
+    try:
+        seconds = int(value)
+    except (TypeError, ValueError):
+        return None
+    return seconds if seconds > 0 else None
+
+
 def _entra_exchange_body(
     client_id: str,
     client_secret: str,
@@ -520,8 +537,8 @@ def _token_error(
     return _map_token_error(resp.status_code, payload, kind)
 
 
-def _access_token_from(resp: httpx.Response) -> str:
-    """Return the access token from a 200 token endpoint response.
+def _access_token_from(resp: httpx.Response) -> tuple[str, int | None]:
+    """Return the access token and its lifetime from a 200 token endpoint response.
 
     A broken body must stay inside the typed error family, or the caller
     returns a 500 instead of a JSON-RPC failure.
@@ -530,7 +547,8 @@ def _access_token_from(resp: httpx.Response) -> str:
         resp: The token endpoint response (status 200).
 
     Returns:
-        The non-empty ``access_token`` string.
+        The non-empty ``access_token`` string, and ``expires_in`` in seconds or
+        ``None`` when the IdP did not return a usable lifetime.
 
     Raises:
         OboExchangeError: The body is not a JSON object or has no access token.
@@ -544,7 +562,7 @@ def _access_token_from(resp: httpx.Response) -> str:
     access_token = payload.get("access_token")
     if not isinstance(access_token, str) or not access_token:
         raise OboExchangeError("IdP returned 200 but no access_token")
-    return access_token
+    return access_token, _coerce_expires_in(payload.get("expires_in"))
 
 
 async def obo_exchange(
@@ -552,7 +570,7 @@ async def obo_exchange(
     subject_token: str,
     target_audience: str,
     scopes: list[str] | None = None,
-) -> str:
+) -> tuple[str, int | None]:
     """Perform the OBO exchange: re-audience the ingress JWT to ``target_audience``.
 
     Args:
@@ -563,14 +581,16 @@ async def obo_exchange(
         scopes: audience-scoped scopes; empty/None -> ``.default`` for Entra.
 
     Returns:
-        The exchanged access token (``aud`` = target, ``sub`` = the user).
+        ``(access_token, expires_in)``: the exchanged token (``aud`` = target,
+        ``sub`` = the user) and its lifetime in seconds, or ``None`` when the IdP
+        did not return a usable ``expires_in``.
 
     Raises:
         OboReauthRequired, OboConsentRequired, OboConfigError,
         OboUnsupportedIdpError, OboExchangeError.
 
-    This token bakes in the user's ``sub`` and MUST NOT be cached across users;
-    callers invoke this per request.
+    This token bakes in the user's ``sub`` and MUST NOT be served to another
+    user; the optional OBO cache (``obo_token_cache``) keys it per ``egress_user``.
     """
     kind = _idp_kind(idp_provider)
     verifier = _keycloak_verifier(idp_provider) if kind == "keycloak" else None
@@ -588,7 +608,7 @@ async def obo_exchange(
     resp = await _post_token_request(token_url, body)
     if resp.status_code != 200:
         raise _token_error(resp, kind)
-    access_token = _access_token_from(resp)
+    access_token, expires_in = _access_token_from(resp)
     if verifier is not None:
         await _refuse_gateway_valid_token(verifier, access_token, target_audience, subject_token)
-    return access_token
+    return access_token, expires_in
