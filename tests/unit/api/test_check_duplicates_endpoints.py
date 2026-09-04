@@ -205,7 +205,7 @@ class TestServerCheckDuplicatesEndpoint:
                     {
                         "path": "/sim",
                         "server_name": "Similar",
-                        "relevance_score": 0.85,
+                        "similarity_score": 0.85,
                     }
                 ]
             }
@@ -236,7 +236,7 @@ class TestServerCheckDuplicatesEndpoint:
                     {
                         "path": "/sim",
                         "server_name": "Similar",
-                        "relevance_score": 0.85,
+                        "similarity_score": 0.85,
                     }
                 ]
             },
@@ -397,7 +397,7 @@ class TestSkillCheckDuplicatesEndpoint:
                     {
                         "path": "/skills/sim",
                         "skill_name": "Similar Skill",
-                        "relevance_score": 0.88,
+                        "similarity_score": 0.88,
                     }
                 ]
             }
