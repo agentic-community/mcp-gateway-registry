@@ -85,6 +85,19 @@ _SIMILARITY_OVERFETCH_FACTOR: int = 10
 _QUERY_TEXT_CHAR_CAP: int = 500
 
 
+def _similarity_of(candidate: dict) -> float:
+    """Absolute cosine similarity of a search hit to the query.
+
+    Returns 0.0 when the backend could not supply one, which keeps the
+    candidate below any configured threshold: an entity we cannot compare
+    is not an entity we should call a possible duplicate.
+    """
+    similarity = candidate.get("similarity_score")
+    if similarity is None:
+        return 0.0
+    return float(similarity)
+
+
 class DuplicateCheckService:
     """Cross-entity duplicate detection for entity registration.
 
@@ -306,6 +319,11 @@ class DuplicateCheckService:
         the configured similarity threshold and the caller's
         visibility scope, then capped to ``dedup_max_suggestions``
         across all entity types (the cap is global, not per-type).
+
+        Ranking and filtering read ``similarity_score``, the hit's cosine
+        similarity to the query, not ``relevance_score``: the latter is a
+        position in a result list, so the best hit carries the top value
+        even when nothing in the registry is remotely similar.
         """
         threshold = self._settings.dedup_score_threshold
         max_suggestions = self._settings.dedup_max_suggestions
@@ -334,11 +352,11 @@ class DuplicateCheckService:
             return [], False
 
         candidates = self._flatten_search_results(raw_results)
-        candidates.sort(key=lambda c: float(c[1].get("relevance_score") or 0.0), reverse=True)
+        candidates.sort(key=lambda c: _similarity_of(c[1]), reverse=True)
 
         advisory: list[ExistingEntity] = []
         for entity_type, candidate in candidates:
-            score = float(candidate.get("relevance_score") or 0.0)
+            score = _similarity_of(candidate)
             if score < threshold:
                 continue
             candidate_path = str(candidate.get("path") or "")

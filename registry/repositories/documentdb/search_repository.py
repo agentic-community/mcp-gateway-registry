@@ -287,6 +287,40 @@ def _reciprocal_rank_fusion(
 SCORE_DISPLAY_FLOOR: float = 0.10
 
 
+def _attach_similarity_scores(
+    grouped_results: dict[str, list[dict[str, Any]]],
+    selected_results: list[tuple[dict, float]],
+    query_embedding: list[float] | None,
+) -> None:
+    """Stamp each hit with its raw cosine similarity to the query, in place.
+
+    ``relevance_score`` is a ranking signal: under RRF it is rank-relative,
+    and ``_normalize_scores`` maps the best hit to exactly 1.0 whatever its
+    real similarity. Callers that need an absolute "how alike are these"
+    number, rather than "what came first", read ``similarity_score``.
+
+    Hits are matched to their source document by ``path``. Entries without
+    one (tools extracted from a parent server) are left untouched, as are
+    all entries when the query could not be embedded.
+    """
+    if not query_embedding:
+        return
+
+    similarity_by_path: dict[str, float] = {}
+    for doc, _ in selected_results:
+        path = doc.get("path")
+        if path:
+            similarity_by_path[str(path)] = cosine_similarity(
+                query_embedding, doc.get("embedding") or []
+            )
+
+    for entries in grouped_results.values():
+        for entry in entries:
+            path = entry.get("path")
+            if path is not None and str(path) in similarity_by_path:
+                entry["similarity_score"] = similarity_by_path[str(path)]
+
+
 def _normalize_scores(
     scored_results: list[tuple[dict, float]],
     max_results: int = 10,
@@ -2040,6 +2074,8 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                 else:
                     grouped_results["custom"].append(_format_custom_result(doc, relevance_score))
 
+            _attach_similarity_scores(grouped_results, selected, query_embedding)
+
             logger.info(
                 "Client-side search returned "
                 "%d servers, %d tools, %d agents, %d skills, "
@@ -2721,6 +2757,8 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                     # Custom entity types (admin-defined). Generic envelope —
                     # the schema-driven UI renders attributes from the descriptor.
                     grouped_results["custom"].append(_format_custom_result(doc, relevance_score))
+
+            _attach_similarity_scores(grouped_results, selected_results, query_embedding)
 
             # Sort each group by relevance_score (descending) to ensure highest matches
             # appear first. This is needed because the DB sorts by text_boost only,

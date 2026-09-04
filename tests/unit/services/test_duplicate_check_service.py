@@ -136,7 +136,7 @@ class TestBothChecksRunIndependently:
             },
             search_results={
                 "servers": [
-                    {"path": "/sim", "server_name": "Similar", "relevance_score": 0.85},
+                    {"path": "/sim", "server_name": "Similar", "similarity_score": 0.85},
                 ]
             },
         )
@@ -159,8 +159,8 @@ class TestBothChecksRunIndependently:
             search_results={
                 "servers": [
                     # Same path as the URL match — should be filtered.
-                    {"path": "/exact", "server_name": "ExactMatch", "relevance_score": 0.95},
-                    {"path": "/other", "server_name": "Other", "relevance_score": 0.85},
+                    {"path": "/exact", "server_name": "ExactMatch", "similarity_score": 0.95},
+                    {"path": "/other", "server_name": "Other", "similarity_score": 0.85},
                 ]
             },
         )
@@ -371,7 +371,7 @@ class TestExactMatchCheck:
             server_match={"path": "/foo"},  # would have matched if repo were healthy
             search_results={
                 "servers": [
-                    {"path": "/sim", "server_name": "Similar", "relevance_score": 0.85},
+                    {"path": "/sim", "server_name": "Similar", "similarity_score": 0.85},
                 ]
             },
         )
@@ -508,9 +508,9 @@ class TestSimilarityAdvisory:
             monkeypatch,
             search_results={
                 "servers": [
-                    {"path": "/alpha", "server_name": "Alpha", "relevance_score": 0.91},
-                    {"path": "/beta", "server_name": "Beta", "relevance_score": 0.55},  # below
-                    {"path": "/gamma", "server_name": "Gamma", "relevance_score": 0.81},
+                    {"path": "/alpha", "server_name": "Alpha", "similarity_score": 0.91},
+                    {"path": "/beta", "server_name": "Beta", "similarity_score": 0.55},  # below
+                    {"path": "/gamma", "server_name": "Gamma", "similarity_score": 0.81},
                 ]
             },
         )
@@ -534,7 +534,7 @@ class TestSimilarityAdvisory:
             monkeypatch,
             search_results={
                 "servers": [
-                    {"path": f"/s{i}", "server_name": f"S{i}", "relevance_score": 0.95}
+                    {"path": f"/s{i}", "server_name": f"S{i}", "similarity_score": 0.95}
                     for i in range(10)
                 ]
             },
@@ -548,8 +548,8 @@ class TestSimilarityAdvisory:
             monkeypatch,
             search_results={
                 "servers": [
-                    {"path": "/me", "server_name": "Me", "relevance_score": 0.99},
-                    {"path": "/other", "server_name": "Other", "relevance_score": 0.85},
+                    {"path": "/me", "server_name": "Me", "similarity_score": 0.99},
+                    {"path": "/other", "server_name": "Other", "similarity_score": 0.85},
                 ]
             },
         )
@@ -570,8 +570,8 @@ class TestSimilarityAdvisory:
             monkeypatch,
             search_results={
                 "servers": [
-                    {"path": "/alpha", "server_name": "Alpha", "relevance_score": 0.95},
-                    {"path": "/beta", "server_name": "Beta", "relevance_score": 0.92},
+                    {"path": "/alpha", "server_name": "Alpha", "similarity_score": 0.95},
+                    {"path": "/beta", "server_name": "Beta", "similarity_score": 0.92},
                 ]
             },
         )
@@ -618,9 +618,9 @@ class TestSimilarityAdvisory:
         service = _build_service(
             monkeypatch,
             search_results={
-                "servers": [{"path": "/s1", "server_name": "S1", "relevance_score": 0.9}],
-                "agents": [{"path": "/a1", "name": "A1", "relevance_score": 0.95}],
-                "skills": [{"path": "/k1", "skill_name": "K1", "relevance_score": 0.85}],
+                "servers": [{"path": "/s1", "server_name": "S1", "similarity_score": 0.9}],
+                "agents": [{"path": "/a1", "name": "A1", "similarity_score": 0.95}],
+                "skills": [{"path": "/k1", "skill_name": "K1", "similarity_score": 0.85}],
             },
         )
         result = await service.check(**_check_kwargs(name="X", description="Y"))
@@ -687,7 +687,7 @@ class TestExtractorFallbacks:
                             "registered_by": "alice",
                             "visibility": "public",
                         },
-                        "relevance_score": 0.9,
+                        "similarity_score": 0.9,
                     }
                 ]
             },
@@ -730,7 +730,7 @@ class TestExtractorFallbacks:
                     {
                         "path": "/skills/foo",
                         "name": "FallbackName",  # no skill_name
-                        "relevance_score": 0.85,
+                        "similarity_score": 0.85,
                     }
                 ]
             },
@@ -748,7 +748,7 @@ class TestExtractorFallbacks:
                     {
                         "path": "/server/foo",
                         "name": "FallbackName",  # no server_name
-                        "relevance_score": 0.85,
+                        "similarity_score": 0.85,
                     }
                 ]
             },
@@ -834,3 +834,94 @@ class TestComputedHasCollision:
         assert result.has_collision is True
         assert len(result.collision_with) == 1
         assert result.collision_with[0].entity_type == "skill"
+
+
+class TestAdvisoryThresholdReadsAbsoluteSimilarity:
+    """The advisory threshold must gate on similarity, not on rank.
+
+    Under the default ``rrf`` fusion the search repository hands back a
+    ``relevance_score`` that has been min-max rescaled for display, so the
+    best hit carries 1.0 whatever its real similarity. Gating on that value
+    admits the top hit in every registry, which is issue #1696.
+    """
+
+    async def test_top_ranked_but_dissimilar_hit_is_not_advised(self, monkeypatch) -> None:
+        service = _build_service(
+            monkeypatch,
+            search_results={
+                "servers": [
+                    {
+                        "path": "/payroll",
+                        "server_name": "payroll-mcp-server",
+                        "relevance_score": 1.0,
+                        "similarity_score": 0.2648,
+                    }
+                ]
+            },
+        )
+        result = await service.check(
+            **_check_kwargs(
+                name="topic-mcp-server",
+                description="Extracts discussion topics from a transcript.",
+            )
+        )
+        assert result.advisory_matches == []
+
+    async def test_genuinely_similar_hit_is_still_advised(self, monkeypatch) -> None:
+        service = _build_service(
+            monkeypatch,
+            search_results={
+                "servers": [
+                    {
+                        "path": "/topics",
+                        "server_name": "topic-extractor-mcp-server",
+                        "relevance_score": 1.0,
+                        "similarity_score": 0.93,
+                    }
+                ]
+            },
+        )
+        result = await service.check(
+            **_check_kwargs(
+                name="topic-mcp-server",
+                description="Extracts discussion topics from a transcript.",
+            )
+        )
+        assert [m.path for m in result.advisory_matches] == ["/topics"]
+        assert result.advisory_matches[0].relevance_score == 0.93
+
+    async def test_ordering_follows_similarity_not_display_rank(self, monkeypatch) -> None:
+        """Display rank and similarity can disagree; the cap must honour similarity."""
+        service = _build_service(
+            monkeypatch,
+            max_suggestions=1,
+            search_results={
+                "servers": [
+                    {
+                        "path": "/ranked-first",
+                        "server_name": "A",
+                        "relevance_score": 1.0,
+                        "similarity_score": 0.72,
+                    },
+                    {
+                        "path": "/most-similar",
+                        "server_name": "B",
+                        "relevance_score": 0.4,
+                        "similarity_score": 0.97,
+                    },
+                ]
+            },
+        )
+        result = await service.check(**_check_kwargs(name="X", description="Y"))
+        assert [m.path for m in result.advisory_matches] == ["/most-similar"]
+
+    async def test_hit_without_a_similarity_score_is_not_advised(self, monkeypatch) -> None:
+        """A backend that cannot supply a similarity cannot supply a duplicate claim."""
+        service = _build_service(
+            monkeypatch,
+            search_results={
+                "servers": [{"path": "/lexical-only", "server_name": "L", "relevance_score": 1.0}]
+            },
+        )
+        result = await service.check(**_check_kwargs(name="X", description="Y"))
+        assert result.advisory_matches == []
