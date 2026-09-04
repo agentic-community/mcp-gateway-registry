@@ -1503,7 +1503,11 @@ class Settings(BaseSettings):
         default=0.7,
         ge=0.0,
         le=1.0,
-        description="Minimum semantic-search score (0..1) for an advisory match to be returned.",
+        description=(
+            "Minimum cosine similarity (0..1) between the incoming entity's "
+            "name plus description and an existing one's for an advisory "
+            "match to be returned."
+        ),
     )
     dedup_max_suggestions: int = Field(
         default=3,
