@@ -417,8 +417,33 @@ class DocumentDBServerRepository(ServerRepositoryBase):
         self,
         path: str,
         server_info: dict[str, Any],
+        *,
+        updated_fields: list[str] | None = None,
+        expected_updated_at: str | None = None,
     ) -> bool:
-        """Update an existing server."""
+        """Update an existing server.
+
+        Args:
+            path: Server path as used by callers (with or without a
+                trailing slash).
+            server_info: Full merged server dict (callers build this by
+                layering their change over a fetched card). Only the
+                fields named in ``updated_fields`` (plus ``updated_at``)
+                are written, so concurrent writers touching other fields
+                are not overwritten (issue #1716). When omitted, every
+                field is written (legacy full-card behaviour).
+            expected_updated_at: Optional ``updated_at`` value the caller
+                read. When given, it participates in the same
+                ``update_one`` filter as the ``_id`` match, so the
+                compare-and-set is atomic: if another writer persisted a
+                change since this caller read the card, the filter
+                matches nothing and the update fails (issue #1716).
+
+        Like :meth:`get`, a card stored under the slash variant of
+        ``path`` is written through the variant that exists, so a read
+        that found the card is never followed by a write that silently
+        misses it (issue #1716).
+        """
         logger.debug(
             f"DocumentDB WRITE: Updating server at '{path}' in collection '{self._collection_name}'"
         )
@@ -429,6 +454,9 @@ class DocumentDBServerRepository(ServerRepositoryBase):
         try:
             doc = {**server_info}
             doc.pop("path", None)
+            if updated_fields is not None:
+                field_set = set(updated_fields) | {"updated_at"}
+                doc = {k: v for k, v in doc.items() if k in field_set}
             populate_normalized_identity_url(doc, ENTITY_TYPE_SERVER)
             unset_ops: dict[str, str] = {}
             # update() may carry no proxy_pass_url at all (a partial
@@ -446,10 +474,31 @@ class DocumentDBServerRepository(ServerRepositoryBase):
             update_spec: dict[str, dict[str, Any]] = {"$set": doc}
             if unset_ops:
                 update_spec["$unset"] = unset_ops
-            result = await collection.update_one({"_id": path}, update_spec)
+
+            # Try the exact _id first; on a miss, a card stored under the
+            # slash variant (readable that way via get(), issue #1716)
+            # still gets the write, guarded by the same revision
+            # predicate. Each update_one is atomic on its own; a miss on
+            # both forms means either the card is gone or the stored
+            # updated_at moved, and both must fail the write.
+            def _filter_for(id_value: str) -> dict[str, Any]:
+                if expected_updated_at is None:
+                    return {"_id": id_value}
+                return {"_id": id_value, "updated_at": expected_updated_at}
+
+            result = await collection.update_one(_filter_for(path), update_spec)
+            if result.matched_count == 0:
+                alternate_path = path.rstrip("/") if path.endswith("/") else path + "/"
+                if alternate_path != path:
+                    result = await collection.update_one(_filter_for(alternate_path), update_spec)
 
             if result.matched_count == 0:
-                logger.error(f"Server at '{path}' not found in DocumentDB")
+                if expected_updated_at is not None:
+                    logger.info(
+                        f"Server at '{path}' revision mismatch or missing; concurrent update won"
+                    )
+                else:
+                    logger.error(f"Server at '{path}' not found in DocumentDB")
                 return False
 
             logger.info(

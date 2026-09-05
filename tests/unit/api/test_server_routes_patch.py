@@ -492,6 +492,97 @@ class TestServerPatch:
         assert called_path == "/test-server"
         assert called_dict["description"] == "patched"
 
+    def test_patch_write_is_scoped_to_supplied_fields(self, client):
+        """Only client-supplied fields are persisted (issue #1716).
+
+        The merged card is still computed for gates and webhooks, but the
+        repository write must carry the patch's field scope so a field a
+        concurrent writer updated is not overwritten by this PATCH.
+        """
+        existing = _existing(auth_credential_encrypted="ENC::keepme")
+        with (
+            patch("registry.api.server_routes.server_service") as svc,
+            patch(
+                "registry.auth.dependencies.user_has_ui_permission_for_service",
+                return_value=True,
+            ),
+            patch(
+                "registry.api.server_routes.check_registration_gate",
+                AsyncMock(return_value=_gate_allow()),
+            ),
+            patch("registry.api.server_routes.send_registration_webhook", AsyncMock()),
+        ):
+            svc.get_server_info = AsyncMock(side_effect=[existing, existing])
+            svc.update_server = AsyncMock(return_value=True)
+
+            response = client.patch(
+                "/servers/test-server",
+                json={"description": "patched"},
+            )
+
+        assert response.status_code == 200
+        kwargs = svc.update_server.call_args.kwargs
+        assert kwargs["updated_fields"] == ["description"]
+
+    def test_patch_write_carries_read_revision_for_if_match(self, client):
+        """With If-Match, the revision joins the atomic repository write (issue #1716)."""
+        ts = datetime(2026, 1, 1, tzinfo=UTC)
+        existing = _existing(updated_at=ts)
+        if_match = f'W/"{int(ts.timestamp() * 1000)}"'
+        with (
+            patch("registry.api.server_routes.server_service") as svc,
+            patch(
+                "registry.auth.dependencies.user_has_ui_permission_for_service",
+                return_value=True,
+            ),
+            patch(
+                "registry.api.server_routes.check_registration_gate",
+                AsyncMock(return_value=_gate_allow()),
+            ),
+            patch("registry.api.server_routes.send_registration_webhook", AsyncMock()),
+        ):
+            svc.get_server_info = AsyncMock(side_effect=[existing, existing])
+            svc.update_server = AsyncMock(return_value=True)
+
+            response = client.patch(
+                "/servers/test-server",
+                json={"description": "patched"},
+                headers={"If-Match": if_match},
+            )
+
+        assert response.status_code == 200
+        kwargs = svc.update_server.call_args.kwargs
+        assert kwargs["expected_updated_at"] == existing["updated_at"]
+
+    def test_patch_412_when_revision_guard_fails_save(self, client):
+        """A guarded write that matched nothing is a lost-update race, not a 500 (issue #1716)."""
+        ts = datetime(2026, 1, 1, tzinfo=UTC)
+        existing = _existing(updated_at=ts)
+        if_match = f'W/"{int(ts.timestamp() * 1000)}"'
+        with (
+            patch("registry.api.server_routes.server_service") as svc,
+            patch(
+                "registry.auth.dependencies.user_has_ui_permission_for_service",
+                return_value=True,
+            ),
+            patch(
+                "registry.api.server_routes.check_registration_gate",
+                AsyncMock(return_value=_gate_allow()),
+            ),
+            patch("registry.api.server_routes.send_registration_webhook", AsyncMock()),
+        ):
+            svc.get_server_info = AsyncMock(side_effect=[existing, None])
+            svc.update_server = AsyncMock(return_value=False)
+
+            response = client.patch(
+                "/servers/test-server",
+                json={"description": "patched"},
+                headers={"If-Match": if_match},
+            )
+
+        assert response.status_code == 412
+        assert "If-Match" in response.json()["detail"]
+
 
 @pytest.mark.unit
 @pytest.mark.api

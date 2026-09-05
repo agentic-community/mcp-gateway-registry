@@ -231,8 +231,23 @@ class ServerService:
             "is_new_version": False,
         }
 
-    async def update_server(self, path: str, server_info: dict[str, Any]) -> bool:
+    async def update_server(
+        self,
+        path: str,
+        server_info: dict[str, Any],
+        *,
+        updated_fields: list[str] | None = None,
+        expected_updated_at: str | None = None,
+    ) -> bool:
         """Update an existing server.
+
+        Args:
+            updated_fields: When given, only these fields (plus
+                ``updated_at``) are persisted; concurrent writes to other
+                fields survive (issue #1716). None writes every field.
+            expected_updated_at: When given, the update only lands if the
+                stored ``updated_at`` still equals this value, enforced
+                atomically in the repository write (issue #1716).
 
         Raises:
             UrlValidationError: If the update sets a proxy_pass_url that fails
@@ -282,7 +297,12 @@ class ServerService:
                 # Re-enabling clears any prior refresh auto-disable.
                 server_info["proxy_disabled_reason"] = None
 
-        result = await self._repo.update(path, server_info)
+        result = await self._repo.update(
+            path,
+            server_info,
+            updated_fields=updated_fields,
+            expected_updated_at=expected_updated_at,
+        )
 
         if result:
             # Update search index
