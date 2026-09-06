@@ -3,8 +3,8 @@
 Covers:
 - Entra jwt-bearer request body shape (grant_type, assertion, scope, on_behalf_of).
 - .default scope synthesis vs explicit scopes.
+- Keycloak RFC 8693 request body shape (subject_token, audience, client auth).
 - IdP error-code -> typed exception mapping.
-- Keycloak path raises (Phase 4 stub).
 - No caching: two calls hit the token endpoint twice.
 - Missing gateway credentials -> config error.
 """
@@ -49,6 +49,19 @@ class _FakeResponse:
 
     def json(self):
         return self._payload
+
+
+class _FakeNonJsonResponse:
+    """A response whose body is not JSON — what a misbehaving proxy in front of
+    the IdP returns. The error path already tolerates this; the success path
+    must too."""
+
+    def __init__(self, status_code: int):
+        self.status_code = status_code
+        self.text = "<html>gateway timeout</html>"
+
+    def json(self):
+        raise ValueError("not json")
 
 
 def _patch_post(monkeypatch, response, capture: dict):
@@ -158,13 +171,176 @@ class TestErrorMapping:
         with pytest.raises(OboConfigError):
             await obo_exchange(_FakeEntraProvider(), subject_token="j", target_audience="api://srv")
 
+    @pytest.mark.asyncio
+    async def test_entra_access_denied_stays_generic(self, monkeypatch):
+        """access_denied must NOT be reclassified on the Entra path.
+
+        The Keycloak remediation hint would be wrong there (Entra returns this
+        for denied consent and for conditional-access blocks — a different fix,
+        and for CA not operator configuration at all), and moving an already
+        released code path out of the exchange_failed audit bucket would break
+        any alerting keyed on it. This test exists to keep that boundary.
+        """
+        cap: dict = {}
+        _patch_post(monkeypatch, _FakeResponse(403, {"error": "access_denied"}), cap)
+        with pytest.raises(OboExchangeError) as excinfo:
+            await obo_exchange(_FakeEntraProvider(), subject_token="j", target_audience="api://srv")
+        assert not isinstance(excinfo.value, OboConfigError)
+        assert "Keycloak" not in str(excinfo.value)
+
+
+@pytest.mark.unit
+class TestKeycloakExchangeBody:
+    @pytest.mark.asyncio
+    async def test_token_exchange_body_shape(self, monkeypatch):
+        cap: dict = {}
+        _patch_post(monkeypatch, _FakeResponse(200, {"access_token": "obo-tok"}), cap)
+
+        token = await obo_exchange(
+            _FakeKeycloakProvider(),
+            subject_token="ingress-jwt",
+            target_audience="finance-mcp-server",
+            scopes=[],
+        )
+
+        assert token == "obo-tok"
+        # The credential and the user's JWT must go to the CONFIGURED endpoint and
+        # nowhere else; without this a regression that redirected the POST would
+        # pass every other assertion in this file.
+        assert cap["url"] == _FakeKeycloakProvider().token_url
+        body = cap["data"]
+        assert body["grant_type"] == "urn:ietf:params:oauth:grant-type:token-exchange"
+        assert body["subject_token"] == "ingress-jwt"
+        assert body["subject_token_type"] == "urn:ietf:params:oauth:token-type:access_token"
+        # Pinned, not left to the server default: legacy Keycloak defaults to
+        # refresh_token and would mint a credential this code discards.
+        assert body["requested_token_type"] == "urn:ietf:params:oauth:token-type:access_token"
+        # Keycloak takes the bare target client id as audience, never an https URL
+        # and never Entra's assertion/requested_token_use convention.
+        assert body["audience"] == "finance-mcp-server"
+        assert body["client_id"] == "gw-client"
+        assert body["client_secret"] == "gw-secret"
+        assert "assertion" not in body
+        assert "requested_token_use" not in body
+        # No explicit scopes -> omit the field entirely so Keycloak applies
+        # the target client's defaults.
+        assert "scope" not in body
+
+    @pytest.mark.asyncio
+    async def test_explicit_scopes_joined_into_scope(self, monkeypatch):
+        """Scopes are space-joined into `scope` when explicitly requested.
+
+        The inputs deliberately mirror what registration actually accepts:
+        ServerInfo._validate_egress_auth binds every scope's resource prefix to
+        target_audience, so bare OIDC names like "profile" are rejected before
+        they could ever reach this builder. Asserting on those would be green
+        and meaningless.
+        """
+        cap: dict = {}
+        _patch_post(monkeypatch, _FakeResponse(200, {"access_token": "t"}), cap)
+
+        await obo_exchange(
+            _FakeKeycloakProvider(),
+            subject_token="j",
+            target_audience="srv-client",
+            scopes=["srv-client/read", "srv-client/write"],
+        )
+        assert cap["data"]["scope"] == "srv-client/read srv-client/write"
+
+    @pytest.mark.asyncio
+    async def test_invalid_token_maps_to_reauth(self, monkeypatch):
+        """An expired subject_token must surface as re-auth, not a generic failure.
+
+        Keycloak never answers invalid_grant for token-exchange — legacy
+        exchange reports an unusable subject_token as invalid_token — so
+        mapping only invalid_grant would leave the single most likely runtime
+        failure (the ingress JWT expiring mid-flight) in the generic bucket.
+        """
+        cap: dict = {}
+        _patch_post(
+            monkeypatch,
+            _FakeResponse(400, {"error": "invalid_token", "error_description": "Invalid token"}),
+            cap,
+        )
+        with pytest.raises(OboReauthRequired):
+            await obo_exchange(
+                _FakeKeycloakProvider(), subject_token="j", target_audience="srv-client"
+            )
+
+    @pytest.mark.asyncio
+    async def test_invalid_request_stays_generic(self, monkeypatch):
+        """invalid_request must NOT be classified — the code is overloaded.
+
+        Keycloak standard exchange answers it for an expired subject_token, for
+        the client's exchange toggle being off, and for an unplaceable audience.
+        Two are operator config and one is user re-auth; guessing config would
+        stop the caller retrying with a fresh token. error_description is the
+        only discriminator and it is logged, not classified on.
+        """
+        cap: dict = {}
+        _patch_post(
+            monkeypatch,
+            _FakeResponse(400, {"error": "invalid_request", "error_description": "Invalid token"}),
+            cap,
+        )
+        with pytest.raises(OboExchangeError) as excinfo:
+            await obo_exchange(
+                _FakeKeycloakProvider(), subject_token="j", target_audience="srv-client"
+            )
+        assert not isinstance(excinfo.value, OboConfigError | OboReauthRequired)
+
+    @pytest.mark.asyncio
+    async def test_unsupported_grant_type_maps_to_config(self, monkeypatch):
+        """Keycloak without the token-exchange feature enabled."""
+        cap: dict = {}
+        _patch_post(monkeypatch, _FakeResponse(400, {"error": "unsupported_grant_type"}), cap)
+        with pytest.raises(OboConfigError, match="token-exchange grant"):
+            await obo_exchange(
+                _FakeKeycloakProvider(), subject_token="j", target_audience="srv-client"
+            )
+
+    @pytest.mark.asyncio
+    async def test_access_denied_maps_to_config(self, monkeypatch):
+        """Keycloak answers access_denied when the target client has not granted
+        the token-exchange permission — the common first-run failure. It must
+        surface as an actionable configuration error, not a generic exchange
+        failure."""
+        cap: dict = {}
+        _patch_post(
+            monkeypatch,
+            _FakeResponse(
+                403,
+                {"error": "access_denied", "error_description": "Client not allowed to exchange"},
+            ),
+            cap,
+        )
+        with pytest.raises(OboConfigError, match="token-exchange permission"):
+            await obo_exchange(
+                _FakeKeycloakProvider(), subject_token="j", target_audience="srv-client"
+            )
+
 
 @pytest.mark.unit
 class TestUnsupportedAndConfig:
     @pytest.mark.asyncio
-    async def test_keycloak_raises_not_implemented(self, monkeypatch):
-        # Keycloak path is a Phase 4 stub; it must raise cleanly, not silently pass.
-        with pytest.raises(OboUnsupportedIdpError, match="Keycloak"):
+    async def test_blank_target_audience_is_config_error(self, monkeypatch):
+        """No credential leaves the process without a target to exchange for."""
+        cap: dict = {}
+        _patch_post(monkeypatch, _FakeResponse(200, {"access_token": "t"}), cap)
+        with pytest.raises(OboConfigError, match="target_audience"):
+            await obo_exchange(_FakeKeycloakProvider(), subject_token="j", target_audience="   ")
+        assert cap["calls"] == 0
+
+    @pytest.mark.asyncio
+    async def test_non_json_success_body_is_typed_error(self, monkeypatch):
+        """A 200 with a broken body must stay inside the OboExchangeError family.
+
+        Otherwise the ValueError escapes the caller's `except OboExchangeError`
+        and the user gets a 500 instead of a JSON-RPC failure.
+        """
+        cap: dict = {}
+        _patch_post(monkeypatch, _FakeNonJsonResponse(200), cap)
+        with pytest.raises(OboExchangeError, match="non-JSON"):
             await obo_exchange(
                 _FakeKeycloakProvider(), subject_token="j", target_audience="srv-client"
             )

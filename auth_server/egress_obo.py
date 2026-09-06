@@ -111,29 +111,99 @@ def _keycloak_exchange_body(
     target_audience: str,
     scopes: list[str],
 ) -> dict[str, str]:
-    """Build the Keycloak RFC 8693 token-exchange request body.
+    """Build the Keycloak RFC 8693 token-exchange (OBO) request body.
 
-    Phase 4 (follow-on). Keycloak uses ``subject_token``/``audience`` (the bare
-    target client id), NOT Entra's ``assertion``/``scope=api://.../.default``.
+    Keycloak's standard token exchange authenticates the gateway's own client
+    via ``client_id``/``client_secret`` form fields, carries the caller's
+    ingress access token as ``subject_token`` (typed as an access_token), and
+    names the target as ``audience`` — the bare target client id, not an
+    https URL and not Entra's ``assertion``/``scope=api://.../.default``
+    convention.
+
+    ``requested_token_type`` is pinned rather than left to the server default,
+    because that default differs by Keycloak generation: legacy exchange
+    (<= 26.1) defaults to ``refresh_token`` and would mint a refresh token this
+    code reads past and discards on every request, while standard exchange
+    (26.2+) defaults to ``access_token``. RFC 8693 §2.1 makes the parameter
+    OPTIONAL with a server-chosen default, which is exactly why relying on it
+    is an interop hazard.
+
+    ``scope`` is sent only when explicit scopes are requested; omitting it
+    makes Keycloak apply the **requesting** client's default client scopes —
+    the gateway's own client, not the audience client.
     """
-    raise OboUnsupportedIdpError(
-        "Keycloak OBO token-exchange (RFC 8693) is not yet implemented; "
-        "Entra (jwt-bearer) ships first. Tracked as Phase 4."
-    )
+    body: dict[str, str] = {
+        "grant_type": _RFC8693_TOKEN_EXCHANGE_GRANT,
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "subject_token": subject_token,
+        "subject_token_type": _RFC8693_ACCESS_TOKEN_TYPE,
+        "requested_token_type": _RFC8693_ACCESS_TOKEN_TYPE,
+        "audience": target_audience,
+    }
+    if scopes:
+        body["scope"] = " ".join(scopes)
+    return body
 
 
-def _map_token_error(status_code: int, payload: dict) -> OboExchangeError:
-    """Map an IdP token-endpoint error response to a typed exception."""
+def _map_token_error(status_code: int, payload: dict, kind: str = "") -> OboExchangeError:
+    """Map an IdP token-endpoint error response to a typed exception.
+
+    ``kind`` is the IdP family (``entra``/``keycloak``). It exists so a
+    provider-specific remediation hint never reaches an operator running the
+    other IdP: the codes overlap but their causes and fixes do not. Codes whose
+    meaning is provider-independent stay in the shared branches below.
+    """
     err = (payload.get("error") or "").strip()
     if err == "interaction_required":
         return OboConsentRequired("IdP requires consent")
-    if err == "invalid_grant":
+    if err in ("invalid_grant", "invalid_token"):
         # invalid_grant spans both user-fixable (expired/no-permission) and
-        # config (gateway not granted access) cases; surface as re-auth with the
-        # IdP detail so the agent/user sees the actual reason.
+        # config (gateway not granted access) cases; re-auth is the safer of the
+        # two, since retrying with a fresh token is cheap and a config problem
+        # simply fails again. The IdP's error_description is logged, not
+        # returned: it is operator diagnostics, not something the calling agent
+        # can act on.
+        # Keycloak never answers invalid_grant for token-exchange: legacy
+        # exchange reports an expired or unusable subject_token as
+        # invalid_token, which is the same user-fixable situation.
         return OboReauthRequired("IdP rejected the user assertion")
+    if err == "unsupported_grant_type":
+        # The token-exchange grant is not enabled on the server at all — on
+        # Keycloak <= 26.1 that means KC_FEATURES lacks token-exchange.
+        return OboConfigError(
+            f"IdP does not support the token-exchange grant "
+            f"(unsupported_grant_type, status={status_code})"
+        )
+    if err == "access_denied" and kind == "keycloak":
+        # Keycloak answers access_denied when the exchange is not permitted,
+        # and what "permitted" means depends on the server generation, so name
+        # both rather than asserting one: legacy exchange (<= 26.1) wants the
+        # token-exchange permission on the TARGET client, while standard
+        # exchange (26.2+) wants the gateway's own client inside the subject
+        # token's audience. Both are operator-actionable configuration.
+        #
+        # Deliberately NOT shared with Entra: Entra returns access_denied for
+        # denied consent and for conditional-access blocks, which are a
+        # different fix and, for CA, not operator configuration at all.
+        # Reclassifying it there would also move an already-released code path
+        # from the exchange_failed audit bucket into config_error.
+        return OboConfigError(
+            f"Keycloak denied the exchange (access_denied, status={status_code}): "
+            "grant the target client's token-exchange permission (legacy exchange), "
+            "or place the gateway client inside the subject token's audience "
+            "(standard exchange, Keycloak 26.2+)"
+        )
     if err in ("invalid_client", "invalid_scope", "unauthorized_client"):
         return OboConfigError(f"IdP rejected exchange configuration ({err})")
+    # invalid_request is deliberately NOT classified. Keycloak standard exchange
+    # (26.2+) answers it for at least three unrelated situations: an expired
+    # subject_token, the client's standard-token-exchange toggle being off, and
+    # a requested audience that cannot be placed in the token. Two are operator
+    # config and one is user re-auth, and the code alone cannot tell them apart
+    # — only error_description can, which is why it is logged at the call site.
+    # Guessing here would be worse than the generic error: classifying an
+    # expired token as config would stop the caller retrying with a fresh one.
     return OboExchangeError(
         f"IdP token exchange failed (status={status_code}, error={err or 'unknown'})"
     )
@@ -170,7 +240,23 @@ async def obo_exchange(
     token_url = getattr(idp_provider, "token_url", "") or ""
     if not token_url or not client_id or not client_secret:
         raise OboConfigError("gateway IdP credentials/token_url not configured for OBO exchange")
+    if not target_audience.strip():
+        # Registration enforces a non-empty audience, but this is the last hop
+        # before the gateway's client_secret and the user's raw JWT leave the
+        # process, and a check that can be reached with the value missing is
+        # equivalent to no check. Entra would send scope="/.default" and
+        # Keycloak a blank audience field; neither should ever be attempted.
+        raise OboConfigError("obo target_audience missing")
 
+    # CREDENTIALED_OAUTH_PROFILE enforces TLS (require_https=True): self-hosted
+    # IdPs (Keycloak is the default self-managed IdP) are supported over https
+    # only. EGRESS_OAUTH_TRUSTED_IDP_HOSTS (#1707) relaxes the public-address
+    # requirement for the named IdP hosts, not the TLS requirement, so the
+    # shipped in-cluster http://keycloak:8080 default cannot serve OBO as-is.
+    # An internal CA works via the process trust store (SSL_CERT_FILE); there
+    # is no per-hop CA-bundle setting. In-cluster non-TLS OBO is deliberately
+    # out of scope pending an explicit, operator-gated design (see
+    # docs/design/egress-auth-design.md).
     try:
         validate_url(
             token_url,
@@ -233,12 +319,29 @@ async def obo_exchange(
             payload = resp.json()
         except ValueError:
             payload = {}
+        # error_description is the only way to tell apart the situations that
+        # share an error code (notably invalid_request on standard exchange).
+        # It carries IdP configuration text, never a token or a secret, and is
+        # truncated so a verbose IdP cannot flood the log.
+        description = str(payload.get("error_description") or "")[:200]
         logger.warning(
-            f"obo_exchange: IdP token exchange failed status={resp.status_code} error={payload.get('error') or 'unknown'}",
+            "obo_exchange: IdP token exchange failed status=%s error=%s description=%s",
+            resp.status_code,
+            payload.get("error") or "unknown",
+            description or "-",
         )
-        raise _map_token_error(resp.status_code, payload)
+        raise _map_token_error(resp.status_code, payload, kind)
 
-    access_token = resp.json().get("access_token")
+    try:
+        success_payload = resp.json()
+    except ValueError as exc:
+        # The error path already tolerates a non-JSON body; the success path
+        # must too, or a 200 with a broken body escapes as an unhandled
+        # exception and the caller returns 500 instead of a typed JSON-RPC
+        # failure.
+        raise OboExchangeError("IdP returned 200 with a non-JSON body") from exc
+
+    access_token = success_payload.get("access_token")
     if not access_token:
         raise OboExchangeError("IdP returned 200 but no access_token")
     return access_token
