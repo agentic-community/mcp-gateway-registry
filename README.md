@@ -124,6 +124,7 @@ The registry holds four built-in asset types plus admin-defined custom ones, all
 
 Across all of them you get semantic + lexical search, UI, REST, and MCP-native interfaces, and uniform governance. Key features worth calling out:
 
+- **[Gateway proxy for any resource](docs/gateway-proxy-operational-guide.md)**: front any HTTP backend — a model-inference API, a REST service, a `SKILL.md` origin — with an authenticated gateway route. Callers hold a gateway token; the backend URL and its credential stay in the registry, encrypted at rest and injected at egress. Off by default.
 - **Single authenticated gateway**: one entry point; OAuth against your existing IdP (Keycloak, Entra ID, Okta, Auth0, Cognito, PingFederate) with fine-grained [scopes](docs/scopes.md).
 - **Dynamic tool discovery**: agents and coding assistants find tools at runtime by natural-language [semantic search](docs/dynamic-tool-discovery.md), not hard-coded config.
 - **[Virtual MCP servers](docs/design/virtual-mcp-server.md)**: aggregate tools from many backends behind one endpoint, with per-tool access control.
@@ -164,7 +165,7 @@ High-traffic pages by audience:
 - [Quick Start](docs/quickstart.md) · [Installation Guide](docs/installation.md) · [Configuration Reference](docs/configuration.md) · [FAQ / Troubleshooting](docs/faq/index.md)
 
 **Platform & security**
-- [Authentication Guide](docs/auth.md) · [Access Control & Scopes](docs/scopes.md) · [AWS ECS Deployment](terraform/aws-ecs/README.md) · [Amazon EKS (Helm)](charts/README.md) · [Observability](docs/OBSERVABILITY.md) · [Federation](docs/federation.md)
+- [Authentication Guide](docs/auth.md) · [Access Control & Scopes](docs/scopes.md) · [Gateway Proxy Guide](docs/gateway-proxy-operational-guide.md) · [AWS ECS Deployment](terraform/aws-ecs/README.md) · [Amazon EKS (Helm)](charts/README.md) · [Observability](docs/OBSERVABILITY.md) · [Federation](docs/federation.md)
 
 **Architecture & development**
 - [Architecture Diagrams](docs/architecture-diagrams.md) · [API Reference](docs/registry_api.md) · [AI Coding Assistant Integration](docs/ai-coding-assistants-setup.md) · [MCP Registry CLI](docs/mcp-registry-cli.md)
