@@ -14,7 +14,10 @@ union of these arrays. A group missing here is silently dropped from the
 session, so a wrong entry degrades authorization in two places at once.
 
 These are static assertions over the seed JSON, so they hold without a live
-Keycloak or DocumentDB.
+Keycloak or DocumentDB. The admin seed's HTTP-verb grant is covered in
+tests/auth_server/unit/test_admin_seed_http_verbs.py instead, because asserting
+it properly means driving the resolver, whose import needs the auth-server path
+setup this suite does not have.
 """
 
 import json
