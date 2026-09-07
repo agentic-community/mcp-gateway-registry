@@ -162,6 +162,17 @@ describe('ProxyField', () => {
     expect(screen.getByText('Backend URL')).toBeInTheDocument();
   });
 
+  it('labels the checkbox with a stable action, not a flipping state readout', () => {
+    // Regression: the label used to render "Not proxied" while unchecked, which
+    // reads as a double negative ("check this to make it not proxied"). The box
+    // carries the state, so the label must name the action and never change.
+    const { rerender } = render(<ProxyField isProxied={false} {...base} />);
+    expect(screen.getByLabelText('Enable proxying')).not.toBeChecked();
+    expect(screen.queryByText('Not proxied')).not.toBeInTheDocument();
+    rerender(<ProxyField isProxied={true} {...base} />);
+    expect(screen.getByLabelText('Enable proxying')).toBeChecked();
+  });
+
   it('pops up the client URL as plain text when proxied and provided', () => {
     render(
       <ProxyField isProxied={true} {...base} clientUrl="/gateway/skill/demo" />,

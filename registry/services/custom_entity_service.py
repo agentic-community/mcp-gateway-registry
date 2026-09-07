@@ -242,6 +242,7 @@ class CustomEntityService:
             is_proxied=request.is_proxied,
             proxy_target_url=request.proxy_target_url,
             proxy_streaming=getattr(request, "proxy_streaming", False),
+            proxy_connect_notes=getattr(request, "proxy_connect_notes", None),
             custom_headers_encrypted=custom_headers_encrypted,
             custom_header_names=custom_header_names,
             custom_header_overridable_names=custom_header_overridable_names,
@@ -303,6 +304,8 @@ class CustomEntityService:
             updates["is_proxied"] = request.is_proxied
         if request.proxy_target_url is not None:
             updates["proxy_target_url"] = request.proxy_target_url
+        if request.proxy_connect_notes is not None:
+            updates["proxy_connect_notes"] = request.proxy_connect_notes
         if request.attributes is not None:
             # Merge-then-validate: merge client patch into stored bag, then validate.
             merged_attrs = dict(existing.attributes)

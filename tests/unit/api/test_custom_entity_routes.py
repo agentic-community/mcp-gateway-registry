@@ -167,6 +167,35 @@ class TestCreate:
         resp = client.post(f"/api/custom/{TYPE}", json={"name": "x"})
         assert resp.status_code == 400
 
+    def test_connect_notes_reaches_the_service(self, patched_service):
+        # The field has to survive request parsing to be persisted at all: an
+        # older build silently drops it as an unknown key, so the request looks
+        # like a success while the notes never arrive.
+        client = _make_client(USER_CTX)
+        resp = client.post(
+            f"/api/custom/{TYPE}",
+            json={
+                "name": "x",
+                "is_proxied": True,
+                "proxy_target_url": "https://api.example.com/v1",
+                "proxy_connect_notes": "Append /v1/chat/completions",
+            },
+        )
+        assert resp.status_code == 201
+        # The route passes the parsed body positionally: create_record(type, body, owner=...)
+        body = patched_service.create_record.call_args[0][1]
+        assert body.proxy_connect_notes == "Append /v1/chat/completions"
+
+    def test_connect_notes_over_max_length_400(self, patched_service):
+        # Operator free text is capped at 2000 so a paste cannot bloat the record.
+        client = _make_client(USER_CTX)
+        resp = client.post(
+            f"/api/custom/{TYPE}",
+            json={"name": "x", "proxy_connect_notes": "z" * 2001},
+        )
+        assert resp.status_code in (400, 422)
+        patched_service.create_record.assert_not_awaited()
+
 
 @pytest.mark.unit
 class TestUpdateDelete:

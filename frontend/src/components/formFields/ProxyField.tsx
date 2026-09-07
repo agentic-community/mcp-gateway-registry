@@ -61,8 +61,12 @@ const ProxyField: React.FC<ProxyFieldProps> = ({
             onChange={(e) => onIsProxiedChange(e.target.checked)}
             className="h-4 w-4 rounded border-gray-300 dark:border-gray-600"
           />
+          {/* Action label, NOT a state readout: a checkbox label names what
+              checking it DOES. The prior state text flipped to "Not proxied"
+              when unchecked, which reads as a double negative ("check this to
+              make it not proxied"). The box itself carries the state. */}
           <span className="text-sm text-gray-600 dark:text-gray-400">
-            {isProxied ? 'Proxied' : 'Not proxied'}
+            Enable proxying
           </span>
         </label>
       </FormField>

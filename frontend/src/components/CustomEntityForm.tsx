@@ -44,7 +44,11 @@ const VISIBILITIES = ['public', 'private', 'group-restricted'] as const;
 // the dedicated ProxyField widget. If an admin's custom-type descriptor happens
 // to define a field with one of these names, skip its descriptor-driven widget
 // so it can't collide with (and clobber) the ProxyField-owned value.
-const PROXY_RESERVED_ATTR_KEYS = new Set(['is_proxied', 'proxy_target_url']);
+const PROXY_RESERVED_ATTR_KEYS = new Set([
+  'is_proxied',
+  'proxy_target_url',
+  'proxy_connect_notes',
+]);
 
 // Custom-entity forms use a teal focus accent.
 const INPUT_CLASS = fieldClass('teal');
@@ -128,6 +132,8 @@ const CustomEntityForm: React.FC<CustomEntityFormProps> = ({
   // when is_proxied is true.
   const [isProxied, setIsProxied] = useState(false);
   const [proxyTargetUrl, setProxyTargetUrl] = useState('');
+  // Optional operator-authored usage notes, shown in the Connect panel.
+  const [proxyConnectNotes, setProxyConnectNotes] = useState('');
   // Read-only, server-derived client path (present on edit once saved).
   const [proxyClientUrl, setProxyClientUrl] = useState('');
   // Upstream headers (per-header overridable). On edit these are the registered
@@ -162,6 +168,7 @@ const CustomEntityForm: React.FC<CustomEntityFormProps> = ({
         record.proxy_target_url ??
           (typeof attrs.proxy_target_url === 'string' ? attrs.proxy_target_url : ''),
       );
+      setProxyConnectNotes(record.proxy_connect_notes ?? '');
       setProxyClientUrl(record.proxy_client_url ?? '');
       // Rebuild header editor rows from the registered NAMES (values write-only).
       setCustomHeaders(
@@ -173,6 +180,7 @@ const CustomEntityForm: React.FC<CustomEntityFormProps> = ({
       );
       delete attrs.is_proxied;
       delete attrs.proxy_target_url;
+      delete attrs.proxy_connect_notes;
       setAttributes(attrs);
     }
   }, [record]);
@@ -346,6 +354,7 @@ const CustomEntityForm: React.FC<CustomEntityFormProps> = ({
       attributes: attributesWithDefaults,
       is_proxied: isProxied,
       ...(isProxied ? { proxy_target_url: proxyTargetUrl.trim() } : {}),
+      ...(isProxied ? { proxy_connect_notes: proxyConnectNotes.trim() } : {}),
     };
 
     // Upstream headers only apply when proxied. Block submit client-side on any
@@ -500,6 +509,19 @@ const CustomEntityForm: React.FC<CustomEntityFormProps> = ({
             error={fieldErrors.proxy_target_url}
             clientUrl={proxyClientUrl}
           />
+
+          {isProxied && (
+            <FormField label="Connect notes">
+              <textarea
+                rows={3}
+                maxLength={2000}
+                value={proxyConnectNotes}
+                onChange={(e) => setProxyConnectNotes(e.target.value)}
+                className={INPUT_CLASS}
+                placeholder="Optional usage notes shown to clients in the Connect panel (e.g. the API sub-path to append)."
+              />
+            </FormField>
+          )}
 
           {isProxied && (
             <UpstreamHeadersField

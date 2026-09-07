@@ -60,6 +60,8 @@ export interface CustomEntityRecord {
   is_proxied?: boolean;
   proxy_target_url?: string | null;
   proxy_client_url?: string | null;
+  // Optional operator-authored usage notes, shown in the Connect panel when set.
+  proxy_connect_notes?: string | null;
   // Upstream custom-header NAMES (values encrypted, never returned).
   // custom_header_overridable_names is the caller-overridable subset.
   custom_header_names?: string[];
@@ -83,6 +85,7 @@ export interface CustomEntityCreate {
   attributes: Record<string, unknown>;
   is_proxied?: boolean;
   proxy_target_url?: string | null;
+  proxy_connect_notes?: string | null;
   custom_headers?: CustomEntityHeader[];
 }
 
@@ -96,6 +99,7 @@ export interface CustomEntityUpdate {
   attributes?: Record<string, unknown> | null;
   is_proxied?: boolean;
   proxy_target_url?: string | null;
+  proxy_connect_notes?: string | null;
 }
 
 /** Shape of the 400 validation-error body: { detail: [{ field, message }, ...] }. */

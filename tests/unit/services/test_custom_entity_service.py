@@ -414,3 +414,60 @@ class TestUpdateRecordUpstreamHeaders:
         assert out is existing
         entities.update.assert_awaited_once()
         search.index_custom_entity.assert_awaited_once()
+
+
+@pytest.mark.unit
+class TestUpdateRecordConnectNotes:
+    """proxy_connect_notes is operator free text, so the patch semantics are the contract.
+
+    None means leave unchanged, which makes the empty string the only way to clear
+    notes that were set. Both directions are asserted because a reader cannot tell
+    them apart from the field declaration alone.
+    """
+
+    async def test_notes_are_persisted(self, service):
+        svc, entities, _, _ = service
+        existing = _record(
+            owner="bob", is_proxied=True, proxy_target_url="https://api.example.com/v1"
+        )
+        entities.get = AsyncMock(return_value=existing)
+        entities.update = AsyncMock(return_value=existing)
+        await svc.update_record(
+            TYPE,
+            f"/{TYPE}/abc",
+            CustomEntityUpdate(proxy_connect_notes="Append /v1/chat/completions"),
+            BOB,
+        )
+        assert entities.update.call_args[0][1]["proxy_connect_notes"] == (
+            "Append /v1/chat/completions"
+        )
+
+    async def test_empty_string_clears_notes(self, service):
+        svc, entities, _, _ = service
+        existing = _record(
+            owner="bob",
+            is_proxied=True,
+            proxy_target_url="https://api.example.com/v1",
+            proxy_connect_notes="old notes",
+        )
+        entities.get = AsyncMock(return_value=existing)
+        entities.update = AsyncMock(return_value=existing)
+        await svc.update_record(
+            TYPE, f"/{TYPE}/abc", CustomEntityUpdate(proxy_connect_notes=""), BOB
+        )
+        # Empty string is not None, so it reaches the update and blanks the field.
+        assert entities.update.call_args[0][1]["proxy_connect_notes"] == ""
+
+    async def test_omitted_leaves_stored_notes_untouched(self, service):
+        svc, entities, _, _ = service
+        existing = _record(
+            owner="bob",
+            is_proxied=True,
+            proxy_target_url="https://api.example.com/v1",
+            proxy_connect_notes="keep me",
+        )
+        entities.get = AsyncMock(return_value=existing)
+        entities.update = AsyncMock(return_value=existing)
+        await svc.update_record(TYPE, f"/{TYPE}/abc", CustomEntityUpdate(visibility="private"), BOB)
+        # Editing an unrelated field must not blank notes the operator wrote.
+        assert "proxy_connect_notes" not in entities.update.call_args[0][1]
