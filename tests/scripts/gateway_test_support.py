@@ -247,8 +247,9 @@ def select_record(
 
     Args:
         records: Proxied custom records.
-        selector: Case-insensitive substring matched against name, path, and
-            client URL. Takes precedence over ``target_hint``.
+        selector: An exact name wins outright; otherwise a case-insensitive
+            substring matched against name, path, and client URL. Takes
+            precedence over ``target_hint``.
         target_hint: Substring of ``proxy_target_url`` identifying this client's
             backend (e.g. ``api.openai.com``), used when no selector is given so a
             registry holding several proxied entities still resolves cleanly.
@@ -268,6 +269,12 @@ def select_record(
 
     if selector:
         needle = selector.lower()
+        # An exact name wins before substring matching, so a selector that is also
+        # a prefix of another record ('openai-proxy' alongside
+        # 'openai-proxy-default-auth') resolves instead of reporting ambiguity.
+        exact = [r for r in records if str(r.get("name", "")).lower() == needle]
+        if len(exact) == 1:
+            return exact[0]
         matches = [
             r
             for r in records
@@ -517,7 +524,7 @@ def add_common_arguments(
     )
     parser.add_argument(
         "--entity",
-        help="Substring selecting the proxied custom record (name, path, or client URL)",
+        help="Proxied custom record: an exact name, else a substring of name, path, or client URL",
     )
     parser.add_argument(
         "--client-path",
