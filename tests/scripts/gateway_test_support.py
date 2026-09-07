@@ -144,7 +144,7 @@ def read_api_key(
     """
     env_key = (os.environ.get(env_var) or "").strip()
     if env_key:
-        logger.info("Backend key : from %s (sent as Authorization)", env_var)
+        logger.info("Backend key : loaded from environment (sent as Authorization)")
         return env_key
 
     if not api_key_file:
@@ -158,7 +158,7 @@ def read_api_key(
     key = path.read_text().strip()
     if not key:
         raise GatewayClientError(f"Backend key file is empty: {api_key_file}")
-    logger.info("Backend key : from %s (sent as Authorization)", api_key_file)
+    logger.info("Backend key : loaded from file (sent as Authorization)")
     return key
 
 
