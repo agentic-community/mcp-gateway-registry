@@ -504,8 +504,7 @@ def add_common_arguments(
         "--token-file",
         default=DEFAULT_TOKEN_FILE,
         help=(
-            "File holding the gateway JWT, sent as X-Authorization "
-            f"(default: {DEFAULT_TOKEN_FILE})"
+            f"File holding the gateway JWT, sent as X-Authorization (default: {DEFAULT_TOKEN_FILE})"
         ),
     )
     parser.add_argument(
