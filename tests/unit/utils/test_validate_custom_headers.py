@@ -82,10 +82,20 @@ def test_encryption_defensively_validates_before_mutation():
 
 
 def test_non_strict_decrypt_skips_malformed_duplicate_and_unsafe_entries():
+    # Every stored entry that cannot be trusted is skipped: not an object, an
+    # unsafe name, a duplicate name, an unsafe decrypted value, no ciphertext.
+    #
+    # Authorization is the ONE reserved name that survives, matching
+    # validate_custom_headers: it is registrable as a caller-overridable slot,
+    # and such a slot may carry an operator DEFAULT. Rejecting it here would
+    # fail-close every request for an entity whose registration was accepted
+    # (see CALLER_OVERRIDABLE_RESERVED_HEADER_NAMES in registry/constants.py).
+    # Every OTHER reserved name is still dropped -- see
+    # test_non_strict_decrypt_drops_gateway_managed_names.
     entries = [
         "not-an-object",
         {"name": "X-Bad\rInjected", "value_encrypted": "bad-name"},
-        {"name": "Authorization", "value_encrypted": "reserved"},
+        {"name": "Authorization", "value_encrypted": "operator-default"},
         {"name": "X-Good", "value_encrypted": "good"},
         {"name": "x-good", "value_encrypted": "duplicate"},
         {"name": "X-Control", "value_encrypted": "control"},
@@ -94,7 +104,7 @@ def test_non_strict_decrypt_skips_malformed_duplicate_and_unsafe_entries():
 
     def decrypt(ciphertext):
         return {
-            "reserved": "must-not-emit",
+            "operator-default": "Bearer caller-overridable-default",
             "good": "safe",
             "duplicate": "other",
             "control": "bad\nvalue",
@@ -104,7 +114,25 @@ def test_non_strict_decrypt_skips_malformed_duplicate_and_unsafe_entries():
         "registry.utils.credential_encryption.decrypt_credential",
         side_effect=decrypt,
     ):
-        assert decrypt_custom_headers(entries) == [{"name": "X-Good", "value": "safe"}]
+        assert decrypt_custom_headers(entries) == [
+            {"name": "Authorization", "value": "Bearer caller-overridable-default"},
+            {"name": "X-Good", "value": "safe"},
+        ]
+
+
+@pytest.mark.parametrize(
+    "reserved",
+    ["X-Authorization", "X-Internal-Token-Generic", "X-User", "X-Scopes", "X-Upstream-Url"],
+)
+def test_non_strict_decrypt_drops_gateway_managed_names(reserved):
+    # The carve-out above is Authorization ONLY. A stored entry for any other
+    # gateway-managed name never reaches egress, however it got into storage.
+    entries = [{"name": reserved, "value_encrypted": "planted"}]
+    with patch(
+        "registry.utils.credential_encryption.decrypt_credential",
+        side_effect=lambda c: "must-not-emit",
+    ):
+        assert decrypt_custom_headers(entries) == []
 
 
 def test_non_strict_decrypt_rejects_non_list_without_raising():
@@ -339,6 +367,31 @@ class TestBuildCustomHeadersStorageFields:
             h["name"]: h["value"] for h in decrypt_custom_headers(out["custom_headers_encrypted"])
         }
         assert decrypted == {"X-Api-Key": "sk-1"}
+
+    def test_overridable_authorization_default_survives_the_round_trip(self):
+        # The regression this carve-out exists for. validate_custom_headers accepts
+        # Authorization as a caller-OVERRIDABLE slot, and such a slot may carry an
+        # operator DEFAULT. If the storage decrypt then refuses the name, the vend
+        # fails and the fail-closed hop answers 502 on EVERY request to an entity
+        # whose registration was accepted. Assert the value makes it back out, in
+        # strict mode too, since that is the path the vend uses.
+        from registry.utils.credential_encryption import (
+            build_custom_headers_storage_fields,
+            decrypt_custom_headers,
+        )
+
+        out = build_custom_headers_storage_fields(
+            [{"name": "Authorization", "value": "Bearer operator-default", "overridable": True}]
+        )
+        assert out["custom_header_names"] == ["Authorization"]
+        assert out["custom_header_overridable_names"] == ["Authorization"]
+
+        for strict in (False, True):
+            decrypted = {
+                h["name"]: h["value"]
+                for h in decrypt_custom_headers(out["custom_headers_encrypted"], strict=strict)
+            }
+            assert decrypted == {"Authorization": "Bearer operator-default"}, f"{strict=}"
 
     def test_empty_list_clears_all_fields(self):
         from registry.utils.credential_encryption import build_custom_headers_storage_fields

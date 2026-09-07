@@ -71,9 +71,6 @@ def _validate_custom_header_value(value: object, *, allow_empty: bool = False) -
     return value
 
 
-_CALLER_OVERRIDABLE_RESERVED_NAMES: frozenset[str] = frozenset({"authorization"})
-
-
 def _validate_custom_header_overridable(value: object) -> bool:
     """Require an explicit boolean override flag; reject ambiguous truthy values."""
     if not isinstance(value, bool):
@@ -96,7 +93,11 @@ def validate_custom_headers(
     if raw is None:
         return None
 
-    from registry.constants import MAX_CUSTOM_HEADERS_PER_SERVER, RESERVED_CUSTOM_HEADER_NAMES
+    from registry.constants import (
+        CALLER_OVERRIDABLE_RESERVED_HEADER_NAMES,
+        MAX_CUSTOM_HEADERS_PER_SERVER,
+        RESERVED_CUSTOM_HEADER_NAMES,
+    )
 
     if not isinstance(raw, list):
         raise ValueError("custom_headers must be a list")
@@ -122,7 +123,7 @@ def validate_custom_headers(
 
         lower = name.lower()
         if lower in RESERVED_CUSTOM_HEADER_NAMES:
-            if lower not in _CALLER_OVERRIDABLE_RESERVED_NAMES:
+            if lower not in CALLER_OVERRIDABLE_RESERVED_HEADER_NAMES:
                 raise ValueError(
                     f"Header '{name}' is managed by the gateway and cannot be set as a custom header"
                 )
@@ -450,7 +451,10 @@ def decrypt_custom_headers(
     strict: bool = False,
 ) -> list[dict]:
     """Decrypt safe stored headers, optionally failing closed on any bad entry."""
-    from registry.constants import RESERVED_CUSTOM_HEADER_NAMES
+    from registry.constants import (
+        CALLER_OVERRIDABLE_RESERVED_HEADER_NAMES,
+        RESERVED_CUSTOM_HEADER_NAMES,
+    )
 
     if not encrypted_list:
         return []
@@ -476,7 +480,14 @@ def decrypt_custom_headers(
             logger.warning("Stored custom header has an invalid name; skipping.")
             continue
         lower = name.lower()
-        if lower in RESERVED_CUSTOM_HEADER_NAMES:
+        # Mirror validate_custom_headers: a reserved name is refused EXCEPT the
+        # sanctioned caller-overridable carve-out (Authorization), which may carry
+        # a stored operator default. Rejecting it here would fail-close every
+        # request for an entity registration already accepted.
+        if (
+            lower in RESERVED_CUSTOM_HEADER_NAMES
+            and lower not in CALLER_OVERRIDABLE_RESERVED_HEADER_NAMES
+        ):
             if strict:
                 raise ValueError(f"stored custom header '{name}' is gateway-managed")
             logger.warning(f"Stored custom header '{name}' is gateway-managed; skipping.")

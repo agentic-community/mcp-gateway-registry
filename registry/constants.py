@@ -181,3 +181,15 @@ RESERVED_CUSTOM_HEADER_NAMES: frozenset[str] = frozenset(
         "x-body-uninspectable",
     }
 )
+
+# The ONE sanctioned exception to the reserved-name denylist above.
+#
+# ``Authorization`` may be registered as an upstream header, but ONLY as a
+# caller-OVERRIDABLE slot (validate_custom_headers enforces the overridable
+# requirement): a fixed operator bearer belongs in the egress credential vault.
+# An overridable slot may still carry an operator DEFAULT value, so the name has
+# to survive every layer that touches stored headers -- registration validation,
+# the strict storage-integrity decrypt, and the vend backstop. Keeping the
+# carve-out here means those layers cannot drift apart: a name that registration
+# accepts but the decrypt rejects is an entity that 502s on every request.
+CALLER_OVERRIDABLE_RESERVED_HEADER_NAMES: frozenset[str] = frozenset({"authorization"})

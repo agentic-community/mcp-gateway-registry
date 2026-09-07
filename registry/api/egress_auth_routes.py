@@ -518,11 +518,17 @@ async def vend_generic_upstream_headers(
     # at validation and its bearer is guarded by the equal-token check at the hop);
     # every other reserved name is dropped so the hop can never inject / forward a
     # gateway-internal header (X-Internal-Token*, X-User, ...) to the backend.
-    from registry.constants import RESERVED_CUSTOM_HEADER_NAMES
+    from registry.constants import (
+        CALLER_OVERRIDABLE_RESERVED_HEADER_NAMES,
+        RESERVED_CUSTOM_HEADER_NAMES,
+    )
 
     def _allowed_upstream_name(name: str) -> bool:
         lower = name.lower()
-        return lower not in RESERVED_CUSTOM_HEADER_NAMES or lower == "authorization"
+        return (
+            lower not in RESERVED_CUSTOM_HEADER_NAMES
+            or lower in CALLER_OVERRIDABLE_RESERVED_HEADER_NAMES
+        )
 
     raw_registered = doc.get("custom_header_names") or []
     raw_overridable = doc.get("custom_header_overridable_names") or []
