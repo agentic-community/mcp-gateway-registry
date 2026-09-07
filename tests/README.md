@@ -31,6 +31,13 @@ tests/
 ├── integration/                        # Integration tests
 │   ├── __init__.py
 │   └── conftest.py                     # Integration test fixtures
+├── scripts/                            # Operator-run clients; need a live stack, not pytest
+│   ├── gateway_test_support.py         # Shared gateway plumbing: credential split, discovery, scope
+│   ├── openai_gateway_client.py        # Generic proxy driven against the OpenAI API
+│   ├── bedrock_gateway_client.py       # Generic proxy driven against Amazon Bedrock
+│   ├── verify_caller_creds.py          # Confirm a caller-supplied key reaches the backend
+│   ├── gateway-proxy-preflight.sh      # Credential and config gate; run before the suite
+│   └── gateway-proxy-regression.md     # Manual regression suite for the generic proxy
 └── auth_server/                        # Auth server tests
     ├── __init__.py
     ├── conftest.py                     # Auth server fixtures
@@ -39,6 +46,16 @@ tests/
         ├── mock_jwt.py                 # JWT utilities
         └── mock_providers.py           # Mock auth providers
 ```
+
+Everything under `scripts/` runs against a deployed stack and a real backend, so `pytest` skips it. These scripts read real secrets from files outside version control (`.token`, `.scratchpad/.oai`, `.scratchpad/.bedrock`, `.scratchpad/pr-1714/api-ninja`).
+
+Before running the gateway suite, run its gate:
+
+```bash
+./tests/scripts/gateway-proxy-preflight.sh
+```
+
+It checks every credential file, decodes the gateway JWT and rejects an expired one, checks the `.env` settings and `/health`, and exits non-zero on the first missing prerequisite. Start `scripts/gateway-proxy-regression.md` only after it prints `PREFLIGHT PASSED`; a partial run turns a missing key into what looks like a proxy bug.
 
 ## Key Features
 
