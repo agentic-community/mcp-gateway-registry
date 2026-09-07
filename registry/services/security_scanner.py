@@ -157,6 +157,7 @@ class SecurityScannerService:
             enabled=settings.security_scan_enabled,
             scan_on_registration=settings.security_scan_on_registration,
             block_unsafe_servers=settings.security_block_unsafe_servers,
+            allow_unsafe_servers=settings.security_allow_unsafe_servers,
             analyzers=settings.security_analyzers,
             scan_timeout_seconds=settings.security_scan_timeout,
             llm_api_key=settings.mcp_scanner_llm_api_key or os.getenv("MCP_SCANNER_LLM_API_KEY"),

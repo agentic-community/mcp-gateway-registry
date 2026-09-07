@@ -57,6 +57,16 @@ class SecurityScanConfig(BaseModel):
     block_unsafe_servers: bool = Field(
         default=True, description="Disable servers that fail security scan"
     )
+
+    allow_unsafe_servers: bool = Field(
+        default=False,
+        description=(
+            "When true, a server failing its scan stays enabled with its "
+            "HIGH/CRITICAL tools individually blocked instead of the whole "
+            "server being disabled. Only applies when block_unsafe_servers is true."
+        ),
+    )
+
     analyzers: str = Field(default="yara", description="Comma-separated list of analyzers to use")
     scan_timeout_seconds: int = Field(
         default=300, description="Timeout for security scans in seconds"
@@ -79,4 +89,29 @@ class ServerSecurityStatus(BaseModel):
     scan_status: str = Field(default="pending", description="Status: pending, completed, failed")
     is_disabled_for_security: bool = Field(
         default=False, description="Whether server is disabled due to security issues"
+    )
+
+
+class ToolOverride(BaseModel):
+    """Per-tool block/enable override state stored on a server document."""
+
+    blocked: bool = Field(
+        default=False,
+        description="True when the tool is blocked (hidden from listings and rejected on call)",
+    )
+    source: str = Field(
+        default="admin",
+        description="Origin of the block: 'security_scan' (auto) or 'admin' (manual)",
+    )
+    reason: str | None = Field(
+        default=None,
+        description="Why the tool was blocked, e.g. 'HIGH:tool_poisoning'",
+    )
+    updated_at: str | None = Field(
+        default=None,
+        description="ISO timestamp of the last change",
+    )
+    updated_by: str | None = Field(
+        default=None,
+        description="Username of the admin, or 'system' for an auto-block",
     )

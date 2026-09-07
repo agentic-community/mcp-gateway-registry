@@ -56,6 +56,18 @@ class _FakeServerRepo(ServerRepositoryBase):
     async def delete(self, path):  # pragma: no cover
         return False
 
+    async def get_tool_overrides(self, path):  # pragma: no cover
+        return {}
+
+    async def get_blocked_tools(self, path):  # pragma: no cover
+        return set()
+
+    async def set_tool_override(self, path, tool_name, override):  # pragma: no cover
+        return False
+
+    async def replace_tool_overrides(self, path, overrides):  # pragma: no cover
+        return False
+
     async def delete_with_versions(self, path):  # pragma: no cover
         return 0
 
