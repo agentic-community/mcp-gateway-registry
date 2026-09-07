@@ -28,6 +28,7 @@ import SecurityScanModal from './SecurityScanModal';
 import useEscapeKey from '../hooks/useEscapeKey';
 import ResourceBoundTokenButton from './ResourceBoundTokenButton';
 import SkillResources from './SkillResources';
+import ProxyConnectButton from './ProxyConnectButton';
 import { SafeLink, safeMarkdownAnchor } from './SafeLink';
 import { toScanSummary } from '../utils/securityScan';
 
@@ -490,6 +491,14 @@ const SkillCard: React.FC<SkillCardProps> = React.memo(({
                   {React.createElement(getSecurityIconState().Icon, { className: `h-4 w-4 ${loadingSecurityScan ? 'animate-pulse' : ''}` })}
                 </button>
 
+                {/* Connect Button — always rendered so its absence never has to
+                    be interpreted; disabled, with the reason as a tooltip, when
+                    the skill is not routed through the gateway. */}
+                <ProxyConnectButton
+                  clientUrl={skill.proxy_client_url}
+                  targetUrl={skill.proxy_target_url}
+                />
+
                 {/* Details Button */}
                 <button
                   onClick={handleViewDetails}
@@ -752,6 +761,11 @@ const SkillCard: React.FC<SkillCardProps> = React.memo(({
 
             {/* Action buttons */}
             <div className="flex items-center gap-4 mb-4 pb-4 border-b border-gray-200 dark:border-gray-700">
+              <ProxyConnectButton
+                label="Connect"
+                clientUrl={skill.proxy_client_url}
+                targetUrl={skill.proxy_target_url}
+              />
               {skill.skill_md_url && (
                 <SafeLink
                   href={skill.skill_md_url}

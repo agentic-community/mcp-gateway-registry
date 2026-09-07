@@ -316,6 +316,7 @@ class CustomEntityCreate(BaseModel):
     is_proxied: bool = Field(default=False)
     proxy_target_url: str | None = Field(default=None)
     proxy_streaming: bool = Field(default=False)
+    proxy_connect_notes: str | None = Field(default=None, max_length=2000)
     custom_headers: list[dict[str, Any]] | None = Field(
         default=None,
         description=(
@@ -383,6 +384,7 @@ class CustomEntityUpdate(BaseModel):
     # Gateway-proxy opt-in (patchable; None = leave unchanged).
     is_proxied: bool | None = None
     proxy_target_url: str | None = None
+    proxy_connect_notes: str | None = None
 
     @field_validator("visibility")
     @classmethod

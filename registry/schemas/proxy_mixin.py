@@ -83,6 +83,7 @@ PROXY_FIELD_NAMES: frozenset[str] = frozenset(
         "proxy_target_host",
         "proxy_disabled_reason",
         "proxy_client_url",
+        "proxy_connect_notes",
         # Upstream auth secrets must NEVER travel to/from a peer. Stripped both
         # ways (a peer must not plant creds, and we must not leak our own).
         # The plaintext "custom_headers" key is normally never persisted, but is
@@ -228,6 +229,16 @@ class ProxyableMixin(BaseModel):
             "type). When false (default) the response is buffered up to "
             "GENERIC_PROXY_MAX_BODY_BYTES. The value is bound into the signed "
             "generic-proxy token, so the hop never trusts a forgeable inbound header."
+        ),
+    )
+    proxy_connect_notes: str | None = Field(
+        default=None,
+        max_length=2000,
+        description=(
+            "Optional operator-authored usage notes for clients connecting through "
+            "the gateway (e.g. the API sub-path to append, the request shape). Free "
+            "text, surfaced in the UI Connect panel only when set and only for a "
+            "proxied entity. Not interpreted by the gateway."
         ),
     )
     custom_headers_encrypted: list[CustomHeaderEncrypted] | None = Field(

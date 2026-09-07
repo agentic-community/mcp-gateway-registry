@@ -15,6 +15,7 @@ import {
 import { labelFor } from '../utils/humanize';
 import StarRatingWidget from './StarRatingWidget';
 import { TagList, ENTITY_ACCENTS } from './cards';
+import ProxyConnectButton from './ProxyConnectButton';
 
 interface CustomEntityCardProps {
   descriptor: CustomTypeDescriptor;
@@ -150,6 +151,13 @@ const CustomEntityCard: React.FC<CustomEntityCardProps> = ({
           onShowToast={onShowToast}
         />
         <div className="flex items-center gap-1">
+          {/* Always rendered: a disabled Connect explains that the record is not
+              routed through the gateway, which an absent control cannot. */}
+          <ProxyConnectButton
+            clientUrl={record.proxy_client_url}
+            targetUrl={record.proxy_target_url}
+            connectNotes={record.proxy_connect_notes}
+          />
           <button
             type="button"
             onClick={() => onView(record)}

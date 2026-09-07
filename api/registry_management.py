@@ -810,6 +810,61 @@ def cmd_custom_record_create(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_custom_proxy_create(args: argparse.Namespace) -> int:
+    """
+    Create a proxied custom-entity record that fronts a REST/HTTP endpoint.
+
+    Convenience over ``custom-record-create``: builds the gateway-proxy fields
+    from flags (target URL, streaming on/off, optional caller-overridable
+    Authorization passthrough) instead of a hand-written JSON record. The custom
+    type must already exist (see ``custom-type-create``); a type with required
+    attribute fields still needs ``custom-record-create`` with a full JSON body.
+
+    Streaming is set via ``--streaming true|false`` (the record's proxy_streaming
+    field). ``--auth-passthrough`` adds a caller-overridable Authorization header:
+    a fixed Authorization credential is rejected by the registry, so the caller
+    supplies the backend Bearer token at request time and the gateway forwards it.
+
+    ``--connect-notes`` sets proxy_connect_notes: free-text usage guidance shown to
+    clients in the UI Connect panel (e.g. the sub-path to append and a ready-to-run
+    invocation command). It is never interpreted by the gateway.
+
+    Args:
+        args: Command arguments (type, name, target_url, streaming,
+            auth_passthrough, connect_notes, visibility, description).
+
+    Returns:
+        Exit code (0 for success, 1 for failure).
+    """
+    try:
+        record: dict[str, Any] = {
+            "name": args.name,
+            "description": args.description or f"Proxied REST endpoint -> {args.target_url}",
+            "visibility": args.visibility,
+            "is_proxied": True,
+            "proxy_target_url": args.target_url,
+            "proxy_streaming": args.streaming == "true",
+            **({"proxy_connect_notes": args.connect_notes} if args.connect_notes else {}),
+        }
+        if args.auth_passthrough:
+            # Authorization is accepted only as a caller-overridable header (a
+            # fixed value is rejected); no stored value, the caller supplies it.
+            record["custom_headers"] = [{"name": "Authorization", "overridable": True}]
+
+        client = _create_client(args)
+        response = client.create_custom_record(args.type, record)
+        logger.info(
+            f"Proxied custom record created: {response.get('path')} "
+            f"(streaming={record['proxy_streaming']}, target={args.target_url})"
+        )
+        if args.json:
+            print(json.dumps(response, indent=2, default=str))
+        return 0
+    except Exception as e:
+        logger.error(f"Proxied custom record creation failed: {e}")
+        return 1
+
+
 def cmd_custom_record_list(args: argparse.Namespace) -> int:
     """
     List records of a custom type the caller can view.
@@ -6253,14 +6308,20 @@ Examples:
         """,
     )
 
-    parser.add_argument("--registry-url", help="Registry base URL (overrides REGISTRY_URL env var)")
+    parser.add_argument(
+        "--registry-url",
+        default="http://localhost",
+        help="Registry base URL (overrides REGISTRY_URL env var). Default: http://localhost",
+    )
 
     parser.add_argument("--aws-region", help="AWS region (overrides AWS_REGION env var)")
 
     parser.add_argument("--keycloak-url", help="Keycloak base URL (overrides KEYCLOAK_URL env var)")
 
     parser.add_argument(
-        "--token-file", help="Path to file containing JWT token (bypasses token script)"
+        "--token-file",
+        default=".token",
+        help="Path to file containing JWT token (bypasses token script). Default: .token",
     )
 
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
@@ -6304,6 +6365,50 @@ Examples:
         "--config", required=True, help="Path to custom record JSON file"
     )
     custom_record_create_parser.add_argument(
+        "--json", action="store_true", help="Print raw JSON response"
+    )
+
+    custom_proxy_create_parser = subparsers.add_parser(
+        "custom-proxy-create",
+        help="Create a proxied custom record fronting a REST/HTTP endpoint (e.g. an LLM API)",
+    )
+    custom_proxy_create_parser.add_argument(
+        "--type",
+        required=True,
+        help="Custom type name (must already exist; see custom-type-create)",
+    )
+    custom_proxy_create_parser.add_argument("--name", required=True, help="Record name")
+    custom_proxy_create_parser.add_argument(
+        "--target-url",
+        required=True,
+        help="Backend/origin URL the gateway proxies to (proxy_target_url), e.g. https://api.openai.com",
+    )
+    custom_proxy_create_parser.add_argument(
+        "--streaming",
+        choices=["true", "false"],
+        default="false",
+        help="Enable response streaming (proxy_streaming). Default: false",
+    )
+    custom_proxy_create_parser.add_argument(
+        "--auth-passthrough",
+        action="store_true",
+        help=(
+            "Add a caller-overridable Authorization header so the caller's Bearer "
+            "token is forwarded to the backend (a fixed Authorization is rejected)"
+        ),
+    )
+    custom_proxy_create_parser.add_argument(
+        "--visibility", default="private", help="Record visibility (default: private)"
+    )
+    custom_proxy_create_parser.add_argument("--description", help="Record description")
+    custom_proxy_create_parser.add_argument(
+        "--connect-notes",
+        help=(
+            "Operator usage notes stored on the record (proxy_connect_notes) and shown "
+            "in the UI Connect panel, e.g. the API sub-path plus an example command"
+        ),
+    )
+    custom_proxy_create_parser.add_argument(
         "--json", action="store_true", help="Print raw JSON response"
     )
 
@@ -8005,6 +8110,7 @@ Examples:
         "custom-type-create": cmd_custom_type_create,
         "custom-type-list": cmd_custom_type_list,
         "custom-record-create": cmd_custom_record_create,
+        "custom-proxy-create": cmd_custom_proxy_create,
         "custom-record-list": cmd_custom_record_list,
         "list": cmd_list,
         "toggle": cmd_toggle,
