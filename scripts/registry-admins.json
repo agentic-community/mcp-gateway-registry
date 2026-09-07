@@ -10,6 +10,11 @@
       "tools": ["all"]
     },
     {
+      "server": "*",
+      "methods": ["http:*"],
+      "tools": []
+    },
+    {
       "agent": "*",
       "actions": ["list_agents", "get_agent", "publish_agent", "modify_agent", "delete_agent", "toggle_agent", "invoke_agent"]
     }
