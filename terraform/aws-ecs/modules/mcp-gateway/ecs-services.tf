@@ -2178,7 +2178,10 @@ module "ecs_service_registry" {
     # no token is injected, and the upstream 3rd-party server 401s (surfacing in
     # the client as "Protected resource ... does not match").
     auth_internal = {
-      description                  = "auth-server -> registry:8091 egress-token vend hop (dedicated internal nginx listener)"
+      # AWS restricts rule descriptions to "a-zA-Z0-9. _-:/()#,@[]+=&;{}!$*", so no
+      # ">" here. An arrow makes AuthorizeSecurityGroupIngress fail the whole apply
+      # with "InvalidParameterValue: Invalid rule description".
+      description                  = "auth-server to registry:8091 egress-token vend hop (dedicated internal nginx listener)"
       from_port                    = 8091
       to_port                      = 8091
       ip_protocol                  = "tcp"
