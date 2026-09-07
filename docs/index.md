@@ -250,7 +250,7 @@ Accelerate development workflows with integrated tooling:
 | [Complete Setup Guide](complete-setup-guide.md)<br/>Step-by-step from scratch on AWS EC2 | [Security Posture](security-posture.md)<br/>Comprehensive security controls and compliance | [AI Coding Assistants Setup](ai-coding-assistants-setup.md)<br/>VS Code, Cursor, Claude Code integration |
 | [Installation Guide](installation.md)<br/>Complete setup instructions for EC2 and EKS | [Authentication Guide](auth.md)<br/>OAuth and identity provider integration | [API Reference](registry_api.md)<br/>Programmatic registry management |
 | [Configuration Reference](configuration.md)<br/>Environment variables and settings | [Amazon Cognito Setup](cognito.md)<br/>Step-by-step IdP configuration | [Dynamic Tool Discovery](dynamic-tool-discovery.md)<br/>Autonomous agent capabilities |
-| | [Fine-Grained Access Control](scopes.md)<br/>Permission management and security | [Deployment Guide](installation.md)<br/>Complete setup for deployment environments |
+| [Gateway Proxy Guide](gateway-proxy-operational-guide.md)<br/>Front any HTTP backend with an authenticated gateway route | [Fine-Grained Access Control](scopes.md)<br/>Permission management and security | [Deployment Guide](installation.md)<br/>Complete setup for deployment environments |
 | [Metadata Field Projection](metadata-field-projection.md)<br/>Reduce payload size on list and search APIs | [Security Scanner](security-scanner.md)<br/>MCP server supply chain security | [Troubleshooting Guide](faq/index.md)<br/>Common issues and solutions |
 
 ---

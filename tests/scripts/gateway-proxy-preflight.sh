@@ -125,10 +125,13 @@ HEALTH=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$ORIGIN/health" 2
   || die "$ORIGIN/health -> ${HEALTH:-no response} — start the stack (docker compose up -d) before testing"
 
 if command -v docker >/dev/null 2>&1; then
-  if docker compose logs auth-server 2>/dev/null | grep -qi "generic-proxy feature DISABLED"; then
-    die "the auth-server logged 'generic-proxy feature DISABLED' — the egress self-check latched the feature off for the process. Set GATEWAY_EGRESS_SELFCHECK_ENABLED=false for local runs and restart."
+  # Match the literal text auth_server/server.py emits. An earlier invented
+  # string ("generic-proxy feature DISABLED") matched nothing, so this gate
+  # always reported ok and the latched-off case reached the suite as a 404.
+  if docker compose logs auth-server 2>/dev/null | grep -qF "Generic proxy egress self-check FAILED"; then
+    die "the auth-server logged 'Generic proxy egress self-check FAILED' — a cloud metadata IP is reachable from the container, so the feature latched off for the process and every route 404s. Set GATEWAY_EGRESS_SELFCHECK_ENABLED=false for local runs and restart."
   else
-    ok "no 'generic-proxy feature DISABLED' line in the auth-server log"
+    ok "no 'Generic proxy egress self-check FAILED' line in the auth-server log"
   fi
 fi
 

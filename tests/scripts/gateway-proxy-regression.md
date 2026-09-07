@@ -78,7 +78,7 @@ curl -s -o /dev/null -w '%{http_code}\n' http://localhost/health        # expect
 docker compose logs auth-server | grep -iE "generic.proxy|egress" | tail -20
 ```
 
-A line reading `generic-proxy feature DISABLED` means the self-check ran. Fix 1.1 and restart before going further.
+A line reading `Generic proxy egress self-check FAILED` means the self-check latched the feature off for the process; fix 1.1 and restart before going further. `Generic proxy egress self-check PASSED; feature active` is the healthy line. Match these literally — they are the exact text `auth_server/server.py` emits.
 
 ### 1.3 Shell variables
 

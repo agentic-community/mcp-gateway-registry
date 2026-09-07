@@ -38,14 +38,20 @@ backend, with SSRF defense in depth at every layer.
 
 `/proxy/{entity_type}/{path}/` is the **internal** auth-server endpoint nginx
 forwards to; a client never calls it. The client-facing location is
-`/{entity_type}/{path}`.
+`/{gateway_proxy_prefix}/{entity_type}/{name}/`, where `{name}` is the registered
+path with its leading namespace segment stripped (see `build_proxy_client_path`).
+A skill at `/skills/pdf` is therefore served at `/gateway/skill/pdf/`, and a
+custom record at `/rest-endpoint/{uuid}` at `/gateway/rest-endpoint/{uuid}/`. The
+type segment is singular so it matches the `X-Generic-Proxy-Kind` marker and the
+authz key; the location keeps a trailing slash so it cannot prefix-match an
+unrelated route (issue #1501).
 
 | Entity | Route today | After this feature (when enabled) |
 |---|---|---|
 | MCP server | `/mcp-proxy/...` | unchanged |
 | A2A agent (existing) | `/agent/...` | unchanged |
-| A2A agent (opted-in) | — | additional `/a2a_agent/...` generic route |
-| Skill / custom (opted-in) | not proxyable | new `/skill/...`, `/{custom-type}/...` |
+| A2A agent (opted-in) | — | additional `/gateway/a2a_agent/...` generic route |
+| Skill / custom (opted-in) | not proxyable | new `/gateway/skill/...`, `/gateway/{custom-type}/...` |
 | Virtual server | alias-only | alias-only (no generic block) |
 
 `gateway_canonical_namespace_enabled` is defined but read nowhere in this
