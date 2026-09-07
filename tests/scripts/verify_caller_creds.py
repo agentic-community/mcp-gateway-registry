@@ -123,8 +123,10 @@ def _resolve_base(registry_url: str, token: str, entity: str) -> str:
             if not rec.get("proxy_client_url"):
                 sys.exit(f"FATAL: {entity} is not proxied (no proxy_client_url)")
             print(f"entity        : {entity}")
-            print(f"upstream auth : names={rec.get('custom_header_names')} "
-                  f"overridable={rec.get('custom_header_overridable_names')}")
+            print(
+                f"upstream auth : names={rec.get('custom_header_names')} "
+                f"overridable={rec.get('custom_header_overridable_names')}"
+            )
             # Trailing slash matters: the nginx location ends in one, so the bare
             # path answers 301 and a POST would be downgraded to GET.
             return registry_url + rec["proxy_client_url"].rstrip("/") + "/"
@@ -165,9 +167,14 @@ def main() -> int:
 
     ok_with = with_key.status_code == 200 and "data" in with_key.json()
     models = len(with_key.json().get("data", [])) if ok_with else 0
-    print(f"with your key    : HTTP {with_key.status_code}  "
-          + (f"{models} models, first={with_key.json()['data'][0]['id']}" if ok_with
-             else with_key.text[:120]))
+    print(
+        f"with your key    : HTTP {with_key.status_code}  "
+        + (
+            f"{models} models, first={with_key.json()['data'][0]['id']}"
+            if ok_with
+            else with_key.text[:120]
+        )
+    )
 
     detail = ""
     try:
@@ -185,7 +192,9 @@ def main() -> int:
         print("FAIL: the call succeeded WITHOUT your key, so a stored operator default")
         print("      is being injected. Clear it, then re-add the name only:")
         print('        PATCH .../upstream-headers  {"custom_headers": []}')
-        print('        PATCH .../upstream-headers  {"custom_headers": [{"name": "Authorization", "overridable": true}]}')
+        print(
+            '        PATCH .../upstream-headers  {"custom_headers": [{"name": "Authorization", "overridable": true}]}'
+        )
         return 1
     print("FAIL: the authenticated call did not succeed. 401 from the GATEWAY means the")
     print("      equal-token guard fired (JWT in both headers); 401 from OpenAI means the")
