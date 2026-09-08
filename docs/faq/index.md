@@ -6,6 +6,7 @@ Common questions and answers about the MCP Gateway Registry.
 
 - [What is MCP and why do I need a gateway?](what-is-mcp-and-gateway.md)
 - [How do I deploy and register MCP servers and agents?](deploying-and-registering-servers-agents.md)
+- [What changes when I upgrade to a release with the gateway generic proxy?](gateway-proxy-backwards-compatibility.md)
 
 ## Tool and Agent Discovery
 
@@ -18,6 +19,7 @@ Common questions and answers about the MCP Gateway Registry.
 
 - [How do I get my AI coding assistant to work with this registry?](connect-ai-coding-assistant.md)
 - [How do I register commonly used third-party MCP servers like GitHub, Slack, and Atlassian?](registering-third-party-mcp-servers.md)
+- [How do I let my team call OpenAI or Bedrock through the gateway?](registering-model-inference-endpoints.md)
 - [How do I configure the Datadog MCP server with per-user egress OAuth (public client + PKCE)?](configuring-datadog-mcp-server.md)
 - [How do I connect my agent to multiple MCP servers through the gateway?](connecting-multiple-mcp-servers.md)
 - [How do I test my agent's integration with the MCP Gateway locally?](local-testing-agent-integration.md)
