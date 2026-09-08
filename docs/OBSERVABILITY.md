@@ -278,7 +278,7 @@ exposition form** (after the OTel exporter appends the unit suffix).
 
 | Metric | Source | Labels | What it counts |
 |---|---|---|---|
-| `mcpgw_registry_auth_request_total` | auth-server | `success`, `method`, `server`, `target_kind` | Authenticated /validate calls. `target_kind` = `a2a_agent` \| `virtual_mcp_server` \| `mcp_server` \| `generic_proxy_skill` \| `generic_proxy_agent` \| `generic_proxy_custom` \| `control_plane` \| `unknown` (routing breakdown; `control_plane` = `/api/*`, static, oauth2 — never counted as a data-plane target). For a gateway-proxied request `server` holds the entity's **authz key** (`skill/skills/pdf`, `rest-endpoint/rest-endpoint/<uuid>`), which is the exact string a `server_access` rule names, so a `success="false"` series points at the rule to write |
+| `mcpgw_registry_auth_request_total` | auth-server | `success`, `method`, `server`, `target_kind` | Authenticated /validate calls. `target_kind` = `a2a_agent` \| `virtual_mcp_server` \| `mcp_server` \| `generic_proxy_skill` \| `generic_proxy_agent` \| `generic_proxy_custom` \| `control_plane` \| `unknown` (routing breakdown; `control_plane` = `/api/*`, static, oauth2 — never counted as a data-plane target). For a gateway-proxied request `server` holds the entity's **authz key** (`skill/skills/pdf`, `rest-endpoint/rest-endpoint/<uuid>`), which is the exact string a `server_access` rule names, so a `success="False"` series points at the rule to write |
 | `mcpgw_registry_tool_execution_total` | auth-server | `tool_name`, `server_name`, `success`, `method`, `client_name`, `client_version` | MCP tool calls detected at the auth layer |
 | `mcpgw_registry_operation_total` | registry middleware | `operation`, `resource_type`, `success` | Registry API operations (list/create/update/delete/search) |
 | `tool_discovery_total` | registry middleware | `results_count_bucket` | Semantic search calls |
@@ -396,6 +396,8 @@ Replace `<TARGET>` with the path you care about (e.g. `/api/servers`,
 
 The three `generic_proxy_*` kinds come from the `X-Generic-Proxy-Kind` marker nginx sets on each generated gateway location, so they hold for any `GATEWAY_PROXY_PREFIX`. Every operator-defined custom type collapses to `generic_proxy_custom`, which keeps the label set fixed at three values however many custom types exist. A gateway request landing in `unknown` means the marker did not arrive, so check the rendered nginx location.
 
+**The `success` label is `True` / `False`, capitalized.** The middleware emits `str(bool)`, so `success="false"` matches nothing and a query written that way returns an empty result rather than an error — it looks like "no failures" when it is really "no such label value". Verified on a running stack: `count by (success)(mcpgw_registry_auth_request_total)` returns `True` and `False` only.
+
 | Goal | Query |
 |---|---|
 | Routing split — one line per target kind (main timeseries) | `sum by (target_kind)(rate(mcpgw_registry_auth_request_total[5m]))` |
@@ -408,7 +410,7 @@ The three `generic_proxy_*` kinds come from the `X-Generic-Proxy-Kind` marker ng
 | Gateway-proxy volume, all three kinds | `sum by (target_kind)(rate(mcpgw_registry_auth_request_total{target_kind=~"generic_proxy_.*"}[5m]))` |
 | Skill routing only | `sum(rate(mcpgw_registry_auth_request_total{target_kind="generic_proxy_skill"}[5m]))` |
 | Busiest proxied endpoints by authz key | `topk(10, sum by (server)(rate(mcpgw_registry_auth_request_total{target_kind=~"generic_proxy_.*"}[1h])))` |
-| Which proxied endpoint is being denied (the `server` value is the scope rule to write) | `sum by (server)(rate(mcpgw_registry_auth_request_total{target_kind=~"generic_proxy_.*", success="false"}[15m])) > 0` |
+| Which proxied endpoint is being denied (the `server` value is the scope rule to write) | `sum by (server)(rate(mcpgw_registry_auth_request_total{target_kind=~"generic_proxy_.*", success="False"}[15m])) > 0` |
 | Gateway requests that failed to classify (should stay flat) | `sum(rate(mcpgw_registry_auth_request_total{target_kind="unknown"}[5m]))` |
 | Session-store hit rate | `sum(rate(mcpgw_registry_session_store_resolve_total{result="hit"}[5m])) / sum(rate(mcpgw_registry_session_store_resolve_total[5m]))` |
 | Federation peer sync failures by type | `sum by (peer_id, failure_type)(rate(peer_sync_failures_total[5m]))` |
@@ -529,7 +531,7 @@ Once callers start using it, four questions come up, and each maps to one of the
 |---|---|
 | How much traffic is this endpoint taking, next to my skills and MCP servers? | `target_kind="generic_proxy_custom"` on `mcpgw_registry_auth_request_total` |
 | Which proxied endpoint, out of the several registered? | the `server` label, which holds the entity's authz key |
-| Is anyone being denied, and what scope rule would fix it? | `success="false"` on that same series; the `server` value is the string to put in `server_access` |
+| Is anyone being denied, and what scope rule would fix it? | `success="False"` on that same series; the `server` value is the string to put in `server_access` |
 | Are its streams completing, or hitting a ceiling? | `mcpgw_registry_generic_proxy_stream_outcome_total` |
 
 Every gateway request carries a `generic_proxy_*` kind, so `target_kind="unknown"` holds no gateway traffic. A gateway call appearing there means the `X-Generic-Proxy-Kind` marker did not reach the auth-server.
