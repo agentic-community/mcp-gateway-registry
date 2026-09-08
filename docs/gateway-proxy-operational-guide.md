@@ -543,12 +543,35 @@ To turn the whole feature off, set `GATEWAY_GENERIC_PROXY_ENABLED=false` and res
 
 ## Monitoring
 
+**Routing and authorization**, on `mcpgw_registry_auth_request_total`, recorded for every request the gateway authorizes:
+
+| Label | Read it as |
+|---|---|
+| `target_kind` | `generic_proxy_skill`, `generic_proxy_agent`, or `generic_proxy_custom`. Every operator-defined custom type collapses to `generic_proxy_custom`, so the label set stays at three values however many types exist. A gateway request in `unknown` means the `X-Generic-Proxy-Kind` marker did not reach the auth-server; check the rendered nginx location. |
+| `server` | The entity's authz key — `skill/skills/pdf`, `rest-endpoint/rest-endpoint/<uuid>`. This is the exact string a `server_access` rule names, so a `success="false"` series tells you the rule to write. See [Authorizing callers](#authorizing-callers). |
+| `success` | The `/validate` decision only. A request that passes `/validate` and then fails at the hop — a 502 vend failure, a 503 from a full pool, an upstream 5xx — is recorded here as a success. Use the hop metrics below for those. |
+
+Find the busiest endpoints, or the ones being denied:
+
+```promql
+topk(10, sum by (server)(rate(mcpgw_registry_auth_request_total{target_kind=~"generic_proxy_.*"}[1h])))
+sum by (server)(rate(mcpgw_registry_auth_request_total{target_kind=~"generic_proxy_.*", success="false"}[15m])) > 0
+```
+
+The companion latency histogram `mcpgw_registry_auth_request_duration_milliseconds` carries no `server` label, so group it by `target_kind`.
+
+**The hop itself:**
+
 | Metric | Read it as |
 |---|---|
 | `mcpgw_registry_generic_proxy_slot_rejected_total{pool}` | 503s from a saturated concurrency pool, labeled `buffered` or `stream`. A non-zero rate means raise `GATEWAY_GENERIC_STREAM_MAX_CONCURRENCY` or shed load. |
-| `mcpgw_registry_generic_proxy_stream_outcome_total{outcome}` | `started`, `completed`, `duration_timeout`, `byte_cap`, `upstream_error`, `client_closed`. In-flight streams equal `started` minus the sum of the terminals. |
+| `mcpgw_registry_generic_proxy_stream_outcome_total{outcome}` | `started`, `completed`, `duration_timeout`, `byte_cap`, `upstream_error`, `client_closed`. In-flight streams equal `started` minus the sum of the terminals. `proxy_streaming` is a property of the entity, so an entity with it on takes the streaming path on every request regardless of what the caller's request body asks for. |
 | `mcpgw_registry_gateway_generic_blocks_dropped_total{reason}` | routes the render path refused, `invalid` (bad target) or `collision` (the location path is already claimed). Non-zero means an entity is registered and unreachable. |
 | `mcpgw_registry_gateway_egress_policy_unverified` | 1 means the startup self-check reached cloud metadata and the feature is latched off for the process. A standing 1 on an enabled deployment is an alert. |
+
+Every label value on the two `generic_proxy_*` counters exists at zero from startup, so a `rate()` alert binds at deploy instead of waiting for the first failure. Confirm with `docker compose logs auth-server | grep zero-init`, which reports `zero-init seeded 8/8 generic-proxy series`. A line reading `zero-init skipped: meter provider is ...` means `OTEL_EXPORTER_PROMETHEUS_HOST` is unset, so nothing was seeded.
+
+[OBSERVABILITY.md](OBSERVABILITY.md#verifying-gateway-proxy-metrics-end-to-end) walks a registered OpenAI endpoint, a buffered endpoint, a skill, and an agent through these counters with copy-pasteable commands.
 
 Log lines worth alerting on. Each is the literal text the code emits, so it is safe to match on:
 
@@ -568,7 +591,7 @@ Dropping generic block for ...                       a route did not render, so 
 | `301` | The trailing slash is missing. The location ends in one. `curl -L` follows it, and a POST becomes a GET when it does. |
 | `200` with `text/html`, ~889 bytes | No proxy location matched, so nginx served the frontend shell. Wrong entity-type spelling (`skills` for `skill`), the entity is not proxied, or the record was registered seconds ago and nginx has not regenerated its config yet — retry. Check the content type, not the status: this failure returns `200`, so a status-only check reports success. |
 | `401` | Expired or missing gateway token, or the equal-token guard fired because `Authorization` matched `X-Authorization`. Check the token lifetime first. |
-| `403` from the gateway | The caller's group has no `server_access` rule granting this verb on this authz key. `methods: ["all"]` does not count. |
+| `403` from the gateway | The caller's group has no `server_access` rule granting this verb on this authz key. `methods: ["all"]` does not count. The `server` label on `mcpgw_registry_auth_request_total{success="false"}` holds the key to name in the rule. |
 | `403` on a create or update | Missing `create_<type>_entity` or `modify_<type>_entity`, or a non-admin trying to manage a custom type. |
 | `404` on a record you know exists | Missing `list_<type>_entity` for that record. The registry hides existence rather than confirming it. |
 | `404` on a gateway route | The feature is off or self-disabled, the client URL was assembled by hand, or nginx has not reloaded. |
@@ -577,6 +600,8 @@ Dropping generic block for ...                       a route did not render, so 
 | `503` | The concurrency pool is full. |
 | Backend rejects the credential right after a rotation | The nginx reload has not landed. Wait and retry. |
 | Backend 401 or 403 | The key is stale, or wrong for the region. The proxy path itself worked. |
+| Gateway traffic showing as `target_kind="unknown"` in metrics | The `X-Generic-Proxy-Kind` marker did not reach the auth-server. Check the rendered location: `docker exec <registry> grep -A3 'X-Generic-Proxy-Kind' /etc/nginx/conf.d/nginx_rev_proxy.conf`. |
+| Metric panels empty on a fresh deployment | `OTEL_EXPORTER_PROMETHEUS_HOST` is unset, so the meter provider is a no-op and the startup seeding did nothing. The auth-server logs `zero-init skipped: meter provider is ...` in that case. |
 
 ## Security practices
 
