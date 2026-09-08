@@ -502,10 +502,29 @@ count(mcpgw_registry_auth_request_total{server!=""})
 
 A ratio query that divides by a per-server rate returns `NaN` for any server with no traffic in the window (`0/0`). Prefer the `> 0` forms above, or append `and on(server) sum by (server)(rate(mcpgw_registry_auth_request_total[$__range])) > 0`.
 
-Read the counters straight from the auth-server's exporter, which avoids the 10s Prometheus scrape delay:
+**On ECS these PromQL assertions are the only way in — there is no `:9464` to curl.** The task runs under `opentelemetry-instrument`, which installs the SDK meter provider before application code runs, so `_init_meter_provider_if_needed` returns early and never starts the Prometheus HTTP server. `OTEL_EXPORTER_PROMETHEUS_HOST/PORT` are set on the task but nothing listens on that port; verified by exec'ing into a running `mcp-gateway-v2-auth` task, where `127.0.0.1:9464` gives `Connection refused`. Metrics leave the task through the **`adot-collector` sidecar** instead (`OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317`, gRPC) and land in Amazon Managed Prometheus, where the same queries work. Query AMP directly with a SigV4-signed request when you have no Grafana:
 
 ```bash
-export AUTH=mcp-gateway-registry-auth-server-1     # container name; on ECS use an execute-command shell
+# AMP needs SigV4, so sign the request; POST avoids query-string canonicalization pitfalls
+python3 - <<'PY'
+import boto3, json, urllib.parse, urllib.request
+from botocore.auth import SigV4Auth
+from botocore.awsrequest import AWSRequest
+AMP = "https://aps-workspaces.<region>.amazonaws.com/workspaces/<ws-id>"
+creds = boto3.Session().get_credentials().get_frozen_credentials()
+body = urllib.parse.urlencode({"query": 'count by (success)(mcpgw_registry_auth_request_total)'}).encode()
+req = AWSRequest(method="POST", url=f"{AMP}/api/v1/query", data=body,
+                 headers={"Content-Type": "application/x-www-form-urlencoded"})
+SigV4Auth(creds, "aps", "<region>").add_auth(req)
+r = urllib.request.Request(req.url, data=body, headers=dict(req.headers), method="POST")
+print(json.load(urllib.request.urlopen(r))["data"]["result"])
+PY
+```
+
+On **docker compose**, where the SDK is bootstrapped by the application itself, the exporter does listen and reading it straight from the container avoids the 10s scrape delay:
+
+```bash
+export AUTH=mcp-gateway-registry-auth-server-1     # compose only; on ECS use the AMP query above
 
 counters() {
   docker exec $AUTH sh -c 'curl -s localhost:9464/metrics' \
@@ -537,7 +556,9 @@ docker compose logs auth-server | grep zero-init
 # zero-init seeded 8/8 generic-proxy series
 ```
 
-A line reading `zero-init skipped: meter provider is ...` means `OTEL_EXPORTER_PROMETHEUS_HOST` is unset or the exporter failed to bind, so no series were seeded and none of the checks below will show anything.
+A line reading `zero-init skipped: meter provider is ...` means the SDK meter provider was never installed, so no series were seeded and none of the checks below will show anything.
+
+On ECS, seeding still happens — `opentelemetry-instrument` installs a real SDK provider, which is exactly the case the guard lets through — but read the **result** rather than the log: query AMP for `sum by (outcome)(mcpgw_registry_generic_proxy_stream_outcome_total)` and expect all six values present with the untriggered ones at `0`. Verified on the ECS deployment: 6 stream outcomes plus both `slot_rejected` pools, untriggered at zero, with no `:9464` involved.
 
 #### A worked example: OpenAI registered as a generic REST endpoint
 

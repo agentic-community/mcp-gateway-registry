@@ -511,6 +511,8 @@ Returns `200`. The sub-path stays inside the route prefix and the SSRF pin locks
 
 Every command below was run against a live stack on 2026-09-08 and the stated values were observed, not predicted. `AUTH` is the auth-server container; `:9464` is not published, so metrics are read with an exec.
 
+**On ECS, substitute an AMP query for every `counters` call.** The task runs under `opentelemetry-instrument`, so the SDK provider is already installed, `start_http_server` never runs, and `curl localhost:9464/metrics` inside the task returns `Connection refused` — metrics leave through the `adot-collector` sidecar over OTLP instead. Use Grafana's AMP datasource, or a SigV4-signed `POST /api/v1/query` (see [OBSERVABILITY.md](../../docs/OBSERVABILITY.md#verifying-gateway-proxy-metrics-end-to-end)). The whole of 7.4 was re-run that way against the ECS deployment on 2026-09-08 and passed: 8 `clear_header` directives in the rendered config (4 entities × 2 headers, one server block), forged `X-Body` minting zero series, and the 64-character authz key `rest-endpoint/rest-endpoint/1a546ca6-…` intact.
+
 ```bash
 export AUTH=mcp-gateway-registry-auth-server-1
 counters() { docker exec $AUTH sh -c 'curl -s localhost:9464/metrics' \
