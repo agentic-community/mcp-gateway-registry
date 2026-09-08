@@ -569,7 +569,11 @@ The companion latency histogram `mcpgw_registry_auth_request_duration_millisecon
 | `mcpgw_registry_gateway_generic_blocks_dropped_total{reason}` | routes the render path refused, `invalid` (bad target) or `collision` (the location path is already claimed). Non-zero means an entity is registered and unreachable. |
 | `mcpgw_registry_gateway_egress_policy_unverified` | 1 means the startup self-check reached cloud metadata and the feature is latched off for the process. A standing 1 on an enabled deployment is an alert. |
 
-Every label value on the two `generic_proxy_*` counters exists at zero from startup, so a `rate()` alert binds at deploy instead of waiting for the first failure. Confirm with `docker compose logs auth-server | grep zero-init`, which reports `zero-init seeded 8/8 generic-proxy series`. A line reading `zero-init skipped: meter provider is ...` means `OTEL_EXPORTER_PROMETHEUS_HOST` is unset, so nothing was seeded.
+Every label value on the two `generic_proxy_*` counters exists at zero from startup, so a `rate()` alert binds at deploy instead of waiting for the first failure.
+
+On **docker compose**, confirm with `docker compose logs auth-server | grep zero-init`, which reports `zero-init seeded 8/8 generic-proxy series`. A line reading `zero-init skipped: meter provider is ...` means the SDK meter provider was never installed, so nothing was seeded.
+
+On **ECS**, check the result instead of the log: query `sum by (outcome)(mcpgw_registry_generic_proxy_stream_outcome_total)` in Grafana or AMP and expect all six values with the untriggered ones at `0`. The task runs under `opentelemetry-instrument`, so the SDK provider already exists, seeding proceeds, and metrics leave through the `adot-collector` sidecar over OTLP — **nothing listens on `:9464` there**, so `curl localhost:9464/metrics` inside the task returns `Connection refused` and is not a valid check on that surface.
 
 **Per-endpoint labels are capped, deliberately.** The `server` label on `mcpgw_registry_auth_request_total` and `server_name` on the tool-execution and protocol-latency instruments are bounded at `METRICS_MAX_LABEL_CARDINALITY` distinct values per process (default 150) and `METRICS_MAX_LABEL_LENGTH` characters (default 96). Past the cap, further new values collapse to `_other` rather than growing the series count without limit — an unbounded per-entity label on a 16-bucket histogram costs 18 series per value, and UUID-keyed custom records mint a new value on every create-and-delete cycle.
 
