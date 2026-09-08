@@ -58,6 +58,7 @@ try:
         record_generic_proxy_stream_outcome,
         redirect_rejected_total,
         token_mint_total,
+        zero_init_generic_proxy_metrics,
     )
 except ImportError:
     from auth_server.observability.meters import (
@@ -65,6 +66,7 @@ except ImportError:
         record_generic_proxy_stream_outcome,
         redirect_rejected_total,
         token_mint_total,
+        zero_init_generic_proxy_metrics,
     )
 
 try:
@@ -2262,6 +2264,10 @@ async def lifespan(app: FastAPI):
     """Lifespan context manager for FastAPI application."""
     # Log OTel SDK + metrics emission state (issue #1122)
     _log_otel_state()
+
+    # Materialize the generic-proxy counter series so dashboards and alerts bind
+    # at deploy rather than at first failure (issue #1735).
+    zero_init_generic_proxy_metrics()
 
     # Startup: Load scopes configuration
     global SCOPES_CONFIG

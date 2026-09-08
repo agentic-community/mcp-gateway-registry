@@ -61,7 +61,14 @@ def _int_from_env(
 _MAX_LABEL_CARDINALITY: int = _int_from_env("METRICS_MAX_LABEL_CARDINALITY", 150)
 
 # Maximum length (characters) of a bounded label value before truncation.
-_MAX_LABEL_LENGTH: int = _int_from_env("METRICS_MAX_LABEL_LENGTH", 64)
+#
+# 96, not 64, because a gateway-proxied entity's authz key goes in the `server`
+# label and is already 64 characters for a UUID-keyed custom record:
+# "rest-endpoint/rest-endpoint/1a546ca6-4336-4164-8fd3-b5d7e6bccb56". A custom
+# type named longer than "rest-endpoint" would truncate, and a truncated key
+# matches no scope rule, which defeats the label's purpose -- pointing an operator
+# at the rule to write after a 403.
+_MAX_LABEL_LENGTH: int = _int_from_env("METRICS_MAX_LABEL_LENGTH", 96)
 
 # Emitted once a bounded label exceeds the distinct-value cap; groups all
 # overflow values into a single time series.

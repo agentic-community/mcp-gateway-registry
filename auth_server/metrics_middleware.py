@@ -53,12 +53,22 @@ logger = logging.getLogger(__name__)
 # Tool-execution OTel attributes derived from request data (JSON-RPC body /
 # clientInfo) and therefore attacker-influenced. These must be cardinality-
 # bounded before reaching the in-process Prometheus instrument, or a client
-# sending randomized values explodes the time-series count (DoS). server_name is
-# derived from the registry-controlled URI path and success is a boolean, so
-# both are left unbounded.
+# sending randomized values explodes the time-series count (DoS).
+#
+# server_name used to be left unbounded because it was the first URI path
+# segment, a registry-controlled value. Gateway-proxied requests changed that: it
+# now carries the per-entity authz key, and custom records are UUID-keyed, so
+# create-and-delete churn mints a value per cycle. The auth emission path routes
+# every attribute through _label_limiter for that reason.
 _TOOL_EXECUTION_BOUNDED_ATTRS: frozenset[str] = frozenset(
     {"tool_name", "method", "client_name", "client_version"}
 )
+
+# Auth-metric attributes that need bounding. Only `server` does: `success` is a
+# boolean and `method` and `target_kind` are server-set enums. `server` now carries
+# the per-entity authz key for gateway-proxied requests, and custom records are
+# UUID-keyed, so create-and-delete churn would otherwise mint a series per cycle.
+_AUTH_BOUNDED_ATTRS: frozenset[str] = frozenset({"server"})
 
 # Shared per-process limiter for this module's OTel-native emission path (mirrors
 # the metrics-service processor's limiter across the deployable boundary).
@@ -111,6 +121,14 @@ _TARGET_KIND_RULES: tuple[tuple[str, Any], ...] = (
     ("virtual_mcp_server", _is_virtual_server),
     ("mcp_server", _is_mcp_server),
 )
+
+# Generic-proxy entity types that get their own label. Every other value -- and
+# operators can define custom types at will -- collapses to generic_proxy_custom,
+# so the label set stays at three values however many custom types exist.
+_GENERIC_PROXY_TARGET_KINDS: dict[str, str] = {
+    "skill": "generic_proxy_skill",
+    "a2a_agent": "generic_proxy_agent",
+}
 
 
 class AuthMetricsMiddleware(BaseHTTPMiddleware):
@@ -213,7 +231,7 @@ class AuthMetricsMiddleware(BaseHTTPMiddleware):
         except Exception:
             return "unknown"
 
-    def classify_target_kind(self, original_url: str) -> str:
+    def classify_target_kind(self, original_url: str, generic_proxy_kind: str = "") -> str:
         """Classify a validated request by the kind of target it routes to.
 
         Splits the auth metric by routed data-plane target type so routing
@@ -234,9 +252,14 @@ class AuthMetricsMiddleware(BaseHTTPMiddleware):
         server_name and do not engage the rate-limit target axis, so this metric
         cannot inadvertently count control-plane API calls as MCP-server traffic.
 
-        Note on skills: skills have no data-plane proxy route -- they are managed
-        only via ``/api/skills/...`` CRUD -- so they correctly classify as
-        control_plane, not a routed target.
+        Note on the generic proxy: a gateway-proxied request is identified by the
+        ``X-Generic-Proxy-Kind`` marker nginx sets on each generated location, NOT
+        by matching a path prefix. ``GATEWAY_PROXY_PREFIX`` is passed to the
+        registry container only, so a prefix-keyed rule here would silently file
+        every gateway request as ``unknown`` whenever an operator changes it.
+        Skills, agents, and custom records all reach the data plane this way and
+        classify as ``generic_proxy_skill``, ``generic_proxy_agent``, or
+        ``generic_proxy_custom``.
 
         Path shapes honor an optional ``REGISTRY_ROOT_PATH`` prefix. Kept
         self-contained (not imported from ``server``) to avoid a circular
@@ -244,6 +267,8 @@ class AuthMetricsMiddleware(BaseHTTPMiddleware):
 
         Args:
             original_url: The X-Original-URL header value from nginx.
+            generic_proxy_kind: The X-Generic-Proxy-Kind marker, empty when the
+                request did not come through a generic-proxy location.
 
         Returns:
             The target-kind label.
@@ -269,6 +294,13 @@ class AuthMetricsMiddleware(BaseHTTPMiddleware):
             # through to a data-plane target label.
             if path_parts[0] in _CONTROL_PLANE_FIRST_SEGMENTS:
                 return "control_plane"
+
+            # The generic proxy is identified by the nginx marker, after the
+            # control-plane check and before the path rules. One marker value maps
+            # to three labels, so this cannot be a (label, predicate) entry in
+            # _TARGET_KIND_RULES.
+            if generic_proxy_kind:
+                return _GENERIC_PROXY_TARGET_KINDS.get(generic_proxy_kind, "generic_proxy_custom")
 
             # Allowlist: attribute to a data-plane target only on an explicit match.
             for kind, predicate in _TARGET_KIND_RULES:
@@ -339,12 +371,26 @@ class AuthMetricsMiddleware(BaseHTTPMiddleware):
         auth_method = "unknown"
         tool_info = {}
 
-        # Extract server name from original URL header
+        # Extract server name from original URL header. The two X-Generic-Proxy-*
+        # markers are set by nginx per generated gateway location (with an
+        # http-scope map default), so a client cannot spoof them -- unlike
+        # X-Original-URL, which is $request_uri and carries caller-chosen
+        # segments past the registered prefix.
         original_url = request.headers.get("X-Original-URL")
+        generic_proxy_kind = (request.headers.get("X-Generic-Proxy-Kind") or "").strip()
+        generic_entity_path = (request.headers.get("X-Entity-Path") or "").strip()
         target_kind = "unknown"
         if original_url:
             server_name = self.extract_server_name_from_url(original_url)
-            target_kind = self.classify_target_kind(original_url)
+            target_kind = self.classify_target_kind(original_url, generic_proxy_kind)
+        if generic_proxy_kind:
+            # The authz key the generic hop authorizes against, built exactly as
+            # server.py does for /validate. Parsing the client path instead would
+            # yield "skill/pdf" for a skill registered at /skills/pdf, because
+            # build_proxy_client_path strips the namespace segment -- a key that
+            # appears in no scope config, so a 403 would name a rule that cannot
+            # exist.
+            server_name = f"{generic_proxy_kind}/{generic_entity_path}".strip("/")
 
         # Extract detailed tool/method information
         tool_info = await self.extract_tool_and_method_info(request)
@@ -458,23 +504,42 @@ class AuthMetricsMiddleware(BaseHTTPMiddleware):
         """Emit authentication metric via OTel and (optionally) legacy HTTP POST.
 
         Cardinality-controlled OTel attributes: ``success``, ``method``,
-        ``server``, ``target_kind``. ``target_kind`` (``a2a_agent`` /
-        ``mcp_server`` / ``unknown``) is a bounded label that lets the same
-        counter answer "how much traffic routed to agents vs MCP servers?"
-        without the unbounded per-target ``server`` name. The legacy
-        ``user_hash`` and ``request_id`` dimensions are intentionally not OTel
-        attributes; per-user identification stays available in
+        ``server``, ``target_kind``. ``target_kind`` is a bounded label that lets
+        the same counter answer "how much traffic routed to agents vs MCP servers
+        vs gateway-proxied entities?" -- it takes ``a2a_agent``,
+        ``virtual_mcp_server``, ``mcp_server``, ``generic_proxy_skill``,
+        ``generic_proxy_agent``, ``generic_proxy_custom``, ``control_plane``, or
+        ``unknown``.
+
+        The counter carries ``server``; the duration histogram does not. Adding a
+        per-target label to a 16-bucket histogram costs 18 series per combination
+        against the counter's 1, and no query asks for latency per target.
+
+        The legacy ``user_hash`` and ``request_id`` dimensions are intentionally
+        not OTel attributes; per-user identification stays available in
         auto-instrumentation span attributes for per-request debugging.
         """
         # 1) OTel emission (always-on, in-process, non-blocking)
-        otel_attrs = {
-            "success": str(success),
-            "method": method,
-            "server": server_name,
-            "target_kind": target_kind,
-        }
+        otel_attrs = _label_limiter.bound_attrs(
+            {
+                "success": str(success),
+                "method": method,
+                "server": server_name,
+                "target_kind": target_kind,
+            },
+            _AUTH_BOUNDED_ATTRS,
+        )
+        # The histogram measures /validate latency -- a token check and a scope
+        # lookup -- which is near-identical work for every target, so a per-target
+        # breakdown adds no signal and 18 of every 19 series: `server` multiplies
+        # against 16 le buckets plus _count and _sum. Nothing queries it that way
+        # (the dashboard panel is avg(rate(_sum))/avg(rate(_count)), and the
+        # documented queries group by le and by (le, target_kind) --
+        # docs/OBSERVABILITY.md). Hop latency, where per-endpoint variance IS
+        # interesting, is a separate metric.
+        hist_attrs = {k: v for k, v in otel_attrs.items() if k != "server"}
         auth_request_total.add(1, otel_attrs)
-        auth_request_duration_ms.record(duration_ms, otel_attrs)
+        auth_request_duration_ms.record(duration_ms, hist_attrs)
         record_emission_path("otel")
 
         # 2) Legacy HTTP POST (one-release dual-write window, issue #1122)
