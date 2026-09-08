@@ -507,6 +507,93 @@ Returns `200`. The sub-path stays inside the route prefix and the SSRF pin locks
 
 **T-7.5 — a PUT-flipped skill stores no `proxy_client_url`.** The field is server-derived, so it never appears in a request body and `exclude_unset` never writes it. Reads recompute it through `populate_proxy_client_url`, and nginx generation recomputes it too, so the API, the UI, and routing all agree. Pass: the API returns the client URL even though Mongo has no such field. A raw projection that skips the model sees `null`.
 
+### 7.4 Routing metrics and the body-capture header (issue #1735)
+
+Every command below was run against a live stack on 2026-09-08 and the stated values were observed, not predicted. `AUTH` is the auth-server container; `:9464` is not published, so metrics are read with an exec.
+
+```bash
+export AUTH=mcp-gateway-registry-auth-server-1
+counters() { docker exec $AUTH sh -c 'curl -s localhost:9464/metrics' \
+  | grep -E '^(mcpgw_registry_)?(auth_request_total|tool_execution_total|mcpgw_registry_generic_proxy_)' \
+  | sed 's/otel_scope[^,]*,//g' | sort; }
+```
+
+**T-7.6 — zero series exist before any traffic.** On a freshly started stack:
+
+```bash
+docker compose logs auth-server | grep zero-init     # zero-init seeded 8/8 generic-proxy series
+docker exec $AUTH sh -c 'curl -s localhost:9464/metrics' \
+  | grep -E '^mcpgw_registry_generic_proxy_(slot_rejected|stream_outcome)_total' | grep -c ' 0.0$'   # 8
+```
+
+Pass: the log line reports `8/8` and all 8 series exist at `0.0`. A `zero-init skipped: meter provider is ...` line means `OTEL_EXPORTER_PROMETHEUS_HOST` is unset, so nothing below will show anything.
+
+**T-7.7 — a proxied request is labeled by entity type and authz key.** Drive one buffered custom record and one skill, then:
+
+```bash
+counters | grep generic_proxy
+```
+
+Pass: `auth_request_total{server="rest-endpoint/rest-endpoint/<uuid>",target_kind="generic_proxy_custom",success="True"}` and `{server="skill/skills/pdf",target_kind="generic_proxy_skill",success="True"}`. The `server` value is the **authz key**, i.e. the exact string a `server_access` rule names — `skill/skills/pdf`, not the client path `skill/pdf`.
+
+**T-7.8 — no gateway request lands in `unknown`.**
+
+```bash
+counters | grep 'target_kind="unknown"'
+```
+
+Pass: the only values present are non-gateway (MCP servers whose paths match no transport rule). The count must not grow when the gateway calls above are repeated.
+
+**T-7.9 — the latency histogram carries no `server` label.**
+
+```bash
+docker exec $AUTH sh -c 'curl -s localhost:9464/metrics' \
+  | grep '^mcpgw_registry_auth_request_duration' | grep -c 'server='      # 0
+```
+
+Pass: `0`. A per-target label on a 16-bucket histogram costs 18 series where the counter costs 1, and nothing queries latency per endpoint. Group by `target_kind` instead.
+
+**T-7.10 — a client cannot author the body-capture headers on a gateway route.** This is the regression guard for the defect fixed in `fb579306`: `capture_body.lua` does not run on generic locations, and the shared `location = /validate` forwards client headers verbatim, so before the fix a caller could hand the metrics middleware a JSON-RPC body of their choosing — **including with an invalid token**, because emission happens in a `finally`.
+
+```bash
+for i in 1 2 3; do
+  curl -sS -o /dev/null -w '%{http_code} ' -H "X-Authorization: Bearer $GW" \
+    -H "X-Body: {\"method\":\"tools/call\",\"params\":{\"name\":\"forged_$i\"}}" \
+    -H 'X-Body-Uninspectable: 1' "${BASE}v1/forecast?latitude=38.9&longitude=-77.03&current=temperature_2m"
+done; echo
+docker exec $AUTH sh -c 'curl -s localhost:9464/metrics' | grep -c 'forged_'                          # 0
+docker exec $AUTH sh -c 'curl -s localhost:9464/metrics' | grep -E 'tool_execution|protocol_latency' \
+  | grep -c 'rest-endpoint/'                                                                          # 0
+```
+
+Pass: the requests still return their normal status (`200` with a valid token, `401` without — the fix does not change the response), **and** no `forged_*` label and no `tool_execution` / `protocol_latency` series naming a gateway entity appear. Run it with a valid token too: a `403`/`401` alone does not exercise the hop.
+
+Also confirm the rendered config still carries the clears (2 per generated gateway location):
+
+```bash
+docker exec mcp-gateway-registry-registry-1 sh -c \
+  "grep -c 'clear_header' /etc/nginx/conf.d/nginx_rev_proxy.conf"
+```
+
+**T-7.11 — streaming still streams, and the terminals balance.** Drive one SSE request against a `proxy_streaming=true` entity, then:
+
+```bash
+counters | grep stream_outcome | grep -v ' 0.0$'
+```
+
+Pass: SSE events arrive incrementally (observed: 29 events spread over 257 ms, not one blob), and `started` equals the sum of the terminals (`completed` + `client_closed` + `duration_timeout` + `byte_cap` + `upstream_error`) once nothing is in flight. A truncated client pipe correctly counts as `client_closed`.
+
+**T-7.12 — MCP traffic keeps per-server labels.** `server_name` on `tool_execution` and `protocol_latency` is now cardinality-bounded (150 distinct values, 96 characters), so verify real MCP names still pass through untouched:
+
+```bash
+uv run python tests/scripts/call_mcp_tool.py --server-url $ORIGIN/<server>/mcp \
+  --tool <tool> --tool-args '{}' --token-file .token --registry-url $ORIGIN
+counters | grep tool_execution_total
+docker exec $AUTH sh -c 'curl -s localhost:9464/metrics' | grep -cE '"_other"|"_unset"'    # 0
+```
+
+Pass: the real server name appears verbatim (`server_name="com-github-github-mcp-server"`), the invoked tool appears as `tool_name`, and no `_other`/`_unset` sentinel exists. **Note the cap:** a deployment whose traffic spreads across more than 150 distinct servers will collapse the long tail into `_other` — this stack has 144 registered MCP servers plus 8 proxied gateway entities, so it is close enough to the cap that `METRICS_MAX_LABEL_CARDINALITY` may need raising (see [unified-parameter-reference.md](../../docs/unified-parameter-reference.md), Group 25).
+
 ## 8. Teardown
 
 ```bash
@@ -557,7 +644,8 @@ No test in this suite covers these yet.
 - Non-admin redaction of `proxy_target_url` while `is_proxied` stays visible.
 - Agents. `a2a_agent` is a proxyable type and its target falls back to the agent's own `url`, so flipping `is_proxied` needs no explicit target. Patching `url` repoints the backend and must re-validate, re-pin, and clear stored headers.
 - `/api/config` exposure of the five streaming settings.
-- All six `stream_outcome_total{outcome}` values, so in-flight equals started minus the terminals.
+- All six `stream_outcome_total{outcome}` values, so in-flight equals started minus the terminals. Section 7.4 (T-7.11) covers `started`, `completed`, and `client_closed`; `duration_timeout`, `byte_cap`, and `upstream_error` still need forcing.
+- Metrics under the legacy dual-write (`METRICS_LEGACY_HTTP_POST=true`): the middleware POSTs the raw authz key to metrics-service, whose limiter does **not** bound `server_name`. Section 7.4 covers the native OTel path only.
 
 ## 11. Result log
 
