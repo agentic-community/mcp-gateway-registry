@@ -15,6 +15,7 @@ from registry.observability.label_bounding import (
     _OVERFLOW_LABEL_VALUE,
     _SAFE_LABEL_CHARS,
     LabelCardinalityLimiter,
+    bool_label,
 )
 
 
@@ -98,3 +99,39 @@ def test_sibling_limiter_semantics_are_pinned() -> None:
     # custom record already reaches exactly 64 characters, and a truncated key
     # matches no scope rule (issue #1735).
     assert LabelCardinalityLimiter()._max_length == 96
+
+
+class TestBoolLabel:
+    """Boolean label values are lowercase, matching the metrics-service sibling.
+
+    `str(True)` is `"True"`, a Python repr. It used to reach Prometheus on the
+    native OTel path while the metrics-service processor lowercased the same
+    booleans, so one `success="false"` filter silently matched nothing on one of
+    the two exporters -- and a label-value miss is an empty result, not an error.
+    """
+
+    def test_true_is_lowercase(self) -> None:
+        assert bool_label(True) == "true"
+
+    def test_false_is_lowercase(self) -> None:
+        assert bool_label(False) == "false"
+
+    def test_never_emits_the_python_repr(self) -> None:
+        assert bool_label(True) != "True"
+        assert bool_label(False) != "False"
+
+    def test_non_bool_passes_through_as_str(self) -> None:
+        # Safe as a blanket wrapper: callers may hand it an already-string label.
+        assert bool_label("tools/call") == "tools/call"
+        assert bool_label(404) == "404"
+        assert bool_label(None) == "None"
+
+    def test_matches_the_metrics_service_normalizer(self) -> None:
+        """Cross-boundary contract: metrics-service lowercases bools identically.
+
+        Its `_normalize_label_value` is pinned by
+        metrics-service/tests/test_label_cardinality.py::test_bool_true_lowercased.
+        If you change one side, change both, or a failure query written against one
+        exporter goes silent against the other.
+        """
+        assert (bool_label(True), bool_label(False)) == ("true", "false")

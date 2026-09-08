@@ -88,6 +88,34 @@ _EMPTY_LABEL_VALUE: str = "_unset"
 _SAFE_LABEL_CHARS: re.Pattern[str] = re.compile(r"[^A-Za-z0-9\-_.:/]")
 
 
+def bool_label(value: object) -> str:
+    """Render a boolean metric-label value the way Prometheus expects it.
+
+    ``str(True)`` yields ``"True"``, a Python repr that leaked into label values
+    on the native OTel emission path while the metrics-service processor
+    normalized the same booleans to lowercase. A query written for one exporter
+    then matched nothing on the other, and Prometheus reports a label-value miss
+    as an empty result rather than an error -- so ``success="false"`` read as "no
+    failures" instead of "no such value". Both paths now emit lowercase, which is
+    also the Prometheus/OpenTelemetry convention.
+
+    Kept beside the limiter because every caller that builds label attributes
+    already imports from this module. Mirrors ``_normalize_label_value`` in
+    ``metrics-service/app/core/processor.py`` across the deployable boundary;
+    tests pin both.
+
+    Args:
+        value: The label value. Booleans are lowercased; anything else is
+            string-coerced unchanged, so this is safe as a blanket wrapper.
+
+    Returns:
+        The label value as a string, with booleans rendered ``true`` / ``false``.
+    """
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
 class LabelCardinalityLimiter:
     """Per-process bound on the distinct values a set of labels may take.
 
