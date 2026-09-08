@@ -396,7 +396,15 @@ Replace `<TARGET>` with the path you care about (e.g. `/api/servers`,
 
 The three `generic_proxy_*` kinds come from the `X-Generic-Proxy-Kind` marker nginx sets on each generated gateway location, so they hold for any `GATEWAY_PROXY_PREFIX`. Every operator-defined custom type collapses to `generic_proxy_custom`, which keeps the label set fixed at three values however many custom types exist. A gateway request landing in `unknown` means the marker did not arrive, so check the rendered nginx location.
 
-**The `success` label is `True` / `False`, capitalized.** The middleware emits `str(bool)`, so `success="false"` matches nothing and a query written that way returns an empty result rather than an error — it looks like "no failures" when it is really "no such label value". Verified on a running stack: `count by (success)(mcpgw_registry_auth_request_total)` returns `True` and `False` only.
+**The `success` label is `True` / `False`, capitalized — except on the metrics-service.** The auth-server and registry emit `str(bool)`, so `success="false"` matches nothing and a query written that way returns an empty result rather than an error: it looks like "no failures" when it really means "no such label value". The standalone metrics-service (the legacy dual-write path, `METRICS_LEGACY_HTTP_POST=true`) normalizes booleans to **lowercase**, so the same query needs `success="false"` there. Verified on a running stack:
+
+| Exporter | `success` values |
+|---|---|
+| auth-server `:9464` (native OTel) | `True` / `False` |
+| registry `:9464` (native OTel) | `True` / `False` |
+| metrics-service (legacy POST path) | `true` / `false` |
+
+Everything in this document targets the native OTel exporters, so use the capitalized form.
 
 | Goal | Query |
 |---|---|
@@ -412,6 +420,10 @@ The three `generic_proxy_*` kinds come from the `X-Generic-Proxy-Kind` marker ng
 | Busiest proxied endpoints by authz key | `topk(10, sum by (server)(rate(mcpgw_registry_auth_request_total{target_kind=~"generic_proxy_.*"}[1h])))` |
 | Which proxied endpoint is being denied (the `server` value is the scope rule to write) | `sum by (server)(rate(mcpgw_registry_auth_request_total{target_kind=~"generic_proxy_.*", success="False"}[15m])) > 0` |
 | Gateway requests that failed to classify (should stay flat) | `sum(rate(mcpgw_registry_auth_request_total{target_kind="unknown"}[5m]))` |
+| Per-server rate across **all** routed targets (MCP, virtual, agent, gateway in one panel) | `topk(20, sum by (server, target_kind)(rate(mcpgw_registry_auth_request_total{target_kind!="control_plane"}[6h])))` |
+| Per-server denial rate, any target type | `sum by (server)(rate(mcpgw_registry_auth_request_total{target_kind!="control_plane", success="False"}[6h])) > 0` |
+| Which tool ran on which MCP server | `sum by (server_name, tool_name)(increase(mcpgw_registry_tool_execution_total{method="tools/call"}[6h]))` |
+| Average MCP flow latency per server | `sum by (server_name)(rate(mcpgw_registry_protocol_latency_milliseconds_sum[6h])) / sum by (server_name)(rate(mcpgw_registry_protocol_latency_milliseconds_count[6h]))` |
 | Session-store hit rate | `sum(rate(mcpgw_registry_session_store_resolve_total{result="hit"}[5m])) / sum(rate(mcpgw_registry_session_store_resolve_total[5m]))` |
 | Federation peer sync failures by type | `sum by (peer_id, failure_type)(rate(peer_sync_failures_total[5m]))` |
 | Logout JWT validation failure rate | `rate(mcpgw_registry_logout_jwt_validation_failed_total[5m])` |
@@ -464,6 +476,29 @@ These are the two signals worth alarming on. Both indicate the limiter is degrad
 Tune the `200` threshold relative to your configured `RATE_LIMIT_BACKEND_TIMEOUT_MS`: alert at roughly 80% of the timeout so you have headroom before ops start failing open.
 
 ### Verifying gateway-proxy metrics end to end
+
+#### Three PromQL assertions to run after a deploy
+
+These answer "did the routing labels ship correctly?" from Grafana Explore, without an exec into the container. Run them as **Instant** queries in **Table** format.
+
+```promql
+# 1. Every gateway request carries an entity kind and an authz key. Expect one row per
+#    proxied entity that has taken traffic; `server` must read like "skill/skills/pdf" or
+#    "rest-endpoint/rest-endpoint/<uuid>", never the bare literal "gateway".
+sum by (target_kind, server, success) (mcpgw_registry_auth_request_total{target_kind=~"generic_proxy_.*"})
+
+# 2. Both hop counters expose every label value, including the ones nothing has triggered.
+#    Expect 8 rows on a fresh deployment, the untriggered ones at 0 — that is what lets a
+#    rate() alert bind at deploy instead of at first failure.
+sum by (outcome)(mcpgw_registry_generic_proxy_stream_outcome_total) or sum by (pool)(mcpgw_registry_generic_proxy_slot_rejected_total)
+
+# 3. The latency histogram must carry NO `server` label. This MUST return "No data".
+#    The contrast query returns a count > 0, proving the label lives on the counter only.
+count(mcpgw_registry_auth_request_duration_milliseconds_count{server!=""})
+count(mcpgw_registry_auth_request_total{server!=""})
+```
+
+A ratio query that divides by a per-server rate returns `NaN` for any server with no traffic in the window (`0/0`). Prefer the `> 0` forms above, or append `and on(server) sum by (server)(rate(mcpgw_registry_auth_request_total[$__range])) > 0`.
 
 Read the counters straight from the auth-server's exporter, which avoids the 10s Prometheus scrape delay:
 
