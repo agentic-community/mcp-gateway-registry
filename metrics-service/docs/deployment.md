@@ -610,7 +610,7 @@ kubectl apply -f k8s/
 | `FLUSH_INTERVAL_SECONDS` | `30` | Buffer flush interval |
 | `MAX_REQUEST_SIZE` | `10MB` | Maximum request size |
 | `METRICS_MAX_LABEL_CARDINALITY` | `150` | Max distinct values a bounded (attacker-influenced) Prometheus label may take per process before further values collapse to the `_other` overflow bucket. Guards against a label-cardinality DoS. A missing, non-integer, or non-positive value falls back to the default (fail-bounded). |
-| `METRICS_MAX_LABEL_LENGTH` | `64` | Max characters of a bounded label value before truncation. Same fail-bounded fallback as above. |
+| `METRICS_MAX_LABEL_LENGTH` | `96` | Max characters of a bounded label value before truncation. Same fail-bounded fallback as above. 96 rather than a shorter cap because a gateway-proxied entity's authz key reaches 64 characters on its own (`rest-endpoint/rest-endpoint/<uuid>`), and a truncated key matches no scope rule. Kept in sync with the registry-side copy in `registry/observability/label_bounding.py`; tests pin both. |
 
 ### Environment-Specific Configurations
 
