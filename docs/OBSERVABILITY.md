@@ -635,14 +635,15 @@ uv run python api/registry_management.py --registry-url "$REGISTRY_URL" --token-
 
 The metric label `target_kind="generic_proxy_custom"` is the part that does not vary: every custom type collapses to that one value, however many types exist and whatever they are named. Only `server` carries the type name.
 
-Once callers start using it, four questions come up, and each maps to one of the labels this feature adds:
+Once callers start using it, five questions come up, and each maps to one of the labels this feature adds:
 
 | Question | Where the answer is |
 |---|---|
 | How much traffic is this endpoint taking, next to my skills and MCP servers? | `target_kind="generic_proxy_custom"` on `mcpgw_registry_auth_request_total` |
 | Which proxied endpoint, out of the several registered? | the `server` label, which holds the entity's authz key |
 | Is anyone being denied, and what scope rule would fix it? | `success="false"` on that same series; the `server` value is the string to put in `server_access` |
-| Are its streams completing, or hitting a ceiling? | `mcpgw_registry_generic_proxy_stream_outcome_total` |
+| **Did the caller's request actually succeed?** | `mcpgw_registry_generic_proxy_request_total{outcome}`. Not `auth_request_total{success}` — that is the `/validate` decision, so a request that authorizes and then fails at the hop reads there as a success |
+| Are its streams completing, or hitting a ceiling? | `mcpgw_registry_generic_proxy_stream_outcome_total` for the lifecycle, or `outcome` on the hop counter for the terminal the caller saw |
 
 Every gateway request carries a `generic_proxy_*` kind, so `target_kind="unknown"` holds no gateway traffic. A gateway call appearing there means the `X-Generic-Proxy-Kind` marker did not reach the auth-server.
 
@@ -691,9 +692,12 @@ curl -sS --compressed -N -X POST \
 
 ```
 mcpgw_registry_auth_request_total{...,server="rest-endpoint/rest-endpoint/6160de6a-...",target_kind="generic_proxy_custom"} 4.0
+mcpgw_registry_generic_proxy_request_total{entity_type="custom",outcome="ok"}           4.0
 mcpgw_registry_generic_proxy_stream_outcome_total{outcome="started"}   4.0
 mcpgw_registry_generic_proxy_stream_outcome_total{outcome="completed"} 4.0
 ```
+
+The hop counter agrees with the stream counter here because every request completed. When they disagree, the hop counter is the one that matches what the caller saw: a stream aborted by the client shows `stream_outcome{client_closed}` **and** `generic_proxy_request_total{outcome="client_closed"}`, while `auth_request_total` still records that request as a success, because `/validate` did succeed.
 
 **Both cases incremented the stream counter**, including the one that asked for `"stream": false`. `proxy_streaming` is a property of the **registered entity**, not of the request: it decides whether the hop streams the upstream response or buffers it. OpenAI's `"stream"` body field only changes what the upstream sends back. An entity with `proxy_streaming=true` therefore takes the streaming hop path on every request.
 
