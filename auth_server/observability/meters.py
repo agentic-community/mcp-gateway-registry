@@ -89,16 +89,24 @@ _meter = metrics.get_meter("mcp-auth-server")
 auth_request_total = _meter.create_counter(
     name="mcpgw_registry_auth_request_total",
     description=(
-        "Authentication request count, labeled by outcome, method, and "
+        "Authentication request count, labeled by success, method, server, and "
         "target_kind (a2a_agent | virtual_mcp_server | mcp_server | "
-        "control_plane | unknown) for routing breakdown"
+        "generic_proxy_skill | generic_proxy_agent | generic_proxy_custom | "
+        "control_plane | unknown) for routing breakdown. For a gateway-proxied "
+        "request `server` holds the entity's authz key, which is the string a "
+        "server_access rule names, so a success=false series points at the rule "
+        "to write"
     ),
     unit="1",
 )
 
 auth_request_duration_ms = _meter.create_histogram(
     name="mcpgw_registry_auth_request_duration",
-    description="Authentication request duration",
+    description=(
+        "Authentication request duration. Carries no `server` label: /validate "
+        "does the same work for every target, and a per-target label costs 18 "
+        "series on this histogram against 1 on the counter. Group by target_kind"
+    ),
     unit="ms",
 )
 
