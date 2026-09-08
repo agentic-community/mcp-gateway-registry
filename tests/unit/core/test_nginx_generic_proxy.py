@@ -252,6 +252,33 @@ class TestCreateBlock:
         assert "location {{ROOT_PATH}}/gateway/a2a_agent/code-reviewer/ {" in block
         assert "client_max_body_size 8m;" in block
 
+    @pytest.mark.parametrize("streaming", [False, True])
+    def test_clears_client_authored_body_capture_headers(self, streaming):
+        """A caller must not be able to author X-Body on a gateway route.
+
+        capture_body.lua is the only trusted producer of X-Body and does not run on
+        generic locations, while the shared `location = /validate` block forwards
+        client headers verbatim (proxy_pass_request_headers on) without redefining
+        X-Body. Without an explicit clear, a caller could hand /validate and the
+        auth-server metrics middleware a JSON-RPC body of their choosing, minting
+        tool_execution / protocol_latency series keyed by this entity's authz key
+        for an entity that runs no MCP tools.
+
+        The clear must happen in the rewrite phase: the auth_request subrequest
+        shares the parent's headers, so a proxy_set_header on this location would
+        not reach it. Header clears only, so no body is read and the streaming
+        route is unaffected.
+        """
+        block = self._block(streaming=streaming)
+        assert "rewrite_by_lua_block {" in block
+        assert 'ngx.req.clear_header("X-Body")' in block
+        assert 'ngx.req.clear_header("X-Body-Uninspectable")' in block
+        # Directive lines only (a comment may name the file for context): the block
+        # must NOT pull in the MCP body-capture Lua, which reads the request body and
+        # would break the streaming route.
+        directive_lines = [ln for ln in block.splitlines() if not ln.lstrip().startswith("#")]
+        assert not any("capture_body.lua" in ln for ln in directive_lines)
+
     def test_forwards_token_under_generic_header_name(self):
         # The hop's verify_generic_proxy_token reads X-Internal-Token-Generic, NOT
         # the MCP hop's X-Internal-Token. Forwarding under the wrong name 401s the

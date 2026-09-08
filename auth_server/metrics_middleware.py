@@ -55,14 +55,24 @@ logger = logging.getLogger(__name__)
 # bounded before reaching the in-process Prometheus instrument, or a client
 # sending randomized values explodes the time-series count (DoS).
 #
-# server_name used to be left unbounded because it was the first URI path
-# segment, a registry-controlled value. Gateway-proxied requests changed that: it
-# now carries the per-entity authz key, and custom records are UUID-keyed, so
-# create-and-delete churn mints a value per cycle. The auth emission path routes
-# every attribute through _label_limiter for that reason.
+# server_name is bounded too, though it is server-derived. It used to be the
+# first URI path segment, a coarse registry-controlled value. Gateway-proxied
+# requests changed that: it now carries the per-entity authz key, and custom
+# records are UUID-keyed, so create-and-delete churn would mint a value per
+# cycle -- on a counter AND on a 16-bucket histogram, which is 18 series per
+# value. Gateway routes should not reach this instrument at all (nginx clears the
+# client-authored X-Body that would synthesize a JSON-RPC method for them, see
+# _create_generic_proxy_block), so this cap is the second line: a future route
+# that forwards a body must not be able to mint per-entity histogram series.
 _TOOL_EXECUTION_BOUNDED_ATTRS: frozenset[str] = frozenset(
-    {"tool_name", "method", "client_name", "client_version"}
+    {"tool_name", "method", "client_name", "client_version", "server_name"}
 )
+
+# Protocol-latency attributes that need bounding. flow_step is a server-set enum;
+# server_name carries the same churn risk as above, on another histogram. The
+# limiter tracks distinct values per label NAME, so the two instruments that use
+# `server_name` share one budget and `server` on the auth counter has its own.
+_PROTOCOL_LATENCY_BOUNDED_ATTRS: frozenset[str] = frozenset({"server_name"})
 
 # Auth-metric attributes that need bounding. Only `server` does: `success` is a
 # boolean and `method` and `target_kind` are server-set enums. `server` now carries
@@ -689,14 +699,16 @@ class AuthMetricsMiddleware(BaseHTTPMiddleware):
         try:
             session_data = self.session_timings.get(session_key, {})
 
-            # 1) OTel emission for each completed flow step
+            # 1) OTel emission for each completed flow step. server_name goes
+            # through the limiter for the same reason as on tool_execution: it can
+            # carry a per-entity authz key, and this is a histogram.
+            latency_attrs = _label_limiter.bound_attrs(
+                {"server_name": str(server_name)}, _PROTOCOL_LATENCY_BOUNDED_ATTRS
+            )
             for flow_step, latency_seconds in self._compute_completed_latencies(session_data):
                 protocol_latency_ms.record(
                     latency_seconds * 1000.0,
-                    {
-                        "flow_step": flow_step,
-                        "server_name": str(server_name),
-                    },
+                    {"flow_step": flow_step, **latency_attrs},
                 )
                 record_emission_path("otel")
 

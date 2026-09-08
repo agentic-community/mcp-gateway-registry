@@ -1931,6 +1931,22 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
         auth_request_set $auth_user $upstream_http_x_user;
         auth_request_set $auth_scopes $upstream_http_x_scopes;
 
+        # Strip client-authored copies of the body-capture headers. capture_body.lua
+        # is the ONLY trusted producer of X-Body, and it does not run here (a generic
+        # route forwards opaque bytes, and reading the body would break streaming
+        # routes). The shared `location = /validate` block forwards client headers
+        # verbatim (proxy_pass_request_headers on) and does not redefine X-Body, so
+        # without this a caller could author the JSON-RPC view that /validate and the
+        # metrics middleware read -- fabricating tool_execution / protocol_latency
+        # series (with this entity's authz key as server_name) for an entity that
+        # runs no MCP tools. Rewrite phase, so the mutation is visible to the
+        # auth_request subrequest, which shares the parent's headers; clears only, so
+        # no body is read and streaming is unaffected.
+        rewrite_by_lua_block {{
+            ngx.req.clear_header("X-Body")
+            ngx.req.clear_header("X-Body-Uninspectable")
+        }}
+
         # SEPARATE upstream variable ($generic_backend_url), NOT $backend_url: keeps
         # X-Resolved-Upstream empty on generic requests so the MCP token mint never
         # fires and exactly one (generic-audience) token is issued per request.

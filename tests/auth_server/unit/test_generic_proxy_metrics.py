@@ -20,6 +20,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from auth_server.metrics_middleware import AuthMetricsMiddleware
+from registry.observability.label_bounding import LabelCardinalityLimiter
 
 pytestmark = pytest.mark.unit
 
@@ -262,3 +263,109 @@ class TestZeroInit:
 
         assert slot_add.call_count == 2
         assert stream_add.call_count == 6
+
+
+class TestServerNameIsBounded:
+    """`server_name` is cardinality-bounded on every instrument that carries it.
+
+    The gateway change makes `server_name` per-entity, and `tool_execution_total`
+    shares it with a 16-bucket histogram (18 series per value) while
+    `protocol_latency_ms` is a histogram too. Left unbounded, UUID-keyed custom
+    records mint series per create-and-delete cycle with no `_other` collapse.
+
+    Gateway routes should not reach these instruments at all -- the emission needs a
+    JSON-RPC `method`, which comes from X-Body, and nginx clears the client-authored
+    copy on generic locations (tests/unit/core/test_nginx_generic_proxy.py). This is
+    the second line of defense, and it is what keeps the label honest if any future
+    route forwards a body.
+
+    Each test installs its own limiter with a small cap: the module-level limiter is
+    process-global, so flooding the real one would spend the shared budget and leak
+    into other tests.
+    """
+
+    @staticmethod
+    def _keys(count: int) -> list[str]:
+        return [
+            f"rest-endpoint/rest-endpoint/{i:08d}-4336-4164-8fd3-b5d7e6bccb56" for i in range(count)
+        ]
+
+    @pytest.mark.asyncio
+    async def test_tool_execution_server_name_collapses_past_the_cap(self, middleware):
+        with (
+            patch(
+                "auth_server.metrics_middleware._label_limiter",
+                LabelCardinalityLimiter(max_cardinality=3),
+            ),
+            patch("auth_server.metrics_middleware.tool_execution_total") as counter,
+            patch("auth_server.metrics_middleware.tool_execution_duration_ms") as hist,
+        ):
+            for key in self._keys(20):
+                await middleware._emit_tool_execution_metric(
+                    tool_info={"method": "tools/call", "tool_name": "x"},
+                    server_name=key,
+                    success=True,
+                    duration_ms=1.0,
+                    user_hash="",
+                )
+
+        emitted = {c[0][1]["server_name"] for c in counter.add.call_args_list}
+        assert "_other" in emitted
+        assert len(emitted - {"_other"}) == 3
+        # The histogram carries the same bounded value, not the raw key: it is the
+        # instrument where an unbounded value costs 18 series instead of 1.
+        assert {c[0][1]["server_name"] for c in hist.record.call_args_list} == emitted
+
+    @pytest.mark.asyncio
+    async def test_protocol_latency_server_name_collapses_past_the_cap(self, middleware):
+        middleware.session_timings = {}
+        with (
+            patch(
+                "auth_server.metrics_middleware._label_limiter",
+                LabelCardinalityLimiter(max_cardinality=3),
+            ),
+            patch("auth_server.metrics_middleware.protocol_latency_ms") as hist,
+        ):
+            for key in self._keys(20):
+                session_key = f"{key}:anonymous"
+                middleware.session_timings[session_key] = {
+                    "initialize": 1000.0,
+                    "tools/list": 1001.0,
+                }
+                await middleware._emit_protocol_latency_metric(
+                    session_key=session_key,
+                    current_method="tools/list",
+                    server_name=key,
+                    user_hash="",
+                    request_id="req_test",
+                )
+
+        emitted = {c[0][1]["server_name"] for c in hist.record.call_args_list}
+        assert emitted, "no protocol-latency series recorded; the flow-step setup broke"
+        assert "_other" in emitted
+        assert len(emitted - {"_other"}) == 3
+        # flow_step survives untouched: it is a server-set enum, not a bounded label.
+        assert {c[0][1]["flow_step"] for c in hist.record.call_args_list} == {
+            "initialize_to_tools_list"
+        }
+
+    @pytest.mark.asyncio
+    async def test_a_single_real_server_name_keeps_full_fidelity(self, middleware):
+        """Bounding must not degrade the common case: one value, emitted verbatim."""
+        with (
+            patch(
+                "auth_server.metrics_middleware._label_limiter",
+                LabelCardinalityLimiter(max_cardinality=150),
+            ),
+            patch("auth_server.metrics_middleware.tool_execution_total") as counter,
+            patch("auth_server.metrics_middleware.tool_execution_duration_ms"),
+        ):
+            await middleware._emit_tool_execution_metric(
+                tool_info={"method": "tools/call", "tool_name": "get_weather"},
+                server_name="airegistry-tools",
+                success=True,
+                duration_ms=1.0,
+                user_hash="",
+            )
+
+        assert counter.add.call_args[0][1]["server_name"] == "airegistry-tools"
