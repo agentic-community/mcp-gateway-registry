@@ -2484,6 +2484,16 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
         dns_resolver_timeout = os.environ.get("NGINX_DNS_RESOLVER_TIMEOUT", "5")
         safe_name = self._sanitize_for_nginx_comment(agent_name)
         route = f"{AGENT_ROUTE_PREFIX}/{agent_path}"
+        # Per the A2A spec the card document lives at a well-known path on the
+        # ORIGIN, while the card's own "url" names the JSON-RPC endpoint and may
+        # carry a path. Appending the suffix to backend_url asks the backend one
+        # level too deep (https://host/a2a/.well-known/... -> 404), which broke the
+        # card route for every spec-following agent while path-less ones looked
+        # fine, since both spellings coincide there. _build_agent_health_urls in
+        # registry/api/agent_routes.py derives this same URL from the origin; the
+        # two must agree or the health check calls an agent healthy while its
+        # gateway card route fails (issue #1724).
+        card_origin = f"{parsed_url.scheme}://{upstream_host}"
 
         return f"""
     # A2A agent card (discovery): {safe_name}
@@ -2494,7 +2504,7 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
         resolver_timeout {dns_resolver_timeout}s;
         auth_request /validate;
         auth_request_set $auth_scopes $upstream_http_x_scopes;
-        proxy_pass {backend_url}/.well-known/agent-card.json;
+        proxy_pass {card_origin}/.well-known/agent-card.json;
         proxy_http_version 1.1;
         proxy_ssl_server_name on;
         proxy_set_header Host {host_header};
