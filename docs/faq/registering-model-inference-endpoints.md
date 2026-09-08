@@ -4,10 +4,10 @@ Put a model-inference endpoint behind the gateway as a **proxied custom record**
 
 Two credential models exist, and you pick one per record:
 
-- **Caller passthrough** — each caller brings their own provider key. The registry stores nothing. The provider sees one client per user, so quota and billing stay per-user.
-- **Fixed operator header** — you store one team key, encrypted, and every authorized caller uses it. Callers never see the key; the provider sees a single client and pools your quota.
+- **Caller passthrough (the default, and what you want for user-facing traffic)** — each caller brings their own provider key. The registry stores nothing. The provider sees one client per user, so quota, rate limits, and billing stay attributable to whoever made the call. Use this whenever a human is behind the request.
+- **Shared operator key (optional, for service-to-service traffic)** — the record carries one key, encrypted, and callers never see it. That suits a batch job, a scheduled pipeline, or an agent running under a machine identity. The provider then sees a single client, so its quota is pooled and its rate limits are shared, and per-user attribution at the provider is gone; the registry's audit log still records which caller made each request. Do not reach for this to spare users the trouble of holding a key — a shared credential turns one user's runaway loop into everybody's throttling. Note the header rule: for `Authorization`, which is what OpenAI and Bedrock use, the slot must still be registered as **caller-overridable**, and it may carry an operator default that any caller who sends their own key overrides. A fixed, non-overridable `Authorization` is refused at registration, because operator-owned bearers belong in the [egress credential vault](../egress-credential-vault.md). Providers that read a different header, such as Azure OpenAI's `api-key`, can hold a fixed operator value.
 
-The steps below use caller passthrough, which is what `--auth-passthrough` sets up. Depth on the feature itself lives in the [gateway generic proxy operational guide](../gateway-proxy-operational-guide.md).
+The steps below use caller passthrough, which is what `--auth-passthrough` sets up. For a stored operator credential, register the header without `--auth-passthrough` and see the [operational guide](../gateway-proxy-operational-guide.md); for per-user third-party credentials the gateway can broker OAuth instead, covered in the [per-user egress credential vault](../egress-credential-vault.md).
 
 ## What you need before you start
 
