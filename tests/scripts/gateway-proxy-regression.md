@@ -523,12 +523,14 @@ counters() { docker exec $AUTH sh -c 'curl -s localhost:9464/metrics' \
 **T-7.6 — zero series exist before any traffic.** On a freshly started stack:
 
 ```bash
-docker compose logs auth-server | grep zero-init     # zero-init seeded 8/8 generic-proxy series
+docker compose logs auth-server | grep zero-init     # zero-init seeded 47/47 generic-proxy series
 docker exec $AUTH sh -c 'curl -s localhost:9464/metrics' \
   | grep -E '^mcpgw_registry_generic_proxy_(slot_rejected|stream_outcome)_total' | grep -c ' 0.0$'   # 8
+docker exec $AUTH sh -c 'curl -s localhost:9464/metrics' \
+  | grep -c '^mcpgw_registry_generic_proxy_request_total.* 0.0$'                                     # 39
 ```
 
-Pass: the log line reports `8/8` and all 8 series exist at `0.0`. A `zero-init skipped: meter provider is ...` line means `OTEL_EXPORTER_PROMETHEUS_HOST` is unset, so nothing below will show anything.
+Pass: the log line reports `47/47`, the two lifecycle counters expose 8 series at `0.0`, and the hop outcome counter exposes all **39** (3 entity types × 13 outcomes). A `zero-init skipped: meter provider is ...` line means the SDK meter provider was never installed, so nothing below will show anything.
 
 **T-7.7 — a proxied request is labeled by entity type and authz key.** Drive one buffered custom record and one skill, then:
 
@@ -595,6 +597,45 @@ docker exec $AUTH sh -c 'curl -s localhost:9464/metrics' | grep -cE '"_other"|"_
 ```
 
 Pass: the real server name appears verbatim (`server_name="com-github-github-mcp-server"`), the invoked tool appears as `tool_name`, and no `_other`/`_unset` sentinel exists. **Note the cap:** a deployment whose traffic spreads across more than 150 distinct servers will collapse the long tail into `_other` — this stack has 144 registered MCP servers plus 8 proxied gateway entities, so it is close enough to the cap that `METRICS_MAX_LABEL_CARDINALITY` may need raising (see [unified-parameter-reference.md](../../docs/unified-parameter-reference.md), Group 25).
+
+**T-7.13 — the hop's own outcome is recorded, once per request (issue #1735 item 4).** `auth_request_total{success}` is the `/validate` decision, so a request that authorizes and then fails at the hop reads there as a success. `generic_proxy_request_total{entity_type,outcome}` is what the caller got.
+
+Drive one request per reachable outcome, then read the counter:
+
+```bash
+hop() { docker exec $AUTH sh -c 'curl -s localhost:9464/metrics' \
+  | grep '^mcpgw_registry_generic_proxy_request_total' | grep -v ' 0.0$' \
+  | sed 's/otel_scope[^,]*,//g;s/mcpgw_registry_generic_proxy_request_total//' | sort; }
+
+curl -sS --compressed -o /dev/null -H "X-Authorization: Bearer $GW" "${BASE}v1/forecast?latitude=38.9&longitude=-77.03&current=temperature_2m"   # ok
+curl -sS --compressed -o /dev/null -H "X-Authorization: Bearer $GW" "${BASE}v1/forecast?latitude=not-a-number"                                    # upstream_4xx
+curl -sS --compressed -o /dev/null -H "X-Authorization: Bearer $GW" "$ORIGIN/gateway/skill/pdf/definitely/not/a/real/file.md"                     # upstream_4xx (skill)
+timeout 60 curl -sS --compressed -N -X POST -H "X-Authorization: Bearer $GW" -H "Authorization: Bearer $OAI" \
+  -H 'Content-Type: application/json' -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hi"}],"stream":true,"max_tokens":10}' \
+  -o /dev/null "$OPENAI_BASE/v1/chat/completions"                                                                                                 # ok (stream)
+timeout 60 curl -sS --compressed -N -X POST -H "X-Authorization: Bearer $GW" -H "Authorization: Bearer $OAI" \
+  -H 'Content-Type: application/json' -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"count to 40"}],"stream":true,"max_tokens":300}' \
+  "$OPENAI_BASE/v1/chat/completions" | head -c 200 > /dev/null                                                                                    # client_closed
+hop
+```
+
+Observed on 2026-09-08 for exactly those six requests:
+
+```
+{entity_type="custom",outcome="client_closed"} 1.0
+{entity_type="custom",outcome="ok"} 2.0
+{entity_type="custom",outcome="upstream_4xx"} 2.0
+{entity_type="skill",outcome="ok"} 1.0
+{entity_type="skill",outcome="upstream_4xx"} 1.0
+```
+
+Pass criteria, each of which has caught a real bug in review:
+
+- **The totals equal the number of requests that entered the hop.** Six requests, six records. More means double counting (the streaming path recording alongside the wrapper); fewer means an exit path records nothing.
+- **A streaming request contributes exactly one record, not one per chunk**, and it reconciles with the lifecycle counter: `stream_outcome{started}` equals the sum of its terminals, and each stream shows up once here.
+- **`entity_type` stays within `skill` / `a2a_agent` / `custom`** whatever the operator named the type.
+- **A 401 from the token gate records nothing.** Send a bogus token and confirm the counter does not move: the gate is a route dependency that returns before the handler, which is a documented non-goal rather than an oversight.
+- **Failures that share a status stay distinct.** `disabled` vs `capacity` (both 503) and `auth_unavailable` vs `egress_blocked` vs `upstream_error` (all 502) are unit-tested per value in `tests/auth_server/unit/test_generic_proxy_outcome.py`; force them here only if you can (a corrupted stored credential gives `auth_unavailable`, `GATEWAY_GENERIC_PROXY_ENABLED=false` gives `disabled`).
 
 ## 8. Teardown
 

@@ -22,8 +22,10 @@ import urllib.parse
 import uuid
 from collections.abc import Mapping
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
 from datetime import datetime
-from functools import lru_cache
+from functools import lru_cache, wraps
 from pathlib import Path
 from string import Template
 from typing import Any
@@ -54,6 +56,7 @@ from starlette.background import BackgroundTask
 
 try:
     from observability.meters import (
+        record_generic_proxy_request,
         record_generic_proxy_slot_rejected,
         record_generic_proxy_stream_outcome,
         redirect_rejected_total,
@@ -62,13 +65,13 @@ try:
     )
 except ImportError:
     from auth_server.observability.meters import (
+        record_generic_proxy_request,
         record_generic_proxy_slot_rejected,
         record_generic_proxy_stream_outcome,
         redirect_rejected_total,
         token_mint_total,
         zero_init_generic_proxy_metrics,
     )
-
 try:
     from egress_obo import (
         OboConfigError,
@@ -8238,6 +8241,120 @@ def _read_generic_stream_read_timeout_seconds() -> float:
         return 3600.0
 
 
+_HOP_ENTITY_TYPE_LABELS: dict[str, str] = {"skill": "skill", "a2a_agent": "a2a_agent"}
+
+# Status -> outcome for hop failures whose meaning the status alone settles.
+# `disabled`, `auth_unavailable` and `egress_blocked` are NOT here: each shares a
+# status with a different failure (503 with capacity, 502 with upstream_error), so
+# their sites record explicitly before raising and the idempotent recorder keeps
+# the first value.
+_HOP_STATUS_OUTCOMES: dict[int, str] = {
+    400: "rejected",
+    413: "byte_cap",
+    502: "upstream_error",
+    503: "capacity",
+    504: "upstream_error",
+}
+
+
+def _metrics_entity_type(entity_type: str) -> str:
+    """Collapse a hop entity_type to the counter's three-value label set.
+
+    Operators define custom types at will, so a raw entity_type would grow the
+    label set with operator behaviour. Everything that is not a skill or an A2A
+    agent is a custom record. Safe on None/empty: returns "custom".
+    """
+    return _HOP_ENTITY_TYPE_LABELS.get(entity_type or "", "custom")
+
+
+@dataclass
+class _HopOutcomeState:
+    """Per-request holder so exactly one outcome is recorded for the hop."""
+
+    entity_type: str
+    recorded: bool = False
+
+
+# Per-request, not per-process: each request runs in its own task, so the context
+# copy isolates this. Set by the handler wrapper; read by the helper-raised failure
+# sites (which have no access to the request) so they can record the outcome only
+# THEY know -- a 503 from the feature latch is not the 503 from a saturated pool.
+_hop_outcome_state: ContextVar[_HopOutcomeState | None] = ContextVar(
+    "generic_hop_outcome", default=None
+)
+
+
+def _record_hop_outcome(outcome: str) -> None:
+    """Record the hop outcome for this request, first writer wins.
+
+    Idempotent because several layers can see the same failure: the site that
+    raises knows the precise meaning, while the wrapper only sees a status code.
+    Whoever is more specific runs first, and the wrapper's later attempt no-ops.
+    """
+    state = _hop_outcome_state.get()
+    if state is None or state.recorded:
+        return
+    state.recorded = True
+    record_generic_proxy_request(state.entity_type, outcome)
+
+
+def _hop_outcome_for_status(status_code: int) -> str:
+    """Map a returned upstream status to an outcome (the success-path branch)."""
+    if status_code >= 500:
+        return "upstream_5xx"
+    if status_code >= 400:
+        return "upstream_4xx"
+    return "ok"
+
+
+def _instrument_generic_hop(handler):
+    """Record exactly one terminal outcome for every request entering the hop.
+
+    A wrapper rather than per-return instrumentation: four exits raise from
+    helpers, not from the handler's own returns -- the two sub-path confinement
+    400s in _build_generic_outbound_url, the host-pin 400 in
+    _assert_outbound_host_pinned, the 413 in _read_bounded, and the 503 in
+    _acquire_generic_proxy_slot (which covers BOTH pools, since the stream pool is
+    acquired inside the awaited streaming call). Instrumenting returns would miss
+    exactly the SSRF-confinement refusals.
+
+    A StreamingResponse records nothing here: its terminal is recorded by the
+    generator in _generic_proxy_streaming, which runs after this returns. Failures
+    raised BEFORE that response exists still land here.
+    """
+
+    @wraps(handler)
+    async def wrapper(entity_type: str, entity_path: str, request: Request):
+        token = _hop_outcome_state.set(_HopOutcomeState(_metrics_entity_type(entity_type)))
+        try:
+            response = await handler(entity_type, entity_path, request)
+        except HTTPException as exc:
+            _record_hop_outcome(
+                _HOP_STATUS_OUTCOMES.get(
+                    exc.status_code,
+                    "rejected" if 400 <= exc.status_code < 500 else "upstream_error",
+                )
+            )
+            raise
+        except asyncio.CancelledError:
+            # The caller hung up. CancelledError derives from BaseException, so
+            # without this arm it would fall through as `internal_error` and page
+            # somebody for a client disconnect. `internal_error` stays for bugs.
+            _record_hop_outcome("client_closed")
+            raise
+        except BaseException:
+            _record_hop_outcome("internal_error")
+            raise
+        else:
+            if not isinstance(response, StreamingResponse):
+                _record_hop_outcome(_hop_outcome_for_status(response.status_code))
+            return response
+        finally:
+            _hop_outcome_state.reset(token)
+
+    return wrapper
+
+
 async def _acquire_generic_proxy_slot(
     semaphore: asyncio.Semaphore, *, pool: str = "buffered"
 ) -> None:
@@ -8501,6 +8618,7 @@ async def _generic_proxy_streaming(
     request_body: bytes,
     forward_headers: dict[str, str],
     verify: bool | str,
+    metrics_entity: str,
 ) -> StreamingResponse:
     """Forward a proxied entity's response to the client incrementally (SSE/chunked).
 
@@ -8569,11 +8687,17 @@ async def _generic_proxy_streaming(
         # of an opaque 500. Log the reason only, never the raw target.
         await _cleanup()
         record_generic_proxy_stream_outcome("upstream_error")
+        # The hop counter separates an egress refusal from a transport fault; both
+        # leave as 502, so the status map alone would blur them.
+        _record_hop_outcome("egress_blocked")
         logger.warning("generic_proxy(stream): egress blocked: %s", exc.reason)
         raise HTTPException(status_code=502, detail="Upstream not permitted") from exc
     except TimeoutError as exc:
         await _cleanup()
         record_generic_proxy_stream_outcome("duration_timeout")
+        # 504 maps to upstream_error by status; this one is the absolute-duration
+        # ceiling firing before headers, which is its own outcome.
+        _record_hop_outcome("duration_timeout")
         logger.warning("generic_proxy(stream): absolute duration exceeded before response headers")
         raise HTTPException(status_code=504, detail="Upstream timed out") from exc
     except httpx.TimeoutException as exc:
@@ -8631,14 +8755,21 @@ async def _generic_proxy_streaming(
                     max_bytes = _read_generic_stream_max_bytes()
                     if total_bytes > max_bytes:
                         record_generic_proxy_stream_outcome("byte_cap")
+                        # Recorded directly, not through the idempotent wrapper: the
+                        # handler already returned this StreamingResponse, so the
+                        # per-request context is gone and only this generator can
+                        # name the terminal.
+                        record_generic_proxy_request(metrics_entity, "byte_cap")
                         raise HTTPException(
                             status_code=413,
                             detail=f"Upstream stream exceeded {max_bytes} bytes",
                         )
                     yield chunk
             record_generic_proxy_stream_outcome("completed")
+            record_generic_proxy_request(metrics_entity, "ok")
         except TimeoutError:
             record_generic_proxy_stream_outcome("duration_timeout")
+            record_generic_proxy_request(metrics_entity, "duration_timeout")
             logger.warning("generic_proxy(stream): absolute stream duration exceeded")
             raise
         except (GeneratorExit, asyncio.CancelledError):
@@ -8646,12 +8777,14 @@ async def _generic_proxy_streaming(
             # slot is released in `finally`; record the terminal so in-flight =
             # started - terminals stays reconcilable, then re-raise.
             record_generic_proxy_stream_outcome("client_closed")
+            record_generic_proxy_request(metrics_entity, "client_closed")
             raise
         except httpx.HTTPError:
             # Upstream failed AFTER headers were sent (dropped mid-body). The status
             # line is already on the wire, so we cannot turn this into a 5xx; record
             # the terminal and abort the stream.
             record_generic_proxy_stream_outcome("upstream_error")
+            record_generic_proxy_request(metrics_entity, "upstream_error")
             logger.error("generic_proxy(stream): mid-stream upstream error")
             raise
         finally:
@@ -8681,6 +8814,7 @@ async def _generic_proxy_streaming(
     methods=_GENERIC_PROXY_METHODS,
     dependencies=[Depends(verify_generic_proxy_token)],
 )
+@_instrument_generic_hop
 async def generic_proxy(
     entity_type: str,
     entity_path: str,
@@ -8696,6 +8830,10 @@ async def generic_proxy(
     # Fail closed if the feature latch is off (flag disabled OR egress self-check
     # failed). None (pre-startup) is treated as off.
     if not _generic_proxy_feature_active:
+        # Recorded here, not derived from the status: a disabled feature and a
+        # saturated pool both return 503, and conflating them means a switched-off
+        # deployment fires a capacity alert.
+        _record_hop_outcome("disabled")
         raise HTTPException(
             status_code=503,
             detail="Generic proxy feature is not active on this server",
@@ -8762,6 +8900,9 @@ async def generic_proxy(
                 entity_type,
                 bound_registered_path,
             )
+            # A missing credential and a dead backend both return 502; separate
+            # them so a credential outage cannot read as an upstream fault.
+            _record_hop_outcome("auth_unavailable")
             raise HTTPException(status_code=502, detail="Upstream auth unavailable")
         vended_defaults, overridable_names = vended
         # Apply the per-header overridable policy: fixed operator headers overwrite
@@ -8798,6 +8939,9 @@ async def generic_proxy(
             request_body=request_body,
             forward_headers=forward_headers,
             verify=verify,
+            # The streaming path owns its terminal, so it needs the label the
+            # wrapper resolved for this request.
+            metrics_entity=_metrics_entity_type(entity_type),
         )
 
     semaphore = _get_generic_proxy_semaphore()
@@ -8848,6 +8992,10 @@ async def generic_proxy(
                 bound_registered_path,
                 exc.reason,
             )
+            # A security event, not a transport fault. Recorded here because this
+            # arm converts it to the same 502 an upstream failure returns, and an
+            # SSRF refusal must not fire the credential-outage alert.
+            _record_hop_outcome("egress_blocked")
             raise HTTPException(status_code=502, detail="Upstream not permitted") from exc
         except httpx.TimeoutException as exc:
             logger.error(

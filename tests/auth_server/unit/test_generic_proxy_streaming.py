@@ -79,6 +79,9 @@ async def _call(sem, client):
             request_body=b"",
             forward_headers={},
             verify=True,
+            # Required since issue #1735 item 4: the streaming path owns its hop
+            # outcome, so it needs the entity label the wrapper resolved.
+            metrics_entity="custom",
         )
 
 
