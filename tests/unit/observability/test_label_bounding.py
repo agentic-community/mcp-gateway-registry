@@ -94,4 +94,7 @@ def test_sibling_limiter_semantics_are_pinned() -> None:
     assert _OVERFLOW_LABEL_VALUE == "_other"
     assert _EMPTY_LABEL_VALUE == "_unset"
     assert _SAFE_LABEL_CHARS.pattern == r"[^A-Za-z0-9\-_.:/]"
-    assert LabelCardinalityLimiter()._max_length == 64
+    # 96, raised from 64 so a gateway-proxied entity's authz key fits: a UUID-keyed
+    # custom record already reaches exactly 64 characters, and a truncated key
+    # matches no scope rule (issue #1735).
+    assert LabelCardinalityLimiter()._max_length == 96

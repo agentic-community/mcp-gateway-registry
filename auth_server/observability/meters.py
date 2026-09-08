@@ -226,6 +226,57 @@ def record_generic_proxy_stream_outcome(outcome: str) -> None:
         pass
 
 
+# Known label values for the generic-proxy counters. An OTel counter reads as
+# ABSENT until its first increment, so a fresh deployment shows an empty panel and
+# a rate() alert that can never fire -- including when it should. Seeding each
+# combination with zero materializes the series without changing any total.
+# Verified against this repo's pinned SDK: an add(0)-only counter does export
+# through PrometheusMetricReader.
+_SLOT_POOLS: tuple[str, ...] = ("buffered", "stream")
+_STREAM_OUTCOMES: tuple[str, ...] = (
+    "started",
+    "completed",
+    "duration_timeout",
+    "byte_cap",
+    "upstream_error",
+    "client_closed",
+)
+
+
+def zero_init_generic_proxy_metrics() -> None:
+    """Seed every known generic-proxy label combination with zero.
+
+    Each add() gets its own try, so one failure cannot skip the rest.
+
+    Logs when the SDK provider was never installed. _init_meter_provider_if_needed
+    returns early unless OTEL_EXPORTER_PROMETHEUS_HOST is set, and a failed
+    start_http_server leaves a proxy provider, so in both cases every add(0) is
+    discarded and an operator would otherwise see no signal that seeding did
+    nothing.
+    """
+    provider = metrics.get_meter_provider()
+    if type(provider).__name__ in ("_ProxyMeterProvider", "NoOpMeterProvider"):
+        logger.info(
+            "zero-init skipped: meter provider is %s, so no series were seeded "
+            "(OTEL_EXPORTER_PROMETHEUS_HOST unset or exporter failed to start)",
+            type(provider).__name__,
+        )
+        return
+
+    seeds = [(generic_proxy_slot_rejected_total, {"pool": pool}) for pool in _SLOT_POOLS]
+    seeds += [
+        (generic_proxy_stream_outcome_total, {"outcome": outcome}) for outcome in _STREAM_OUTCOMES
+    ]
+    seeded = 0
+    for instrument, attrs in seeds:
+        try:
+            instrument.add(0, attrs)
+            seeded += 1
+        except Exception:  # pragma: no cover - metrics must never break startup
+            pass
+    logger.info("zero-init seeded %d/%d generic-proxy series", seeded, len(seeds))
+
+
 # =============================================================================
 # Public helpers
 # =============================================================================
