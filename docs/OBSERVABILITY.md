@@ -424,6 +424,8 @@ Everything in this document targets the native OTel exporters, so use the capita
 | Per-server denial rate, any target type | `sum by (server)(rate(mcpgw_registry_auth_request_total{target_kind!="control_plane", success="False"}[6h])) > 0` |
 | Which tool ran on which MCP server | `sum by (server_name, tool_name)(increase(mcpgw_registry_tool_execution_total{method="tools/call"}[6h]))` |
 | Average MCP flow latency per server | `sum by (server_name)(rate(mcpgw_registry_protocol_latency_milliseconds_sum[6h])) / sum by (server_name)(rate(mcpgw_registry_protocol_latency_milliseconds_count[6h]))` |
+| Label-cardinality headroom (compare against `METRICS_MAX_LABEL_CARDINALITY`, default 150) | `count(count by (server)(mcpgw_registry_auth_request_total))` |
+| **Alert:** a bounded label has hit the cap and is collapsing values | `sum(mcpgw_registry_auth_request_total{server="_other"}) or sum(mcpgw_registry_tool_execution_total{server_name="_other"}) or sum(mcpgw_registry_tool_execution_total{tool_name="_other"})` |
 | Session-store hit rate | `sum(rate(mcpgw_registry_session_store_resolve_total{result="hit"}[5m])) / sum(rate(mcpgw_registry_session_store_resolve_total[5m]))` |
 | Federation peer sync failures by type | `sum by (peer_id, failure_type)(rate(peer_sync_failures_total[5m]))` |
 | Logout JWT validation failure rate | `rate(mcpgw_registry_logout_jwt_validation_failed_total[5m])` |

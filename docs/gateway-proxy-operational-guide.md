@@ -571,6 +571,17 @@ The companion latency histogram `mcpgw_registry_auth_request_duration_millisecon
 
 Every label value on the two `generic_proxy_*` counters exists at zero from startup, so a `rate()` alert binds at deploy instead of waiting for the first failure. Confirm with `docker compose logs auth-server | grep zero-init`, which reports `zero-init seeded 8/8 generic-proxy series`. A line reading `zero-init skipped: meter provider is ...` means `OTEL_EXPORTER_PROMETHEUS_HOST` is unset, so nothing was seeded.
 
+**Per-endpoint labels are capped, deliberately.** The `server` label on `mcpgw_registry_auth_request_total` and `server_name` on the tool-execution and protocol-latency instruments are bounded at `METRICS_MAX_LABEL_CARDINALITY` distinct values per process (default 150) and `METRICS_MAX_LABEL_LENGTH` characters (default 96). Past the cap, further new values collapse to `_other` rather than growing the series count without limit — an unbounded per-entity label on a 16-bucket histogram costs 18 series per value, and UUID-keyed custom records mint a new value on every create-and-delete cycle.
+
+The default is fine for most deployments and is left as-is. Two queries tell you when it stops being fine:
+
+```promql
+count(count by (server)(mcpgw_registry_auth_request_total))     # headroom: compare against 150
+sum(mcpgw_registry_auth_request_total{server="_other"})         # non-empty means the cap is biting
+```
+
+Raise `METRICS_MAX_LABEL_CARDINALITY` when the first query passes roughly 80% of the cap, or as soon as the second returns anything. Count *potential* values, not current ones: every registered MCP server plus every proxied gateway entity can eventually appear. Do not disable the bound — it is the control that keeps a churny label from turning into a cardinality DoS.
+
 [OBSERVABILITY.md](OBSERVABILITY.md#verifying-gateway-proxy-metrics-end-to-end) walks a registered OpenAI endpoint, a buffered endpoint, a skill, and an agent through these counters with copy-pasteable commands.
 
 Log lines worth alerting on. Each is the literal text the code emits, so it is safe to match on:
