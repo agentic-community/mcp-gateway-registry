@@ -276,20 +276,31 @@ class AuthMetricsMiddleware(BaseHTTPMiddleware):
         import: ``server`` imports this middleware.
 
         Args:
-            original_url: The X-Original-URL header value from nginx.
+            original_url: The X-Original-URL header value from nginx. May be empty:
+                a request carrying the generic-proxy marker still classifies, since
+                the marker alone proves the request transited a gateway location.
             generic_proxy_kind: The X-Generic-Proxy-Kind marker, empty when the
                 request did not come through a generic-proxy location.
 
         Returns:
             The target-kind label.
         """
-        if not original_url:
-            return "unknown"
+        # The marker label is resolved up front so it survives a missing or
+        # unparseable X-Original-URL. nginx sets the marker only inside a generated
+        # gateway location, so a request carrying one IS gateway traffic whatever
+        # the URL header looks like -- and "no gateway request lands in unknown" is
+        # a documented invariant with an alert query behind it. The control-plane
+        # check still wins below: /api/ locations never set the marker.
+        marker_kind = (
+            _GENERIC_PROXY_TARGET_KINDS.get(generic_proxy_kind, "generic_proxy_custom")
+            if generic_proxy_kind
+            else ""
+        )
 
         try:
             from urllib.parse import urlparse
 
-            parsed_url = urlparse(original_url)
+            parsed_url = urlparse(original_url or "")
             path = parsed_url.path.strip("/")
 
             registry_prefix = os.environ.get("REGISTRY_ROOT_PATH", "").strip("/")
@@ -297,20 +308,21 @@ class AuthMetricsMiddleware(BaseHTTPMiddleware):
                 path = path[len(registry_prefix) :].lstrip("/")
 
             path_parts = path.split("/") if path else []
-            if not path_parts:
-                return "unknown"
 
             # Control plane is checked FIRST so an /api/* path can never fall
             # through to a data-plane target label.
-            if path_parts[0] in _CONTROL_PLANE_FIRST_SEGMENTS:
+            if path_parts and path_parts[0] in _CONTROL_PLANE_FIRST_SEGMENTS:
                 return "control_plane"
 
             # The generic proxy is identified by the nginx marker, after the
             # control-plane check and before the path rules. One marker value maps
             # to three labels, so this cannot be a (label, predicate) entry in
             # _TARGET_KIND_RULES.
-            if generic_proxy_kind:
-                return _GENERIC_PROXY_TARGET_KINDS.get(generic_proxy_kind, "generic_proxy_custom")
+            if marker_kind:
+                return marker_kind
+
+            if not path_parts:
+                return "unknown"
 
             # Allowlist: attribute to a data-plane target only on an explicit match.
             for kind, predicate in _TARGET_KIND_RULES:
@@ -320,7 +332,7 @@ class AuthMetricsMiddleware(BaseHTTPMiddleware):
             # Recognized as neither control plane nor a known routed target.
             return "unknown"
         except Exception:
-            return "unknown"
+            return marker_kind or "unknown"
 
     async def extract_tool_and_method_info(self, request: Request) -> dict[str, Any]:
         """Extract detailed tool and method information from headers (X-Body) instead of consuming body."""
@@ -389,10 +401,12 @@ class AuthMetricsMiddleware(BaseHTTPMiddleware):
         original_url = request.headers.get("X-Original-URL")
         generic_proxy_kind = (request.headers.get("X-Generic-Proxy-Kind") or "").strip()
         generic_entity_path = (request.headers.get("X-Entity-Path") or "").strip()
-        target_kind = "unknown"
+        # Classification runs unconditionally: the marker alone is enough to place a
+        # gateway request, so a missing X-Original-URL cannot file one under
+        # "unknown" while server_name below still names the entity.
+        target_kind = self.classify_target_kind(original_url or "", generic_proxy_kind)
         if original_url:
             server_name = self.extract_server_name_from_url(original_url)
-            target_kind = self.classify_target_kind(original_url, generic_proxy_kind)
         if generic_proxy_kind:
             # The authz key the generic hop authorizes against, built exactly as
             # server.py does for /validate. Parsing the client path instead would

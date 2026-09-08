@@ -15,9 +15,12 @@ label costs 18 series on a 16-bucket histogram against the counter's 1, and no
 query asks for /validate latency per target.
 """
 
+import asyncio
 from unittest.mock import MagicMock, patch
 
 import pytest
+from starlette.requests import Request
+from starlette.responses import Response
 
 from auth_server.metrics_middleware import AuthMetricsMiddleware
 from registry.observability.label_bounding import LabelCardinalityLimiter
@@ -59,6 +62,28 @@ class TestClassifyGenericProxy:
         """
         url = f"http://localhost/gateway/skill/{UUID}/v1/models"
         assert middleware.classify_target_kind(url, "") == "unknown"
+
+    @pytest.mark.parametrize("url", ["", None])
+    def test_marker_classifies_without_x_original_url(self, middleware, url):
+        """A missing X-Original-URL must not file gateway traffic under unknown.
+
+        `server_name` is built from the markers alone, so classification has to be
+        too: otherwise one request records the per-entity `server` label AND
+        `target_kind="unknown"`, contradicting the documented invariant ("no gateway
+        request lands in unknown") that OBSERVABILITY.md ships an alert query for.
+        """
+        assert middleware.classify_target_kind(url, "skill") == "generic_proxy_skill"
+        assert middleware.classify_target_kind(url, "rest-endpoint") == "generic_proxy_custom"
+
+    def test_no_marker_and_no_url_is_unknown(self, middleware):
+        assert middleware.classify_target_kind("", "") == "unknown"
+
+    def test_control_plane_still_wins_when_the_url_is_present(self, middleware):
+        """Resolving the marker earlier must not reorder it ahead of control plane."""
+        assert (
+            middleware.classify_target_kind("http://localhost/api/skills/pdf", "skill")
+            == "control_plane"
+        )
 
     def test_marker_works_for_any_prefix(self, middleware):
         """A non-default GATEWAY_PROXY_PREFIX still classifies.
@@ -197,6 +222,55 @@ class TestServerLabelFromMarkers:
         name a rule the authorization layer never consulted.
         """
         assert f"{kind}/{entity_path}".strip("/") == expected
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("with_original_url", [True, False])
+    async def test_dispatch_labels_a_gateway_request_from_the_markers(
+        self, middleware, with_original_url
+    ):
+        """Drive the real dispatch path, not a re-typed copy of the expression.
+
+        Covers both labels at once and both header shapes: with X-Original-URL and
+        without it. The second case is the one that used to record the per-entity
+        `server` alongside `target_kind="unknown"`.
+        """
+        headers = [
+            (b"x-generic-proxy-kind", b"rest-endpoint"),
+            (b"x-entity-path", f"rest-endpoint/{UUID}".encode()),
+        ]
+        if with_original_url:
+            headers.append(
+                (b"x-original-url", f"http://localhost/gateway/rest-endpoint/{UUID}/v1".encode())
+            )
+        request = Request(
+            {
+                "type": "http",
+                "method": "GET",
+                "path": "/validate",
+                "query_string": b"",
+                "headers": headers,
+                "client": ("10.0.0.1", 1234),
+                "server": ("localhost", 80),
+                "scheme": "http",
+            }
+        )
+
+        async def call_next(_request):
+            return Response(status_code=200, headers={"X-Auth-Method": "self_signed"})
+
+        with (
+            patch("auth_server.metrics_middleware.auth_request_total") as counter,
+            patch("auth_server.metrics_middleware.auth_request_duration_ms"),
+            patch("auth_server.metrics_middleware.record_emission_path"),
+        ):
+            await middleware.dispatch(request, call_next)
+            # Emission is fire-and-forget via create_task; let those tasks run.
+            for _ in range(5):
+                await asyncio.sleep(0)
+
+        attrs = counter.add.call_args[0][1]
+        assert attrs["server"] == f"rest-endpoint/rest-endpoint/{UUID}"
+        assert attrs["target_kind"] == "generic_proxy_custom"
 
 
 class TestZeroInit:
