@@ -558,7 +558,22 @@ docker compose logs auth-server | grep zero-init
 
 A line reading `zero-init skipped: meter provider is ...` means the SDK meter provider was never installed, so no series were seeded and none of the checks below will show anything.
 
-On ECS, seeding still happens — `opentelemetry-instrument` installs a real SDK provider, which is exactly the case the guard lets through — but read the **result** rather than the log: query AMP for `sum by (outcome)(mcpgw_registry_generic_proxy_stream_outcome_total)` and expect all six values present with the untriggered ones at `0`. Verified on the ECS deployment: 6 stream outcomes plus both `slot_rejected` pools, untriggered at zero, with no `:9464` involved.
+On ECS, seeding still happens — `opentelemetry-instrument` installs a real SDK provider, which is exactly the case the guard lets through. The log line is there too, in the **per-container v2 log group** named by the task definition, not the older `/ecs/mcp-gateway-auth-server`:
+
+```bash
+aws logs filter-log-events --log-group-name /ecs/mcp-gateway-v2-auth-server \
+  --filter-pattern 'zero-init' --start-time $(( ($(date +%s) - 3600) * 1000 )) \
+  --query 'events[-3:].message' --output text
+# zero-init seeded 8/8 generic-proxy series
+
+# the group name comes from the task definition, so read it rather than guessing:
+aws ecs describe-task-definition --task-definition mcp-gateway-v2-auth \
+  --query 'taskDefinition.containerDefinitions[].logConfiguration.options."awslogs-group"' --output text
+```
+
+A rolling deploy leaves the replaced task's stream in the same group, so filter by a stream whose id matches a **currently running** task (`aws ecs describe-tasks ... --query 'tasks[].taskArn'`) or you may read a startup line from the previous revision.
+
+Then confirm the effect in AMP: `sum by (outcome)(mcpgw_registry_generic_proxy_stream_outcome_total)` returns all six values with the untriggered ones at `0`. Verified on the ECS deployment: log line at 15:50:09 UTC and 6 stream outcomes plus both `slot_rejected` pools seeded, with no `:9464` involved.
 
 #### A worked example: OpenAI registered as a generic REST endpoint
 
