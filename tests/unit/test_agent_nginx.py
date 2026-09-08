@@ -90,6 +90,88 @@ class TestGenerateAgentLocationBlocks:
         assert "{{ROOT_PATH}}/agent/flight-booking-agent/.well-known/agent-card.json" in result
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "backend_url",
+        [
+            "https://support.example.com/a2a",
+            "https://support.example.com/api/v1/a2a",
+            "http://support.example.com:9000/a2a/",
+        ],
+    )
+    async def test_card_route_targets_the_origin_not_the_endpoint(
+        self, patched_agent_service, backend_url
+    ):
+        """Per the A2A spec the card lives at a well-known path on the ORIGIN.
+
+        The registered url names the JSON-RPC endpoint and may carry a path, so
+        appending the well-known suffix to it asks the backend one level too deep
+        and 404s. _build_agent_health_urls (registry/api/agent_routes.py) already
+        derives the card from the origin, and the two must not disagree: the health
+        check would otherwise report an agent healthy while its gateway card route
+        fails (issue #1724).
+        """
+        patched_agent_service.get_enabled_agents = AsyncMock(return_value=["/support-agent"])
+        patched_agent_service.get_agent_info = AsyncMock(
+            return_value=_agent(path="/support-agent", url=backend_url)
+        )
+        service = NginxConfigService()
+
+        result = await service._generate_agent_location_blocks()
+
+        origin = backend_url.split("/a2a")[0].split("/api")[0].rstrip("/")
+        assert f"proxy_pass {origin}/.well-known/agent-card.json;" in result
+        # The endpoint path must not survive into the card target.
+        assert "/a2a/.well-known/agent-card.json" not in result
+
+    @pytest.mark.asyncio
+    async def test_card_route_unchanged_for_a_path_less_url(self, patched_agent_service):
+        """A path-less url is why this went unnoticed: appending to the url and to
+        the origin produce the same string, so these routes were always correct and
+        must stay byte-identical."""
+        patched_agent_service.get_enabled_agents = AsyncMock(return_value=["/travel-agent"])
+        patched_agent_service.get_agent_info = AsyncMock(
+            return_value=_agent(path="/travel-agent", url="http://travel-agent:9000/")
+        )
+        service = NginxConfigService()
+
+        result = await service._generate_agent_location_blocks()
+
+        assert "proxy_pass http://travel-agent:9000/.well-known/agent-card.json;" in result
+
+    @pytest.mark.asyncio
+    async def test_jsonrpc_route_keeps_the_endpoint_path(self, patched_agent_service):
+        """Only the card route moves to the origin. The JSON-RPC route must keep the
+        registered path, or the endpoint itself breaks."""
+        patched_agent_service.get_enabled_agents = AsyncMock(return_value=["/support-agent"])
+        patched_agent_service.get_agent_info = AsyncMock(
+            return_value=_agent(path="/support-agent", url="https://support.example.com/a2a")
+        )
+        service = NginxConfigService()
+
+        result = await service._generate_agent_location_blocks()
+
+        assert "proxy_pass https://support.example.com/a2a/;" in result
+
+    @pytest.mark.asyncio
+    async def test_card_route_keeps_its_credential_strips(self, patched_agent_service):
+        """Moving the target must not disturb the egress trust model: X-Authorization
+        carries the caller's gateway credential and must never reach a
+        registrant-controlled backend (the #1391 class of bug)."""
+        patched_agent_service.get_enabled_agents = AsyncMock(return_value=["/support-agent"])
+        patched_agent_service.get_agent_info = AsyncMock(
+            return_value=_agent(path="/support-agent", url="https://support.example.com/a2a")
+        )
+        service = NginxConfigService()
+
+        card_block = (await service._generate_agent_location_blocks()).split(
+            "# A2A agent JSON-RPC endpoint"
+        )[0]
+
+        assert 'proxy_set_header X-Authorization "";' in card_block
+        assert 'proxy_set_header Cookie "";' in card_block
+        assert "body_filter_by_lua_file /etc/nginx/lua/agent_card_rewrite.lua;" in card_block
+
+    @pytest.mark.asyncio
     async def test_block_enforces_auth_request(self, patched_agent_service):
         """Generated blocks are protected by the /validate auth subrequest."""
         patched_agent_service.get_enabled_agents = AsyncMock(return_value=["/flight-booking-agent"])
