@@ -299,6 +299,29 @@ class TestZeroInit:
         assert all(c[0][0] == 0 for c in slot_add.call_args_list)
         assert all(c[0][0] == 0 for c in stream_add.call_args_list)
 
+    def test_seeds_all_39_hop_outcome_combinations(self):
+        """The hop counter is the one an alert binds to, so it must exist at zero.
+
+        39 series = 3 entity types x 13 outcomes, flat whatever the endpoint count.
+        A missed combination is invisible until the day it increments, which is the
+        day you needed the alert to have been armed already.
+        """
+        from auth_server.observability import meters
+
+        with (
+            patch.object(meters.generic_proxy_request_total, "add") as hop_add,
+            patch.object(meters.generic_proxy_slot_rejected_total, "add"),
+            patch.object(meters.generic_proxy_stream_outcome_total, "add"),
+            patch.object(meters.metrics, "get_meter_provider", return_value=MagicMock()),
+        ):
+            meters.zero_init_generic_proxy_metrics()
+
+        seeded = {(c[0][1]["entity_type"], c[0][1]["outcome"]) for c in hop_add.call_args_list}
+        expected = {(e, o) for e in meters.HOP_ENTITY_TYPES for o in meters.HOP_OUTCOMES}
+        assert seeded == expected
+        assert len(seeded) == 39
+        assert all(c[0][0] == 0 for c in hop_add.call_args_list)
+
     def test_skips_and_reports_a_no_op_provider(self, caplog):
         """With no SDK provider every add(0) is discarded, so say so once.
 
@@ -337,6 +360,18 @@ class TestZeroInit:
 
         assert slot_add.call_count == 2
         assert stream_add.call_count == 6
+        # The hop counter is seeded after both of those, so a raise in the first
+        # instrument must not cost the 39 series an alert actually binds to.
+        with (
+            patch.object(
+                meters.generic_proxy_slot_rejected_total, "add", side_effect=RuntimeError("boom")
+            ),
+            patch.object(meters.generic_proxy_stream_outcome_total, "add"),
+            patch.object(meters.generic_proxy_request_total, "add") as hop_add,
+            patch.object(meters.metrics, "get_meter_provider", return_value=MagicMock()),
+        ):
+            meters.zero_init_generic_proxy_metrics()
+        assert hop_add.call_count == 39
 
 
 class TestServerNameIsBounded:

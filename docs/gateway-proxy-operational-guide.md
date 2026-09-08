@@ -564,21 +564,35 @@ The companion latency histogram `mcpgw_registry_auth_request_duration_millisecon
 
 | Metric | Read it as |
 |---|---|
+| `mcpgw_registry_generic_proxy_request_total{entity_type,outcome}` | **What the caller got**, one record per request on both paths. This is the metric to alert on: `ok` / `upstream_4xx` / `upstream_5xx` / `upstream_error` / `egress_blocked` / `auth_unavailable` / `capacity` / `disabled` / `rejected` / `byte_cap` / `client_closed` / `duration_timeout` / `internal_error`. Statuses alone would blur these — two different 503s (`disabled` vs `capacity`) and three different 502s (`auth_unavailable` vs `egress_blocked` vs `upstream_error`) — so a switched-off feature would page for saturation and an SSRF refusal would page for a credential outage. 39 series, flat whatever the endpoint count. The 401 token gate records nothing here: it rejects before the handler runs. |
 | `mcpgw_registry_generic_proxy_slot_rejected_total{pool}` | 503s from a saturated concurrency pool, labeled `buffered` or `stream`. A non-zero rate means raise `GATEWAY_GENERIC_STREAM_MAX_CONCURRENCY` or shed load. |
 | `mcpgw_registry_generic_proxy_stream_outcome_total{outcome}` | `started`, `completed`, `duration_timeout`, `byte_cap`, `upstream_error`, `client_closed`. In-flight streams equal `started` minus the sum of the terminals. `proxy_streaming` is a property of the entity, so an entity with it on takes the streaming path on every request regardless of what the caller's request body asks for. |
 | `mcpgw_registry_gateway_generic_blocks_dropped_total{reason}` | routes the render path refused, `invalid` (bad target) or `collision` (the location path is already claimed). Non-zero means an entity is registered and unreachable. |
 | `mcpgw_registry_gateway_egress_policy_unverified` | 1 means the startup self-check reached cloud metadata and the feature is latched off for the process. A standing 1 on an enabled deployment is an alert. |
 
-Every label value on the two `generic_proxy_*` counters exists at zero from startup, so a `rate()` alert binds at deploy instead of waiting for the first failure.
+Every label value on all three `generic_proxy_*` counters exists at zero from startup (39 + 6 + 2 = 47 series), so a `rate()` alert binds at deploy instead of waiting for the first failure.
 
-On **docker compose**, confirm with `docker compose logs auth-server | grep zero-init`, which reports `zero-init seeded 8/8 generic-proxy series`. A line reading `zero-init skipped: meter provider is ...` means the SDK meter provider was never installed, so nothing was seeded.
+The failure-rate query worth putting on a dashboard, and the three worth alerting on:
+
+```promql
+sum by (entity_type)(rate(mcpgw_registry_generic_proxy_request_total{outcome!~"ok|upstream_4xx"}[5m]))
+  / sum by (entity_type)(rate(mcpgw_registry_generic_proxy_request_total[5m]))
+
+sum by (entity_type)(rate(mcpgw_registry_generic_proxy_request_total{outcome="egress_blocked"}[15m])) > 0   # SSRF refusals
+sum(rate(mcpgw_registry_generic_proxy_request_total{outcome="auth_unavailable"}[15m])) > 0                  # credential vend failing
+sum(rate(mcpgw_registry_generic_proxy_request_total{outcome="internal_error"}[15m])) > 0                    # a bug, not a backend fault
+```
+
+`upstream_4xx` is deliberately outside the failure ratio: a caller asking a backend for something it does not have is not a gateway fault. Include it when you care about caller behaviour rather than hop health.
+
+On **docker compose**, confirm with `docker compose logs auth-server | grep zero-init`, which reports `zero-init seeded 47/47 generic-proxy series`. A line reading `zero-init skipped: meter provider is ...` means the SDK meter provider was never installed, so nothing was seeded.
 
 On **ECS**, both checks work but the paths differ. The log line lives in the per-container v2 group named by the task definition (`/ecs/mcp-gateway-v2-auth-server` — read it with `aws ecs describe-task-definition ... logConfiguration.options."awslogs-group"` rather than guessing, and pick a stream whose id matches a currently running task, since a rolling deploy leaves the replaced task's stream behind):
 
 ```bash
 aws logs filter-log-events --log-group-name /ecs/mcp-gateway-v2-auth-server \
   --filter-pattern 'zero-init' --start-time $(( ($(date +%s) - 3600) * 1000 )) \
-  --query 'events[-1].message' --output text     # zero-init seeded 8/8 generic-proxy series
+  --query 'events[-1].message' --output text     # zero-init seeded 47/47 generic-proxy series
 ```
 
 For the counters themselves, query `sum by (outcome)(mcpgw_registry_generic_proxy_stream_outcome_total)` in Grafana or AMP and expect all six values with the untriggered ones at `0`. The task runs under `opentelemetry-instrument`, so the SDK provider already exists, seeding proceeds, and metrics leave through the `adot-collector` sidecar over OTLP — **nothing listens on `:9464` there**, so `curl localhost:9464/metrics` inside the task returns `Connection refused` and is not a valid check on that surface.

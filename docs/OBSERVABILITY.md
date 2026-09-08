@@ -307,10 +307,45 @@ exposition form** (after the OTel exporter appends the unit suffix).
 | `mcpgw_rate_limit_quarantine_denied_total` | auth-server (`/validate`) | `scope` (`caller`/`target`), `entity_type` | Requests dropped because a caller or target is **quarantined** (kill switch) |
 | `mcpgw_rate_limit_quarantine_members` (Gauge) | registry | `group` (`quarantine-callers`/`quarantine-targets`) | Current member count of each kill-switch group, observed each export cycle (correct across replicas) |
 | `mcpgw_rate_limit_errors_total` | auth-server (`/validate`) | `axis` (incl. `qtn` for a quarantine-membership read error) | Rate-limit backend errors (counter-store unreachable/timeout → fail-open/closed) |
+| `mcpgw_registry_generic_proxy_request_total` | auth-server (gateway hop) | `entity_type` (`skill`/`a2a_agent`/`custom`), `outcome` (13 values, below) | **What the caller actually got.** One record per request that enters the hop handler, on both the buffered and streaming paths. `auth_request_total` cannot answer this — its `success` label is the `/validate` decision, so a 502 credential-vend failure reads there as a success. 3 × 13 = 39 series, flat whatever the endpoint count (no label carries entity identity); every combination exists at zero from startup. Does **not** cover the 401 token gate, which rejects in a route dependency before the handler runs |
 | `mcpgw_registry_generic_proxy_slot_rejected_total` | auth-server (gateway hop) | `pool` (`buffered`/`stream`) | Gateway-proxy requests rejected with 503 because a concurrency slot could not be acquired inside the acquire timeout. A non-zero rate means the pool is saturated: raise `GATEWAY_GENERIC_STREAM_MAX_CONCURRENCY` or shed load. Both `pool` values exist at zero from startup |
 | `mcpgw_registry_generic_proxy_stream_outcome_total` | auth-server (gateway hop) | `outcome` (`started`/`completed`/`duration_timeout`/`byte_cap`/`upstream_error`/`client_closed`) | Streaming gateway-proxy lifecycle. In-flight streams are `started` minus the sum of the five terminals. All six values exist at zero from startup |
 | `mcpgw_registry_gateway_generic_blocks_dropped_total` | registry | `reason` (`invalid`/`collision`) | Gateway routes the nginx render path refused. Non-zero means an entity is registered and unreachable |
 | `mcpgw_registry_gateway_egress_policy_unverified` (Gauge) | registry | none | `1` means the startup self-check reached cloud metadata, so the generic proxy latched **off** for the process. A standing `1` on an enabled deployment is an alert |
+
+#### The 13 hop outcomes, and why the set is not just "status code"
+
+`mcpgw_registry_generic_proxy_request_total{outcome}` exists because HTTP statuses collapse failures an operator must tell apart. Two 503s and three 502s leave the hop for entirely different reasons:
+
+| Outcome | Status the caller saw | What happened |
+|---|---|---|
+| `ok` | 2xx/3xx | Forwarded and returned, or a stream that completed |
+| `upstream_4xx` | 4xx from the backend | The hop worked; the backend refused. A 404 for a path that does not exist upstream lands here |
+| `upstream_5xx` | 5xx from the backend | The hop worked; the backend broke |
+| `upstream_error` | 502 / 504 | No usable response: connection refused, reset, or timed out |
+| `egress_blocked` | 502 | **Security event.** The guarded transport refused the outbound because the pinned host resolved to a private, metadata, or rebound IP |
+| `auth_unavailable` | 502 | The upstream-credential vend failed, so the hop refused to forward unauthenticated |
+| `capacity` | 503 | A concurrency slot could not be acquired inside the acquire timeout (either pool) |
+| `disabled` | 503 | The feature latch is off — flag disabled, or the egress self-check failed at startup |
+| `rejected` | 400 | Sub-path confinement or host-pin refusal: the SSRF guards saying no |
+| `byte_cap` | 413 | The response exceeded the buffered or stream byte ceiling |
+| `client_closed` | — | The caller hung up (buffered `CancelledError`, or a stream abandoned mid-body) |
+| `duration_timeout` | 504 / aborted stream | The absolute stream-duration ceiling fired |
+| `internal_error` | 500 | A bug. If this moves, read the logs — nothing else records here |
+
+Collapse those and you get paged for the wrong thing: `disabled` would fire a saturation alert, and `egress_blocked` — an SSRF refusal — would fire a credential-outage alert.
+
+| Goal | Query |
+|---|---|
+| Hop failure rate per entity type (the headline SLI) | `sum by (entity_type)(rate(mcpgw_registry_generic_proxy_request_total{outcome!~"ok\|upstream_4xx"}[5m])) / sum by (entity_type)(rate(mcpgw_registry_generic_proxy_request_total[5m]))` |
+| What is failing, ranked | `topk(10, sum by (outcome)(rate(mcpgw_registry_generic_proxy_request_total{outcome!="ok"}[15m])))` |
+| **Alert:** SSRF egress refusals (would have read as a credential outage before) | `sum by (entity_type)(rate(mcpgw_registry_generic_proxy_request_total{outcome="egress_blocked"}[15m])) > 0` |
+| **Alert:** credential vend failing | `sum(rate(mcpgw_registry_generic_proxy_request_total{outcome="auth_unavailable"}[15m])) > 0` |
+| **Alert:** a bug, not a backend fault | `sum(rate(mcpgw_registry_generic_proxy_request_total{outcome="internal_error"}[15m])) > 0` |
+| Feature switched off while callers still arrive | `sum(rate(mcpgw_registry_generic_proxy_request_total{outcome="disabled"}[5m])) > 0` |
+| The disagreement this counter exists for: `/validate` says success, the hop failed | `sum(rate(mcpgw_registry_generic_proxy_request_total{outcome=~"auth_unavailable\|upstream_error\|egress_blocked\|capacity"}[15m])) > 0 and sum(rate(mcpgw_registry_auth_request_total{target_kind=~"generic_proxy_.*", success="true"}[15m])) > 0` |
+
+Both counters are correct at once: `/validate` did succeed, and the request still failed at the hop. That is the point — `auth_request_total` reports the authorization decision, this counter reports the caller's outcome.
 
 ### Histograms
 
@@ -538,7 +573,7 @@ counters() {
 counters
 ```
 
-On a stack that has just started, before any gateway traffic, eight series already exist at zero. That is the point of zero-initialization: a `rate()` alert can bind at deploy instead of waiting for the first failure.
+On a stack that has just started, before any gateway traffic, 47 series already exist at zero — 39 hop outcomes plus the 8 lifecycle values below. That is the point of zero-initialization: a `rate()` alert can bind at deploy instead of waiting for the first failure.
 
 ```
 mcpgw_registry_generic_proxy_slot_rejected_total{pool="buffered"} 0.0
@@ -555,7 +590,7 @@ Confirm the startup log said so:
 
 ```bash
 docker compose logs auth-server | grep zero-init
-# zero-init seeded 8/8 generic-proxy series
+# zero-init seeded 47/47 generic-proxy series
 ```
 
 A line reading `zero-init skipped: meter provider is ...` means the SDK meter provider was never installed, so no series were seeded and none of the checks below will show anything.
@@ -566,7 +601,7 @@ On ECS, seeding still happens — `opentelemetry-instrument` installs a real SDK
 aws logs filter-log-events --log-group-name /ecs/mcp-gateway-v2-auth-server \
   --filter-pattern 'zero-init' --start-time $(( ($(date +%s) - 3600) * 1000 )) \
   --query 'events[-3:].message' --output text
-# zero-init seeded 8/8 generic-proxy series
+# zero-init seeded 47/47 generic-proxy series
 
 # the group name comes from the task definition, so read it rather than guessing:
 aws ecs describe-task-definition --task-definition mcp-gateway-v2-auth \

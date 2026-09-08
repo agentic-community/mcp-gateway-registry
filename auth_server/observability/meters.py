@@ -217,6 +217,21 @@ generic_proxy_stream_outcome_total = _meter.create_counter(
     unit="1",
 )
 
+generic_proxy_request_total = _meter.create_counter(
+    name="mcpgw_registry_generic_proxy_request_total",
+    description=(
+        "Generic-proxy requests by terminal outcome, labeled by entity_type "
+        "(skill | a2a_agent | custom) and outcome (ok | upstream_4xx | "
+        "upstream_5xx | upstream_error | egress_blocked | auth_unavailable | "
+        "capacity | disabled | rejected | byte_cap | client_closed | "
+        "duration_timeout | internal_error). Counts the HOP's own result, which "
+        "auth_request_total cannot: a request that passes /validate and then "
+        "fails at the hop lands here as a failure and there as a success. Does "
+        "not cover the 401 token gate, which rejects before the handler runs."
+    ),
+    unit="1",
+)
+
 
 def record_generic_proxy_slot_rejected(pool: str) -> None:
     """Record a generic-proxy capacity rejection (503) for the given pool."""
@@ -230,6 +245,21 @@ def record_generic_proxy_stream_outcome(outcome: str) -> None:
     """Record a start/terminal outcome for a streaming generic-proxy request."""
     try:
         generic_proxy_stream_outcome_total.add(1, {"outcome": outcome})
+    except Exception:  # pragma: no cover - metrics must never break the hop
+        pass
+
+
+def record_generic_proxy_request(entity_type: str, outcome: str) -> None:
+    """Record one terminal outcome for a generic-proxy request.
+
+    Exactly one call per request that enters the hop handler. The buffered path
+    records through an idempotent per-request wrapper in ``server.py`` so a
+    helper-raised failure and the handler's own exception arm cannot both count;
+    the streaming path records its post-header terminal directly, because by then
+    the handler has already returned the StreamingResponse.
+    """
+    try:
+        generic_proxy_request_total.add(1, {"entity_type": entity_type, "outcome": outcome})
     except Exception:  # pragma: no cover - metrics must never break the hop
         pass
 
@@ -248,6 +278,28 @@ _STREAM_OUTCOMES: tuple[str, ...] = (
     "byte_cap",
     "upstream_error",
     "client_closed",
+)
+
+# The hop counter's label sets. entity_type is collapsed to three values by
+# _metrics_entity_type in server.py (operators define custom types at will, so a
+# raw entity_type would grow the label set with operator behaviour), and outcome
+# is a closed enum, so the product is 3 x 13 = 39 series -- flat, whatever the
+# endpoint count, because no label carries entity identity.
+HOP_ENTITY_TYPES: tuple[str, ...] = ("skill", "a2a_agent", "custom")
+HOP_OUTCOMES: tuple[str, ...] = (
+    "ok",
+    "upstream_4xx",
+    "upstream_5xx",
+    "upstream_error",
+    "egress_blocked",
+    "auth_unavailable",
+    "capacity",
+    "disabled",
+    "rejected",
+    "byte_cap",
+    "client_closed",
+    "duration_timeout",
+    "internal_error",
 )
 
 
@@ -274,6 +326,11 @@ def zero_init_generic_proxy_metrics() -> None:
     seeds = [(generic_proxy_slot_rejected_total, {"pool": pool}) for pool in _SLOT_POOLS]
     seeds += [
         (generic_proxy_stream_outcome_total, {"outcome": outcome}) for outcome in _STREAM_OUTCOMES
+    ]
+    seeds += [
+        (generic_proxy_request_total, {"entity_type": entity_type, "outcome": outcome})
+        for entity_type in HOP_ENTITY_TYPES
+        for outcome in HOP_OUTCOMES
     ]
     seeded = 0
     for instrument, attrs in seeds:
