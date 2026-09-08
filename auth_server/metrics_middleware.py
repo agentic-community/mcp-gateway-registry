@@ -46,7 +46,7 @@ except ImportError:
         tool_execution_total,
     )
 
-from registry.observability.label_bounding import LabelCardinalityLimiter
+from registry.observability.label_bounding import LabelCardinalityLimiter, bool_label
 
 logger = logging.getLogger(__name__)
 
@@ -546,7 +546,7 @@ class AuthMetricsMiddleware(BaseHTTPMiddleware):
         # 1) OTel emission (always-on, in-process, non-blocking)
         otel_attrs = _label_limiter.bound_attrs(
             {
-                "success": str(success),
+                "success": bool_label(success),
                 "method": method,
                 "server": server_name,
                 "target_kind": target_kind,
@@ -639,7 +639,7 @@ class AuthMetricsMiddleware(BaseHTTPMiddleware):
             {
                 "tool_name": str(actual_tool_name or method_name),
                 "server_name": str(server_name),
-                "success": str(success),
+                "success": bool_label(success),
                 "method": str(method_name),
                 "client_name": str(client_info.get("name", "unknown")),
                 "client_version": str(client_info.get("version", "unknown")),

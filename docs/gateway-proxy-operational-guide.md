@@ -548,14 +548,14 @@ To turn the whole feature off, set `GATEWAY_GENERIC_PROXY_ENABLED=false` and res
 | Label | Read it as |
 |---|---|
 | `target_kind` | `generic_proxy_skill`, `generic_proxy_agent`, or `generic_proxy_custom`. Every operator-defined custom type collapses to `generic_proxy_custom`, so the label set stays at three values however many types exist. A gateway request in `unknown` means the `X-Generic-Proxy-Kind` marker did not reach the auth-server; check the rendered nginx location. |
-| `server` | The entity's authz key — `skill/skills/pdf`, `rest-endpoint/rest-endpoint/<uuid>`. This is the exact string a `server_access` rule names, so a `success="False"` series tells you the rule to write. See [Authorizing callers](#authorizing-callers). |
+| `server` | The entity's authz key — `skill/skills/pdf`, `rest-endpoint/rest-endpoint/<uuid>`. This is the exact string a `server_access` rule names, so a `success="false"` series tells you the rule to write. See [Authorizing callers](#authorizing-callers). |
 | `success` | The `/validate` decision only. A request that passes `/validate` and then fails at the hop — a 502 vend failure, a 503 from a full pool, an upstream 5xx — is recorded here as a success. Use the hop metrics below for those. |
 
 Find the busiest endpoints, or the ones being denied:
 
 ```promql
 topk(10, sum by (server)(rate(mcpgw_registry_auth_request_total{target_kind=~"generic_proxy_.*"}[1h])))
-sum by (server)(rate(mcpgw_registry_auth_request_total{target_kind=~"generic_proxy_.*", success="False"}[15m])) > 0
+sum by (server)(rate(mcpgw_registry_auth_request_total{target_kind=~"generic_proxy_.*", success="false"}[15m])) > 0
 ```
 
 The companion latency histogram `mcpgw_registry_auth_request_duration_milliseconds` carries no `server` label, so group it by `target_kind`.
@@ -602,7 +602,7 @@ Dropping generic block for ...                       a route did not render, so 
 | `301` | The trailing slash is missing. The location ends in one. `curl -L` follows it, and a POST becomes a GET when it does. |
 | `200` with `text/html`, ~889 bytes | No proxy location matched, so nginx served the frontend shell. Wrong entity-type spelling (`skills` for `skill`), the entity is not proxied, or the record was registered seconds ago and nginx has not regenerated its config yet — retry. Check the content type, not the status: this failure returns `200`, so a status-only check reports success. |
 | `401` | Expired or missing gateway token, or the equal-token guard fired because `Authorization` matched `X-Authorization`. Check the token lifetime first. |
-| `403` from the gateway | The caller's group has no `server_access` rule granting this verb on this authz key. `methods: ["all"]` does not count. The `server` label on `mcpgw_registry_auth_request_total{success="False"}` holds the key to name in the rule. |
+| `403` from the gateway | The caller's group has no `server_access` rule granting this verb on this authz key. `methods: ["all"]` does not count. The `server` label on `mcpgw_registry_auth_request_total{success="false"}` holds the key to name in the rule. |
 | `403` on a create or update | Missing `create_<type>_entity` or `modify_<type>_entity`, or a non-admin trying to manage a custom type. |
 | `404` on a record you know exists | Missing `list_<type>_entity` for that record. The registry hides existence rather than confirming it. |
 | `404` on a gateway route | The feature is off or self-disabled, the client URL was assembled by hand, or nginx has not reloaded. |

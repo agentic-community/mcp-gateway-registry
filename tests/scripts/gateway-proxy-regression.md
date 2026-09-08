@@ -534,7 +534,7 @@ Pass: the log line reports `8/8` and all 8 series exist at `0.0`. A `zero-init s
 counters | grep generic_proxy
 ```
 
-Pass: `auth_request_total{server="rest-endpoint/rest-endpoint/<uuid>",target_kind="generic_proxy_custom",success="True"}` and `{server="skill/skills/pdf",target_kind="generic_proxy_skill",success="True"}`. The `server` value is the **authz key**, i.e. the exact string a `server_access` rule names — `skill/skills/pdf`, not the client path `skill/pdf`.
+Pass: `auth_request_total{server="rest-endpoint/rest-endpoint/<uuid>",target_kind="generic_proxy_custom",success="true"}` and `{server="skill/skills/pdf",target_kind="generic_proxy_skill",success="true"}`. The `server` value is the **authz key**, i.e. the exact string a `server_access` rule names — `skill/skills/pdf`, not the client path `skill/pdf`.
 
 **T-7.8 — no gateway request lands in `unknown`.**
 

@@ -278,7 +278,7 @@ exposition form** (after the OTel exporter appends the unit suffix).
 
 | Metric | Source | Labels | What it counts |
 |---|---|---|---|
-| `mcpgw_registry_auth_request_total` | auth-server | `success`, `method`, `server`, `target_kind` | Authenticated /validate calls. `target_kind` = `a2a_agent` \| `virtual_mcp_server` \| `mcp_server` \| `generic_proxy_skill` \| `generic_proxy_agent` \| `generic_proxy_custom` \| `control_plane` \| `unknown` (routing breakdown; `control_plane` = `/api/*`, static, oauth2 — never counted as a data-plane target). For a gateway-proxied request `server` holds the entity's **authz key** (`skill/skills/pdf`, `rest-endpoint/rest-endpoint/<uuid>`), which is the exact string a `server_access` rule names, so a `success="False"` series points at the rule to write |
+| `mcpgw_registry_auth_request_total` | auth-server | `success`, `method`, `server`, `target_kind` | Authenticated /validate calls. `target_kind` = `a2a_agent` \| `virtual_mcp_server` \| `mcp_server` \| `generic_proxy_skill` \| `generic_proxy_agent` \| `generic_proxy_custom` \| `control_plane` \| `unknown` (routing breakdown; `control_plane` = `/api/*`, static, oauth2 — never counted as a data-plane target). For a gateway-proxied request `server` holds the entity's **authz key** (`skill/skills/pdf`, `rest-endpoint/rest-endpoint/<uuid>`), which is the exact string a `server_access` rule names, so a `success="false"` series points at the rule to write |
 | `mcpgw_registry_tool_execution_total` | auth-server | `tool_name`, `server_name`, `success`, `method`, `client_name`, `client_version` | MCP tool calls detected at the auth layer |
 | `mcpgw_registry_operation_total` | registry middleware | `operation`, `resource_type`, `success` | Registry API operations (list/create/update/delete/search) |
 | `tool_discovery_total` | registry middleware | `results_count_bucket` | Semantic search calls |
@@ -360,7 +360,7 @@ minutes.
 |---|---|
 | Total invocations per tool | `sum by (tool)(mcpgw_registry_tool_invocations_total)` |
 | Tool QPS | `sum by (tool)(rate(mcpgw_registry_tool_invocations_total[5m]))` |
-| Per-tool error rate | `sum by (tool)(rate(mcpgw_registry_tool_invocations_total{success="False"}[5m])) / sum by (tool)(rate(mcpgw_registry_tool_invocations_total[5m]))` |
+| Per-tool error rate | `sum by (tool)(rate(mcpgw_registry_tool_invocations_total{success="false"}[5m])) / sum by (tool)(rate(mcpgw_registry_tool_invocations_total[5m]))` |
 | Most-called tool right now | `topk(3, sum by (tool)(rate(mcpgw_registry_tool_invocations_total[5m])))` |
 | p95 latency per tool | `histogram_quantile(0.95, sum by (le, tool)(rate(mcpgw_registry_tool_duration_milliseconds_bucket[5m])))` |
 | Average duration per tool | `sum by (tool)(rate(mcpgw_registry_tool_duration_milliseconds_sum[5m])) / sum by (tool)(rate(mcpgw_registry_tool_duration_milliseconds_count[5m]))` |
@@ -396,15 +396,15 @@ Replace `<TARGET>` with the path you care about (e.g. `/api/servers`,
 
 The three `generic_proxy_*` kinds come from the `X-Generic-Proxy-Kind` marker nginx sets on each generated gateway location, so they hold for any `GATEWAY_PROXY_PREFIX`. Every operator-defined custom type collapses to `generic_proxy_custom`, which keeps the label set fixed at three values however many custom types exist. A gateway request landing in `unknown` means the marker did not arrive, so check the rendered nginx location.
 
-**The `success` label is `True` / `False`, capitalized — except on the metrics-service.** The auth-server and registry emit `str(bool)`, so `success="false"` matches nothing and a query written that way returns an empty result rather than an error: it looks like "no failures" when it really means "no such label value". The standalone metrics-service (the legacy dual-write path, `METRICS_LEGACY_HTTP_POST=true`) normalizes booleans to **lowercase**, so the same query needs `success="false"` there. Verified on a running stack:
+**The `success` label is lowercase `true` / `false` on every exporter.** It used to be `True` / `False` on the native OTel path (auth-server and registry emitted `str(bool)`, a Python repr) while the standalone metrics-service normalized the same booleans to lowercase. A query written for one exporter matched nothing on the other, and Prometheus reports a label-value miss as an **empty result rather than an error** — so `success="false"` read as "no failures" when it really meant "no such label value". Both paths now emit lowercase, which is the Prometheus/OpenTelemetry convention.
 
 | Exporter | `success` values |
 |---|---|
-| auth-server `:9464` (native OTel) | `True` / `False` |
-| registry `:9464` (native OTel) | `True` / `False` |
+| auth-server `:9464` (native OTel) | `true` / `false` |
+| registry `:9464` (native OTel) | `true` / `false` |
 | metrics-service (legacy POST path) | `true` / `false` |
 
-Everything in this document targets the native OTel exporters, so use the capitalized form.
+**Upgrading:** any saved query, alert rule, or panel filtering `success="True"` / `success="False"` must be lowercased. Series carrying the old capitalized values stay in the TSDB until retention expires, so a `sum(...)` over a window that straddles the upgrade needs `success=~"[Tt]rue"` to cover both. The shipped Grafana dashboards are already updated.
 
 | Goal | Query |
 |---|---|
@@ -418,10 +418,10 @@ Everything in this document targets the native OTel exporters, so use the capita
 | Gateway-proxy volume, all three kinds | `sum by (target_kind)(rate(mcpgw_registry_auth_request_total{target_kind=~"generic_proxy_.*"}[5m]))` |
 | Skill routing only | `sum(rate(mcpgw_registry_auth_request_total{target_kind="generic_proxy_skill"}[5m]))` |
 | Busiest proxied endpoints by authz key | `topk(10, sum by (server)(rate(mcpgw_registry_auth_request_total{target_kind=~"generic_proxy_.*"}[1h])))` |
-| Which proxied endpoint is being denied (the `server` value is the scope rule to write) | `sum by (server)(rate(mcpgw_registry_auth_request_total{target_kind=~"generic_proxy_.*", success="False"}[15m])) > 0` |
+| Which proxied endpoint is being denied (the `server` value is the scope rule to write) | `sum by (server)(rate(mcpgw_registry_auth_request_total{target_kind=~"generic_proxy_.*", success="false"}[15m])) > 0` |
 | Gateway requests that failed to classify (should stay flat) | `sum(rate(mcpgw_registry_auth_request_total{target_kind="unknown"}[5m]))` |
 | Per-server rate across **all** routed targets (MCP, virtual, agent, gateway in one panel) | `topk(20, sum by (server, target_kind)(rate(mcpgw_registry_auth_request_total{target_kind!="control_plane"}[6h])))` |
-| Per-server denial rate, any target type | `sum by (server)(rate(mcpgw_registry_auth_request_total{target_kind!="control_plane", success="False"}[6h])) > 0` |
+| Per-server denial rate, any target type | `sum by (server)(rate(mcpgw_registry_auth_request_total{target_kind!="control_plane", success="false"}[6h])) > 0` |
 | Which tool ran on which MCP server | `sum by (server_name, tool_name)(increase(mcpgw_registry_tool_execution_total{method="tools/call"}[6h]))` |
 | Average MCP flow latency per server | `sum by (server_name)(rate(mcpgw_registry_protocol_latency_milliseconds_sum[6h])) / sum by (server_name)(rate(mcpgw_registry_protocol_latency_milliseconds_count[6h]))` |
 | Label-cardinality headroom (compare against `METRICS_MAX_LABEL_CARDINALITY`, default 150) | `count(count by (server)(mcpgw_registry_auth_request_total))` |
@@ -568,7 +568,7 @@ Once callers start using it, four questions come up, and each maps to one of the
 |---|---|
 | How much traffic is this endpoint taking, next to my skills and MCP servers? | `target_kind="generic_proxy_custom"` on `mcpgw_registry_auth_request_total` |
 | Which proxied endpoint, out of the several registered? | the `server` label, which holds the entity's authz key |
-| Is anyone being denied, and what scope rule would fix it? | `success="False"` on that same series; the `server` value is the string to put in `server_access` |
+| Is anyone being denied, and what scope rule would fix it? | `success="false"` on that same series; the `server` value is the string to put in `server_access` |
 | Are its streams completing, or hitting a ceiling? | `mcpgw_registry_generic_proxy_stream_outcome_total` |
 
 Every gateway request carries a `generic_proxy_*` kind, so `target_kind="unknown"` holds no gateway traffic. A gateway call appearing there means the `X-Generic-Proxy-Kind` marker did not reach the auth-server.

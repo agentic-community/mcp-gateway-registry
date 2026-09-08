@@ -164,7 +164,7 @@ class TestServerLabel:
         # Everything else survives, so the documented (le, target_kind) query
         # keeps working.
         assert hist_attrs["target_kind"] == "generic_proxy_custom"
-        assert hist_attrs["success"] == "True"
+        assert hist_attrs["success"] == "true"
         assert hist_attrs["method"] == "self_signed"
 
     @pytest.mark.asyncio
