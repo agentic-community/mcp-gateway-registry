@@ -18,6 +18,7 @@ the transport.
 
 import asyncio
 import http.server
+import socket
 import socketserver
 import threading
 from collections.abc import Iterator
@@ -63,12 +64,30 @@ class _Origin(http.server.BaseHTTPRequestHandler):
 
 @pytest.fixture(scope="module")
 def origin() -> Iterator[int]:
-    """A loopback origin. Loopback is private, which is the point of the fixture."""
-    server = socketserver.TCPServer(("127.0.0.1", 0), _Origin)
+    """A loopback origin bound where the guard will actually dial.
+
+    ``url_guard`` resolves the hostname itself and pins the first address
+    ``getaddrinfo`` returns, so the fixture must bind that same address. Hosts
+    resolving ``localhost`` to ``::1`` first (GitHub runners) would otherwise get
+    a connection failure that looks like an SSRF refusal. Loopback is a private
+    address, which is what makes it a valid stand-in for an internal forge.
+    """
+    family, _, _, _, sockaddr = socket.getaddrinfo("localhost", 0, proto=socket.IPPROTO_TCP)[0]
+
+    class _Server(socketserver.TCPServer):
+        address_family = family
+        allow_reuse_address = True
+
+    server = _Server((sockaddr[0], 0), _Origin)
     port = server.server_address[1]
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
+        # Fail loudly here rather than let an unreachable origin surface later as
+        # a "redirect blocked" error, which is the very confusion under test.
+        with socket.socket(family, socket.SOCK_STREAM) as probe:
+            probe.settimeout(5)
+            probe.connect((sockaddr[0], port))
         yield port
     finally:
         server.shutdown()
@@ -176,9 +195,17 @@ class TestRealRedirectsStillRefused:
             _validate_skill_md_url,
         )
 
-        with _allowlisted_settings(), pytest.raises(SkillUrlValidationError):
+        with _allowlisted_settings(), pytest.raises(SkillUrlValidationError) as exc:
             asyncio.run(_validate_skill_md_url(f"http://localhost:{origin}/to-metadata"))
         _clear_allowlist_cache()
+
+        # Assert the reason, not just the type. A transport error raises the same
+        # class, which would let an unreachable origin pose as a security refusal.
+        # These hops are refused by the guarded transport's own per-hop validation
+        # before any connect, so the message names the failure, not the target.
+        message = str(exc.value)
+        assert "All connection attempts failed" not in message
+        assert "SSRF validation" in message or "Redirect to unsafe URL blocked" in message
 
     def test_redirect_to_non_allowlisted_private_ip_is_refused(self, origin: int) -> None:
         """Allowlisting one internal host must not admit every internal host.
@@ -191,9 +218,13 @@ class TestRealRedirectsStillRefused:
             _validate_skill_md_url,
         )
 
-        with _allowlisted_settings(), pytest.raises(SkillUrlValidationError):
+        with _allowlisted_settings(), pytest.raises(SkillUrlValidationError) as exc:
             asyncio.run(_validate_skill_md_url(f"http://localhost:{origin}/to-other-private"))
         _clear_allowlist_cache()
+
+        message = str(exc.value)
+        assert "All connection attempts failed" not in message
+        assert "SSRF validation" in message or "Redirect to unsafe URL blocked" in message
 
 
 class TestRedirectDetectionHelper:
