@@ -113,6 +113,53 @@ def _is_safe_url(
         return False
 
 
+def _unsafe_redirect_target(
+    response: httpx.Response,
+) -> str | None:
+    """Return the first redirect hop that fails SSRF validation, else None.
+
+    Only real redirects are examined. ``response.url`` cannot be used for this:
+    the guarded transport pins every request to a validated IP by rewriting the
+    URL host (``url_guard._rewrite_to_pinned_ip``), so ``response.url`` differs
+    from the requested URL on EVERY fetch and reads as an IP literal. Comparing
+    it rejected SKILL.md fetches from forges whose hostname is allowlisted via
+    ``github_extra_hosts`` but resolves to a private address -- no redirect
+    involved (issue #1740).
+
+    Identity, not the pinned address, is what needs checking. The transport
+    preserves the intended hostname in the ``Host`` header and the
+    ``sni_hostname`` extension, so each hop is validated under the name the
+    server was asked for. A hop whose host was already an IP literal (no
+    rewrite, so no ``Host`` override) is validated as-is.
+
+    This is defense in depth: the transport itself validates, resolves, and pins
+    every hop including redirects, so a redirect to a denied address raises
+    UrlValidationError before any connect. This adds a second, independent check
+    that the redirect CHAIN stayed within policy.
+
+    Args:
+        response: The completed httpx response, possibly with a redirect history.
+
+    Returns:
+        The offending URL (identity form) if a hop fails validation, else None.
+    """
+    if not response.history:
+        return None
+
+    for hop in (*response.history, response):
+        request = hop.request
+        # Recover the pre-pinning identity the transport stashed; fall back to
+        # the request URL when no rewrite happened (literal-IP targets).
+        hostname = request.extensions.get("sni_hostname") or request.headers.get("host")
+        identity_url = str(request.url)
+        if hostname:
+            host_only = str(hostname).rsplit(":", 1)[0] if ":" in str(hostname) else str(hostname)
+            identity_url = str(request.url.copy_with(host=host_only))
+        if not _is_safe_url(identity_url):
+            return identity_url
+    return None
+
+
 def _append_page_param(
     url: str,
     page: str,
@@ -546,12 +593,12 @@ async def _validate_skill_md_url(
                 timeout=URL_VALIDATION_TIMEOUT,
             )
 
-            final_url = str(response.url)
-            if final_url != fetch_url and not _is_safe_url(final_url):
+            unsafe_hop = _unsafe_redirect_target(response)
+            if unsafe_hop is not None:
                 logger.warning(
-                    f"SSRF protection: Blocked redirect from {redact_url(url)} to unsafe URL {redact_url(final_url)}"
+                    f"SSRF protection: Blocked redirect from {redact_url(url)} to unsafe URL {redact_url(unsafe_hop)}"
                 )
-                raise SkillUrlValidationError(url, f"Redirect to unsafe URL blocked: {final_url}")
+                raise SkillUrlValidationError(url, f"Redirect to unsafe URL blocked: {unsafe_hop}")
 
             if response.status_code >= 400:
                 raise SkillUrlValidationError(url, f"HTTP {response.status_code}")
@@ -643,13 +690,13 @@ async def _parse_skill_md_content(
                 fetch_url, headers=headers, follow_redirects=True, timeout=URL_VALIDATION_TIMEOUT
             )
 
-            # SSRF protection: validate final URL after redirects
-            final_url = str(response.url)
-            if final_url != str(raw_url) and not _is_safe_url(final_url):
+            # SSRF protection: validate every hop of a real redirect chain
+            unsafe_hop = _unsafe_redirect_target(response)
+            if unsafe_hop is not None:
                 logger.warning(
-                    f"SSRF protection: Blocked redirect from {redact_url(raw_url)} to unsafe URL {redact_url(final_url)}"
+                    f"SSRF protection: Blocked redirect from {redact_url(raw_url)} to unsafe URL {redact_url(unsafe_hop)}"
                 )
-                raise SkillUrlValidationError(url, f"Redirect to unsafe URL blocked: {final_url}")
+                raise SkillUrlValidationError(url, f"Redirect to unsafe URL blocked: {unsafe_hop}")
 
             if response.status_code >= 400:
                 raise SkillUrlValidationError(url, f"HTTP {response.status_code}")
@@ -839,17 +886,17 @@ async def _check_skill_health(
                 timeout=URL_VALIDATION_TIMEOUT,
             )
 
-            # SSRF protection: validate final URL after redirects
-            final_url = str(response.url)
-            if final_url != str(url) and not _is_safe_url(final_url):
+            # SSRF protection: validate every hop of a real redirect chain
+            unsafe_hop = _unsafe_redirect_target(response)
+            if unsafe_hop is not None:
                 logger.warning(
-                    f"SSRF protection: Blocked redirect from {redact_url(url)} to unsafe URL {redact_url(final_url)}"
+                    f"SSRF protection: Blocked redirect from {redact_url(url)} to unsafe URL {redact_url(unsafe_hop)}"
                 )
                 response_time_ms = (time.perf_counter() - start_time) * 1000
                 return {
                     "healthy": False,
                     "status_code": None,
-                    "error": f"Redirect to unsafe URL blocked: {final_url}",
+                    "error": f"Redirect to unsafe URL blocked: {unsafe_hop}",
                     "response_time_ms": round(response_time_ms, 2),
                 }
 
@@ -1031,9 +1078,9 @@ async def _fetch_authenticated_content(
                 timeout=timeout,
             )
 
-            final_url = str(response.url)
-            if final_url != fetch_url and not _is_safe_url(final_url):
-                raise SkillContentSSRFError(final_url)
+            unsafe_hop = _unsafe_redirect_target(response)
+            if unsafe_hop is not None:
+                raise SkillContentSSRFError(unsafe_hop)
 
             if response.status_code >= 400:
                 raise SkillContentFetchError(
