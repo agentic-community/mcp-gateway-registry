@@ -3,7 +3,7 @@ global:
   image:
     # Container registry (host + optional namespace). Shared default across subcharts.
     registry: public.ecr.aws/p3v1o3c6
-    tag: 1.29.0
+    tag: 1.30.0
     pullPolicy: IfNotPresent
 # Per-service image configuration
 # Any field left empty falls back to the corresponding global.image.* value.
@@ -353,7 +353,6 @@ metricsScrape:
       kubernetes.io/metadata.name: monitoring
     fromPodSelector:
       app.kubernetes.io/name: prometheus
-
 # Egress NetworkPolicy for the generic-proxy SSRF defense (LLD Step 7a layer 1).
 # This is the PRIMARY DNS-rebind control and a REQUIRED prerequisite before
 # enabling the generic proxy (registry chart's gatewayGenericProxyEnabled). It is
