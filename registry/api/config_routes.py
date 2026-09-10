@@ -378,7 +378,9 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
         "order": 21,
         "fields": [
             ("dedup_registration_hint_enabled", "UI Hint Enabled", False),
-            ("dedup_score_threshold", "Score Threshold", False),
+            ("dedup_score_threshold", "Score Threshold (override)", False),
+            ("effective_dedup_score_threshold", "Score Threshold (in force)", False),
+            ("dedup_threshold_source", "Score Threshold Source", False),
             ("dedup_max_suggestions", "Max Suggestions", False),
         ],
     },

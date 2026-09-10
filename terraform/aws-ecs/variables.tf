@@ -391,13 +391,13 @@ variable "dedup_registration_hint_enabled" {
 }
 
 variable "dedup_score_threshold" {
-  description = "Minimum cosine similarity (0.0..1.0) for an advisory match, measured after catalog boilerplate is stripped from the query and compared against the entity's indexed text. Default 0.45: measured on all-MiniLM-L6-v2 against real indexed documents, unrelated pairs land at 0.00-0.25 and genuine near-duplicates at 0.50-0.83."
+  description = "Minimum cosine similarity (0.0..1.0) for an advisory duplicate match. Leave null to use the default calibrated for the configured embeddings model: 0.45 for all-MiniLM-L6-v2, 0.85 for openai/text-embedding-ada-002, 0.6 for anything else. Cosine scales are model-specific, so a number tuned for one model is noise on another. Set a value only to override the per-model default."
   type        = number
-  default     = 0.45
+  default     = null
 
   validation {
-    condition     = var.dedup_score_threshold >= 0 && var.dedup_score_threshold <= 1
-    error_message = "dedup_score_threshold must be between 0.0 and 1.0."
+    condition     = var.dedup_score_threshold == null || (var.dedup_score_threshold >= 0 && var.dedup_score_threshold <= 1)
+    error_message = "dedup_score_threshold must be null or between 0.0 and 1.0."
   }
 }
 

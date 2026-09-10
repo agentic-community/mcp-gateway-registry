@@ -161,7 +161,10 @@ app:
   # check is advisory and never blocks registration.
   dedup:
     registrationHintEnabled: true # When true, registration UI pre-flights /check-duplicates and shows hint modal.
-    scoreThreshold: "0.45" # Minimum cosine similarity (0.0..1.0) for advisory matches, after boilerplate stripping.
+    # Empty: use the default calibrated for the embeddings model below
+    # (0.45 for all-MiniLM-L6-v2, 0.85 for text-embedding-ada-002).
+    # Set a value only to override it.
+    scoreThreshold: ""
     maxSuggestions: "3" # Cap on advisory suggestions per request.
   # OpenTelemetry direct OTLP push export configuration
   # Standard OTel SDK var. Setting this activates the OTLP push exporter (the

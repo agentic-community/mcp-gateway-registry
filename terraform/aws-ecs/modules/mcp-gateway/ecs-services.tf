@@ -1216,8 +1216,10 @@ module "ecs_service_registry" {
           value = tostring(var.dedup_registration_hint_enabled)
         },
         {
+          # Empty when unset: the registry then picks the default calibrated for
+          # the configured embeddings model rather than a global guess.
           name  = "DEDUP_SCORE_THRESHOLD"
-          value = tostring(var.dedup_score_threshold)
+          value = var.dedup_score_threshold == null ? "" : tostring(var.dedup_score_threshold)
         },
         {
           name  = "DEDUP_MAX_SUGGESTIONS"
