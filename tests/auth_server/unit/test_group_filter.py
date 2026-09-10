@@ -91,6 +91,42 @@ class TestFilterSessionGroups:
         assert result == ["a", "b"]
 
     @pytest.mark.asyncio
+    async def test_scope_derived_normalizes_leading_slash(self):
+        """Design C: a full-group-path IdP claim matches an unslashed mapping.
+
+        Keycloak's Group Membership mapper with "Full group path" enabled
+        emits '/mcp-admins' instead of 'mcp-admins'; scope mappings are seeded
+        without the leading slash, so the comparison must normalize both.
+        """
+        repo = _make_scope_repo({"registry-admins", "registry-readonly"})
+        with patch.object(group_filter, "ALLOWED_IDP_GROUPS", []):
+            with patch(
+                "registry.repositories.factory.get_scope_repository",
+                return_value=repo,
+            ):
+                result = await group_filter.filter_session_groups(
+                    ["/registry-admins", "some-other-group"],
+                    username_hash="h",
+                )
+        assert result == ["registry-admins"]
+
+    @pytest.mark.asyncio
+    async def test_allowlist_mode_normalizes_leading_slash(self):
+        """Design B: the allowlist comparison also normalizes leading slashes."""
+        repo = _make_scope_repo({"should-not-be-used"})
+        with patch.object(group_filter, "ALLOWED_IDP_GROUPS", ["keep-a", "keep-b"]):
+            with patch(
+                "registry.repositories.factory.get_scope_repository",
+                return_value=repo,
+            ) as mock_get_repo:
+                result = await group_filter.filter_session_groups(
+                    ["/keep-a", "drop-x"],
+                    username_hash="h",
+                )
+        assert result == ["keep-a"]
+        mock_get_repo.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_identifier_mismatch_stores_empty(self):
         """Mappings keyed by names but token emits GUIDs -> empty intersection.
 
