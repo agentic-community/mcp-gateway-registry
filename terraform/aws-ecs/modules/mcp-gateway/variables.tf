@@ -411,7 +411,7 @@ variable "dedup_score_threshold" {
   type        = number
   default     = null
   validation {
-    condition     = var.dedup_score_threshold == null || (var.dedup_score_threshold >= 0.0 && var.dedup_score_threshold <= 1.0)
+    condition     = coalesce(var.dedup_score_threshold, 0.0) >= 0.0 && coalesce(var.dedup_score_threshold, 0.0) <= 1.0
     error_message = "dedup_score_threshold must be null or between 0.0 and 1.0."
   }
 }
