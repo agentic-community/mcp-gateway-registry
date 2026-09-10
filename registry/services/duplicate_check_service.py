@@ -85,6 +85,7 @@ _SIMILARITY_OVERFETCH_FACTOR: int = 10
 # distinguishing signal for similarity.
 _QUERY_TEXT_CHAR_CAP: int = 500
 
+
 # A query must carry at least this many distinct tokens, after
 # boilerplate stripping, before it is embedded. A one-token query cannot
 # clear any usable threshold against a document that has a description
@@ -128,6 +129,43 @@ class DuplicateCheckService:
             ENTITY_TYPE_AGENT: get_agent_repository(),
             ENTITY_TYPE_SKILL: get_skill_repository(),
         }
+        self._log_threshold_resolution()
+
+    def _log_threshold_resolution(self) -> None:
+        """State which threshold is in force and where it came from.
+
+        Silent mis-calibration is the failure mode worth naming: the advisory
+        keeps answering, and on an uncalibrated model every answer is noise.
+        """
+        source = self._settings.dedup_threshold_source
+        threshold = self._settings.effective_dedup_score_threshold
+        model = self._settings.embeddings_model_name or "(unset)"
+        if source == "configured":
+            logger.info(
+                "Duplicate-check threshold %.2f from DEDUP_SCORE_THRESHOLD (embeddings model: %s).",
+                threshold,
+                model,
+            )
+        elif source.startswith("model-default"):
+            logger.info(
+                "Duplicate-check threshold %.2f: no DEDUP_SCORE_THRESHOLD "
+                "configured, using the default calibrated for embeddings model "
+                "%s.",
+                threshold,
+                model,
+            )
+        else:
+            logger.warning(
+                "Duplicate-check threshold %.2f: no DEDUP_SCORE_THRESHOLD "
+                "configured and no calibrated default for embeddings model %s, "
+                "so falling back to a generic value. Cosine scales differ per "
+                "model, so calibrate against your own catalog: check a known "
+                "duplicate and an unrelated entity, read the 'top cosine' this "
+                "service logs for each, and set DEDUP_SCORE_THRESHOLD between "
+                "the two bands.",
+                threshold,
+                model,
+            )
 
     async def check(
         self,
@@ -163,7 +201,7 @@ class DuplicateCheckService:
             A :class:`DuplicateCheckResult`. The route layer wraps
             this in a 200 envelope; there is no 4xx path.
         """
-        threshold = self._settings.dedup_score_threshold
+        threshold = self._settings.effective_dedup_score_threshold
 
         collisions = await self._find_exact_match_collisions(
             identity_url=identity_url,
@@ -336,7 +374,7 @@ class DuplicateCheckService:
         position in a result list, so the best hit carries the top value
         even when nothing in the registry is remotely similar.
         """
-        threshold = self._settings.dedup_score_threshold
+        threshold = self._settings.effective_dedup_score_threshold
         max_suggestions = self._settings.dedup_max_suggestions
         query = self._build_query_text(name, description)
         if not query:

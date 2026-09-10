@@ -22,8 +22,11 @@ def _build_service(
     skill_match: dict | None = None,
     search_results: dict | None = None,
     search_raises: Exception | None = None,
-    threshold: float = 0.7,
+    threshold: float | None = 0.7,
     max_suggestions: int = 3,
+    embeddings_model: str = "all-MiniLM-L6-v2",
+    effective_threshold: float | None = None,
+    threshold_source: str = "configured",
 ) -> DuplicateCheckService:
     """Construct a service with stubbed-out dependencies.
 
@@ -66,6 +69,11 @@ def _build_service(
     fake_settings = MagicMock()
     fake_settings.dedup_score_threshold = threshold
     fake_settings.dedup_max_suggestions = max_suggestions
+    fake_settings.embeddings_model_name = embeddings_model
+    fake_settings.effective_dedup_score_threshold = (
+        effective_threshold if effective_threshold is not None else threshold
+    )
+    fake_settings.dedup_threshold_source = threshold_source
     monkeypatch.setattr(
         "registry.services.duplicate_check_service.settings",
         fake_settings,
@@ -1057,3 +1065,73 @@ class TestDegradedSimilarityIsReported:
 
         assert [m.path for m in result.advisory_matches] == ["/scored"]
         assert result.similarity_search_available is True
+
+
+class TestThresholdResolution:
+    """The threshold is model-specific, so its source must be visible.
+
+    Measured on one corpus: all-MiniLM-L6-v2 puts unrelated pairs at 0.00-0.25
+    and genuine duplicates at 0.50-0.83, while openai/text-embedding-ada-002
+    puts unrelated pairs at 0.73-0.78 and duplicates at 0.83-0.92. Running one
+    model's number on the other advises the cap on every registration.
+    """
+
+    def test_model_default_is_logged_when_nothing_is_configured(self, monkeypatch, caplog) -> None:
+        with caplog.at_level("INFO", logger="registry.services.duplicate_check_service"):
+            _build_service(
+                monkeypatch,
+                threshold=None,
+                embeddings_model="openai/text-embedding-ada-002",
+                effective_threshold=0.85,
+                threshold_source="model-default:text-embedding-ada-002",
+            )
+
+        assert "no DEDUP_SCORE_THRESHOLD configured" in caplog.text
+        assert "0.85" in caplog.text
+
+    def test_configured_value_is_logged_as_such(self, monkeypatch, caplog) -> None:
+        with caplog.at_level("INFO", logger="registry.services.duplicate_check_service"):
+            _build_service(
+                monkeypatch,
+                threshold=0.9,
+                effective_threshold=0.9,
+                threshold_source="configured",
+            )
+
+        assert "from DEDUP_SCORE_THRESHOLD" in caplog.text
+
+    def test_uncalibrated_model_warns(self, monkeypatch, caplog) -> None:
+        """A model we have not measured must not fail quietly."""
+        with caplog.at_level("WARNING", logger="registry.services.duplicate_check_service"):
+            _build_service(
+                monkeypatch,
+                threshold=None,
+                embeddings_model="cohere/embed-english-v3.0",
+                effective_threshold=0.6,
+                threshold_source="unknown-model-default",
+            )
+
+        assert "no calibrated default" in caplog.text
+        assert "cohere/embed-english-v3.0" in caplog.text
+
+
+@pytest.mark.asyncio
+class TestEffectiveThresholdGates:
+    async def test_advisory_gates_on_the_effective_threshold(self, monkeypatch) -> None:
+        """The request path must read the resolved value, not the raw field."""
+        service = _build_service(
+            monkeypatch,
+            threshold=None,
+            effective_threshold=0.85,
+            threshold_source="model-default:text-embedding-ada-002",
+            search_results={
+                "servers": [
+                    {"path": "/high", "server_name": "H", "similarity_score": 0.9},
+                    {"path": "/low", "server_name": "L", "similarity_score": 0.8},
+                ]
+            },
+        )
+        result = await service.check(
+            **_check_kwargs(name="topic extractor", description="Extracts topics.")
+        )
+        assert [m.path for m in result.advisory_matches] == ["/high"]

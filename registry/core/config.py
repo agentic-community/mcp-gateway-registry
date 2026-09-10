@@ -128,6 +128,29 @@ ALLOWED_SECRET_STORES: frozenset[str] = frozenset(
 # Issue #1477.
 MCP_TOKEN_ABSOLUTE_MAX_TTL_HOURS: int = 168
 
+# Advisory duplicate-check thresholds, per embeddings model. Cosine scales are
+# model-specific and not comparable, so one number cannot serve every model:
+# measured against the same corpus, all-MiniLM-L6-v2 puts unrelated pairs at
+# 0.00-0.25 and genuine duplicates at 0.50-0.83, while
+# openai/text-embedding-ada-002 puts unrelated pairs at 0.73-0.78 (gibberish
+# still scores 0.736) and genuine duplicates at 0.83-0.92. Running MiniLM's
+# number on ada-002 sits below its noise floor and advises
+# dedup_max_suggestions unrelated entries on every registration, which is the
+# symptom issue #1696 reported.
+#
+# Keys are matched as case-insensitive substrings of EMBEDDINGS_MODEL_NAME, so
+# a provider prefix ('openai/text-embedding-ada-002') still resolves.
+# DEDUP_SCORE_THRESHOLD overrides all of this when set.
+DEDUP_THRESHOLD_BY_EMBEDDINGS_MODEL: dict[str, float] = {
+    "all-minilm-l6-v2": 0.45,
+    "text-embedding-ada-002": 0.85,
+}
+
+# Used when no threshold is configured and the model is not one we have
+# measured. Deliberately mid-scale: an uncalibrated model can place unrelated
+# pairs anywhere, and a too-low guess is the noisy failure, not the quiet one.
+DEDUP_THRESHOLD_UNKNOWN_MODEL_DEFAULT: float = 0.6
+
 
 class DeploymentMode(str, Enum):
     """Deployment mode options."""
@@ -1546,28 +1569,74 @@ class Settings(BaseSettings):
             "service themselves remain available regardless."
         ),
     )
-    dedup_score_threshold: float = Field(
-        default=0.45,
+    dedup_score_threshold: float | None = Field(
+        default=None,
         ge=0.0,
         le=1.0,
         description=(
-            "Minimum cosine similarity (0..1) for an advisory match. The "
-            "query is the incoming name plus description with catalog "
-            "boilerplate ('mcp', 'server', 'skill', ...) stripped; it is "
-            "compared against each candidate's indexed text, which is not "
-            "stripped and also carries tags and metadata. That asymmetry "
-            "pulls scores down, so the default is calibrated against real "
-            "indexed documents on all-MiniLM-L6-v2: unrelated pairs land at "
-            "0.00-0.25, genuine near-duplicates at 0.50-0.83, and two "
-            "entries with identical name and description at 0.60."
+            "Minimum cosine similarity (0..1) for an advisory match. Leave "
+            "unset to take the default calibrated for the configured "
+            "embeddings model (see DEDUP_THRESHOLD_BY_EMBEDDINGS_MODEL); a "
+            "value here overrides that. Cosine scales are not comparable "
+            "across models, which is why there is no single sensible number: "
+            "on all-MiniLM-L6-v2 unrelated pairs land at 0.00-0.25 and "
+            "genuine duplicates at 0.50-0.83, while on "
+            "openai/text-embedding-ada-002 the same corpus puts unrelated "
+            "pairs at 0.73-0.78 and genuine duplicates at 0.83-0.92. Read "
+            "the effective value from effective_dedup_score_threshold."
         ),
     )
+
     dedup_max_suggestions: int = Field(
         default=3,
         ge=1,
         le=10,
         description="Cap on the number of duplicate suggestions returned.",
     )
+
+    @field_validator("dedup_score_threshold", mode="before")
+    @classmethod
+    def _empty_threshold_is_unset(cls, v: object) -> object:
+        """Treat a blank value as unset rather than as a parse error.
+
+        Every deployment surface passes this through a template
+        (``${DEDUP_SCORE_THRESHOLD:-}`` on Compose, ``tostring(null)`` on
+        Terraform, ``"" | b64enc`` on Helm), so "not configured" arrives as an
+        empty string rather than an absent variable.
+        """
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
+
+    @property
+    def effective_dedup_score_threshold(self) -> float:
+        """Resolved advisory threshold: operator value, else per-model default.
+
+        Resolution order, which :meth:`dedup_threshold_source` reports for
+        logging: an explicit ``DEDUP_SCORE_THRESHOLD`` wins; otherwise the
+        default calibrated for the configured embeddings model; otherwise
+        ``DEDUP_THRESHOLD_UNKNOWN_MODEL_DEFAULT``, which is deliberately
+        conservative because an uncalibrated model can put unrelated pairs
+        anywhere.
+        """
+        if self.dedup_score_threshold is not None:
+            return self.dedup_score_threshold
+        model = (self.embeddings_model_name or "").lower()
+        for fragment, threshold in DEDUP_THRESHOLD_BY_EMBEDDINGS_MODEL.items():
+            if fragment in model:
+                return threshold
+        return DEDUP_THRESHOLD_UNKNOWN_MODEL_DEFAULT
+
+    @property
+    def dedup_threshold_source(self) -> str:
+        """Where :attr:`effective_dedup_score_threshold` came from."""
+        if self.dedup_score_threshold is not None:
+            return "configured"
+        model = (self.embeddings_model_name or "").lower()
+        for fragment in DEDUP_THRESHOLD_BY_EMBEDDINGS_MODEL:
+            if fragment in model:
+                return f"model-default:{fragment}"
+        return "unknown-model-default"
 
     # Storage Backend Configuration
     storage_backend: str = Field(

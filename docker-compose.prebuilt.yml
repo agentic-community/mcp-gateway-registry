@@ -298,7 +298,10 @@ services:
       - ALLOW_CALLER_SUPPLIED_ASSET_ID=${ALLOW_CALLER_SUPPLIED_ASSET_ID:-false}
       # Registration duplicate-check advisory (Issue #1696)
       - DEDUP_REGISTRATION_HINT_ENABLED=${DEDUP_REGISTRATION_HINT_ENABLED:-true}
-      - DEDUP_SCORE_THRESHOLD=${DEDUP_SCORE_THRESHOLD:-0.45}
+      # Unset by default: the registry picks the threshold calibrated for the
+      # configured embeddings model (0.45 for all-MiniLM-L6-v2, 0.85 for
+      # text-embedding-ada-002). Set a value only to override that.
+      - DEDUP_SCORE_THRESHOLD=${DEDUP_SCORE_THRESHOLD:-}
       - DEDUP_MAX_SUGGESTIONS=${DEDUP_MAX_SUGGESTIONS:-3}
       # Registration Gate (Admission Control)
       - REGISTRATION_GATE_ENABLED=${REGISTRATION_GATE_ENABLED:-false}

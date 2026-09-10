@@ -370,7 +370,13 @@ oauth2_allowed_redirect_uris = ""
 # shown below — uncomment only to override.
 #
 # dedup_registration_hint_enabled = true
-# dedup_score_threshold           = 0.45
+# dedup_score_threshold: LEAVE COMMENTED OUT unless calibrated. Cosine scales
+# are model-specific, so the registry picks the value measured for your
+# embeddings model: 0.45 for all-MiniLM-L6-v2, 0.85 for
+# openai/text-embedding-ada-002, 0.60 for anything else (logged as a warning).
+# On ada-002, 0.45 is below the noise floor and advises unrelated entries on
+# every registration.
+# dedup_score_threshold           = 0.85
 # dedup_max_suggestions           = 3
 
 # ============================================================================
