@@ -340,9 +340,15 @@ class DuplicateCheckService:
         max_suggestions = self._settings.dedup_max_suggestions
         query = self._build_query_text(name, description)
         if not query:
-            # Every token was catalog boilerplate, so there is nothing
-            # left to compare. Reported as available: the check ran and
-            # found nothing, the backend is fine.
+            # Nothing survived stripping, or the caller sent no text at all.
+            # Reported as available: the check ran, the backend is fine.
+            # Logged because an operator asking "why did this registration get
+            # no hint" would otherwise see no trace of the decision.
+            logger.info(
+                "Duplicate-check similarity skipped: no comparable text left "
+                "after boilerplate stripping (name=%r).",
+                name,
+            )
             return [], True
 
         token_count = distinct_token_count(query)

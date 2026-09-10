@@ -978,13 +978,16 @@ class TestBoilerplateStrippingAndThinQueries:
         assert result.similarity_search_available is True
         service._semantic_search_service.search.assert_not_awaited()
 
-    async def test_all_boilerplate_name_is_not_embedded(self, monkeypatch) -> None:
+    async def test_all_boilerplate_name_is_not_embedded(self, monkeypatch, caplog) -> None:
         service = _build_service(monkeypatch, search_results={})
-        result = await service.check(**_check_kwargs(name="mcp-server-tools"))
+        with caplog.at_level("INFO", logger="registry.services.duplicate_check_service"):
+            result = await service.check(**_check_kwargs(name="mcp-server-tools"))
 
         assert result.advisory_matches == []
         assert result.similarity_search_available is True
         service._semantic_search_service.search.assert_not_awaited()
+        # An operator asking why a registration got no hint needs a trace of it.
+        assert "no comparable text left" in caplog.text
 
     async def test_two_meaningful_tokens_still_search(self, monkeypatch) -> None:
         """The guard refuses thin text, not short text."""

@@ -4,7 +4,10 @@
   "description": "Intelligent test automation agent that generates, executes, and manages test cases. Supports unit tests, integration tests, and end-to-end test scenarios",
   "url": "https://example.com/agents/test-automation",
   "version": "1.8.2",
-  "provider": "Quality Assurance Labs",
+  "provider": {
+    "organization": "Quality Assurance Labs",
+    "url": "https://example.com"
+  },
   "path": "/test-automation",
   "tags": "testing,automation,qa,test-generation",
   "is_enabled": true,
@@ -190,5 +193,6 @@
     ],
     "concurrent_tests": 8,
     "test_history_days": 90
-  }
+  },
+  "supportedProtocol": "a2a"
 }

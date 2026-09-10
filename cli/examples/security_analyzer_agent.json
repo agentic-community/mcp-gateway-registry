@@ -4,7 +4,10 @@
   "description": "Comprehensive security analysis agent for vulnerability detection, penetration testing, and compliance checking. Identifies security risks and recommends mitigations",
   "url": "https://example.com/agents/security-analyzer",
   "version": "2.5.0",
-  "provider": "CyberSec Corp",
+  "provider": {
+    "organization": "CyberSec Corp",
+    "url": "https://example.com"
+  },
   "path": "/security-analyzer",
   "tags": "security,vulnerability-detection,compliance,penetration-testing",
   "is_enabled": true,
@@ -239,5 +242,6 @@
     ],
     "reporting_templates": 12,
     "updates_frequency": "daily"
-  }
+  },
+  "supportedProtocol": "a2a"
 }

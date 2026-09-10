@@ -57,7 +57,10 @@
     }
   ],
   "preferredTransport": "JSONRPC",
-  "provider": "Example Corp",
+  "provider": {
+    "organization": "Example Corp",
+    "url": "https://example.com"
+  },
   "securitySchemes": {
     "bearer_auth": {
       "type": "http",
@@ -86,5 +89,6 @@
   "numStars": 42,
   "license": "MIT",
   "visibility": "public",
-  "trustLevel": "verified"
+  "trustLevel": "verified",
+  "supportedProtocol": "a2a"
 }

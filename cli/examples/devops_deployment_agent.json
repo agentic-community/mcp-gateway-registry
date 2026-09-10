@@ -4,7 +4,10 @@
   "description": "DevOps automation agent for infrastructure management, deployment orchestration, and continuous integration/deployment pipeline management across multiple cloud platforms",
   "url": "https://example.com/agents/devops-deployment",
   "version": "2.3.0",
-  "provider": "CloudOps Inc",
+  "provider": {
+    "organization": "CloudOps Inc",
+    "url": "https://example.com"
+  },
   "path": "/devops-deployment",
   "tags": "devops,deployment,infrastructure,ci-cd,cloud",
   "is_enabled": true,
@@ -317,5 +320,6 @@
     ],
     "sla_uptime_percent": 99.95,
     "deployment_speed_seconds": 120
-  }
+  },
+  "supportedProtocol": "a2a"
 }

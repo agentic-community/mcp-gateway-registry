@@ -36,5 +36,6 @@
     "url": "https://godaddy.com"
   },
   "visibility": "public",
-  "ans_agent_id": "ans://v1.0.0.support-c17fedfd-13da-4026-87f5-d3c78b3f6f95.helpagent.club"
+  "ans_agent_id": "ans://v1.0.0.support-c17fedfd-13da-4026-87f5-d3c78b3f6f95.helpagent.club",
+  "supportedProtocol": "a2a"
 }
