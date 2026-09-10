@@ -370,7 +370,7 @@ oauth2_allowed_redirect_uris = ""
 # shown below — uncomment only to override.
 #
 # dedup_registration_hint_enabled = true
-# dedup_score_threshold           = 0.7
+# dedup_score_threshold           = 0.6
 # dedup_max_suggestions           = 3
 
 # ============================================================================

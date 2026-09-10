@@ -299,9 +299,11 @@ def _attach_similarity_scores(
     real similarity. Callers that need an absolute "how alike are these"
     number, rather than "what came first", read ``similarity_score``.
 
-    Hits are matched to their source document by ``path``. Entries without
-    one (tools extracted from a parent server) are left untouched, as are
-    all entries when the query could not be embedded.
+    Hits are matched to their source document by ``path``, which the search
+    collection also uses as ``_id``, so it is unique across entity types.
+    Tool entries lifted out of a parent server carry ``server_path`` rather
+    than ``path`` and are left untouched, as are all entries when the query
+    could not be embedded.
     """
     if not query_embedding:
         return

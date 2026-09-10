@@ -249,8 +249,8 @@ class TestServerCheckDuplicatesEndpoint:
             response = client.post(
                 "/servers/check-duplicates",
                 json={
-                    "name": "New Server",
-                    "description": "Server",
+                    "name": "New Payroll Server",
+                    "description": "Runs payroll for the finance team.",
                     "proxy_pass_url": "https://api.example.com/mcp",
                 },
             )

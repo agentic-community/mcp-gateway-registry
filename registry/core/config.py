@@ -1547,13 +1547,17 @@ class Settings(BaseSettings):
         ),
     )
     dedup_score_threshold: float = Field(
-        default=0.7,
+        default=0.6,
         ge=0.0,
         le=1.0,
         description=(
             "Minimum cosine similarity (0..1) between the incoming entity's "
             "name plus description and an existing one's for an advisory "
-            "match to be returned."
+            "match to be returned. Compared against the similarity of the "
+            "text left after catalog boilerplate ('mcp', 'server', 'skill', "
+            "...) is stripped. Calibrated on all-MiniLM-L6-v2, where "
+            "unrelated pairs measure 0.07-0.37 and true duplicates "
+            "0.71-0.87."
         ),
     )
     dedup_max_suggestions: int = Field(

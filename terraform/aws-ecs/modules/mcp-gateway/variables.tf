@@ -407,9 +407,9 @@ variable "dedup_registration_hint_enabled" {
 }
 
 variable "dedup_score_threshold" {
-  description = "Minimum similarity score (0.0..1.0) for an advisory match. Default 0.7."
+  description = "Minimum cosine similarity (0.0..1.0) for an advisory match, after boilerplate stripping. Default 0.6."
   type        = number
-  default     = 0.7
+  default     = 0.6
   validation {
     condition     = var.dedup_score_threshold >= 0.0 && var.dedup_score_threshold <= 1.0
     error_message = "dedup_score_threshold must be between 0.0 and 1.0."
