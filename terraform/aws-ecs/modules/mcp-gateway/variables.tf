@@ -407,9 +407,9 @@ variable "dedup_registration_hint_enabled" {
 }
 
 variable "dedup_score_threshold" {
-  description = "Minimum cosine similarity (0.0..1.0) for an advisory match, after boilerplate stripping. Default 0.6."
+  description = "Minimum cosine similarity (0.0..1.0) for an advisory match, measured after catalog boilerplate is stripped from the query and compared against the entity's indexed text. Default 0.45: measured on all-MiniLM-L6-v2 against real indexed documents, unrelated pairs land at 0.00-0.25 and genuine near-duplicates at 0.50-0.83."
   type        = number
-  default     = 0.6
+  default     = 0.45
   validation {
     condition     = var.dedup_score_threshold >= 0.0 && var.dedup_score_threshold <= 1.0
     error_message = "dedup_score_threshold must be between 0.0 and 1.0."

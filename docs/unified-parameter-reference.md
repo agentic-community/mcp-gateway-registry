@@ -581,7 +581,7 @@ Two independent checks run per call on `POST /api/{servers|agents|skills}/check-
 | Parameter | Docker (`.env`) | Terraform (`.tfvars`) | Helm (`values.yaml`) | Purpose |
 |-----------|-----------------|-----------------------|----------------------|---------|
 | UI hint enabled | `DEDUP_REGISTRATION_HINT_ENABLED` | `dedup_registration_hint_enabled` | `registry.app.dedup.registrationHintEnabled` | Whether the registration form pre-flights the check and renders the hint modal. Default `true`. The endpoints stay available either way, so CLI, CI, and federation callers are unaffected. |
-| Score threshold | `DEDUP_SCORE_THRESHOLD` | `dedup_score_threshold` | `registry.app.dedup.scoreThreshold` | Minimum cosine similarity (0.0..1.0) for a candidate to surface. Default `0.6`. Calibrated on `all-MiniLM-L6-v2`, where unrelated pairs measure 0.07-0.37 and true duplicates 0.71-0.87. Raise toward 1.0 for precision, lower for recall. |
+| Score threshold | `DEDUP_SCORE_THRESHOLD` | `dedup_score_threshold` | `registry.app.dedup.scoreThreshold` | Minimum cosine similarity (0.0..1.0) for a candidate to surface. Default `0.45`. The stripped query is compared against each candidate's *indexed* text, which keeps its boilerplate and also carries tags and metadata; that asymmetry pulls scores down. Measured on `all-MiniLM-L6-v2` against real indexed documents: unrelated pairs 0.00-0.25, genuine near-duplicates 0.50-0.83, two entries with identical name and description 0.60. Raise toward 1.0 for precision, lower for recall. |
 | Max suggestions | `DEDUP_MAX_SUGGESTIONS` | `dedup_max_suggestions` | `registry.app.dedup.maxSuggestions` | Cap on advisory suggestions returned per request, across all entity types. Default `3`. |
 
 ---
