@@ -166,8 +166,8 @@ class TestBothChecksRunIndependently:
         )
         result = await service.check(
             **_check_kwargs(
-                name="My Server",
-                description="...",
+                name="My Payroll Server",
+                description="Runs payroll for the finance team.",
                 identity_url="https://api.example.com/mcp",
             )
         )
@@ -637,11 +637,12 @@ class TestQueryComposition:
         assert result.advisory_matches == []
         assert result.similarity_search_available is True
 
-    async def test_query_combines_name_and_description(self, monkeypatch) -> None:
+    async def test_query_strips_boilerplate_from_name_and_description(self, monkeypatch) -> None:
+        """'Tools' and 'API' describe the kind of thing, not what it does."""
         service = _build_service(monkeypatch, search_results={"servers": []})
         await service.check(**_check_kwargs(name="Github Tools", description="Wraps gh API"))
         called_kwargs = service._semantic_search_service.search.await_args.kwargs
-        assert called_kwargs["query"] == "Github Tools Wraps gh API"
+        assert called_kwargs["query"] == "github wraps gh"
 
     async def test_long_description_is_truncated_before_search(self, monkeypatch) -> None:
         """Bound the per-call cost of long descriptions.
@@ -660,8 +661,9 @@ class TestQueryComposition:
         called_kwargs = service._semantic_search_service.search.await_args.kwargs
         query = called_kwargs["query"]
         assert len(query) == _QUERY_TEXT_CHAR_CAP
-        # The leading portion (name + space + start of description) is preserved.
-        assert query.startswith("N x")
+        # The leading portion (name + space + start of description) survives
+        # stripping, lowercased.
+        assert query.startswith("n x")
 
 
 @pytest.mark.asyncio
@@ -925,3 +927,130 @@ class TestAdvisoryThresholdReadsAbsoluteSimilarity:
         )
         result = await service.check(**_check_kwargs(name="X", description="Y"))
         assert result.advisory_matches == []
+
+
+@pytest.mark.asyncio
+class TestBoilerplateStrippingAndThinQueries:
+    """Catalog boilerplate must not reach the embedder (issue #1696).
+
+    Every registry name carries tokens like ``mcp`` and ``server``. On a
+    short name they fill most of the string and carry most of the cosine:
+    ``topic-mcp-server`` and ``category-mcp-server`` measure 0.76 similar
+    on the shared suffix alone, and 0.47 once it is stripped.
+    """
+
+    @staticmethod
+    def _query_sent(service) -> str:
+        return service._semantic_search_service.search.await_args.kwargs["query"]
+
+    async def test_boilerplate_is_stripped_before_embedding(self, monkeypatch) -> None:
+        service = _build_service(monkeypatch, search_results={})
+        await service.check(
+            **_check_kwargs(
+                name="topic-mcp-server",
+                description="Extracts discussion topics from a transcript.",
+            )
+        )
+        assert self._query_sent(service) == ("topic extracts discussion topics from a transcript")
+
+    async def test_reported_pair_never_reaches_the_backend(self, monkeypatch) -> None:
+        """The case from #1696: a bare name with no description.
+
+        After stripping, `topic-mcp-server` is the single token `topic`,
+        which cannot clear any usable threshold against a described entry.
+        The search call is skipped rather than spent.
+        """
+        service = _build_service(
+            monkeypatch,
+            search_results={
+                "servers": [
+                    {
+                        "path": "/category",
+                        "server_name": "category-mcp-server",
+                        "similarity_score": 0.7621,
+                    }
+                ]
+            },
+        )
+        result = await service.check(**_check_kwargs(name="topic-mcp-server"))
+
+        assert result.advisory_matches == []
+        assert result.similarity_search_available is True
+        service._semantic_search_service.search.assert_not_awaited()
+
+    async def test_all_boilerplate_name_is_not_embedded(self, monkeypatch) -> None:
+        service = _build_service(monkeypatch, search_results={})
+        result = await service.check(**_check_kwargs(name="mcp-server-tools"))
+
+        assert result.advisory_matches == []
+        assert result.similarity_search_available is True
+        service._semantic_search_service.search.assert_not_awaited()
+
+    async def test_two_meaningful_tokens_still_search(self, monkeypatch) -> None:
+        """The guard refuses thin text, not short text."""
+        service = _build_service(
+            monkeypatch,
+            search_results={
+                "servers": [
+                    {
+                        "path": "/topics",
+                        "server_name": "topic-extractor-mcp-server",
+                        "similarity_score": 0.93,
+                    }
+                ]
+            },
+        )
+        result = await service.check(**_check_kwargs(name="topic-extractor-mcp-server"))
+
+        assert self._query_sent(service) == "topic extractor"
+        assert [m.path for m in result.advisory_matches] == ["/topics"]
+
+
+@pytest.mark.asyncio
+class TestDegradedSimilarityIsReported:
+    """A keyword-only fallback must not read as "nothing similar exists".
+
+    When the embedder is unreachable the search backend answers with
+    lexical hits that carry no similarity. The advisory has to say the
+    check did not run, because the frontend keys its degraded-mode notice
+    off ``similarity_search_available``.
+    """
+
+    async def test_hits_without_any_similarity_report_unavailable(self, monkeypatch) -> None:
+        service = _build_service(
+            monkeypatch,
+            search_results={
+                "servers": [
+                    {"path": "/lexical-one", "server_name": "One", "relevance_score": 1.0},
+                    {"path": "/lexical-two", "server_name": "Two", "relevance_score": 0.8},
+                ]
+            },
+        )
+        result = await service.check(**_check_kwargs(name="topic extractor"))
+
+        assert result.advisory_matches == []
+        assert result.similarity_search_available is False
+
+    async def test_no_hits_at_all_still_reports_available(self, monkeypatch) -> None:
+        """An empty result set means the registry holds nothing alike, not an outage."""
+        service = _build_service(monkeypatch, search_results={"servers": []})
+        result = await service.check(**_check_kwargs(name="topic extractor"))
+
+        assert result.advisory_matches == []
+        assert result.similarity_search_available is True
+
+    async def test_partial_scoring_drops_the_unscored_hit(self, monkeypatch) -> None:
+        """One scored hit proves the embedder answered; unscored hits are still dropped."""
+        service = _build_service(
+            monkeypatch,
+            search_results={
+                "servers": [
+                    {"path": "/scored", "server_name": "S", "similarity_score": 0.91},
+                    {"path": "/unscored", "server_name": "U", "relevance_score": 1.0},
+                ]
+            },
+        )
+        result = await service.check(**_check_kwargs(name="topic extractor"))
+
+        assert [m.path for m in result.advisory_matches] == ["/scored"]
+        assert result.similarity_search_available is True

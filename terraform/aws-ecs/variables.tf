@@ -391,9 +391,9 @@ variable "dedup_registration_hint_enabled" {
 }
 
 variable "dedup_score_threshold" {
-  description = "Minimum similarity score (0.0..1.0) for an advisory match. Raise toward 1.0 for higher precision."
+  description = "Minimum cosine similarity (0.0..1.0) for an advisory match, measured after catalog boilerplate is stripped from the query. Raise toward 1.0 for higher precision."
   type        = number
-  default     = 0.7
+  default     = 0.6
 
   validation {
     condition     = var.dedup_score_threshold >= 0 && var.dedup_score_threshold <= 1
