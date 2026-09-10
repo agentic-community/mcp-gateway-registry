@@ -576,6 +576,8 @@ Used by `registry` and `mcpgw` services.
 
 Advisory check that surfaces likely-duplicate servers, agents, and skills when a user registers a new one. Reuses the embedding model from Group 20 — the query embedder and the persisted-corpus embedder must be the same model for cosine scores to be meaningful. Used by the `registry` service only. The check never blocks registration.
 
+The registration UI pre-flights this, and so does the CLI: `registry_management.py check-duplicates` runs it standalone, while `register`, `agent-register`, and `skill-register` pre-flight it and report what they find before submitting (`--fail-on-duplicate` gates CI, `--skip-duplicate-check` opts out). `POST /register` itself never consults it — the feature stays advisory.
+
 Two independent checks run per call on `POST /api/{servers|agents|skills}/check-duplicates`: an exact identity-URL lookup (`collision_with`) and a similarity advisory (`advisory_matches`). The advisory is gated on the cosine similarity between the two texts, measured after catalog boilerplate (`mcp`, `server`, `tool`, `skill`, `agent`, `api`, `service`) is stripped from the query. A query left with fewer than two distinct tokens is not embedded at all.
 
 | Parameter | Docker (`.env`) | Terraform (`.tfvars`) | Helm (`values.yaml`) | Purpose |

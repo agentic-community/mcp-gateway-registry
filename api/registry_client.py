@@ -1810,6 +1810,7 @@ class RegistryClient:
             or "/versions" in endpoint
             or "/egress-auth" in endpoint
             or "/egress-pat" in endpoint
+            or "/check-duplicates" in endpoint
             # The server rate endpoint (POST /api/servers/{path}/rate) takes a
             # JSON RatingRequest body, not form data.
             or endpoint.endswith("/rate")
@@ -1838,6 +1839,57 @@ class RegistryClient:
                     logger.warning(f"Could not parse 422 error response as JSON: {e}")
             raise
         return response
+
+    def check_duplicates(
+        self,
+        entity_type: str,
+        name: str,
+        description: str | None = None,
+        identity_url: str | None = None,
+        self_path: str | None = None,
+    ) -> dict[str, Any]:
+        """Ask the registry whether a registration would duplicate an existing entity.
+
+        Advisory only: the registry never blocks a registration on the result,
+        and neither does this method. Two independent checks come back in one
+        envelope — ``collision_with`` for an exact identity-URL match (the
+        strong signal) and ``advisory_matches`` for semantic similarity above
+        the configured threshold.
+
+        Args:
+            entity_type: ``server``, ``agent``, or ``skill``.
+            name: Proposed entity name.
+            description: Proposed description; sharpens the similarity half.
+            identity_url: The URL that identifies the entity — ``proxy_pass_url``
+                for a server, ``url`` for an agent, ``skill_md_url`` for a skill.
+            self_path: Path to exclude, so editing an entity does not match itself.
+
+        Returns:
+            The ``DuplicateCheckResult`` envelope as a dict.
+
+        Raises:
+            ValueError: If ``entity_type`` is not one of the three.
+            requests.HTTPError: If the request fails.
+        """
+        url_field = {
+            "server": "proxy_pass_url",
+            "agent": "url",
+            "skill": "skill_md_url",
+        }.get(entity_type)
+        if url_field is None:
+            raise ValueError(f"entity_type must be server, agent, or skill (got {entity_type!r})")
+
+        payload: dict[str, Any] = {"name": name}
+        if description:
+            payload["description"] = description
+        if identity_url:
+            payload[url_field] = identity_url
+        if self_path:
+            payload["self_path"] = self_path
+
+        endpoint = f"/api/{entity_type}s/check-duplicates"
+        response = self._make_request(method="POST", endpoint=endpoint, data=payload)
+        return response.json()
 
     def register_service(self, registration: InternalServiceRegistration) -> ServiceResponse:
         """
