@@ -1547,17 +1547,19 @@ class Settings(BaseSettings):
         ),
     )
     dedup_score_threshold: float = Field(
-        default=0.6,
+        default=0.45,
         ge=0.0,
         le=1.0,
         description=(
-            "Minimum cosine similarity (0..1) between the incoming entity's "
-            "name plus description and an existing one's for an advisory "
-            "match to be returned. Compared against the similarity of the "
-            "text left after catalog boilerplate ('mcp', 'server', 'skill', "
-            "...) is stripped. Calibrated on all-MiniLM-L6-v2, where "
-            "unrelated pairs measure 0.07-0.37 and true duplicates "
-            "0.71-0.87."
+            "Minimum cosine similarity (0..1) for an advisory match. The "
+            "query is the incoming name plus description with catalog "
+            "boilerplate ('mcp', 'server', 'skill', ...) stripped; it is "
+            "compared against each candidate's indexed text, which is not "
+            "stripped and also carries tags and metadata. That asymmetry "
+            "pulls scores down, so the default is calibrated against real "
+            "indexed documents on all-MiniLM-L6-v2: unrelated pairs land at "
+            "0.00-0.25, genuine near-duplicates at 0.50-0.83, and two "
+            "entries with identical name and description at 0.60."
         ),
     )
     dedup_max_suggestions: int = Field(
