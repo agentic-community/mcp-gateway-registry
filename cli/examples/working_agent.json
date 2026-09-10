@@ -89,5 +89,6 @@
   "visibility": "public",
   "allowed_groups": [],
   "signature": null,
-  "trust_level": "unverified"
+  "trust_level": "unverified",
+  "supportedProtocol": "a2a"
 }

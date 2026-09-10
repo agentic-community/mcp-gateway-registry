@@ -24,5 +24,6 @@
     "url": "https://marameo.tv"
   },
   "tags": ["tourism", "travel", "itinerary", "a2a", "ans-verified"],
-  "ans_agent_id": "ans://v1.0.0.tourist-guide.agentworks.fr"
+  "ans_agent_id": "ans://v1.0.0.tourist-guide.agentworks.fr",
+  "supportedProtocol": "a2a"
 }

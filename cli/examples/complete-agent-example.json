@@ -24,5 +24,6 @@
       "description": "An example skill demonstrating agent capabilities",
       "tags": ["example", "demo"]
     }
-  ]
+  ],
+  "supportedProtocol": "a2a"
 }
