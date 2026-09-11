@@ -33,6 +33,9 @@ metadata:
     {{- if .Values.global.ingress.inboundCidrs }}
     alb.ingress.kubernetes.io/inbound-cidrs: {{ .Values.global.ingress.inboundCidrs }}
     {{- end }}
+    {{- if .Values.global.ingress.sslPolicy }}
+    alb.ingress.kubernetes.io/ssl-policy: {{ .Values.global.ingress.sslPolicy }}
+    {{- end }}
 spec:
   ingressClassName: {{ .Values.ingress.className }}
   rules:
