@@ -156,6 +156,21 @@ the client expects (e.g. `https://claude.ai/api/mcp/auth_callback` for
 Claude.ai's Custom Connector UI) and paste the resulting `client_id`/
 `client_secret` into the connector's "Advanced settings" panel.
 
+## Path-prefixed deployments
+
+When the gateway is served under a path prefix (`ROOT_PATH=/registry`,
+`REGISTRY_URL=https://gw.example.com/registry`), the per-server resource is
+`https://gw.example.com/registry/<server>/mcp`. RFC 9728 section 3.1 forms the
+path-aware well-known URL by inserting the well-known segment between host and
+path, so a client that derives it from the resource requests
+`https://gw.example.com/.well-known/oauth-protected-resource/registry/<server>/mcp`.
+The registry resolves that form (the gateway's own prefix is stripped before the
+server lookup), and the bundled nginx already forwards `location ^~ /.well-known/`
+to the app. If an external ingress or load balancer sits in front and only routes
+`/<ROOT_PATH>/*`, route `/.well-known/*` to the registry as well, or clients that
+do not follow the `resource_metadata` hint from the 401 will get a 404 and fall
+back to legacy discovery.
+
 ## Common diagnostic checks
 
 | Symptom | Likely cause |
