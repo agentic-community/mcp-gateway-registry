@@ -220,6 +220,57 @@ class TestUpdate:
         mock_collection.update_one.side_effect = Exception("db error")
         assert await repo.update("/a", {"server_name": "A"}) is False
 
+    async def test_writes_slash_variant_id(self, repo, mock_collection):
+        """A card stored under '/a/' is writable as '/a' (issue #1716).
+
+        get() already falls back to the slash variant when reading, so a
+        read-then-write flow on such a card must resolve the same _id or
+        the write matches nothing and the route reports a save failure.
+        """
+        mock_collection.update_one.return_value = MagicMock(matched_count=0)
+        result = await repo.update("/a", {"server_name": "A"})
+        assert result is False
+        # The exact _id misses, then the slash variant is tried.
+        assert mock_collection.update_one.call_args_list[0][0][0] == {"_id": "/a"}
+        assert mock_collection.update_one.call_args_list[1][0][0] == {"_id": "/a/"}
+
+    async def test_writes_exact_id_first(self, repo, mock_collection):
+        """The common path is a single update_one on the exact _id."""
+        mock_collection.update_one.return_value = MagicMock(matched_count=1)
+        assert await repo.update("/a", {"server_name": "A"}) is True
+        assert mock_collection.update_one.call_count == 1
+        assert mock_collection.update_one.call_args[0][0] == {"_id": "/a"}
+
+    async def test_scoped_fields_write_only_those_fields(self, repo, mock_collection):
+        """updated_fields scopes the $set so other fields are not clobbered."""
+        mock_collection.update_one.return_value = MagicMock(matched_count=1)
+        await repo.update(
+            "/a",
+            {"server_name": "A", "description": "kept", "tags": ["also kept"]},
+            updated_fields=["description"],
+        )
+        spec = mock_collection.update_one.call_args[0][1]
+        assert set(spec["$set"].keys()) == {"description", "updated_at"}
+
+    async def test_expected_updated_at_in_filter(self, repo, mock_collection):
+        """The revision predicate shares the update_one filter (atomic CAS)."""
+        mock_collection.update_one.return_value = MagicMock(matched_count=0)
+        result = await repo.update(
+            "/a",
+            {"server_name": "A"},
+            expected_updated_at="2026-01-01T00:00:00",
+        )
+        assert result is False
+        # Both attempted writes carry the revision in the same filter.
+        assert mock_collection.update_one.call_args_list[0][0][0] == {
+            "_id": "/a",
+            "updated_at": "2026-01-01T00:00:00",
+        }
+        assert mock_collection.update_one.call_args_list[1][0][0] == {
+            "_id": "/a/",
+            "updated_at": "2026-01-01T00:00:00",
+        }
+
 
 class TestDelete:
     async def test_deletes_existing(self, repo, mock_collection):

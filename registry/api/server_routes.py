@@ -6249,8 +6249,20 @@ async def update_server_endpoint(
             detail=f"Registration denied by policy gate: {gate_result.error_message}",
         )
 
-    success = await server_service.update_server(path, merged)
+    # PUT replaces the card, so it keeps the full-field write; the
+    # revision guard moves into the same repository write as the $set so
+    # the If-Match check above is not just advisory (issue #1716).
+    success = await server_service.update_server(
+        path,
+        merged,
+        expected_updated_at=(existing.get("updated_at") if client_ts is not None else None),
+    )
     if not success:
+        if client_ts is not None:
+            raise HTTPException(
+                status_code=status.HTTP_412_PRECONDITION_FAILED,
+                detail="If-Match does not match current server version",
+            )
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={"detail": "Failed to save server"},
@@ -6398,6 +6410,12 @@ async def patch_server_endpoint(
             detail="Empty patch body",
         )
 
+    # Only fields the client supplied are written, so a concurrently
+    # updated field absent from the patch survives (issue #1716).
+    # Null-valued fields stay in the scope: the merge stores None for
+    # them, same as before.
+    patch_fields = sorted(patch_dict.keys())
+
     # Changing the lifecycle status requires a dedicated permission (Issue #1330),
     # separate from modify_service, so a scope can grant "edit metadata" without
     # "promote/deprecate". Only enforced when the status actually changes.
@@ -6430,8 +6448,21 @@ async def patch_server_endpoint(
             detail=f"Registration denied by policy gate: {gate_result.error_message}",
         )
 
-    success = await server_service.update_server(path, merged)
+    success = await server_service.update_server(
+        path,
+        merged,
+        updated_fields=patch_fields,
+        expected_updated_at=(existing.get("updated_at") if client_ts is not None else None),
+    )
     if not success:
+        # A revision-guarded write that matched nothing means the card
+        # changed after the caller read it; anything else is a failed
+        # save (issue #1716).
+        if client_ts is not None:
+            raise HTTPException(
+                status_code=status.HTTP_412_PRECONDITION_FAILED,
+                detail="If-Match does not match current server version",
+            )
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={"detail": "Failed to save server"},

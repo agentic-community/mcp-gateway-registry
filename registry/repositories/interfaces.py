@@ -128,8 +128,12 @@ class ServerRepositoryBase(ABC):
         self,
         path: str,
         server_info: dict[str, Any],
+        *,
+        updated_fields: list[str] | None = None,
+        expected_updated_at: str | None = None,
     ) -> bool:
-        """Update an existing server."""
+        """Update an existing server (see the DocumentDB impl for the
+        issue #1716 field-scoping and revision-guard semantics)."""
         pass
 
     @abstractmethod
