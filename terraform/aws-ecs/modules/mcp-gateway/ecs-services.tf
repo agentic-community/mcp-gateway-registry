@@ -530,6 +530,51 @@ module "ecs_service_auth" {
           name  = "AWS_EC2_METADATA_DISABLED"
           value = "true"
         },
+        # Gateway generic-proxy feature (ships disabled by default)
+        {
+          name  = "GATEWAY_GENERIC_PROXY_ENABLED"
+          value = tostring(var.gateway_generic_proxy_enabled)
+        },
+        {
+          name  = "GENERIC_PROXY_TOKEN_TTL_SECONDS"
+          value = tostring(var.generic_proxy_token_ttl_seconds)
+        },
+        {
+          name  = "GENERIC_PROXY_MAX_BODY_BYTES"
+          value = tostring(var.generic_proxy_max_body_bytes)
+        },
+        {
+          name  = "GATEWAY_GENERIC_REQUIRE_BEARER_FOR_WRITES"
+          value = tostring(var.gateway_generic_require_bearer_for_writes)
+        },
+        {
+          name  = "GATEWAY_EGRESS_SELFCHECK_ENABLED"
+          value = tostring(var.gateway_egress_selfcheck_enabled)
+        },
+        {
+          name  = "GATEWAY_GENERIC_TLS_VERIFY"
+          value = tostring(var.gateway_generic_tls_verify)
+        },
+        {
+          name  = "GATEWAY_GENERIC_MAX_CONCURRENCY"
+          value = tostring(var.gateway_generic_max_concurrency)
+        },
+        {
+          name  = "GATEWAY_GENERIC_STREAM_MAX_CONCURRENCY"
+          value = tostring(var.gateway_generic_stream_max_concurrency)
+        },
+        {
+          name  = "GATEWAY_GENERIC_ACQUIRE_TIMEOUT_SECONDS"
+          value = tostring(var.gateway_generic_acquire_timeout_seconds)
+        },
+        {
+          name  = "GATEWAY_GENERIC_STREAM_MAX_DURATION_SECONDS"
+          value = tostring(var.gateway_generic_stream_max_duration_seconds)
+        },
+        {
+          name  = "GATEWAY_GENERIC_STREAM_MAX_BYTES"
+          value = tostring(var.gateway_generic_stream_max_bytes)
+        },
         {
           name  = "METRICS_LEGACY_HTTP_POST"
           value = "false"
@@ -565,6 +610,12 @@ module "ecs_service_auth" {
         {
           name  = "EGRESS_REGISTRY_INTERNAL_URL"
           value = var.egress_registry_internal_url
+        },
+        {
+          # OBO (same-IdP) token exchange against a self-hosted IdP: allowlist its
+          # private-resolving token endpoint. Mirrors the registry container.
+          name  = "EGRESS_OAUTH_TRUSTED_IDP_HOSTS"
+          value = var.egress_oauth_trusted_idp_hosts
         }
         ],
         # PR #947: MongoDB connection string override (plain-text variant).
@@ -834,6 +885,16 @@ module "ecs_service_auth" {
   subnet_ids = var.private_subnet_ids
   # No ALB ingress rule needed: Service Connect proxy-to-proxy traffic is allowed
   # by the registry->auth rule defined separately below.
+  #
+  # The generic proxy may target operator-approved Internet endpoints, so this
+  # service needs broad egress. Security groups are allow-only and cannot express
+  # "0.0.0.0/0 except link-local". Fargate does not expose EC2 IMDS; the task's
+  # 169.254.170.2 container-credential endpoint must remain reachable for its IAM
+  # role. The auth task disables SDK EC2-IMDS fallback, and the proxy URL guard
+  # hard-denies 169.254.169.254, 169.254.170.2, 169.254.170.23,
+  # fd00:ec2::254, and fd00:ec2::23 before any allowlist relaxation. Deploy an
+  # AWS Network Firewall/NACL equivalent when network-layer deny rules are
+  # required for an EC2-backed capacity provider.
   security_group_egress_rules = {
     all = {
       ip_protocol = "-1"
@@ -924,14 +985,26 @@ module "ecs_service_registry" {
   # Enable Service Connect
   service_connect_configuration = {
     namespace = aws_service_discovery_private_dns_namespace.mcp.arn
-    service = [{
-      client_alias = {
-        port     = 8080 # Non-root nginx listens on 8080
-        dns_name = "registry"
+    service = [
+      {
+        client_alias = {
+          port     = 8080 # Non-root nginx listens on 8080
+          dns_name = "registry"
+        }
+        port_name      = "http"
+        discovery_name = "registry"
+      },
+      {
+        # Dedicated internal egress-token vend listener (nginx :8091). Advertised
+        # so the auth-server reaches it as registry:8091; never ALB-fronted.
+        client_alias = {
+          port     = 8091
+          dns_name = "registry"
+        }
+        port_name      = "egress-internal"
+        discovery_name = "registry-egress-internal"
       }
-      port_name      = "http"
-      discovery_name = "registry"
-    }]
+    ]
   }
 
   # Container definitions
@@ -960,6 +1033,11 @@ module "ecs_service_registry" {
         {
           name          = "registry"
           containerPort = 7860
+          protocol      = "tcp"
+        },
+        {
+          name          = "egress-internal"
+          containerPort = 8091 # dedicated internal egress-token vend listener
           protocol      = "tcp"
         }
       ]
@@ -1231,8 +1309,10 @@ module "ecs_service_registry" {
           value = tostring(var.dedup_registration_hint_enabled)
         },
         {
+          # Empty when unset: the registry then picks the default calibrated for
+          # the configured embeddings model rather than a global guess.
           name  = "DEDUP_SCORE_THRESHOLD"
-          value = tostring(var.dedup_score_threshold)
+          value = var.dedup_score_threshold == null ? "" : tostring(var.dedup_score_threshold)
         },
         {
           name  = "DEDUP_MAX_SUGGESTIONS"
@@ -1568,6 +1648,31 @@ module "ecs_service_registry" {
           name  = "SSRF_ALLOWED_CIDRS"
           value = var.ssrf_allowed_cidrs
         },
+        # Gateway generic-proxy feature (ships disabled by default)
+        {
+          name  = "GATEWAY_GENERIC_PROXY_ENABLED"
+          value = tostring(var.gateway_generic_proxy_enabled)
+        },
+        {
+          name  = "GATEWAY_CANONICAL_NAMESPACE_ENABLED"
+          value = tostring(var.gateway_canonical_namespace_enabled)
+        },
+        {
+          name  = "GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS"
+          value = tostring(var.gateway_proxy_allow_private_targets)
+        },
+        {
+          name  = "GATEWAY_GENERIC_CLIENT_MAX_BODY_SIZE"
+          value = tostring(var.gateway_generic_client_max_body_size)
+        },
+        {
+          name  = "GATEWAY_PROXY_PREFIX"
+          value = tostring(var.gateway_proxy_prefix)
+        },
+        {
+          name  = "GATEWAY_GENERIC_STREAM_READ_TIMEOUT_SECONDS"
+          value = tostring(var.gateway_generic_stream_read_timeout_seconds)
+        },
         # Internal/workshop deployment classification (telemetry labels; issue #1216)
         {
           name  = "INTERNAL_ONLY_DEPLOYMENT"
@@ -1864,6 +1969,14 @@ module "ecs_service_registry" {
           name  = "EGRESS_OBO_ALLOWED_AUDIENCES"
           value = var.egress_obo_allowed_audiences
         },
+        # Hosts whose OAuth token endpoints may resolve to private addresses, for a
+        # self-hosted IdP (Keycloak, Entra over Private Link). Exact hostnames only;
+        # does not inherit ssrf_allowed_hosts, so a proxy-target bypass can never
+        # relax a token POST. Empty by default, which permits none.
+        {
+          name  = "EGRESS_OAUTH_TRUSTED_IDP_HOSTS"
+          value = var.egress_oauth_trusted_idp_hosts
+        },
         # AUTH_SERVER_NGINX_MARKER_SECRET is injected via secrets/valueFrom below
         # (required unconditionally, not just for egress).
         {
@@ -1967,6 +2080,15 @@ module "ecs_service_registry" {
             valueFrom = aws_secretsmanager_secret.embeddings_idp_client_secret.arn
           }
         ],
+        # Per-user egress credential vault encryption key (registry-only,
+        # optional). Injected as a true secret via Secrets Manager valueFrom;
+        # only present when an operator supplied a value (empty => feature off).
+        var.egress_credential_encryption_key != "" ? [
+          {
+            name      = "EGRESS_CREDENTIAL_ENCRYPTION_KEY"
+            valueFrom = aws_secretsmanager_secret.egress_credential_encryption_key[0].arn
+          }
+        ] : [],
         # PR #947: MongoDB connection string override (Secrets Manager variant).
         # Preferred when the URI contains credentials (avoids plain text in state).
         var.mongodb_connection_string_secret_arn != "" ? [
@@ -2143,16 +2265,20 @@ module "ecs_service_registry" {
       referenced_security_group_id = module.ecs_service_mcpgw.security_group_id
     }
     # Egress credential vault: the auth-server mcp_proxy calls the registry's
-    # internal egress-token vend endpoint (auth -> registry:8080 ->
+    # DEDICATED INTERNAL egress-token vend listener (auth -> registry:8091 ->
     # /_egress_internal/egress-token) to fetch a user's vaulted upstream token
-    # before proxying an MCP call. Without this the vend hop times out
-    # ("egress vend: registry unreachable"), no token is injected, and the
-    # upstream 3rd-party server 401s (surfacing in the client as
-    # "Protected resource ... does not match").
+    # before proxying an MCP call. The vend is served on nginx :8091 (never
+    # ALB-fronted), reached task-to-task via Service Connect (registry:8091).
+    # Without this the vend hop times out ("egress vend: registry unreachable"),
+    # no token is injected, and the upstream 3rd-party server 401s (surfacing in
+    # the client as "Protected resource ... does not match").
     auth_internal = {
-      description                  = "HTTP from auth-server for the egress-token vend hop (non-root nginx)"
-      from_port                    = 8080
-      to_port                      = 8080
+      # AWS restricts rule descriptions to "a-zA-Z0-9. _-:/()#,@[]+=&;{}!$*", so no
+      # ">" here. An arrow makes AuthorizeSecurityGroupIngress fail the whole apply
+      # with "InvalidParameterValue: Invalid rule description".
+      description                  = "auth-server to registry:8091 egress-token vend hop (dedicated internal nginx listener)"
+      from_port                    = 8091
+      to_port                      = 8091
       ip_protocol                  = "tcp"
       referenced_security_group_id = module.ecs_service_auth.security_group_id
     }

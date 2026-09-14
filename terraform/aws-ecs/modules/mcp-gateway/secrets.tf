@@ -128,6 +128,29 @@ resource "aws_secretsmanager_secret_version" "nginx_marker_secret" {
   secret_string = var.egress_nginx_marker_secret != "" ? var.egress_nginx_marker_secret : random_password.nginx_marker_secret.result
 }
 
+# Per-user egress credential vault encryption key (registry-only, optional).
+# When set, the registry AES-256-GCM-encrypts stored egress tokens before they
+# reach Secrets Manager / OpenBao. Empty disables encryption (legacy plaintext),
+# so the secret is only provisioned when an operator supplies a value -- existing
+# deployments keep working unchanged. Never auto-generated.
+resource "aws_secretsmanager_secret" "egress_credential_encryption_key" {
+  #checkov:skip=CKV2_AWS_57:Operator-supplied encryption key, rotation requires coordinated re-encryption of the vault
+  count = var.egress_credential_encryption_key != "" ? 1 : 0
+
+  name_prefix             = "${local.name_prefix}-egress-cred-enc-key-"
+  description             = "AES-256-GCM key used by the registry to encrypt per-user egress credentials at rest"
+  recovery_window_in_days = 0
+  kms_key_id              = aws_kms_key.secrets.id
+  tags                    = local.common_tags
+}
+
+resource "aws_secretsmanager_secret_version" "egress_credential_encryption_key" {
+  count = var.egress_credential_encryption_key != "" ? 1 : 0
+
+  secret_id     = aws_secretsmanager_secret.egress_credential_encryption_key[0].id
+  secret_string = var.egress_credential_encryption_key
+}
+
 # Keycloak client secrets (created with placeholder, updated by init-keycloak.sh)
 resource "aws_secretsmanager_secret" "keycloak_client_secret" {
   #checkov:skip=CKV2_AWS_57:Keycloak client secret managed by Keycloak init script, not rotatable via Secrets Manager

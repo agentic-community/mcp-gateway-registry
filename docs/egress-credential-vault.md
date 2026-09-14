@@ -364,8 +364,10 @@ and `AUTH_SERVER_NGINX_MARKER_SECRET`.
 | `EGRESS_TOKEN_REFRESH_SKEW_SECONDS` | `300` | Refresh a vaulted token this many seconds before expiry. |
 | `EGRESS_REFRESH_WORKER_INTERVAL_SECONDS` | `120` | Background proactive-refresh scan interval; `0` disables the sweep. |
 | `EGRESS_STATE_TTL_SECONDS` | `600` | Lifetime of the AEAD-encrypted OAuth consent state. |
-| `EGRESS_REGISTRY_INTERNAL_URL` | `http://registry:8080` | URL the auth-server uses to reach the registry's internal vend endpoint. |
+| `EGRESS_REGISTRY_INTERNAL_URL` | `http://registry:8091` | URL the auth-server uses to reach the registry's dedicated internal vend listener (never exposed to the host / public Ingress). |
 | `AUTH_SERVER_NGINX_MARKER_SECRET` | _(required)_ | Shared secret nginx force-sets on `/validate`; the auth-server only mints an mcp-proxy token when it matches. **Required at startup** (auth-server and registry refuse to start without it) and must be identical across both. Set a strong random value. **(secret)** |
+| `EGRESS_CREDENTIAL_ENCRYPTION_KEY` | `""` | Application-layer root key. When set (>= 32 chars), `StoredToken` payloads are AES-256-GCM encrypted under a per-principal HKDF-derived key before reaching either backend, so the vault holds ciphertext. Empty = plaintext at rest (legacy). Backend-independent; legacy plaintext entries are re-encrypted on first read. Must live **outside** the secret-store trust boundary it protects. **(secret)** |
+| `EGRESS_CREDENTIAL_ENCRYPTION_REQUIRE_ENCRYPTED` | `false` | Terminal strict mode. When `true` (and the key is set), reads **reject** any remaining legacy plaintext entry instead of accepting it, closing the plaintext-downgrade/injection hole against a write-capable backend. Enable only after read-repair has migrated all entries. |
 | `AWS_SECRETS_REGION` | `""` | AWS region (required when `SECRET_STORE_BACKEND=secrets-manager`). |
 | `SECRETS_MANAGER_KMS_KEY_ID` | `""` | Optional CMK for envelope encryption; empty uses the AWS-managed key. **(secret)** |
 | `SECRETS_MANAGER_PATH_PREFIX` | `mcp/egress` | Secret-name prefix; also scopes the ECS task IAM grant. |
@@ -673,10 +675,33 @@ Users can review and revoke their connections in the UI at **Connected Accounts*
   **required at startup** (both auth-server and registry refuse to start without
   it); an empty marker — which would mint unconditionally — is rejected rather than
   silently disabling the check.
+- **Dedicated internal vend listener (network boundary).** The vend endpoint
+  `/_egress_internal/egress-token` is served on a separate nginx listener
+  (`registry:8091`) that is NEVER published to the host (Compose) nor routed by
+  the public Ingress (K8s: a ClusterIP-only Service port gated by a
+  NetworkPolicy that admits only the auth-server pod). It is removed from the
+  internet-facing `8080`/`8443` listeners entirely, so the app-level token gate
+  is no longer the sole defense against a reachable caller.
+  - **Deployment requirement:** because the public listeners now return `404`
+    for the whole `/api/internal/` prefix, the auth-server **must** point
+    `EGRESS_REGISTRY_INTERNAL_URL` at the internal listener (`http://registry:8091`,
+    the chart default). If it is still set to the public listener
+    (`registry:8000` / `:8080`), the vend returns `404` and egress auth fails.
+    On Helm, set `registry.egressAuth.enabled=true` so the `:8091` Service port
+    and NetworkPolicy are rendered.
 - **Upstream cross-check.** The vend endpoint re-verifies the internal token and
   confirms the token's `upstream_url` falls within the registered server's
   `proxy_pass_url` (and version allowlist) before vending — a forged upstream is
   rejected.
+- **Destination binding (write-time).** Each stored credential records the
+  server's registered upstream base URLs — and, for a custom provider, the OAuth
+  token endpoint — as they stood at consent / PAT-submit time. The vend requires
+  the request's destination to be a member of that stored set. The live
+  cross-check above reads the *current* server record, so an operator who
+  repoints `proxy_pass_url` (or `custom_token_url`) moves both sides of that
+  check together; the write-time binding does **not** move, so the vend
+  fail-closes to re-consent instead of shipping the credential to the new host.
+  See `registry/egress_auth/upstream_binding.py`.
 - **Anti-phishing consent.** The connect URL points at the gateway, not the
   provider. The AS facade requires a live gateway session and stores the token
   under the **session** principal, not any client-asserted identity.
@@ -691,6 +716,36 @@ Users can review and revoke their connections in the UI at **Connected Accounts*
 - **Secret-at-rest.** OAuth app client secrets are Fernet-encrypted with
   `SECRET_KEY`. Per-user tokens live only in the vault backend (OpenBao /
   Secrets Manager), never in the app database.
+- **Application-layer credential encryption (optional, defense in depth).** When
+  `EGRESS_CREDENTIAL_ENCRYPTION_KEY` is set, the whole `StoredToken` (access
+  token, refresh token, client_id, scopes, expiry/status metadata) is AES-256-GCM
+  encrypted in a common codec (`registry/secrets/credential_codec.py`) before it
+  reaches either backend, so Secrets Manager / OpenBao contain a versioned
+  ciphertext envelope, not usable credentials. A per-`(auth_method, user_id)`
+  key is derived from the root key with HKDF-SHA256 (the root key is never used
+  directly), and the AEAD associated data binds the full
+  `(auth_method, user_id, provider, server_path)` address — a ciphertext copied
+  to another user or server fails authentication; the envelope's
+  `version`/`algorithm`/`key_id` are bound into the AAD too, so metadata cannot
+  be tampered to steer decryption. Reads recognize both the new envelope and
+  legacy plaintext; a legacy entry is transparently re-encrypted on first read
+  (**read-repair**, a non-blocking compare-and-set — Secrets Manager under the
+  principal mutation lease, OpenBao via KV v2 `cas` — so a migration never
+  clobbers a concurrent token refresh), so an in-place upgrade migrates without
+  re-consent. A missing/wrong key **fails closed** — credentials are never
+  returned or re-persisted as plaintext, and no plaintext/key material is logged.
+  Set `EGRESS_CREDENTIAL_ENCRYPTION_REQUIRE_ENCRYPTED=true` after migration to
+  make reads **reject** any lingering plaintext (blocks a write-capable backend
+  from downgrading an envelope to plaintext or injecting a plaintext token).
+  **Key custody:** the root key must live outside the secret-store trust boundary
+  it protects; storing it in the same AWS account's Secrets Manager as the egress
+  credentials defeats the isolation. This protects confidentiality against
+  vault/storage compromise; it is not integrity against a compromised application
+  runtime that can read plaintext. **Rotation is a destructive cutover today**
+  (a single active key): changing the key makes existing ciphertext
+  undecryptable (fail-closed) and forces affected users to reconnect — the
+  envelope carries a `key_id` so a future multi-key keyring can decrypt-old /
+  encrypt-new without re-consent, but that keyring is not yet implemented.
 
 ---
 
@@ -703,10 +758,13 @@ Users can review and revoke their connections in the UI at **Connected Accounts*
 | Client never gets a consent prompt | The MCP client must support URL-mode elicitation (`-32042` `URLElicitationRequiredError`), and the elicitation only fires on token-requiring methods (`tools/call`, `prompts/get`, `resources/read`). Check the server's `egress_auth_mode` is `oauth_user`. |
 | Consent loops (re-asked every call) | Usually an `auth_method` mismatch between consent-write and vend-read — confirm the IdP method canonicalizes to `oauth2`. Or the stored refresh token is dead (provider revoked it) → re-consent. |
 | Connected once, but tools still show empty / vend logs "has no token" | The consent-write and vend paths keyed the vault on different `user_id`s. Since keying moved to the OIDC `sub` (see [Vault key scheme](#vault-key-scheme)), an existing connection created under the old display-name key is invisible to the new `sub`-keyed lookup. Fix: **disconnect and reconnect once** (from Connected Accounts), which re-writes the entry under the `sub`. On Entra this reconnect must follow a fresh gateway login so the session carries the persisted `subject`. |
+| Connected, but a `tools/call` asks to reconnect after a backend URL change | Destination binding: changing a server's `proxy_pass_url` (or a custom provider's `custom_token_url`) invalidates credentials bound to the old destination. **Reconnect once** (from Connected Accounts) to rebind. Adding a *new version* whose base URL differs only requires a reconnect for calls routed to that new version; existing routes are unaffected. |
+| After upgrading to the destination-binding release, every connection asks to reconnect once | Credentials stored before the upgrade carry an empty binding, which never matches — a deliberate one-time forced reconnect (`oauth_user` → connect nudge, `pat` → "submit a PAT"), mirroring the `sub`-keying migration above. |
 | "Connection failed" on the consent callback; registry logs `state user mismatch` | The account-swap guard saw the consent-initiate principal differ from the callback's live-session principal. Almost always the session predates the `sub`-persisting login — **log out and back in**, then reconnect, so the cookie session carries the `subject` the initiate leg bound the state to. |
 | Vend returns 401 from auth-server | Marker secret mismatch. Ensure `AUTH_SERVER_NGINX_MARKER_SECRET` matches on registry + auth-server, and nginx sets it on `/validate`. |
 | OpenBao reads fail with permission denied | The role token lapsed. The store re-authenticates and retries once; persistent failure means a real policy/role gap — verify the `mcp-egress` policy and the role binding to the registry ServiceAccount. |
 | `decrypt` errors on client secret | `SECRET_KEY` was rotated after the server's egress config was saved. Re-save the egress config with the client secret. |
+| Vend/list fails: "Egress credential failed authentication" or "is encrypted but ... not set" | `EGRESS_CREDENTIAL_ENCRYPTION_KEY` is missing, was changed, or does not match the key entries were encrypted under. The store fails closed rather than returning/overwriting plaintext. Restore the original key (rotation needs the old key available to decrypt existing entries). |
 
 ### Related documentation
 

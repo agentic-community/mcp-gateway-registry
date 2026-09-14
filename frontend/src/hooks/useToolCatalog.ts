@@ -10,11 +10,16 @@ import axios from 'axios';
 import { fetchAllPages } from '../utils/fetchAllPages';
 
 
+// The scope editor's value space is chosen by `type`: MCP method tokens for
+// 'mcp'/'virtual', HTTP verbs for proxied non-MCP entities. `entityType` carries
+// the canonical type token used to build the authz key ({entityType}/{path}) for
+// proxied skills/agents/custom entities; it is undefined for plain mcp/virtual.
 export interface ServerInfo {
   path: string;
   name: string;
   description: string;
-  type: 'mcp' | 'virtual';
+  type: 'mcp' | 'virtual' | 'skill' | 'a2a_agent' | 'custom';
+  entityType?: string;
 }
 
 export interface ToolInfo {
@@ -31,6 +36,23 @@ interface VirtualServerListResponse {
     enabled?: boolean;
     [key: string]: unknown;
   }>;
+}
+
+interface ProxiedEntitiesResponse {
+  proxied_entities: Array<{
+    entity_type: string;
+    path: string;
+    name: string;
+    authz_key: string;
+  }>;
+  count: number;
+}
+
+// Map a proxied entity's canonical type token to the ServerInfo.type union.
+function _proxiedType(entityType: string): ServerInfo['type'] {
+  if (entityType === 'skill') return 'skill';
+  if (entityType === 'a2a_agent') return 'a2a_agent';
+  return 'custom'; // any admin-defined custom descriptor name
 }
 
 interface ToolCatalogResponse {
@@ -74,8 +96,11 @@ export function useServerList(): UseServerListReturn {
     setError(null);
 
     try {
-      // Issue #880: page through /api/servers (not a single hard-capped page).
-      const [rawServers, virtualServersResponse] = await Promise.all([
+      // Fetch regular servers, virtual servers, and proxied non-MCP entities in
+      // parallel. Issue #880: page through /api/servers (not a single hard-capped
+      // page). The proxied-entities endpoint is admin-only + may 403 for a
+      // non-admin viewer; tolerate that (the scope editor is admin-only anyway).
+      const [rawServers, virtualServersResponse, proxiedResponse] = await Promise.all([
         fetchAllPages<{
           path: string;
           server_name?: string;
@@ -86,6 +111,9 @@ export function useServerList(): UseServerListReturn {
           itemsKey: 'servers',
         }),
         axios.get<VirtualServerListResponse>('/api/virtual-servers'),
+        axios
+          .get<ProxiedEntitiesResponse>('/api/iam/proxied-entities')
+          .catch(() => ({ data: { proxied_entities: [], count: 0 } })),
       ]);
 
       // Map regular MCP servers
@@ -106,14 +134,33 @@ export function useServerList(): UseServerListReturn {
           type: 'virtual' as const,
         }));
 
-      // Combine and sort by type (MCP first), then by name
-      const allServers = [...mcpServers, ...virtualServers];
+      // Map proxied non-MCP entities (skills/agents/custom). The `path` here is
+      // the canonical authz_key (entity_type/registered_path) so the scope editor
+      // writes the SAME string the auth-server expects — writing a bare slugged
+      // path would silently 403 on the generic hop.
+      const proxiedEntities: ServerInfo[] = (proxiedResponse.data.proxied_entities || []).map(
+        (p) => ({
+          path: p.authz_key,
+          name: p.name,
+          description: `Proxied ${p.entity_type}`,
+          type: _proxiedType(p.entity_type),
+          entityType: p.entity_type,
+        }),
+      );
+
+      // Combine and sort by type rank (mcp, virtual, then proxied), then by name.
+      const typeRank: Record<ServerInfo['type'], number> = {
+        mcp: 0,
+        virtual: 1,
+        skill: 2,
+        a2a_agent: 3,
+        custom: 4,
+      };
+      const allServers = [...mcpServers, ...virtualServers, ...proxiedEntities];
       allServers.sort((a, b) => {
-        // Sort by type first (mcp before virtual)
         if (a.type !== b.type) {
-          return a.type === 'mcp' ? -1 : 1;
+          return typeRank[a.type] - typeRank[b.type];
         }
-        // Then by name
         return a.name.localeCompare(b.name);
       });
 

@@ -45,7 +45,8 @@ resource "aws_iam_policy" "ecs_secrets_access" {
             aws_secretsmanager_secret.metrics_admin_api_key[0].arn,
             aws_secretsmanager_secret.grafana_admin_password[0].arn
           ] : [],
-          var.enable_observability && var.otel_otlp_endpoint != "" ? [aws_secretsmanager_secret.otlp_exporter_headers[0].arn] : []
+          var.enable_observability && var.otel_otlp_endpoint != "" ? [aws_secretsmanager_secret.otlp_exporter_headers[0].arn] : [],
+          var.egress_credential_encryption_key != "" ? [aws_secretsmanager_secret.egress_credential_encryption_key[0].arn] : []
         )
       },
       {

@@ -21,6 +21,7 @@ from ...exceptions import (
 )
 from ...schemas.virtual_server_models import VirtualServerConfig
 from ..interfaces import VirtualServerRepositoryBase
+from ._identity_url_sidecar import ensure_is_proxied_index
 from .client import get_collection_name, get_documentdb_client
 
 # Configure logging
@@ -99,6 +100,10 @@ class DocumentDBVirtualServerRepository(VirtualServerRepositoryBase):
         except Exception as e:
             logger.warning(f"Could not create indexes for {self._collection_name}: {e}")
 
+        # Optional is_proxied index (partial w/ plain fallback, never raises) —
+        # AFTER _indexes_created so a DocumentDB rejection can't defeat the guard.
+        await ensure_is_proxied_index(self._collection, self._collection_name)
+
     async def get(
         self,
         path: str,
@@ -109,6 +114,25 @@ class DocumentDBVirtualServerRepository(VirtualServerRepositoryBase):
         if doc:
             return _document_to_config(doc)
         return None
+
+    async def list_proxied(self) -> list[dict[str, Any]]:
+        """Projected list of proxied virtual servers (alias-only, no target).
+
+        is_proxied on a virtual server only governs emission of the canonical
+        /virtual_server/<path> alias; it never carries a proxy_target_url.
+        """
+        projection = {"is_proxied": 1, "is_enabled": 1, "sync_metadata": 1}
+        try:
+            collection = await self._get_collection()
+            cursor = collection.find({"is_proxied": True}, projection)
+            rows = []
+            async for doc in cursor:
+                doc["path"] = doc.pop("_id")
+                rows.append(doc)
+            return rows
+        except Exception as e:
+            logger.error(f"Error listing proxied virtual servers: {e}", exc_info=True)
+            return []
 
     async def list_all(self) -> list[VirtualServerConfig]:
         """List all virtual servers."""

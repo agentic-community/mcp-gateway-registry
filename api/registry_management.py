@@ -6,8 +6,17 @@ High-level wrapper for the RegistryClient providing command-line interface
 for server registration, management, group operations, and A2A agent management.
 
 Server Management:
-    # Register a server from JSON config
+    # Register a server from JSON config (pre-flights the duplicate check)
     uv run python registry_management.py register --config /path/to/config.json
+
+    # Check for duplicates without registering anything
+    uv run python registry_management.py check-duplicates --config /path/to/config.json
+
+    # Gate a CI registration on the check
+    uv run python registry_management.py register --config /path/to/config.json --fail-on-duplicate
+
+    # Skip the pre-flight (one fewer round trip, no embedding call)
+    uv run python registry_management.py register --config /path/to/config.json --skip-duplicate-check
 
     # List all servers
     uv run python registry_management.py list
@@ -272,6 +281,8 @@ from registry_client import (
     RatingInfoResponse,
     RatingResponse,
     RegistryClient,
+    RescanResponse,
+    SecurityScanResult,
     ServerUpdateResponse,
     Skill,
     SkillRegistrationRequest,
@@ -808,6 +819,61 @@ def cmd_custom_record_create(args: argparse.Namespace) -> int:
         return 1
 
 
+def cmd_custom_proxy_create(args: argparse.Namespace) -> int:
+    """
+    Create a proxied custom-entity record that fronts a REST/HTTP endpoint.
+
+    Convenience over ``custom-record-create``: builds the gateway-proxy fields
+    from flags (target URL, streaming on/off, optional caller-overridable
+    Authorization passthrough) instead of a hand-written JSON record. The custom
+    type must already exist (see ``custom-type-create``); a type with required
+    attribute fields still needs ``custom-record-create`` with a full JSON body.
+
+    Streaming is set via ``--streaming true|false`` (the record's proxy_streaming
+    field). ``--auth-passthrough`` adds a caller-overridable Authorization header:
+    a fixed Authorization credential is rejected by the registry, so the caller
+    supplies the backend Bearer token at request time and the gateway forwards it.
+
+    ``--connect-notes`` sets proxy_connect_notes: free-text usage guidance shown to
+    clients in the UI Connect panel (e.g. the sub-path to append and a ready-to-run
+    invocation command). It is never interpreted by the gateway.
+
+    Args:
+        args: Command arguments (type, name, target_url, streaming,
+            auth_passthrough, connect_notes, visibility, description).
+
+    Returns:
+        Exit code (0 for success, 1 for failure).
+    """
+    try:
+        record: dict[str, Any] = {
+            "name": args.name,
+            "description": args.description or f"Proxied REST endpoint -> {args.target_url}",
+            "visibility": args.visibility,
+            "is_proxied": True,
+            "proxy_target_url": args.target_url,
+            "proxy_streaming": args.streaming == "true",
+            **({"proxy_connect_notes": args.connect_notes} if args.connect_notes else {}),
+        }
+        if args.auth_passthrough:
+            # Authorization is accepted only as a caller-overridable header (a
+            # fixed value is rejected); no stored value, the caller supplies it.
+            record["custom_headers"] = [{"name": "Authorization", "overridable": True}]
+
+        client = _create_client(args)
+        response = client.create_custom_record(args.type, record)
+        logger.info(
+            f"Proxied custom record created: {response.get('path')} "
+            f"(streaming={record['proxy_streaming']}, target={args.target_url})"
+        )
+        if args.json:
+            print(json.dumps(response, indent=2, default=str))
+        return 0
+    except Exception as e:
+        logger.error(f"Proxied custom record creation failed: {e}")
+        return 1
+
+
 def cmd_custom_record_list(args: argparse.Namespace) -> int:
     """
     List records of a custom type the caller can view.
@@ -831,6 +897,162 @@ def cmd_custom_record_list(args: argparse.Namespace) -> int:
         return 0
     except Exception as e:
         logger.error(f"Listing custom records failed: {e}")
+        return 1
+
+
+# Fields that carry the identity URL per entity type, and the key each
+# registration config uses for the entity's name. Kept in one place so the
+# duplicate check reads a config the same way the register commands do.
+_DUPLICATE_CHECK_FIELDS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    "server": (("server_name", "name"), ("proxy_pass_url",)),
+    "agent": (("name",), ("url",)),
+    "skill": (("skill_name", "name"), ("skill_md_url", "url")),
+}
+
+
+def _first_present(config: dict, keys: tuple[str, ...]) -> str | None:
+    """Return the first non-empty value among ``keys``."""
+    for key in keys:
+        value = config.get(key)
+        if value:
+            return str(value)
+    return None
+
+
+def _duplicate_check_args_from_config(entity_type: str, config: dict) -> dict[str, str | None]:
+    """Pull the duplicate-check inputs out of a registration config."""
+    name_keys, url_keys = _DUPLICATE_CHECK_FIELDS[entity_type]
+    return {
+        "name": _first_present(config, name_keys) or "",
+        "description": config.get("description"),
+        "identity_url": _first_present(config, url_keys),
+        "self_path": None,
+    }
+
+
+def _report_duplicate_check(result: dict, entity_label: str) -> bool:
+    """Print a duplicate-check envelope. Returns True when anything matched.
+
+    Written for a terminal and for CI logs: the exact-URL half first because it
+    is certain, the similarity half second because it is a hint.
+    """
+    collisions = result.get("collision_with") or []
+    advisory = result.get("advisory_matches") or []
+    threshold = result.get("threshold")
+
+    if collisions:
+        logger.warning(
+            f"{entity_label} collides with {len(collisions)} existing "
+            f"entit{'y' if len(collisions) == 1 else 'ies'} on the same URL:"
+        )
+        for entry in collisions:
+            logger.warning(
+                f"  {entry.get('path')} ({entry.get('entity_type')}) "
+                f"- {entry.get('name')} [{entry.get('match_reason')}]"
+            )
+
+    if advisory:
+        logger.warning(
+            f"{len(advisory)} existing entit{'y' if len(advisory) == 1 else 'ies'} "
+            f"look similar (cosine >= {threshold}):"
+        )
+        for entry in advisory:
+            score = entry.get("relevance_score")
+            score_text = f"{score:.4f}" if isinstance(score, int | float) else "n/a"
+            logger.warning(
+                f"  {entry.get('path')} ({entry.get('entity_type')}) "
+                f"- {entry.get('name')} [similarity {score_text}]"
+            )
+
+    if result.get("similarity_search_available") is False:
+        logger.warning(
+            "The similarity check did not run: the registry could not reach its "
+            "embedding backend, so only the exact-URL result above is complete."
+        )
+
+    if not collisions and not advisory:
+        logger.info(f"No duplicates found for {entity_label}.")
+    return bool(collisions or advisory)
+
+
+def _preflight_duplicate_check(args: argparse.Namespace, entity_type: str, config: dict) -> int:
+    """Run the duplicate check before a registration. Returns an exit code.
+
+    Advisory by default — a match is reported and the registration proceeds,
+    which mirrors the registration UI. ``--fail-on-duplicate`` turns it into a
+    gate for CI, and ``--skip-duplicate-check`` opts out entirely.
+    """
+    if getattr(args, "skip_duplicate_check", False):
+        return 0
+
+    check_args = _duplicate_check_args_from_config(entity_type, config)
+    if not check_args["name"]:
+        return 0
+
+    try:
+        client = _create_client(args)
+        result = client.check_duplicates(entity_type, **check_args)
+    except Exception as e:
+        # A hint must never be the reason a registration fails.
+        logger.warning(f"Duplicate check skipped ({e}); continuing with registration.")
+        return 0
+
+    found = _report_duplicate_check(result, f"{entity_type} '{check_args['name']}'")
+    if found and getattr(args, "fail_on_duplicate", False):
+        logger.error("Aborting: --fail-on-duplicate was set and the check found a match.")
+        return 1
+    return 0
+
+
+def cmd_check_duplicates(args: argparse.Namespace) -> int:
+    """
+    Check whether a registration would duplicate an existing entity.
+
+    Args:
+        args: Command arguments
+
+    Returns:
+        Exit code (0 for no match or advisory-only, 1 on error or when
+        --fail-on-duplicate is set and something matched)
+    """
+    try:
+        if args.config:
+            config = _load_json_config(args.config)
+            if args.type == "server" and _is_mcp_registry_schema(config):
+                config = _transform_mcp_registry_to_internal(config)
+            check_args = _duplicate_check_args_from_config(args.type, config)
+        else:
+            if not args.name:
+                logger.error("Provide either --config or --name.")
+                return 1
+            check_args = {
+                "name": args.name,
+                "description": args.description,
+                "identity_url": args.url,
+                "self_path": args.self_path,
+            }
+
+        client = _create_client(args)
+        result = client.check_duplicates(args.type, **check_args)
+
+        if args.json:
+            print(json.dumps(result, indent=2))
+        else:
+            _report_duplicate_check(result, f"{args.type} '{check_args['name']}'")
+
+        matched = bool(result.get("collision_with") or result.get("advisory_matches"))
+        if matched and args.fail_on_duplicate:
+            return 1
+        return 0
+
+    except FileNotFoundError as e:
+        logger.error(f"Configuration file error: {e}")
+        return 1
+    except json.JSONDecodeError as e:
+        logger.error(f"Invalid JSON configuration: {e}")
+        return 1
+    except Exception as e:
+        logger.error(f"Duplicate check failed: {e}")
         return 1
 
 
@@ -885,6 +1107,10 @@ def cmd_register(args: argparse.Namespace) -> int:
             visibility=config.get("visibility"),
             allowed_groups=config.get("allowed_groups"),
         )
+
+        preflight = _preflight_duplicate_check(args, "server", config)
+        if preflight != 0:
+            return preflight
 
         client = _create_client(args)
         response = client.register_service(registration)
@@ -2651,6 +2877,10 @@ def cmd_agent_register(args: argparse.Namespace) -> int:
         config = {k: v for k, v in config.items() if k in valid_fields}
 
         agent = AgentRegistration(**config)
+        preflight = _preflight_duplicate_check(args, "agent", config)
+        if preflight != 0:
+            return preflight
+
         client = _create_client(args)
         response = client.register_agent(agent)
 
@@ -3492,6 +3722,18 @@ def cmd_skill_register(args: argparse.Namespace) -> int:
             metadata=metadata,
             visibility=args.visibility if hasattr(args, "visibility") else "public",
         )
+
+        preflight = _preflight_duplicate_check(
+            args,
+            "skill",
+            {
+                "name": args.name,
+                "description": getattr(args, "description", None),
+                "skill_md_url": args.url,
+            },
+        )
+        if preflight != 0:
+            return preflight
 
         client = _create_client(args)
         skill = client.register_skill(request)
@@ -6251,14 +6493,20 @@ Examples:
         """,
     )
 
-    parser.add_argument("--registry-url", help="Registry base URL (overrides REGISTRY_URL env var)")
+    parser.add_argument(
+        "--registry-url",
+        default="http://localhost",
+        help="Registry base URL (overrides REGISTRY_URL env var). Default: http://localhost",
+    )
 
     parser.add_argument("--aws-region", help="AWS region (overrides AWS_REGION env var)")
 
     parser.add_argument("--keycloak-url", help="Keycloak base URL (overrides KEYCLOAK_URL env var)")
 
     parser.add_argument(
-        "--token-file", help="Path to file containing JWT token (bypasses token script)"
+        "--token-file",
+        default=".token",
+        help="Path to file containing JWT token (bypasses token script). Default: .token",
     )
 
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
@@ -6266,9 +6514,50 @@ Examples:
     subparsers = parser.add_subparsers(dest="command", help="Command to execute")
 
     # Register command
+    check_dup_parser = subparsers.add_parser(
+        "check-duplicates",
+        help="Check whether a registration would duplicate an existing entity",
+    )
+    check_dup_parser.add_argument(
+        "--type",
+        choices=["server", "agent", "skill"],
+        default="server",
+        help="Entity type to check against (default: server)",
+    )
+    check_dup_parser.add_argument(
+        "--config",
+        help="Registration config JSON to read name/description/URL from",
+    )
+    check_dup_parser.add_argument("--name", help="Entity name (when not using --config)")
+    check_dup_parser.add_argument("--description", help="Entity description")
+    check_dup_parser.add_argument(
+        "--url",
+        help="Identity URL: proxy_pass_url for a server, url for an agent, skill_md_url for a skill",
+    )
+    check_dup_parser.add_argument(
+        "--self-path",
+        help="Path to exclude, so editing an existing entity does not match itself",
+    )
+    check_dup_parser.add_argument("--json", action="store_true", help="Print the raw envelope")
+    check_dup_parser.add_argument(
+        "--fail-on-duplicate",
+        action="store_true",
+        help="Exit non-zero when anything matches (for CI gating)",
+    )
+
     register_parser = subparsers.add_parser("register", help="Register a new server")
     register_parser.add_argument(
         "--config", required=True, help="Path to server configuration JSON file"
+    )
+    register_parser.add_argument(
+        "--skip-duplicate-check",
+        action="store_true",
+        help="Do not pre-flight the duplicate check before registering",
+    )
+    register_parser.add_argument(
+        "--fail-on-duplicate",
+        action="store_true",
+        help="Abort the registration when the duplicate check finds a match",
     )
     register_parser.add_argument(
         "--overwrite", action="store_true", help="Overwrite if server already exists"
@@ -6302,6 +6591,50 @@ Examples:
         "--config", required=True, help="Path to custom record JSON file"
     )
     custom_record_create_parser.add_argument(
+        "--json", action="store_true", help="Print raw JSON response"
+    )
+
+    custom_proxy_create_parser = subparsers.add_parser(
+        "custom-proxy-create",
+        help="Create a proxied custom record fronting a REST/HTTP endpoint (e.g. an LLM API)",
+    )
+    custom_proxy_create_parser.add_argument(
+        "--type",
+        required=True,
+        help="Custom type name (must already exist; see custom-type-create)",
+    )
+    custom_proxy_create_parser.add_argument("--name", required=True, help="Record name")
+    custom_proxy_create_parser.add_argument(
+        "--target-url",
+        required=True,
+        help="Backend/origin URL the gateway proxies to (proxy_target_url), e.g. https://api.openai.com",
+    )
+    custom_proxy_create_parser.add_argument(
+        "--streaming",
+        choices=["true", "false"],
+        default="false",
+        help="Enable response streaming (proxy_streaming). Default: false",
+    )
+    custom_proxy_create_parser.add_argument(
+        "--auth-passthrough",
+        action="store_true",
+        help=(
+            "Add a caller-overridable Authorization header so the caller's Bearer "
+            "token is forwarded to the backend (a fixed Authorization is rejected)"
+        ),
+    )
+    custom_proxy_create_parser.add_argument(
+        "--visibility", default="private", help="Record visibility (default: private)"
+    )
+    custom_proxy_create_parser.add_argument("--description", help="Record description")
+    custom_proxy_create_parser.add_argument(
+        "--connect-notes",
+        help=(
+            "Operator usage notes stored on the record (proxy_connect_notes) and shown "
+            "in the UI Connect panel, e.g. the API sub-path plus an example command"
+        ),
+    )
+    custom_proxy_create_parser.add_argument(
         "--json", action="store_true", help="Print raw JSON response"
     )
 
@@ -6976,6 +7309,16 @@ Examples:
     agent_register_parser.add_argument(
         "--config", required=True, help="Path to agent configuration JSON file"
     )
+    agent_register_parser.add_argument(
+        "--skip-duplicate-check",
+        action="store_true",
+        help="Do not pre-flight the duplicate check before registering",
+    )
+    agent_register_parser.add_argument(
+        "--fail-on-duplicate",
+        action="store_true",
+        help="Abort the registration when the duplicate check finds a match",
+    )
 
     # Agent list command
     agent_list_parser = subparsers.add_parser("agent-list", help="List all A2A agents")
@@ -7199,6 +7542,16 @@ Examples:
         "--name", required=True, help="Skill name (lowercase alphanumeric with hyphens)"
     )
     skill_register_parser.add_argument("--url", required=True, help="URL to SKILL.md file")
+    skill_register_parser.add_argument(
+        "--skip-duplicate-check",
+        action="store_true",
+        help="Do not pre-flight the duplicate check before registering",
+    )
+    skill_register_parser.add_argument(
+        "--fail-on-duplicate",
+        action="store_true",
+        help="Abort the registration when the duplicate check finds a match",
+    )
     skill_register_parser.add_argument(
         "--id",
         help="Optional caller-supplied id (UUID, ARN, ...). Auto-generated if omitted. "
@@ -8003,6 +8356,7 @@ Examples:
         "custom-type-create": cmd_custom_type_create,
         "custom-type-list": cmd_custom_type_list,
         "custom-record-create": cmd_custom_record_create,
+        "custom-proxy-create": cmd_custom_proxy_create,
         "custom-record-list": cmd_custom_record_list,
         "list": cmd_list,
         "toggle": cmd_toggle,
@@ -8152,6 +8506,8 @@ Examples:
         "embeddings-reindex": cmd_embeddings_reindex,
         "embeddings-stale": cmd_embeddings_stale,
         "embeddings-stale-cleanup": cmd_embeddings_stale_cleanup,
+        # Registration duplicate check (issue #1696)
+        "check-duplicates": cmd_check_duplicates,
     }
 
     handler = command_handlers.get(args.command)

@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import axios from 'axios';
 import {
   CustomEntityCreate,
+  CustomEntityHeader,
   CustomEntityRecord,
   CustomEntityUpdate,
   CustomTypeDescriptor,
@@ -20,6 +21,11 @@ interface UseCustomEntitiesReturn {
   refreshData: () => Promise<void>;
   createRecord: (body: CustomEntityCreate) => Promise<CustomEntityRecord>;
   updateRecord: (uuid: string, body: CustomEntityUpdate) => Promise<CustomEntityRecord>;
+  /** Rotate a record's upstream headers via the dedicated PATCH endpoint. */
+  rotateRecordHeaders: (
+    uuid: string,
+    customHeaders: CustomEntityHeader[],
+  ) => Promise<CustomEntityRecord>;
   deleteRecord: (uuid: string) => Promise<void>;
 }
 
@@ -149,6 +155,21 @@ export const useCustomEntities = (typeName: string): UseCustomEntitiesReturn => 
     [typeName, refreshStats],
   );
 
+  const rotateRecordHeaders = useCallback(
+    async (
+      uuid: string,
+      customHeaders: CustomEntityHeader[],
+    ): Promise<CustomEntityRecord> => {
+      const res = await axios.patch<CustomEntityRecord>(
+        `/api/custom/${typeName}/${uuid}/upstream-headers`,
+        { custom_headers: customHeaders },
+      );
+      await refreshStats();
+      return res.data;
+    },
+    [typeName, refreshStats],
+  );
+
   const deleteRecord = useCallback(
     async (uuid: string): Promise<void> => {
       await axios.delete(`/api/custom/${typeName}/${uuid}`);
@@ -166,6 +187,7 @@ export const useCustomEntities = (typeName: string): UseCustomEntitiesReturn => 
     refreshData: refreshStats,
     createRecord,
     updateRecord,
+    rotateRecordHeaders,
     deleteRecord,
   };
 };

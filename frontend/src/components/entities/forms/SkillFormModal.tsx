@@ -2,6 +2,9 @@ import React from 'react';
 import {
   StatusField,
   MetadataField,
+  ProxyField,
+  UpstreamHeadersField,
+  type UpstreamHeader,
   FIELD_BASE,
   FIELD_FOCUS,
   LABEL,
@@ -30,6 +33,15 @@ export interface SkillForm {
   auth_scheme: 'none' | 'global_credentials' | 'bearer' | 'api_key';
   auth_credential: string;
   auth_header_name: string;
+  // Gateway-proxy opt-in. A skill has no native backend URL, so proxy_target_url
+  // is required when is_proxied is true.
+  is_proxied: boolean;
+  proxy_target_url: string;
+  // Read-only, server-derived client path (empty on create until saved).
+  proxy_client_url: string;
+  // Upstream headers presented to the proxied backend (per-header overridable).
+  // On edit these are the registered names with blank values (write-only).
+  custom_headers: UpstreamHeader[];
 }
 
 interface SkillFormModalProps {
@@ -215,6 +227,27 @@ const SkillFormModal: React.FC<SkillFormModalProps> = ({
             accent="amber"
             onChange={(status) => setForm((prev) => ({ ...prev, status }))}
           />
+
+          <ProxyField
+            isProxied={form.is_proxied}
+            onIsProxiedChange={(v) => setForm((prev) => ({ ...prev, is_proxied: v }))}
+            proxyTargetUrl={form.proxy_target_url}
+            onProxyTargetUrlChange={(v) => setForm((prev) => ({ ...prev, proxy_target_url: v }))}
+            targetRequired
+            accent="amber"
+            clientUrl={form.proxy_client_url}
+          />
+
+          {/* Upstream headers only apply when the skill is proxied. On edit they
+              are rotated via the dedicated PATCH endpoint (see Dashboard save). */}
+          {form.is_proxied && (
+            <UpstreamHeadersField
+              headers={form.custom_headers}
+              onChange={(custom_headers) => setForm((prev) => ({ ...prev, custom_headers }))}
+              accent="amber"
+              editMode={!!editing}
+            />
+          )}
 
           <div>
             <label className={LABEL}>Tags</label>

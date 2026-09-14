@@ -200,19 +200,19 @@ variable "keycloak_log_level" {
 variable "registry_image_uri" {
   description = "Container image URI for registry service (defaults to pre-built image from public ECR)"
   type        = string
-  default     = "public.ecr.aws/p3v1o3c6/registry:1.29.0"
+  default     = "public.ecr.aws/p3v1o3c6/registry:1.30.0"
 }
 
 variable "auth_server_image_uri" {
   description = "Container image URI for auth server service (defaults to pre-built image from public ECR)"
   type        = string
-  default     = "public.ecr.aws/p3v1o3c6/auth-server:1.29.0"
+  default     = "public.ecr.aws/p3v1o3c6/auth-server:1.30.0"
 }
 
 variable "mcpgw_image_uri" {
   description = "Container image URI for mcpgw service (defaults to pre-built image from public ECR)"
   type        = string
-  default     = "public.ecr.aws/p3v1o3c6/mcpgw:1.29.0"
+  default     = "public.ecr.aws/p3v1o3c6/mcpgw:1.30.0"
 }
 
 variable "keycloak_image_uri" {
@@ -391,13 +391,13 @@ variable "dedup_registration_hint_enabled" {
 }
 
 variable "dedup_score_threshold" {
-  description = "Minimum similarity score (0.0..1.0) for an advisory match. Raise toward 1.0 for higher precision."
+  description = "Minimum cosine similarity (0.0..1.0) for an advisory duplicate match. Leave null to use the default calibrated for the configured embeddings model: 0.45 for all-MiniLM-L6-v2, 0.85 for openai/text-embedding-ada-002, 0.6 for anything else. Cosine scales are model-specific, so a number tuned for one model is noise on another. Set a value only to override the per-model default."
   type        = number
-  default     = 0.7
+  default     = null
 
   validation {
-    condition     = var.dedup_score_threshold >= 0 && var.dedup_score_threshold <= 1
-    error_message = "dedup_score_threshold must be between 0.0 and 1.0."
+    condition     = coalesce(var.dedup_score_threshold, 0) >= 0 && coalesce(var.dedup_score_threshold, 0) <= 1
+    error_message = "dedup_score_threshold must be null or between 0.0 and 1.0."
   }
 }
 
@@ -2029,9 +2029,19 @@ variable "registry_extra_env" {
 
   validation {
     condition = alltrue([
-      for entry in var.registry_extra_env : upper(trimspace(entry.name)) != "AWS_EC2_METADATA_DISABLED"
+      for entry in var.registry_extra_env : (
+        upper(trimspace(entry.name)) != "AWS_EC2_METADATA_DISABLED"
+        && !contains([
+          "GATEWAY_GENERIC_PROXY_ENABLED",
+          "GATEWAY_CANONICAL_NAMESPACE_ENABLED",
+          "GATEWAY_PROXY_ALLOW_PRIVATE_TARGETS",
+          "GATEWAY_GENERIC_CLIENT_MAX_BODY_SIZE",
+          "GATEWAY_PROXY_PREFIX",
+          "GATEWAY_GENERIC_STREAM_READ_TIMEOUT_SECONDS",
+        ], upper(trimspace(entry.name)))
+      )
     ])
-    error_message = "registry_extra_env must not override Terraform-managed AWS_EC2_METADATA_DISABLED."
+    error_message = "registry_extra_env must not override Terraform-managed variables (AWS_EC2_METADATA_DISABLED or the canonical gateway_* generic-proxy variables; use the gateway_* variables instead)."
   }
 }
 
@@ -2043,9 +2053,22 @@ variable "auth_server_extra_env" {
 
   validation {
     condition = alltrue([
-      for entry in var.auth_server_extra_env : upper(trimspace(entry.name)) != "AWS_EC2_METADATA_DISABLED"
+      for entry in var.auth_server_extra_env : !contains([
+        "GATEWAY_GENERIC_PROXY_ENABLED",
+        "GENERIC_PROXY_TOKEN_TTL_SECONDS",
+        "GENERIC_PROXY_MAX_BODY_BYTES",
+        "GATEWAY_GENERIC_REQUIRE_BEARER_FOR_WRITES",
+        "GATEWAY_EGRESS_SELFCHECK_ENABLED",
+        "GATEWAY_GENERIC_TLS_VERIFY",
+        "GATEWAY_GENERIC_MAX_CONCURRENCY",
+        "GATEWAY_GENERIC_STREAM_MAX_CONCURRENCY",
+        "GATEWAY_GENERIC_ACQUIRE_TIMEOUT_SECONDS",
+        "GATEWAY_GENERIC_STREAM_MAX_DURATION_SECONDS",
+        "GATEWAY_GENERIC_STREAM_MAX_BYTES",
+        "AWS_EC2_METADATA_DISABLED",
+      ], upper(trimspace(entry.name)))
     ])
-    error_message = "auth_server_extra_env must not override Terraform-managed AWS_EC2_METADATA_DISABLED."
+    error_message = "auth_server_extra_env must not override Terraform-managed generic-proxy or metadata-hardening variables; use the canonical variables instead."
   }
 }
 
@@ -2127,10 +2150,27 @@ variable "egress_obo_allowed_audiences" {
   default     = ""
 }
 
-variable "egress_registry_internal_url" {
-  description = "URL the auth-server uses to reach the registry internal vend endpoint."
+variable "egress_oauth_trusted_idp_hosts" {
+  description = <<-EOT
+    Optional comma-separated hostnames of operator-controlled OAuth/OIDC identity
+    providers whose token endpoints may resolve to private addresses. Empty (the
+    default) means the credentialed-OAuth SSRF profile permits no private-resolving
+    token endpoint. Set this when the IdP is self-hosted (Keycloak, or Entra reached
+    over Private Link), where the token endpoint legitimately resolves to RFC1918
+    and egress consent would otherwise fail as blocked by security policy. Exact
+    hostnames only: no CIDRs, no wildcards, and this does not inherit
+    ssrf_allowed_hosts, so a proxy-target bypass can never relax a token POST.
+    HTTPS stays required and metadata/link-local addresses stay denied. Entries
+    receive client secrets, refresh tokens and user assertions, so keep it tight.
+  EOT
   type        = string
-  default     = "http://registry:8080"
+  default     = ""
+}
+
+variable "egress_registry_internal_url" {
+  description = "URL the auth-server uses to reach the registry's dedicated internal egress-token vend listener. Served on a separate nginx port (8091) that the ALB never fronts; reached task-to-task via Service Connect (registry:8091), gated by the auth-server->registry security-group rule."
+  type        = string
+  default     = "http://registry:8091"
 }
 
 variable "egress_nginx_marker_secret" {
@@ -2159,6 +2199,24 @@ variable "validate_fast_path_enabled" {
   default     = false
 }
 
+variable "egress_credential_encryption_key" {
+  description = "Optional AES-256-GCM key (registry-only) used to encrypt per-user egress credentials at rest before they reach Secrets Manager / OpenBao. Empty disables encryption (legacy plaintext); existing deployments keep working unchanged. Never auto-generated."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+# =============================================================================
+# GATEWAY GENERIC-PROXY FEATURE (ships disabled by default)
+# =============================================================================
+
+# Registry container settings
+variable "gateway_generic_proxy_enabled" {
+  description = "Master switch for the gateway generic-proxy feature (proxying arbitrary resources). Off by default = no behavior change for existing deployments."
+  type        = bool
+  default     = false
+}
+
 variable "validate_fast_path_image_uri" {
   description = "Container image URI for the go-validate sidecar."
   type        = string
@@ -2175,4 +2233,120 @@ variable "validate_upstream_url" {
   description = "nginx /validate upstream for the registry. Empty -> auth-server. Set to http://go-validate:8899 when validate_fast_path_enabled = true."
   type        = string
   default     = ""
+}
+
+variable "gateway_canonical_namespace_enabled" {
+  description = "Enable canonical namespace handling for generic-proxied entities. Off by default."
+  type        = bool
+  default     = false
+}
+
+variable "gateway_proxy_allow_private_targets" {
+  description = "Allow the generic proxy to reach private/internal network targets. Off by default to keep the SSRF egress guard fail-closed."
+  type        = bool
+  default     = false
+}
+
+variable "gateway_generic_client_max_body_size" {
+  description = "Maximum client request body size accepted by the generic-proxy nginx location (nginx client_max_body_size syntax, e.g. '1m')."
+  type        = string
+  default     = "1m"
+}
+
+variable "gateway_proxy_prefix" {
+  description = "URL path prefix for auto-generated client-facing proxy routes (/{prefix}/{entity_type}/{name}). Single URL-safe path segment; the registry derives the client path automatically."
+  type        = string
+  default     = "gateway"
+}
+
+variable "gateway_generic_stream_read_timeout_seconds" {
+  description = "nginx proxy_read_timeout (seconds) for generic-proxy routes whose entity has proxy_streaming=true (SSE / token streams, e.g. an LLM proxied as a custom type). Only affects streaming routes."
+  type        = number
+  default     = 3600
+}
+
+# Auth-server container settings
+variable "generic_proxy_token_ttl_seconds" {
+  description = "Lifetime (seconds) of the auth-server-minted generic-proxy internal token; the replay-window cap."
+  type        = number
+  default     = 30
+}
+
+variable "generic_proxy_max_body_bytes" {
+  description = "Upper bound (in bytes) on a generic-proxy upstream response body that the auth-server hop will buffer. Default 10485760 (10 MiB)."
+  type        = number
+  default     = 10485760
+}
+
+variable "gateway_generic_require_bearer_for_writes" {
+  description = "Require a bearer token for write (non-GET) requests through the generic proxy. On by default (fail-closed)."
+  type        = bool
+  default     = true
+}
+
+variable "gateway_egress_selfcheck_enabled" {
+  description = "Enable the egress self-check that validates outbound connectivity before enabling generic-proxy targets. On by default (fail-closed)."
+  type        = bool
+  default     = true
+}
+
+variable "gateway_generic_tls_verify" {
+  description = "Whether the generic proxy verifies upstream TLS certificates. Defaults to 'true'; set to 'false' only for trusted internal targets with self-signed certs."
+  type        = string
+  default     = "true"
+}
+
+variable "gateway_generic_max_concurrency" {
+  description = "Maximum number of concurrent buffered generic-proxy requests handled by the auth-server."
+  type        = number
+  default     = 32
+
+  validation {
+    condition     = var.gateway_generic_max_concurrency >= 1
+    error_message = "gateway_generic_max_concurrency must be at least 1."
+  }
+}
+
+variable "gateway_generic_stream_max_concurrency" {
+  description = "Maximum number of concurrent long-lived generic-proxy streams; isolated from buffered request capacity."
+  type        = number
+  default     = 8
+
+  validation {
+    condition     = var.gateway_generic_stream_max_concurrency >= 1
+    error_message = "gateway_generic_stream_max_concurrency must be at least 1."
+  }
+}
+
+variable "gateway_generic_acquire_timeout_seconds" {
+  description = "Maximum seconds a generic request waits for either concurrency pool before returning 503."
+  type        = number
+  default     = 5
+
+  validation {
+    condition     = var.gateway_generic_acquire_timeout_seconds > 0
+    error_message = "gateway_generic_acquire_timeout_seconds must be greater than 0."
+  }
+}
+
+variable "gateway_generic_stream_max_duration_seconds" {
+  description = "Absolute lifetime in seconds for one generic-proxy stream, even while chunks continue to arrive."
+  type        = number
+  default     = 3600
+
+  validation {
+    condition     = var.gateway_generic_stream_max_duration_seconds >= 1
+    error_message = "gateway_generic_stream_max_duration_seconds must be at least 1."
+  }
+}
+
+variable "gateway_generic_stream_max_bytes" {
+  description = "Maximum raw response bytes forwarded by one generic-proxy stream."
+  type        = number
+  default     = 104857600
+
+  validation {
+    condition     = var.gateway_generic_stream_max_bytes >= 1024
+    error_message = "gateway_generic_stream_max_bytes must be at least 1024."
+  }
 }

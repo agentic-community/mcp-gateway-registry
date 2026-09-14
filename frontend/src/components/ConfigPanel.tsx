@@ -39,10 +39,20 @@ interface ConfigGroup {
   subgroups?: ConfigSubgroup[];
 }
 
+interface Recommendation {
+  id: string;
+  setting: string;
+  component: string;
+  severity: string;
+  message: string;
+  configured: boolean;
+}
+
 interface ConfigResponse {
   groups: ConfigGroup[];
   total_groups: number;
   is_local_dev: boolean;
+  recommendations?: Recommendation[];
 }
 
 type ExportFormat = 'env' | 'json' | 'tfvars' | 'yaml';
@@ -500,6 +510,33 @@ const ConfigPanel: React.FC<ConfigPanelProps> = ({ onError, showToast }) => {
           </button>
         </div>
       </div>
+
+      {/* Recommended-but-optional settings left unset (nudge) */}
+      {(config.recommendations ?? []).some((r) => !r.configured) && (
+        <div
+          className="rounded-lg border border-yellow-300 bg-yellow-50 px-4 py-3
+                     dark:border-yellow-700/60 dark:bg-yellow-900/20"
+          data-testid="recommended-config-warning"
+        >
+          <div className="flex items-start space-x-2">
+            <ExclamationCircleIcon className="h-5 w-5 flex-shrink-0 text-yellow-600 dark:text-yellow-400" />
+            <div className="space-y-1">
+              <p className="text-sm font-medium text-yellow-800 dark:text-yellow-200">
+                Recommended configuration not set
+              </p>
+              <ul className="list-disc space-y-1 pl-5 text-sm text-yellow-800 dark:text-yellow-300">
+                {config.recommendations!
+                  .filter((r) => !r.configured)
+                  .map((r) => (
+                    <li key={r.id}>
+                      <span className="font-mono">{r.setting}</span>: {r.message}
+                    </li>
+                  ))}
+              </ul>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Search */}
       <div className="relative">

@@ -25,6 +25,7 @@ def _reset_caches() -> None:
     url_guard._skill_allowlist.cache_clear()
     url_guard._proxy_allowlist.cache_clear()
     url_guard._builtin_airegistry_tools_allowlist.cache_clear()
+    url_guard._credentialed_oauth_allowlist.cache_clear()
 
 
 @pytest.fixture(autouse=True)
@@ -43,11 +44,19 @@ def _resolve_to(*ips: str):
     return _stub
 
 
-def _settings(github_extra_hosts="", ssrf_allowed_hosts="", ssrf_allowed_cidrs=""):
+def _settings(
+    github_extra_hosts="",
+    ssrf_allowed_hosts="",
+    ssrf_allowed_cidrs="",
+    gateway_proxy_allow_private_targets=False,
+    egress_oauth_trusted_idp_hosts="",
+):
     s = MagicMock()
     s.github_extra_hosts = github_extra_hosts
     s.ssrf_allowed_hosts = ssrf_allowed_hosts
     s.ssrf_allowed_cidrs = ssrf_allowed_cidrs
+    s.gateway_proxy_allow_private_targets = gateway_proxy_allow_private_targets
+    s.egress_oauth_trusted_idp_hosts = egress_oauth_trusted_idp_hosts
     return s
 
 
@@ -690,13 +699,126 @@ class TestBuiltinExactOutboundIdentity:
 
 
 class TestCredentialedOAuthProfile:
-    def test_profile_has_empty_allowlist_and_requires_https(self):
-        profile = url_guard.CREDENTIALED_OAUTH_PROFILE
-        allowlist = profile.allowlist_factory()
-        assert profile.name == "credentialed-oauth"
-        assert profile.require_https is True
-        assert allowlist.hosts == frozenset()
+    def test_profile_is_empty_by_default_and_requires_https(self):
+        with patch.object(url_guard, "settings", _settings()):
+            profile = url_guard.CREDENTIALED_OAUTH_PROFILE
+            allowlist = profile.allowlist_factory()
+            assert profile.name == "credentialed-oauth"
+            assert profile.require_https is True
+            assert allowlist.hosts == frozenset()
+            assert allowlist.cidrs == ()
+
+    def test_trusted_idp_host_is_read_from_its_own_setting(self):
+        with patch.object(
+            url_guard,
+            "settings",
+            _settings(egress_oauth_trusted_idp_hosts="Keycloak.Internal.Example.COM, "),
+        ):
+            allowlist = url_guard.CREDENTIALED_OAUTH_PROFILE.allowlist_factory()
+        # Normalized to lower case and whitespace-stripped, and hosts-only: a
+        # trusted IdP never brings CIDRs with it.
+        assert allowlist.hosts == frozenset({"keycloak.internal.example.com"})
         assert allowlist.cidrs == ()
+
+    def test_trusted_idp_may_resolve_to_a_private_address(self):
+        # The whole point: a self-hosted IdP legitimately resolves to RFC1918,
+        # and the gateway is already required to trust it via KEYCLOAK_URL.
+        with patch.object(
+            url_guard,
+            "settings",
+            _settings(egress_oauth_trusted_idp_hosts="keycloak.internal"),
+        ):
+            with patch.object(url_guard.socket, "getaddrinfo", _resolve_to("10.20.30.40")):
+                ips = url_guard.validate_url(
+                    "https://keycloak.internal/realms/x/protocol/openid-connect/token",
+                    profile=url_guard.CREDENTIALED_OAUTH_PROFILE,
+                )
+        assert ips == ["10.20.30.40"]
+
+    def test_untrusted_private_idp_is_still_blocked(self):
+        with patch.object(
+            url_guard,
+            "settings",
+            _settings(egress_oauth_trusted_idp_hosts="keycloak.internal"),
+        ):
+            with patch.object(url_guard.socket, "getaddrinfo", _resolve_to("10.20.30.40")):
+                with pytest.raises(UrlValidationError):
+                    url_guard.validate_url(
+                        "https://not-the-idp.internal/oauth/token",
+                        profile=url_guard.CREDENTIALED_OAUTH_PROFILE,
+                    )
+
+    def test_trusted_idp_hosts_match_exactly_with_no_wildcards(self):
+        # Naming one host must not implicitly trust its subdomains or parent.
+        with patch.object(
+            url_guard,
+            "settings",
+            _settings(egress_oauth_trusted_idp_hosts="idp.example.com"),
+        ):
+            with patch.object(url_guard.socket, "getaddrinfo", _resolve_to("10.0.0.9")):
+                for host in ("evil.idp.example.com", "example.com", "idp.example.com.evil.net"):
+                    with pytest.raises(UrlValidationError):
+                        url_guard.validate_url(
+                            f"https://{host}/token",
+                            profile=url_guard.CREDENTIALED_OAUTH_PROFILE,
+                        )
+
+    def test_trusted_idp_does_not_relax_the_metadata_endpoint(self):
+        # Hard-denied categories run before the hostname relaxation, so naming a
+        # host cannot turn it into a credential-endpoint bypass.
+        with patch.object(
+            url_guard,
+            "settings",
+            _settings(egress_oauth_trusted_idp_hosts="keycloak.internal"),
+        ):
+            with patch.object(url_guard.socket, "getaddrinfo", _resolve_to("169.254.169.254")):
+                with pytest.raises(UrlValidationError):
+                    url_guard.validate_url(
+                        "https://keycloak.internal/token",
+                        profile=url_guard.CREDENTIALED_OAUTH_PROFILE,
+                    )
+
+    def test_trusted_idp_still_requires_https(self):
+        with patch.object(
+            url_guard,
+            "settings",
+            _settings(egress_oauth_trusted_idp_hosts="keycloak.internal"),
+        ):
+            with patch.object(url_guard.socket, "getaddrinfo", _resolve_to("10.20.30.40")):
+                with pytest.raises(UrlValidationError):
+                    url_guard.validate_url(
+                        "http://keycloak.internal/token",
+                        profile=url_guard.CREDENTIALED_OAUTH_PROFILE,
+                    )
+
+    def test_trusted_idp_transport_pins_to_resolved_ip(self):
+        with patch.object(
+            url_guard,
+            "settings",
+            _settings(egress_oauth_trusted_idp_hosts="keycloak.internal"),
+        ):
+            with patch.object(url_guard.socket, "getaddrinfo", _resolve_to("10.20.30.40")):
+                transport = url_guard.GuardedAsyncTransport(
+                    guard_profile=url_guard.CREDENTIALED_OAUTH_PROFILE
+                )
+                pinned = transport._pin_request(
+                    httpx.Request("POST", "https://keycloak.internal/token")
+                )
+        assert pinned.url.host == "10.20.30.40"
+        assert pinned.headers["Host"] == "keycloak.internal"
+
+    def test_skill_allowlist_cannot_relax_oauth_token_target(self):
+        with patch.object(
+            url_guard,
+            "settings",
+            _settings(github_extra_hosts="token.internal"),
+        ):
+            with patch.object(url_guard.socket, "getaddrinfo", _resolve_to("10.0.0.8")):
+                with pytest.raises(UrlValidationError):
+                    url_guard.validate_url(
+                        "https://token.internal/oauth/token",
+                        profile=url_guard.CREDENTIALED_OAUTH_PROFILE,
+                    )
 
     def test_proxy_allowlists_cannot_relax_oauth_token_target(self):
         with patch.object(
@@ -720,3 +842,77 @@ class TestCredentialedOAuthProfile:
         )
         with pytest.raises(UrlValidationError):
             transport._pin_request(httpx.Request("POST", "http://93.184.216.34/token"))
+
+
+class TestEgressUpstreamProfile:
+    """The egress-injected proxy hop pins to the resolved IP and permits private /
+    hostname-private MCP upstreams, but never metadata/credential endpoints."""
+
+    def test_profile_is_settings_free_and_allows_private(self):
+        profile = url_guard.EGRESS_UPSTREAM_PROFILE
+        allowlist = profile.allowlist_factory()  # must not touch registry settings
+        assert profile.name == "egress-upstream"
+        assert profile.allow_private is True
+        assert profile.require_https is False
+        assert allowlist.hosts == frozenset() and allowlist.cidrs == ()
+
+    def test_private_upstream_is_pinned_not_blocked(self):
+        # An internal MCP server resolving to a private IP stays reachable, and
+        # the connection is pinned to that resolved IP (rebinding-safe).
+        with patch.object(url_guard.socket, "getaddrinfo", _resolve_to("10.0.0.5")):
+            transport = url_guard.GuardedAsyncTransport(
+                guard_profile=url_guard.EGRESS_UPSTREAM_PROFILE
+            )
+            pinned = transport._pin_request(httpx.Request("POST", "http://internal-mcp:8003/mcp"))
+        assert pinned.url.host == "10.0.0.5"
+        assert pinned.headers["Host"] == "internal-mcp:8003"
+
+    def test_metadata_literal_is_blocked_even_with_allow_private(self):
+        transport = url_guard.GuardedAsyncTransport(guard_profile=url_guard.EGRESS_UPSTREAM_PROFILE)
+        with pytest.raises(UrlValidationError):
+            transport._pin_request(
+                httpx.Request("POST", "http://169.254.169.254/latest/meta-data/")
+            )
+
+    def test_credential_endpoint_literal_is_blocked(self):
+        # ECS task-credential endpoint: hard-denied regardless of allow_private.
+        transport = url_guard.GuardedAsyncTransport(guard_profile=url_guard.EGRESS_UPSTREAM_PROFILE)
+        with pytest.raises(UrlValidationError):
+            transport._pin_request(httpx.Request("POST", "http://169.254.170.2/creds"))
+
+    def test_rebind_to_metadata_is_defeated(self):
+        # allow_private permits private unicast, but a rebind to the metadata IP
+        # is still blocked at connect time.
+        with patch.object(url_guard.socket, "getaddrinfo", _resolve_to("169.254.169.254")):
+            transport = url_guard.GuardedAsyncTransport(
+                guard_profile=url_guard.EGRESS_UPSTREAM_PROFILE
+            )
+            with pytest.raises(UrlValidationError):
+                transport._pin_request(httpx.Request("POST", "http://rebind.example/mcp"))
+
+
+class TestProxyProfilePrivateTargetToggle:
+    def test_bool_relaxes_private_but_not_credential_endpoints(self):
+        settings = _settings(gateway_proxy_allow_private_targets=True)
+        with patch.object(url_guard, "settings", settings):
+            assert url_guard.validate_url(
+                "http://10.0.0.5/x", profile=url_guard.PROXY_PROFILE, resolve=False
+            ) == ["10.0.0.5"]
+            for target in (
+                "http://169.254.169.254/x",
+                "http://169.254.170.2/x",
+                "http://[fd00:ec2::254]/x",
+                "http://[fd00:ec2::23]/x",
+            ):
+                with pytest.raises(UrlValidationError):
+                    url_guard.validate_url(target, profile=url_guard.PROXY_PROFILE, resolve=False)
+
+    def test_bool_does_not_relax_noncredential_link_local(self):
+        settings = _settings(gateway_proxy_allow_private_targets=True)
+        with patch.object(url_guard, "settings", settings):
+            with pytest.raises(UrlValidationError):
+                url_guard.validate_url(
+                    "http://169.254.10.10/x",
+                    profile=url_guard.PROXY_PROFILE,
+                    resolve=False,
+                )

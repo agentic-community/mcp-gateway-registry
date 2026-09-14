@@ -120,11 +120,48 @@ local function _forward_identity_headers()
 end
 
 
+-- JSON Schema keywords whose value must serialize as an array.
+local SCHEMA_ARRAY_KEYS = {
+    required = true, enum = true, allOf = true, anyOf = true,
+    oneOf = true, examples = true, prefixItems = true,
+}
+
+-- Keywords holding a map of caller-chosen names to subschemas. A member named
+-- "required" there is a property name, not the keyword, so descend into the
+-- members without matching their names against SCHEMA_ARRAY_KEYS.
+local SCHEMA_MAP_KEYS = {
+    properties = true, patternProperties = true,
+    definitions = true, ["$defs"] = true,
+}
+
+-- cjson decodes an empty JSON array to a bare table, which re-encodes as {}.
+-- Tag those tables so the keywords above survive the round trip as [].
+local function _tag_empty_schema_arrays(node, depth)
+    if type(node) ~= "table" or depth > 16 then
+        return
+    end
+    for key, value in pairs(node) do
+        if type(value) == "table" then
+            if SCHEMA_MAP_KEYS[key] then
+                for _, subschema in pairs(value) do
+                    _tag_empty_schema_arrays(subschema, depth + 1)
+                end
+            elseif SCHEMA_ARRAY_KEYS[key] and next(value) == nil then
+                setmetatable(value, empty_array_mt)
+            else
+                _tag_empty_schema_arrays(value, depth + 1)
+            end
+        end
+    end
+end
+
+
 -- Ensure inputSchema has "type": "object" as required by MCP spec
 local function _ensure_mcp_schema(schema)
     if not schema or type(schema) ~= "table" then
         return { type = "object", properties = {} }
     end
+    _tag_empty_schema_arrays(schema, 0)
     if schema.type == "object" then
         return schema
     end

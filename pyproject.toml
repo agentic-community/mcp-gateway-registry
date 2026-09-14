@@ -229,7 +229,10 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "B", "C4", "UP"]
-ignore = ["E501", "B008", "B904", "B019", "C401", "B007", "E402", "F841", "F823", "E722", "F811", "W293", "W291", "F821"]
+# F821 (undefined name) is intentionally NOT ignored: it catches type names used
+# in annotations but never imported, which break typing.get_type_hints(), mypy,
+# and IDE navigation even when they do not crash at runtime (see #1654).
+ignore = ["E501", "B008", "B904", "B019", "C401", "B007", "E402", "F841", "F823", "E722", "F811", "W293", "W291"]
 
 [tool.ruff.format]
 quote-style = "double"

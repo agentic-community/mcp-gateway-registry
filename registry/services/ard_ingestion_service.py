@@ -32,6 +32,7 @@ from ..observability.meters import (
 from ..repositories.factory import get_federation_config_repository, get_skill_repository
 from ..schemas.federation_schema import AiCatalogFederationConfig, AiCatalogSourceConfig
 from ..schemas.peer_federation_schema import SyncResult
+from ..schemas.proxy_mixin import strip_proxy_fields
 from ..schemas.skill_models import SkillCard
 from .ard_ingest_mapping import entry_to_record, entry_to_skill_data
 from .ard_trust import host_identity_domain, verify_entry_trust
@@ -269,6 +270,10 @@ class ArdIngestionService:
         repo = get_skill_repository()
         stored = 0
         for skill_data in skills:
+            # Peer content (ARD catalog crawl): strip proxy fields so a federated
+            # skill can never become a local gateway route. Matches the AgentCore
+            # skill-ingest path; not relying on the mapper allowlist alone.
+            skill_data = strip_proxy_fields(skill_data)
             path = skill_data["path"]
             try:
                 try:

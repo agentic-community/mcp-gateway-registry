@@ -47,6 +47,12 @@ from registry.observability.meters import (
     embedding_removal_failures_total as EMBEDDING_REMOVAL_FAILURES_TOTAL,
 )
 from registry.observability.meters import (
+    gateway_egress_policy_unverified as GATEWAY_EGRESS_POLICY_UNVERIFIED,
+)
+from registry.observability.meters import (
+    gateway_generic_blocks_dropped_total as GATEWAY_GENERIC_BLOCKS_DROPPED,
+)
+from registry.observability.meters import (
     m2m_orphan_cleanups_total as M2M_ORPHAN_CLEANUPS_TOTAL,
 )
 from registry.observability.meters import (
@@ -114,6 +120,8 @@ __all__ = [
     "CONFIG_VIEW_REQUESTS",
     "DEPLOYMENT_MODE_INFO",
     "EMBEDDING_REMOVAL_FAILURES_TOTAL",
+    "GATEWAY_EGRESS_POLICY_UNVERIFIED",
+    "GATEWAY_GENERIC_BLOCKS_DROPPED",
     "M2M_ORPHAN_CLEANUPS_TOTAL",
     "MODE_BLOCKED_REQUESTS",
     "NGINX_CONFIG_WRITES",

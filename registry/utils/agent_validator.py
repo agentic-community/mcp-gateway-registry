@@ -11,6 +11,7 @@ Based on: docs/design/a2a-protocol-integration.md
 import logging
 import re
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 from pydantic import BaseModel
@@ -218,7 +219,13 @@ def _check_endpoint_reachability(
     from .url_guard import PROXY_PROFILE, guarded_client
 
     try:
-        well_known_url = f"{url}/.well-known/agent-card.json"
+        # Same origin rule as the nginx card route and _build_agent_health_urls:
+        # the A2A spec puts the card at a well-known path on the ORIGIN, while the
+        # registered url names the JSON-RPC endpoint and may carry a path. Appending
+        # to the url probes one level too deep, so a spec-following agent was
+        # reported unreachable at registration (issue #1724).
+        parsed = urlparse(url)
+        well_known_url = f"{parsed.scheme}://{parsed.netloc}/.well-known/agent-card.json"
 
         with guarded_client(profile=PROXY_PROFILE, timeout=5.0) as client:
             response = client.get(well_known_url)

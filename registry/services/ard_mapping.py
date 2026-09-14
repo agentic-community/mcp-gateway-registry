@@ -6,6 +6,14 @@ URL, and return an :class:`ArdCatalogEntry` (or ``None`` when the record cannot
 produce a valid URN, in which case the caller skips it).
 
 See issue #1294 and ``.scratchpad/issue-1294/lld.md`` for the mapping rules.
+
+SECURITY NOTE: this is a federation OUTBOUND surface (ARD catalog / /api/ard/*).
+It emits an explicit ``ArdCatalogEntry`` allowlist, so gateway-proxy fields
+(is_proxied / proxy_target_url — an internal backend URL) are structurally never
+advertised to peers. Unlike the ``/api/federation/*`` export, this path is NOT
+guarded by ``strip_proxy_fields``; its safety is the allowlist. Do NOT add a
+generic passthrough of raw record fields here, and never map proxy_* onto an
+ArdCatalogEntry — that would leak internal proxy config to every catalog consumer.
 """
 
 import logging

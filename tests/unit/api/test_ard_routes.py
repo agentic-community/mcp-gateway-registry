@@ -169,8 +169,22 @@ class TestPublicAgent:
         agents = {
             "/trav": {
                 "name": "Trav",
+                "description": "Safe public description",
                 "visibility": "public",
                 "is_enabled": True,
+                "is_proxied": True,
+                "proxy_client_url": "/gateway/a2a_agent/trav",
+                "proxy_target_url": "https://private-agent.internal/rpc",
+                "proxy_streaming": True,
+                "proxy_resolved_ips": ["10.0.0.8"],
+                "proxy_target_host": "private-agent.internal",
+                "proxy_disabled_reason": "internal failure detail",
+                "custom_headers_encrypted": [
+                    {"name": "X-Api-Key", "value_encrypted": "ciphertext"}
+                ],
+                "custom_header_names": ["X-Api-Key"],
+                "custom_header_overridable_names": ["Authorization"],
+                "custom_headers_updated_at": "2026-01-01T00:00:00Z",
                 "security_schemes": {"oauth2": {}},
                 "allowed_groups": ["secret-group"],
                 "registered_by": "alice",
@@ -188,6 +202,11 @@ class TestPublicAgent:
         assert resp.status_code == 200
         body = resp.json()
         assert body["name"] == "Trav"
+        assert body["description"] == "Safe public description"
+        assert body["is_proxied"] is True
+        assert body["proxy_client_url"] == "/gateway/a2a_agent/trav"
+        for field in public_record_routes._PUBLIC_PROXY_INTERNAL_FIELDS:
+            assert field not in body
         assert "security_schemes" not in body
         assert "allowed_groups" not in body
         assert "registered_by" not in body
@@ -211,7 +230,20 @@ class TestPublicSkill:
             path="/skills/pdf",
             model_dump=lambda mode="json": {
                 "name": "pdf",
+                "description": "Safe public description",
                 "path": "/skills/pdf",
+                "is_proxied": True,
+                "proxy_client_url": "/gateway/skill/pdf",
+                "proxy_target_url": "https://private-skill.internal/run",
+                "proxy_resolved_ips": ["10.0.0.9"],
+                "proxy_target_host": "private-skill.internal",
+                "proxy_disabled_reason": "internal failure detail",
+                "custom_headers_encrypted": [
+                    {"name": "X-Api-Key", "value_encrypted": "ciphertext"}
+                ],
+                "custom_header_names": ["X-Api-Key"],
+                "custom_header_overridable_names": ["X-Caller-Token"],
+                "custom_headers_updated_at": "2026-01-01T00:00:00Z",
                 "auth_credential_encrypted": "secret",
                 "auth_scheme": "bearer",
                 "auth_header_name": "Authorization",
@@ -229,13 +261,21 @@ class TestPublicSkill:
         assert resp.status_code == 200
         body = resp.json()
         assert body["name"] == "pdf"
-        assert "auth_credential_encrypted" not in body
-        assert "auth_scheme" not in body
-        assert "auth_header_name" not in body
-        assert "credential_updated_at" not in body
-        assert "_identity_url_normalized" not in body
-        assert "owner" not in body
-        assert "rating_details" not in body
+        assert body["description"] == "Safe public description"
+        assert body["is_proxied"] is True
+        assert body["proxy_client_url"] == "/gateway/skill/pdf"
+        for field in public_record_routes._PUBLIC_PROXY_INTERNAL_FIELDS:
+            assert field not in body
+        for field in (
+            "auth_credential_encrypted",
+            "auth_scheme",
+            "auth_header_name",
+            "credential_updated_at",
+            "_identity_url_normalized",
+            "owner",
+            "rating_details",
+        ):
+            assert field not in body
         assert body["num_stars"] == 4.0
         assert body["rating_count"] == 1
 

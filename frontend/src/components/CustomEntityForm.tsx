@@ -12,17 +12,43 @@ import {
   MAX_TEXT_LEN,
 } from '../types/customEntity';
 import { labelFor } from '../utils/humanize';
-import { FormField, fieldClass } from './formFields';
+import {
+  FormField,
+  fieldClass,
+  ProxyField,
+  UpstreamHeadersField,
+  upstreamHeaderRowError,
+  type UpstreamHeader,
+} from './formFields';
 
 interface CustomEntityFormProps {
   descriptor: CustomTypeDescriptor;
   /** Existing record for edit mode; null/undefined for create. */
   record?: CustomEntityRecord | null;
-  onSave: (body: CustomEntityCreate | CustomEntityUpdate) => Promise<void>;
+  /**
+   * Persist the record. ``customHeaders`` carries the upstream-header editor
+   * rows (only when proxied); the parent routes them to the create payload
+   * (create) or the dedicated rotation PATCH (edit). Undefined = not proxied /
+   * no header edits.
+   */
+  onSave: (
+    body: CustomEntityCreate | CustomEntityUpdate,
+    customHeaders?: UpstreamHeader[],
+  ) => Promise<void>;
   onCancel: () => void;
 }
 
 const VISIBILITIES = ['public', 'private', 'group-restricted'] as const;
+
+// Gateway-proxy keys live in the attributes bag on the wire but are edited via
+// the dedicated ProxyField widget. If an admin's custom-type descriptor happens
+// to define a field with one of these names, skip its descriptor-driven widget
+// so it can't collide with (and clobber) the ProxyField-owned value.
+const PROXY_RESERVED_ATTR_KEYS = new Set([
+  'is_proxied',
+  'proxy_target_url',
+  'proxy_connect_notes',
+]);
 
 // Custom-entity forms use a teal focus accent.
 const INPUT_CLASS = fieldClass('teal');
@@ -101,6 +127,19 @@ const CustomEntityForm: React.FC<CustomEntityFormProps> = ({
   const [allowedGroups, setAllowedGroups] = useState<string[]>([]);
   const [tags, setTags] = useState<string[]>([]);
 
+  // --- gateway-proxy opt-in (lives in the attributes bag on the wire) ---
+  // A custom entity has no native backend URL, so proxy_target_url is required
+  // when is_proxied is true.
+  const [isProxied, setIsProxied] = useState(false);
+  const [proxyTargetUrl, setProxyTargetUrl] = useState('');
+  // Optional operator-authored usage notes, shown in the Connect panel.
+  const [proxyConnectNotes, setProxyConnectNotes] = useState('');
+  // Read-only, server-derived client path (present on edit once saved).
+  const [proxyClientUrl, setProxyClientUrl] = useState('');
+  // Upstream headers (per-header overridable). On edit these are the registered
+  // names with blank values (write-only); the backend preserves unchanged ones.
+  const [customHeaders, setCustomHeaders] = useState<UpstreamHeader[]>([]);
+
   // --- attributes state (per-type) ---
   const [attributes, setAttributes] = useState<Record<string, unknown>>({});
 
@@ -116,7 +155,33 @@ const CustomEntityForm: React.FC<CustomEntityFormProps> = ({
       setVisibility(record.visibility);
       setAllowedGroups(record.allowed_groups ?? []);
       setTags(record.tags ?? []);
-      setAttributes({ ...(record.attributes ?? {}) });
+      // Proxy fields are TOP-LEVEL (mixin) fields on the wire, edited via the
+      // dedicated ProxyField widget. Read them from the record envelope; keep a
+      // fallback read from the attributes bag for any record written before the
+      // fields moved top-level, and strip them from the descriptor-driven
+      // attribute state so no duplicate raw widget can render.
+      const attrs = { ...(record.attributes ?? {}) };
+      setIsProxied(
+        record.is_proxied ?? !!attrs.is_proxied,
+      );
+      setProxyTargetUrl(
+        record.proxy_target_url ??
+          (typeof attrs.proxy_target_url === 'string' ? attrs.proxy_target_url : ''),
+      );
+      setProxyConnectNotes(record.proxy_connect_notes ?? '');
+      setProxyClientUrl(record.proxy_client_url ?? '');
+      // Rebuild header editor rows from the registered NAMES (values write-only).
+      setCustomHeaders(
+        (record.custom_header_names ?? []).map((name) => ({
+          name,
+          value: '',
+          overridable: (record.custom_header_overridable_names ?? []).includes(name),
+        })),
+      );
+      delete attrs.is_proxied;
+      delete attrs.proxy_target_url;
+      delete attrs.proxy_connect_notes;
+      setAttributes(attrs);
     }
   }, [record]);
 
@@ -250,6 +315,12 @@ const CustomEntityForm: React.FC<CustomEntityFormProps> = ({
       setFieldErrors({ allowed_groups: 'At least one group is required' });
       return;
     }
+    // A custom entity has no native URL to fall back on, so a proxied entity
+    // must carry an explicit target.
+    if (isProxied && !proxyTargetUrl.trim()) {
+      setFieldErrors({ proxy_target_url: 'Proxy target URL is required when proxying is enabled' });
+      return;
+    }
 
     // Materialize bool field defaults. The checkbox widget renders an untouched
     // bool as unchecked but never writes into `attributes` until toggled, so a
@@ -258,6 +329,11 @@ const CustomEntityForm: React.FC<CustomEntityFormProps> = ({
     // Default any absent bool field to false before submitting.
     const attributesWithDefaults = { ...attributes };
     descriptor.fields.forEach((field) => {
+      if (PROXY_RESERVED_ATTR_KEYS.has(field.name)) {
+        // Owned by the ProxyField; never materialize a descriptor default for
+        // these (they are sent top-level, not in the attributes bag).
+        return;
+      }
       if (
         field.datatype === 'bool' &&
         attributesWithDefaults[field.name] === undefined
@@ -266,6 +342,9 @@ const CustomEntityForm: React.FC<CustomEntityFormProps> = ({
       }
     });
 
+    // Gateway-proxy opt-in: TOP-LEVEL (mixin) fields on the wire, NOT in the
+    // attributes bag. Always send is_proxied so toggling off persists; only send
+    // the target when proxying (proxy_client_url is server-derived, never sent).
     const payload = {
       name: name.trim(),
       description: description.trim() || null,
@@ -273,11 +352,42 @@ const CustomEntityForm: React.FC<CustomEntityFormProps> = ({
       allowed_groups: allowedGroups,
       tags,
       attributes: attributesWithDefaults,
+      is_proxied: isProxied,
+      ...(isProxied ? { proxy_target_url: proxyTargetUrl.trim() } : {}),
+      ...(isProxied ? { proxy_connect_notes: proxyConnectNotes.trim() } : {}),
     };
+
+    // Upstream headers only apply when proxied. Block submit client-side on any
+    // known-invalid row (reserved name, fixed Authorization, value-less fixed
+    // header) so a credential form fails fast with a specific message rather
+    // than a generic backend reject. The backend remains the security boundary.
+    if (isProxied) {
+      for (const h of customHeaders) {
+        const rowError = upstreamHeaderRowError(h, isEditMode);
+        if (rowError) {
+          setFormError(rowError);
+          return;
+        }
+      }
+    }
+
+    // Drop fully-blank rows; trim the name and (non-blank) value so stray
+    // whitespace is never persisted. A blank value is preserved server-side
+    // (write-only UX) on edit, or must be a caller-only overridable slot on
+    // create; an all-whitespace value trims to blank and keeps that meaning.
+    const upstreamHeaders = isProxied
+      ? customHeaders
+          .filter((h) => h.name.trim())
+          .map((h) => ({
+            name: h.name.trim(),
+            value: h.value.trim(),
+            overridable: h.overridable,
+          }))
+      : [];
 
     setSaving(true);
     try {
-      await onSave(payload);
+      await onSave(payload, upstreamHeaders);
     } catch (err: unknown) {
       const detail = axios.isAxiosError(err) ? err.response?.data?.detail : undefined;
       if (Array.isArray(detail)) {
@@ -306,6 +416,12 @@ const CustomEntityForm: React.FC<CustomEntityFormProps> = ({
   }, [onCancel, saving]);
 
   const typeLabel = descriptor.display_name || labelFor({ name: descriptor.name });
+
+  // Descriptor fields to render as raw widgets, minus any that collide with the
+  // ProxyField-owned reserved keys (see PROXY_RESERVED_ATTR_KEYS).
+  const renderableFields = descriptor.fields.filter(
+    (field) => !PROXY_RESERVED_ATTR_KEYS.has(field.name),
+  );
 
   return (
     <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
@@ -383,10 +499,43 @@ const CustomEntityForm: React.FC<CustomEntityFormProps> = ({
             <ChipInput value={tags} onChange={setTags} placeholder="Type a tag, press Enter" />
           </FormField>
 
+          <ProxyField
+            isProxied={isProxied}
+            onIsProxiedChange={setIsProxied}
+            proxyTargetUrl={proxyTargetUrl}
+            onProxyTargetUrlChange={setProxyTargetUrl}
+            targetRequired
+            accent="teal"
+            error={fieldErrors.proxy_target_url}
+            clientUrl={proxyClientUrl}
+          />
+
+          {isProxied && (
+            <FormField label="Connect notes">
+              <textarea
+                rows={3}
+                maxLength={2000}
+                value={proxyConnectNotes}
+                onChange={(e) => setProxyConnectNotes(e.target.value)}
+                className={INPUT_CLASS}
+                placeholder="Optional usage notes shown to clients in the Connect panel (e.g. the API sub-path to append)."
+              />
+            </FormField>
+          )}
+
+          {isProxied && (
+            <UpstreamHeadersField
+              headers={customHeaders}
+              onChange={setCustomHeaders}
+              accent="teal"
+              editMode={!!record}
+            />
+          )}
+
           {/* --- Per-type attributes (descriptor-driven) --- */}
-          {descriptor.fields.length > 0 && (
+          {renderableFields.length > 0 && (
             <div className="space-y-6 pt-2 border-t border-gray-200 dark:border-gray-700">
-              {descriptor.fields.map(renderField)}
+              {renderableFields.map(renderField)}
             </div>
           )}
         </div>

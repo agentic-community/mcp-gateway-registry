@@ -296,6 +296,8 @@ class EgressAuthService:
         egress_oauth: dict,
         current_user_id: str | None = None,
         current_auth_method: str | None = None,
+        *,
+        bound_upstreams: list[str],
     ) -> EgressConnection:
         """Verify state, exchange the code, and store the token.
 
@@ -339,6 +341,12 @@ class EgressAuthService:
             redirect_uri=self._callback_url,
             pkce_verifier=state.pkce_verifier,
         )
+        # Bind the credential to the destinations + token endpoint registered at
+        # consent time; the vend refuses any other upstream / token URL (see
+        # egress_auth.upstream_binding and get_valid_token).
+        token = token.model_copy(
+            update={"bound_upstreams": list(bound_upstreams), "bound_token_url": cfg.token_url}
+        )
         await self._store.put_token(
             state.auth_method, state.user_id, state.provider, state.server_path, token
         )
@@ -359,6 +367,8 @@ class EgressAuthService:
         user_id: str,
         server_path: str,
         egress_oauth: dict,
+        *,
+        requested_upstream: str,
     ) -> str | None:
         """Vend a valid access token, refreshing if near expiry. None on miss.
 
@@ -383,6 +393,37 @@ class EgressAuthService:
                 server_path,
             )
             return None
+
+        # destination binding: the credential may only travel to an upstream that
+        # was registered when it was stored. A repointed proxy_pass_url (or a
+        # newly added version) is a MISS -> re-consent, never a vend to the new
+        # host. Legacy entries carry an empty set and re-consent once.
+        if requested_upstream not in set(token.bound_upstreams):
+            logger.warning(
+                "egress vend: upstream binding mismatch for %s/%s (requested %r not in "
+                "bound set); refusing to vend -- forcing re-consent",
+                provider,
+                server_path,
+                requested_upstream,
+            )
+            return None
+
+        # token-endpoint binding: a repointed custom_token_url would send the
+        # refresh_token + client_secret to a new endpoint on the next refresh.
+        # Reject before that refresh can fire. None (pat/legacy) skips the check.
+        if token.bound_token_url is not None:
+            try:
+                live_token_url = resolve_provider(egress_oauth).token_url
+            except Exception:  # nosec B110 - provider misconfig -> fail closed below
+                live_token_url = None
+            if live_token_url != token.bound_token_url:
+                logger.warning(
+                    "egress vend: token-endpoint binding mismatch for %s/%s; refusing "
+                    "to vend -- forcing re-consent",
+                    provider,
+                    server_path,
+                )
+                return None
 
         if self._is_near_expiry(token):
             token = await self._refresh_single_flight(
@@ -441,6 +482,12 @@ class EgressAuthService:
                     server_path,
                 )
                 return None
+            new = new.model_copy(
+                update={
+                    "bound_upstreams": current.bound_upstreams,
+                    "bound_token_url": current.bound_token_url,
+                }
+            )
             await self._store.put_token(auth_method, user_id, provider, server_path, new)
             return new
         finally:
@@ -488,6 +535,8 @@ class EgressAuthService:
         user_id: str,
         provider: str,
         server_path: str,
+        *,
+        requested_upstream: str,
     ) -> str | None:
         """Vend a stored per-user PAT, enforcing the bounded lifetime. None on miss.
 
@@ -513,6 +562,13 @@ class EgressAuthService:
             return None
         # Enforce the bounded lifetime at the sink: an expired PAT is a MISS.
         if not token.expires_at or self._is_expired(token.expires_at):
+            return None
+        if requested_upstream not in set(token.bound_upstreams):
+            logger.warning(
+                "egress vend: pat upstream binding mismatch for %s/%s; treating as a miss",
+                provider,
+                server_path,
+            )
             return None
         return token.access_token
 

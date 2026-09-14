@@ -114,7 +114,14 @@ class TestToolExecutionLabelBounding:
 
 def test_bounded_attrs_set_covers_request_derived_keys() -> None:
     # Guard against a future edit re-adding a raw request-derived attr without
-    # bounding it. Every key here is copied verbatim from the JSON-RPC body.
+    # bounding it. tool_name / method / client_name / client_version are copied
+    # verbatim from the JSON-RPC body.
+    #
+    # server_name joined the set with the gateway-proxy metrics work (issue #1735):
+    # it stopped being a coarse path segment and became the per-entity authz key,
+    # and it rides a 16-bucket histogram as well as a counter, so one unbounded
+    # value costs 19 series and UUID-keyed records churn a value per create-delete
+    # cycle. Removing it from this set reopens that.
     assert _TOOL_EXECUTION_BOUNDED_ATTRS == frozenset(
-        {"tool_name", "method", "client_name", "client_version"}
+        {"tool_name", "method", "client_name", "client_version", "server_name"}
     )

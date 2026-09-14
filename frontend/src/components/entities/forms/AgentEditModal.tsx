@@ -5,6 +5,7 @@ import {
   StatusField,
   VisibilityField,
   MetadataField,
+  ProxyField,
   FIELD_BASE,
   FIELD_FOCUS,
   LABEL,
@@ -33,6 +34,12 @@ export interface AgentEditForm {
   skillsJson: string;
   metadata: string;
   status: 'active' | 'draft' | 'deprecated' | 'beta';
+  // Gateway-proxy opt-in. An agent has a native url, so proxy_target_url is
+  // optional (falls back to the agent's url when blank).
+  is_proxied: boolean;
+  proxy_target_url: string;
+  // Read-only, server-derived client path.
+  proxy_client_url: string;
 }
 
 interface AgentEditModalProps {
@@ -102,6 +109,15 @@ const AgentEditModal: React.FC<AgentEditModalProps> = ({
             value={form.status}
             accent="cyan"
             onChange={(status) => setForm((prev) => ({ ...prev, status }))}
+          />
+
+          <ProxyField
+            isProxied={form.is_proxied}
+            onIsProxiedChange={(v) => setForm((prev) => ({ ...prev, is_proxied: v }))}
+            proxyTargetUrl={form.proxy_target_url}
+            onProxyTargetUrlChange={(v) => setForm((prev) => ({ ...prev, proxy_target_url: v }))}
+            accent="cyan"
+            clientUrl={form.proxy_client_url}
           />
 
           <FormField label="Version">

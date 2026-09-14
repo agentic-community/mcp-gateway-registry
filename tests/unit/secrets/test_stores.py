@@ -49,22 +49,39 @@ class InvalidPath(Exception):
 _InvalidPath = InvalidPath  # alias used below
 
 
+class InvalidRequest(Exception):
+    """Mirrors hvac.exceptions.InvalidRequest (raised on a KV v2 cas mismatch)."""
+
+
 class _FakeKvV2:
     def __init__(self) -> None:
         self._data: dict[str, dict] = {}
+        self._versions: dict[str, int] = {}
 
-    def create_or_update_secret(self, path, secret, mount_point):
+    def create_or_update_secret(self, path, secret, mount_point, cas=None):
+        current = self._versions.get(path, 0)
+        # KV v2 check-and-set: the write is rejected unless cas equals the
+        # entry's current version (0 for a create).
+        if cas is not None and cas != current:
+            raise InvalidRequest("check-and-set parameter did not match the current version")
         self._data[path] = dict(secret)
+        self._versions[path] = current + 1
 
     def read_secret_version(self, path, mount_point, raise_on_deleted_version=False):
         if path not in self._data:
             raise _InvalidPath(path)
-        return {"data": {"data": self._data[path]}}
+        return {
+            "data": {
+                "data": self._data[path],
+                "metadata": {"version": self._versions.get(path, 1)},
+            }
+        }
 
     def delete_metadata_and_all_versions(self, path, mount_point):
         # delete the entry and anything beneath it
         for k in [k for k in self._data if k == path or k.startswith(path + "/")]:
             del self._data[k]
+            self._versions.pop(k, None)
 
     def list_secrets(self, path, mount_point):
         prefix = path.rstrip("/") + "/"

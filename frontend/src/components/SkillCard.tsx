@@ -28,6 +28,7 @@ import SecurityScanModal from './SecurityScanModal';
 import useEscapeKey from '../hooks/useEscapeKey';
 import ResourceBoundTokenButton from './ResourceBoundTokenButton';
 import SkillResources from './SkillResources';
+import ProxyConnectButton from './ProxyConnectButton';
 import { SafeLink, safeMarkdownAnchor } from './SafeLink';
 import { toScanSummary } from '../utils/securityScan';
 
@@ -408,6 +409,20 @@ const SkillCard: React.FC<SkillCardProps> = React.memo(({
                     Discovery
                   </span>
                 )}
+                {/* Proxied badge - served through the gateway generic hop */}
+                {skill.is_proxied && (
+                  <span
+                    className="px-2 py-0.5 text-xs font-semibold bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-300 rounded-full flex-shrink-0 border border-cyan-200 dark:border-cyan-600"
+                    title={
+                      skill.proxy_client_url
+                        ? `Clients connect at ${skill.proxy_client_url}` +
+                          (skill.proxy_target_url ? ` (forwards to ${skill.proxy_target_url})` : '')
+                        : 'Served through the gateway proxy'
+                    }
+                  >
+                    Proxied
+                  </span>
+                )}
               </div>
 
               <code className="text-xs text-gray-600 dark:text-gray-300 bg-gray-50 dark:bg-gray-800/50 px-2 py-1 rounded font-mono">
@@ -475,6 +490,14 @@ const SkillCard: React.FC<SkillCardProps> = React.memo(({
                 >
                   {React.createElement(getSecurityIconState().Icon, { className: `h-4 w-4 ${loadingSecurityScan ? 'animate-pulse' : ''}` })}
                 </button>
+
+                {/* Connect Button — always rendered so its absence never has to
+                    be interpreted; disabled, with the reason as a tooltip, when
+                    the skill is not routed through the gateway. */}
+                <ProxyConnectButton
+                  clientUrl={skill.proxy_client_url}
+                  targetUrl={skill.proxy_target_url}
+                />
 
                 {/* Details Button */}
                 <button
@@ -738,6 +761,11 @@ const SkillCard: React.FC<SkillCardProps> = React.memo(({
 
             {/* Action buttons */}
             <div className="flex items-center gap-4 mb-4 pb-4 border-b border-gray-200 dark:border-gray-700">
+              <ProxyConnectButton
+                label="Connect"
+                clientUrl={skill.proxy_client_url}
+                targetUrl={skill.proxy_target_url}
+              />
               {skill.skill_md_url && (
                 <SafeLink
                   href={skill.skill_md_url}

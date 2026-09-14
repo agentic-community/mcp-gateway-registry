@@ -222,6 +222,10 @@ def _future_iso(seconds: int) -> str:
     return (datetime.now(UTC) + timedelta(seconds=seconds)).isoformat()
 
 
+# Registered upstream base for the direct get_pat tests (binding must match).
+PAT_UP = "https://api.example.com"
+
+
 @pytest.mark.unit
 class TestGetPatService:
     async def test_hit_with_client_id_none_vends(self):
@@ -233,9 +237,14 @@ class TestGetPatService:
             "alice",
             "github",
             "/github",
-            StoredToken(access_token="ghp_x", client_id=None, expires_at=_future_iso(3600)),
+            StoredToken(
+                access_token="ghp_x",
+                client_id=None,
+                expires_at=_future_iso(3600),
+                bound_upstreams=[PAT_UP],
+            ),
         )
-        token = await svc.get_pat("oauth2", "alice", "github", "/github")
+        token = await svc.get_pat("oauth2", "alice", "github", "/github", requested_upstream=PAT_UP)
         assert token == "ghp_x"
 
     async def test_expired_pat_is_miss(self):
@@ -247,7 +256,10 @@ class TestGetPatService:
             "/github",
             StoredToken(access_token="ghp_x", expires_at="2000-01-01T00:00:00+00:00"),
         )
-        assert await svc.get_pat("oauth2", "alice", "github", "/github") is None
+        assert (
+            await svc.get_pat("oauth2", "alice", "github", "/github", requested_upstream=PAT_UP)
+            is None
+        )
 
     async def test_missing_expires_at_is_miss(self):
         # A pat entry without expires_at is treated as a miss (fail closed) --
@@ -256,10 +268,16 @@ class TestGetPatService:
         await svc._store.put_token(
             "oauth2", "alice", "github", "/github", StoredToken(access_token="ghp_x")
         )
-        assert await svc.get_pat("oauth2", "alice", "github", "/github") is None
+        assert (
+            await svc.get_pat("oauth2", "alice", "github", "/github", requested_upstream=PAT_UP)
+            is None
+        )
 
     async def test_never_submitted_is_miss(self):
-        assert await _svc().get_pat("oauth2", "nobody", "github", "/github") is None
+        assert (
+            await _svc().get_pat("oauth2", "nobody", "github", "/github", requested_upstream=PAT_UP)
+            is None
+        )
 
     async def test_non_per_user_is_miss(self):
         svc = _svc()
@@ -270,4 +288,9 @@ class TestGetPatService:
             "/github",
             StoredToken(access_token="ghp_x", expires_at=_future_iso(3600)),
         )
-        assert await svc.get_pat("network-trusted", "alice", "github", "/github") is None
+        assert (
+            await svc.get_pat(
+                "network-trusted", "alice", "github", "/github", requested_upstream=PAT_UP
+            )
+            is None
+        )

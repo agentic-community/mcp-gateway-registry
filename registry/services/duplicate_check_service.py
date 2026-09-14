@@ -50,6 +50,7 @@ from ..schemas.duplicate_check_models import (
     EntityType,
     ExistingEntity,
 )
+from ..utils.text_normalize import distinct_token_count, strip_boilerplate_tokens
 from ..utils.url_normalize import (
     ENTITY_TYPE_AGENT,
     ENTITY_TYPE_SERVER,
@@ -85,6 +86,28 @@ _SIMILARITY_OVERFETCH_FACTOR: int = 10
 _QUERY_TEXT_CHAR_CAP: int = 500
 
 
+# A query must carry at least this many distinct tokens, after
+# boilerplate stripping, before it is embedded. A one-token query cannot
+# clear any usable threshold against a document that has a description
+# ('topic' scores 0.2603 against its own entry), so embedding it buys a
+# provider call for a guaranteed-empty answer. Registrations that thin
+# are still covered by the exact-URL check, which is the strong signal.
+_MIN_QUERY_TOKENS: int = 2
+
+
+def _similarity_of(candidate: dict) -> float:
+    """Absolute cosine similarity of a search hit to the query.
+
+    Returns 0.0 when the backend could not supply one, which keeps the
+    candidate below any configured threshold: an entity we cannot compare
+    is not an entity we should call a possible duplicate.
+    """
+    similarity = candidate.get("similarity_score")
+    if similarity is None:
+        return 0.0
+    return float(similarity)
+
+
 class DuplicateCheckService:
     """Cross-entity duplicate detection for entity registration.
 
@@ -106,6 +129,43 @@ class DuplicateCheckService:
             ENTITY_TYPE_AGENT: get_agent_repository(),
             ENTITY_TYPE_SKILL: get_skill_repository(),
         }
+        self._log_threshold_resolution()
+
+    def _log_threshold_resolution(self) -> None:
+        """State which threshold is in force and where it came from.
+
+        Silent mis-calibration is the failure mode worth naming: the advisory
+        keeps answering, and on an uncalibrated model every answer is noise.
+        """
+        source = self._settings.dedup_threshold_source
+        threshold = self._settings.effective_dedup_score_threshold
+        model = self._settings.embeddings_model_name or "(unset)"
+        if source == "configured":
+            logger.info(
+                "Duplicate-check threshold %.2f from DEDUP_SCORE_THRESHOLD (embeddings model: %s).",
+                threshold,
+                model,
+            )
+        elif source.startswith("model-default"):
+            logger.info(
+                "Duplicate-check threshold %.2f: no DEDUP_SCORE_THRESHOLD "
+                "configured, using the default calibrated for embeddings model "
+                "%s.",
+                threshold,
+                model,
+            )
+        else:
+            logger.warning(
+                "Duplicate-check threshold %.2f: no DEDUP_SCORE_THRESHOLD "
+                "configured and no calibrated default for embeddings model %s, "
+                "so falling back to a generic value. Cosine scales differ per "
+                "model, so calibrate against your own catalog: check a known "
+                "duplicate and an unrelated entity, read the 'top cosine' this "
+                "service logs for each, and set DEDUP_SCORE_THRESHOLD between "
+                "the two bands.",
+                threshold,
+                model,
+            )
 
     async def check(
         self,
@@ -141,7 +201,7 @@ class DuplicateCheckService:
             A :class:`DuplicateCheckResult`. The route layer wraps
             this in a 200 envelope; there is no 4xx path.
         """
-        threshold = self._settings.dedup_score_threshold
+        threshold = self._settings.effective_dedup_score_threshold
 
         collisions = await self._find_exact_match_collisions(
             identity_url=identity_url,
@@ -301,16 +361,42 @@ class DuplicateCheckService:
     ) -> tuple[list[ExistingEntity], bool]:
         """Query the search pipeline for similar entities across all types.
 
-        Returns ``(matches, available)``. ``available`` is False when
-        the embedding backend was unreachable. Matches are filtered to
-        the configured similarity threshold and the caller's
-        visibility scope, then capped to ``dedup_max_suggestions``
-        across all entity types (the cap is global, not per-type).
+        Returns ``(matches, available)``. ``available`` is False when the
+        embedding backend was unreachable, including the case where it
+        answered with keyword-only hits that carry no similarity at all.
+        Matches are filtered to the configured similarity threshold and
+        the caller's visibility scope, then capped to
+        ``dedup_max_suggestions`` across all entity types (the cap is
+        global, not per-type).
+
+        Ranking and filtering read ``similarity_score``, the hit's cosine
+        similarity to the query, not ``relevance_score``: the latter is a
+        position in a result list, so the best hit carries the top value
+        even when nothing in the registry is remotely similar.
         """
-        threshold = self._settings.dedup_score_threshold
+        threshold = self._settings.effective_dedup_score_threshold
         max_suggestions = self._settings.dedup_max_suggestions
         query = self._build_query_text(name, description)
         if not query:
+            # Nothing survived stripping, or the caller sent no text at all.
+            # Reported as available: the check ran, the backend is fine.
+            # Logged because an operator asking "why did this registration get
+            # no hint" would otherwise see no trace of the decision.
+            logger.info(
+                "Duplicate-check similarity skipped: no comparable text left "
+                "after boilerplate stripping (name=%r).",
+                name,
+            )
+            return [], True
+
+        token_count = distinct_token_count(query)
+        if token_count < _MIN_QUERY_TOKENS:
+            logger.info(
+                "Duplicate-check similarity skipped: query carries %d distinct "
+                "token(s) after boilerplate stripping, minimum is %d.",
+                token_count,
+                _MIN_QUERY_TOKENS,
+            )
             return [], True
 
         try:
@@ -334,13 +420,37 @@ class DuplicateCheckService:
             return [], False
 
         candidates = self._flatten_search_results(raw_results)
-        candidates.sort(key=lambda c: float(c[1].get("relevance_score") or 0.0), reverse=True)
+        scored = [
+            (entity_type, candidate)
+            for entity_type, candidate in candidates
+            if candidate.get("similarity_score") is not None
+        ]
+
+        if candidates and not scored:
+            # Hits came back carrying no similarity at all, which means
+            # the search backend fell back to keyword-only matching
+            # because the embedder was unreachable. Lexical hits on
+            # tokens like "mcp" are not similarity evidence, so report
+            # the degraded state rather than an empty answer that reads
+            # as "nothing similar exists".
+            logger.warning(
+                "Duplicate check received %d search hits with no similarity "
+                "scores; treating similarity search as unavailable. First "
+                "hits: %s. Either the embedding backend is unreachable, or "
+                "these documents have no stored embedding.",
+                len(candidates),
+                [str(candidate.get("path") or "?") for _, candidate in candidates[:3]],
+            )
+            return [], False
+
+        scored.sort(key=lambda c: _similarity_of(c[1]), reverse=True)
 
         advisory: list[ExistingEntity] = []
-        for entity_type, candidate in candidates:
-            score = float(candidate.get("relevance_score") or 0.0)
+        for entity_type, candidate in scored:
+            score = _similarity_of(candidate)
             if score < threshold:
-                continue
+                # Sorted descending, so nothing below can qualify.
+                break
             candidate_path = str(candidate.get("path") or "")
             if candidate_path in excluded_paths:
                 continue
@@ -359,6 +469,19 @@ class DuplicateCheckService:
             )
             if len(advisory) >= max_suggestions:
                 break
+
+        # One line per check, so an operator can answer "how often does
+        # this advise anything, and how close were the near-misses" from
+        # the log stream without a metrics pipeline.
+        logger.info(
+            "Duplicate check similarity: %d candidates, %d scored, top cosine "
+            "%.4f, threshold %.2f, %d advised.",
+            len(candidates),
+            len(scored),
+            _similarity_of(scored[0][1]) if scored else 0.0,
+            threshold,
+            len(advisory),
+        )
         return advisory, True
 
     @staticmethod
@@ -368,10 +491,14 @@ class DuplicateCheckService:
     ) -> str:
         """Compose the similarity search query from name and description.
 
-        Truncates to ``_QUERY_TEXT_CHAR_CAP`` to keep the embedded
-        text bounded — the registration form's description field is
-        unbounded but only the first few hundred characters typically
-        carry meaningful similarity signal.
+        Catalog boilerplate is stripped before the text is embedded: a
+        shared '-mcp-server' suffix carries no capability signal but does
+        carry most of the cosine on a short name (issue #1696). Stripping
+        is query-side only, so no stored embedding has to be rebuilt.
+
+        Returns an empty string when nothing survives stripping, and
+        truncates to ``_QUERY_TEXT_CHAR_CAP`` afterwards so the cap
+        covers 500 characters of meaningful text.
         """
         parts: list[str] = []
         if name:
@@ -379,9 +506,12 @@ class DuplicateCheckService:
         if description:
             parts.append(description.strip())
         joined = " ".join(part for part in parts if part)
-        if len(joined) > _QUERY_TEXT_CHAR_CAP:
-            return joined[:_QUERY_TEXT_CHAR_CAP]
-        return joined
+        if not joined:
+            return ""
+        stripped = strip_boilerplate_tokens(joined)
+        if len(stripped) > _QUERY_TEXT_CHAR_CAP:
+            return stripped[:_QUERY_TEXT_CHAR_CAP]
+        return stripped
 
     @staticmethod
     def _flatten_search_results(

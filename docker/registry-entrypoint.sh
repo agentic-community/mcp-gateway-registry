@@ -40,7 +40,7 @@ if [ -n "$MONGODB_CONNECTION_STRING" ] || [ -n "$DOCUMENTDB_HOST" ]; then
     source /app/.venv/bin/activate
     python3 -c "
 import pymongo, os, re, time
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, quote_plus
 
 override = os.getenv('MONGODB_CONNECTION_STRING', '')
 if override:
@@ -59,7 +59,10 @@ else:
     ca_file = os.getenv('DOCUMENTDB_TLS_CA_FILE', '/app/certs/global-bundle.pem')
     auth = 'SCRAM-SHA-256' if backend == 'mongodb-ce' else 'SCRAM-SHA-1'
     if user and pwd:
-        uri = f'mongodb://{user}:{pwd}@{host}:{port}/?authMechanism={auth}&authSource=admin'
+        # Escape credentials per RFC 3986 so passwords with reserved
+        # characters (e.g. after a Secrets Manager rotation) do not break
+        # the connection URI. Mirrors scripts/_mongo_conn_args.py.
+        uri = f'mongodb://{quote_plus(user)}:{quote_plus(pwd)}@{host}:{port}/?authMechanism={auth}&authSource=admin'
     else:
         uri = f'mongodb://{host}:{port}/'
     tls_options = {}
@@ -236,6 +239,10 @@ if [ "${NGINX_ENABLE_IPV6:-false}" = "true" ]; then
         if ! grep -q 'listen \[::\]:8080;' "$nginx_template"; then
             sed -i 's|listen 8080;|listen 8080;\
     listen [::]:8080;|' "$nginx_template"
+        fi
+        if ! grep -q 'listen \[::\]:8091;' "$nginx_template"; then
+            sed -i 's|listen 8091;|listen 8091;\
+    listen [::]:8091;|' "$nginx_template"
         fi
         if grep -q 'listen 8443 ssl;' "$nginx_template" && ! grep -q 'listen \[::\]:8443 ssl;' "$nginx_template"; then
             sed -i 's|listen 8443 ssl;|listen 8443 ssl;\

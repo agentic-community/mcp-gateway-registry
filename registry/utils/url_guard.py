@@ -53,9 +53,13 @@ Validation profiles separate the registry's distinct outbound trust surfaces:
   Cloud/workload credential endpoints are never allowlistable in any profile.
 
 - **Credential-bearing OAuth token endpoints**
-  (``CREDENTIALED_OAUTH_PROFILE``): HTTPS-only with a deliberately empty
-  host/CIDR allowlist. Token POSTs carry client secrets, refresh tokens, or user
-  assertions and must never inherit the proxy profile's internal-target bypass.
+  (``CREDENTIALED_OAUTH_PROFILE``): HTTPS-only, and public-only unless the
+  operator names a trusted IdP host in ``settings.egress_oauth_trusted_idp_hosts``
+  (hosts only — no CIDRs, no wildcards — and empty by default). Token POSTs carry
+  client secrets, refresh tokens, or user assertions, so this profile must never
+  inherit the proxy profile's internal-target bypass: it reads only its own
+  setting, and an ``ssrf_allowed_hosts``/``github_extra_hosts`` entry cannot
+  re-permit a token endpoint.
 
 Request lifecycle (validate -> resolve -> pin -> re-validate per redirect)::
 
@@ -424,6 +428,7 @@ class _Allowlist:
 
     hosts: frozenset[str] = field(default_factory=frozenset)
     cidrs: tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...] = ()
+    allow_private: bool = False
 
     def allows_host(
         self,
@@ -539,6 +544,7 @@ def _proxy_allowlist() -> _Allowlist:
     return _Allowlist(
         hosts=_parse_hosts(_settings.ssrf_allowed_hosts),
         cidrs=_parse_cidrs(_settings.ssrf_allowed_cidrs),
+        allow_private=bool(getattr(_settings, "gateway_proxy_allow_private_targets", False)),
     )
 
 
@@ -549,15 +555,46 @@ def _builtin_airegistry_tools_allowlist() -> _Allowlist:
     return _Allowlist(
         hosts=ordinary.hosts | _RESERVED_BUILTIN_PROXY_HOSTS,
         cidrs=ordinary.cidrs,
+        allow_private=ordinary.allow_private,
     )
 
 
+@lru_cache(maxsize=1)
 def _credentialed_oauth_allowlist() -> _Allowlist:
-    """Return the OAuth token-endpoint allowlist: deliberately empty.
+    """Return the OAuth token-endpoint allowlist: trusted IdP hosts only.
 
     Credential-bearing token POSTs may include a client secret, refresh token,
-    or user assertion. They must not inherit any operator proxy/skill bypass.
-    The profile also enforces HTTPS at both structural validation and transport.
+    or user assertion. They must not inherit any operator proxy/skill bypass, so
+    this reads its own dedicated setting and deliberately does NOT consult
+    ``ssrf_allowed_hosts``/``ssrf_allowed_cidrs``/``github_extra_hosts``: an
+    entry there still cannot re-permit a token endpoint.
+
+    ``egress_oauth_trusted_idp_hosts`` exists because a self-hosted IdP
+    (Keycloak, Entra behind Private Link, ...) legitimately resolves to a
+    private address, while the gateway is already required to trust that same
+    IdP for its own authentication via ``KEYCLOAK_URL``. Unlike a federation
+    peer or a registrant-supplied proxy target, the IdP is operator-configured
+    infrastructure. It is hosts-only (no CIDRs, no wildcards) so each IdP must
+    be named exactly — deliberately narrower than the proxy profile — and
+    defaults to empty, so an existing deployment is unchanged.
+
+    This is a post-resolution relaxation, not a DNS bypass: the profile still
+    enforces HTTPS at both structural validation and transport, answers are
+    still resolved, classified and pinned, and cloud/workload credential,
+    metadata, link-local, reserved and multicast addresses stay hard-denied.
+    Cached because settings are immutable per-process.
+    """
+    return _Allowlist(hosts=_parse_hosts(_get_settings().egress_oauth_trusted_idp_hosts))
+
+
+def _egress_upstream_allowlist() -> _Allowlist:
+    """Empty allowlist for the egress-injected proxy hop.
+
+    Deliberately touches no settings so it is importable from the auth-server
+    process (which does not build the registry Settings). Combined with
+    ``allow_private=True`` on EGRESS_UPSTREAM_PROFILE, the hop pins to the
+    resolved IP and permits private / hostname-private MCP upstreams, while the
+    cloud/workload credential + metadata endpoints stay hard-denied.
     """
     return _Allowlist()
 
@@ -585,6 +622,7 @@ class _Profile:
     allowlist_factory: object  # callable returning _Allowlist
     allowed_url_identities: frozenset[str] | None = None
     require_https: bool = False
+    allow_private: bool = False
 
 
 SKILL_PROFILE = _Profile(name="skill", allowlist_factory=_skill_allowlist)
@@ -599,6 +637,11 @@ CREDENTIALED_OAUTH_PROFILE = _Profile(
     name="credentialed-oauth",
     allowlist_factory=_credentialed_oauth_allowlist,
     require_https=True,
+)
+EGRESS_UPSTREAM_PROFILE = _Profile(
+    name="egress-upstream",
+    allowlist_factory=_egress_upstream_allowlist,
+    allow_private=True,
 )
 
 
@@ -633,6 +676,7 @@ def _is_blocked_ip(
     allowlist: _Allowlist,
     *,
     trusted_hostname: bool = False,
+    allow_private: bool = False,
 ) -> bool:
     """Return True if an IP must not be the target of a server-side fetch.
 
@@ -651,7 +695,13 @@ def _is_blocked_ip(
     return (
         _ip_denial_reason(
             ip,
-            allow_private=False,
+            # allow_private is honored from EITHER source: the threaded flag
+            # (profile.allow_private, e.g. EGRESS_UPSTREAM_PROFILE=True) or the
+            # allowlist (allowlist.allow_private, set from
+            # gateway_proxy_allow_private_targets). Metadata/credential/link-local
+            # /reserved/multicast stay hard-denied in _ip_denial_reason before
+            # any relaxation, so this only ever relaxes loopback/private/CGNAT.
+            allow_private=allow_private or allowlist.allow_private,
             allowed_cidrs=allowed_cidrs,
         )
         is not None
@@ -662,13 +712,17 @@ def _validate_resolved_ips(
     hostname: str,
     addr_info: list[tuple],
     allowlist: _Allowlist,
+    *,
+    allow_private: bool = False,
 ) -> list[str]:
     """Validate every resolver answer and return a de-duplicated IP list."""
     trusted_hostname = allowlist.allows_host(hostname.lower())
     ips: list[str] = []
     for _family, _socktype, _proto, _canonname, sockaddr in addr_info:
         ip_str = str(sockaddr[0])
-        if _is_blocked_ip(ip_str, allowlist, trusted_hostname=trusted_hostname):
+        if _is_blocked_ip(
+            ip_str, allowlist, trusted_hostname=trusted_hostname, allow_private=allow_private
+        ):
             raise UrlValidationError(hostname, f"resolves to blocked/private IP {ip_str}")
         if ip_str not in ips:
             ips.append(ip_str)
@@ -681,19 +735,23 @@ def _resolve_public_ips(
     hostname: str,
     port: int,
     allowlist: _Allowlist,
+    *,
+    allow_private: bool = False,
 ) -> list[str]:
     """Synchronously resolve, classify, and return every destination IP."""
     try:
         addr_info = socket.getaddrinfo(hostname, port, proto=socket.IPPROTO_TCP)
     except socket.gaierror as exc:
         raise UrlValidationError(hostname, f"DNS resolution failed: {exc}") from exc
-    return _validate_resolved_ips(hostname, addr_info, allowlist)
+    return _validate_resolved_ips(hostname, addr_info, allowlist, allow_private=allow_private)
 
 
 async def _resolve_public_ips_async(
     hostname: str,
     port: int,
     allowlist: _Allowlist,
+    *,
+    allow_private: bool = False,
 ) -> list[str]:
     """Resolve without blocking the event loop, under a fixed DNS deadline."""
     loop = asyncio.get_running_loop()
@@ -706,7 +764,7 @@ async def _resolve_public_ips_async(
         raise UrlValidationError(hostname, "DNS resolution timed out") from exc
     except socket.gaierror as exc:
         raise UrlValidationError(hostname, f"DNS resolution failed: {exc}") from exc
-    return _validate_resolved_ips(hostname, addr_info, allowlist)
+    return _validate_resolved_ips(hostname, addr_info, allowlist, allow_private=allow_private)
 
 
 def contains_nginx_metacharacters(
@@ -795,7 +853,7 @@ def validate_url(
     # not mistaken for opaque hostnames.
     literal = coerce_ip_literal(hostname)
     if literal is not None:
-        if _is_blocked_ip(hostname, allowlist):
+        if _is_blocked_ip(hostname, allowlist, allow_private=profile.allow_private):
             raise UrlValidationError(url, f"targets blocked/private IP {hostname}")
         return [str(literal)]
 
@@ -824,7 +882,7 @@ def validate_url(
         logger.debug(f"URL guard[{profile.name}]: resolving trusted host '{hostname_lower}'")
 
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
-    return _resolve_public_ips(hostname, port, allowlist)
+    return _resolve_public_ips(hostname, port, allowlist, allow_private=profile.allow_private)
 
 
 def validate_proxy_pass_url(
@@ -986,10 +1044,12 @@ class _PinnedResolverMixin:
         """Synchronously validate, resolve, and pin a request."""
         url, _scheme, hostname, port, allowlist = self._request_target(request)
         if coerce_ip_literal(hostname) is not None:
-            if _is_blocked_ip(hostname, allowlist):
+            if _is_blocked_ip(hostname, allowlist, allow_private=self._guard_profile.allow_private):
                 raise UrlValidationError(str(url), f"targets blocked/private IP {hostname}")
             return request
-        pinned_ip = _resolve_public_ips(hostname, port, allowlist)[0]
+        pinned_ip = _resolve_public_ips(
+            hostname, port, allowlist, allow_private=self._guard_profile.allow_private
+        )[0]
         return self._rewrite_to_pinned_ip(request, url, hostname, pinned_ip)
 
     async def _pin_request_async(
@@ -999,10 +1059,14 @@ class _PinnedResolverMixin:
         """Asynchronously validate, resolve under deadline, and pin a request."""
         url, _scheme, hostname, port, allowlist = self._request_target(request)
         if coerce_ip_literal(hostname) is not None:
-            if _is_blocked_ip(hostname, allowlist):
+            if _is_blocked_ip(hostname, allowlist, allow_private=self._guard_profile.allow_private):
                 raise UrlValidationError(str(url), f"targets blocked/private IP {hostname}")
             return request
-        pinned_ip = (await _resolve_public_ips_async(hostname, port, allowlist))[0]
+        pinned_ip = (
+            await _resolve_public_ips_async(
+                hostname, port, allowlist, allow_private=self._guard_profile.allow_private
+            )
+        )[0]
         return self._rewrite_to_pinned_ip(request, url, hostname, pinned_ip)
 
 

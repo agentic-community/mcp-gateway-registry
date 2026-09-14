@@ -16,9 +16,49 @@ from ..exceptions import AssetIdConflictError
 from ..repositories.factory import get_agent_repository, get_search_repository
 from ..repositories.interfaces import AgentRepositoryBase, SearchRepositoryBase
 from ..schemas.agent_models import AgentCard
+from ..schemas.proxy_mixin import (
+    clear_upstream_headers_on_repoint,
+    effective_proxy_target,
+    validate_and_pin_proxy_target,
+)
 from ..utils.url_guard import validate_agent_url
 
 logger = logging.getLogger(__name__)
+
+
+async def _validate_and_pin_agent_proxy(
+    agent_card: AgentCard,
+) -> None:
+    """Reject non-HTTP transports + resolve/validate/pin an agent's proxy target.
+
+    No-op when the agent is not proxied. When proxied:
+    - reject a GRPC ``preferred_transport`` (an HTTP location block can't serve
+      it) with a clear ValueError (surfaced as 4xx by the route);
+    - resolve the effective target (proxy_target_url or the agent url) and
+      validate every resolved IP against the egress policy (layer 2),
+      pinning the resolved IPs onto the card.
+    """
+    if not agent_card.is_proxied:
+        return
+    transport = (agent_card.preferred_transport or "").strip().upper()
+    if transport == "GRPC":
+        raise ValueError(
+            "is_proxied=true is not supported for an a2a_agent with "
+            "preferred_transport=GRPC: the gateway serves HTTP only. Use an HTTP "
+            "transport (JSONRPC / HTTP+JSON) or disable proxying."
+        )
+    pin = await validate_and_pin_proxy_target(
+        "a2a_agent",
+        {
+            "is_proxied": agent_card.is_proxied,
+            "proxy_target_url": agent_card.proxy_target_url,
+            "proxy_disabled_reason": agent_card.proxy_disabled_reason,
+            "url": agent_card.url,
+        },
+    )
+    if pin:
+        agent_card.proxy_resolved_ips = pin["proxy_resolved_ips"]
+        agent_card.proxy_target_host = pin["proxy_target_host"]
 
 
 class AgentService:
@@ -65,6 +105,9 @@ class AgentService:
         if await self._repo.get(path) is not None:
             logger.error(f"Agent registration failed: path '{path}' already exists")
             raise ValueError(f"Agent path '{path}' already exists")
+
+        # Gateway-proxy SSRF layer 2 + transport guard (no-op unless is_proxied).
+        await _validate_and_pin_agent_proxy(agent_card)
 
         # Id uniqueness pre-check (#1276): a caller-supplied id must not
         # collide with an existing agent. Raise -> route maps to 409.
@@ -215,10 +258,34 @@ class AgentService:
         agent_dict["updated_at"] = datetime.now(UTC)
 
         try:
-            AgentCard(**agent_dict)
+            merged_card = AgentCard(**agent_dict)
         except Exception as e:
             logger.error(f"Failed to validate updated agent: {e}")
             raise ValueError(f"Invalid agent update: {e}")
+
+        # Gateway-proxy SSRF layer 2 + transport guard on the MERGED card when this
+        # update touches the proxy opt-in or target. Re-validates + re-pins (or
+        # clears the pin) on the merged state, before persist. Re-enabling clears a
+        # prior auto-disable. "url" is included: for an A2A agent the effective
+        # backend falls back to url when proxy_target_url is unset, so changing url
+        # repoints the backend and must re-validate + trigger the header clear.
+        if "is_proxied" in updates or "proxy_target_url" in updates or "url" in updates:
+            merged_card.proxy_disabled_reason = None
+            await _validate_and_pin_agent_proxy(merged_card)
+            agent_dict["proxy_resolved_ips"] = merged_card.proxy_resolved_ips
+            agent_dict["proxy_target_host"] = merged_card.proxy_target_host
+            agent_dict["proxy_disabled_reason"] = None
+            # Credential-misdirection guard (symmetric with skill/custom/server):
+            # if the effective backend host changed, clear any create-time upstream
+            # headers so the old host's secret is never injected at the new host.
+            # Agents cannot carry headers through the API today, but wiring the
+            # guard here keeps the invariant safe if that ever changes, rather than
+            # relying on "agents never get headers".
+            clear_upstream_headers_on_repoint(
+                agent_dict,
+                existing_target=effective_proxy_target("a2a_agent", existing_agent.model_dump()),
+                new_target=effective_proxy_target("a2a_agent", merged_card.model_dump()),
+            )
 
         updated_agent = await self._repo.update(path, agent_dict)
 

@@ -81,6 +81,15 @@ export interface Skill {
   repository_url?: string;
   auth_scheme?: 'none' | 'global_credentials' | 'bearer' | 'api_key';
   auth_header_name?: string;
+  // Gateway-proxy opt-in (registry extension).
+  is_proxied?: boolean;
+  proxy_target_url?: string;
+  // Read-only, auto-derived client path ({prefix}/{type}/{name}).
+  proxy_client_url?: string;
+  // Upstream custom-header NAMES (values are encrypted and never returned).
+  // custom_header_overridable_names is the subset the caller may override/supply.
+  custom_header_names?: string[];
+  custom_header_overridable_names?: string[];
   num_stars?: number;
   rating_details?: Array<{ user: string; rating: number }>;
   // Lightweight scan summary from the list payload, used to colour the shield

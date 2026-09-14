@@ -1,0 +1,144 @@
+suite: gateway generic-proxy env flags
+templates:
+  - deployment.yaml
+release:
+  name: test
+  namespace: default
+tests:
+  - it: defaults the auth-server gateway flags to their safe values
+    asserts:
+      # Shared master switch: the auth-server reads it too (activates the /proxy
+      # hop + egress self-check). Defaults false (feature ships dark).
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GATEWAY_GENERIC_PROXY_ENABLED
+            value: "false"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GATEWAY_EGRESS_SELFCHECK_ENABLED
+            value: "true"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GATEWAY_GENERIC_REQUIRE_BEARER_FOR_WRITES
+            value: "true"
+
+  # Regression: a large YAML integer parses as float64 and toString renders it in
+  # scientific notation (1.048576e+07), which the int-typed setting rejects at
+  # startup (auth-server crash-loop). int64 forces plain-integer formatting.
+  - it: renders the response-body cap as a plain integer (not sci-notation)
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GENERIC_PROXY_MAX_BODY_BYTES
+            value: "10485760"
+
+  - it: renders a numeric --set body cap override as a plain integer
+    set:
+      app.genericProxyMaxBodyBytes: 52428800
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GENERIC_PROXY_MAX_BODY_BYTES
+            value: "52428800"
+
+  # Regression: `| default true` would swallow an explicit false (sprig treats
+  # false as empty), leaving the egress self-check un-disable-able and blocking a
+  # dev deploy. hasKey/ternary preserves the override.
+  - it: allows disabling the egress self-check via an explicit false
+    set:
+      app.gatewayEgressSelfcheckEnabled: false
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GATEWAY_EGRESS_SELFCHECK_ENABLED
+            value: "false"
+
+  - it: allows disabling the CSRF bearer requirement via an explicit false
+    set:
+      app.gatewayGenericRequireBearerForWrites: false
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GATEWAY_GENERIC_REQUIRE_BEARER_FOR_WRITES
+            value: "false"
+
+  - it: renders bounded generic stream defaults
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GATEWAY_GENERIC_STREAM_MAX_CONCURRENCY
+            value: "8"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GATEWAY_GENERIC_ACQUIRE_TIMEOUT_SECONDS
+            value: "5"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GATEWAY_GENERIC_STREAM_MAX_DURATION_SECONDS
+            value: "3600"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GATEWAY_GENERIC_STREAM_MAX_BYTES
+            value: "104857600"
+
+  - it: renders generic stream overrides without scientific notation
+    set:
+      app.gatewayGenericStreamMaxConcurrency: 3
+      app.gatewayGenericAcquireTimeoutSeconds: 2.5
+      app.gatewayGenericStreamMaxDurationSeconds: 900
+      app.gatewayGenericStreamMaxBytes: 52428800
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GATEWAY_GENERIC_STREAM_MAX_CONCURRENCY
+            value: "3"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GATEWAY_GENERIC_ACQUIRE_TIMEOUT_SECONDS
+            value: "2.5"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GATEWAY_GENERIC_STREAM_MAX_DURATION_SECONDS
+            value: "900"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GATEWAY_GENERIC_STREAM_MAX_BYTES
+            value: "52428800"
+
+  - it: fails closed when generic proxy is enabled without any declared egress policy
+    set:
+      app.gatewayGenericProxyEnabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "generic proxy is enabled but no egress policy is declared"
+
+  - it: permits generic proxy with the chart-managed egress NetworkPolicy
+    set:
+      app.gatewayGenericProxyEnabled: true
+      egress.networkPolicy.enabled: true
+    asserts:
+      - isKind:
+          of: Deployment
+
+  - it: permits generic proxy with explicit external-policy acknowledgement
+    set:
+      app.gatewayGenericProxyEnabled: true
+      egress.externalEgressPolicyAcknowledged: true
+    asserts:
+      - isKind:
+          of: Deployment

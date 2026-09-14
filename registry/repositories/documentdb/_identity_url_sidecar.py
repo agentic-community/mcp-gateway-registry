@@ -64,6 +64,43 @@ async def ensure_normalized_identity_url_index(
         )
 
 
+async def ensure_is_proxied_index(
+    collection: AsyncIOMotorCollection,
+    collection_name: str,
+) -> None:
+    """Create the index backing ``list_proxied()`` (the nginx-render hot path).
+
+    Prefers a partial index (``partialFilterExpression={"is_proxied": True}``) so
+    only proxied documents are indexed. AWS DocumentDB may reject partial
+    indexes, so we fall back to a plain single-field index; the query
+    (``{"is_proxied": True}``) uses either. If both fail, list_proxied still works
+    (unindexed scan) — index creation is an optimization, never a correctness
+    requirement. NEVER raises: callers invoke this from index-setup paths where an
+    exception would defeat an idempotency guard or crash init.
+    """
+    try:
+        await collection.create_index(
+            "is_proxied",
+            name="idx_is_proxied",
+            partialFilterExpression={"is_proxied": True},
+        )
+        return
+    except Exception as exc:
+        logger.warning(
+            "Partial is_proxied index rejected on %s (%s); trying plain index",
+            collection_name,
+            exc,
+        )
+    try:
+        await collection.create_index("is_proxied", name="idx_is_proxied_plain")
+    except Exception as exc:
+        logger.warning(
+            "Could not create is_proxied index on %s: %s (list_proxied will scan)",
+            collection_name,
+            exc,
+        )
+
+
 async def backfill_normalized_identity_url(
     collection: AsyncIOMotorCollection,
     collection_name: str,

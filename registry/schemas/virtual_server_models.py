@@ -155,6 +155,21 @@ class VirtualServerConfig(BaseModel):
         description="Whether the virtual server is enabled and routable",
     )
 
+    # Gateway-proxy opt-in (ALIAS-ONLY). A virtual server is already served
+    # through the gateway via tool aggregation; is_proxied here governs ONLY
+    # whether the canonical /virtual_server/<path> alias is emitted. It never
+    # feeds the generic proxy hop and never takes a proxy_target_url — setting
+    # one is rejected (see _reject_proxy_target_url). Not inherited from
+    # ProxyableMixin precisely because the mixin permits proxy_target_url.
+    is_proxied: bool = Field(
+        default=False,
+        description="Emit the canonical /virtual_server/<path> alias (alias-only; no target URL).",
+    )
+    proxy_target_url: str | None = Field(
+        default=None,
+        description="Not supported for virtual servers; must be null (rejected if set).",
+    )
+
     # Categorization
     tags: list[str] = Field(
         default_factory=list,
@@ -235,6 +250,17 @@ class VirtualServerConfig(BaseModel):
         if not stripped:
             raise ValueError("Server name cannot be empty or whitespace-only")
         return stripped
+
+    @field_validator("proxy_target_url")
+    @classmethod
+    def _reject_proxy_target_url(cls, v: str | None) -> str | None:
+        """Virtual-server proxying is alias-only; a target URL is not allowed."""
+        if v is not None:
+            raise ValueError(
+                "proxy_target_url is not supported for virtual servers "
+                "(is_proxied is alias-only; it never forwards to a target)"
+            )
+        return v
 
 
 class VirtualServerInfo(BaseModel):

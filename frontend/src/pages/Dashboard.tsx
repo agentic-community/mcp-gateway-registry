@@ -44,6 +44,7 @@ import ServerRegisterModal, {
 } from '../components/entities/forms/ServerRegisterModal';
 import { useEntityToggle } from '../hooks/useEntityToggle';
 import { filterEntities } from '../utils/entityFilters';
+import { upstreamHeaderRowError } from '../components/formFields';
 
 // Federated-registry header accents (local groups are always green/emerald).
 const SERVER_REGISTRY_ACCENT: RegistryAccent = {
@@ -151,6 +152,11 @@ interface Agent {
     last_verified?: string;
   };
   registered_by?: string | null;
+  // Gateway-proxy opt-in (registry extension): served through the generic hop.
+  is_proxied?: boolean;
+  proxy_target_url?: string;
+  // Read-only, auto-derived client path ({prefix}/{type}/{name}).
+  proxy_client_url?: string;
 }
 
 // Toast notification component
@@ -522,6 +528,9 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
     skillsJson: '[]',
     metadata: '',
     status: 'active' as 'active' | 'draft' | 'deprecated' | 'beta',
+    is_proxied: false,
+    proxy_target_url: '',
+    proxy_client_url: '',
   });
   const [editAgentLoading, setEditAgentLoading] = useState(false);
   const [skillsJsonError, setSkillsJsonError] = useState<string | null>(null);
@@ -543,6 +552,10 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
     auth_scheme: 'none' as 'none' | 'global_credentials' | 'bearer' | 'api_key',
     auth_credential: '',
     auth_header_name: '',
+    is_proxied: false,
+    proxy_target_url: '',
+    proxy_client_url: '',
+    custom_headers: [],
   });
   const [skillFormLoading, setSkillFormLoading] = useState(false);
   const [showDeleteSkillConfirm, setShowDeleteSkillConfirm] = useState<string | null>(null);
@@ -665,6 +678,10 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
       ans_metadata: a.ans_metadata,
       registered_by: a.registered_by,
       lifecycle_status: a.lifecycle_status,
+      // Gateway-proxy opt-in — carry through for the card badge + edit modal.
+      is_proxied: a.is_proxied ?? false,
+      proxy_target_url: a.proxy_target_url,
+      proxy_client_url: a.proxy_client_url,
     }));
   }, [agentsFromStats]);
 
@@ -1373,6 +1390,11 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
           ? JSON.stringify(fullAgent.metadata, null, 2)
           : '',
         status: (fullAgent.status || agent.lifecycle_status || 'active') as 'active' | 'draft' | 'deprecated' | 'beta',
+        // The proxy mixin fields have no camelCase alias, so the API serializes
+        // them snake_case even where sibling fields are camelCased.
+        is_proxied: (fullAgent.is_proxied ?? agent.is_proxied) ?? false,
+        proxy_target_url: fullAgent.proxy_target_url || agent.proxy_target_url || '',
+        proxy_client_url: fullAgent.proxy_client_url || agent.proxy_client_url || '',
       });
     } catch (error) {
       console.error('Failed to fetch agent details for editing:', error);
@@ -1391,6 +1413,9 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         skillsJson: '[]',
         metadata: '',
         status: agent.lifecycle_status || 'active',
+        is_proxied: agent.is_proxied ?? false,
+        proxy_target_url: agent.proxy_target_url || '',
+        proxy_client_url: agent.proxy_client_url || '',
       });
     }
   }, [agentApiToken]);
@@ -1636,6 +1661,13 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         skills: parsedSkills,
         status: editAgentForm.status,
         ...(editAgentForm.metadata.trim() ? { metadata: JSON.parse(editAgentForm.metadata) } : {}),
+        // Gateway-proxy opt-in. snake_case (the mixin fields have no camelCase
+        // alias; populate_by_name accepts them). Always send is_proxied so
+        // toggling off persists; target optional (agent url is the fallback).
+        is_proxied: editAgentForm.is_proxied,
+        ...(editAgentForm.is_proxied && editAgentForm.proxy_target_url.trim()
+          ? { proxy_target_url: editAgentForm.proxy_target_url.trim() }
+          : {}),
       };
 
       await axios.put(
@@ -1769,6 +1801,17 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         auth_scheme: (skill.auth_scheme || 'none') as 'none' | 'global_credentials' | 'bearer' | 'api_key',
         auth_credential: '',
         auth_header_name: skill.auth_header_name || '',
+        is_proxied: skill.is_proxied ?? false,
+        proxy_target_url: skill.proxy_target_url || '',
+        proxy_client_url: skill.proxy_client_url || '',
+        // Rebuild the editor rows from the registered NAMES (values are
+        // write-only and never returned): each name gets a blank value, and the
+        // overridable flag is set from custom_header_overridable_names.
+        custom_headers: (skill.custom_header_names || []).map((name) => ({
+          name,
+          value: '',
+          overridable: (skill.custom_header_overridable_names || []).includes(name),
+        })),
       });
     } else {
       // Create mode - reset form
@@ -1788,6 +1831,10 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         auth_scheme: 'none',
         auth_credential: '',
         auth_header_name: '',
+        is_proxied: false,
+        proxy_target_url: '',
+        proxy_client_url: '',
+        custom_headers: [],
       });
     }
     setShowSkillModal(true);
@@ -1842,6 +1889,29 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
   }, [skillForm.skill_md_url, skillForm.auth_scheme, skillForm.auth_credential, skillForm.auth_header_name, skillParseLoading, showToast]);
 
   const performSkillSave = useCallback(async (): Promise<void> => {
+    // A skill has no native backend URL, so a proxied skill must carry an
+    // explicit target. Block here with an inline toast rather than letting the
+    // backend reject it with a 422 the user can't easily map to a field.
+    if (skillForm.is_proxied && !skillForm.proxy_target_url.trim()) {
+      showToast('A proxy target URL is required when proxying is enabled', 'error');
+      return;
+    }
+
+    // Block submit client-side on any known-invalid upstream header row
+    // (reserved name, fixed Authorization, value-less fixed header) so this
+    // credential form fails fast with a specific message rather than a generic
+    // backend reject. Only when proxied and there are rows. The backend still
+    // re-validates the full policy — it remains the security boundary.
+    if (skillForm.is_proxied) {
+      for (const h of skillForm.custom_headers) {
+        const rowError = upstreamHeaderRowError(h, !!editingSkill);
+        if (rowError) {
+          showToast(rowError, 'error');
+          return;
+        }
+      }
+    }
+
     try {
       setSkillFormLoading(true);
 
@@ -1884,14 +1954,47 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         }
       }
 
+      // Gateway-proxy opt-in. Always send is_proxied so toggling OFF persists;
+      // include the target only when proxied (backend requires it for skills).
+      payload.is_proxied = skillForm.is_proxied;
+      if (skillForm.is_proxied) {
+        payload.proxy_target_url = skillForm.proxy_target_url.trim() || undefined;
+      }
+
+      // Upstream headers, only meaningful when proxied. Drop fully-blank rows
+      // (no name); trim the name and (non-blank) value so stray whitespace is
+      // never persisted. A blank value is preserved server-side (write-only UX)
+      // on edit; on create it must be a caller-only overridable slot. An
+      // all-whitespace value trims to blank and keeps that keep-stored meaning.
+      const upstreamHeaders = skillForm.is_proxied
+        ? skillForm.custom_headers
+            .filter((h) => h.name.trim())
+            .map((h) => ({
+              name: h.name.trim(),
+              value: h.value.trim(),
+              overridable: h.overridable,
+            }))
+        : [];
+
       if (editingSkill) {
         // Update existing skill
         const skillPath = editingSkill.path.replace(/^\/skills\//, '');
         await axios.put(`/api/skills/${skillPath}`, payload);
+        // Headers are NOT settable on the general PUT (it strips them); rotate
+        // them through the dedicated endpoint. Only when proxied — a non-proxied
+        // skill has no upstream to authenticate to.
+        if (skillForm.is_proxied) {
+          await axios.patch(`/api/skills/${skillPath}/upstream-headers`, {
+            custom_headers: upstreamHeaders,
+          });
+        }
         showToast('Skill updated successfully!', 'success');
         notifyDataChanged();
       } else {
-        // Create new skill
+        // Create new skill (custom_headers accepted on the create payload).
+        if (upstreamHeaders.length > 0) {
+          payload.custom_headers = upstreamHeaders;
+        }
         await axios.post('/api/skills', payload);
         showToast('Skill registered successfully!', 'success');
         notifyDataChanged();

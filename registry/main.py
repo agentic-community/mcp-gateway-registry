@@ -175,6 +175,13 @@ def _log_startup_configuration() -> None:
 
     logger.info("=" * 60)
 
+    # Nudge operators about recommended-but-optional settings left unset (e.g. the
+    # egress credential encryption key when the vault is enabled). Same source of
+    # truth as the recommended-config metric and the System Config UI badge.
+    from registry.core.recommended_config import log_recommended_config_warnings
+
+    log_recommended_config_warnings(settings)
+
 
 def _initialize_deployment_metrics() -> None:
     """Initialize deployment mode Prometheus metrics.
@@ -268,6 +275,7 @@ async def _sync_agentcore_on_startup(
         get_skill_repository,
     )
     from registry.schemas.agent_models import AgentCard
+    from registry.schemas.proxy_mixin import strip_proxy_fields
     from registry.schemas.skill_models import SkillCard
     from registry.services.agent_service import agent_service
     from registry.services.federation.agentcore_client import (
@@ -299,6 +307,8 @@ async def _sync_agentcore_on_startup(
     server_count = 0
     for server_data in records["servers"]:
         try:
+            # Peer content: strip proxy fields (no proxying federated entities).
+            server_data = strip_proxy_fields(server_data)
             server_path = server_data.get("path")
             if not server_path:
                 continue
@@ -325,6 +335,7 @@ async def _sync_agentcore_on_startup(
     agent_count = 0
     for agent_data in records["agents"]:
         try:
+            agent_data = strip_proxy_fields(agent_data)  # peer content: no proxying
             agent_path = agent_data.get("path")
             if not agent_path:
                 continue
@@ -348,6 +359,7 @@ async def _sync_agentcore_on_startup(
     skill_repo = get_skill_repository()
     for skill_data in records["skills"]:
         try:
+            skill_data = strip_proxy_fields(skill_data)  # peer content: no proxying
             skill_path = skill_data.get("path")
             if not skill_path:
                 continue
@@ -643,9 +655,13 @@ async def lifespan(app: FastAPI):
                             )
 
                             # Register servers
+                            from registry.schemas.proxy_mixin import strip_proxy_fields
+
                             synced_count = 0
                             for server_data in servers:
                                 try:
+                                    # Peer content: strip proxy fields (no proxying federated entities).
+                                    server_data = strip_proxy_fields(server_data)
                                     server_path = server_data.get("path")
                                     if not server_path:
                                         continue
@@ -1191,6 +1207,12 @@ app.include_router(rate_limit_router, prefix="/api", tags=["Rate Limiting"])
 # it without an additional prefix override.
 app.include_router(iam_user_groups_router)
 
+# Proxied-entity listing for the IAM scope editor (gateway-proxy feature). Router
+# declares its own /api/iam/proxied-entities prefix.
+from registry.api.proxied_entities_routes import router as proxied_entities_router
+
+app.include_router(proxied_entities_router)
+
 # Register Anthropic MCP Registry API (public API for MCP servers only)
 app.include_router(registry_router, prefix="/api/registry", tags=["Registry Card"])
 
@@ -1416,11 +1438,8 @@ async def serve_rum_js():
 if FRONTEND_BUILD_PATH.exists():
     # Build the cached HTML at import time
     _CACHED_INDEX_HTML = _build_cached_index_html()
-    # Mount static files - path depends on ROOT_PATH
-    # When ROOT_PATH is set, FastAPI automatically handles the prefix for routes,
-    # but we need to explicitly mount static files at the root level
-    # The <base> tag in HTML will make browsers request /registry/static/*
-    # which FastAPI will handle correctly with root_path
+    # Mount static files at the unprefixed path; nginx's own ROOT_PATH-prefixed
+    # static location handles the prefixed request and never reaches this app.
     app.mount("/static", StaticFiles(directory=FRONTEND_BUILD_PATH / "static"), name="static")
 
     # Serve React app for all other routes (SPA)
