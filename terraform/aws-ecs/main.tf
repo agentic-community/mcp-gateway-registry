@@ -73,13 +73,13 @@ module "mcp_gateway" {
   cloudfront_prefix_list_name = local.cloudfront_prefix_list_name
 
   # Container images (core services default to public ECR)
-  registry_image_uri    = var.registry_image_uri
-  auth_server_image_uri = var.auth_server_image_uri
+  registry_image_uri           = var.registry_image_uri
+  auth_server_image_uri        = var.auth_server_image_uri
   validate_fast_path_image_uri = var.validate_fast_path_image_uri
   validate_fast_path_enabled   = var.validate_fast_path_enabled
   validate_fast_path_audience  = var.validate_fast_path_audience
-  validate_upstream_url = var.validate_upstream_url
-  mcpgw_image_uri       = var.mcpgw_image_uri
+  validate_upstream_url        = var.validate_upstream_url
+  mcpgw_image_uri              = var.mcpgw_image_uri
 
   # Demo servers (disabled by default)
   enable_demo_servers              = var.enable_demo_servers
