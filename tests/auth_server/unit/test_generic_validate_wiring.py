@@ -45,10 +45,11 @@ class _Resp:
 
 
 class TestAttachGenericProxyToken:
-    def test_mints_when_generic_upstream_present(self):
+    def test_mints_when_generic_upstream_and_nginx_marker_present(self):
         req = _Req(
             {
                 "X-Resolved-Generic-Upstream": "https://backend.example/",
+                "X-Validate-Source-Secret": settings.auth_server_nginx_marker_secret,
             }
         )
         resp = _Resp()
@@ -60,29 +61,67 @@ class TestAttachGenericProxyToken:
                 scopes=["s/read"],
                 entity_type="skill",
                 registered_path="skills/proxy-demo",
+                http_method="GET",
             )
         tok = resp.headers["X-Internal-Token-Generic"]
         claims = pyjwt.decode(tok, _SECRET, algorithms=["HS256"], audience=GENERIC_PROXY_AUDIENCE)
         assert claims["entity_type"] == "skill"
         assert claims["server"] == "skills/proxy-demo"  # FULL registered path
         assert claims["upstream_url"] == "https://backend.example/"  # server-set marker
+        assert claims["method"] == "GET"
         assert claims["sub"] == "alice"
 
-    def test_no_mint_when_marker_absent(self):
+    def test_no_mint_when_resolved_upstream_absent(self):
         req = _Req({})  # not a generic request
         resp = _Resp()
         with patch.dict(os.environ, {"SECRET_KEY": _SECRET}, clear=False):
             _attach_generic_proxy_token(
-                req, resp, subject="alice", scopes=[], entity_type="skill", registered_path="x"
+                req,
+                resp,
+                subject="alice",
+                scopes=[],
+                entity_type="skill",
+                registered_path="x",
+                http_method="GET",
+            )
+        assert "X-Internal-Token-Generic" not in resp.headers
+
+    @pytest.mark.parametrize("marker", [None, "wrong-marker-secret"])
+    def test_no_mint_when_nginx_marker_missing_or_mismatched(self, marker):
+        headers = {"X-Resolved-Generic-Upstream": "https://backend.example/"}
+        if marker is not None:
+            headers["X-Validate-Source-Secret"] = marker
+        req = _Req(headers)
+        resp = _Resp()
+        with patch.dict(os.environ, {"SECRET_KEY": _SECRET}, clear=False):
+            _attach_generic_proxy_token(
+                req,
+                resp,
+                subject="alice",
+                scopes=[],
+                entity_type="skill",
+                registered_path="skills/x",
+                http_method="GET",
             )
         assert "X-Internal-Token-Generic" not in resp.headers
 
     def test_empty_subject_mints_nothing(self):
-        req = _Req({"X-Resolved-Generic-Upstream": "https://b/"})
+        req = _Req(
+            {
+                "X-Resolved-Generic-Upstream": "https://b/",
+                "X-Validate-Source-Secret": settings.auth_server_nginx_marker_secret,
+            }
+        )
         resp = _Resp()
         with patch.dict(os.environ, {"SECRET_KEY": _SECRET}, clear=False):
             _attach_generic_proxy_token(
-                req, resp, subject="", scopes=[], entity_type="skill", registered_path="x"
+                req,
+                resp,
+                subject="",
+                scopes=[],
+                entity_type="skill",
+                registered_path="x",
+                http_method="GET",
             )
         # fail-closed: no token attached, generic hop rejects downstream
         assert "X-Internal-Token-Generic" not in resp.headers
@@ -91,8 +130,14 @@ class TestAttachGenericProxyToken:
 class TestDisjointFromMcpMint:
     def test_generic_request_does_not_mint_mcp_token(self):
         # A generic request sets X-Resolved-Generic-Upstream but NOT
-        # X-Resolved-Upstream, so the MCP attach must short-circuit.
-        req = _Req({"X-Resolved-Generic-Upstream": "https://b/"})
+        # X-Resolved-Upstream, so the MCP attach must short-circuit. The shared
+        # nginx marker permits only the generic mint.
+        req = _Req(
+            {
+                "X-Resolved-Generic-Upstream": "https://b/",
+                "X-Validate-Source-Secret": settings.auth_server_nginx_marker_secret,
+            }
+        )
         resp = _Resp()
         with patch.dict(os.environ, {"SECRET_KEY": _SECRET}, clear=False):
             _attach_mcp_proxy_token(req, resp, subject="alice", scopes=[], server_name="skill/x")
@@ -103,6 +148,7 @@ class TestDisjointFromMcpMint:
                 scopes=[],
                 entity_type="skill",
                 registered_path="skills/x",
+                http_method="GET",
             )
         assert "X-Internal-Token" not in resp.headers  # MCP mint did not fire
         assert "X-Internal-Token-Generic" in resp.headers  # generic mint did
@@ -118,7 +164,13 @@ class TestDisjointFromMcpMint:
         with patch.dict(os.environ, {"SECRET_KEY": _SECRET}, clear=False):
             _attach_mcp_proxy_token(req, resp, subject="alice", scopes=[], server_name="foo/mcp")
             _attach_generic_proxy_token(
-                req, resp, subject="alice", scopes=[], entity_type="skill", registered_path="x"
+                req,
+                resp,
+                subject="alice",
+                scopes=[],
+                entity_type="skill",
+                registered_path="x",
+                http_method="GET",
             )
         assert "X-Internal-Token" in resp.headers  # MCP mint fired
         assert "X-Internal-Token-Generic" not in resp.headers  # generic mint did not

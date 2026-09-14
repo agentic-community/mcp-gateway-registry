@@ -549,12 +549,24 @@ module "ecs_service_auth" {
           value = tostring(var.gateway_generic_tls_verify)
         },
         {
-          name  = "GATEWAY_PROXY_PIN_REFRESH_SECONDS"
-          value = tostring(var.gateway_proxy_pin_refresh_seconds)
-        },
-        {
           name  = "GATEWAY_GENERIC_MAX_CONCURRENCY"
           value = tostring(var.gateway_generic_max_concurrency)
+        },
+        {
+          name  = "GATEWAY_GENERIC_STREAM_MAX_CONCURRENCY"
+          value = tostring(var.gateway_generic_stream_max_concurrency)
+        },
+        {
+          name  = "GATEWAY_GENERIC_ACQUIRE_TIMEOUT_SECONDS"
+          value = tostring(var.gateway_generic_acquire_timeout_seconds)
+        },
+        {
+          name  = "GATEWAY_GENERIC_STREAM_MAX_DURATION_SECONDS"
+          value = tostring(var.gateway_generic_stream_max_duration_seconds)
+        },
+        {
+          name  = "GATEWAY_GENERIC_STREAM_MAX_BYTES"
+          value = tostring(var.gateway_generic_stream_max_bytes)
         },
         {
           name  = "METRICS_LEGACY_HTTP_POST"
@@ -591,6 +603,12 @@ module "ecs_service_auth" {
         {
           name  = "EGRESS_REGISTRY_INTERNAL_URL"
           value = var.egress_registry_internal_url
+        },
+        {
+          # OBO (same-IdP) token exchange against a self-hosted IdP: allowlist its
+          # private-resolving token endpoint. Mirrors the registry container.
+          name  = "EGRESS_OAUTH_TRUSTED_IDP_HOSTS"
+          value = var.egress_oauth_trusted_idp_hosts
         }
         ],
         # PR #947: MongoDB connection string override (plain-text variant).
@@ -781,6 +799,16 @@ module "ecs_service_auth" {
   subnet_ids = var.private_subnet_ids
   # No ALB ingress rule needed: Service Connect proxy-to-proxy traffic is allowed
   # by the registry->auth rule defined separately below.
+  #
+  # The generic proxy may target operator-approved Internet endpoints, so this
+  # service needs broad egress. Security groups are allow-only and cannot express
+  # "0.0.0.0/0 except link-local". Fargate does not expose EC2 IMDS; the task's
+  # 169.254.170.2 container-credential endpoint must remain reachable for its IAM
+  # role. The auth task disables SDK EC2-IMDS fallback, and the proxy URL guard
+  # hard-denies 169.254.169.254, 169.254.170.2, 169.254.170.23,
+  # fd00:ec2::254, and fd00:ec2::23 before any allowlist relaxation. Deploy an
+  # AWS Network Firewall/NACL equivalent when network-layer deny rules are
+  # required for an EC2-backed capacity provider.
   security_group_egress_rules = {
     all = {
       ip_protocol = "-1"
@@ -1188,8 +1216,10 @@ module "ecs_service_registry" {
           value = tostring(var.dedup_registration_hint_enabled)
         },
         {
+          # Empty when unset: the registry then picks the default calibrated for
+          # the configured embeddings model rather than a global guess.
           name  = "DEDUP_SCORE_THRESHOLD"
-          value = tostring(var.dedup_score_threshold)
+          value = var.dedup_score_threshold == null ? "" : tostring(var.dedup_score_threshold)
         },
         {
           name  = "DEDUP_MAX_SUGGESTIONS"
@@ -1571,6 +1601,14 @@ module "ecs_service_registry" {
           name  = "GATEWAY_GENERIC_CLIENT_MAX_BODY_SIZE"
           value = tostring(var.gateway_generic_client_max_body_size)
         },
+        {
+          name  = "GATEWAY_PROXY_PREFIX"
+          value = tostring(var.gateway_proxy_prefix)
+        },
+        {
+          name  = "GATEWAY_GENERIC_STREAM_READ_TIMEOUT_SECONDS"
+          value = tostring(var.gateway_generic_stream_read_timeout_seconds)
+        },
         # Internal/workshop deployment classification (telemetry labels; issue #1216)
         {
           name  = "INTERNAL_ONLY_DEPLOYMENT"
@@ -1866,6 +1904,14 @@ module "ecs_service_registry" {
         {
           name  = "EGRESS_OBO_ALLOWED_AUDIENCES"
           value = var.egress_obo_allowed_audiences
+        },
+        # Hosts whose OAuth token endpoints may resolve to private addresses, for a
+        # self-hosted IdP (Keycloak, Entra over Private Link). Exact hostnames only;
+        # does not inherit ssrf_allowed_hosts, so a proxy-target bypass can never
+        # relax a token POST. Empty by default, which permits none.
+        {
+          name  = "EGRESS_OAUTH_TRUSTED_IDP_HOSTS"
+          value = var.egress_oauth_trusted_idp_hosts
         },
         # AUTH_SERVER_NGINX_MARKER_SECRET is injected via secrets/valueFrom below
         # (required unconditionally, not just for egress).
@@ -2163,7 +2209,10 @@ module "ecs_service_registry" {
     # no token is injected, and the upstream 3rd-party server 401s (surfacing in
     # the client as "Protected resource ... does not match").
     auth_internal = {
-      description                  = "auth-server -> registry:8091 egress-token vend hop (dedicated internal nginx listener)"
+      # AWS restricts rule descriptions to "a-zA-Z0-9. _-:/()#,@[]+=&;{}!$*", so no
+      # ">" here. An arrow makes AuthorizeSecurityGroupIngress fail the whole apply
+      # with "InvalidParameterValue: Invalid rule description".
+      description                  = "auth-server to registry:8091 egress-token vend hop (dedicated internal nginx listener)"
       from_port                    = 8091
       to_port                      = 8091
       ip_protocol                  = "tcp"

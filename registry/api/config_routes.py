@@ -378,7 +378,9 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
         "order": 21,
         "fields": [
             ("dedup_registration_hint_enabled", "UI Hint Enabled", False),
-            ("dedup_score_threshold", "Score Threshold", False),
+            ("dedup_score_threshold", "Score Threshold (override)", False),
+            ("effective_dedup_score_threshold", "Score Threshold (in force)", False),
+            ("dedup_threshold_source", "Score Threshold Source", False),
             ("dedup_max_suggestions", "Max Suggestions", False),
         ],
     },
@@ -426,6 +428,10 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             ("egress_state_ttl_seconds", "OAuth State TTL (s)", False),
             ("egress_registry_internal_url", "Registry Internal Vend URL", False),
             ("egress_obo_allowed_audiences", "OBO Allowed Audiences", False),
+            # trusted-IdP allowlist for the credentialed-OAuth SSRF profile; not
+            # sensitive (hostnames only) but shown here because entries receive
+            # client secrets and refresh tokens
+            ("egress_oauth_trusted_idp_hosts", "Trusted IdP Hosts", False),
             # application-layer credential encryption (key is masked; only its
             # presence/absence is shown, never the value)
             ("egress_credential_encryption_key", "Credential Encryption Key", True),
@@ -476,12 +482,22 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
         "fields": [
             ("gateway_generic_proxy_enabled", "Generic Proxy Enabled", False),
             ("gateway_canonical_namespace_enabled", "Canonical Namespace Enabled", False),
+            ("gateway_proxy_prefix", "Proxy URL Prefix", False),
             ("gateway_proxy_allow_private_targets", "Allow Private Targets", False),
             ("gateway_generic_require_bearer_for_writes", "Require Bearer for Writes", False),
             ("gateway_generic_client_max_body_size", "Client Max Body Size (nginx)", False),
             ("generic_proxy_max_body_bytes", "Upstream Response Max Body Bytes", False),
             ("gateway_generic_max_concurrency", "Max Concurrency", False),
             ("gateway_generic_tls_verify", "TLS Verify", False),
+            ("gateway_generic_stream_max_concurrency", "Streaming Max Concurrency", False),
+            (
+                "gateway_generic_acquire_timeout_seconds",
+                "Stream Slot Acquire Timeout (seconds)",
+                False,
+            ),
+            ("gateway_generic_stream_max_duration_seconds", "Stream Max Duration (seconds)", False),
+            ("gateway_generic_stream_max_bytes", "Stream Max Bytes", False),
+            ("gateway_generic_stream_read_timeout_seconds", "Stream Read Timeout (seconds)", False),
             ("gateway_egress_selfcheck_enabled", "Egress Self-Check Enabled", False),
         ],
     },

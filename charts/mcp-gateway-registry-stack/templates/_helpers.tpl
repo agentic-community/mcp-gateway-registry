@@ -75,3 +75,22 @@ Selector labels
 app.kubernetes.io/name: {{ include "mcp-gateway-registry-stack.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
+
+{{/*
+Validate generic-proxy cross-chart parity and egress prerequisites. The stack
+owns both consumers, so it can reject a split-brain switch configuration before
+subcharts render.
+*/}}
+{{- define "mcp-gateway-registry-stack.validateGenericProxy" -}}
+{{- $registryEnabled := dig "app" "gatewayGenericProxyEnabled" false .Values.registry -}}
+{{- $authValues := index .Values "auth-server" -}}
+{{- $authEnabled := dig "app" "gatewayGenericProxyEnabled" false $authValues -}}
+{{- if ne $registryEnabled $authEnabled -}}
+{{- fail "generic proxy switch mismatch: registry.app.gatewayGenericProxyEnabled and auth-server.app.gatewayGenericProxyEnabled must be identical" -}}
+{{- end -}}
+{{- $managedPolicyEnabled := dig "egress" "networkPolicy" "enabled" false $authValues -}}
+{{- $externalPolicyAcknowledged := dig "egress" "externalEgressPolicyAcknowledged" false $authValues -}}
+{{- if and $authEnabled (not $managedPolicyEnabled) (not $externalPolicyAcknowledged) -}}
+{{- fail "generic proxy is enabled but no egress policy is declared: enable auth-server.egress.networkPolicy or explicitly acknowledge an equivalent external policy with auth-server.egress.externalEgressPolicyAcknowledged=true" -}}
+{{- end -}}
+{{- end -}}

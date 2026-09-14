@@ -18,6 +18,7 @@ from typing import Any
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from registry.observability.label_bounding import bool_label
 from registry.observability.meters import (
     record_emission_path,
     registry_operation_duration_ms,
@@ -229,7 +230,7 @@ class RegistryMetricsMiddleware(BaseHTTPMiddleware):
             otel_attrs = {
                 "operation": str(operation_info["operation"]),
                 "resource_type": str(operation_info["resource_type"]),
-                "success": str(success),
+                "success": bool_label(success),
             }
             registry_operation_total.add(1, otel_attrs)
             registry_operation_duration_ms.record(duration_ms, otel_attrs)

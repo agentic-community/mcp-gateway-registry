@@ -78,6 +78,7 @@ from ..services.skill_service import (
     get_skill_service,
 )
 from ..services.tool_validation_service import get_tool_validation_service
+from ..services.visibility import redact_proxy_backend_url
 from ..services.webhook_service import send_registration_webhook
 from ..utils.metadata import (
     flatten_metadata_to_text,
@@ -100,9 +101,21 @@ class RatingRequest(BaseModel):
     rating: int
 
 
+class UpstreamHeadersUpdateRequest(BaseModel):
+    """Body for PATCH /api/skills/{path}/upstream-headers.
+
+    Replaces the skill's ENTIRE upstream custom-header set (rotation semantics,
+    like PATCH /servers/{path}/auth-credential replaces the credential). Each
+    entry is ``{name, value?, overridable?}`` -- same policy as create. An empty
+    list clears all upstream headers. Values are write-only: never echoed back.
+    """
+
+    custom_headers: list[dict[str, Any]] = []
+
+
 router = APIRouter(prefix="/skills", tags=["skills"])
 
-_SKILL_CARD_EXCLUDE = {"auth_credential_encrypted"}
+_SKILL_CARD_EXCLUDE = {"auth_credential_encrypted", "custom_headers_encrypted"}
 
 
 # Dependency for normalized path
@@ -282,6 +295,11 @@ async def list_skills(
                 health_status=s.health_status,
                 last_checked_time=s.last_checked_time,
                 status=s.status,
+                # Gateway-proxy opt-in: carry through so the card badge + edit
+                # modal reflect stored state (proxy_client_url is server-derived).
+                is_proxied=s.is_proxied,
+                proxy_target_url=s.proxy_target_url,
+                proxy_client_url=s.proxy_client_url,
             )
             for s in skill_cards
         ]
@@ -307,6 +325,10 @@ async def list_skills(
     scan_summaries = await skill_scanner_service.get_scan_summaries()
     for skill in page_skills:
         skill.security_scan = scan_summaries.get(skill.path)
+        # Redact the internal backend origin (proxy_target_url) for non-admins,
+        # mirroring the MCP server read endpoints. is_proxied and the derived
+        # proxy_client_url stay visible.
+        redact_proxy_backend_url(skill, user_context)
 
     logger.info(
         f"Returning {len(page_skills)} skills for user "
@@ -960,6 +982,8 @@ async def get_skill(
 
         skill.metadata = SkillMetadata(**(projected or {}))
 
+    # Redact the internal backend origin for non-admins (mirrors the list path).
+    redact_proxy_backend_url(skill, user_context)
     return skill
 
 
@@ -1213,6 +1237,23 @@ async def update_skill(
 
     updates = request.model_dump(exclude_unset=True, mode="json")
 
+    # Upstream custom headers are NOT settable on this general update (they are
+    # accepted at create, mirroring the MCP-server update model's intentional
+    # omission — see server_update_models.py). Drop them from the update payload so
+    # a PUT carrying `custom_headers` can neither (a) bypass the create-path
+    # validation (reserved-name block + count cap) nor (b) persist PLAINTEXT header
+    # values straight into storage via $set (custom_headers_encrypted would be left
+    # untouched, so it would also be a silent egress no-op). Header rotation after
+    # create goes through the dedicated PATCH /skills/{path}/upstream-headers
+    # endpoint (update_skill_upstream_headers).
+    for _hdr_field in (
+        "custom_headers",
+        "custom_headers_encrypted",
+        "custom_header_names",
+        "custom_header_overridable_names",
+    ):
+        updates.pop(_hdr_field, None)
+
     # Lifecycle status change requires change_lifecycle_status (Issue #1330).
     if "status" in updates:
         old_status = (getattr(existing, "status", None) or "active").lower()
@@ -1258,6 +1299,70 @@ async def update_skill(
             status_code=status.HTTP_404_NOT_FOUND, detail=f"Skill not found: {normalized_path}"
         )
 
+    return updated
+
+
+@router.patch(
+    "/{skill_path:path}/upstream-headers",
+    response_model=SkillCard,
+    response_model_exclude=_SKILL_CARD_EXCLUDE,
+    summary="Rotate a skill's upstream proxy headers",
+)
+async def update_skill_upstream_headers(
+    http_request: Request,
+    body: UpstreamHeadersUpdateRequest,
+    user_context: Annotated[dict, Depends(nginx_proxied_auth)],
+    skill_path: str = Path(..., description="Skill path or name"),
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
+) -> SkillCard:
+    """Replace a skill's upstream custom headers (the proxy-hop credentials).
+
+    Dedicated, narrowly-scoped mutation surface -- the mirror of PATCH
+    /servers/{path}/auth-credential -- so headers can be rotated after create
+    without re-registering, while the general PUT stays free of plaintext-secret
+    handling. Owner-or-admin + the modify_skill scope, same as PUT. An empty
+    ``custom_headers`` list clears all upstream headers. Fails with 400 on any
+    policy violation (reserved name, count cap, fixed Authorization, ...).
+    """
+    normalized_path = normalize_skill_path(skill_path)
+    set_audit_action(
+        http_request,
+        "update",
+        "skill_upstream_headers",
+        resource_id=normalized_path,
+        description=f"Rotate upstream headers for skill {normalized_path}",
+    )
+
+    service = get_skill_service()
+    existing = await service.get_skill(normalized_path)
+    if not existing:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"Skill not found: {normalized_path}"
+        )
+    if not _user_can_modify_skill(existing, user_context):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    from ..utils.credential_encryption import build_custom_headers_storage_fields
+
+    # Pass the existing ciphertext so a blank submitted value preserves the stored
+    # secret (write-only value convention, same as the 3LO client_secret and the
+    # MCP-server custom-header edit path).
+    existing_encrypted = [
+        h.model_dump() if hasattr(h, "model_dump") else dict(h)
+        for h in (existing.custom_headers_encrypted or [])
+    ]
+    try:
+        updates = build_custom_headers_storage_fields(
+            body.custom_headers, existing_encrypted=existing_encrypted
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+    updated = await service.update_skill(normalized_path, updates)
+    if not updated:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"Skill not found: {normalized_path}"
+        )
     return updated
 
 

@@ -46,3 +46,45 @@ class TestReachabilitySsrfGuard:
                 assert reachable is True
                 assert error is None
                 mock_client.get.assert_called_once()
+
+
+class TestReachabilityProbesTheOrigin:
+    """The probe fetches the card from the ORIGIN, not from the registered path.
+
+    Per the A2A spec the card document sits at a well-known path on the origin,
+    while the registered url names the JSON-RPC endpoint and may carry a path.
+    Appending the suffix to the url probes one level too deep, so a spec-following
+    agent was reported unreachable at registration (issue #1724).
+    """
+
+    def test_path_carrying_url_is_probed_at_its_origin(self):
+        with patch("registry.utils.url_guard.socket.getaddrinfo") as mock_resolve:
+            mock_resolve.return_value = [(None, None, None, None, ("140.82.112.3", 443))]
+
+            with patch("registry.utils.url_guard.guarded_client") as mock_client_factory:
+                mock_client = mock_client_factory.return_value.__enter__.return_value
+                mock_client.get.return_value.status_code = 200
+
+                reachable, _ = _check_endpoint_reachability("https://good.example/api/v1/a2a")
+
+                assert reachable is True
+                assert (
+                    mock_client.get.call_args[0][0]
+                    == "https://good.example/.well-known/agent-card.json"
+                )
+
+    def test_path_less_url_probe_is_unchanged(self):
+        """Both spellings coincide for a path-less url, which is why this went unnoticed."""
+        with patch("registry.utils.url_guard.socket.getaddrinfo") as mock_resolve:
+            mock_resolve.return_value = [(None, None, None, None, ("140.82.112.3", 9000))]
+
+            with patch("registry.utils.url_guard.guarded_client") as mock_client_factory:
+                mock_client = mock_client_factory.return_value.__enter__.return_value
+                mock_client.get.return_value.status_code = 200
+
+                _check_endpoint_reachability("http://good.example:9000")
+
+                assert (
+                    mock_client.get.call_args[0][0]
+                    == "http://good.example:9000/.well-known/agent-card.json"
+                )

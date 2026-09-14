@@ -55,6 +55,24 @@ export interface CustomEntityRecord {
   created_at: string;
   updated_at: string;
   attributes: Record<string, unknown>;
+  // Gateway-proxy opt-in. Top-level (mixin) fields on the wire, NOT in attributes.
+  // proxy_client_url is the read-only, server-derived client path.
+  is_proxied?: boolean;
+  proxy_target_url?: string | null;
+  proxy_client_url?: string | null;
+  // Optional operator-authored usage notes, shown in the Connect panel when set.
+  proxy_connect_notes?: string | null;
+  // Upstream custom-header NAMES (values encrypted, never returned).
+  // custom_header_overridable_names is the caller-overridable subset.
+  custom_header_names?: string[];
+  custom_header_overridable_names?: string[];
+}
+
+/** One upstream custom header on the create payload / rotation body. */
+export interface CustomEntityHeader {
+  name: string;
+  value?: string;
+  overridable?: boolean;
 }
 
 /** Client payload for POST /api/custom/{type}. */
@@ -65,6 +83,10 @@ export interface CustomEntityCreate {
   allowed_groups: string[];
   tags: string[];
   attributes: Record<string, unknown>;
+  is_proxied?: boolean;
+  proxy_target_url?: string | null;
+  proxy_connect_notes?: string | null;
+  custom_headers?: CustomEntityHeader[];
 }
 
 /** Client payload for PUT /api/custom/{type}/{uuid} (all optional). */
@@ -75,6 +97,9 @@ export interface CustomEntityUpdate {
   allowed_groups?: string[];
   tags?: string[];
   attributes?: Record<string, unknown> | null;
+  is_proxied?: boolean;
+  proxy_target_url?: string | null;
+  proxy_connect_notes?: string | null;
 }
 
 /** Shape of the 400 validation-error body: { detail: [{ field, message }, ...] }. */

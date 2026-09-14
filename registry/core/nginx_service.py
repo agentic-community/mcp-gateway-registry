@@ -13,8 +13,9 @@ from urllib.parse import urlparse
 
 import httpx
 
+from registry.common.log_redaction import redact_url
 from registry.constants import REGISTRY_CONSTANTS, DeploymentType, HealthStatus
-from registry.schemas.proxy_mixin import _assert_egress_allowed
+from registry.schemas.proxy_mixin import _assert_egress_allowed, build_proxy_client_path
 
 from .config import settings
 from .endpoint_utils import get_endpoint_url_from_server_info
@@ -1840,6 +1841,8 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
         entity_type: str,
         path: str,
         target_url: str,
+        streaming: bool = False,
+        has_upstream_auth: bool = False,
     ) -> str:
         """Render one nginx location block routing a proxied non-MCP entity.
 
@@ -1852,27 +1855,73 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
         IP-pinning and TLS SNI for the backend happen at the auth-server httpx
         layer, not here.
 
+        When ``streaming`` is true the route disables nginx response buffering and
+        raises the read timeout so a long-lived SSE / chunked upstream (e.g. an
+        LLM proxied as a custom type) flows to the client incrementally instead of
+        being held until complete. The ``$generic_streaming`` marker is forwarded
+        on the /validate subrequest and bound into the token, so the hop switches
+        to a StreamingResponse only when the SIGNED claim says so — never on a
+        forgeable inbound header.
+
+        When ``has_upstream_auth`` is true the route sets the
+        ``$generic_has_upstream_auth`` marker (forwarded on /validate, bound into
+        the token) so the hop knows to fetch the entity's decrypted upstream
+        headers from the registry's internal vend endpoint and inject them on
+        egress. Like ``$generic_streaming`` it is a fixed literal, never the
+        secret; the encrypted header VALUES never enter the nginx config.
+
         Args:
             entity_type: Canonical entity type (e.g. "skill", "a2a_agent").
             path: The registered entity path (e.g. "/skills/proxy-demo").
             target_url: The resolved, egress-validated backend URL.
+            streaming: Emit the buffering-off + long-timeout streaming variant.
+            has_upstream_auth: Emit the upstream-auth marker (entity has custom
+                headers to inject on egress).
 
         Returns:
             The nginx location block string (with ``{{ROOT_PATH}}`` placeholder).
         """
-        norm_path = path if path.startswith("/") else "/" + path
         entity_path = path.strip("/")
         proxy_target = f"{settings.auth_server_url.rstrip('/')}/proxy/{entity_type}/{entity_path}/"
-        # Normalise to a trailing slash for the same reason as real and virtual
-        # servers (issue #1501): a bare `location /skill/foo` prefix-matches
-        # unrelated routes like `/skill/foobar`, hijacking them into this entity's
-        # /validate auth subrequest. `location /skill/foo/` only matches the
-        # subtree, and — paired with the trailing-slash proxy_pass target — appends
-        # a client sub-path cleanly onto the pinned base. It also makes the
-        # cross-block collision dedup exact-match correctly against the MCP/virtual
-        # location paths, which already carry a trailing slash.
-        location_path = f"/{entity_type}{norm_path}".rstrip("/") + "/"
+        # Client-facing location = {prefix}/{type}/{name} (auto-derived, never
+        # hand-entered). This is ONLY the outward path; the authz key is unchanged
+        # — it still keys off $generic_proxy_kind ($entity_path) below and the
+        # /proxy/{type}/{entity_path}/ proxy_pass, both of which use the FULL
+        # registered path. Changing this line does not invalidate existing scopes.
+        #
+        # Normalise to a trailing slash (issue #1501): a bare location prefix-matches
+        # unrelated routes (e.g. /gateway/skill/foobar), hijacking them into this
+        # entity's /validate auth subrequest. A trailing-slash location matches only
+        # the subtree and dedups exactly against the MCP/virtual location paths.
+        location_path = (
+            build_proxy_client_path(entity_type, path, settings.gateway_proxy_prefix).rstrip("/")
+            + "/"
+        )
         body_size = settings.gateway_generic_client_max_body_size
+        # Streaming variant: disable nginx buffering (so SSE/chunked bytes are not
+        # held), raise the read timeout for long-lived token streams, and set the
+        # $generic_streaming marker (forwarded on /validate, bound into the token).
+        # $generic_streaming is a fixed literal ("1"/"") — no untrusted input — so
+        # it needs no sanitization. Non-streaming keeps the marker empty (map
+        # default), so the mint stays buffered.
+        if streaming:
+            stream_read_timeout = settings.gateway_generic_stream_read_timeout_seconds
+            streaming_directives = f"""
+        # Streaming route: forward SSE/chunked bytes incrementally.
+        set $generic_streaming "1";
+        proxy_buffering off;
+        proxy_read_timeout {stream_read_timeout}s;
+        proxy_set_header Connection "";"""
+        else:
+            streaming_directives = ""
+        # Upstream-auth marker: a fixed literal, never the secret. Signals the hop
+        # to vend + inject the entity's registered upstream headers (values stay
+        # in the registry). Empty (map default) when the entity has none.
+        if has_upstream_auth:
+            upstream_auth_directive = """
+        set $generic_has_upstream_auth "1";"""
+        else:
+            upstream_auth_directive = ""
         return f"""
     # Proxied {entity_type}: {location_path}
     location {{{{ROOT_PATH}}}}{location_path} {{
@@ -1882,12 +1931,28 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
         auth_request_set $auth_user $upstream_http_x_user;
         auth_request_set $auth_scopes $upstream_http_x_scopes;
 
+        # Strip client-authored copies of the body-capture headers. capture_body.lua
+        # is the ONLY trusted producer of X-Body, and it does not run here (a generic
+        # route forwards opaque bytes, and reading the body would break streaming
+        # routes). The shared `location = /validate` block forwards client headers
+        # verbatim (proxy_pass_request_headers on) and does not redefine X-Body, so
+        # without this a caller could author the JSON-RPC view that /validate and the
+        # metrics middleware read -- fabricating tool_execution / protocol_latency
+        # series (with this entity's authz key as server_name) for an entity that
+        # runs no MCP tools. Rewrite phase, so the mutation is visible to the
+        # auth_request subrequest, which shares the parent's headers; clears only, so
+        # no body is read and streaming is unaffected.
+        rewrite_by_lua_block {{
+            ngx.req.clear_header("X-Body")
+            ngx.req.clear_header("X-Body-Uninspectable")
+        }}
+
         # SEPARATE upstream variable ($generic_backend_url), NOT $backend_url: keeps
         # X-Resolved-Upstream empty on generic requests so the MCP token mint never
         # fires and exactly one (generic-audience) token is issued per request.
         set $generic_backend_url "{target_url}";
         set $generic_proxy_kind "{entity_type}";
-        set $entity_path "{entity_path}";
+        set $entity_path "{entity_path}";{streaming_directives}{upstream_auth_directive}
         proxy_set_header X-Upstream-Url $generic_backend_url;
 
         proxy_pass {proxy_target};
@@ -1914,6 +1979,8 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
         entity_type: str,
         path: str,
         target_url: str,
+        streaming: bool = False,
+        has_upstream_auth: bool = False,
     ) -> str | None:
         """Return a generic block, or None to SKIP if the target is invalid/denied.
 
@@ -1958,9 +2025,17 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
                 raise ValueError("illegal character in target")
             if any(c in path for c in structural):
                 raise ValueError("illegal character in path")
-            return self._create_generic_proxy_block(entity_type, path, target_url)
+            return self._create_generic_proxy_block(
+                entity_type, path, target_url, streaming, has_upstream_auth
+            )
         except Exception as e:
-            logger.warning("Skipping generic block for %s%s: %s", entity_type, path, e)
+            logger.warning(
+                "Skipping generic block for %s%s (target=%s, reason=%s)",
+                entity_type,
+                path,
+                redact_url(target_url),
+                type(e).__name__,
+            )
             GATEWAY_GENERIC_BLOCKS_DROPPED.labels(reason="invalid").inc()
             return None
 
@@ -1994,7 +2069,13 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
 
         blocks: list[str] = []
         for res in sorted(resources, key=lambda r: (r["entity_type"], r["path"])):
-            block = self._safe_generic_block(res["entity_type"], res["path"], res["target_url"])
+            block = self._safe_generic_block(
+                res["entity_type"],
+                res["path"],
+                res["target_url"],
+                res.get("streaming", False),
+                res.get("has_upstream_auth", False),
+            )
             if block is None:
                 continue  # _safe_generic_block already logged + counted the drop
             block_paths = self._location_paths_in(block)
@@ -2419,6 +2500,16 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
         dns_resolver_timeout = os.environ.get("NGINX_DNS_RESOLVER_TIMEOUT", "5")
         safe_name = self._sanitize_for_nginx_comment(agent_name)
         route = f"{AGENT_ROUTE_PREFIX}/{agent_path}"
+        # Per the A2A spec the card document lives at a well-known path on the
+        # ORIGIN, while the card's own "url" names the JSON-RPC endpoint and may
+        # carry a path. Appending the suffix to backend_url asks the backend one
+        # level too deep (https://host/a2a/.well-known/... -> 404), which broke the
+        # card route for every spec-following agent while path-less ones looked
+        # fine, since both spellings coincide there. _build_agent_health_urls in
+        # registry/api/agent_routes.py derives this same URL from the origin; the
+        # two must agree or the health check calls an agent healthy while its
+        # gateway card route fails (issue #1724).
+        card_origin = f"{parsed_url.scheme}://{upstream_host}"
 
         return f"""
     # A2A agent card (discovery): {safe_name}
@@ -2429,7 +2520,7 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
         resolver_timeout {dns_resolver_timeout}s;
         auth_request /validate;
         auth_request_set $auth_scopes $upstream_http_x_scopes;
-        proxy_pass {backend_url}/.well-known/agent-card.json;
+        proxy_pass {card_origin}/.well-known/agent-card.json;
         proxy_http_version 1.1;
         proxy_ssl_server_name on;
         proxy_set_header Host {host_header};
@@ -3052,7 +3143,27 @@ async def _fetch_generic_proxied_resources() -> list[dict[str, Any]]:
             if not target:
                 # Not renderable (federated / disabled / auto-disabled / no target).
                 continue
-            resources.append({"entity_type": row_type, "path": doc["path"], "target_url": target})
+            resources.append(
+                {
+                    "entity_type": row_type,
+                    "path": doc["path"],
+                    "target_url": target,
+                    # Opt-in streaming: chunk-forward + buffering-off nginx route.
+                    # Coerced to bool so a missing/None projection field is False.
+                    "streaming": bool(doc.get("proxy_streaming")),
+                    # Any stored/vended credential signal forces the hop through
+                    # strict vending. This intentionally includes malformed legacy
+                    # or bypass-written rows (for example orphaned ciphertext with
+                    # no name metadata): the vend endpoint then rejects inconsistent
+                    # storage instead of forwarding the request unauthenticated.
+                    # Only this boolean enters nginx/the token; secret values do not.
+                    "has_upstream_auth": bool(
+                        doc.get("custom_header_names")
+                        or doc.get("custom_header_overridable_names")
+                        or doc.get("custom_headers_encrypted")
+                    ),
+                }
+            )
     return resources
 
 

@@ -53,6 +53,14 @@ data:
   # https host URLs), so shared first-party APIs (Graph/ARM/Key Vault) are rejected.
   EGRESS_OBO_ALLOWED_AUDIENCES: {{ .Values.egressAuth.oboAllowedAudiences | quote }}
   {{- end }}
+  {{- if .Values.egressAuth.oauthTrustedIdpHosts }}
+  # Hosts whose OAuth token endpoints may resolve to private addresses. Needed when
+  # the IdP is self-hosted (Keycloak, Entra via Private Link); without it the
+  # credentialed-OAuth SSRF profile rejects every private-resolving token endpoint.
+  # Exact hostnames only, no CIDRs. Entries receive client secrets and refresh
+  # tokens, so keep the list tight.
+  EGRESS_OAUTH_TRUSTED_IDP_HOSTS: {{ .Values.egressAuth.oauthTrustedIdpHosts | quote }}
+  {{- end }}
   {{- if .Values.egressAuth.secretsManager }}
   {{- if .Values.egressAuth.secretsManager.kmsKeyId }}
   SECRETS_MANAGER_KMS_KEY_ID: {{ .Values.egressAuth.secretsManager.kmsKeyId | quote }}

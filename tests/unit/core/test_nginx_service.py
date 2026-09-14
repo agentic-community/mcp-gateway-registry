@@ -2148,7 +2148,7 @@ def test_conf_declares_rate_limit_zones(conf_path):
     # Registration patterns must allow an optional trailing slash so a request to
     # /api/register/ cannot bypass the stricter registration cap (only the generous
     # edge limit would apply). Match must be anchored to the register path suffix.
-    for register_path in ("register", "servers/register", "internal/register"):
+    for register_path in ("register", "servers/register"):
         assert f'"~*/api/{register_path}/?$"' in text, (
             f"register classifier for /api/{register_path} must accept an optional "
             "trailing slash to prevent a trailing-slash throttle bypass"
@@ -2169,10 +2169,42 @@ def test_conf_applies_edge_limit_on_general_api_location(conf_path):
     idx = text.index(marker)
     body = text[idx : idx + 800]
     assert "limit_req zone=mcp_gateway_edge burst=100 nodelay;" in body
-    # Registration endpoints (/api/register, /api/servers/register,
-    # /api/internal/register) fall through this location and get the tighter cap.
+    # Registration endpoints (/api/register, /api/servers/register) fall through
+    # this location and get the tighter cap.
     assert "limit_req zone=mcp_gateway_register burst=10 nodelay;" in body
     assert "limit_conn mcp_gateway_conn 100;" in body
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("conf_path", [_HTTP_ONLY_CONF, _HTTP_AND_HTTPS_CONF])
+def test_internal_routes_blocked_on_public_listeners(conf_path):
+    """Service-to-service /api/internal/* routes must not be reachable on the
+    public listeners.
+
+    The public `/api/` catch-all would otherwise proxy every `/api/internal/*`
+    path (egress-token vend, virtual-server sessions, service management) to the
+    app, leaving the app-level gates as the sole defense. Each public server
+    block must `return 404` for the prefix. The egress vend and session subsets
+    keep their own dedicated internal locations (/_egress_internal/egress-token
+    on :8091, /_internal/sessions/ subrequest); the management routes are
+    superseded by the user-authenticated /api/servers/* endpoints, so nothing
+    proxies the /api/internal/ prefix through on any listener.
+    """
+    text = conf_path.read_text()
+    expected_public_blocks = 2 if conf_path == _HTTP_AND_HTTPS_CONF else 1
+    assert text.count("location ^~ {{ROOT_PATH}}/api/internal/ {") == expected_public_blocks, (
+        "each public server block must 404 the /api/internal/ prefix"
+    )
+    # No listener proxies the /api/internal/ prefix through to the app: the vend
+    # endpoint has its own exact-match location, and the management routes are no
+    # longer nginx-routable (migrated to the public /api/servers/* siblings).
+    assert "location ^~ /api/internal/ {" not in text
+    assert "proxy_pass http://127.0.0.1:7860/api/internal/;" not in text
+    # The egress vend endpoint is still served on the internal listener.
+    assert "proxy_pass http://127.0.0.1:7860/api/internal/egress-token;" in text
+    # The dead public register-rate-limit classifier for internal/register is gone
+    # (the endpoint is no longer publicly routable, so it needs no throttle key).
+    assert '"~*/api/internal/register/?$"' not in text
 
 
 def _assert_all_locations_rate_limited(

@@ -4,7 +4,10 @@
   "description": "Advanced data analysis agent for statistical analysis, data visualization, and insight generation. Supports multiple data formats and provides predictive analytics",
   "url": "https://example.com/agents/data-analysis",
   "version": "3.2.1",
-  "provider": "Analytics Solutions Inc",
+  "provider": {
+    "organization": "Analytics Solutions Inc",
+    "url": "https://example.com"
+  },
   "path": "/data-analysis",
   "tags": "analytics,data-science,visualization,statistics",
   "is_enabled": true,
@@ -250,5 +253,6 @@
     ],
     "computation_gpu_enabled": true,
     "avg_analysis_time_seconds": 30
-  }
+  },
+  "supportedProtocol": "a2a"
 }

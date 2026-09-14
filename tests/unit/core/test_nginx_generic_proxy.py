@@ -146,6 +146,37 @@ class TestFetchFlagGate:
                 result = await _fetch_generic_proxied_resources()
         assert [r["path"] for r in result] == ["/skills/ok"]
 
+    async def test_orphaned_ciphertext_still_forces_strict_vending(self):
+        corrupt = AsyncMock()
+        corrupt.list_proxied.return_value = [
+            {
+                "path": "/skills/corrupt",
+                "is_proxied": True,
+                "proxy_target_url": "https://backend.example/",
+                "custom_header_names": [],
+                "custom_header_overridable_names": [],
+                "custom_headers_encrypted": [
+                    {"name": "X-Api-Key", "value_encrypted": "orphaned-ciphertext"}
+                ],
+            }
+        ]
+        empty = AsyncMock()
+        empty.list_proxied.return_value = []
+        with patch("registry.core.nginx_service.settings") as s:
+            s.gateway_generic_proxy_enabled = True
+            with (
+                patch("registry.repositories.factory.get_agent_repository", return_value=empty),
+                patch("registry.repositories.factory.get_skill_repository", return_value=corrupt),
+                patch(
+                    "registry.repositories.factory.get_custom_entity_repository",
+                    return_value=empty,
+                ),
+            ):
+                result = await _fetch_generic_proxied_resources()
+
+        assert result[0]["path"] == "/skills/corrupt"
+        assert result[0]["has_upstream_auth"] is True
+
 
 # --------------------------------------------------------------------------- #
 # _create_generic_proxy_block — shape
@@ -153,24 +184,40 @@ class TestFetchFlagGate:
 
 
 class TestCreateBlock:
-    def _block(self, entity_type="skill", path="/skills/proxy-demo", target="https://b.example/"):
+    def _block(
+        self,
+        entity_type="skill",
+        path="/skills/proxy-demo",
+        target="https://b.example/",
+        streaming=False,
+        has_upstream_auth=False,
+    ):
         with patch("registry.core.nginx_service.settings") as s:
             s.auth_server_url = "http://auth-server:8888"
             s.gateway_generic_client_max_body_size = "1m"
-            return _service()._create_generic_proxy_block(entity_type, path, target)
+            s.gateway_proxy_prefix = "gateway"
+            s.gateway_generic_stream_read_timeout_seconds = 3600
+            return _service()._create_generic_proxy_block(
+                entity_type, path, target, streaming, has_upstream_auth
+            )
 
-    def test_location_is_entity_type_namespaced(self):
+    def test_location_is_prefixed_type_name(self):
+        # Client-facing path = /{prefix}/{type}/{name} (namespace segment stripped
+        # from the registered path, so /skills/proxy-demo -> /gateway/skill/proxy-demo,
+        # NOT the doubled /skill/skills/proxy-demo).
         block = self._block()
-        assert "location {{ROOT_PATH}}/skill/skills/proxy-demo/ {" in block
+        assert "location {{ROOT_PATH}}/gateway/skill/proxy-demo/ {" in block
+        assert "location {{ROOT_PATH}}/skill/skills/proxy-demo" not in block
 
     def test_location_has_trailing_slash_no_prefix_hijack(self):
-        # Issue #1501 class: a bare `location /skill/foo` prefix-matches sibling
-        # routes like `/skill/foobar`, pulling them into this entity's /validate
-        # auth subrequest. The rendered location MUST carry a trailing slash so it
-        # only matches the subtree (same guard real/virtual servers apply).
+        # Issue #1501 class: a bare `location /gateway/skill/foo` prefix-matches
+        # sibling routes like `/gateway/skill/foobar`, pulling them into this
+        # entity's /validate auth subrequest. The rendered location MUST carry a
+        # trailing slash so it only matches the subtree (same guard real/virtual
+        # servers apply).
         block = self._block(path="/skills/foo")
-        assert "location {{ROOT_PATH}}/skill/skills/foo/ {" in block
-        assert "location {{ROOT_PATH}}/skill/skills/foo {" not in block
+        assert "location {{ROOT_PATH}}/gateway/skill/foo/ {" in block
+        assert "location {{ROOT_PATH}}/gateway/skill/foo {" not in block
 
     def test_proxy_pass_targets_auth_server_generic_hop(self):
         block = self._block()
@@ -193,12 +240,44 @@ class TestCreateBlock:
         with patch("registry.core.nginx_service.settings") as s:
             s.auth_server_url = "http://auth-server:8888"
             s.gateway_generic_client_max_body_size = "8m"
+            s.gateway_proxy_prefix = "gateway"
             block = _service()._create_generic_proxy_block(
                 "a2a_agent", "/agents/code-reviewer", "https://x/"
             )
+        # authz markers use the FULL registered path (unchanged by the client-path
+        # rename): X-Generic-Proxy-Kind + X-Entity-Path are the scope key.
         assert 'set $generic_proxy_kind "a2a_agent";' in block
         assert 'set $entity_path "agents/code-reviewer";' in block
+        # ...while the outward location uses the stripped, prefixed client path.
+        assert "location {{ROOT_PATH}}/gateway/a2a_agent/code-reviewer/ {" in block
         assert "client_max_body_size 8m;" in block
+
+    @pytest.mark.parametrize("streaming", [False, True])
+    def test_clears_client_authored_body_capture_headers(self, streaming):
+        """A caller must not be able to author X-Body on a gateway route.
+
+        capture_body.lua is the only trusted producer of X-Body and does not run on
+        generic locations, while the shared `location = /validate` block forwards
+        client headers verbatim (proxy_pass_request_headers on) without redefining
+        X-Body. Without an explicit clear, a caller could hand /validate and the
+        auth-server metrics middleware a JSON-RPC body of their choosing, minting
+        tool_execution / protocol_latency series keyed by this entity's authz key
+        for an entity that runs no MCP tools.
+
+        The clear must happen in the rewrite phase: the auth_request subrequest
+        shares the parent's headers, so a proxy_set_header on this location would
+        not reach it. Header clears only, so no body is read and the streaming
+        route is unaffected.
+        """
+        block = self._block(streaming=streaming)
+        assert "rewrite_by_lua_block {" in block
+        assert 'ngx.req.clear_header("X-Body")' in block
+        assert 'ngx.req.clear_header("X-Body-Uninspectable")' in block
+        # Directive lines only (a comment may name the file for context): the block
+        # must NOT pull in the MCP body-capture Lua, which reads the request body and
+        # would break the streaming route.
+        directive_lines = [ln for ln in block.splitlines() if not ln.lstrip().startswith("#")]
+        assert not any("capture_body.lua" in ln for ln in directive_lines)
 
     def test_forwards_token_under_generic_header_name(self):
         # The hop's verify_generic_proxy_token reads X-Internal-Token-Generic, NOT
@@ -207,15 +286,48 @@ class TestCreateBlock:
         with patch("registry.core.nginx_service.settings") as s:
             s.auth_server_url = "http://auth-server:8888"
             s.gateway_generic_client_max_body_size = "1m"
+            s.gateway_proxy_prefix = "gateway"
             block = _service()._create_generic_proxy_block("skill", "/skills/x", "https://x/")
         assert "proxy_set_header X-Internal-Token-Generic $auth_internal_token_generic;" in block
         # must NOT forward the generic token under the MCP header name
         assert "proxy_set_header X-Internal-Token $auth_internal_token_generic;" not in block
 
+    def test_non_streaming_block_has_no_streaming_directives(self):
+        # Default (buffered) route: no streaming marker, no buffering-off, so the
+        # hop keeps the bounded/buffered path and nginx buffers normally.
+        block = self._block(streaming=False)
+        assert 'set $generic_streaming "1";' not in block
+        assert "proxy_buffering off;" not in block
+
+    def test_streaming_block_emits_marker_and_buffering_off(self):
+        # Streaming route (proxy_streaming=true entity): sets the $generic_streaming
+        # marker (forwarded on /validate, bound into the token), disables nginx
+        # buffering, and raises the read timeout for long-lived SSE / token streams.
+        block = self._block(streaming=True)
+        assert 'set $generic_streaming "1";' in block
+        assert "proxy_buffering off;" in block
+        assert "proxy_read_timeout 3600s;" in block
+        assert 'proxy_set_header Connection "";' in block
+
+    def test_no_upstream_auth_block_has_no_marker(self):
+        # Default: no upstream-auth marker, so the hop won't vend/inject headers.
+        block = self._block(has_upstream_auth=False)
+        assert 'set $generic_has_upstream_auth "1";' not in block
+
+    def test_upstream_auth_block_emits_marker_only(self):
+        # Entity with registered upstream headers: sets the bool marker (bound into
+        # the token so the hop vends+injects). The marker is a fixed literal -- the
+        # secret VALUES never appear in the rendered nginx config.
+        block = self._block(has_upstream_auth=True)
+        assert 'set $generic_has_upstream_auth "1";' in block
+        # Defence: no decrypted header value leaks into the config.
+        assert "value_encrypted" not in block
+
     def test_auth_server_url_trailing_slash_not_doubled(self):
         with patch("registry.core.nginx_service.settings") as s:
             s.auth_server_url = "http://auth-server:8888/"
             s.gateway_generic_client_max_body_size = "1m"
+            s.gateway_proxy_prefix = "gateway"
             block = _service()._create_generic_proxy_block("skill", "/skills/x", "https://x/")
         assert "proxy_pass http://auth-server:8888/proxy/skill/skills/x/;" in block
 
@@ -233,6 +345,7 @@ class TestSafeBlock:
             s.auth_server_url = auth_url
             s.gateway_generic_client_max_body_size = "1m"
             s.gateway_proxy_allow_private_targets = allow_private
+            s.gateway_proxy_prefix = "gateway"
             return _service()._safe_generic_block(entity_type, path, target)
 
     def test_valid_target_returns_block(self):
@@ -247,6 +360,17 @@ class TestSafeBlock:
         assert (
             self._safe("skill", "/skills/x", "http://169.254.169.254/", allow_private=True) is None
         )
+
+    @pytest.mark.parametrize(
+        "entity_type,path",
+        [
+            ("skill", "/skills/fake"),
+            ("a2a_agent", "/agents/fake"),
+            ("workflow", "/workflow/fake"),
+        ],
+    )
+    def test_arbitrary_mcpgw_server_target_skipped(self, entity_type, path):
+        assert self._safe(entity_type, path, "http://mcpgw-server:8003/") is None
 
     def test_private_target_skipped_when_flag_false(self):
         assert self._safe("skill", "/skills/x", "http://10.0.0.5/", allow_private=False) is None
@@ -321,6 +445,7 @@ class TestGenerateGenericBlocks:
             s.auth_server_url = "http://auth-server:8888"
             s.gateway_generic_client_max_body_size = "1m"
             s.gateway_proxy_allow_private_targets = False
+            s.gateway_proxy_prefix = "gateway"
             with patch(
                 "registry.core.nginx_service._fetch_generic_proxied_resources",
                 new=AsyncMock(return_value=resources),
@@ -339,19 +464,21 @@ class TestGenerateGenericBlocks:
         assert len(blocks) == 2
 
     async def test_generic_dropped_on_collision_with_claimed_path(self):
-        # A legacy MCP server already claimed /skill/skills/a (precedence).
+        # A prior block already claimed the client path /gateway/skill/a (precedence).
+        # Collision is checked against the CLIENT path (the location line), which is
+        # now {prefix}/{type}/{name}, not the legacy /skill/skills/... form.
         resources = [
             {"entity_type": "skill", "path": "/skills/a", "target_url": "https://a/"},
             {"entity_type": "skill", "path": "/skills/b", "target_url": "https://b/"},
         ]
-        # Claimed paths carry a trailing slash (that is how MCP/virtual blocks
-        # render their location), and the generic block now normalises to a
-        # trailing slash too — so the exact-match collision dedup catches it.
-        claimed = {"/skill/skills/a/"}
+        # Claimed client paths carry a trailing slash (that is how MCP/virtual blocks
+        # render their location), and the generic block now normalises to a trailing
+        # slash too — so the exact-match collision dedup catches it.
+        claimed = {"/gateway/skill/a/"}
         blocks = await self._generate(resources, claimed)
         # only /skills/b survives; the colliding /skills/a is dropped
         assert len(blocks) == 1
-        assert "/skill/skills/b/" in blocks[0]
+        assert "/gateway/skill/b/" in blocks[0]
 
     async def test_generic_vs_generic_first_seen_wins(self):
         # Two entities rendering the SAME location path: deterministic first-wins
@@ -362,8 +489,8 @@ class TestGenerateGenericBlocks:
         resources = [
             {"entity_type": "skill", "path": "/skills/dup", "target_url": "https://a/"},
         ]
-        # Pre-claim the path; the single generic must be dropped, not duplicated.
-        blocks = await self._generate(resources, {"/skill/skills/dup/"})
+        # Pre-claim the client path; the single generic must be dropped, not duplicated.
+        blocks = await self._generate(resources, {"/gateway/skill/dup/"})
         assert blocks == []
 
     async def test_invalid_target_skipped_but_others_render(self):
@@ -377,4 +504,4 @@ class TestGenerateGenericBlocks:
         ]
         blocks = await self._generate(resources, set())
         assert len(blocks) == 1
-        assert "/skill/skills/good" in blocks[0]
+        assert "/gateway/skill/good" in blocks[0]

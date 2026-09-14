@@ -134,8 +134,12 @@ class TestCardinalityLimiterCap:
         assert _SAFE_LABEL_CHARS.pattern == r"[^A-Za-z0-9\-_.:/]"
         # Default length pin (cardinality default is env-derived; length is the
         # charset-normalization constant that must match the sibling).
+        #
+        # 96, raised from 64 so a gateway-proxied entity's authz key fits: a
+        # UUID-keyed custom record already reaches exactly 64 characters, and a
+        # truncated key matches no scope rule (issue #1735).
         limiter = _CardinalityLimiter()
-        assert limiter._max_length == 64
+        assert limiter._max_length == 96
 
 
 class TestBoundDimensions:

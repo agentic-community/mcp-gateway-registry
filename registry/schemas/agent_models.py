@@ -732,6 +732,9 @@ class AgentCard(ProxyableMixin):
             },
             read_safe=True,  # storage model: reconstructed on read, log-not-raise
         )
+        # Derive the read-only client-facing path from type + path (self-healing).
+        # Agent path may be None pre-generation; populate handles that (clears).
+        self.populate_proxy_client_url("a2a_agent")
         return self
 
 
@@ -897,6 +900,21 @@ class AgentInfo(BaseModel):
     metadata: dict[str, Any] = Field(
         default_factory=dict,
         description="Additional metadata key-value pairs",
+    )
+    # Gateway-proxy opt-in (mirrored from the AgentCard so listings show the badge
+    # and the edit modal populates the toggle). proxy_client_url is the read-only,
+    # server-derived client path; proxy_target_url is the backend/origin.
+    is_proxied: bool = Field(
+        default=False,
+        description="When true, the agent is served through the gateway generic proxy.",
+    )
+    proxy_target_url: str | None = Field(
+        default=None,
+        description="Backend/origin HTTP(S) URL the gateway forwards to (falls back to the agent url).",
+    )
+    proxy_client_url: str | None = Field(
+        default=None,
+        description="Read-only, auto-derived client-facing gateway path (/{prefix}/a2a_agent/{name}).",
     )
 
     model_config = ConfigDict(

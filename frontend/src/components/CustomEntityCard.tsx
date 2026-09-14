@@ -15,6 +15,7 @@ import {
 import { labelFor } from '../utils/humanize';
 import StarRatingWidget from './StarRatingWidget';
 import { TagList, ENTITY_ACCENTS } from './cards';
+import ProxyConnectButton from './ProxyConnectButton';
 
 interface CustomEntityCardProps {
   descriptor: CustomTypeDescriptor;
@@ -91,14 +92,29 @@ const CustomEntityCard: React.FC<CustomEntityCardProps> = ({
         <h3 className="text-base font-semibold text-gray-900 dark:text-white truncate">
           {record.name}
         </h3>
-        <span
-          className={`px-2 py-0.5 text-xs font-semibold rounded-full flex-shrink-0 flex items-center gap-1 ${visibilityColor(
-            record.visibility,
-          )}`}
-        >
-          {visibilityIcon(record.visibility)}
-          {record.visibility}
-        </span>
+        <div className="flex items-center gap-1 flex-shrink-0">
+          {record.is_proxied && (
+            <span
+              className="px-2 py-0.5 text-xs font-semibold bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-300 rounded-full border border-cyan-200 dark:border-cyan-600"
+              title={
+                record.proxy_client_url
+                  ? `Clients connect at ${record.proxy_client_url}` +
+                    (record.proxy_target_url ? ` (forwards to ${record.proxy_target_url})` : '')
+                  : 'Served through the gateway proxy'
+              }
+            >
+              Proxied
+            </span>
+          )}
+          <span
+            className={`px-2 py-0.5 text-xs font-semibold rounded-full flex items-center gap-1 ${visibilityColor(
+              record.visibility,
+            )}`}
+          >
+            {visibilityIcon(record.visibility)}
+            {record.visibility}
+          </span>
+        </div>
       </div>
 
       {record.description && (
@@ -135,6 +151,13 @@ const CustomEntityCard: React.FC<CustomEntityCardProps> = ({
           onShowToast={onShowToast}
         />
         <div className="flex items-center gap-1">
+          {/* Always rendered: a disabled Connect explains that the record is not
+              routed through the gateway, which an absent control cannot. */}
+          <ProxyConnectButton
+            clientUrl={record.proxy_client_url}
+            targetUrl={record.proxy_target_url}
+            connectNotes={record.proxy_connect_notes}
+          />
           <button
             type="button"
             onClick={() => onView(record)}

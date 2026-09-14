@@ -31,6 +31,9 @@ class TestStripProxyFields:
             "proxy_resolved_ips": ["1.2.3.4"],
             "proxy_target_host": "internal.example",
             "proxy_disabled_reason": "blocked",
+            # Operator notes describe a local backend's request shape, so they are
+            # neither exported to a peer nor accepted from one.
+            "proxy_connect_notes": "Append /v1/chat/completions",
         }
         out = strip_proxy_fields(doc)
         assert set(out) == {"name", "path"}

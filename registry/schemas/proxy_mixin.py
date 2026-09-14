@@ -8,13 +8,15 @@ traffic to the entity's effective backend URL.
 Security posture (this module wires the entity/proxy layer to the SSRF control):
 - IP classification + the egress allowlist are owned by the canonical
   ``registry.utils.url_guard``, including its inline literal parser and IP-category
-  classifier. The functions here are thin PROXY_PROFILE adapters that translate the guard's ``UrlValidationError`` into the local
-  ``EgressPolicyError`` (a ``ValueError``) so a Pydantic field validator surfaces a
-  clean 4xx. Registration and the fetch-time pinned transport therefore share ONE
-  policy — the ``gateway_proxy_allow_private_targets`` bool (relaxes loopback/
-  private/CGNAT only) plus ``ssrf_allowed_hosts``/``ssrf_allowed_cidrs`` (an explicit
-  CIDR re-permits any non-metadata category); the cloud metadata endpoints
-  (169.254.169.254 AND the IPv6 fd00:ec2::254) are NEVER reachable.
+  classifier. The functions here are thin PROXY_PROFILE adapters that translate
+  the guard's ``UrlValidationError`` into the local ``EgressPolicyError`` (a
+  ``ValueError``) so a Pydantic field validator surfaces a clean 4xx. Registration
+  and the fetch-time pinned transport therefore share ONE policy — the
+  ``gateway_proxy_allow_private_targets`` bool plus ``ssrf_allowed_hosts`` /
+  ``ssrf_allowed_cidrs`` can relax only loopback/private/CGNAT targets;
+  cloud/workload credential endpoints (including Alibaba), link-local, reserved,
+  multicast, and unspecified destinations remain hard-denied, including scoped
+  and embedded/tunneled IPv6 forms.
 - The static check is best-effort on literal-IP targets; hostnames pass it (no DNS
   in a validator). The authoritative rebind defense is the fetch-time pinned
   transport (``url_guard.guarded_async_client``, which resolves+validates+connects
@@ -43,6 +45,19 @@ from registry.utils.url_guard import coerce_ip_literal
 
 logger = logging.getLogger(__name__)
 
+
+class CustomHeaderEncrypted(BaseModel):
+    """Stored form of a custom upstream header: name + Fernet-encrypted value.
+
+    Defined here (not core.schemas) so every proxyable entity can carry custom
+    upstream headers via ProxyableMixin without a schemas<->proxy_mixin import
+    cycle. core.schemas re-exports it for backward compatibility.
+    """
+
+    name: str
+    value_encrypted: str
+
+
 # Canonical built-in entity-type tokens that resolve_proxy_target knows how to
 # derive a fallback backend URL for. Custom entities pass their own descriptor
 # name as the type token and must always carry an explicit proxy_target_url.
@@ -63,9 +78,21 @@ PROXY_FIELD_NAMES: frozenset[str] = frozenset(
     {
         "is_proxied",
         "proxy_target_url",
+        "proxy_streaming",
         "proxy_resolved_ips",
         "proxy_target_host",
         "proxy_disabled_reason",
+        "proxy_client_url",
+        "proxy_connect_notes",
+        # Upstream auth secrets must NEVER travel to/from a peer. Stripped both
+        # ways (a peer must not plant creds, and we must not leak our own).
+        # The plaintext "custom_headers" key is normally never persisted, but is
+        # stripped too as defense-in-depth in case a raw-doc path ever carries it.
+        "custom_headers",
+        "custom_headers_encrypted",
+        "custom_header_names",
+        "custom_header_overridable_names",
+        "custom_headers_updated_at",
     }
 )
 
@@ -82,6 +109,46 @@ def strip_proxy_fields(doc: dict[str, Any]) -> dict[str, Any]:
     if not any(k in doc for k in PROXY_FIELD_NAMES):
         return doc
     return {k: v for k, v in doc.items() if k not in PROXY_FIELD_NAMES}
+
+
+def _target_identity(url: str | None) -> str:
+    """Return normalized full-URL credential identity, or a fail-closed marker."""
+    if not url:
+        return ""
+    from registry.exceptions import UrlValidationError
+    from registry.utils.url_guard import normalize_url_identity
+
+    try:
+        return normalize_url_identity(url)
+    except UrlValidationError:
+        # Invalid legacy values should never share credentials with a replacement.
+        # Include the original value so an unchanged malformed row remains stable,
+        # while any edit necessarily changes identity and clears credentials.
+        return f"invalid:{url}"
+
+
+def clear_upstream_headers_on_repoint(
+    updates: dict[str, Any],
+    existing_target: str | None,
+    new_target: str | None,
+) -> None:
+    """Clear stored upstream custom headers when an update repoints the target.
+
+    Credential-misdirection guard (shared by every entity update path). The
+    encrypted ``custom_headers`` were entered by an operator for one exact
+    normalized upstream URL. A scheme, host, port, path, or query change can
+    repoint the credential to a different tenant/resource even on the same host,
+    so every full-target identity change clears the stored headers.
+
+    No-op only when the normalized full URLs are identical (for example, host
+    case or an explicit default port differs) or when there is nothing to clear.
+    """
+    if _target_identity(existing_target) == _target_identity(new_target):
+        return
+    updates["custom_headers_encrypted"] = None
+    updates["custom_header_names"] = []
+    updates["custom_header_overridable_names"] = []
+    updates["custom_headers_updated_at"] = None
 
 
 class EgressPolicyError(ValueError):
@@ -152,6 +219,61 @@ class ProxyableMixin(BaseModel):
             "is true and the entity has no native backend URL (skills, custom entities)."
         ),
     )
+    proxy_streaming: bool = Field(
+        default=False,
+        description=(
+            "When true, the generic hop streams the upstream response chunk-by-chunk "
+            "(SSE / chunked) instead of buffering it, and the generated nginx route "
+            "disables proxy_buffering with a long read timeout. Set this for "
+            "long-lived or token-streaming backends (e.g. an LLM proxied as a custom "
+            "type). When false (default) the response is buffered up to "
+            "GENERIC_PROXY_MAX_BODY_BYTES. The value is bound into the signed "
+            "generic-proxy token, so the hop never trusts a forgeable inbound header."
+        ),
+    )
+    proxy_connect_notes: str | None = Field(
+        default=None,
+        max_length=2000,
+        description=(
+            "Optional operator-authored usage notes for clients connecting through "
+            "the gateway (e.g. the API sub-path to append, the request shape). Free "
+            "text, surfaced in the UI Connect panel only when set and only for a "
+            "proxied entity. Not interpreted by the gateway."
+        ),
+    )
+    custom_headers_encrypted: list[CustomHeaderEncrypted] | None = Field(
+        default=None,
+        description=(
+            "Static upstream auth headers presented to the backend the gateway "
+            "proxies to (e.g. an API key for an LLM proxied as a custom type). "
+            "Stored as {name, value_encrypted} (Fernet); the plaintext values are "
+            "NEVER serialized to API consumers, rendered into nginx, or logged. At "
+            "request time the generic hop fetches the decrypted headers from the "
+            "registry's internal vend endpoint (same trust boundary as the egress "
+            "vault) and injects them on egress. Accepted on create/update via a "
+            "plaintext 'custom_headers' list that the registration path encrypts."
+        ),
+    )
+    custom_header_names: list[str] = Field(
+        default_factory=list,
+        description="Names of the custom upstream headers (values are encrypted). Safe to surface.",
+    )
+    custom_header_overridable_names: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Subset of custom_header_names the CALLER may override or supply on the "
+            "request (the entries registered with overridable=true). This IS the "
+            "caller passthrough allowlist: on egress the generic hop forwards a "
+            "caller-supplied header ONLY if its name is in this set; a name here with "
+            "a stored encrypted value is an operator DEFAULT the caller may override, "
+            "and a name here WITHOUT a stored value is a caller-only slot. Names only, "
+            "no secret. Safe to surface on reads."
+        ),
+    )
+    custom_headers_updated_at: str | None = Field(
+        default=None,
+        description="ISO timestamp of the last custom-headers update.",
+    )
     # Operational bookkeeping written by the resolve-and-validate refresh; not user-set.
     proxy_resolved_ips: list[str] = Field(
         default_factory=list,
@@ -168,6 +290,50 @@ class ProxyableMixin(BaseModel):
             "to a denied IP). When non-null the entity is treated as NOT proxied."
         ),
     )
+    # DERIVED, read-only: the client-facing gateway path ({prefix}/{type}/{name}).
+    # Never user-set — it is recomputed from the entity's type + path on every
+    # construction (see populate_proxy_client_url, called from each storage
+    # model's after-validator), so any client-supplied or stored value is
+    # overwritten. Distinct from proxy_target_url (the backend/origin the gateway
+    # forwards to). Null when the entity is not proxied.
+    proxy_client_url: str | None = Field(
+        default=None,
+        description=(
+            "Read-only, auto-derived client-facing gateway path "
+            "(/{gateway_proxy_prefix}/{entity_type}/{name}). Clients connect here; "
+            "the registry forwards to proxy_target_url. Recomputed on every read — "
+            "any value sent by a client is ignored."
+        ),
+    )
+
+    def populate_proxy_client_url(
+        self,
+        entity_type: str,
+    ) -> None:
+        """Set ``proxy_client_url`` from the entity's type + path, or clear it.
+
+        Called from each storage model's ``model_validator(mode="after")`` so the
+        derived client path is present in ``model_dump`` for API reads and stays
+        self-healing (recomputed on every construction, never trusted from the DB
+        or a client payload). Populated whenever ``is_proxied`` is set and the
+        model carries a non-empty ``path``; cleared to None otherwise.
+
+        Args:
+            entity_type: The entity-type token used as the URL's type segment
+                (must match the authz key, e.g. "skill", "a2a_agent", or a custom
+                type name).
+        """
+        path = getattr(self, "path", None)
+        if self.is_proxied and path:
+            from registry.core.config import settings
+
+            self.proxy_client_url = build_proxy_client_path(
+                entity_type,
+                path,
+                settings.gateway_proxy_prefix,
+            )
+        else:
+            self.proxy_client_url = None
 
     # NOTE: no raising field_validator on proxy_target_url here. Storage models
     # inherit this mixin and are RECONSTRUCTED from the DB on every read; a
@@ -200,6 +366,8 @@ def egress_guard_validator(v: str | None) -> str | None:
 
 async def resolve_and_validate_proxy_target(
     url: str,
+    *,
+    profile: Any = None,
 ) -> tuple[str | None, list[str]]:
     """Resolve a proxy_target_url's hostname and validate every resolved IP.
 
@@ -232,6 +400,7 @@ async def resolve_and_validate_proxy_target(
     from registry.exceptions import UrlValidationError
     from registry.utils.url_guard import PROXY_PROFILE, validate_url
 
+    selected_profile = profile or PROXY_PROFILE
     host = (urlparse(url).hostname or "").strip("[]")
     is_literal = coerce_ip_literal(host) is not None
     try:
@@ -241,7 +410,12 @@ async def resolve_and_validate_proxy_target(
         # SYNCHRONOUS (socket.getaddrinfo), so run it in a worker thread — a slow
         # or adversarial DNS answer must not block the event loop on this async
         # register/refresh path.
-        ips = await asyncio.to_thread(validate_url, url, profile=PROXY_PROFILE, resolve=True)
+        ips = await asyncio.to_thread(
+            validate_url,
+            url,
+            profile=selected_profile,
+            resolve=True,
+        )
     except UrlValidationError as e:
         raise EgressPolicyError(f"proxy_target_url rejected: {e.reason}") from e
 
@@ -282,8 +456,47 @@ async def validate_and_pin_proxy_target(
     target = resolve_proxy_target(entity_type, doc)
     if not target:
         return {}
-    host, ips = await resolve_and_validate_proxy_target(target)
+    from registry.utils.url_guard import proxy_profile_for_entity_target
+
+    profile = proxy_profile_for_entity_target(entity_type, doc.get("path"), target)
+    host, ips = await resolve_and_validate_proxy_target(target, profile=profile)
     return {"proxy_resolved_ips": ips, "proxy_target_host": host or ""}
+
+
+def build_proxy_client_path(
+    entity_type: str,
+    path: str,
+    prefix: str,
+) -> str:
+    """Return the client-facing gateway path for a proxied entity.
+
+    This is the URL a CLIENT connects to — distinct from ``proxy_target_url``
+    (the backend/origin the gateway forwards to). It is ALWAYS auto-derived, so
+    operators never hand-enter it: they only supply the origin.
+
+    Shape: ``/{prefix}/{entity_type}/{name}`` where ``{name}`` is the registered
+    ``path`` with its leading namespace segment stripped, so a skill at
+    ``/skills/pdf-processing`` (entity_type ``skill``) yields
+    ``/gateway/skill/pdf-processing`` — not the doubled ``/skill/skills/...``.
+    Uniqueness follows from ``path`` being unique per type (the Mongo ``_id``),
+    so the stripped name cannot collide within a type's namespace.
+
+    Args:
+        entity_type: The entity-type token (e.g. "skill", "a2a_agent", or a
+            custom type name). Used verbatim as the URL's type segment so it
+            matches the authz key (``X-Generic-Proxy-Kind``).
+        path: The registered entity path (e.g. "/skills/pdf-processing").
+        prefix: The configured gateway path prefix (settings.gateway_proxy_prefix).
+
+    Returns:
+        The client-facing path, leading-slash-prefixed and with no trailing slash.
+    """
+    clean = path.strip("/")
+    # Drop the leading namespace segment (skills/, agents/, {custom-type}/) so the
+    # type is not doubled; keep any remaining structure (nested paths stay unique).
+    _head, _sep, rest = clean.partition("/")
+    name = rest if rest else clean
+    return f"/{prefix.strip('/')}/{entity_type}/{name}"
 
 
 def _is_federated(doc: dict[str, Any]) -> bool:
@@ -351,6 +564,31 @@ def resolve_proxy_target(
     if entity_type == "a2a_agent":
         return doc.get("url")
     return None  # skills / custom entities must set proxy_target_url explicitly
+
+
+def effective_proxy_target(entity_type: str, doc: dict[str, Any]) -> str | None:
+    """The target-IDENTITY of an entity, WITHOUT the routability gates.
+
+    Same target-derivation as ``resolve_proxy_target`` (explicit
+    ``proxy_target_url``, else the type's native fallback) but deliberately
+    OMITS the is_enabled / is_proxied / proxy_disabled_reason / federated
+    short-circuits. Use this ONLY to answer "does this update repoint the
+    exact backend URL?" for the credential-misdirection guard: a disabled or
+    not-yet-enabled server can still be repointed, and its dormant upstream
+    headers must be cleared on that host change even though it currently
+    resolves to no live route. Never use this to decide whether to EMIT a route
+    (that must stay ``resolve_proxy_target``, which is fail-closed).
+    """
+    explicit = doc.get("proxy_target_url")
+    if explicit:
+        return explicit
+    if entity_type == "mcp_server":
+        if doc.get("deployment") == "local":
+            return None
+        return doc.get("proxy_pass_url")
+    if entity_type == "a2a_agent":
+        return doc.get("url")
+    return None
 
 
 def proxy_target_missing(

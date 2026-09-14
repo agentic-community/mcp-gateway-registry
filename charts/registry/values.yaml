@@ -3,7 +3,7 @@ global:
   image:
     # Container registry (host + optional namespace). Shared default across subcharts.
     registry: public.ecr.aws/p3v1o3c6
-    tag: 1.29.0
+    tag: 1.30.0
     pullPolicy: IfNotPresent
   cloud:
     # AWS region for cloud detection in telemetry. Set this when deploying
@@ -161,7 +161,10 @@ app:
   # check is advisory and never blocks registration.
   dedup:
     registrationHintEnabled: true # When true, registration UI pre-flights /check-duplicates and shows hint modal.
-    scoreThreshold: "0.7" # Minimum similarity score (0.0..1.0) for advisory matches.
+    # Empty: use the default calibrated for the embeddings model below
+    # (0.45 for all-MiniLM-L6-v2, 0.85 for text-embedding-ada-002).
+    # Set a value only to override it.
+    scoreThreshold: ""
     maxSuggestions: "3" # Cap on advisory suggestions per request.
   # OpenTelemetry direct OTLP push export configuration
   # Standard OTel SDK var. Setting this activates the OTLP push exporter (the
@@ -293,11 +296,13 @@ app:
   # Gateway generic-proxy feature (registry-consumed). Ships DISABLED. Do NOT
   # enable gatewayGenericProxyEnabled until the network egress policy (SSRF layer 1)
   # is deployed and the registration-time validation + CSRF defenses are in place.
-  # The seven auth-server-consumed knobs live in the auth-server chart.
+  # The eleven auth-server-consumed knobs live in the auth-server chart.
   gatewayGenericProxyEnabled: false # Master switch for generic-proxy nginx blocks
   gatewayCanonicalNamespaceEnabled: false # Emit /entity_type/path canonical aliases
   gatewayProxyAllowPrivateTargets: false # Allow private/loopback proxy targets (metadata always denied)
   gatewayGenericClientMaxBodySize: "1m" # nginx client_max_body_size for generic blocks
+  gatewayProxyPrefix: "gateway" # URL path prefix for auto-generated client routes (/{prefix}/{type}/{name})
+  gatewayGenericStreamReadTimeoutSeconds: 3600 # nginx proxy_read_timeout (s) for proxy_streaming routes (SSE/token streams)
   # Registry-UI internal token verification (the /api/ hop). The auth-server mints
   # the token (using its own INTERNAL_TOKEN_TTL_SECONDS); the registry verifies it
   # and uses the leeway below. Not secrets -- plain env. See docs/unified-parameter-reference.md.
@@ -528,6 +533,17 @@ egressAuth:
   # When empty, a shape rule applies: the target must be an internal app audience
   # (api:// App ID URI or bare client-id/GUID), never an https host URL.
   oboAllowedAudiences: ""
+  # Comma-separated hostnames of operator-controlled OAuth/OIDC identity providers
+  # whose token endpoints may resolve to private addresses. Optional; empty means
+  # the credentialed-OAuth SSRF profile permits no private-resolving token endpoint,
+  # which is the default posture. Set this when the IdP is self-hosted (Keycloak, or
+  # Entra reached over Private Link), where the token endpoint legitimately resolves
+  # to RFC1918 and consent would otherwise fail with a blocked-by-security-policy
+  # error. Exact hostnames only: no CIDRs, no wildcards, and this deliberately does
+  # not inherit ssrfAllowedHosts, so a proxy-target bypass can never relax a token
+  # POST. HTTPS is still required and metadata/link-local addresses stay denied.
+  # Entries receive client secrets, refresh tokens and user assertions.
+  oauthTrustedIdpHosts: ""
   # Application-layer AES-256-GCM root key for the per-user egress credential
   # vault (issue #1665). Registry-only SECRET; injected into the registry env
   # secret only when non-empty. >=32 chars recommended. Keep this OUTSIDE the

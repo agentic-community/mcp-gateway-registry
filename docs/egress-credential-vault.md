@@ -682,6 +682,13 @@ Users can review and revoke their connections in the UI at **Connected Accounts*
   NetworkPolicy that admits only the auth-server pod). It is removed from the
   internet-facing `8080`/`8443` listeners entirely, so the app-level token gate
   is no longer the sole defense against a reachable caller.
+  - **Deployment requirement:** because the public listeners now return `404`
+    for the whole `/api/internal/` prefix, the auth-server **must** point
+    `EGRESS_REGISTRY_INTERNAL_URL` at the internal listener (`http://registry:8091`,
+    the chart default). If it is still set to the public listener
+    (`registry:8000` / `:8080`), the vend returns `404` and egress auth fails.
+    On Helm, set `registry.egressAuth.enabled=true` so the `:8091` Service port
+    and NetworkPolicy are rendered.
 - **Upstream cross-check.** The vend endpoint re-verifies the internal token and
   confirms the token's `upstream_url` falls within the registered server's
   `proxy_pass_url` (and version allowlist) before vending — a forged upstream is

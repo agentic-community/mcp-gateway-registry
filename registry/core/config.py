@@ -128,6 +128,29 @@ ALLOWED_SECRET_STORES: frozenset[str] = frozenset(
 # Issue #1477.
 MCP_TOKEN_ABSOLUTE_MAX_TTL_HOURS: int = 168
 
+# Advisory duplicate-check thresholds, per embeddings model. Cosine scales are
+# model-specific and not comparable, so one number cannot serve every model:
+# measured against the same corpus, all-MiniLM-L6-v2 puts unrelated pairs at
+# 0.00-0.25 and genuine duplicates at 0.50-0.83, while
+# openai/text-embedding-ada-002 puts unrelated pairs at 0.73-0.78 (gibberish
+# still scores 0.736) and genuine duplicates at 0.83-0.92. Running MiniLM's
+# number on ada-002 sits below its noise floor and advises
+# dedup_max_suggestions unrelated entries on every registration, which is the
+# symptom issue #1696 reported.
+#
+# Keys are matched as case-insensitive substrings of EMBEDDINGS_MODEL_NAME, so
+# a provider prefix ('openai/text-embedding-ada-002') still resolves.
+# DEDUP_SCORE_THRESHOLD overrides all of this when set.
+DEDUP_THRESHOLD_BY_EMBEDDINGS_MODEL: dict[str, float] = {
+    "all-minilm-l6-v2": 0.45,
+    "text-embedding-ada-002": 0.85,
+}
+
+# Used when no threshold is configured and the model is not one we have
+# measured. Deliberately mid-scale: an uncalibrated model can place unrelated
+# pairs anywhere, and a too-low guess is the noisy failure, not the quiet one.
+DEDUP_THRESHOLD_UNKNOWN_MODEL_DEFAULT: float = 0.6
+
 
 class DeploymentMode(str, Enum):
     """Deployment mode options."""
@@ -677,6 +700,28 @@ class Settings(BaseSettings):
             "for proxy_pass_url / agent URLs even though they are private (e.g. "
             "'10.0.0.0/8,192.168.0.0/16'). Use for internal MCP-server subnets. "
             "The cloud metadata address 169.254.169.254 is never permitted."
+        ),
+    )
+
+    # Trusted-IdP allowlist for the credential-bearing OAuth token endpoints used
+    # by per-user egress consent. Deliberately separate from ssrf_allowed_hosts:
+    # an operator proxy-target bypass must never relax a token POST, so this is
+    # its own opt-in, hosts-only, and defaults to empty (no behaviour change).
+    # Needed because a self-hosted IdP (Keycloak, Entra via Private Link, etc.)
+    # legitimately resolves to a private address, yet the gateway is already
+    # required to trust that same IdP for its own authentication via KEYCLOAK_URL.
+    egress_oauth_trusted_idp_hosts: str = Field(
+        default="",
+        description=(
+            "Comma-separated hostnames of operator-controlled OAuth/OIDC identity "
+            "providers whose token endpoints may resolve to private addresses "
+            "(e.g. 'keycloak.internal.example.com'). Applies ONLY to the "
+            "credentialed-OAuth profile used for egress token exchange. Hosts must "
+            "be named exactly; no CIDRs and no wildcards. HTTPS is still required, "
+            "answers are still resolved, classified and pinned, and cloud/workload "
+            "credential, metadata and link-local addresses are never permitted. "
+            "Keep this list tight: entries here receive client secrets, refresh "
+            "tokens and user assertions."
         ),
     )
     nginx_config_validation_required: bool = Field(
@@ -1298,6 +1343,40 @@ class Settings(BaseSettings):
             "canonical URLs)."
         ),
     )
+    gateway_proxy_prefix: str = Field(
+        default="gateway",
+        description=(
+            "URL path segment that namespaces every auto-generated client-facing "
+            "proxy route. The client connects to /{prefix}/{entity_type}/{name}; "
+            "the registry derives this path automatically from the entity's type "
+            "and registered path, so operators never hand-enter the client path "
+            "(they only provide the backend/origin proxy_target_url). Rendered "
+            "verbatim into nginx location directives, so it is restricted to a "
+            "single URL-safe path segment (letters, digits, hyphen, underscore)."
+        ),
+    )
+
+    @field_validator("gateway_proxy_prefix")
+    @classmethod
+    def _validate_gateway_proxy_prefix(
+        cls,
+        v: str,
+    ) -> str:
+        """Reject anything that is not a single URL-safe path segment.
+
+        This value is rendered verbatim into an nginx ``location`` path, so a
+        slash, whitespace, or config-special character would either break the
+        reload or open a path-injection surface. Enforce a strict single-segment
+        grammar (no leading/trailing slash, no embedded separators) at load time.
+        """
+        stripped = v.strip().strip("/")
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", stripped):
+            raise ValueError(
+                f"gateway_proxy_prefix={v!r} is not a valid path segment "
+                "(expected letters, digits, hyphen, or underscore; no slashes)"
+            )
+        return stripped
+
     gateway_proxy_allow_private_targets: bool = Field(
         default=False,
         description=(
@@ -1369,10 +1448,57 @@ class Settings(BaseSettings):
         default=32,
         ge=1,
         description=(
-            "Semaphore cap on in-flight generic-hop requests (OOM guard). "
+            "Semaphore cap on in-flight buffered generic-hop requests (OOM guard). "
             "Worst-case auth-server heap from buffering approx = "
-            "generic_proxy_max_body_bytes * this. Tune down for memory-"
-            "constrained single-replica deployments. Consumed by the auth-server."
+            "generic_proxy_max_body_bytes * this. Streaming requests use a "
+            "separate pool. Consumed by the auth-server."
+        ),
+    )
+    gateway_generic_stream_max_concurrency: int = Field(
+        default=8,
+        ge=1,
+        description=(
+            "Separate semaphore cap for long-lived generic streaming requests. "
+            "Isolation prevents streams from exhausting buffered request capacity. "
+            "Consumed by the auth-server."
+        ),
+    )
+    gateway_generic_acquire_timeout_seconds: float = Field(
+        default=5.0,
+        gt=0,
+        description=(
+            "Maximum seconds a generic request may wait for its buffered or "
+            "streaming concurrency slot before failing with 503. Consumed by the "
+            "auth-server."
+        ),
+    )
+    gateway_generic_stream_max_duration_seconds: int = Field(
+        default=3600,
+        ge=1,
+        description=(
+            "Absolute lifetime in seconds for one generic streaming response. "
+            "This remains enforced even when chunks continue to arrive. Consumed "
+            "by the auth-server."
+        ),
+    )
+    gateway_generic_stream_max_bytes: int = Field(
+        default=100 * 1024 * 1024,
+        ge=1024,
+        description=(
+            "Maximum raw response bytes forwarded by one generic stream before "
+            "the auth-server terminates it."
+        ),
+    )
+    gateway_generic_stream_read_timeout_seconds: int = Field(
+        default=3600,
+        ge=1,
+        description=(
+            "nginx proxy_read_timeout (seconds) for generic-proxy routes whose "
+            "entity has proxy_streaming=true. Long by design: an SSE / token-"
+            "streaming upstream (e.g. an LLM proxied as a custom type) can be idle "
+            "between chunks for a while. Only affects streaming routes; buffered "
+            "generic routes keep nginx's default read timeout. Rendered into the "
+            "nginx config by the registry (not read by the auth-server)."
         ),
     )
     gateway_generic_tls_verify: str = Field(
@@ -1456,18 +1582,74 @@ class Settings(BaseSettings):
             "service themselves remain available regardless."
         ),
     )
-    dedup_score_threshold: float = Field(
-        default=0.7,
+    dedup_score_threshold: float | None = Field(
+        default=None,
         ge=0.0,
         le=1.0,
-        description="Minimum semantic-search score (0..1) for an advisory match to be returned.",
+        description=(
+            "Minimum cosine similarity (0..1) for an advisory match. Leave "
+            "unset to take the default calibrated for the configured "
+            "embeddings model (see DEDUP_THRESHOLD_BY_EMBEDDINGS_MODEL); a "
+            "value here overrides that. Cosine scales are not comparable "
+            "across models, which is why there is no single sensible number: "
+            "on all-MiniLM-L6-v2 unrelated pairs land at 0.00-0.25 and "
+            "genuine duplicates at 0.50-0.83, while on "
+            "openai/text-embedding-ada-002 the same corpus puts unrelated "
+            "pairs at 0.73-0.78 and genuine duplicates at 0.83-0.92. Read "
+            "the effective value from effective_dedup_score_threshold."
+        ),
     )
+
     dedup_max_suggestions: int = Field(
         default=3,
         ge=1,
         le=10,
         description="Cap on the number of duplicate suggestions returned.",
     )
+
+    @field_validator("dedup_score_threshold", mode="before")
+    @classmethod
+    def _empty_threshold_is_unset(cls, v: object) -> object:
+        """Treat a blank value as unset rather than as a parse error.
+
+        Every deployment surface passes this through a template
+        (``${DEDUP_SCORE_THRESHOLD:-}`` on Compose, ``tostring(null)`` on
+        Terraform, ``"" | b64enc`` on Helm), so "not configured" arrives as an
+        empty string rather than an absent variable.
+        """
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
+
+    @property
+    def effective_dedup_score_threshold(self) -> float:
+        """Resolved advisory threshold: operator value, else per-model default.
+
+        Resolution order, which :meth:`dedup_threshold_source` reports for
+        logging: an explicit ``DEDUP_SCORE_THRESHOLD`` wins; otherwise the
+        default calibrated for the configured embeddings model; otherwise
+        ``DEDUP_THRESHOLD_UNKNOWN_MODEL_DEFAULT``, which is deliberately
+        conservative because an uncalibrated model can put unrelated pairs
+        anywhere.
+        """
+        if self.dedup_score_threshold is not None:
+            return self.dedup_score_threshold
+        model = (self.embeddings_model_name or "").lower()
+        for fragment, threshold in DEDUP_THRESHOLD_BY_EMBEDDINGS_MODEL.items():
+            if fragment in model:
+                return threshold
+        return DEDUP_THRESHOLD_UNKNOWN_MODEL_DEFAULT
+
+    @property
+    def dedup_threshold_source(self) -> str:
+        """Where :attr:`effective_dedup_score_threshold` came from."""
+        if self.dedup_score_threshold is not None:
+            return "configured"
+        model = (self.embeddings_model_name or "").lower()
+        for fragment in DEDUP_THRESHOLD_BY_EMBEDDINGS_MODEL:
+            if fragment in model:
+                return f"model-default:{fragment}"
+        return "unknown-model-default"
 
     # Storage Backend Configuration
     storage_backend: str = Field(

@@ -294,6 +294,11 @@ class CustomEntityRecord(ProxyableMixin):
             },
             read_safe=True,  # storage model: reconstructed on read, log-not-raise
         )
+        # Derive the read-only client-facing path from entity_type + path
+        # (self-healing). On create the synthetic path may not be assigned yet
+        # (assign_path runs later); populate handles the empty path (clears) and
+        # the value is recomputed on the next read when the path is present.
+        self.populate_proxy_client_url(self.entity_type)
         return self
 
 
@@ -310,6 +315,19 @@ class CustomEntityCreate(BaseModel):
     # proxy_target_url is required when is_proxied).
     is_proxied: bool = Field(default=False)
     proxy_target_url: str | None = Field(default=None)
+    proxy_streaming: bool = Field(default=False)
+    proxy_connect_notes: str | None = Field(default=None, max_length=2000)
+    custom_headers: list[dict[str, Any]] | None = Field(
+        default=None,
+        description=(
+            "Plaintext upstream auth headers ([{name, value?, overridable?}, ...]) "
+            "presented to the proxied backend when is_proxied is true. A value makes "
+            "it an operator-injected header; overridable=true lets the CALLER supply "
+            "or override it on the request (a value-less overridable entry is a "
+            "caller-only passthrough slot). Encrypted into custom_headers_encrypted "
+            "at creation; never persisted or echoed in plaintext."
+        ),
+    )
 
     @field_validator("proxy_target_url")
     @classmethod
@@ -366,6 +384,7 @@ class CustomEntityUpdate(BaseModel):
     # Gateway-proxy opt-in (patchable; None = leave unchanged).
     is_proxied: bool | None = None
     proxy_target_url: str | None = None
+    proxy_connect_notes: str | None = None
 
     @field_validator("visibility")
     @classmethod

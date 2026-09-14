@@ -22,8 +22,11 @@ def _build_service(
     skill_match: dict | None = None,
     search_results: dict | None = None,
     search_raises: Exception | None = None,
-    threshold: float = 0.7,
+    threshold: float | None = 0.7,
     max_suggestions: int = 3,
+    embeddings_model: str = "all-MiniLM-L6-v2",
+    effective_threshold: float | None = None,
+    threshold_source: str = "configured",
 ) -> DuplicateCheckService:
     """Construct a service with stubbed-out dependencies.
 
@@ -66,6 +69,11 @@ def _build_service(
     fake_settings = MagicMock()
     fake_settings.dedup_score_threshold = threshold
     fake_settings.dedup_max_suggestions = max_suggestions
+    fake_settings.embeddings_model_name = embeddings_model
+    fake_settings.effective_dedup_score_threshold = (
+        effective_threshold if effective_threshold is not None else threshold
+    )
+    fake_settings.dedup_threshold_source = threshold_source
     monkeypatch.setattr(
         "registry.services.duplicate_check_service.settings",
         fake_settings,
@@ -136,7 +144,7 @@ class TestBothChecksRunIndependently:
             },
             search_results={
                 "servers": [
-                    {"path": "/sim", "server_name": "Similar", "relevance_score": 0.85},
+                    {"path": "/sim", "server_name": "Similar", "similarity_score": 0.85},
                 ]
             },
         )
@@ -159,15 +167,15 @@ class TestBothChecksRunIndependently:
             search_results={
                 "servers": [
                     # Same path as the URL match — should be filtered.
-                    {"path": "/exact", "server_name": "ExactMatch", "relevance_score": 0.95},
-                    {"path": "/other", "server_name": "Other", "relevance_score": 0.85},
+                    {"path": "/exact", "server_name": "ExactMatch", "similarity_score": 0.95},
+                    {"path": "/other", "server_name": "Other", "similarity_score": 0.85},
                 ]
             },
         )
         result = await service.check(
             **_check_kwargs(
-                name="My Server",
-                description="...",
+                name="My Payroll Server",
+                description="Runs payroll for the finance team.",
                 identity_url="https://api.example.com/mcp",
             )
         )
@@ -371,7 +379,7 @@ class TestExactMatchCheck:
             server_match={"path": "/foo"},  # would have matched if repo were healthy
             search_results={
                 "servers": [
-                    {"path": "/sim", "server_name": "Similar", "relevance_score": 0.85},
+                    {"path": "/sim", "server_name": "Similar", "similarity_score": 0.85},
                 ]
             },
         )
@@ -508,9 +516,9 @@ class TestSimilarityAdvisory:
             monkeypatch,
             search_results={
                 "servers": [
-                    {"path": "/alpha", "server_name": "Alpha", "relevance_score": 0.91},
-                    {"path": "/beta", "server_name": "Beta", "relevance_score": 0.55},  # below
-                    {"path": "/gamma", "server_name": "Gamma", "relevance_score": 0.81},
+                    {"path": "/alpha", "server_name": "Alpha", "similarity_score": 0.91},
+                    {"path": "/beta", "server_name": "Beta", "similarity_score": 0.55},  # below
+                    {"path": "/gamma", "server_name": "Gamma", "similarity_score": 0.81},
                 ]
             },
         )
@@ -534,7 +542,7 @@ class TestSimilarityAdvisory:
             monkeypatch,
             search_results={
                 "servers": [
-                    {"path": f"/s{i}", "server_name": f"S{i}", "relevance_score": 0.95}
+                    {"path": f"/s{i}", "server_name": f"S{i}", "similarity_score": 0.95}
                     for i in range(10)
                 ]
             },
@@ -548,8 +556,8 @@ class TestSimilarityAdvisory:
             monkeypatch,
             search_results={
                 "servers": [
-                    {"path": "/me", "server_name": "Me", "relevance_score": 0.99},
-                    {"path": "/other", "server_name": "Other", "relevance_score": 0.85},
+                    {"path": "/me", "server_name": "Me", "similarity_score": 0.99},
+                    {"path": "/other", "server_name": "Other", "similarity_score": 0.85},
                 ]
             },
         )
@@ -570,8 +578,8 @@ class TestSimilarityAdvisory:
             monkeypatch,
             search_results={
                 "servers": [
-                    {"path": "/alpha", "server_name": "Alpha", "relevance_score": 0.95},
-                    {"path": "/beta", "server_name": "Beta", "relevance_score": 0.92},
+                    {"path": "/alpha", "server_name": "Alpha", "similarity_score": 0.95},
+                    {"path": "/beta", "server_name": "Beta", "similarity_score": 0.92},
                 ]
             },
         )
@@ -618,9 +626,9 @@ class TestSimilarityAdvisory:
         service = _build_service(
             monkeypatch,
             search_results={
-                "servers": [{"path": "/s1", "server_name": "S1", "relevance_score": 0.9}],
-                "agents": [{"path": "/a1", "name": "A1", "relevance_score": 0.95}],
-                "skills": [{"path": "/k1", "skill_name": "K1", "relevance_score": 0.85}],
+                "servers": [{"path": "/s1", "server_name": "S1", "similarity_score": 0.9}],
+                "agents": [{"path": "/a1", "name": "A1", "similarity_score": 0.95}],
+                "skills": [{"path": "/k1", "skill_name": "K1", "similarity_score": 0.85}],
             },
         )
         result = await service.check(**_check_kwargs(name="X", description="Y"))
@@ -637,11 +645,12 @@ class TestQueryComposition:
         assert result.advisory_matches == []
         assert result.similarity_search_available is True
 
-    async def test_query_combines_name_and_description(self, monkeypatch) -> None:
+    async def test_query_strips_boilerplate_from_name_and_description(self, monkeypatch) -> None:
+        """'Tools' and 'API' describe the kind of thing, not what it does."""
         service = _build_service(monkeypatch, search_results={"servers": []})
         await service.check(**_check_kwargs(name="Github Tools", description="Wraps gh API"))
         called_kwargs = service._semantic_search_service.search.await_args.kwargs
-        assert called_kwargs["query"] == "Github Tools Wraps gh API"
+        assert called_kwargs["query"] == "github wraps gh"
 
     async def test_long_description_is_truncated_before_search(self, monkeypatch) -> None:
         """Bound the per-call cost of long descriptions.
@@ -660,8 +669,9 @@ class TestQueryComposition:
         called_kwargs = service._semantic_search_service.search.await_args.kwargs
         query = called_kwargs["query"]
         assert len(query) == _QUERY_TEXT_CHAR_CAP
-        # The leading portion (name + space + start of description) is preserved.
-        assert query.startswith("N x")
+        # The leading portion (name + space + start of description) survives
+        # stripping, lowercased.
+        assert query.startswith("n x")
 
 
 @pytest.mark.asyncio
@@ -687,7 +697,7 @@ class TestExtractorFallbacks:
                             "registered_by": "alice",
                             "visibility": "public",
                         },
-                        "relevance_score": 0.9,
+                        "similarity_score": 0.9,
                     }
                 ]
             },
@@ -730,7 +740,7 @@ class TestExtractorFallbacks:
                     {
                         "path": "/skills/foo",
                         "name": "FallbackName",  # no skill_name
-                        "relevance_score": 0.85,
+                        "similarity_score": 0.85,
                     }
                 ]
             },
@@ -748,7 +758,7 @@ class TestExtractorFallbacks:
                     {
                         "path": "/server/foo",
                         "name": "FallbackName",  # no server_name
-                        "relevance_score": 0.85,
+                        "similarity_score": 0.85,
                     }
                 ]
             },
@@ -834,3 +844,294 @@ class TestComputedHasCollision:
         assert result.has_collision is True
         assert len(result.collision_with) == 1
         assert result.collision_with[0].entity_type == "skill"
+
+
+class TestAdvisoryThresholdReadsAbsoluteSimilarity:
+    """The advisory threshold must gate on similarity, not on rank.
+
+    Under the default ``rrf`` fusion the search repository hands back a
+    ``relevance_score`` that has been min-max rescaled for display, so the
+    best hit carries 1.0 whatever its real similarity. Gating on that value
+    admits the top hit in every registry, which is issue #1696.
+    """
+
+    async def test_top_ranked_but_dissimilar_hit_is_not_advised(self, monkeypatch) -> None:
+        service = _build_service(
+            monkeypatch,
+            search_results={
+                "servers": [
+                    {
+                        "path": "/payroll",
+                        "server_name": "payroll-mcp-server",
+                        "relevance_score": 1.0,
+                        "similarity_score": 0.2648,
+                    }
+                ]
+            },
+        )
+        result = await service.check(
+            **_check_kwargs(
+                name="topic-mcp-server",
+                description="Extracts discussion topics from a transcript.",
+            )
+        )
+        assert result.advisory_matches == []
+
+    async def test_genuinely_similar_hit_is_still_advised(self, monkeypatch) -> None:
+        service = _build_service(
+            monkeypatch,
+            search_results={
+                "servers": [
+                    {
+                        "path": "/topics",
+                        "server_name": "topic-extractor-mcp-server",
+                        "relevance_score": 1.0,
+                        "similarity_score": 0.93,
+                    }
+                ]
+            },
+        )
+        result = await service.check(
+            **_check_kwargs(
+                name="topic-mcp-server",
+                description="Extracts discussion topics from a transcript.",
+            )
+        )
+        assert [m.path for m in result.advisory_matches] == ["/topics"]
+        assert result.advisory_matches[0].relevance_score == 0.93
+
+    async def test_ordering_follows_similarity_not_display_rank(self, monkeypatch) -> None:
+        """Display rank and similarity can disagree; the cap must honour similarity."""
+        service = _build_service(
+            monkeypatch,
+            max_suggestions=1,
+            search_results={
+                "servers": [
+                    {
+                        "path": "/ranked-first",
+                        "server_name": "A",
+                        "relevance_score": 1.0,
+                        "similarity_score": 0.72,
+                    },
+                    {
+                        "path": "/most-similar",
+                        "server_name": "B",
+                        "relevance_score": 0.4,
+                        "similarity_score": 0.97,
+                    },
+                ]
+            },
+        )
+        result = await service.check(**_check_kwargs(name="X", description="Y"))
+        assert [m.path for m in result.advisory_matches] == ["/most-similar"]
+
+    async def test_hit_without_a_similarity_score_is_not_advised(self, monkeypatch) -> None:
+        """A backend that cannot supply a similarity cannot supply a duplicate claim."""
+        service = _build_service(
+            monkeypatch,
+            search_results={
+                "servers": [{"path": "/lexical-only", "server_name": "L", "relevance_score": 1.0}]
+            },
+        )
+        result = await service.check(**_check_kwargs(name="X", description="Y"))
+        assert result.advisory_matches == []
+
+
+@pytest.mark.asyncio
+class TestBoilerplateStrippingAndThinQueries:
+    """Catalog boilerplate must not reach the embedder (issue #1696).
+
+    Every registry name carries tokens like ``mcp`` and ``server``. On a
+    short name they fill most of the string and carry most of the cosine:
+    ``topic-mcp-server`` and ``category-mcp-server`` measure 0.76 similar
+    on the shared suffix alone, and 0.47 once it is stripped.
+    """
+
+    @staticmethod
+    def _query_sent(service) -> str:
+        return service._semantic_search_service.search.await_args.kwargs["query"]
+
+    async def test_boilerplate_is_stripped_before_embedding(self, monkeypatch) -> None:
+        service = _build_service(monkeypatch, search_results={})
+        await service.check(
+            **_check_kwargs(
+                name="topic-mcp-server",
+                description="Extracts discussion topics from a transcript.",
+            )
+        )
+        assert self._query_sent(service) == ("topic extracts discussion topics from a transcript")
+
+    async def test_reported_pair_never_reaches_the_backend(self, monkeypatch) -> None:
+        """The case from #1696: a bare name with no description.
+
+        After stripping, `topic-mcp-server` is the single token `topic`,
+        which cannot clear any usable threshold against a described entry.
+        The search call is skipped rather than spent.
+        """
+        service = _build_service(
+            monkeypatch,
+            search_results={
+                "servers": [
+                    {
+                        "path": "/category",
+                        "server_name": "category-mcp-server",
+                        "similarity_score": 0.7621,
+                    }
+                ]
+            },
+        )
+        result = await service.check(**_check_kwargs(name="topic-mcp-server"))
+
+        assert result.advisory_matches == []
+        assert result.similarity_search_available is True
+        service._semantic_search_service.search.assert_not_awaited()
+
+    async def test_all_boilerplate_name_is_not_embedded(self, monkeypatch, caplog) -> None:
+        service = _build_service(monkeypatch, search_results={})
+        with caplog.at_level("INFO", logger="registry.services.duplicate_check_service"):
+            result = await service.check(**_check_kwargs(name="mcp-server-tools"))
+
+        assert result.advisory_matches == []
+        assert result.similarity_search_available is True
+        service._semantic_search_service.search.assert_not_awaited()
+        # An operator asking why a registration got no hint needs a trace of it.
+        assert "no comparable text left" in caplog.text
+
+    async def test_two_meaningful_tokens_still_search(self, monkeypatch) -> None:
+        """The guard refuses thin text, not short text."""
+        service = _build_service(
+            monkeypatch,
+            search_results={
+                "servers": [
+                    {
+                        "path": "/topics",
+                        "server_name": "topic-extractor-mcp-server",
+                        "similarity_score": 0.93,
+                    }
+                ]
+            },
+        )
+        result = await service.check(**_check_kwargs(name="topic-extractor-mcp-server"))
+
+        assert self._query_sent(service) == "topic extractor"
+        assert [m.path for m in result.advisory_matches] == ["/topics"]
+
+
+@pytest.mark.asyncio
+class TestDegradedSimilarityIsReported:
+    """A keyword-only fallback must not read as "nothing similar exists".
+
+    When the embedder is unreachable the search backend answers with
+    lexical hits that carry no similarity. The advisory has to say the
+    check did not run, because the frontend keys its degraded-mode notice
+    off ``similarity_search_available``.
+    """
+
+    async def test_hits_without_any_similarity_report_unavailable(self, monkeypatch) -> None:
+        service = _build_service(
+            monkeypatch,
+            search_results={
+                "servers": [
+                    {"path": "/lexical-one", "server_name": "One", "relevance_score": 1.0},
+                    {"path": "/lexical-two", "server_name": "Two", "relevance_score": 0.8},
+                ]
+            },
+        )
+        result = await service.check(**_check_kwargs(name="topic extractor"))
+
+        assert result.advisory_matches == []
+        assert result.similarity_search_available is False
+
+    async def test_no_hits_at_all_still_reports_available(self, monkeypatch) -> None:
+        """An empty result set means the registry holds nothing alike, not an outage."""
+        service = _build_service(monkeypatch, search_results={"servers": []})
+        result = await service.check(**_check_kwargs(name="topic extractor"))
+
+        assert result.advisory_matches == []
+        assert result.similarity_search_available is True
+
+    async def test_partial_scoring_drops_the_unscored_hit(self, monkeypatch) -> None:
+        """One scored hit proves the embedder answered; unscored hits are still dropped."""
+        service = _build_service(
+            monkeypatch,
+            search_results={
+                "servers": [
+                    {"path": "/scored", "server_name": "S", "similarity_score": 0.91},
+                    {"path": "/unscored", "server_name": "U", "relevance_score": 1.0},
+                ]
+            },
+        )
+        result = await service.check(**_check_kwargs(name="topic extractor"))
+
+        assert [m.path for m in result.advisory_matches] == ["/scored"]
+        assert result.similarity_search_available is True
+
+
+class TestThresholdResolution:
+    """The threshold is model-specific, so its source must be visible.
+
+    Measured on one corpus: all-MiniLM-L6-v2 puts unrelated pairs at 0.00-0.25
+    and genuine duplicates at 0.50-0.83, while openai/text-embedding-ada-002
+    puts unrelated pairs at 0.73-0.78 and duplicates at 0.83-0.92. Running one
+    model's number on the other advises the cap on every registration.
+    """
+
+    def test_model_default_is_logged_when_nothing_is_configured(self, monkeypatch, caplog) -> None:
+        with caplog.at_level("INFO", logger="registry.services.duplicate_check_service"):
+            _build_service(
+                monkeypatch,
+                threshold=None,
+                embeddings_model="openai/text-embedding-ada-002",
+                effective_threshold=0.85,
+                threshold_source="model-default:text-embedding-ada-002",
+            )
+
+        assert "no DEDUP_SCORE_THRESHOLD configured" in caplog.text
+        assert "0.85" in caplog.text
+
+    def test_configured_value_is_logged_as_such(self, monkeypatch, caplog) -> None:
+        with caplog.at_level("INFO", logger="registry.services.duplicate_check_service"):
+            _build_service(
+                monkeypatch,
+                threshold=0.9,
+                effective_threshold=0.9,
+                threshold_source="configured",
+            )
+
+        assert "from DEDUP_SCORE_THRESHOLD" in caplog.text
+
+    def test_uncalibrated_model_warns(self, monkeypatch, caplog) -> None:
+        """A model we have not measured must not fail quietly."""
+        with caplog.at_level("WARNING", logger="registry.services.duplicate_check_service"):
+            _build_service(
+                monkeypatch,
+                threshold=None,
+                embeddings_model="cohere/embed-english-v3.0",
+                effective_threshold=0.6,
+                threshold_source="unknown-model-default",
+            )
+
+        assert "no calibrated default" in caplog.text
+        assert "cohere/embed-english-v3.0" in caplog.text
+
+
+@pytest.mark.asyncio
+class TestEffectiveThresholdGates:
+    async def test_advisory_gates_on_the_effective_threshold(self, monkeypatch) -> None:
+        """The request path must read the resolved value, not the raw field."""
+        service = _build_service(
+            monkeypatch,
+            threshold=None,
+            effective_threshold=0.85,
+            threshold_source="model-default:text-embedding-ada-002",
+            search_results={
+                "servers": [
+                    {"path": "/high", "server_name": "H", "similarity_score": 0.9},
+                    {"path": "/low", "server_name": "L", "similarity_score": 0.8},
+                ]
+            },
+        )
+        result = await service.check(
+            **_check_kwargs(name="topic extractor", description="Extracts topics.")
+        )
+        assert [m.path for m in result.advisory_matches] == ["/high"]

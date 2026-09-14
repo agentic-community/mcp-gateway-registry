@@ -78,6 +78,11 @@ interface Server {
   visibility?: string;
   supported_protocol?: string | null;
   lifecycle_status?: 'active' | 'draft' | 'deprecated' | 'beta';
+  // Gateway-proxy opt-in. proxy_client_url is the read-only, auto-derived
+  // client path; proxy_target_url is the origin/backend URL.
+  is_proxied?: boolean;
+  proxy_target_url?: string;
+  proxy_client_url?: string;
 }
 
 interface ServerStats {
@@ -321,6 +326,10 @@ export const ServerStatsProvider: React.FC<ServerStatsProviderProps> = ({ childr
           visibility: agentInfo.visibility || 'public',
           supported_protocol: agentInfo.supported_protocol || agentInfo.supportedProtocol || null,
           lifecycle_status: agentInfo.status || 'active',
+          // Gateway-proxy opt-in (snake_case only; the mixin has no camelCase alias).
+          is_proxied: agentInfo.is_proxied ?? false,
+          proxy_target_url: agentInfo.proxy_target_url ?? undefined,
+          proxy_client_url: agentInfo.proxy_client_url ?? undefined,
         };
         return transformed;
       });

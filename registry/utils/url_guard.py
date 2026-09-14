@@ -53,9 +53,13 @@ Validation profiles separate the registry's distinct outbound trust surfaces:
   Cloud/workload credential endpoints are never allowlistable in any profile.
 
 - **Credential-bearing OAuth token endpoints**
-  (``CREDENTIALED_OAUTH_PROFILE``): HTTPS-only with a deliberately empty
-  host/CIDR allowlist. Token POSTs carry client secrets, refresh tokens, or user
-  assertions and must never inherit the proxy profile's internal-target bypass.
+  (``CREDENTIALED_OAUTH_PROFILE``): HTTPS-only, and public-only unless the
+  operator names a trusted IdP host in ``settings.egress_oauth_trusted_idp_hosts``
+  (hosts only — no CIDRs, no wildcards — and empty by default). Token POSTs carry
+  client secrets, refresh tokens, or user assertions, so this profile must never
+  inherit the proxy profile's internal-target bypass: it reads only its own
+  setting, and an ``ssrf_allowed_hosts``/``github_extra_hosts`` entry cannot
+  re-permit a token endpoint.
 
 Request lifecycle (validate -> resolve -> pin -> re-validate per redirect)::
 
@@ -555,14 +559,32 @@ def _builtin_airegistry_tools_allowlist() -> _Allowlist:
     )
 
 
+@lru_cache(maxsize=1)
 def _credentialed_oauth_allowlist() -> _Allowlist:
-    """Return the OAuth token-endpoint allowlist: deliberately empty.
+    """Return the OAuth token-endpoint allowlist: trusted IdP hosts only.
 
     Credential-bearing token POSTs may include a client secret, refresh token,
-    or user assertion. They must not inherit any operator proxy/skill bypass.
-    The profile also enforces HTTPS at both structural validation and transport.
+    or user assertion. They must not inherit any operator proxy/skill bypass, so
+    this reads its own dedicated setting and deliberately does NOT consult
+    ``ssrf_allowed_hosts``/``ssrf_allowed_cidrs``/``github_extra_hosts``: an
+    entry there still cannot re-permit a token endpoint.
+
+    ``egress_oauth_trusted_idp_hosts`` exists because a self-hosted IdP
+    (Keycloak, Entra behind Private Link, ...) legitimately resolves to a
+    private address, while the gateway is already required to trust that same
+    IdP for its own authentication via ``KEYCLOAK_URL``. Unlike a federation
+    peer or a registrant-supplied proxy target, the IdP is operator-configured
+    infrastructure. It is hosts-only (no CIDRs, no wildcards) so each IdP must
+    be named exactly — deliberately narrower than the proxy profile — and
+    defaults to empty, so an existing deployment is unchanged.
+
+    This is a post-resolution relaxation, not a DNS bypass: the profile still
+    enforces HTTPS at both structural validation and transport, answers are
+    still resolved, classified and pinned, and cloud/workload credential,
+    metadata, link-local, reserved and multicast addresses stay hard-denied.
+    Cached because settings are immutable per-process.
     """
-    return _Allowlist()
+    return _Allowlist(hosts=_parse_hosts(_get_settings().egress_oauth_trusted_idp_hosts))
 
 
 def _egress_upstream_allowlist() -> _Allowlist:

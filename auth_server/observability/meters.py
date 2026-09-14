@@ -89,16 +89,24 @@ _meter = metrics.get_meter("mcp-auth-server")
 auth_request_total = _meter.create_counter(
     name="mcpgw_registry_auth_request_total",
     description=(
-        "Authentication request count, labeled by outcome, method, and "
+        "Authentication request count, labeled by success, method, server, and "
         "target_kind (a2a_agent | virtual_mcp_server | mcp_server | "
-        "control_plane | unknown) for routing breakdown"
+        "generic_proxy_skill | generic_proxy_agent | generic_proxy_custom | "
+        "control_plane | unknown) for routing breakdown. For a gateway-proxied "
+        "request `server` holds the entity's authz key, which is the string a "
+        "server_access rule names, so a success=false series points at the rule "
+        "to write"
     ),
     unit="1",
 )
 
 auth_request_duration_ms = _meter.create_histogram(
     name="mcpgw_registry_auth_request_duration",
-    description="Authentication request duration",
+    description=(
+        "Authentication request duration. Carries no `server` label: /validate "
+        "does the same work for every target, and a per-target label costs 18 "
+        "series on this histogram against 1 on the counter. Group by target_kind"
+    ),
     unit="ms",
 )
 
@@ -182,6 +190,156 @@ def record_emission_path(path: str) -> None:
         path: Either ``"otel"`` or ``"legacy"``.
     """
     _metrics_emission_path_counter.add(1, {"path": path})
+
+
+# =============================================================================
+# Generic reverse-proxy (gateway-proxy-any-resource) hop metrics
+# =============================================================================
+
+generic_proxy_slot_rejected_total = _meter.create_counter(
+    name="mcpgw_registry_generic_proxy_slot_rejected_total",
+    description=(
+        "Generic-proxy requests rejected with 503 because a concurrency slot "
+        "could not be acquired within the acquire timeout, labeled by pool "
+        "(buffered | stream). A non-zero rate means the pool is saturated."
+    ),
+    unit="1",
+)
+
+generic_proxy_stream_outcome_total = _meter.create_counter(
+    name="mcpgw_registry_generic_proxy_stream_outcome_total",
+    description=(
+        "Generic-proxy streaming request outcomes, labeled by outcome "
+        "(started | completed | duration_timeout | byte_cap | upstream_error | "
+        "client_closed). "
+        "duration_timeout/byte_cap track the new stream ceilings."
+    ),
+    unit="1",
+)
+
+generic_proxy_request_total = _meter.create_counter(
+    name="mcpgw_registry_generic_proxy_request_total",
+    description=(
+        "Generic-proxy requests by terminal outcome, labeled by entity_type "
+        "(skill | a2a_agent | custom) and outcome (ok | upstream_4xx | "
+        "upstream_5xx | upstream_error | egress_blocked | auth_unavailable | "
+        "capacity | disabled | rejected | byte_cap | client_closed | "
+        "duration_timeout | internal_error). Counts the HOP's own result, which "
+        "auth_request_total cannot: a request that passes /validate and then "
+        "fails at the hop lands here as a failure and there as a success. Does "
+        "not cover the 401 token gate, which rejects before the handler runs."
+    ),
+    unit="1",
+)
+
+
+def record_generic_proxy_slot_rejected(pool: str) -> None:
+    """Record a generic-proxy capacity rejection (503) for the given pool."""
+    try:
+        generic_proxy_slot_rejected_total.add(1, {"pool": pool})
+    except Exception:  # pragma: no cover - metrics must never break the hop
+        pass
+
+
+def record_generic_proxy_stream_outcome(outcome: str) -> None:
+    """Record a start/terminal outcome for a streaming generic-proxy request."""
+    try:
+        generic_proxy_stream_outcome_total.add(1, {"outcome": outcome})
+    except Exception:  # pragma: no cover - metrics must never break the hop
+        pass
+
+
+def record_generic_proxy_request(entity_type: str, outcome: str) -> None:
+    """Record one terminal outcome for a generic-proxy request.
+
+    Exactly one call per request that enters the hop handler. The buffered path
+    records through an idempotent per-request wrapper in ``server.py`` so a
+    helper-raised failure and the handler's own exception arm cannot both count;
+    the streaming path records its post-header terminal directly, because by then
+    the handler has already returned the StreamingResponse.
+    """
+    try:
+        generic_proxy_request_total.add(1, {"entity_type": entity_type, "outcome": outcome})
+    except Exception:  # pragma: no cover - metrics must never break the hop
+        pass
+
+
+# Known label values for the generic-proxy counters. An OTel counter reads as
+# ABSENT until its first increment, so a fresh deployment shows an empty panel and
+# a rate() alert that can never fire -- including when it should. Seeding each
+# combination with zero materializes the series without changing any total.
+# Verified against this repo's pinned SDK: an add(0)-only counter does export
+# through PrometheusMetricReader.
+_SLOT_POOLS: tuple[str, ...] = ("buffered", "stream")
+_STREAM_OUTCOMES: tuple[str, ...] = (
+    "started",
+    "completed",
+    "duration_timeout",
+    "byte_cap",
+    "upstream_error",
+    "client_closed",
+)
+
+# The hop counter's label sets. entity_type is collapsed to three values by
+# _metrics_entity_type in server.py (operators define custom types at will, so a
+# raw entity_type would grow the label set with operator behaviour), and outcome
+# is a closed enum, so the product is 3 x 13 = 39 series -- flat, whatever the
+# endpoint count, because no label carries entity identity.
+HOP_ENTITY_TYPES: tuple[str, ...] = ("skill", "a2a_agent", "custom")
+HOP_OUTCOMES: tuple[str, ...] = (
+    "ok",
+    "upstream_4xx",
+    "upstream_5xx",
+    "upstream_error",
+    "egress_blocked",
+    "auth_unavailable",
+    "capacity",
+    "disabled",
+    "rejected",
+    "byte_cap",
+    "client_closed",
+    "duration_timeout",
+    "internal_error",
+)
+
+
+def zero_init_generic_proxy_metrics() -> None:
+    """Seed every known generic-proxy label combination with zero.
+
+    Each add() gets its own try, so one failure cannot skip the rest.
+
+    Logs when the SDK provider was never installed. _init_meter_provider_if_needed
+    returns early unless OTEL_EXPORTER_PROMETHEUS_HOST is set, and a failed
+    start_http_server leaves a proxy provider, so in both cases every add(0) is
+    discarded and an operator would otherwise see no signal that seeding did
+    nothing.
+    """
+    provider = metrics.get_meter_provider()
+    if type(provider).__name__ in ("_ProxyMeterProvider", "NoOpMeterProvider"):
+        logger.info(
+            "zero-init skipped: meter provider is %s, so no series were seeded "
+            "(OTEL_EXPORTER_PROMETHEUS_HOST unset or exporter failed to start)",
+            type(provider).__name__,
+        )
+        return
+
+    seeds = [(generic_proxy_slot_rejected_total, {"pool": pool}) for pool in _SLOT_POOLS]
+    seeds += [
+        (generic_proxy_stream_outcome_total, {"outcome": outcome}) for outcome in _STREAM_OUTCOMES
+    ]
+    seeds += [
+        (generic_proxy_request_total, {"entity_type": entity_type, "outcome": outcome})
+        for entity_type in HOP_ENTITY_TYPES
+        for outcome in HOP_OUTCOMES
+    ]
+    seeded = 0
+    for instrument, attrs in seeds:
+        try:
+            instrument.add(0, attrs)
+            seeded += 1
+        except Exception:  # pragma: no cover - metrics must never break startup
+            pass
+    logger.info("zero-init seeded %d/%d generic-proxy series", seeded, len(seeds))
 
 
 # =============================================================================

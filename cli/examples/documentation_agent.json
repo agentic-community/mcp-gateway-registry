@@ -4,7 +4,10 @@
   "description": "Intelligent documentation agent that generates, updates, and maintains API documentation, guides, and technical specifications from source code and configuration",
   "url": "https://example.com/agents/documentation",
   "version": "1.6.3",
-  "provider": "Doc Systems",
+  "provider": {
+    "organization": "Doc Systems",
+    "url": "https://example.com"
+  },
   "path": "/documentation",
   "tags": "documentation,code-generation,api-docs,knowledge-management",
   "is_enabled": true,
@@ -246,5 +249,6 @@
     ],
     "average_generation_time_seconds": 45,
     "max_project_size_mb": 500
-  }
+  },
+  "supportedProtocol": "a2a"
 }
