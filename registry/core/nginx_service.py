@@ -305,6 +305,44 @@ def _resolve_mcp_proxy_read_timeout_seconds() -> int:
     return int(math.ceil(upstream)) + MCP_PROXY_NGINX_READ_TIMEOUT_BUFFER_SECONDS
 
 
+def _resolve_upstream_host(host: str) -> str | None:
+    """Resolve ``host`` to a literal address nginx can use, or None.
+
+    Service Connect names (e.g. the ``go-validate`` sidecar published by the
+    auth-server task) are NOT in DNS: neither the VPC resolver (169.254.169.253)
+    nor the task's nameserver answers for them. They resolve only through the
+    container's own resolver stack, which glibc -- and therefore
+    ``getaddrinfo`` -- consults. nginx cannot see them either way:
+
+    * a LITERAL hostname in ``proxy_pass`` is resolved by nginx at config-load
+      time, so a name that is not answering yet fails ``nginx -t`` and the whole
+      candidate config is rejected (issue #1652: this took the registry down);
+    * a VARIABLE upstream defers to nginx's own ``resolver`` directive, which
+      queries a nameserver directly and never sees Service Connect names at all
+      (and the template sets ``ipv6=off`` while SC answers with IPv6 only).
+
+    So resolution has to happen here, in Python, and the config gets a literal
+    address. Returns an IPv6 address already wrapped in brackets, which is the
+    form nginx requires. Returns None when the name cannot be resolved, so the
+    caller can fall back to the auth-server rather than emit a config nginx will
+    reject.
+    """
+    import socket
+
+    try:
+        infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+    except OSError as e:
+        logger.warning(f"Could not resolve upstream host '{host}': {e}")
+        return None
+    # Prefer IPv4 when both exist: shorter config, and every deployment has it.
+    for family in (socket.AF_INET, socket.AF_INET6):
+        for info in infos:
+            if info[0] == family:
+                addr = info[4][0]
+                return f"[{addr}]" if family == socket.AF_INET6 else addr
+    return None
+
+
 def _render_real_ip_config() -> str:
     """Render nginx realip directives from the ``TRUSTED_REAL_IP_CIDRS`` env var.
 
@@ -1341,6 +1379,25 @@ class NginxConfigService:
                     )
                     validate_host = auth_host
                     validate_port = auth_port
+                # Substitute a literal address, not the name. nginx resolves a
+                # name in proxy_pass at config-load time and cannot see Service
+                # Connect names at all; resolving here (glibc) is the only place
+                # that works. An unresolvable name falls back to the
+                # auth-server: a degraded-but-correct /validate beats a config
+                # nginx rejects, which would take the registry down.
+                if validate_host != auth_host:
+                    resolved = _resolve_upstream_host(validate_host)
+                    if resolved:
+                        logger.info(f"Resolved /validate upstream '{validate_host}' to {resolved}")
+                        validate_host = resolved
+                    else:
+                        logger.warning(
+                            f"/validate upstream '{validate_host}' did not resolve; "
+                            f"falling back to the auth-server at {auth_host}:{auth_port}. "
+                            "The fast-path sidecar will not receive traffic."
+                        )
+                        validate_host = auth_host
+                        validate_port = auth_port
             config_content = config_content.replace("{{VALIDATE_UPSTREAM_HOST}}", validate_host)
             config_content = config_content.replace("{{VALIDATE_UPSTREAM_PORT}}", validate_port)
 
