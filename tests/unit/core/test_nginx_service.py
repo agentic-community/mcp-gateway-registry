@@ -2652,7 +2652,8 @@ async def test_generate_config_async_validate_upstream_set(
     """VALIDATE_UPSTREAM_URL routes only /validate to the go-validate sidecar."""
     template_content = """
 server {
-    proxy_pass http://{{VALIDATE_UPSTREAM_HOST}}:{{VALIDATE_UPSTREAM_PORT}}/validate;
+    set $validate_upstream {{VALIDATE_UPSTREAM_HOST}}:{{VALIDATE_UPSTREAM_PORT}};
+    proxy_pass http://$validate_upstream/validate;
     proxy_pass http://{{AUTH_SERVER_HOST}}:{{AUTH_SERVER_PORT}}/oauth2/login/keycloak;
 {{LOCATION_BLOCKS}}
 }
@@ -2679,7 +2680,8 @@ server {
                             assert result is True
                             written = mock_atomic_write.call_args_list[0][0][1]
                             # /validate goes to the sidecar...
-                            assert "http://go-validate:8899/validate;" in written
+                            assert "set $validate_upstream go-validate:8899;" in written
+                            assert "proxy_pass http://$validate_upstream/validate;" in written
                             # ...while /oauth2/* still goes to the auth-server.
                             assert "http://auth-server:8888/oauth2/login/keycloak;" in written
                             assert "{{VALIDATE_UPSTREAM_HOST}}" not in written
@@ -2694,7 +2696,8 @@ async def test_generate_config_async_validate_upstream_defaults_to_auth(
     """When VALIDATE_UPSTREAM_URL is unset, /validate defaults to the auth-server."""
     template_content = """
 server {
-    proxy_pass http://{{VALIDATE_UPSTREAM_HOST}}:{{VALIDATE_UPSTREAM_PORT}}/validate;
+    set $validate_upstream {{VALIDATE_UPSTREAM_HOST}}:{{VALIDATE_UPSTREAM_PORT}};
+    proxy_pass http://$validate_upstream/validate;
 {{LOCATION_BLOCKS}}
 }
 """
@@ -2718,5 +2721,60 @@ server {
 
                             assert result is True
                             written = mock_atomic_write.call_args_list[0][0][1]
-                            assert "http://auth-server:8888/validate;" in written
+                            assert "set $validate_upstream auth-server:8888;" in written
                             assert "{{VALIDATE_UPSTREAM_HOST}}" not in written
+
+
+@pytest.mark.unit
+def test_shipped_templates_never_hardcode_a_dns_upstream():
+    """No `proxy_pass` in a shipped template may name a host nginx must resolve at load.
+
+    nginx resolves a LITERAL hostname in proxy_pass when it parses the config, so a
+    name owned by another service -- the go-validate sidecar runs in the auth-server
+    task and is published in the Service Connect namespace -- makes `nginx -t` fail
+    with `host not found in upstream` whenever that DNS is not answering yet at
+    registry startup. The candidate config is then rejected, the registry falls back
+    to an unrendered template, and the task exits: the gateway goes down because a
+    sidecar's name was briefly unresolvable.
+
+    Loopback literals are fine (always resolvable). Anything else must go through a
+    variable so nginx defers to the `resolver` per request.
+    """
+    import re
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parents[3]
+    templates = [
+        repo / "docker" / "nginx_rev_proxy_http_only.conf",
+        repo / "docker" / "nginx_rev_proxy_http_and_https.conf",
+    ]
+    # proxy_pass targets that are neither loopback nor a variable.
+    offender = re.compile(
+        r"^\s*proxy_pass\s+https?://(?!127\.0\.0\.1|\$|localhost)([A-Za-z0-9_.-]+)",
+        re.MULTILINE,
+    )
+    for tpl in templates:
+        assert tpl.exists(), f"template missing: {tpl}"
+        body = tpl.read_text()
+        hits = offender.findall(body)
+        assert not hits, (
+            f"{tpl.name} hardcodes DNS upstream(s) {sorted(set(hits))} in proxy_pass; "
+            "use `set $var host:port;` + `proxy_pass http://$var/...` so nginx resolves "
+            "lazily via the resolver instead of failing config load"
+        )
+
+
+@pytest.mark.unit
+def test_shipped_templates_route_validate_through_a_variable():
+    """The /validate block must use the lazy-resolution form, in both templates."""
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parents[3]
+    for name in ("nginx_rev_proxy_http_only.conf", "nginx_rev_proxy_http_and_https.conf"):
+        body = (repo / "docker" / name).read_text()
+        assert (
+            "set $validate_upstream {{VALIDATE_UPSTREAM_HOST}}:{{VALIDATE_UPSTREAM_PORT}};" in body
+        ), name
+        assert "proxy_pass http://$validate_upstream/validate;" in body, name
+        # and the old eager form must be gone
+        assert "proxy_pass http://{{VALIDATE_UPSTREAM_HOST}}" not in body, name
