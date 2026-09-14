@@ -406,14 +406,19 @@ func (s *server) handleValidate(w http.ResponseWriter, r *http.Request) {
 
 // handleHealth reports readiness (B5). Degraded when the fast path is enabled but
 // the JWKS keyset is not currently healthy.
+// buildVersion is set at link time (-X main.buildVersion=...) from the
+// BUILD_VERSION build arg. "dev" means a local `go build` with no stamp.
+var buildVersion = "dev"
+
 func (s *server) handleHealth(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("X-Go-Validate-Version", buildVersion)
 	if s.cfg.FastPathReady && !s.ks.healthy.Load() {
 		w.WriteHeader(http.StatusServiceUnavailable)
-		_, _ = w.Write([]byte("degraded: jwks unhealthy\n"))
+		_, _ = w.Write([]byte("degraded: jwks unhealthy version=" + buildVersion + "\n"))
 		return
 	}
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte("ok\n"))
+	_, _ = w.Write([]byte("ok version=" + buildVersion + "\n"))
 }
 
 // handleMetrics exposes counters plus two health gauges so a "fast path silently
@@ -436,7 +441,10 @@ func (s *server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 	_, _ = w.Write([]byte(
-		"# HELP govalidate_fastpath_ready 1 if the fast path is configured (else all requests proxy to Python)\n" +
+		"# HELP govalidate_build_info Build of the running sidecar (always 1; read the version label)\n" +
+			"# TYPE govalidate_build_info gauge\n" +
+			"govalidate_build_info{version=\"" + buildVersion + "\"} 1\n" +
+			"# HELP govalidate_fastpath_ready 1 if the fast path is configured (else all requests proxy to Python)\n" +
 			"# TYPE govalidate_fastpath_ready gauge\n" +
 			"govalidate_fastpath_ready " + itoa(ready) + "\n" +
 			"# HELP govalidate_jwks_healthy 1 if the JWKS keyset is currently loaded (else fast path degraded)\n" +
@@ -502,7 +510,7 @@ func main() {
 	mux.HandleFunc("/metrics", s.handleMetrics)
 
 	if cfg.FastPathReady {
-		log.Printf("go-validate listening on %s | mode=fast-path | provider=%s | fallback=%s", cfg.Listen, cfg.Provider, cfg.FallbackURL)
+		log.Printf("go-validate %s listening on %s | mode=fast-path | provider=%s | fallback=%s", buildVersion, cfg.Listen, cfg.Provider, cfg.FallbackURL)
 		if cfg.Provider == "cognito" {
 			log.Printf("accepted issuers=%v | accepted client_ids=%v | m2m_accept_any=%v", cfg.Issuers, cfg.AcceptedClientIDs, cfg.M2MAcceptAny)
 		} else {
@@ -511,7 +519,7 @@ func main() {
 	} else {
 		// Loud: an operator who deployed the sidecar expecting acceleration must
 		// see WHY it is only proxying, not discover it from a flat latency graph.
-		log.Printf("WARN go-validate listening on %s in FALLBACK-ONLY mode: %s. Every /validate request is proxied to Python (correct, NOT accelerated). fallback=%s",
+		log.Printf("WARN go-validate %s listening on %s in FALLBACK-ONLY mode: %s. Every /validate request is proxied to Python (correct, NOT accelerated). fallback=%s", buildVersion,
 			cfg.Listen, missingReason(cfg), cfg.FallbackURL)
 	}
 	log.Fatal(http.ListenAndServe(cfg.Listen, mux))

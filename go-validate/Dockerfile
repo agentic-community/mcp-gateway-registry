@@ -8,7 +8,14 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY *.go ./
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/go-validate .
+# BUILD_VERSION is supplied by build_and_run.sh, scripts/build-images.sh, and the
+# release workflow (github.ref_name on a tag). Stamped into the binary so a
+# running sidecar can say which build it is -- a sidecar on :latest is otherwise
+# indistinguishable from any other.
+ARG BUILD_VERSION=dev
+RUN CGO_ENABLED=0 GOOS=linux go build \
+    -ldflags="-s -w -X main.buildVersion=${BUILD_VERSION}" \
+    -o /out/go-validate .
 
 # Fetch the Amazon DocumentDB CA bundle at build time (same source the Python
 # entrypoints use). DocumentDB serves a cert signed by the Amazon RDS CA, which is

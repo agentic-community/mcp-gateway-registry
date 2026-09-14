@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"net/http/httputil"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 )
@@ -413,4 +414,49 @@ func indexOf(s, sub string) int {
 		}
 	}
 	return -1
+}
+
+// TestBuildVersionIsReported pins the version plumbing: CI passes BUILD_VERSION
+// as a build arg, the Dockerfile stamps it via -ldflags -X, and an operator has
+// to be able to read it back off a running sidecar. Without this, a sidecar
+// deployed on :latest is indistinguishable from any other build (issue #1652).
+func TestBuildVersionIsReported(t *testing.T) {
+	original := buildVersion
+	buildVersion = "1.31.0-test"
+	defer func() { buildVersion = original }()
+
+	s := &server{cfg: Config{}}
+
+	t.Run("health carries it in body and header", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		s.handleHealth(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", rec.Code)
+		}
+		if got := rec.Header().Get("X-Go-Validate-Version"); got != "1.31.0-test" {
+			t.Errorf("X-Go-Validate-Version = %q, want %q", got, "1.31.0-test")
+		}
+		if body := rec.Body.String(); !strings.Contains(body, "version=1.31.0-test") {
+			t.Errorf("body = %q, want it to contain the version", body)
+		}
+	})
+
+	t.Run("metrics exposes build_info", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		s.handleMetrics(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+
+		want := `govalidate_build_info{version="1.31.0-test"} 1`
+		if body := rec.Body.String(); !strings.Contains(body, want) {
+			t.Errorf("metrics missing %q, got:\n%s", want, body)
+		}
+	})
+}
+
+// TestBuildVersionDefault documents that an unstamped local build says so
+// rather than claiming a release version.
+func TestBuildVersionDefault(t *testing.T) {
+	if buildVersion != "dev" && !strings.Contains(buildVersion, ".") {
+		t.Errorf("buildVersion = %q, want \"dev\" or a stamped version", buildVersion)
+	}
 }
