@@ -1088,7 +1088,7 @@ def _parse_auth_path_share(
     for path, pct in parsed.items():
         if path not in AUTH_PATHS:
             continue
-        if isinstance(pct, bool) or not isinstance(pct, (int, float)):
+        if isinstance(pct, bool) or not isinstance(pct, int | float):
             continue
         if pct <= 0:
             continue
