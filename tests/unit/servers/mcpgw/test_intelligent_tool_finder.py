@@ -156,7 +156,9 @@ async def test_request_payload_uses_correct_field_names():
     assert "max_results" in body
     assert body["max_results"] == 7
     assert "entity_types" in body
-    assert body["entity_types"] == ["mcp_server", "tool", "a2a_agent", "skill", "virtual_server"]
+    # No virtual_server: this tool reads only servers[], so requesting virtual
+    # servers spent max_results slots on results it discarded (issue #1752).
+    assert body["entity_types"] == ["mcp_server", "tool", "a2a_agent", "skill"]
     assert "top_k" not in body
     assert "entity_type" not in body
 
@@ -586,3 +588,130 @@ async def test_discovery_receipt_caps_top_withheld_items():
         "tool_4",
         "tool_5",
     ]
+
+
+# ---------------------------------------------------------------------------
+# Issue #1752: search_registry returns the virtual servers it asks for
+# ---------------------------------------------------------------------------
+
+
+def _make_virtual_server(n_tools=2, server_name="bundle", path="/bundle"):
+    """A virtual server payload shaped like VirtualServerSearchResult."""
+    return {
+        "server_name": server_name,
+        "path": path,
+        "backend_count": 2,
+        "matching_tools": [
+            {
+                "tool_name": f"vs_tool_{i}",
+                "description": f"Virtual tool {i}",
+                "relevance_score": round(0.8 - i * 0.1, 2),
+            }
+            for i in range(n_tools)
+        ],
+    }
+
+
+@pytest.mark.asyncio
+async def test_search_registry_returns_virtual_servers():
+    """The request asks for virtual_server, so the response must carry them."""
+    mock_resp = _make_mock_response()
+    mock_resp.json.return_value = {
+        "servers": [],
+        "tools": [],
+        "agents": [],
+        "skills": [],
+        "virtual_servers": [_make_virtual_server()],
+    }
+
+    result = await _call_search_registry(mock_resp, query="bundled tools")
+
+    assert result["virtual_servers"] == [_make_virtual_server()]
+
+
+@pytest.mark.asyncio
+async def test_virtual_servers_count_toward_total_results():
+    mock_resp = _make_mock_response()
+    mock_resp.json.return_value = {
+        "servers": [_make_server_with_tools(1, path="/a")],
+        "tools": [],
+        "agents": [],
+        "skills": [],
+        "virtual_servers": [
+            _make_virtual_server(path="/vs1"),
+            _make_virtual_server(path="/vs2"),
+        ],
+    }
+
+    result = await _call_search_registry(mock_resp, query="bundled tools")
+
+    assert result["total_results"] == 3
+
+
+@pytest.mark.asyncio
+async def test_virtual_server_tools_appear_in_the_discovery_receipt():
+    mock_resp = _make_mock_response()
+    mock_resp.json.return_value = {
+        "servers": [],
+        "tools": [],
+        "agents": [],
+        "skills": [],
+        "virtual_servers": [_make_virtual_server(n_tools=2, path="/bundle")],
+    }
+
+    result = await _call_search_registry(
+        mock_resp,
+        query="bundled tools",
+        max_results=10,
+        include_discovery_receipt=True,
+    )
+
+    receipt = result["discovery_receipt"]
+    assert receipt["exposed_results"] == [
+        {
+            "asset_type": "tool",
+            "service_path": "/bundle",
+            "name": "vs_tool_0",
+            "similarity_score": 0.8,
+        },
+        {
+            "asset_type": "tool",
+            "service_path": "/bundle",
+            "name": "vs_tool_1",
+            "similarity_score": 0.7,
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_missing_virtual_servers_key_yields_an_empty_list():
+    """An older registry omits the key; the tool must not raise."""
+    mock_resp = _make_mock_response(servers=[])
+
+    result = await _call_search_registry(mock_resp, query="bundled tools")
+
+    assert result["virtual_servers"] == []
+    assert result["total_results"] == 0
+
+
+@pytest.mark.asyncio
+async def test_search_registry_still_requests_virtual_servers():
+    """The fix returns them; it must not stop asking for them."""
+    capture = {}
+    mock_resp = _make_mock_response(servers=[])
+
+    await _call_search_registry(mock_resp, query="bundled tools", capture=capture)
+
+    assert "virtual_server" in capture["json"]["entity_types"]
+
+
+@pytest.mark.asyncio
+async def test_intelligent_tool_finder_no_longer_requests_virtual_servers():
+    """It reads only servers[], so asking would spend slots on discarded results."""
+    capture = {}
+    mock_resp = _make_mock_response(servers=[])
+
+    await _call_finder(mock_resp, query="bundled tools", capture=capture)
+
+    assert "virtual_server" not in capture["json"]["entity_types"]
+    assert capture["json"]["entity_types"] == ["mcp_server", "tool", "a2a_agent", "skill"]

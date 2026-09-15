@@ -747,7 +747,10 @@ async def search_registry(
         include_discovery_receipt: Include compact eval metadata about exposed and withheld results
 
     Returns:
-        Dictionary with servers, tools, agents, skills arrays and metadata
+        Dictionary with servers, tools, agents, skills, virtual_servers arrays
+        and metadata. A virtual server is a curated bundle of tools drawn from
+        several backend servers, exposed at one endpoint_url; connect to it the
+        same way you would connect to a server.
     """
     logger.info(f"search_registry called: max_results={max_results}")
     if SEARCH_LOG_QUERY_TEXT:
@@ -781,6 +784,10 @@ async def search_registry(
         tools = data.get("tools", []) if isinstance(data, dict) else []
         agents = data.get("agents", []) if isinstance(data, dict) else []
         skills = data.get("skills", []) if isinstance(data, dict) else []
+        # The request above asks for virtual_server, so the registry matches them and
+        # counts them against max_results. Return them instead of discarding them
+        # (issue #1752). An older registry that omits the key yields [].
+        virtual_servers = data.get("virtual_servers", []) if isinstance(data, dict) else []
 
         candidate_results = []
         for tool in tools:
@@ -799,6 +806,17 @@ async def search_registry(
                     {
                         "asset_type": "tool",
                         "service_path": server_path,
+                        "name": tool.get("tool_name", ""),
+                        "similarity_score": tool.get("relevance_score"),
+                    }
+                )
+        for virtual_server in virtual_servers:
+            vs_path = virtual_server.get("path", "")
+            for tool in virtual_server.get("matching_tools", []):
+                candidate_results.append(
+                    {
+                        "asset_type": "tool",
+                        "service_path": vs_path,
                         "name": tool.get("tool_name", ""),
                         "similarity_score": tool.get("relevance_score"),
                     }
@@ -828,12 +846,13 @@ async def search_registry(
         exposed_results = candidate_results[:max_results]
         withheld_results = candidate_results[max_results:]
 
-        total_results = len(servers) + len(tools) + len(agents) + len(skills)
+        total_results = len(servers) + len(tools) + len(agents) + len(skills) + len(virtual_servers)
         result = {
             "servers": servers,
             "tools": tools,
             "agents": agents,
             "skills": skills,
+            "virtual_servers": virtual_servers,
             "query": query,
             "total_results": total_results,
             "status": "success",
@@ -911,7 +930,11 @@ async def intelligent_tool_finder(
                 headers=headers,
                 json={
                     "query": query,
-                    "entity_types": ["mcp_server", "tool", "a2a_agent", "skill", "virtual_server"],
+                    # No virtual_server here: this tool reads only servers[], so asking
+                    # for virtual servers would spend max_results slots on results it
+                    # discards. It is deprecated for removal in v1.26.0, so it gets the
+                    # narrower request rather than the search_registry treatment (#1752).
+                    "entity_types": ["mcp_server", "tool", "a2a_agent", "skill"],
                     "max_results": top_n,
                 },
             )
