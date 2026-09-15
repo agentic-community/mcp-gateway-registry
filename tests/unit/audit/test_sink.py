@@ -104,6 +104,19 @@ class _Capture(logging.Handler):
         return "\n".join(self.messages)
 
 
+def _is_audit_origin(record: logging.LogRecord) -> bool:
+    """Could this record carry an audit body?
+
+    Only the sink's own logger tree (`registry.*`) and writes made straight to
+    the root logger (`logging.info(...)`, whose records are named "root") can.
+    Third-party loggers are excluded on purpose: raising the root level to DEBUG
+    below also un-gates their DEBUG output, and pymongo's topology monitor logs
+    server heartbeats from a background thread for as long as any client in the
+    process is alive, which would make this capture non-deterministic.
+    """
+    return record.name == "root" or record.name.split(".", 1)[0] == "registry"
+
+
 @pytest.fixture
 def app_log_stream():
     """Everything that reaches a ROOT handler, i.e. the application log stream.
@@ -113,6 +126,7 @@ def app_log_stream():
     """
     root = logging.getLogger()
     handler = _Capture()
+    handler.addFilter(_is_audit_origin)
     previous_level = root.level
     root.addHandler(handler)
     root.setLevel(logging.DEBUG)
