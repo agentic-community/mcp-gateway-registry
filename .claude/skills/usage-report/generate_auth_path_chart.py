@@ -189,7 +189,7 @@ def _parse_share(
     for key, value in payload.items():
         if key not in AUTH_PATH_ALLOWLIST:
             continue
-        if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        if isinstance(value, bool) or not isinstance(value, int | float | str):
             continue
         try:
             pct = float(value)
@@ -365,7 +365,7 @@ def _coerce_share_map(
     for key, value in raw.items():
         if key not in AUTH_PATH_ALLOWLIST:
             continue
-        if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        if isinstance(value, bool) or not isinstance(value, int | float | str):
             continue
         try:
             pct = float(value)
