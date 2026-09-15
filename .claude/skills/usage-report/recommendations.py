@@ -349,6 +349,26 @@ def rule_github_growth(
     return None
 
 
+def rule_auth_path_not_landing(
+    vars_: dict,
+    args: argparse.Namespace,
+) -> str | None:
+    """Trigger when instances run telemetry schema v6 but no auth-path mix is stored."""
+    schema_v6 = int(vars_.get("auth_path_schema_v6_instances", 0) or 0)
+    reporting = int(vars_.get("auth_path_reporting_instances", 0) or 0)
+    if schema_v6 <= 0 or reporting > 0:
+        return None
+    plural = "s" if schema_v6 != 1 else ""
+    return (
+        f"**Auth-path telemetry is not landing.** {schema_v6} instance{plural} report telemetry "
+        f"schema v6 and none stored an auth-path mix. The registries send the fields on the "
+        f"heartbeat. The collector discards keys it does not declare. Rebuild "
+        f"`lambda_function.zip` from `terraform/telemetry-collector/lambda/collector/` and "
+        f"re-apply the collector so its `HeartbeatEvent` accepts `auth_path_share_24h`, "
+        f"`auth_path_volume_bucket_24h`, and `auth_path_window_hours`."
+    )
+
+
 # ============================================================================
 # Driver
 # ============================================================================
@@ -365,6 +385,7 @@ RULES = [
     rule_ltv_milestone,
     rule_one_day_wonder_trend,
     rule_github_growth,
+    rule_auth_path_not_landing,
 ]
 
 

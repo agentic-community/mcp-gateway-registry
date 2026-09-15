@@ -190,6 +190,35 @@ Cumulative unique instances per development/git-describe version:
 | Average per instance | {search_avg_per_instance} |
 | Max from single instance | {search_max_single_instance} |
 
+## Auth Path Mix
+
+{auth_path_status_line}
+
+| Metric | Value |
+|--------|------:|
+| Instances reporting an auth-path mix | {auth_path_reporting_instances} |
+| Fleet instances | {auth_path_total_instances} |
+| Coverage | {auth_path_coverage_pct}% |
+| Instances on telemetry schema v6 | {auth_path_schema_v6_instances} |
+
+![Auth Path Mix](auth-path-mix-{date}.png)
+
+### Fleet Share by Auth Path
+
+Each instance counts in proportion to its 24-hour volume bucket, so a registry serving 10k+ authentications outweighs one serving five.
+
+{auth_path_mix_table}
+
+### Authentication Volume per 24 Hours
+
+{auth_path_volume_table}
+
+{auth_path_window_summary}
+
+The registry sends `auth_path_share_24h`, `auth_path_volume_bucket_24h`, and `auth_path_window_hours` on the heartbeat only. The startup payload carries `schema_version: "6"` and none of the three fields. The collector drops any key it does not declare in `HeartbeatEvent`, so a zero above has two causes: no registry emits the fields, or the deployed collector Lambda predates the schema and throws them away. The schema-v6 count against the reporting count tells you which.
+
+<!-- COMMENTARY:auth_path -->
+
 ## Sticky Instance Breakdown (3+ Days)
 
 {sticky_3plus_days} customer instances are running for 3+ days. By cloud + compute:

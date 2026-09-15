@@ -440,6 +440,83 @@ def _build_sticky_cloud_compute_table(
     return "\n".join(lines)
 
 
+AUTH_PATH_VOLUME_BUCKETS = ("0", "1-9", "10-99", "100-999", "1k-9k", "10k+")
+
+
+def _build_auth_path_status_line(
+    auth_path: dict,
+    total_instances: int,
+) -> str:
+    """Render the one-sentence verdict on auth-path collection."""
+    reporting = int(auth_path.get("reporting_instances") or 0)
+    total = int(auth_path.get("total_instances") or total_instances or 0)
+    schema_v6 = int(auth_path.get("schema_v6_instances") or 0)
+    coverage = float(auth_path.get("coverage_pct") or 0.0)
+    if reporting > 0:
+        return (
+            f"Collected: {reporting} of {total} instances ({coverage:.1f}%) "
+            f"report an auth-path mix."
+        )
+    if schema_v6 > 0:
+        return (
+            f"Not collected yet: {schema_v6} of {total} instances run telemetry schema v6, "
+            f"yet no auth-path mix reached the database."
+        )
+    return f"Not collected yet: none of {total} instances report an auth-path mix."
+
+
+def _build_auth_path_mix_table(
+    auth_path: dict,
+) -> str:
+    """Render the volume-weighted fleet share per auth path."""
+    share = auth_path.get("fleet_share_pct") or {}
+    if not share:
+        return "_No instance reports an auth-path mix, so there is no share to show._"
+    per_path = auth_path.get("per_path_instances") or {}
+    lines = [
+        "| Auth Path | Fleet Share | Instances |",
+        "|-----------|------------:|----------:|",
+    ]
+    for path, pct in sorted(share.items(), key=lambda kv: (-float(kv[1]), kv[0])):
+        lines.append(f"| `{path}` | {float(pct):.1f}% | {per_path.get(path, 0)} |")
+    return "\n".join(lines)
+
+
+def _build_auth_path_volume_table(
+    auth_path: dict,
+) -> str:
+    """Render the per-instance 24-hour authentication-volume buckets."""
+    counts = auth_path.get("volume_bucket_counts") or {}
+    if not counts:
+        return "_No instance reports a 24-hour authentication volume._"
+    total = sum(counts.values()) or 1
+    ordered = [b for b in AUTH_PATH_VOLUME_BUCKETS if b in counts]
+    ordered += sorted(b for b in counts if b not in AUTH_PATH_VOLUME_BUCKETS)
+    lines = [
+        "| Authentications per 24h | Instances | % of Reporting |",
+        "|-------------------------|----------:|---------------:|",
+    ]
+    for bucket in ordered:
+        count = counts[bucket]
+        lines.append(f"| `{bucket}` | {count} | {count / total * 100:.1f}% |")
+    return "\n".join(lines)
+
+
+def _build_auth_path_window_summary(
+    auth_path: dict,
+) -> str:
+    """Describe the reported auth-path measurement windows."""
+    window = auth_path.get("window_hours") or {}
+    median = window.get("median")
+    if median is None:
+        return "_No instance reports an auth-path measurement window._"
+    return (
+        f"Reporting instances measure their mix over {int(window.get('min') or 0)} to "
+        f"{int(window.get('max') or 0)} hours, median {float(median):.1f}. "
+        f"The registry clamps this window to 48 hours."
+    )
+
+
 def _read_section_from_tables_md(
     path: str,
     section_header: str,
@@ -916,6 +993,10 @@ def _build_template_vars(
         )
     executive_summary_lead = " ".join(exec_lead_parts) or "No major shifts since the last report."
 
+    # Auth-path telemetry (schema-v6 heartbeat fields; absent on older snapshots).
+    auth_path = metrics.get("auth_path") or {}
+    auth_path_total = int(auth_path.get("total_instances") or total_instances or 0)
+
     # ===== Build the variable dict =====
 
     vars_ = {
@@ -993,6 +1074,15 @@ def _build_template_vars(
         "search_total_queries": f"{metrics.get('search_stats', {}).get('lifetime_sum', 0):,}",
         "search_avg_per_instance": f"{metrics.get('search_stats', {}).get('lifetime_avg', 0):.1f}",
         "search_max_single_instance": f"{metrics.get('search_stats', {}).get('lifetime_max', 0):,}",
+        # Auth path mix (schema-v6 heartbeat fields)
+        "auth_path_status_line": _build_auth_path_status_line(auth_path, total_instances),
+        "auth_path_reporting_instances": int(auth_path.get("reporting_instances") or 0),
+        "auth_path_total_instances": auth_path_total,
+        "auth_path_coverage_pct": f"{float(auth_path.get('coverage_pct') or 0.0):.1f}",
+        "auth_path_schema_v6_instances": int(auth_path.get("schema_v6_instances") or 0),
+        "auth_path_mix_table": _build_auth_path_mix_table(auth_path),
+        "auth_path_volume_table": _build_auth_path_volume_table(auth_path),
+        "auth_path_window_summary": _build_auth_path_window_summary(auth_path),
         # Forecast
         "forecast_linear_rate": f"{linear_rate:.1f}",
         "forecast_linear_eta": linear_eta,

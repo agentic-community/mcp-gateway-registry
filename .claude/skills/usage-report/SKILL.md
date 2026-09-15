@@ -53,7 +53,7 @@ The entire pipeline is wrapped in two shell scripts so the whole report runs in 
 
 The pipeline has exactly one non-deterministic step: generating the analyst commentary, which requires the LLM. Everything else is deterministic. The two scripts sit on either side of that seam:
 
-- **`run_report.sh`** (Half A) does everything up to the commentary: bastion export, all 14 charts, telemetry + liveness analysis, a chart-completeness gate, the deterministic report render, and the commentary-manifest extract.
+- **`run_report.sh`** (Half A) does everything up to the commentary: bastion export, all 15 charts, telemetry + liveness analysis, a chart-completeness gate, the deterministic report render, and the commentary-manifest extract.
 - **The LLM step**: the agent reads `commentary-manifest.json` and writes `commentary.json` (a flat `{section_id: paragraph}` map). See [Step 8](#step-8-augment-with-llm-commentary) for the exact constraints.
 - **`finish_report.sh`** (Half B) applies the commentary into the markdown and produces the self-contained HTML.
 
@@ -79,7 +79,7 @@ Finally present results per [Step 10](#step-10-present-results).
 - **Date math is computed once.** `run_report.sh` derives the previous complete day (report date - 1) for `--active-on-date` / `--yesterday`, and passes the base dir (not the dated subdir) as `--search-dir`. These are the args most easily gotten wrong by hand.
 - **Export is guarded.** If `registry_metrics.csv` already exists for the date, the bastion export is skipped so you can iterate on charts without re-pulling. Set `FORCE_EXPORT=1` to re-export. Pass `BASTION_IP=...` to skip the terraform lookup; `SSH_KEY=...` to override the identity file.
 - **Fail-loud.** `set -euo pipefail` throughout; any failing step aborts the run. The GitHub-stats fetch is the one intentional exception (non-fatal; the report omits that section if it fails).
-- **Completeness gate.** Before rendering, `run_report.sh` verifies all 14 mandatory charts exist and aborts with the list of any missing ones, so `render_report.py` never emits broken-image placeholders.
+- **Completeness gate.** Before rendering, `run_report.sh` verifies all 15 mandatory charts exist and aborts with the list of any missing ones, so `render_report.py` never emits broken-image placeholders.
 - **Resume boundary.** If Half A succeeds but the commentary is bad, re-run only `finish_report.sh` (or re-run Half A without `FORCE_EXPORT` to skip the slow export). `finish_report.sh` refuses to run if the markdown or `commentary.json` is missing.
 
 ---
@@ -463,6 +463,23 @@ Outputs:
 
 The renderer reads this JSON to populate the "Community vs Internal Deployments" section: the yesterday/cumulative headline numbers and the two per-version breakdown tables. Embed the chart in that section.
 
+### Step 5i: Generate Auth-Path Mix Chart
+
+Plot which authentication paths the fleet uses. Under telemetry schema v6 the registry sends `auth_path_share_24h` (integer percentages per path, summing to 100), `auth_path_volume_bucket_24h`, and `auth_path_window_hours` on every **heartbeat**. Startup payloads carry `schema_version` and none of the three fields, so this chart reads heartbeat rows only.
+
+The chart weights each instance by its volume bucket midpoint (`1-9` = 3, `10-99` = 30, `100-999` = 300, `1k-9k` = 3000, `10k+` = 10000), so a registry serving 10k+ authentications outweighs an idle one. It also shows how many instances report the fields at all: the collector discards any key `HeartbeatEvent` does not declare, so an empty chart means either no registry emits the fields or the deployed collector Lambda predates the schema.
+
+```bash
+/usr/bin/python3 .claude/skills/usage-report/generate_auth_path_chart.py \
+  --csv $DATE_DIR/registry_metrics.csv \
+  --output $DATE_DIR/auth-path-mix-YYYY-MM-DD.png \
+  --metrics $DATE_DIR/metrics-YYYY-MM-DD.json
+```
+
+**Note**: Run after Step 6 since it reads the `auth_path` block of `metrics-*.json`.
+
+Embed the chart in the report's **Auth Path Mix** section (placed after Search Usage, before Sticky Instance Breakdown).
+
 ### Step 6: Run Telemetry Analysis
 
 Run the analysis script to compute all distributions, instance timelines, and metrics. This produces two files:
@@ -565,7 +582,7 @@ If a previous `liveness-*.json` file is found in `--search-dir`, the "vs Previou
 The report is rendered **deterministically from a template + structured data**, not by an LLM. This eliminates hallucination, ensures every section is present, and keeps numbers reconciled with the analyzer outputs.
 
 The renderer reads:
-- `metrics-YYYY-MM-DD.json` (key counts, distributions, version adoption, upgrade trajectories, sticky profiles, etc.)
+- `metrics-YYYY-MM-DD.json` (key counts, distributions, version adoption, upgrade trajectories, sticky profiles, the `auth_path` block, etc.)
 - `liveness-YYYY-MM-DD.json` (tier counts, confirmed-alive list)
 - `ltv-spend-YYYY-MM-DD.json` (yesterday/last-7-days/cumulative LTV)
 - `install-forecast-YYYY-MM-DD.json` (linear and recent-pace ETAs)
@@ -597,7 +614,7 @@ The renderer is composed of three pieces, all under `.claude/skills/usage-report
 
 #### Mandatory Charts Checklist
 
-The report MUST embed all 14 charts (the template's `![...]` references). If any chart file is missing the renderer will substitute the path verbatim and pandoc will render a broken-image placeholder, so generate all charts (Steps 5 through 5h) before invoking `render_report.py`.
+The report MUST embed all 15 charts (the template's `![...]` references). If any chart file is missing the renderer will substitute the path verbatim and pandoc will render a broken-image placeholder, so generate all charts (Steps 5 through 5i) before invoking `render_report.py`.
 
 1. `registry-installs-timeseries-YYYY-MM-DD.png` (cloud provider: cumulative + daily-active + daily-new)
 2. `instance-distribution-YYYY-MM-DD.png` (6-panel faceted, all customers)
@@ -613,6 +630,7 @@ The report MUST embed all 14 charts (the template's `![...]` references). If any
 12. `adoption-funnel-YYYY-MM-DD.png` (funnel from total to confirmed-alive)
 13. `detection-by-version-YYYY-MM-DD.png` (cloud_detection_method outcomes per version)
 14. `prod-internal-timeseries-YYYY-MM-DD.png` (community vs internal: cumulative + daily-active)
+15. `auth-path-mix-YYYY-MM-DD.png` (volume-weighted auth-path share + reporting coverage)
 
 #### Editing the report
 
@@ -662,7 +680,7 @@ The pipeline is split so the LLM has a narrowly-scoped, hard-to-screw-up job:
 
 #### Required commentary anchors (in template)
 
-The current template has 22 commentary anchors covering: executive_summary, cloud_installs, deployment_distribution, lifetime_by_compute, lifetime_retention, liveness, engagement, compute_platform, version_adoption, prod_internal, upgrade_trajectories, feature_adoption, sticky_breakdown, most_active, install_forecast, daily_reporters, ltv_arr, adoption_funnel, cloud_detection, github, architecture, recommendations.
+The current template has 23 commentary anchors covering: executive_summary, cloud_installs, deployment_distribution, lifetime_by_compute, lifetime_retention, liveness, engagement, compute_platform, version_adoption, prod_internal, upgrade_trajectories, feature_adoption, auth_path, sticky_breakdown, most_active, install_forecast, daily_reporters, ltv_arr, adoption_funnel, cloud_detection, github, architecture, recommendations.
 
 Adding/removing anchors: edit `report_template.md` to insert or delete `<!-- COMMENTARY:name -->` markers; the augmenter's extract phase will pick up the new set automatically.
 
@@ -709,17 +727,22 @@ Compared to previous report (2026-05-20): +2299 events (+8%), +26 new instances 
 
 Full report: .scratchpad/usage-reports/2026-05-22/ai-registry-usage-report-2026-05-22.md
 HTML report: .scratchpad/usage-reports/2026-05-22/ai-registry-usage-report-2026-05-22.html
-Charts (10):
+Charts (15):
   - registry-installs-timeseries-2026-05-22.png
   - compute-installs-timeseries-2026-05-22.png
   - instance-distribution-2026-05-22.png
   - instance-distribution-active-2026-05-21.png
   - instance-lifetime-2026-05-22.png
+  - instance-lifetime-box-by-compute-2026-05-22.png
   - lifetime-buckets-2026-05-22.png
   - active-instances-2026-05-22.png
   - install-forecast-2026-05-22.png
+  - daily-reporters-2026-05-22.png
   - ltv-spend-2026-05-22.png
   - adoption-funnel-2026-05-22.png
+  - detection-by-version-2026-05-22.png
+  - prod-internal-timeseries-2026-05-22.png
+  - auth-path-mix-2026-05-22.png
 CSV data: .scratchpad/usage-reports/2026-05-22/registry_metrics.csv
 ```
 
@@ -738,17 +761,22 @@ Output saved to `/tmp/reports/2026-05-22/`.
     ai-registry-usage-report-2026-05-22.md
     ai-registry-usage-report-2026-05-22.html
 
-    # Charts (10 mandatory PNGs)
+    # Charts (15 mandatory PNGs)
     registry-installs-timeseries-2026-05-22.png
     compute-installs-timeseries-2026-05-22.png
     instance-distribution-2026-05-22.png
     instance-distribution-active-2026-05-21.png
     instance-lifetime-2026-05-22.png
+    instance-lifetime-box-by-compute-2026-05-22.png
     lifetime-buckets-2026-05-22.png
     active-instances-2026-05-22.png
     install-forecast-2026-05-22.png
+    daily-reporters-2026-05-22.png
     ltv-spend-2026-05-22.png
     adoption-funnel-2026-05-22.png
+    detection-by-version-2026-05-22.png
+    prod-internal-timeseries-2026-05-22.png
+    auth-path-mix-2026-05-22.png
 
     # Analysis outputs
     tables-2026-05-22.md
