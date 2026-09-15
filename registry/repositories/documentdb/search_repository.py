@@ -1835,7 +1835,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
 
             # Tokenize query for keyword matching
             query_tokens = _tokenize_query(query)
-            logger.debug(f"Client-side search tokens: {query_tokens}")
+            logger.debug("Client-side search tokenized query into %d tokens", len(query_tokens))
 
             # Score each document on BOTH axes independently for RRF
             vector_scored: list[tuple[dict, float]] = []
@@ -2134,7 +2134,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
         query_tokens = _tokenize_query(query)
 
         if not query_tokens:
-            logger.info("Lexical search: no valid tokens from query '%s'", query)
+            logger.info("Lexical search: no valid tokens in query, returning no results")
             return {
                 "servers": [],
                 "tools": [],
@@ -2181,8 +2181,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
         grouped_results = self._format_lexical_results(results, max_results)
 
         logger.info(
-            "Lexical-only search for '%s' returned %d servers, %d tools, %d agents",
-            query,
+            "Lexical-only search returned %d servers, %d tools, %d agents",
             len(grouped_results["servers"]),
             len(grouped_results["tools"]),
             len(grouped_results["agents"]),
@@ -2393,6 +2392,12 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
         """
         collection = await self._get_collection()
 
+        # The single place a query string can reach the logs from this repository.
+        # search() is the entry point for all three paths (hybrid, client-side,
+        # lexical-only), so one guarded line covers them all (issue #1752).
+        if settings.search_log_query_text:
+            logger.info("Search query text: %s", query)
+
         try:
             # Try to get embedding; fall back to lexical-only search if
             # unavailable. _embed_texts() honors and updates the
@@ -2434,11 +2439,13 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             escaped_tokens = [re.escape(token) for token in query_tokens]
             has_keyword_tokens = bool(escaped_tokens)
             token_regex = "|".join(escaped_tokens)
+            # Token count and stage flag only. The tokens are the query minus
+            # stopwords, and the regex is the tokens joined, so logging either would
+            # leak what the user typed (issue #1752).
             logger.info(
-                "Hybrid search tokens for '%s': %s (regex: %s)",
-                query,
-                query_tokens,
-                token_regex if has_keyword_tokens else "<none: keyword stage skipped>",
+                "Hybrid search tokenized query into %d tokens (keyword stage: %s)",
+                len(query_tokens),
+                "enabled" if has_keyword_tokens else "skipped",
             )
 
             text_boost_stage = _build_text_boost_stage(token_regex) if has_keyword_tokens else None
@@ -2481,9 +2488,8 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                         result_ids.add(doc_id)
 
             logger.info(
-                "Per-type vector search for '%s': %d total candidates "
+                "Per-type vector search: %d total candidates "
                 "(k_per_type=%d, efSearch=%d, types=%s)",
-                query,
                 len(results),
                 k_per_type,
                 ef_search,
@@ -2505,8 +2511,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                 keyword_results = await keyword_cursor.to_list(length=max(max_results, 10))
 
             logger.info(
-                "Keyword search for '%s' found %d candidates",
-                query,
+                "Keyword search found %d candidates",
                 len(keyword_results),
             )
             for i, kw_doc in enumerate(keyword_results):
@@ -2775,10 +2780,9 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             grouped_results["custom"].sort(key=lambda x: x.get("relevance_score", 0), reverse=True)
 
             logger.info(
-                "Hybrid search for '%s' returned "
+                "Hybrid search returned "
                 "%d servers, %d tools, %d agents, %d skills, "
                 "%d virtual_servers, %d custom (max_results=%d)",
-                query,
                 len(grouped_results["servers"]),
                 len(grouped_results["tools"]),
                 len(grouped_results["agents"]),

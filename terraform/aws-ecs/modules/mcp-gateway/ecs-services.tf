@@ -1254,6 +1254,12 @@ module "ecs_service_registry" {
           value = var.cors_allowed_origins
         },
         {
+          # Debug only: writes raw user search queries to the logs. Defaults to
+          # false; the registry warns at startup while it is on.
+          name  = "SEARCH_LOG_QUERY_TEXT"
+          value = tostring(var.search_log_query_text)
+        },
+        {
           name  = "SECURITY_SCAN_ENABLED"
           value = tostring(var.security_scan_enabled)
         },
@@ -2520,6 +2526,12 @@ module "ecs_service_mcpgw" {
           # rejected with UNIMPLEMENTED. Disable the traces exporter. Issue #1326.
           name  = "OTEL_TRACES_EXPORTER"
           value = "none"
+        },
+        {
+          # Debug only: writes raw user search queries to the logs. Same variable
+          # the registry reads, so both containers agree. Issue #1752.
+          name  = "SEARCH_LOG_QUERY_TEXT"
+          value = tostring(var.search_log_query_text)
         }
         ],
         # Extra environment variables from user (Issue #1000)

@@ -175,6 +175,14 @@ def _log_startup_configuration() -> None:
 
     logger.info("=" * 60)
 
+    # A dangerous toggle: on, every search query a user types is written to the logs.
+    # Warn so it is not left enabled after a debugging session (issue #1752).
+    if settings.search_log_query_text:
+        logger.warning(
+            "SEARCH_LOG_QUERY_TEXT is enabled. Raw user search queries are being "
+            "written to the logs. Disable this outside of debugging."
+        )
+
     # Nudge operators about recommended-but-optional settings left unset (e.g. the
     # egress credential encryption key when the vault is enabled). Same source of
     # truth as the recommended-config metric and the System Config UI badge.

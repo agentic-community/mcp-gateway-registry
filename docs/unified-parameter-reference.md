@@ -569,6 +569,7 @@ Used by `registry` and `mcpgw` services.
 | IdP timeout | `EMBEDDINGS_IDP_TIMEOUT_SECONDS` | `embeddings_idp_timeout_seconds` | `registry.embeddings.idpTimeoutSeconds` | Token request timeout (default 30s). |
 | IdP allow insecure | `EMBEDDINGS_IDP_ALLOW_INSECURE` | `embeddings_idp_allow_insecure` | `registry.embeddings.idpAllowInsecure` | Allow `http://` loopback token endpoint (local dev only, default `false`). |
 | Response format | `EMBEDDINGS_RESPONSE_FORMAT` | `embeddings_response_format` | `registry.embeddings.responseFormat` | `openai` (default envelope) or `raw_array` (endpoint returns a bare `[[float]]` array). Independent of auth mode. |
+| Log raw search query | `SEARCH_LOG_QUERY_TEXT` | `search_log_query_text` | `registry.app.searchLogQueryText` / `mcpgw.app.searchLogQueryText` | Debug only, default `false`. Logs the raw user search query at INFO in both the registry and mcpgw. A query is free text a user typed and can carry PII, so leave it off outside of debugging; both services warn at startup while it is on. Supported values: `true`, `false`. |
 
 ---
 

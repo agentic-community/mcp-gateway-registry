@@ -38,6 +38,11 @@ app:
   # Uncomment to use a specific key:
   # secretKey: "your-secure-key-here"
 
+  # Debug only: log the raw user search query at INFO. A query is free text a user
+  # typed and can carry PII, so this stays false outside of debugging. The server
+  # logs a startup warning while it is on.
+  searchLogQueryText: false
+
   # GitHub private repo auth (SKILL.md fetching)
   githubPat: ""
   githubPatExistingSecret: "" # If set, read GITHUB_PAT from this K8s secret

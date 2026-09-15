@@ -101,6 +101,21 @@ M2M_CLIENT_SECRET = os.getenv("M2M_CLIENT_SECRET", "")
 MCPGW_BASE_URL = os.getenv("MCPGW_BASE_URL", "http://localhost:18003")
 REGISTRY_API_TOKEN = os.getenv("REGISTRY_API_TOKEN", "")
 
+# ---------------------------------------------------------------------------
+# Search query logging (debug aid, off by default)
+# ---------------------------------------------------------------------------
+# A search query is free text a user typed and can hold a name, an email address,
+# an account number, or an unannounced project. It is not logged unless an operator
+# asks for it. Supported values are true and false; the registry reads the same
+# variable through its Settings class (issue #1752).
+SEARCH_LOG_QUERY_TEXT = os.getenv("SEARCH_LOG_QUERY_TEXT", "").lower() in ("true", "1", "yes")
+
+if SEARCH_LOG_QUERY_TEXT:
+    logger.warning(
+        "SEARCH_LOG_QUERY_TEXT is enabled. Raw user search queries are being written "
+        "to the mcpgw logs. Disable this outside of debugging."
+    )
+
 
 class _M2MTokenManager:
     """Fetches and caches a Keycloak M2M token via client_credentials grant."""
@@ -734,7 +749,9 @@ async def search_registry(
     Returns:
         Dictionary with servers, tools, agents, skills arrays and metadata
     """
-    logger.info(f"search_registry called: query={query}, max_results={max_results}")
+    logger.info(f"search_registry called: max_results={max_results}")
+    if SEARCH_LOG_QUERY_TEXT:
+        logger.info("search_registry query text: %s", query)
 
     try:
         query = _validate_query(query)
@@ -879,7 +896,9 @@ async def intelligent_tool_finder(
     Returns:
         Dictionary containing results, query, total_results, and status
     """
-    logger.info(f"intelligent_tool_finder called: query={query}, top_n={top_n}")
+    logger.info(f"intelligent_tool_finder called: top_n={top_n}")
+    if SEARCH_LOG_QUERY_TEXT:
+        logger.info("intelligent_tool_finder query text: %s", query)
 
     try:
         query = _validate_query(query)
