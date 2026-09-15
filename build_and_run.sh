@@ -464,12 +464,19 @@ else
     log "WARNING: scripts/prepare-log-dirs.sh not found or not executable; skipping log-directory prep"
 fi
 
+# Shared weak-credential denylist, also sourced by
+# pingfederate/setup/init-pingfederate.sh so preflight and the post-deploy gate
+# cannot drift apart.
+# shellcheck source=scripts/weak-credentials.sh
+. "${SCRIPT_DIR}/scripts/weak-credentials.sh"
+
 # Return the lowercased value of the named variable (indirect expansion) so the
 # weak-value comparisons below are case-insensitive -- a placeholder mutated only
-# by case (e.g. "Change-Password-...") must not slip past the denylist.
+# by case (e.g. "Change-Password-...") must not slip past the denylist. LC_ALL=C
+# pins the ASCII fold: tr's [:upper:]/[:lower:] classes are locale-sensitive.
 _lc_var() {
     local name="$1"
-    printf '%s' "${!name:-}" | tr '[:upper:]' '[:lower:]'
+    printf '%s' "${!name:-}" | LC_ALL=C tr 'A-Z' 'a-z'
 }
 
 # Reject known-weak default values for secrets that could reach a deployment.
@@ -519,12 +526,48 @@ _validate_secret_defaults() {
             ;;
     esac
 
-    case "$(_lc_var PF_ADMIN_PASS)" in
-        2federatem0re|change-password-to-some-secret-password)
-            log "ERROR: PF_ADMIN_PASS is set to the PingFederate vendor default or placeholder."
-            log "       The registry drives the PF admin API with this credential; set a"
-            log "       strong value in .env when the pingfederate profile is enabled."
-            failed=1
+    # ---- PingFederate credentials -----------------------------------------
+    # Gated on PINGFEDERATE_ENABLED. These variables are only read when the
+    # pingfederate profile runs, and `changeme` was the shipped .env.example value
+    # for PINGFEDERATE_CLIENT_SECRET until recently -- so validating them
+    # unconditionally would block startup for every operator on Keycloak, Cognito,
+    # Okta, Entra or Auth0 over a credential their deployment never touches.
+    case "$(_lc_var PINGFEDERATE_ENABLED)" in
+        1|true|yes|on)
+            # Compose passes PF_ADMIN_PASS to the bundled container as
+            # PING_IDENTITY_PASSWORD, and the Ping server profile resolves
+            # ${PING_IDENTITY_PASSWORD:=2FederateM0re}. `:=` substitutes on null as
+            # well as unset, so an EMPTY value silently reinstates the vendor
+            # default on the admin console. Emptiness must fail here, because
+            # compose cannot use ${VAR:?} (it interpolates every service at
+            # file-load time, before profile filtering) and the bootstrap script
+            # only runs after the console is already live.
+            if [ -z "${PF_ADMIN_PASS:-}" ]; then
+                log "ERROR: PF_ADMIN_PASS is required when PINGFEDERATE_ENABLED is true."
+                log "       The bundled container bootstraps its console administrator"
+                log "       from this value; leaving it empty boots PingFederate on the"
+                log "       vendor default password. Set a strong value in .env."
+                failed=1
+            fi
+
+            # Weak-value checks share one denylist with the bootstrap script, so
+            # preflight and the post-deploy gate cannot disagree.
+            local pf_var
+            for pf_var in PF_ADMIN_PASS PINGFEDERATE_CLIENT_SECRET PF_REGISTRY_ADMIN_PASSWORD; do
+                local pf_val="${!pf_var:-}"
+                [ -n "$pf_val" ] || continue
+                if is_weak_credential "$pf_val"; then
+                    log "ERROR: ${pf_var} is set to a known-weak/placeholder value."
+                    log "       init-pingfederate.sh rejects it and will refuse to run;"
+                    log "       set a strong value in .env (openssl rand -hex 24)."
+                    failed=1
+                elif [ "${#pf_val}" -lt "$WEAK_CREDENTIAL_MIN_LEN" ]; then
+                    log "ERROR: ${pf_var} must be at least ${WEAK_CREDENTIAL_MIN_LEN} characters."
+                    log "       init-pingfederate.sh enforces the same floor and would"
+                    log "       abort after the stack is already up."
+                    failed=1
+                fi
+            done
             ;;
     esac
 

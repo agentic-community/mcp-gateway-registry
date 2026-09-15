@@ -69,13 +69,8 @@ create_realm() {
 
     echo "Creating MCP Gateway realm..."
 
-    # Check if realm already exists
-    if realm_exists "$token"; then
-        echo -e "${YELLOW}Realm already exists. Skipping creation...${NC}"
-        return 0
-    fi
-
-    # Create basic realm
+    # Realm settings the bootstrap owns. Kept in one place so the create and the
+    # update path below cannot drift.
     local realm_json='{
         "realm": "mcp-gateway",
         "enabled": true,
@@ -83,8 +78,36 @@ create_realm() {
         "loginWithEmailAllowed": true,
         "duplicateEmailsAllowed": false,
         "resetPasswordAllowed": true,
-        "editUsernameAllowed": false
+        "editUsernameAllowed": false,
+        "bruteForceProtected": true,
+        "failureFactor": 5,
+        "waitIncrementSeconds": 60,
+        "maxFailureWaitSeconds": 900,
+        "permanentLockout": false
     }'
+
+    # An existing realm is UPDATED, not skipped. Skipping meant a security setting
+    # added here (e.g. bruteForceProtected) never reached a deployment whose realm
+    # already existed, while the script still reported success.
+    if realm_exists "$token"; then
+        local update_status
+        local update_response
+        update_response=$(curl -sS -w $'\n%{http_code}' \
+            -X PUT "${KEYCLOAK_URL}/admin/realms/${REALM}" \
+            -H "Authorization: Bearer ${token}" \
+            -H "Content-Type: application/json" \
+            -d "$realm_json")
+        update_status="${update_response##*$'\n'}"
+        if [ "$update_status" = "204" ]; then
+            echo -e "${GREEN}Realm already exists; settings updated.${NC}"
+            return 0
+        fi
+        # Print the body: a 4xx on a realm representation names the rejected field,
+        # and a bare status is not actionable.
+        echo -e "${RED}Failed to update existing realm (HTTP ${update_status})${NC}" >&2
+        echo "  response: ${update_response%$'\n'*}" >&2
+        return 1
+    fi
 
     local response=$(curl -s -o /dev/null -w "%{http_code}" \
         -X POST "${KEYCLOAK_URL}/admin/realms" \
@@ -96,17 +119,74 @@ create_realm() {
         echo -e "${GREEN}Realm created successfully!${NC}"
         return 0
     elif [ "$response" = "409" ]; then
-        echo -e "${YELLOW}Realm already exists. Continuing...${NC}"
-        return 0
-    else
-        echo -e "${RED}Failed to create realm. HTTP status: ${response}${NC}"
-        echo "Response body:"
-        curl -s -X POST "${KEYCLOAK_URL}/admin/realms" \
+        # Lost a race with a concurrent bootstrap; the realm exists, so apply the
+        # settings rather than continuing with an unknown configuration.
+        local race_status
+        race_status=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X PUT "${KEYCLOAK_URL}/admin/realms/${REALM}" \
             -H "Authorization: Bearer ${token}" \
             -H "Content-Type: application/json" \
-            -d "$realm_json"
-        echo ""
+            -d "$realm_json")
+        if [ "$race_status" = "204" ]; then
+            echo -e "${YELLOW}Realm already exists; settings updated.${NC}"
+            return 0
+        fi
+        echo -e "${RED}Failed to update existing realm (HTTP ${race_status})${NC}" >&2
         return 1
+    else
+        echo -e "${RED}Failed to create realm. HTTP status: ${response}${NC}" >&2
+        return 1
+    fi
+}
+
+# Create the client if absent, otherwise PUT the full representation so attribute
+# changes (webOrigins, post.logout.redirect.uris) reach deployments whose realm
+# already exists. A bare POST silently 409s on a re-run, which would make every
+# hardening change here a no-op for existing installs. Mirrors upsert_client in
+# charts/keycloak-configure/templates/configmap.yaml and the 409->PUT path in
+# terraform/aws-ecs/scripts/init-keycloak.sh.
+upsert_client() {
+    local token=$1
+    local client_id=$2
+    local client_json=$3
+
+    local existing_id
+    existing_id=$(curl -s \
+        -H "Authorization: Bearer ${token}" \
+        "${KEYCLOAK_URL}/admin/realms/${REALM}/clients?clientId=${client_id}" \
+        | grep -o '"id":"[^"]*' | head -1 | cut -d'"' -f4)
+
+    local status
+    if [ -z "$existing_id" ]; then
+        local create_response
+        create_response=$(curl -sS -w $'\n%{http_code}' \
+            -X POST "${KEYCLOAK_URL}/admin/realms/${REALM}/clients" \
+            -H "Authorization: Bearer ${token}" \
+            -H "Content-Type: application/json" \
+            -d "$client_json")
+        status="${create_response##*$'\n'}"
+        if [ "$status" = "201" ]; then
+            echo -e "  ${GREEN}Client ${client_id} created${NC}"
+        else
+            echo -e "  ${RED}Failed to create client ${client_id} (HTTP ${status})${NC}" >&2
+            echo "  response: ${create_response%$'\n'*}" >&2
+            return 1
+        fi
+    else
+        local update_response
+        update_response=$(curl -sS -w $'\n%{http_code}' \
+            -X PUT "${KEYCLOAK_URL}/admin/realms/${REALM}/clients/${existing_id}" \
+            -H "Authorization: Bearer ${token}" \
+            -H "Content-Type: application/json" \
+            -d "$client_json")
+        status="${update_response##*$'\n'}"
+        if [ "$status" = "204" ]; then
+            echo -e "  ${GREEN}Client ${client_id} updated${NC}"
+        else
+            echo -e "  ${RED}Failed to update client ${client_id} (HTTP ${status})${NC}" >&2
+            echo "  response: ${update_response%$'\n'*}" >&2
+            return 1
+        fi
     fi
 }
 
@@ -131,20 +211,21 @@ create_clients() {
         "webOrigins": [
             "'${REGISTRY_URL:-http://localhost:7860}'",
             "http://localhost:7860",
-            "+"
+            "http://localhost:8888"
         ],
+        "attributes": {
+            "post.logout.redirect.uris": "'${REGISTRY_URL:-http://localhost:7860}'/*##http://localhost:7860/*##http://localhost:8888/*"
+        },
         "protocol": "openid-connect",
         "standardFlowEnabled": true,
         "implicitFlowEnabled": false,
         "directAccessGrantsEnabled": true,
         "serviceAccountsEnabled": false,
+        "fullScopeAllowed": false,
         "publicClient": false
     }'
 
-    curl -s -X POST "${KEYCLOAK_URL}/admin/realms/${REALM}/clients" \
-        -H "Authorization: Bearer ${token}" \
-        -H "Content-Type: application/json" \
-        -d "$web_client_json" > /dev/null
+    upsert_client "$token" "mcp-gateway-web" "$web_client_json"
 
     # Create M2M client
     local m2m_client_json='{
@@ -157,13 +238,11 @@ create_clients() {
         "implicitFlowEnabled": false,
         "directAccessGrantsEnabled": false,
         "serviceAccountsEnabled": true,
+        "fullScopeAllowed": false,
         "publicClient": false
     }'
 
-    curl -s -X POST "${KEYCLOAK_URL}/admin/realms/${REALM}/clients" \
-        -H "Authorization: Bearer ${token}" \
-        -H "Content-Type: application/json" \
-        -d "$m2m_client_json" > /dev/null
+    upsert_client "$token" "mcp-gateway-m2m" "$m2m_client_json"
 
     echo -e "${GREEN}Clients created successfully!${NC}"
 }
@@ -804,12 +883,34 @@ main() {
     PROJECT_ROOT="$( cd "$SCRIPT_DIR/../.." && pwd )"
     ENV_FILE="$PROJECT_ROOT/.env"
 
-    # Load environment variables from .env file if it exists
+    # Load environment variables from .env file if it exists.
+    #
+    # The caller's environment WINS over the file for every variable that decides
+    # WHICH Keycloak we talk to or WHAT we write into it. This matters now that an
+    # existing client is PUT rather than skipped, because Keycloak replaces
+    # redirectUris/webOrigins wholesale on that PUT: on a host that also has a
+    # Compose .env, the file's localhost values would be written over a deployed
+    # realm and break login with invalid_redirect_uri. KEYCLOAK_ADMIN_URL is in the
+    # list for the same reason in reverse -- a stale .env would otherwise retarget
+    # the entire run at a local Keycloak.
+    CALLER_PRECEDENCE_VARS="KEYCLOAK_ADMIN_URL REGISTRY_URL AUTH_SERVER_EXTERNAL_URL"
     if [ -f "$ENV_FILE" ]; then
         echo "Loading environment variables from $ENV_FILE..."
+        # Snapshot the caller's values before `set -a; source` overwrites them.
+        local _var _snapshot_name
+        for _var in $CALLER_PRECEDENCE_VARS; do
+            eval "_CALLER_${_var}=\${${_var}:-}"
+        done
         set -a  # Automatically export all variables
         source "$ENV_FILE"
         set +a  # Turn off automatic export
+        for _var in $CALLER_PRECEDENCE_VARS; do
+            _snapshot_name="_CALLER_${_var}"
+            if [ -n "${!_snapshot_name}" ] && [ "${!_snapshot_name}" != "${!_var}" ]; then
+                echo "  Keeping caller-supplied ${_var}=${!_snapshot_name} (ignoring .env)"
+                export "${_var}=${!_snapshot_name}"
+            fi
+        done
         echo "Environment variables loaded successfully"
     else
         echo "No .env file found at $ENV_FILE"
