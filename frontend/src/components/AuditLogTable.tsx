@@ -18,7 +18,9 @@ export interface AuditEvent {
   log_type: string;
   version?: string;
   correlation_id?: string;
-  identity: {
+  // Absent on the token_mint stream, which carries no `identity` block (its
+  // identity fields are flat, below).
+  identity?: {
     username: string;
     auth_method: string;
     provider?: string;
@@ -27,6 +29,17 @@ export interface AuditEvent {
     is_admin: boolean;
     credential_type: string;
     credential_hint?: string;
+    // Durable / IdP identity claims (present when the token carries them,
+    // notably Entra delegated/OBO access tokens). `username` stays the
+    // human-facing display value; these are for correlation / contact. The API
+    // serializes a claim the token did not carry as an explicit `null`, and
+    // records written before the claims existed omit the key entirely.
+    subject?: string | null;
+    canonical_id?: string | null;
+    principal_name?: string | null;
+    object_id?: string | null;
+    tenant_id?: string | null;
+    app_id?: string | null;
   };
   request?: {
     method: string;
@@ -76,9 +89,24 @@ export interface AuditEvent {
   };
   // Token-mint-specific fields (token_mint stream has no `identity` block).
   // `username` is the raw human-readable identity (email -> preferred_username
-  // -> sub); `username_hash` is DEPRECATED, kept only for old records.
+  // -> upn -> sub); `username_hash` is DEPRECATED, kept only for old records.
   username?: string;
   username_hash?: string;
+  token_kind?: string;
+  token_path?: string;
+  resource_type?: string;
+  resource_id?: string;
+  outcome?: string;
+  failure_reason?: string;
+  expires_in_seconds?: number;
+  // The same durable / IdP identity claims declared under `identity` above:
+  // token_mint records have no `identity` block, so they carry them flat.
+  subject?: string | null;
+  canonical_id?: string | null;
+  principal_name?: string | null;
+  object_id?: string | null;
+  tenant_id?: string | null;
+  app_id?: string | null;
 }
 
 interface AuditLogTableProps {
