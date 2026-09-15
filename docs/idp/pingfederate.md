@@ -58,14 +58,25 @@ PINGFEDERATE_ENABLED=true
 PINGFEDERATE_BASE_URL=https://pingfederate:9031
 PINGFEDERATE_EXTERNAL_URL=https://localhost:9031
 
-# OAuth client created by init-pingfederate.sh
+# OAuth client created by init-pingfederate.sh.
+# Required: choose a strong, unique secret. There is no shipped default; the
+# bootstrap script refuses to run if this is unset or a known-weak value.
 PINGFEDERATE_CLIENT_ID=mcp-gateway
-PINGFEDERATE_CLIENT_SECRET=<picked by you, also in init script>
+PINGFEDERATE_CLIENT_SECRET=<a strong secret you choose>
 
-# Admin API (defaults match the bundled container)
+# Admin API of the PingFederate console. With the bundled container this value
+# BOOTSTRAPS the console administrator on first start (compose passes it as
+# PING_IDENTITY_PASSWORD), so pick it before you bring the stack up. For a BYO
+# PingFederate, set it to that instance's existing admin password. Either way it
+# must not be the Ping vendor default: the bootstrap script rejects known-weak
+# values and fails closed. See "Rotating the PingFederate credentials" below.
 PF_ADMIN_URL=https://pingfederate:9999
 PF_ADMIN_USER=administrator
-PF_ADMIN_PASS=2FederateM0re
+PF_ADMIN_PASS=<your PingFederate admin password>
+
+# Password for the 'admin' browser login the bootstrap seeds (mapped to the
+# registry-admins group). Required: strong and unique, no default.
+PF_REGISTRY_ADMIN_PASSWORD=<a strong secret you choose>
 
 # User-to-group fallback enabled for PingFederate
 IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS=pingfederate
@@ -73,21 +84,91 @@ IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS=pingfederate
 
 ### Step 2: Start the stack with the PingFederate profile
 
+**Set `PF_ADMIN_PASS` before this step.** The container bootstraps its console
+administrator on first start, and the Ping server profile resolves that password
+from `${PING_IDENTITY_PASSWORD:=2FederateM0re}`. Because `:=` substitutes on an
+empty value as well as an unset one, leaving `PF_ADMIN_PASS` blank boots the admin
+console on the vendor default. Compose cannot enforce this for you: it
+interpolates every service's variables at file-load time, before profile
+filtering, so a `${PF_ADMIN_PASS:?}` here would break `docker compose up` for
+everyone who never enables this profile. Verify first:
+
+```bash
+# Must print a non-empty, non-default value. build_and_run.sh checks this too,
+# but it does not start the pingfederate profile.
+grep '^PF_ADMIN_PASS=' .env
+```
+
 ```bash
 docker compose --profile pingfederate up -d
 ```
 
 This brings up the PingFederate container alongside the registry, auth-server, and the rest. Without `--profile pingfederate`, the PingFederate container does not start.
 
+If you get this wrong, the console keeps the vendor default until the
+`pingfederate-data` volume is recreated (`docker compose --profile pingfederate
+down -v`) or you rotate it explicitly — see
+[Rotating the PingFederate credentials](#rotating-the-pingfederate-credentials).
+Step 3 will refuse to run against a vendor-default `PF_ADMIN_PASS`, so a mistake
+here surfaces as a failed bootstrap rather than a silently insecure console.
+
 ### Step 3: Bootstrap PingFederate
 
-Wait 2-3 minutes for PingFederate to come up (license activation + profile init), then run the bootstrap script. It creates the OAuth client, the `groups` scope, the JWT ATM, two test users (admin and testuser), and seeds the registry's `idp_user_groups` collection with their group mappings.
+Wait 2-3 minutes for PingFederate to come up (license activation + profile init), then run the bootstrap script. It creates the OAuth client, the `groups` scope, the JWT ATM, and a single `admin` browser login (password taken from `PF_REGISTRY_ADMIN_PASSWORD`), then seeds the registry's `idp_user_groups` collection so that login maps to the `registry-admins` group.
 
 ```bash
 bash pingfederate/setup/init-pingfederate.sh
 ```
 
-After this you can log in to the registry at `https://localhost` with `admin / admin123` (admin) or `testuser / changeme` (read-only).
+After this you can log in to the registry at `https://localhost` as `admin` using the password you set in `PF_REGISTRY_ADMIN_PASSWORD`. This account maps to `registry-admins`; rotate the password on first use and treat it as a privileged credential.
+
+### Rotating the PingFederate credentials
+
+Two distinct credentials are in play. Do not conflate them.
+
+**1. Console / admin-API administrator (`PF_ADMIN_USER` + `PF_ADMIN_PASS`).** This is
+the PingFederate native admin account. The registry drives the admin API with it;
+nothing in this repo rotates it for you.
+
+On a *fresh* volume, compose bootstraps it from your `PF_ADMIN_PASS`, because the
+`baseline/pingfederate` server profile resolves the account password from
+`${PING_IDENTITY_PASSWORD:=2FederateM0re}` and compose supplies
+`PING_IDENTITY_PASSWORD=${PF_ADMIN_PASS:-}`. Set `PF_ADMIN_PASS` *before* the first
+`docker compose --profile pingfederate up -d` and the console never has the vendor
+default.
+
+On an *already-initialized* volume the account lives in
+`server/default/data/pingfederate-admin-user.xml` under the `pingfederate-data`
+volume, so changing `PF_ADMIN_PASS` alone only changes what the registry sends —
+the console keeps its old password and the admin API returns 401. Rotate it
+explicitly, then update `.env` to match:
+
+```bash
+# Replace the placeholders; never paste real secrets into a shell that logs history.
+curl -sk -o /dev/null -w '%{http_code}\n' \
+  -X POST "https://localhost:9999/pf-admin-api/v1/administrativeAccounts/changePassword" \
+  -u "administrator:<current-admin-password>" \
+  -H 'X-XSRF-Header: PingFederate' -H 'Content-Type: application/json' \
+  -d '{"currentPassword":"<current-admin-password>","newPassword":"<new-admin-password>"}'
+# -> 200. Then set PF_ADMIN_PASS=<new-admin-password> in .env and restart the
+# registry and auth-server so they pick it up.
+```
+
+To start over instead, `docker compose --profile pingfederate down -v` (destroys the
+`pingfederate-data` volume) and bring the stack up again with the new
+`PF_ADMIN_PASS` already set.
+
+**2. Registry browser login `admin` (`PF_REGISTRY_ADMIN_PASSWORD`).** This is a row in
+PingFederate's Simple Password Credential Validator, not an administrator account.
+Rotate it by setting a new `PF_REGISTRY_ADMIN_PASSWORD` and re-running the
+bootstrap: Step 5 *overwrites* the existing `admin` row rather than skipping it, so
+a re-run remediates a previously weak password and aborts on any admin-API error
+instead of reporting a false success.
+
+```bash
+bash pingfederate/setup/init-pingfederate.sh
+```
+
 
 ### Step 4 (optional): switch to BYO PingFederate
 
