@@ -301,3 +301,61 @@ class TestDestinationBindingRoute:
         body = r.json()
         assert body["consent_required"] is True
         assert body["access_token"] is None
+
+
+@pytest.mark.unit
+class TestOboExchangeVendDefense:
+    """The vend path returns the stored obo_exchange DIRECTIVE to the exchange
+    engine. It must re-validate the stored directive (defense in depth) so a
+    directive persisted before the write-path allowlist existed -- or via any
+    other mutation path -- can never be exchanged for a delegated token to a
+    disallowed audience. Fail closed: refuse, never silently pass through."""
+
+    def test_valid_obo_directive_vends(self, make_client):
+        client = make_client(
+            _claims(),
+            _server(
+                egress_auth_mode="obo_exchange",
+                egress_oauth={
+                    "target_audience": "api://outlook-mcp-server",
+                    "scopes": ["api://outlook-mcp-server/.default"],
+                },
+            ),
+        )
+        r = _post(client)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["mode"] == "obo_exchange"
+        assert body["obo_target_audience"] == "api://outlook-mcp-server"
+
+    def test_disallowed_stored_audience_refused(self, make_client):
+        # A directive that predates the write-path floor names a first-party
+        # resource; vending it would exfiltrate a delegated token upstream.
+        client = make_client(
+            _claims(),
+            _server(
+                egress_auth_mode="obo_exchange",
+                egress_oauth={
+                    "target_audience": "https://graph.microsoft.com",
+                    "scopes": [],
+                },
+            ),
+        )
+        r = _post(client)
+        assert r.status_code == 403
+        assert "not allowed" in r.json()["detail"]
+
+    def test_mismatched_stored_scope_refused(self, make_client):
+        client = make_client(
+            _claims(),
+            _server(
+                egress_auth_mode="obo_exchange",
+                egress_oauth={
+                    "target_audience": "api://outlook-mcp-server",
+                    "scopes": ["https://graph.microsoft.com/.default"],
+                },
+            ),
+        )
+        r = _post(client)
+        assert r.status_code == 403
+        assert "not allowed" in r.json()["detail"]

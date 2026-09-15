@@ -37,7 +37,7 @@ from registry.auth.internal import validate_internal_auth
 from registry.auth.proxied_token import verify_generic_proxy_token, verify_mcp_proxy_token
 from registry.common.log_redaction import redact_url
 from registry.core.config import settings
-from registry.core.schemas import _is_gateway_own_audience
+from registry.core.schemas import _validate_obo_egress_config
 from registry.egress_auth.factory import get_egress_auth_service
 from registry.egress_auth.providers import list_provider_names, resolve_provider
 from registry.egress_auth.schemas import StoredToken
@@ -752,6 +752,26 @@ async def vend_egress_token(
     # credentials and the raw ingress JWT); the registry never sees the JWT and
     # holds no per-user token for this mode. Stateless -- no vault lookup.
     if egress_mode == "obo_exchange":
+        # Defense in depth: re-validate the STORED directive before vending it to
+        # the exchange engine. The write path validates on persist, but a directive
+        # written before that enforcement existed (or by any other mutation path)
+        # must never be exchanged for a delegated token to a disallowed audience.
+        # Fail closed: a stored directive that no longer passes the floor is a
+        # refusal, never a silent passthrough.
+        try:
+            _validate_obo_egress_config(
+                egress_oauth.get("target_audience"), egress_oauth.get("scopes")
+            )
+        except ValueError as exc:
+            logger.warning(
+                "egress vend REFUSED: stored obo_exchange directive for %s is not allowlisted: %s",
+                server_path,
+                exc,
+            )
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                detail="obo_exchange target audience is not allowed for this server",
+            ) from exc
         return EgressTokenResponse(
             mode="obo_exchange",
             obo_target_audience=egress_oauth.get("target_audience"),
@@ -993,16 +1013,15 @@ async def configure_egress_auth(
         server["egress_oauth"] = eo
     elif body.egress_auth_mode == "obo_exchange":
         target = (body.target_audience or "").strip()
-        if not target:
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST,
-                detail="obo_exchange requires target_audience",
-            )
-        if _is_gateway_own_audience(target):
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST,
-                detail="target_audience must differ from the gateway's own IdP client id",
-            )
+        # Enforce the always-on obo target-audience/scope floor on the live write
+        # path (the ServerInfo model validator is never instantiated in prod, so
+        # this is the only enforcement point). Fail closed: any malformed,
+        # gateway-own, first-party, or scope-mismatched audience is rejected
+        # before it can be persisted and later vended to the exchange engine.
+        try:
+            _validate_obo_egress_config(target, body.scopes)
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
         # Same-IdP exchange: no per-server provider/client_id/secret. Only the
         # target audience and (optional) audience-scoped scopes are stored.
         server["egress_auth_mode"] = "obo_exchange"

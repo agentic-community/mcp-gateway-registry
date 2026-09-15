@@ -314,6 +314,68 @@ def _obo_scope_mismatches_target(scope: str, target_audience: str) -> bool:
     return bool(resource) and resource != target
 
 
+def _validate_obo_egress_config(target_audience: str | None, scopes: list[str] | None) -> None:
+    """Enforce the obo_exchange target-audience/scope invariants, fail-closed.
+
+    Shared by :meth:`ServerInfo._validate_egress_auth` (storage-model
+    construction) and the live egress-auth write path so both enforce an
+    identical always-on floor: the target must be non-empty and well-formed, must
+    differ from the gateway's own IdP app, must be an internal MCP server's own
+    audience (never a shared first-party resource such as Microsoft Graph / ARM /
+    Key Vault), and every requested scope must be bound to that target. Raises
+    :class:`ValueError` describing the first violation; returns ``None`` when the
+    config is acceptable.
+    """
+    target = (target_audience or "").strip()
+    if not target:
+        raise ValueError("egress_auth_mode='obo_exchange' requires egress_oauth.target_audience")
+    # Reject a malformed scheme audience (e.g. 'api://', 'api:/', 'api:'): a
+    # value carrying a ':' scheme separator must be a well-formed
+    # 'scheme://<non-empty-authority>'. A degenerate scheme would collapse to a
+    # bare scheme in scope-resource extraction, letting a scope for another
+    # resource appear to "match" it.
+    if ":" in target:
+        scheme, sep, rest = target.partition("://")
+        if not sep or not rest.strip() or not scheme.strip():
+            raise ValueError(
+                f"egress_oauth.target_audience {target!r} is malformed: a scheme "
+                "audience must be 'scheme://<authority>' with a non-empty authority "
+                "(e.g. 'api://<app-id>')"
+            )
+    if _is_gateway_own_audience(target):
+        raise ValueError(
+            "egress_oauth.target_audience must differ from the gateway's own IdP "
+            "client id / app ID URI; same-app OBO is not a valid exchange"
+        )
+    if _is_disallowed_obo_audience(target):
+        raise ValueError(
+            f"egress_oauth.target_audience {target!r} is not an allowed obo_exchange "
+            "target. It must be an internal MCP server's own IdP audience: an "
+            "'api://...' Entra App ID URI (including the 'api://<app-guid>' form) or "
+            "a bare non-GUID client-id. It must NEVER be an 'https://' host URL or a "
+            "bare GUID, which is how a shared first-party API (Microsoft Graph, ARM, "
+            "Key Vault) is directly addressable -- a delegated token for such a "
+            "resource would be exfiltrated to the server's upstream (confused deputy). "
+            "Pin a bare-GUID audience explicitly via EGRESS_OBO_ALLOWED_AUDIENCES."
+        )
+    # Bind scopes to the target. The exchange engine sends egress_oauth.scopes
+    # verbatim (ignoring target_audience) when present, so an unvalidated scope
+    # for a different resource (e.g. https://graph.microsoft.com/.default) would
+    # defeat the target check entirely. Require every scope to grant against the
+    # validated target.
+    for scope in scopes or []:
+        if not scope or not scope.strip():
+            raise ValueError("egress_oauth.scope entries must be non-empty")
+        if _obo_scope_mismatches_target(scope, target):
+            raise ValueError(
+                f"egress_oauth.scope {scope!r} grants against a resource other than "
+                f"target_audience {target!r}. obo_exchange scopes must be audience-"
+                "scoped to the target (e.g. '<target_audience>/.default'); a scope "
+                "for a different resource would exchange the user's token for THAT "
+                "resource (confused deputy)."
+            )
+
+
 class CustomHeader(BaseModel):
     """A single user-defined HTTP header attached to an MCP server."""
 
@@ -841,56 +903,7 @@ class ServerInfo(ProxyableMixin):
                 raise ValueError("egress_auth_mode='pat' requires egress_oauth.provider")
             return self
         # mode == "obo_exchange"
-        target = (self.egress_oauth.target_audience or "").strip()
-        if not target:
-            raise ValueError(
-                "egress_auth_mode='obo_exchange' requires egress_oauth.target_audience"
-            )
-        # Reject a malformed scheme audience (e.g. 'api://', 'api:/', 'api:'): a
-        # value carrying a ':' scheme separator must be a well-formed
-        # 'scheme://<non-empty-authority>'. A degenerate scheme would collapse to a
-        # bare scheme in scope-resource extraction, letting a scope for another
-        # resource appear to "match" it.
-        if ":" in target:
-            scheme, sep, rest = target.partition("://")
-            if not sep or not rest.strip() or not scheme.strip():
-                raise ValueError(
-                    f"egress_oauth.target_audience {target!r} is malformed: a scheme "
-                    "audience must be 'scheme://<authority>' with a non-empty authority "
-                    "(e.g. 'api://<app-id>')"
-                )
-        if _is_gateway_own_audience(target):
-            raise ValueError(
-                "egress_oauth.target_audience must differ from the gateway's own IdP "
-                "client id / app ID URI; same-app OBO is not a valid exchange"
-            )
-        if _is_disallowed_obo_audience(target):
-            raise ValueError(
-                f"egress_oauth.target_audience {target!r} is not an allowed obo_exchange "
-                "target. It must be an internal MCP server's own IdP audience: an "
-                "'api://...' Entra App ID URI (including the 'api://<app-guid>' form) or "
-                "a bare non-GUID client-id. It must NEVER be an 'https://' host URL or a "
-                "bare GUID, which is how a shared first-party API (Microsoft Graph, ARM, "
-                "Key Vault) is directly addressable -- a delegated token for such a "
-                "resource would be exfiltrated to the server's upstream (confused deputy). "
-                "Pin a bare-GUID audience explicitly via EGRESS_OBO_ALLOWED_AUDIENCES."
-            )
-        # Bind scopes to the target. The exchange engine sends egress_oauth.scopes
-        # verbatim (ignoring target_audience) when present, so an unvalidated scope
-        # for a different resource (e.g. https://graph.microsoft.com/.default) would
-        # defeat the target check entirely. Require every scope to grant against the
-        # validated target.
-        for scope in self.egress_oauth.scopes or []:
-            if not scope or not scope.strip():
-                raise ValueError("egress_oauth.scope entries must be non-empty")
-            if _obo_scope_mismatches_target(scope, target):
-                raise ValueError(
-                    f"egress_oauth.scope {scope!r} grants against a resource other than "
-                    f"target_audience {target!r}. obo_exchange scopes must be audience-"
-                    "scoped to the target (e.g. '<target_audience>/.default'); a scope "
-                    "for a different resource would exchange the user's token for THAT "
-                    "resource (confused deputy)."
-                )
+        _validate_obo_egress_config(self.egress_oauth.target_audience, self.egress_oauth.scopes)
         return self
 
 
