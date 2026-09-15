@@ -1,62 +1,105 @@
 {{- $existingSecret := .Values.mongodb.existingSecret | default .Values.global.existingMongoCredentialsSecret }}
+{{- /*
+  Resolve image coordinates: per-chart image.* overrides global.image.* when set,
+  matching charts/registry/templates/deployment.yaml.
+
+  This Job runs the registry image's OWN /app/scripts/init-mongodb-ce.py. It used
+  to run a 589-line copy of that script embedded in a ConfigMap, which had drifted
+  from the source in six functional ways -- including scope seeds with inverted
+  group_mappings and a missing collection. A copy cannot drift if there is no copy.
+*/ -}}
+{{- $imgRegistry := default .Values.global.image.registry .Values.image.registry }}
+{{- $imgRepository := required "image.repository must be set" .Values.image.repository }}
+{{- $imgTag := default .Values.global.image.tag .Values.image.tag }}
+{{- $imgPullPolicy := default .Values.global.image.pullPolicy .Values.image.pullPolicy }}
 apiVersion: batch/v1
 kind: Job
 metadata:
   name: setup-mongodb
   namespace: {{ .Release.Namespace | quote }}
+  annotations:
+    # Re-run on every install AND upgrade, so schema changes actually land.
+    # Kubernetes Jobs are immutable: without this, `helm upgrade` on an existing
+    # install either patches nothing (the Completed Job is left alone, so new
+    # indexes are never created) or fails with "field is immutable" once the pod
+    # template changes. Either way the database keeps the schema it was first
+    # installed with. keycloak-configure and openbao-init in this repo use the
+    # same pattern for the same reason.
+    #
+    # Re-running is safe because the script is idempotent: collection creation is
+    # existence-checked, `create_index` is a no-op for an index that already
+    # exists, the scope load upserts, the index migrations tolerate the old index
+    # being absent, and the TTL index refuses to shorten retention (see
+    # AUDIT_LOG_MONGODB_TTL_ALLOW_SHRINK below).
+    #
+    # Weight -10 runs database setup before every other hook in the stack.
+    # openbao-init is at 5 and keycloak-configure at 10; sharing weight 5 with
+    # openbao-init made Helm break the tie alphabetically, so the OpenBao
+    # bootstrap gated this database migration for no reason.
+    "helm.sh/hook": "post-install,post-upgrade"
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": "before-hook-creation"
 spec:
+  backoffLimit: {{ .Values.job.backoffLimit }}
+  # Bound the whole attempt. The script waits up to MONGODB_WAIT_TIMEOUT_SECONDS
+  # for MongoDB and then builds the audit indexes, which is real work on a large
+  # collection. Without a deadline a stuck Job hangs `helm upgrade --wait` until
+  # the release timeout, and the cause is in a pod that the
+  # before-hook-creation policy deletes on the next attempt.
+  activeDeadlineSeconds: {{ .Values.job.activeDeadlineSeconds }}
+  # Helm does NOT delete hook resources on `helm uninstall`, so without this a
+  # completed setup Job is left orphaned in the namespace.
+  ttlSecondsAfterFinished: {{ .Values.job.ttlSecondsAfterFinished }}
   template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: setup-mongodb
+        app.kubernetes.io/component: setup-mongodb
     spec:
-      initContainers:
-        - name: wait-for-mongodb
-          image: public.ecr.aws/docker/library/python:3.13-slim
-          command: ['sh', '-c']
-          envFrom:
-            - secretRef:
-                name: {{ $existingSecret | default "mongo-credentials" }}
-          args:
-            - |
-              echo "Installing pymongo..."
-              pip install --no-cache-dir pymongo
-
-              echo "Waiting for MongoDB replica set to be ready..."
-              python3 /app/wait.py
-          volumeMounts:
-            - mountPath: /app/wait.py
-              name: script
-              subPath: wait.py
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
       containers:
         - name: job
-          image: public.ecr.aws/docker/library/python:3.13-slim
-          command: ["/bin/sh", "-c"]
-          args: [
-            "pip install --no-cache-dir pyyaml motor && python /app/script.py"
-          ]
+          image: "{{ $imgRegistry }}/{{ $imgRepository }}:{{ $imgTag }}"
+          imagePullPolicy: {{ $imgPullPolicy }}
+          # The registry image already carries the init script, the scope seed
+          # JSONs the script loads from its own directory, and a uv.lock-pinned
+          # venv containing motor and pymongo. So there is nothing to mount and
+          # nothing to `pip install` at runtime -- the previous Job installed
+          # unpinned packages from PyPI on every upgrade, with the MongoDB
+          # credential already in its environment.
+          command: ["/app/.venv/bin/python", "/app/scripts/init-mongodb-ce.py"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
           envFrom:
             - secretRef:
                 name: {{ $existingSecret | default "mongo-credentials" }}
-          volumeMounts:
-            - mountPath: /app/script.py
-              name: script
-              subPath: script.py
-            - mountPath: /app/registry-admins.json
-              name: script
-              subPath: registry-admins.json
-            - mountPath: /app/mcp-registry-admin.json
-              name: script
-              subPath: mcp-registry-admin.json
-            - mountPath: /app/mcp-servers-unrestricted-execute.json
-              name: script
-              subPath: mcp-servers-unrestricted-execute.json
-            - mountPath: /app/mcp-servers-unrestricted-read.json
-              name: script
-              subPath: mcp-servers-unrestricted-read.json
-            - mountPath: /app/federation-service.json
-              name: script
-              subPath: federation-service.json
-      restartPolicy: Never
-      volumes:
-        - name: script
-          configMap:
-            name: setup-mongodb
-  backoffLimit: 4
+          env:
+            # Audit retention. The Job's only environment used to be the MongoDB
+            # credential secret, which carries no TTL key, so the script could
+            # only ever see its own 7-day default -- and an operator who had
+            # raised retention out-of-band had it silently reset on upgrade.
+            - name: AUDIT_LOG_MONGODB_TTL_DAYS
+              value: {{ .Values.mongodb.auditTtlDays | quote }}
+            # Reducing retention deletes existing audit records, so the script
+            # refuses unless this is explicitly true.
+            - name: AUDIT_LOG_MONGODB_TTL_ALLOW_SHRINK
+              value: {{ .Values.mongodb.auditTtlAllowShrink | quote }}
+            - name: MONGODB_WAIT_TIMEOUT_SECONDS
+              value: {{ .Values.job.mongodbWaitTimeoutSeconds | quote }}
+            {{- with .Values.global.authProvider.entra.adminGroupId }}
+            # Entra admin group: the script appends this to the registry-admins
+            # scope's group_mappings. This is now the ONLY mechanism -- the
+            # ConfigMap that templated it into a duplicate of the seed JSON is
+            # gone, so there are no longer two competing sources for it.
+            - name: ENTRA_GROUP_ADMIN_ID
+              value: {{ . | quote }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.job.resources | nindent 12 }}

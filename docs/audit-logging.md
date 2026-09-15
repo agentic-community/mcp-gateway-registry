@@ -344,32 +344,120 @@ export AUDIT_LOG_MONGODB_TTL_DAYS=30
 export AUDIT_LOG_MONGODB_TTL_DAYS=90
 ```
 
-The TTL index is created when running the DocumentDB initialization script:
+The TTL index is created by whichever initialization script matches your storage
+backend — the application never creates it:
 
 ```bash
+# DocumentDB (wraps scripts/init-documentdb-indexes.py)
 ./scripts/init-documentdb.sh
+
+# MongoDB CE
+python scripts/init-mongodb-ce.py
 ```
+
+On Kubernetes the `setup-mongodb` Job runs the MongoDB CE script for you, and
+takes its retention from Helm values:
+
+```yaml
+mongodb-configure:
+  mongodb:
+    auditTtlDays: 90
+```
+
+Set it there rather than on the collection. The Job re-runs on every
+`helm upgrade`, so a TTL applied out-of-band is reconciled back to whatever the
+chart says.
 
 ### Important Notes
 
 - TTL indexes run approximately once per minute in MongoDB/DocumentDB
 - Documents may persist slightly longer than the TTL value
-- Changing the TTL requires dropping and recreating the index with `--recreate` flag
+- Changing the TTL means recreating the index, which both scripts do for you.
+  **Shortening** retention is refused by default: the TTL monitor would delete
+  every record older than the new window, normally within a minute and
+  irreversibly, so the script logs the refusal, leaves the longer retention in
+  place, and continues. Set `AUDIT_LOG_MONGODB_TTL_ALLOW_SHRINK=true`
+  (`mongodb-configure.mongodb.auditTtlAllowShrink`) when you intend to discard
+  those records. Lengthening applies immediately.
+- With no init script run, nothing expires. Confirm with
+  `db.audit_events_default.getIndexes()` that an index reports
+  `expireAfterSeconds`
 - For compliance requirements, consider also streaming logs to a long-term archive
 
 ## Storage
 
 ### MongoDB Collection
 
-Audit events are stored in the `audit_events_{namespace}` collection with the following indexes:
+Audit events are stored in the `audit_events_{namespace}` collection. Both
+initialization scripts create the same index set, under the same names:
 
 | Index | Purpose |
 |-------|---------|
-| `request_id` (unique) | Fast lookup by request ID |
+| `request_id` + `log_type` (unique) | Fast lookup by request ID within a stream. One request writes a record on more than one stream and they share a `request_id`, so uniqueness is on the pair — a single-field unique index rejected the second write and the record was dropped |
 | `identity.username` + `timestamp` | Query by user over time range |
 | `action.operation` + `timestamp` | Query by operation type over time range |
 | `action.resource_type` + `timestamp` | Query by resource type over time range |
-| `timestamp` (TTL) | Automatic expiration after configured days |
+| `mcp_server.name` | Distinct / filter queries by MCP server name |
+| `log_type` + `resource_type` + `resource_id` + `timestamp: -1` | Query the `token_mint` stream, whose resource fields are top-level |
+| `log_type` + one identity claim + `timestamp: -1`, ×13 | Correlate an IdP-side identifier back to gateway activity. Named `audit_claim_{api,mcp,mint}_{claim}_idx` |
+| `timestamp` (TTL) | Automatic expiration after the configured number of days |
+
+There are 13 claim indexes because each is pinned to a single stream with a
+`partialFilterExpression`: two streams nest the claims under `identity`, while
+`token_mint` carries them at the top level alongside a flat `username`. Pinning
+them keeps each index to the records it can actually serve — measured on a
+representative 30k-record mix, 2.09 MB across these 13 versus 3.46 MB across 9
+unpinned ones, and an insert updates 4–5 claim indexes instead of all 9. `sparse`
+would not work here: on a compound index it keeps a document when *any* indexed
+field exists, and `log_type` always exists.
+
+### Schema changes on upgrade
+
+The application never creates or alters an audit index. Only an initialization
+script does, so a release that adds an index changes nothing until that script
+runs against your database.
+
+On Kubernetes the `setup-mongodb` Job runs it as a `post-install,post-upgrade`
+Helm hook, at hook weight `-10` so it precedes the other bootstrap jobs. It
+executes the registry image's own `scripts/init-mongodb-ce.py` — there is no copy
+of the script in the chart. Consequences worth knowing before you upgrade:
+
+- **The script version is the IMAGE version, not the chart version.** The Job runs
+  whatever `scripts/init-mongodb-ce.py` is baked into
+  `registry:<global.image.tag>`. Bumping the chart alone therefore runs the OLD
+  script; the schema change lands when the registry image is rebuilt and the tag
+  is bumped. This is the deliberate trade for removing the chart's copy of the
+  script: the copy shipped with the chart but drifted from source, whereas the
+  image is built from source every time. Chart and image are released under the
+  same version, so upgrading both — as a normal release does — is correct.
+- **Repackage the subcharts first.** `charts/*/charts/*.tgz` is gitignored and
+  only rebuilt on demand, so a plain `helm upgrade` after a `git pull` deploys the
+  *previous* subchart and silently skips the migration:
+
+  ```bash
+  cd charts/mcp-gateway-registry-stack
+  helm dependency build && helm dependency update
+  ```
+
+- **The hook gates the release.** `helm upgrade` waits for the Job. If MongoDB is
+  unreachable the Job fails and the upgrade fails, rather than succeeding against
+  a database whose schema was never updated. That is deliberate — the previous
+  behaviour was to leave the schema stale and say nothing.
+- **Index builds are proportional to collection size.** A large `audit_events`
+  collection can take minutes. Raise
+  `mongodb-configure.job.activeDeadlineSeconds` (default 1800) and your
+  `helm upgrade --timeout` together; a deadline shorter than the build marks the
+  release failed while the build continues in the background.
+- **Retention is never silently shortened.** See
+  [Configuring Retention](#configuring-retention).
+- **If the unique index fails to build**, the collection already holds a true
+  duplicate `(request_id, log_type)` pair — which the pre-migration single-field
+  index made possible. The Job logs the exact aggregation to list the offending
+  pairs and leaves the old index in place, so uniqueness stays enforced while you
+  delete the surplus copies. Re-run the upgrade afterwards.
+
+The migration is forward-only. Rolling the chart back leaves the newer indexes in
+place; they are additive and the older application ignores them.
 
 ### Storage Sizing
 

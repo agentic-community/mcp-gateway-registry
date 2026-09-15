@@ -293,6 +293,12 @@ mongodb-configure:
     password: *mongoPassword
     database: *mongoDatabase
     connectionString: *mongoConnectionString
+    # Audit log retention, applied to the audit_events TTL index by the init
+    # Job. Set it HERE rather than out-of-band: the Job re-runs on every
+    # `helm upgrade`, so a value only present in the cluster is not durable.
+    # Shortening it deletes existing audit records, so the script refuses to
+    # unless mongodb-configure.mongodb.auditTtlAllowShrink is also true.
+    auditTtlDays: 7
 # Registry service configuration
 registry:
   app:
