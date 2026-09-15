@@ -1533,6 +1533,132 @@ class TestGenerateTokenEndpoint:
         assert response.status_code == 429
         assert "Rate limit exceeded" in response.json()["detail"]
 
+    def test_multivalued_email_still_produces_a_mint_audit_record(self, auth_env_vars):
+        """REGRESSION (audit evasion by claim shape): a Keycloak multivalued
+        `email` mapper propagates a LIST into the mint audit record's `username`,
+        which Pydantic refuses to coerce -- the ValidationError was raised INSIDE
+        the best-effort emit and swallowed, silently dropping the whole record
+        while the token was still minted. All 7 mint sites now resolve the display
+        value through the ONE `_claim_str`-backed resolver.
+        """
+        import auth_server.server as server_module
+
+        records: list[object] = []
+        client = TestClient(server_module.app)
+        with (
+            patch.object(server_module, "emit_audit_event", records.append),
+            patch.object(server_module, "get_audit_logger", return_value=None),
+        ):
+            response = client.post(
+                "/internal/tokens",
+                json={
+                    "user_context": {
+                        "username": "alice",
+                        "scopes": ["read:servers"],
+                        "auth_method": "oauth2",
+                        "provider": "keycloak",
+                        # The multivalued mapper: a JSON array, not a string.
+                        "email": ["alice@example.com", "alice.alias@example.com"],
+                    },
+                    "requested_scopes": ["read:servers"],
+                    "expires_in_hours": 8,
+                },
+                headers=_internal_auth_headers(auth_env_vars),
+            )
+
+        assert response.status_code == 200
+        assert len(records) == 1, "the audit record was dropped"
+        record = records[0]
+        # First usable member of the multivalued claim, as a plain string.
+        assert record.username == "alice@example.com"
+        assert record.username_hash == server_module.hash_username("alice")
+
+
+class TestEmitTokenMintAuditIdentityCoercion:
+    """`_emit_token_mint_audit` is the ONE cap/coercion point for this stream.
+
+    Both identity values it receives are IdP-claim-derived at several of its call
+    sites, and their shape is the IdP's choice. Unguarded, a multivalued mapper
+    (list) raises in `hash_username` or in Pydantic INSIDE the best-effort block,
+    which swallows it and drops the whole record while the token is still minted.
+    Isolated here so the guarantee holds even if a call site stops pre-resolving.
+    """
+
+    _COMMON = {
+        "request_id": "req-1",
+        "correlation_id": None,
+        "auth_method": "oauth2",
+        "provider": "keycloak",
+        "internal_caller": "registry",
+        "token_kind": "user",
+        "resource_type": None,
+        "resource_id": None,
+        "token_path": "self_signed",  # nosec B106 - audit metadata label
+        "requested_scopes": [],
+        "expires_in_seconds": 3600,
+        "outcome": "success",
+    }
+
+    async def _emit(self, **kwargs):
+        import auth_server.server as server_module
+
+        records: list[object] = []
+        with (
+            patch.object(server_module, "emit_audit_event", records.append),
+            patch.object(server_module, "get_audit_logger", return_value=None),
+        ):
+            await server_module._emit_token_mint_audit(**self._COMMON, **kwargs)
+        return records
+
+    async def test_list_display_and_list_username_still_record(self):
+        import auth_server.server as server_module
+
+        records = await self._emit(
+            username=["alice", "alice.alias"],
+            display_username=["alice@example.com", "alice.alias@example.com"],
+        )
+        assert len(records) == 1, "the audit record was dropped"
+        assert records[0].username == "alice@example.com"
+        assert records[0].username_hash == server_module.hash_username("alice")
+
+    async def test_unusable_identity_shapes_degrade_to_anonymous_not_to_nothing(self):
+        # A record attributed to "anonymous" is still a record; a dropped record
+        # is audit evasion by claim shape.
+        records = await self._emit(username={"bad": 1}, display_username=True)
+        assert len(records) == 1
+        assert records[0].username == "anonymous"
+        assert records[0].username_hash == "anonymous"
+
+    async def test_oversized_identity_is_capped_not_dropped(self):
+        records = await self._emit(username="u" * 500, display_username="d" * 500)
+        import auth_server.server as server_module
+
+        assert len(records) == 1
+        assert len(records[0].username) == server_module._MAX_AUDIT_CLAIM_LEN
+
+    async def test_a_dropped_record_is_counted(self):
+        """The emit is best-effort by design (a mint must never fail on
+        observability), which is exactly why a loss here cannot be silent."""
+        import auth_server.server as server_module
+
+        degraded: list[dict] = []
+
+        def _boom(_record):
+            raise RuntimeError("audit sink down")
+
+        with (
+            patch.object(server_module, "emit_audit_event", _boom),
+            patch.object(server_module, "get_audit_logger", return_value=None),
+            patch.object(
+                server_module,
+                "audit_integrity_degraded_total",
+                type("_C", (), {"add": staticmethod(lambda n, labels: degraded.append(labels))})(),
+            ),
+        ):
+            await server_module._emit_token_mint_audit(**self._COMMON, username="alice")
+
+        assert degraded == [{"reason": "record_dropped"}]
+
 
 class TestInternalRouterGate:
     """Meta-test: every route under the ``/internal/`` prefix on the
@@ -4369,6 +4495,14 @@ class TestMcpProxyOboExchange:
 
         patch_httpx, _ = _capture_upstream_headers()
         patch_audit, emitted = self._capture_mint_audit(server_module)
+        # Falling back to the opaque sub is a degradation of the audit trail, not a
+        # neutral outcome: it must be counted so an operator can alert on the rate.
+        degraded: list[dict] = []
+        patch_metric = patch.object(
+            server_module,
+            "audit_integrity_degraded_total",
+            type("_C", (), {"add": staticmethod(lambda n, labels: degraded.append(labels))})(),
+        )
         with (
             patch.object(server_module.settings, "egress_auth_enabled", True),
             patch.object(server_module, "_vend_egress_token", self._obo_directive_vend),
@@ -4378,6 +4512,7 @@ class TestMcpProxyOboExchange:
             _patch_scope_repo_allow_all(),
             patch_httpx,
             patch_audit,
+            patch_metric,
         ):
             client = TestClient(server_module.app)
             response = client.post(
@@ -4400,6 +4535,112 @@ class TestMcpProxyOboExchange:
         record = emitted[0]
         assert record["display_username"] == "test-user"
         assert "ceo@example.com" not in str(record)
+        assert degraded == [{"reason": "identity_hop_claim_missing"}]
+
+    def test_obo_mint_record_is_joinable_to_the_validate_access_record(self):
+        """REGRESSION (cross-stream join): the OBO mint record was emitted with
+        correlation_id=None, so nothing tied it to the mcp_server_access record
+        /validate wrote for the SAME request -- the two audit streams could not be
+        joined at all. /validate now signs its request_id as `rid` on the hop
+        token, and this record carries it as correlation_id (its own request_id
+        must stay unique for the (request_id, log_type) index).
+        """
+        import auth_server.server as server_module
+
+        ingress_jwt = _obo_ingress_jwt("test-user")
+
+        async def _fake_exchange(provider, subject_token, target_audience, scopes=None):
+            return "exchanged-obo-token"
+
+        patch_httpx, _ = _capture_upstream_headers()
+        patch_audit, emitted = self._capture_mint_audit(server_module)
+        with (
+            patch.object(server_module.settings, "egress_auth_enabled", True),
+            patch.object(server_module, "_vend_egress_token", self._obo_directive_vend),
+            patch.object(server_module, "get_auth_provider", lambda *a, **k: _FakeEntraProvider()),
+            patch.object(server_module, "obo_exchange", _fake_exchange),
+            patch.object(server_module, "_read_mcp_filter_enabled", return_value=False),
+            _patch_scope_repo_allow_all(),
+            patch_httpx,
+            patch_audit,
+        ):
+            client = TestClient(server_module.app)
+            response = client.post(
+                "/mcp-proxy/outlook",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 14,
+                    "method": "tools/call",
+                    "params": {"name": "read_inbox"},
+                },
+                headers={
+                    **_mcp_proxy_token_headers(
+                        server_name="outlook",
+                        audit_identity={
+                            **self._SIGNED_AUDIT_IDENTITY,
+                            "rid": "req-validate-abc",
+                        },
+                    ),
+                    "X-Authorization": f"Bearer {ingress_jwt}",
+                },
+            )
+
+        assert response.status_code == 200
+        assert len(emitted) == 1
+        record = emitted[0]
+        # The join key: equal to the /validate request_id for this request.
+        assert record["correlation_id"] == "req-validate-abc"
+        # ...while this record keeps its own unique key, so the composite unique
+        # index (request_id, log_type) is not violated by the second stream.
+        assert record["request_id"] != "req-validate-abc"
+        assert record["request_id"]
+
+    def test_obo_mint_record_without_rid_still_audits(self):
+        """A hop token minted before `rid` existed (rolling deploy): the record is
+        unjoined -- exactly the previous behaviour -- and must never be lost."""
+        import auth_server.server as server_module
+
+        ingress_jwt = _obo_ingress_jwt("test-user")
+
+        async def _fake_exchange(provider, subject_token, target_audience, scopes=None):
+            return "exchanged-obo-token"
+
+        patch_httpx, _ = _capture_upstream_headers()
+        patch_audit, emitted = self._capture_mint_audit(server_module)
+        with (
+            patch.object(server_module.settings, "egress_auth_enabled", True),
+            patch.object(server_module, "_vend_egress_token", self._obo_directive_vend),
+            patch.object(server_module, "get_auth_provider", lambda *a, **k: _FakeEntraProvider()),
+            patch.object(server_module, "obo_exchange", _fake_exchange),
+            patch.object(server_module, "_read_mcp_filter_enabled", return_value=False),
+            _patch_scope_repo_allow_all(),
+            patch_httpx,
+            patch_audit,
+        ):
+            client = TestClient(server_module.app)
+            response = client.post(
+                "/mcp-proxy/outlook",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 15,
+                    "method": "tools/call",
+                    "params": {"name": "read_inbox"},
+                },
+                headers={
+                    # Legacy claim shape: identity, but no `rid`.
+                    **_mcp_proxy_token_headers(
+                        server_name="outlook",
+                        audit_identity=self._SIGNED_AUDIT_IDENTITY,
+                    ),
+                    "X-Authorization": f"Bearer {ingress_jwt}",
+                },
+            )
+
+        assert response.status_code == 200
+        assert len(emitted) == 1
+        record = emitted[0]
+        assert record["correlation_id"] is None
+        assert record["display_username"] == "alice@example.com"
 
     def test_obo_no_bearer_jwt_is_terminal_no_consent(self, monkeypatch):
         """Session-cookie / M2M caller (no bearer ingress JWT) -> terminal error,
@@ -4550,6 +4791,59 @@ class TestMcpProxyOboExchange:
         assert "x-authorization" not in sent
         # ...and with the feature off, the obo branch never injects a token.
         assert "authorization" not in sent
+
+    def test_internal_hop_token_never_reaches_a_plain_registered_upstream(self):
+        """REGRESSION (credential + identity leak, non-egress path): X-Internal-Token
+        is a SECRET_KEY-signed gateway-internal credential AND it carries the
+        caller's signed `audit_identity` claim (UPN/email, Entra oid/tid/appid) in
+        a payload anyone can base64-decode.
+
+        It used to be stripped only by _EGRESS_STRIP_HEADERS, which is applied on
+        the vault/OBO branches ALONE -- so for a plain registered MCP server
+        (egress off / no vend) the registrant's backend received both the token and
+        the caller's identity. This path had no coverage at all.
+        """
+        import auth_server.server as server_module
+
+        hop_headers = _mcp_proxy_token_headers(
+            server_name="plain",
+            audit_identity={
+                "display": "alice@contoso.example",
+                "subject": "test-user",
+                "principal_name": "alice@contoso.example",
+                "object_id": "00000000-0000-0000-0000-00000000oid1",
+                "tenant_id": "00000000-0000-0000-0000-00000000tid1",
+                "rid": "req-validate-abc",
+            },
+        )
+        hop_token = hop_headers["X-Internal-Token"]
+        # Pin the premise: the token really does carry the readable identity, so
+        # this test fails for the right reason if the strip regresses.
+        assert "alice@contoso.example" in str(
+            server_module._audit_identity_from_token(
+                jwt.decode(hop_token, options={"verify_signature": False})
+            )
+        )
+
+        patch_httpx, captured = _capture_upstream_headers()
+        with (
+            patch.object(server_module.settings, "egress_auth_enabled", False),
+            patch.object(server_module, "_read_mcp_filter_enabled", return_value=False),
+            _patch_scope_repo_allow_all(),
+            patch_httpx,
+        ):
+            client = TestClient(server_module.app)
+            response = client.post(
+                "/mcp-proxy/plain",
+                json={"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "x"}},
+                headers=hop_headers,
+            )
+
+        assert response.status_code == 200
+        sent = {k.lower(): v for k, v in captured["headers"].items()}
+        assert "x-internal-token" not in sent
+        assert hop_token not in sent.values()
+        assert "alice@contoso.example" not in str(sent)
 
     def test_obo_integration_real_exchange_only_idp_mocked(self, monkeypatch):
         """Full pipeline through mcp_proxy with the REAL obo_exchange engine;
@@ -5327,6 +5621,47 @@ class TestForwardHeadersProxyContextStrip:
         the issue explicitly asks that it stay untouched (compatibility)."""
         out = self._forward({"X-Forwarded-For": "203.0.113.5"})
         assert out.get("X-Forwarded-For") == "203.0.113.5"
+
+
+class TestForwardHeadersInternalTokenStrip:
+    """The gateway-internal hop tokens must never be copied onto the egress hop.
+
+    X-Internal-Token is minted by /validate, signed with SECRET_KEY, bound to the
+    resolved upstream -- and it carries the caller's signed `audit_identity` claim
+    (UPN/email, Entra oid/tid/appid). It was previously dropped only by
+    _EGRESS_STRIP_HEADERS, applied on the vault/OBO branches alone, so every plain
+    registered MCP server's backend received it. The strip is unconditional here.
+    """
+
+    def _forward(self, incoming, relay=False):
+        from auth_server.server import _forward_headers
+
+        return _forward_headers(incoming, relay_authorization=relay)
+
+    def test_strips_each_internal_hop_token_header(self):
+        from auth_server.server import _INTERNAL_HOP_TOKEN_HEADERS
+
+        # Enumerated from the set itself so a name added there is covered too.
+        assert _INTERNAL_HOP_TOKEN_HEADERS  # not silently empty
+        for lower in _INTERNAL_HOP_TOKEN_HEADERS:
+            name = "-".join(part.capitalize() for part in lower.split("-"))
+            out = self._forward({name: "signed.hop.jwt", "Accept": "application/json"})
+            assert name.lower() not in {k.lower() for k in out}, name
+            assert out.get("Accept") == "application/json"
+
+    def test_case_insensitive(self):
+        out = self._forward({"x-internal-token": "t", "X-INTERNAL-TOKEN-GENERIC": "g"})
+        assert out == {}
+
+    def test_relay_does_not_re_admit_the_hop_token(self):
+        """The built-in internal registry-tools server DOES receive the relayed
+        ingress Authorization -- but not a token minted for a different hop."""
+        out = self._forward(
+            {"X-Internal-Token": "t", "X-Authorization": "Bearer ingress"},
+            relay=True,
+        )
+        assert "x-internal-token" not in {k.lower() for k in out}
+        assert out.get("X-Authorization") == "Bearer ingress"
 
 
 class TestInternalRelayDecision:

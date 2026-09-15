@@ -251,6 +251,64 @@ class TestAuditIdentityDisplay:
 
 
 @pytest.mark.unit
+class TestAuditIntegrityDegradedMetric:
+    """Coercing a claim away is a silent audit degradation; it is counted so an
+    operator can alert on the RATE (mcpgw_registry_audit_integrity_degraded_total,
+    reason="claim_dropped").
+
+    The alertability of that series depends on one decision: an ABSENT claim is
+    normal (every IdP omits some) and must count NOTHING; only a value that was
+    actually present and had to be coerced away or truncated counts.
+    """
+
+    def _counted(self, monkeypatch, call):
+        counted: list[dict] = []
+        monkeypatch.setattr(
+            server,
+            "audit_integrity_degraded_total",
+            type("_C", (), {"add": staticmethod(lambda n, labels: counted.append(labels))})(),
+        )
+        result = call()
+        return result, counted
+
+    def test_absent_claims_count_nothing(self, monkeypatch):
+        for absent in (None, "", [], ()):
+            result, counted = self._counted(
+                monkeypatch, lambda absent=absent: server._claim_str(absent)
+            )
+            assert result is None
+            assert counted == [], absent
+
+    def test_a_token_with_no_identity_claims_at_all_is_silent(self, monkeypatch):
+        # The common non-Entra case: every field resolves to None. If this counted,
+        # the series would be a constant stream and useless for alerting.
+        _, counted = self._counted(monkeypatch, lambda: server._audit_identity_claims({}))
+        assert counted == []
+
+    def test_present_but_unusable_shapes_are_counted(self, monkeypatch):
+        for unusable in (True, {"bad": 1}, b"bytes"):
+            result, counted = self._counted(
+                monkeypatch, lambda unusable=unusable: server._claim_str(unusable)
+            )
+            assert result is None
+            assert counted == [{"reason": "claim_dropped"}], unusable
+
+    def test_truncation_is_counted(self, monkeypatch):
+        result, counted = self._counted(
+            monkeypatch, lambda: server._claim_str("u" * (server._MAX_AUDIT_CLAIM_LEN + 1))
+        )
+        assert len(result) == server._MAX_AUDIT_CLAIM_LEN
+        assert counted == [{"reason": "claim_dropped"}]
+
+    def test_a_multivalued_claim_with_a_usable_member_is_not_counted(self, monkeypatch):
+        result, counted = self._counted(
+            monkeypatch, lambda: server._claim_str(["alice@example.com", "alias@example.com"])
+        )
+        assert result == "alice@example.com"
+        assert counted == []
+
+
+@pytest.mark.unit
 class TestAuditIdentityClaims:
     """`_audit_identity_claims` enriches an audit record with the durable and
     IdP identity claims (sub, oid+tid canonical id, upn, appid/azp) so an
@@ -504,6 +562,38 @@ class TestAuditIdentityClaims:
         assert len(claims["tenant_id"]) == server._MAX_AUDIT_CLAIM_LEN
         assert len(claims["canonical_id"]) == server._MAX_AUDIT_CLAIM_LEN
 
+    def test_canonical_id_is_byte_identical_on_both_record_streams(self):
+        # The field exists to JOIN the mcp_server_access record (Identity, built
+        # from _audit_identity_claims directly) to the token_mint record (built
+        # from the hop claim, which _audit_identity_from_token re-caps). An
+        # uncapped composition landed full-length on the first and TRUNCATED on
+        # the second -- two different keys for one human, no join.
+        from registry.audit.models import Identity, TokenMintAuditRecord
+
+        vr = {"data": {"sub": "s", "oid": "o" * 200, "tid": "t" * 200}}
+        claims = server._audit_identity_claims(vr)
+        _, hop_fields = server._audit_identity_from_token(
+            {"audit_identity": server._audit_identity_token_claim(vr, "req-validate-1")}
+        )
+
+        access = Identity(
+            username="u@x.com",
+            auth_method="entra",
+            credential_type="bearer_token",
+            **claims,
+        )
+        mint = TokenMintAuditRecord(
+            request_id="req-1",
+            username_hash="user_deadbeef",
+            auth_method="entra",
+            internal_caller="mcp-proxy",
+            token_kind="user",
+            token_path="obo_exchange",  # nosec B106 - audit metadata label
+            outcome="success",
+            **{key: value for key, value in hop_fields.items() if value},
+        )
+        assert access.canonical_id == mint.canonical_id
+
 
 @pytest.mark.unit
 class TestAuditProvider:
@@ -534,6 +624,21 @@ class TestAuditProvider:
         monkeypatch.setattr(server.settings, "auth_provider", "")
         assert server._audit_provider({}) is None
 
+    def test_self_signed_is_not_attributed_to_the_configured_idp(self, monkeypatch):
+        # A gateway-minted token (Connect button, Cursor/Claude bearer) was not
+        # issued by the configured IdP, so naming that IdP would credit one that
+        # never saw the request.
+        monkeypatch.setattr(server.settings, "auth_provider", "entra")
+        vr = {"method": server.AUTH_METHOD_SELF_SIGNED, "data": {"sub": "s"}}
+        assert server._audit_provider(vr) is None
+
+    def test_self_signed_still_reports_the_provider_its_session_recorded(self, monkeypatch):
+        # Skipping the configured-IdP fallback must not discard a provider that
+        # the originating login actually established.
+        monkeypatch.setattr(server.settings, "auth_provider", "entra")
+        vr = {"method": server.AUTH_METHOD_SELF_SIGNED, "data": {"provider": "keycloak"}}
+        assert server._audit_provider(vr) == "keycloak"
+
 
 @pytest.mark.unit
 class TestAuditIdentityHopClaim:
@@ -559,7 +664,7 @@ class TestAuditIdentityHopClaim:
             },
         }
         display, fields = server._audit_identity_from_token(
-            {"audit_identity": server._audit_identity_token_claim(vr)}
+            {"audit_identity": server._audit_identity_token_claim(vr, "req-validate-1")}
         )
         assert display == "alice@example.com"
         assert fields == server._audit_identity_claims(vr)
@@ -567,8 +672,42 @@ class TestAuditIdentityHopClaim:
     def test_claim_omits_empty_values(self):
         # The claim rides in a response header nginx copies; absent claims must
         # not pad it with nulls.
-        claim = server._audit_identity_token_claim({"data": {"sub": "s"}})
-        assert claim == {"display": "s", "subject": "s", "canonical_id": "s"}
+        claim = server._audit_identity_token_claim({"data": {"sub": "s"}}, "req-validate-1")
+        assert claim == {
+            "display": "s",
+            "subject": "s",
+            "canonical_id": "s",
+            "rid": "req-validate-1",
+        }
+
+    def test_rid_signs_the_validate_request_id_for_the_cross_stream_join(self):
+        # The mcp-proxy hop's token_mint record needs its OWN request_id (the
+        # (request_id, log_type) unique index), so the ONLY way it can be joined
+        # to the mcp_server_access record /validate wrote for the same request is
+        # this signed id, recorded there as correlation_id.
+        claim = server._audit_identity_token_claim({"data": {"sub": "s"}}, "req-validate-1")
+        assert server._audit_request_id_from_token({"audit_identity": claim}) == "req-validate-1"
+
+    def test_rid_is_not_an_identity_field(self):
+        # It is a correlation id: it must not be splatted into the record's
+        # identity fields (there is no such model field).
+        claim = server._audit_identity_token_claim({"data": {"sub": "s"}}, "req-validate-1")
+        _, fields = server._audit_identity_from_token({"audit_identity": claim})
+        assert "rid" not in fields
+
+    def test_rid_absent_on_a_legacy_or_malformed_claim(self):
+        # A hop token minted before `rid` existed (rolling deploy) must not crash
+        # the mint audit -- the record simply keeps its pre-join correlation_id.
+        assert server._audit_request_id_from_token({"audit_identity": {"display": "d"}}) is None
+        assert server._audit_request_id_from_token({}) is None
+        assert server._audit_request_id_from_token({"audit_identity": "not-a-dict"}) is None
+        assert server._audit_request_id_from_token({"audit_identity": {"rid": {"bad": 1}}}) is None
+
+    def test_rid_is_capped_like_every_other_claim(self):
+        # The claim rides back as a response header nginx copies; an oversized
+        # value there fails the request with "upstream sent too big header".
+        claim = server._audit_identity_token_claim({"data": {"sub": "s"}}, "r" * 400)
+        assert len(claim["rid"]) == server._MAX_AUDIT_CLAIM_LEN
 
     def test_absent_claim_degrades_to_empty_not_to_header_identity(self):
         # Rolling deploy: an in-flight token can predate the claim. The caller
@@ -715,12 +854,15 @@ class TestAttachMcpProxyTokenMarker:
             scopes=[],
             server_name="github-mcp",
             auth_method="oauth2",
-            audit_identity=server._audit_identity_token_claim(vr),
+            audit_identity=server._audit_identity_token_claim(vr, "req-validate-1"),
         )
         claims = _decode(resp.headers["X-Internal-Token"])
         display, fields = server._audit_identity_from_token(claims)
         assert display == "alice@example.com"
         assert fields["canonical_id"] == "user-object-id@tenant-id"
+        # The /validate request id rides the same signed claim, so the hop's
+        # token_mint record can be joined to this request's access record.
+        assert server._audit_request_id_from_token(claims) == "req-validate-1"
 
     def test_audit_identity_does_not_disturb_the_egress_vault_key(self, monkeypatch):
         # REGRESSION (3LO): the egress vend keys the per-user token vault on the
@@ -738,7 +880,7 @@ class TestAttachMcpProxyTokenMarker:
         minted = {}
         for label, audit_identity in (
             ("without", None),
-            ("with", server._audit_identity_token_claim(vr)),
+            ("with", server._audit_identity_token_claim(vr, "req-validate-1")),
         ):
             resp = _FakeResponse()
             server._attach_mcp_proxy_token(
@@ -761,8 +903,12 @@ class TestAttachMcpProxyTokenMarker:
         assert set(minted["with"]) - set(minted["without"]) == {"audit_identity"}
 
     def test_no_audit_identity_leaves_the_claim_absent(self, monkeypatch):
-        # Callers with nothing to attribute (federation-static, network-trusted)
-        # must not pad the header with an empty claim.
+        # DECISION: the guard in mint_mcp_proxy_token is KEPT, not deleted,
+        # because this shape is reachable in production -- the static-credential
+        # /validate branches (federation-static, network-trusted) authenticate a
+        # machine credential with no IdP claims and pass no audit identity, so the
+        # response header nginx copies must not be padded with an empty claim.
+        # Deleting the guard would sign `"audit_identity": null` on those paths.
         monkeypatch.setattr(server.settings, "auth_server_nginx_marker_secret", "")
         resp = _FakeResponse()
         server._attach_mcp_proxy_token(
@@ -773,7 +919,13 @@ class TestAttachMcpProxyTokenMarker:
             server_name="github-mcp",
             auth_method="oauth2",
         )
-        assert "audit_identity" not in _decode(resp.headers["X-Internal-Token"])
+        claims = _decode(resp.headers["X-Internal-Token"])
+        assert "audit_identity" not in claims
+        # ...and the reader degrades to "no identity", which is what makes the
+        # omission safe: the mcp-proxy hop then attributes its record to the
+        # verified `sub`, never to the unverified ingress header.
+        assert server._audit_identity_from_token(claims) == ("", {})
+        assert server._audit_request_id_from_token(claims) is None
 
 
 @pytest.mark.unit

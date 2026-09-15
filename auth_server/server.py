@@ -58,6 +58,7 @@ try:
     from auth_path_stats import flush_loop as auth_path_flush_loop
     from auth_path_stats import flush_once as auth_path_flush_once
     from observability.meters import (
+        audit_integrity_degraded_total,
         record_generic_proxy_request,
         record_generic_proxy_slot_rejected,
         record_generic_proxy_stream_outcome,
@@ -69,6 +70,7 @@ except ImportError:
     from auth_server.auth_path_stats import flush_loop as auth_path_flush_loop
     from auth_server.auth_path_stats import flush_once as auth_path_flush_once
     from auth_server.observability.meters import (
+        audit_integrity_degraded_total,
         record_generic_proxy_request,
         record_generic_proxy_slot_rejected,
         record_generic_proxy_stream_outcome,
@@ -419,18 +421,38 @@ def _claim_str(value: object) -> str | None:
     is truthy, and a record whose principal name is three spaces identifies
     nobody while looking like it does. Surrounding whitespace is not part of any
     identifier, so trimming it also makes an equality lookup match.
+
+    Every lossy outcome increments ``audit_integrity_degraded_total`` with
+    ``reason="claim_dropped"`` so the degradation is rate-alertable instead of
+    silent. Counted ONLY when a value that was actually PRESENT is coerced away
+    (bool, unusable type) or truncated; an ABSENT claim (``None`` / ``""`` /
+    empty list / whitespace only) is normal for every IdP that omits it and
+    increments nothing, which is what keeps the series alertable. A list's
+    unusable MEMBERS account for themselves via the recursive call, so the
+    container never double-counts.
     """
     if isinstance(value, str):
-        return value.strip()[:_MAX_AUDIT_CLAIM_LEN] or None
+        trimmed = value.strip()
+        if len(trimmed) > _MAX_AUDIT_CLAIM_LEN:
+            audit_integrity_degraded_total.add(1, {"reason": "claim_dropped"})
+            return trimmed[:_MAX_AUDIT_CLAIM_LEN]
+        return trimmed or None
     if isinstance(value, bool):
+        audit_integrity_degraded_total.add(1, {"reason": "claim_dropped"})
         return None
     if isinstance(value, int | float):
-        return str(value)[:_MAX_AUDIT_CLAIM_LEN]
+        coerced_number = str(value)
+        if len(coerced_number) > _MAX_AUDIT_CLAIM_LEN:
+            audit_integrity_degraded_total.add(1, {"reason": "claim_dropped"})
+        return coerced_number[:_MAX_AUDIT_CLAIM_LEN]
     if isinstance(value, list | tuple):
         for item in value:
             coerced = _claim_str(item)
             if coerced:
                 return coerced
+        return None
+    if value is not None:
+        audit_integrity_degraded_total.add(1, {"reason": "claim_dropped"})
     return None
 
 
@@ -584,30 +606,49 @@ def _audit_provider(validation_result: dict) -> str | None:
       2. ``data.provider`` -- the cookie session persists it at login (see
          ``create_session``), and the PingFederate fallback path sets it.
       3. ``settings.auth_provider`` -- the gateway's configured IdP, which is the
-         truth for every token this deployment accepts.
+         truth for every token this deployment accepts from an IdP.
+
+    Step 3 is skipped for a ``self_signed`` token. Those are minted by the
+    gateway itself (the Connect button, a Cursor/Claude bearer), not issued by
+    the configured IdP, so attributing one to ``entra`` would name an IdP that
+    never saw the request -- the same misattribution issue #1642 is about. A
+    self-signed token still reports its IdP when the session it was minted from
+    recorded one, via step 2.
 
     Returns ``None`` only when nothing identifies the IdP, keeping the field
     optional rather than inventing a value.
     """
     data = validation_result.get("data") or {}
-    return (
-        _claim_str(validation_result.get("provider"))
-        or _claim_str(data.get("provider"))
-        or _claim_str(settings.auth_provider)
-    )
+    resolved = _claim_str(validation_result.get("provider")) or _claim_str(data.get("provider"))
+    if resolved:
+        return resolved
+    if validation_result.get("method") == AUTH_METHOD_SELF_SIGNED:
+        return None
+    return _claim_str(settings.auth_provider)
 
 
-def _audit_identity_token_claim(validation_result: dict) -> dict:
+def _audit_identity_token_claim(validation_result: dict, request_id: str) -> dict:
     """Compact audit identity to sign into an internal hop token.
 
     Bundles the readable display value with the durable claims, dropping empty
     entries so the claim -- and the response header nginx copies -- stays small.
-    Read back with ``_audit_identity_from_token``.
+    Read back with ``_audit_identity_from_token`` (identity) and
+    ``_audit_request_id_from_token`` (``rid``).
+
+    ``request_id`` is THIS /validate's audit request id -- the one the
+    ``mcp_server_access`` record is keyed on. Signing it as ``rid`` is what makes
+    the two audit streams joinable: the mcp-proxy hop needs its own unique
+    ``request_id`` for the ``(request_id, log_type)`` index, so it records the
+    value read back here as the mint record's ``correlation_id`` instead. Capped
+    like every other claim.
     """
     claim: dict = {"display": _audit_identity_display(validation_result)}
     claim.update(
         {key: value for key, value in _audit_identity_claims(validation_result).items() if value}
     )
+    rid = _claim_str(request_id)
+    if rid:
+        claim["rid"] = rid
     return claim
 
 
@@ -637,6 +678,23 @@ def _audit_identity_from_token(claims: dict) -> tuple[str, dict]:
     )
 
 
+def _audit_request_id_from_token(claims: dict) -> str | None:
+    """The /validate ``request_id`` signed as ``rid`` into the hop claim.
+
+    ``None`` when the hop token predates the claim (rolling deploy) or carries a
+    malformed value: the mint record then keeps its pre-join ``correlation_id``
+    (``None``) rather than failing, and only loses the join.
+
+    Deliberately NOT folded into ``_audit_identity_from_token``: that function's
+    second element is splatted into the audit record as identity FIELDS, and
+    ``rid`` is a correlation id, not an identity claim.
+    """
+    raw = (claims or {}).get("audit_identity")
+    if not isinstance(raw, dict):
+        return None
+    return _claim_str(raw.get("rid"))
+
+
 def _attach_mcp_proxy_token(
     request: "Request",
     response: "JSONResponse",
@@ -663,7 +721,8 @@ def _attach_mcp_proxy_token(
     ``audit_identity`` is the audit identity resolved from the VERIFIED claims
     (``_audit_identity_token_claim``); signing it here is what lets the
     mcp-proxy hop attribute its OBO token-mint record without trusting the raw
-    ingress header.
+    ingress header. Omitted by the static-credential callers (federation-static /
+    network-trusted), which authenticate a machine credential with no IdP claims.
 
     When ``AUTH_SERVER_NGINX_MARKER_SECRET`` is configured, the token is
     minted ONLY if nginx force-set the matching ``X-Validate-Source-Secret`` on
@@ -4636,8 +4695,10 @@ async def validate_request(request: Request):
             egress_user=_egress_user,
             # Sign the audit identity resolved from the VERIFIED claims so the
             # mcp-proxy hop attributes its OBO mint record from this, not from
-            # the raw ingress header it also receives.
-            audit_identity=_audit_identity_token_claim(validation_result),
+            # the raw ingress header it also receives. `request_id` rides along
+            # as `rid` so that hop's token_mint record can be joined to the
+            # mcp_server_access record this request writes above.
+            audit_identity=_audit_identity_token_claim(validation_result, request_id),
         )
 
         # Generic-proxy hop token (proxied non-MCP entities). Keyed on the
@@ -4861,7 +4922,9 @@ async def manage_federation_token(request: Request):
 async def _emit_token_mint_audit(
     request_id: str,
     correlation_id: str | None,
-    username: str,
+    # `object`, not `str`: both identity values are IdP-claim-derived at several
+    # call sites, and their shape is the IdP's choice (see _claim_str).
+    username: object,
     auth_method: str,
     provider: str | None,
     internal_caller: str,
@@ -4873,16 +4936,22 @@ async def _emit_token_mint_audit(
     expires_in_seconds: int | None,
     outcome: str,
     failure_reason: str | None = None,
-    display_username: str | None = None,
+    display_username: object = None,
     identity_claims: dict | None = None,
 ) -> None:
     """Emit a token-mint audit record and increment the mint metric.
 
     ``username`` is what the record's DEPRECATED ``username_hash`` is derived
-    from (kept identical to preserve existing hash values / back-compat).
-    ``display_username`` is the raw, human-readable identity stored in the new
-    ``username`` field (email -> preferred_username -> sub); when omitted it
+    from. ``display_username`` is the raw, human-readable identity stored in the
+    new ``username`` field (email -> preferred_username -> sub); when omitted it
     falls back to ``username`` (already human-readable on most mint paths).
+
+    BOTH go through ``_claim_str`` here -- this is the ONE cap and the ONE
+    coercion for this stream, so no mint site can reintroduce the drop. Hash
+    values for real principals are unchanged (every identifier is far below
+    ``_MAX_AUDIT_CLAIM_LEN``); a value that exceeds the cap is truncated before
+    hashing, which is strictly better than the previous behaviour of raising
+    inside the best-effort block below and losing the whole record.
 
     ``identity_claims`` are the durable/IdP identity claims (``subject``,
     ``canonical_id``, ``principal_name``, ``object_id``, ``tenant_id``,
@@ -4908,11 +4977,18 @@ async def _emit_token_mint_audit(
         logger.debug("token_mint metric increment failed", exc_info=True)
 
     try:
+        # A multivalued IdP mapper (Keycloak `email`/`username` emitted as a JSON
+        # array) or a numeric directory id reaches here as a non-str: unguarded it
+        # raises in `hash_username` (a list has no `.encode`) or in Pydantic (both
+        # fields are typed `str`), and the `except` below then swallows the
+        # exception -- dropping the ENTIRE audit record while the mint itself
+        # succeeds. Coerce once, here, for every call site.
+        hash_source = _claim_str(username) or ""
         record = TokenMintAuditRecord(
             request_id=request_id,
             correlation_id=correlation_id,
-            username=display_username or username or "anonymous",
-            username_hash=hash_username(username),
+            username=_claim_str(display_username) or hash_source or "anonymous",
+            username_hash=hash_username(hash_source),
             auth_method=auth_method,
             provider=provider,
             internal_caller=internal_caller,
@@ -4932,6 +5008,9 @@ async def _emit_token_mint_audit(
         if audit_logger is not None:
             await audit_logger.log_event(record)
     except Exception:
+        # The mint is already done; the record is not. Count it so the loss is
+        # rate-alertable instead of living only in a log line.
+        audit_integrity_degraded_total.add(1, {"reason": "record_dropped"})
         logger.warning("Failed to emit token-mint audit record", exc_info=True)
 
 
@@ -5111,14 +5190,17 @@ async def generate_user_token(
         _validate_context_group_scope_shape(user_context)
         username = user_context.get("username")
         user_scopes = user_context.get("scopes", [])
-        # Human-readable identity for the audit record (email ->
-        # preferred_username -> username). `username` still drives the
-        # deprecated username_hash and all auth/vault logic unchanged.
-        audit_display_username = (
-            user_context.get("email")
-            or user_context.get("preferred_username")
-            or username
-            or "anonymous"
+        # Human-readable identity for the audit record, resolved by the ONE audit
+        # display helper (email -> preferred_username -> upn -> username -> sub,
+        # every candidate capped and coerced by _claim_str). The mint body is the
+        # shape that helper reads: the caller-supplied claims live under `data`
+        # and the resolved login handle at the top level. This adds `upn`/`sub` as
+        # fallbacks after the three keys the mint path resolved before -- a
+        # superset in the same precedence order, so no existing value changes.
+        # `username` still drives the deprecated username_hash and all
+        # auth/vault logic unchanged.
+        audit_display_username = _audit_identity_display(
+            {"data": user_context, "username": username}
         )
 
         if not username:
@@ -6909,13 +6991,37 @@ _PROXY_CONTEXT_HEADERS: frozenset[str] = frozenset(
     }
 )
 
+# Gateway-internal hop credentials. Each is a JWT this gateway mints for ONE
+# internal hop (nginx -> auth_server / registry) and nothing upstream of the
+# gateway consumes any of them, so they are stripped on EVERY egress hop --
+# unconditionally, not only on the vault/OBO branches that apply
+# _EGRESS_STRIP_HEADERS. Two reasons this must be unconditional:
+#   1. Credential leak: X-Internal-Token is signed with SECRET_KEY and bound to
+#      the resolved upstream, so a registrant-controlled MCP backend that
+#      received it could replay it against this gateway's /mcp-proxy hop.
+#   2. Identity leak: since the #1642 fix it carries the caller's signed
+#      `audit_identity` claim (UPN/email + Entra oid/tid/appid) -- readable by
+#      anyone holding the token, base64 needs no key.
+# nginx sets X-Internal-Token on the /mcp-proxy hop (see nginx_service.py's
+# generated location block); the -Generic / -Registry variants belong to other
+# locations and can only arrive here client-supplied, which is exactly why they
+# are stripped too rather than forwarded as attacker-chosen values.
+_INTERNAL_HOP_TOKEN_HEADERS: frozenset[str] = frozenset(
+    {
+        "x-internal-token",
+        "x-internal-token-generic",
+        "x-internal-token-registry",
+    }
+)
+
 
 def _forward_headers(
     incoming: dict[str, str],
     relay_authorization: bool = False,
 ) -> dict[str, str]:
     """Copy incoming request headers to the upstream, stripping hop-by-hop and
-    proxy-context headers so httpx can set them correctly for the connection.
+    proxy-context headers so httpx can set them correctly for the connection,
+    plus every gateway-internal credential.
 
     Ingress-auth policy (issue #1266): Cookie is ALWAYS stripped (never
     forwarded to any upstream). Authorization and X-Authorization are also
@@ -6924,6 +7030,14 @@ def _forward_headers(
     receives BOTH forms (the MCP Gateway carries the caller bearer in
     X-Authorization, not Authorization). Every other server gets no client auth
     header on egress; upstream creds come from the vault.
+
+    The gateway-internal hop tokens (_INTERNAL_HOP_TOKEN_HEADERS) are stripped
+    for EVERY upstream, including plain registered MCP servers that never touch
+    the egress-vault branches: X-Internal-Token is a SECRET_KEY-signed
+    credential carrying the caller's audit identity, and a registrant-controlled
+    backend must not receive it. ``relay_authorization`` does NOT re-admit them
+    -- even the built-in internal server has no use for a token minted for a
+    different hop.
     """
     forwarded: dict[str, str] = {}
     for key, value in incoming.items():
@@ -6934,6 +7048,10 @@ def _forward_headers(
             # Never leak this internal routing header to the upstream.
             continue
         if lower in _PROXY_CONTEXT_HEADERS:
+            continue
+        if lower in _INTERNAL_HOP_TOKEN_HEADERS:
+            # Gateway-internal, single-hop credentials; see the set's comment.
+            # Read the MCP hop's token off `request.headers`, never off this dict.
             continue
         if lower in ("x-body", "x-body-uninspectable"):
             # Gateway-internal body-capture headers set by capture_body.lua for
@@ -7058,8 +7176,11 @@ def _assert_generic_authorization_not_gateway_cred(
 # Headers that MUST be stripped before injecting a vaulted egress token:
 # the user's gateway IdP JWT / session cookie / X-Authorization are full gateway
 # credentials and must never reach a third-party SaaS upstream; the X-User*/
-# X-Internal-Token/X-Scopes family is gateway-internal identity/routing. Only
-# applied on the oauth_user egress path (other servers keep existing behavior).
+# X-Scopes family is gateway-internal identity/routing. Applied on the
+# oauth_user / PAT egress paths only (other servers keep existing behavior) --
+# with the exception of x-internal-token, which _forward_headers now strips for
+# EVERY upstream (_INTERNAL_HOP_TOKEN_HEADERS); it is kept here so this set
+# remains a self-contained, independently verifiable invariant.
 _EGRESS_STRIP_HEADERS: frozenset[str] = frozenset(
     {
         "authorization",
@@ -8083,12 +8204,23 @@ async def mcp_proxy(
                         "attributing the OBO mint to the verified sub principal",
                         server_name,
                     )
+                    # The record still lands, attributed to the opaque verified
+                    # `sub` -- count it so the degradation is rate-alertable and
+                    # not merely visible to whoever is reading DEBUG logs.
+                    audit_integrity_degraded_total.add(1, {"reason": "identity_hop_claim_missing"})
                 # `_audit_identity_display` resolves to the literal "anonymous"
                 # when no claim identified the caller. That string says strictly
                 # less than the verified principal, so it must not win over it --
                 # plain `or` chaining would keep it, because it is truthy.
                 if obo_display in ("", AUDIT_IDENTITY_ANONYMOUS):
                     obo_display = obo_principal or AUDIT_IDENTITY_ANONYMOUS
+                # The /validate request_id signed as `rid`. This mint record needs
+                # its OWN unique request_id (the (request_id, log_type) index), so
+                # the shared id is recorded as the correlation_id -- that is what
+                # joins this token_mint record to the mcp_server_access record
+                # /validate wrote for the same request. None on a legacy token:
+                # the record is unjoined, exactly as before, never dropped.
+                obo_correlation_id = _audit_request_id_from_token(claims)
                 try:
                     obo_token = await obo_exchange(
                         get_auth_provider(),
@@ -8102,7 +8234,7 @@ async def mcp_proxy(
                     )
                     await _emit_token_mint_audit(
                         request_id=str(uuid.uuid4()),
-                        correlation_id=None,
+                        correlation_id=obo_correlation_id,
                         username=obo_principal,
                         display_username=obo_display,
                         auth_method=obo_auth_method,
@@ -8121,7 +8253,7 @@ async def mcp_proxy(
                     return _obo_error_response(req_id, str(exc))
                 await _emit_token_mint_audit(
                     request_id=str(uuid.uuid4()),
-                    correlation_id=None,
+                    correlation_id=obo_correlation_id,
                     username=obo_principal,
                     display_username=obo_display,
                     auth_method=obo_auth_method,

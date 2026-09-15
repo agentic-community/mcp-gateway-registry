@@ -2,9 +2,10 @@
 
 These events are emitted by the tool-filter helper (Issue #1026) whenever
 a user-visible tool list is pruned by policy. The events are routed through
-`registry.audit.sink.emit_audit_event`, which currently logs them as JSON
-at INFO on the `registry.audit` logger. A DB-backed sink can be wired in
-later without changing the call sites.
+`registry.audit.sink.emit_audit_event`, which logs them as JSON at INFO on the
+`registry.audit.records` logger. That logger is terminal (it does not propagate
+to the application log stream); see the sink module for why. A DB-backed sink
+can be wired in later without changing the call sites.
 """
 
 from __future__ import annotations
