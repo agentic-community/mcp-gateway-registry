@@ -6,6 +6,7 @@ including credential masking validators to ensure sensitive data
 is never logged in plain text.
 """
 
+from copy import deepcopy
 from datetime import UTC, datetime
 from typing import Any
 
@@ -107,6 +108,86 @@ def _is_sensitive_query_param(name: str) -> bool:
     return any(marker in lowered for marker in SENSITIVE_QUERY_PARAM_SUBSTRINGS)
 
 
+# =============================================================================
+# Shared identity claims
+# =============================================================================
+
+
+class IdentityClaims(BaseModel):
+    """Durable / IdP identity claims, defined ONCE for every audit record type.
+
+    Populated when the validated token carries them -- notably Entra
+    delegated/OBO ACCESS tokens, whose readable identity lives in `upn` and
+    whose stable identity is `oid`+`tid`. They let an operator contact and
+    correlate the actor without an IdP reverse lookup. The record's `username`
+    stays the human-facing display value; NONE of these drive auth/vault/OBO
+    decisions -- they are correlation metadata only. Absent for IdPs/tokens that
+    omit the claims (forward-only: historical records simply store null).
+
+    Derived from VERIFIED claims only: the mcp-proxy hop reads them from its
+    signed internal token, never from the raw ingress header.
+
+    `display_name` (the OIDC `name` claim) is RESERVED and deliberately NOT a
+    field: `principal_name` already makes the actor contactable, so storing a
+    person's full name would add a PII category for no investigative gain
+    (GDPR Art. 25(2)). It is named here so nobody silently repurposes it.
+
+    Both `Identity` (nested under `identity` on the registry_api / mcp_access
+    streams) and `TokenMintAuditRecord` (flat -- that stream has no `identity`
+    block) take their claim fields from this class via `_claim`, so the field
+    types and descriptions can no longer drift apart.
+    """
+
+    subject: str | None = Field(
+        default=None,
+        description="OIDC `sub`: opaque, stable per (user, app); protocol-level correlation",
+    )
+    canonical_id: str | None = Field(
+        default=None,
+        description="Durable identity: Entra `oid@tid` when both present, else `sub`",
+    )
+    principal_name: str | None = Field(
+        default=None,
+        description="Readable principal handle: `upn` / `preferred_username` / `email`",
+    )
+    object_id: str | None = Field(
+        default=None,
+        description="Entra user Object ID (`oid`): immutable per user within a tenant",
+    )
+    tenant_id: str | None = Field(
+        default=None,
+        description=(
+            "Entra tenant ID (`tid`) of the IdP that authenticated the caller. "
+            "An IdP-side identifier, not a registry tenant: this system is "
+            "single-tenant, and this is not `EntraIdProvider.tenant_id` (the "
+            "gateway's own app registration)"
+        ),
+    )
+    app_id: str | None = Field(
+        default=None,
+        description="Calling application id from the token: `appid` / `azp`",
+    )
+
+
+# The claim field names in canonical order. FROZEN: the frontend, the CSV
+# export columns, the Mongo indexes and the auth server's claim resolver all key
+# on these exact names. Read it from the model so the two can never disagree.
+IDENTITY_CLAIM_FIELDS: tuple[str, ...] = tuple(IdentityClaims.model_fields)
+
+
+def _claim(name: str) -> Any:
+    """Return `IdentityClaims`' definition of `name`, for reuse in a record.
+
+    Composition rather than inheritance: a base class would force the claim
+    block to serialize FIRST, reordering the keys of every audit record already
+    in the store. Copying the field definition lets each record keep the claim
+    block where it is while the type, default and description live in exactly
+    one place. `test_claim_fields_come_from_identity_claims` fails if a copy is
+    hand-edited.
+    """
+    return deepcopy(IdentityClaims.model_fields[name])
+
+
 class Identity(BaseModel):
     """
     Identity information for the user making the request.
@@ -132,6 +213,16 @@ class Identity(BaseModel):
         description="Fixed marker recording that a credential was present; "
         "emits no part of the credential value",
     )
+
+    # --- Durable / IdP identity claims (optional) --------------------------
+    # Defined once on `IdentityClaims` -- see that class for the rationale, and
+    # for why the `name` claim is deliberately not captured.
+    subject: str | None = _claim("subject")
+    canonical_id: str | None = _claim("canonical_id")
+    principal_name: str | None = _claim("principal_name")
+    object_id: str | None = _claim("object_id")
+    tenant_id: str | None = _claim("tenant_id")
+    app_id: str | None = _claim("app_id")
 
     @field_validator("credential_hint", mode="before")
     @classmethod
@@ -430,6 +521,15 @@ class TokenMintAuditRecord(BaseModel):
         ...,
         description="Identity of the internal service that called /internal/tokens",
     )
+
+    # Durable / IdP identity claims (optional), defined once on
+    # `IdentityClaims`. Flat here because this record has no `identity` block.
+    subject: str | None = _claim("subject")
+    canonical_id: str | None = _claim("canonical_id")
+    principal_name: str | None = _claim("principal_name")
+    object_id: str | None = _claim("object_id")
+    tenant_id: str | None = _claim("tenant_id")
+    app_id: str | None = _claim("app_id")
 
     # What was minted
     token_kind: str = Field(

@@ -41,7 +41,7 @@ interface AuditStatisticsData {
 }
 
 interface AuditStatisticsProps {
-  stream: 'registry_api' | 'mcp_access';
+  stream: 'registry_api' | 'mcp_access' | 'token_mint';
   days?: number;
   username?: string;
 }

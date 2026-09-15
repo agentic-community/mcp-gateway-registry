@@ -3519,6 +3519,7 @@ def _mcp_proxy_token_headers(
     server_name: str = "office-docs",
     upstream_url: str = "https://upstream.example/mcp",
     scopes: list[str] | None = None,
+    audit_identity: dict | None = None,
 ) -> dict:
     """Build the X-Internal-Token nginx would forward to /mcp-proxy.
 
@@ -3539,8 +3540,28 @@ def _mcp_proxy_token_headers(
         scopes=["admin:all"] if scopes is None else scopes,
         server_name=server_name,
         upstream_url=upstream_url,
+        audit_identity=audit_identity,
     )
     return {"X-Internal-Token": token}
+
+
+def _forged_ingress_jwt(sub: str = "test-user", **claims: str) -> str:
+    """An UNSIGNED-in-practice ingress JWT carrying attacker-chosen identity.
+
+    nginx forwards the client's raw Authorization/X-Authorization to the
+    /mcp-proxy hop, and /validate does NOT signature-verify that header when the
+    request authenticated on a session cookie. So a caller can present a JWT
+    signed with a key nobody trusts, matching only the principal binding
+    (``sub``), and choose every other claim. Nothing derived from this token may
+    reach an audit record.
+    """
+    import jwt as _jwt
+
+    return _jwt.encode(
+        {"sub": sub, "preferred_username": sub, **claims},
+        "attacker-chosen-key",
+        algorithm="HS256",
+    )
 
 
 def _obo_ingress_jwt(sub: str = "test-user") -> str:
@@ -4153,6 +4174,185 @@ class TestMcpProxyOboExchange:
         assert "x-authorization" not in sent
         assert "cookie" not in sent
         assert "x-internal-token" not in sent
+
+    @staticmethod
+    def _capture_mint_audit(server_module):
+        """Patch the token-mint audit emitter and capture its kwargs."""
+        emitted: list[dict] = []
+
+        async def _record(**kwargs):
+            emitted.append(kwargs)
+
+        return patch.object(server_module, "_emit_token_mint_audit", _record), emitted
+
+    # The audit identity /validate would have signed into the hop token for an
+    # Entra delegated caller, keyed on sub=test-user so the OBO principal binding passes.
+    _SIGNED_AUDIT_IDENTITY = {
+        "display": "alice@example.com",
+        "subject": "test-user",
+        "canonical_id": "user-object-id@tenant-id",
+        "principal_name": "alice@example.com",
+        "object_id": "user-object-id",
+        "tenant_id": "tenant-id",
+        "app_id": "client-app-id",
+    }
+
+    def test_obo_audit_record_is_attributed_from_the_signed_hop_claim(self, monkeypatch):
+        """The OBO mint record carries the readable identity AND the durable
+        claims, sourced from the verified internal token."""
+        import auth_server.server as server_module
+
+        ingress_jwt = _obo_ingress_jwt("test-user")
+
+        async def _fake_exchange(provider, subject_token, target_audience, scopes=None):
+            return "exchanged-obo-token"
+
+        patch_httpx, _ = _capture_upstream_headers()
+        patch_audit, emitted = self._capture_mint_audit(server_module)
+        with (
+            patch.object(server_module.settings, "egress_auth_enabled", True),
+            patch.object(server_module, "_vend_egress_token", self._obo_directive_vend),
+            patch.object(server_module, "get_auth_provider", lambda *a, **k: _FakeEntraProvider()),
+            patch.object(server_module, "obo_exchange", _fake_exchange),
+            patch.object(server_module, "_read_mcp_filter_enabled", return_value=False),
+            _patch_scope_repo_allow_all(),
+            patch_httpx,
+            patch_audit,
+        ):
+            client = TestClient(server_module.app)
+            response = client.post(
+                "/mcp-proxy/outlook",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 11,
+                    "method": "tools/call",
+                    "params": {"name": "read_inbox"},
+                },
+                headers={
+                    **_mcp_proxy_token_headers(
+                        server_name="outlook",
+                        audit_identity=self._SIGNED_AUDIT_IDENTITY,
+                    ),
+                    "X-Authorization": f"Bearer {ingress_jwt}",
+                },
+            )
+
+        assert response.status_code == 200
+        assert len(emitted) == 1
+        record = emitted[0]
+        assert record["outcome"] == "success"
+        # Readable USER value, not the opaque sub (the reported bug).
+        assert record["display_username"] == "alice@example.com"
+        # username (-> username_hash) stays the VERIFIED principal, unchanged.
+        assert record["username"] == "test-user"
+        # Durable claims ride along so an opaque sub can be correlated.
+        assert record["identity_claims"]["canonical_id"] == "user-object-id@tenant-id"
+        assert record["identity_claims"]["object_id"] == "user-object-id"
+        assert record["identity_claims"]["tenant_id"] == "tenant-id"
+
+    def test_obo_audit_identity_ignores_a_forged_ingress_header(self, monkeypatch):
+        """REGRESSION (audit integrity): the audit identity must come from the
+        signed hop claim, never from the raw ingress header.
+
+        nginx forwards that header to this hop, and /validate never
+        signature-verifies it when the request authenticated on a session cookie
+        -- while the OBO principal bind compares only `sub`, which the caller
+        knows (it is their own). Deriving the audit identity from the header
+        therefore let a caller write another user's name into the audit trail.
+        """
+        import auth_server.server as server_module
+
+        # Same principal (so the bind passes), attacker-chosen readable identity.
+        forged_jwt = _forged_ingress_jwt(
+            "test-user",
+            upn="ceo@example.com",
+            email="ceo@example.com",
+            preferred_username="ceo@example.com",
+        )
+
+        async def _fake_exchange(provider, subject_token, target_audience, scopes=None):
+            return "exchanged-obo-token"
+
+        patch_httpx, _ = _capture_upstream_headers()
+        patch_audit, emitted = self._capture_mint_audit(server_module)
+        with (
+            patch.object(server_module.settings, "egress_auth_enabled", True),
+            patch.object(server_module, "_vend_egress_token", self._obo_directive_vend),
+            patch.object(server_module, "get_auth_provider", lambda *a, **k: _FakeEntraProvider()),
+            patch.object(server_module, "obo_exchange", _fake_exchange),
+            patch.object(server_module, "_read_mcp_filter_enabled", return_value=False),
+            _patch_scope_repo_allow_all(),
+            patch_httpx,
+            patch_audit,
+        ):
+            client = TestClient(server_module.app)
+            response = client.post(
+                "/mcp-proxy/outlook",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 12,
+                    "method": "tools/call",
+                    "params": {"name": "read_inbox"},
+                },
+                headers={
+                    **_mcp_proxy_token_headers(
+                        server_name="outlook",
+                        audit_identity=self._SIGNED_AUDIT_IDENTITY,
+                    ),
+                    "X-Authorization": f"Bearer {forged_jwt}",
+                },
+            )
+
+        assert response.status_code == 200
+        assert len(emitted) == 1
+        record = emitted[0]
+        assert record["display_username"] == "alice@example.com"
+        assert "ceo@example.com" not in str(record)
+
+    def test_obo_audit_falls_back_to_verified_sub_without_the_hop_claim(self, monkeypatch):
+        """Rolling deploy: a hop token minted before the claim existed. The record
+        degrades to the verified `sub` -- opaque but true -- and never reads the
+        ingress header for a readable identity."""
+        import auth_server.server as server_module
+
+        forged_jwt = _forged_ingress_jwt("test-user", upn="ceo@example.com")
+
+        async def _fake_exchange(provider, subject_token, target_audience, scopes=None):
+            return "exchanged-obo-token"
+
+        patch_httpx, _ = _capture_upstream_headers()
+        patch_audit, emitted = self._capture_mint_audit(server_module)
+        with (
+            patch.object(server_module.settings, "egress_auth_enabled", True),
+            patch.object(server_module, "_vend_egress_token", self._obo_directive_vend),
+            patch.object(server_module, "get_auth_provider", lambda *a, **k: _FakeEntraProvider()),
+            patch.object(server_module, "obo_exchange", _fake_exchange),
+            patch.object(server_module, "_read_mcp_filter_enabled", return_value=False),
+            _patch_scope_repo_allow_all(),
+            patch_httpx,
+            patch_audit,
+        ):
+            client = TestClient(server_module.app)
+            response = client.post(
+                "/mcp-proxy/outlook",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 13,
+                    "method": "tools/call",
+                    "params": {"name": "read_inbox"},
+                },
+                headers={
+                    # No audit_identity claim on the hop token.
+                    **_mcp_proxy_token_headers(server_name="outlook"),
+                    "X-Authorization": f"Bearer {forged_jwt}",
+                },
+            )
+
+        assert response.status_code == 200
+        assert len(emitted) == 1
+        record = emitted[0]
+        assert record["display_username"] == "test-user"
+        assert "ceo@example.com" not in str(record)
 
     def test_obo_no_bearer_jwt_is_terminal_no_consent(self, monkeypatch):
         """Session-cookie / M2M caller (no bearer ingress JWT) -> terminal error,
