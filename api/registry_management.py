@@ -2578,6 +2578,8 @@ def cmd_server_search(args: argparse.Namespace) -> int:
             for server in response.servers:
                 print(f"  {server.server_name} ({server.path})")
                 print(f"    Relevance: {server.relevance_score:.2%}")
+                if server.similarity_score is not None:
+                    print(f"    Similarity: {server.similarity_score:.4f}")
                 if server.tags:
                     print(f"    Tags: {', '.join(server.tags[:5])}")
                 if server.description:
@@ -2595,6 +2597,8 @@ def cmd_server_search(args: argparse.Namespace) -> int:
             for tool in response.tools:
                 print(f"  {tool.tool_name} (from {tool.server_path})")
                 print(f"    Relevance: {tool.relevance_score:.2%}")
+                if tool.similarity_score is not None:
+                    print(f"    Similarity: {tool.similarity_score:.4f}")
                 if tool.description:
                     desc = (
                         tool.description[:100] + "..."
@@ -2613,6 +2617,8 @@ def cmd_server_search(args: argparse.Namespace) -> int:
                 agent_skills = agent.agent_card.get("skills", [])
                 print(f"  {agent_name} ({agent.path})")
                 print(f"    Relevance: {agent.relevance_score:.2%}")
+                if agent.similarity_score is not None:
+                    print(f"    Similarity: {agent.similarity_score:.4f}")
                 if agent_skills:
                     skill_names = [
                         s.get("name", "") if isinstance(s, dict) else str(s)
@@ -2630,6 +2636,8 @@ def cmd_server_search(args: argparse.Namespace) -> int:
             for skill in response.skills:
                 print(f"  {skill.skill_name} ({skill.path})")
                 print(f"    Relevance: {skill.relevance_score:.2%}")
+                if skill.similarity_score is not None:
+                    print(f"    Similarity: {skill.similarity_score:.4f}")
                 if skill.author:
                     print(f"    Author: {skill.author}")
                 if skill.tags:
@@ -2649,6 +2657,8 @@ def cmd_server_search(args: argparse.Namespace) -> int:
             for vs in response.virtual_servers:
                 print(f"  {vs.server_name} ({vs.path})")
                 print(f"    Relevance: {vs.relevance_score:.2%}")
+                if vs.similarity_score is not None:
+                    print(f"    Similarity: {vs.similarity_score:.4f}")
                 print(f"    Tools: {vs.num_tools}, Backends: {vs.backend_count}")
                 if vs.backend_paths:
                     print(f"    Backend paths: {', '.join(vs.backend_paths)}")

@@ -38,7 +38,10 @@ class MatchingToolResult(BaseModel):
 
     tool_name: str
     description: str | None = None
-    relevance_score: float = Field(0.0, ge=0.0, le=1.0)
+    # Required on purpose. Every search path grades its tools, so a missing score
+    # means a path stopped grading and should fail loudly rather than report 0.0
+    # for a tool that matched (issue #1752).
+    relevance_score: float = Field(..., ge=0.0, le=1.0)
     match_context: str | None = None
     inputSchema: dict | None = Field(
         default=None, description="JSON Schema for tool input parameters"
@@ -55,6 +58,39 @@ class SyncMetadata(BaseModel):
     is_orphaned: bool = False
     orphaned_at: str | None = None
     is_read_only: bool = True
+
+
+def _virtual_server_field(
+    entry: dict,
+    key: str,
+    default,
+):
+    """Read a virtual server field that the search repository flattens.
+
+    The repository's three virtual_server branches copy num_tools,
+    backend_count and backend_paths onto the result entry and emit no
+    "metadata" key at all. Reading them only out of ``entry["metadata"]``
+    reported 0 tools and 0 backends for every virtual server in semantic
+    search, however many it really had.
+
+    Prefers the flattened value and falls back to metadata so a producer that
+    does nest them keeps working. A genuine 0 or [] on the entry wins over a
+    metadata value, so an empty virtual server is not misreported.
+
+    Args:
+        entry: One virtual_server result entry from the search repository.
+        key: Field name to read.
+        default: Value to return when the field is absent or None on both.
+
+    Returns:
+        The field value, or default when neither source supplies one.
+    """
+    if entry.get(key) is not None:
+        return entry[key]
+
+    metadata = entry.get("metadata") or {}
+    value = metadata.get(key)
+    return default if value is None else value
 
 
 def _compute_endpoint_url(
@@ -126,6 +162,21 @@ class ServerSearchResult(BaseModel):
     num_tools: int = 0
     is_enabled: bool = False
     relevance_score: float = Field(..., ge=0.0, le=1.0)
+    # Absolute cosine similarity to the query, computed by
+    # _attach_similarity_scores(). Unlike relevance_score, which is rank-relative
+    # after normalization, this is comparable across queries (issue #1752).
+    similarity_score: float | None = Field(
+        default=None,
+        ge=-1.0,
+        le=1.0,
+        description=(
+            "Raw cosine similarity to the query, in [-1.0, 1.0]. Negative means less "
+            "alike than two random vectors. Unlike relevance_score this is not a "
+            "0-to-1 confidence, so do not render it as a percentage. Null when the "
+            "query was not embedded, and on tools lifted out of a parent server "
+            "(they carry server_path, and similarity is attached per document path)."
+        ),
+    )
     match_context: str | None = None
     matching_tools: list[MatchingToolResult] = Field(default_factory=list)
     sync_metadata: SyncMetadata | None = None
@@ -180,6 +231,21 @@ class ToolSearchResult(BaseModel):
     description: str | None = None
     inputSchema: dict | None = Field(default=None, description="JSON Schema for tool input")
     relevance_score: float = Field(..., ge=0.0, le=1.0)
+    # Absolute cosine similarity to the query, computed by
+    # _attach_similarity_scores(). Unlike relevance_score, which is rank-relative
+    # after normalization, this is comparable across queries (issue #1752).
+    similarity_score: float | None = Field(
+        default=None,
+        ge=-1.0,
+        le=1.0,
+        description=(
+            "Raw cosine similarity to the query, in [-1.0, 1.0]. Negative means less "
+            "alike than two random vectors. Unlike relevance_score this is not a "
+            "0-to-1 confidence, so do not render it as a percentage. Null when the "
+            "query was not embedded, and on tools lifted out of a parent server "
+            "(they carry server_path, and similarity is attached per document path)."
+        ),
+    )
     match_context: str | None = None
     # Endpoint URL for the parent MCP server
     endpoint_url: str | None = Field(
@@ -196,6 +262,21 @@ class AgentSearchResult(BaseModel):
 
     path: str = Field(..., description="Agent path for identification")
     relevance_score: float = Field(..., ge=0.0, le=1.0)
+    # Absolute cosine similarity to the query, computed by
+    # _attach_similarity_scores(). Unlike relevance_score, which is rank-relative
+    # after normalization, this is comparable across queries (issue #1752).
+    similarity_score: float | None = Field(
+        default=None,
+        ge=-1.0,
+        le=1.0,
+        description=(
+            "Raw cosine similarity to the query, in [-1.0, 1.0]. Negative means less "
+            "alike than two random vectors. Unlike relevance_score this is not a "
+            "0-to-1 confidence, so do not render it as a percentage. Null when the "
+            "query was not embedded, and on tools lifted out of a parent server "
+            "(they carry server_path, and similarity is attached per document path)."
+        ),
+    )
     match_context: str | None = None
     agent_card: dict = Field(..., description="Full agent card with all details")
     trust_verified: str = Field(
@@ -220,6 +301,21 @@ class SkillSearchResult(BaseModel):
     last_checked_time: str | None = None
     status: str = Field(default="active", description="Lifecycle status")
     relevance_score: float = Field(..., ge=0.0, le=1.0)
+    # Absolute cosine similarity to the query, computed by
+    # _attach_similarity_scores(). Unlike relevance_score, which is rank-relative
+    # after normalization, this is comparable across queries (issue #1752).
+    similarity_score: float | None = Field(
+        default=None,
+        ge=-1.0,
+        le=1.0,
+        description=(
+            "Raw cosine similarity to the query, in [-1.0, 1.0]. Negative means less "
+            "alike than two random vectors. Unlike relevance_score this is not a "
+            "0-to-1 confidence, so do not render it as a percentage. Null when the "
+            "query was not embedded, and on tools lifted out of a parent server "
+            "(they carry server_path, and similarity is attached per document path)."
+        ),
+    )
     match_context: str | None = None
     metadata: dict | None = Field(
         default=None,
@@ -237,6 +333,21 @@ class VirtualServerSearchResult(BaseModel):
     backend_paths: list[str] = Field(default_factory=list)
     is_enabled: bool = False
     relevance_score: float = Field(..., ge=0.0, le=1.0)
+    # Absolute cosine similarity to the query, computed by
+    # _attach_similarity_scores(). Unlike relevance_score, which is rank-relative
+    # after normalization, this is comparable across queries (issue #1752).
+    similarity_score: float | None = Field(
+        default=None,
+        ge=-1.0,
+        le=1.0,
+        description=(
+            "Raw cosine similarity to the query, in [-1.0, 1.0]. Negative means less "
+            "alike than two random vectors. Unlike relevance_score this is not a "
+            "0-to-1 confidence, so do not render it as a percentage. Null when the "
+            "query was not embedded, and on tools lifted out of a parent server "
+            "(they carry server_path, and similarity is attached per document path)."
+        ),
+    )
     match_context: str | None = None
     matching_tools: list[MatchingToolResult] = Field(default_factory=list)
     # Endpoint URL for agent connectivity (computed based on deployment mode)
@@ -262,6 +373,21 @@ class CustomEntitySearchResult(BaseModel):
     owner: str | None = None
     is_enabled: bool = False
     relevance_score: float = Field(..., ge=0.0, le=1.0)
+    # Absolute cosine similarity to the query, computed by
+    # _attach_similarity_scores(). Unlike relevance_score, which is rank-relative
+    # after normalization, this is comparable across queries (issue #1752).
+    similarity_score: float | None = Field(
+        default=None,
+        ge=-1.0,
+        le=1.0,
+        description=(
+            "Raw cosine similarity to the query, in [-1.0, 1.0]. Negative means less "
+            "alike than two random vectors. Unlike relevance_score this is not a "
+            "0-to-1 confidence, so do not render it as a percentage. Null when the "
+            "query was not embedded, and on tools lifted out of a parent server "
+            "(they carry server_path, and similarity is attached per document path)."
+        ),
+    )
     match_context: str | None = None
 
 
@@ -567,7 +693,7 @@ async def semantic_search(
             MatchingToolResult(
                 tool_name=tool.get("tool_name") or tool.get("name", ""),
                 description=tool.get("description"),
-                relevance_score=tool.get("relevance_score", 0.0),
+                relevance_score=tool["relevance_score"],
                 match_context=tool.get("match_context"),
             )
             for tool in allowed_matching
@@ -639,6 +765,7 @@ async def semantic_search(
                 num_tools=filtered_num_tools,
                 is_enabled=server.get("is_enabled", False),
                 relevance_score=server.get("relevance_score", 0.0),
+                similarity_score=server.get("similarity_score"),
                 match_context=server.get("match_context"),
                 matching_tools=matching_tools,
                 sync_metadata=sync_meta,
@@ -701,6 +828,7 @@ async def semantic_search(
                 description=tool.get("description"),
                 inputSchema=tool.get("inputSchema"),
                 relevance_score=tool.get("relevance_score", 0.0),
+                similarity_score=tool.get("similarity_score"),
                 match_context=tool.get("match_context"),
                 endpoint_url=tool_endpoint_url,
             )
@@ -745,6 +873,7 @@ async def semantic_search(
             AgentSearchResult(
                 path=agent_path,
                 relevance_score=agent.get("relevance_score", 0.0),
+                similarity_score=agent.get("similarity_score"),
                 match_context=agent.get("match_context") or agent_card_dict.get("description"),
                 agent_card=agent_card_dict or {},
                 trust_verified=trust_verified,
@@ -797,6 +926,7 @@ async def semantic_search(
                 last_checked_time=skill.get("last_checked_time"),
                 status=skill.get("status", "active"),
                 relevance_score=skill.get("relevance_score", 0.0),
+                similarity_score=skill.get("similarity_score"),
                 match_context=skill.get("match_context"),
                 metadata=_skill_metadata_for_projection,
             )
@@ -855,7 +985,7 @@ async def semantic_search(
                 MatchingToolResult(
                     tool_name=tool_name,
                     description=tool.get("description"),
-                    relevance_score=tool.get("relevance_score", 0.0),
+                    relevance_score=tool["relevance_score"],
                     match_context=tool.get("match_context"),
                     inputSchema=input_schema,
                 )
@@ -870,12 +1000,11 @@ async def semantic_search(
             redact_backend_urls=redact_backend,
         )
 
-        metadata = vs.get("metadata", {})
         # Blocker 3 / Issue #1026: recompute num_tools for the virtual
-        # server against the filtered metadata tool_list (if present) so
-        # the badge matches the rendered list. Falls back to the metadata
+        # server against the filtered tool_list (if present) so the badge
+        # matches what this caller is allowed to see. Falls back to the stored
         # count when the virtual server has no enumerable tool_list.
-        vs_tool_list = metadata.get("tool_list") or []
+        vs_tool_list = _virtual_server_field(vs, "tool_list", []) or []
         if vs_tool_list:
             allowed_vs_full = filter_tools_for_user(
                 vs_name_for_filter,
@@ -886,7 +1015,7 @@ async def semantic_search(
             )
             vs_num_tools = len(allowed_vs_full)
         else:
-            vs_num_tools = metadata.get("num_tools", 0)
+            vs_num_tools = _virtual_server_field(vs, "num_tools", 0)
 
         filtered_virtual_servers.append(
             VirtualServerSearchResult(
@@ -895,10 +1024,11 @@ async def semantic_search(
                 description=vs.get("description"),
                 tags=vs.get("tags", []),
                 num_tools=vs_num_tools,
-                backend_count=metadata.get("backend_count", 0),
-                backend_paths=metadata.get("backend_paths", []),
+                backend_count=_virtual_server_field(vs, "backend_count", 0),
+                backend_paths=_virtual_server_field(vs, "backend_paths", []),
                 is_enabled=vs.get("is_enabled", False),
                 relevance_score=vs.get("relevance_score", 0.0),
+                similarity_score=vs.get("similarity_score"),
                 match_context=vs.get("match_context"),
                 matching_tools=matching_tools,
                 endpoint_url=vs_endpoint_url,
@@ -970,6 +1100,7 @@ async def semantic_search(
                 # mislabeled disabled (which would hide it from default search).
                 is_enabled=record.get("is_enabled", True),
                 relevance_score=record.get("relevance_score", 0.0),
+                similarity_score=record.get("similarity_score"),
                 match_context=record.get("match_context"),
             )
         )

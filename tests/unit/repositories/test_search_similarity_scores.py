@@ -88,3 +88,89 @@ def test_document_without_an_embedding_scores_zero() -> None:
     _attach_similarity_scores(grouped, selected, QUERY)
 
     assert grouped["servers"][0]["similarity_score"] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Issue #1752: the absolute similarity must survive the response model.
+# Before this fix the number was computed and then dropped by Pydantic, because
+# no response model declared the field.
+# ---------------------------------------------------------------------------
+
+
+def test_server_response_model_carries_similarity_score() -> None:
+    from registry.api.search_routes import ServerSearchResult
+
+    result = ServerSearchResult(
+        path="/servers/near",
+        server_name="near",
+        relevance_score=1.0,
+        similarity_score=0.6412,
+    )
+
+    assert result.model_dump()["similarity_score"] == 0.6412
+
+
+def test_similarity_score_defaults_to_none_when_not_embedded() -> None:
+    from registry.api.search_routes import ServerSearchResult
+
+    result = ServerSearchResult(path="/servers/near", server_name="near", relevance_score=1.0)
+
+    assert result.similarity_score is None
+
+
+def test_similarity_score_accepts_a_negative_cosine() -> None:
+    """Cosine similarity ranges [-1, 1]; a 0..1 bound would reject opposite vectors."""
+    from registry.api.search_routes import ServerSearchResult
+
+    result = ServerSearchResult(
+        path="/servers/opposite",
+        server_name="opposite",
+        relevance_score=0.1,
+        similarity_score=-0.83,
+    )
+
+    assert result.similarity_score == -0.83
+
+
+def test_every_search_result_model_declares_it() -> None:
+    from registry.api.search_routes import (
+        AgentSearchResult,
+        CustomEntitySearchResult,
+        ServerSearchResult,
+        SkillSearchResult,
+        ToolSearchResult,
+        VirtualServerSearchResult,
+    )
+
+    for model in (
+        ServerSearchResult,
+        ToolSearchResult,
+        AgentSearchResult,
+        SkillSearchResult,
+        VirtualServerSearchResult,
+        CustomEntitySearchResult,
+    ):
+        assert "similarity_score" in model.model_fields, model.__name__
+
+
+def test_matching_tool_without_a_score_is_rejected() -> None:
+    """A missing tool score means a search path stopped grading (issue #1752)."""
+    import pytest
+    from pydantic import ValidationError
+
+    from registry.api.search_routes import MatchingToolResult
+
+    with pytest.raises(ValidationError):
+        MatchingToolResult(tool_name="get_current_time", description="Return the time")
+
+
+def test_matching_tool_with_a_graded_score_is_accepted() -> None:
+    from registry.api.search_routes import MatchingToolResult
+
+    tool = MatchingToolResult(
+        tool_name="get_current_time",
+        description="Return the time",
+        relevance_score=0.31,
+    )
+
+    assert tool.relevance_score == 0.31

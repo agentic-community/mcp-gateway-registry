@@ -16,6 +16,7 @@ Covers:
 from registry.repositories.documentdb.search_repository import (
     RRF_K,
     SCORE_DISPLAY_FLOOR,
+    _grade_matching_tools,
     _normalize_scores,
     _reciprocal_rank_fusion,
     _score_tool_relevance,
@@ -324,3 +325,100 @@ class TestScoreToolRelevance:
         """Tools that don't match query get 0, not a server-inherited score."""
         score = _score_tool_relevance("getStats", "Get activity stats", ["strava"])
         assert score == 0.0
+
+
+UNSCORED_TOOLS = [
+    {
+        "tool_name": "get_current_time",
+        "description": "Return the current time",
+        "match_context": "Return the current time",
+    },
+    {
+        "tool_name": "list_things",
+        "description": "List things at the current time",
+        "match_context": "List things at the current time",
+    },
+    {
+        "tool_name": "unrelated",
+        "description": "",
+        "match_context": "Tool: unrelated",
+    },
+]
+
+
+class TestGradeMatchingTools:
+    """Issue #1752: the pipeline selects tools, Python grades them."""
+
+    def test_every_kept_tool_carries_a_graded_score(self):
+        graded = _grade_matching_tools(UNSCORED_TOOLS, ["current", "time"])
+
+        assert graded, "expected at least one tool to score above zero"
+        for tool in graded:
+            assert 0.0 < tool["relevance_score"] <= 1.0
+
+    def test_no_tool_is_reported_at_a_flat_one(self):
+        """The bug: every keyword-matched tool came back at exactly 1.0."""
+        graded = _grade_matching_tools(UNSCORED_TOOLS, ["current", "time"])
+
+        assert [tool["relevance_score"] for tool in graded] != [1.0] * len(graded)
+
+    def test_score_matches_the_scorer(self):
+        graded = _grade_matching_tools(UNSCORED_TOOLS, ["current", "time"])
+        by_name = {tool["tool_name"]: tool["relevance_score"] for tool in graded}
+
+        assert by_name["get_current_time"] == _score_tool_relevance(
+            "get_current_time", "Return the current time", ["current", "time"]
+        )
+
+    def test_a_name_hit_outranks_a_description_only_hit(self):
+        graded = _grade_matching_tools(UNSCORED_TOOLS, ["current", "time"])
+
+        assert graded[0]["tool_name"] == "get_current_time"
+
+    def test_results_are_sorted_best_first(self):
+        graded = _grade_matching_tools(UNSCORED_TOOLS, ["current", "time"])
+        scores = [tool["relevance_score"] for tool in graded]
+
+        assert scores == sorted(scores, reverse=True)
+
+    def test_zero_scoring_tools_are_dropped(self):
+        graded = _grade_matching_tools(UNSCORED_TOOLS, ["current", "time"])
+
+        assert "unrelated" not in {tool["tool_name"] for tool in graded}
+
+    def test_no_tokens_drops_everything(self):
+        """With no tokens nothing can be graded above zero, so nothing is kept."""
+        assert _grade_matching_tools(UNSCORED_TOOLS, []) == []
+
+    def test_empty_input_returns_empty(self):
+        assert _grade_matching_tools([], ["current", "time"]) == []
+
+    def test_grading_is_idempotent(self):
+        """Docs added by the keyword merge arrive already graded; regrading is a no-op."""
+        once = _grade_matching_tools(UNSCORED_TOOLS, ["current", "time"])
+        twice = _grade_matching_tools(once, ["current", "time"])
+
+        assert once == twice
+
+    def test_other_keys_survive(self):
+        graded = _grade_matching_tools(UNSCORED_TOOLS, ["current", "time"])
+
+        assert graded[0]["match_context"] == "Return the current time"
+        assert graded[0]["description"] == "Return the current time"
+
+    def test_input_is_not_mutated(self):
+        """The caller's list must be reusable; grading returns new dicts."""
+        original = [dict(tool) for tool in UNSCORED_TOOLS]
+        _grade_matching_tools(UNSCORED_TOOLS, ["current", "time"])
+
+        assert UNSCORED_TOOLS == original
+
+    def test_missing_and_none_fields_do_not_raise(self):
+        tools = [
+            {"tool_name": None, "description": None},
+            {},
+            {"tool_name": "time_now"},
+        ]
+        graded = _grade_matching_tools(tools, ["time"])
+
+        assert [tool["tool_name"] for tool in graded] == ["time_now"]

@@ -164,3 +164,34 @@ class TestSearchNeverEmitsRawQueryRegex:
         assert emitted, "expected keyword stages to run for a tokenizable query"
         for pattern in emitted:
             assert ".*" not in pattern
+
+
+def _find_relevance_score_keys(node, path: str = "") -> list[str]:
+    """Walk a nested aggregation expression and collect relevance_score paths."""
+    found: list[str] = []
+    if isinstance(node, dict):
+        for key, value in node.items():
+            child = f"{path}.{key}"
+            if key == "relevance_score":
+                found.append(child)
+            found.extend(_find_relevance_score_keys(value, child))
+    elif isinstance(node, list):
+        for index, value in enumerate(node):
+            found.extend(_find_relevance_score_keys(value, f"{path}[{index}]"))
+    return found
+
+
+class TestTextBoostStageEmitsNoToolScore:
+    """Issue #1752: the $map must not stamp a score. Python grades tools."""
+
+    def test_stage_has_no_relevance_score_at_any_depth(self):
+        stage = _build_text_boost_stage("time|tokyo")
+
+        assert _find_relevance_score_keys(stage) == []
+
+    def test_stage_still_emits_the_fields_the_grader_needs(self):
+        """_grade_matching_tools() reads tool_name and description off each entry."""
+        stage = _build_text_boost_stage("time|tokyo")
+        tool_projection = stage["$addFields"]["matching_tools"]["$map"]["in"]
+
+        assert set(tool_projection) == {"tool_name", "description", "match_context"}
