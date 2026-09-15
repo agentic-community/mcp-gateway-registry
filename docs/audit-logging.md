@@ -1,17 +1,19 @@
 # Audit Logging
 
-MCP Gateway Registry provides comprehensive audit logging for compliance, security monitoring, and operational visibility. All API requests and MCP server access events are logged to MongoDB/DocumentDB with automatic retention management.
+MCP Gateway Registry provides comprehensive audit logging for compliance, security monitoring, and operational visibility. All API requests and MCP server access events are logged to MongoDB/DocumentDB, and are expired by a TTL index that an initialization script creates — see [Data Retention](#data-retention).
 
 ![Audit Log Viewer](img/audit-log.png)
 
 ## Overview
 
-Audit logging captures two types of events:
+Audit logging captures three types of events, written to one collection and
+distinguished by `log_type`:
 
-1. **Registry API Access** - All REST API requests to the Registry (`/api/*`, `/v0.1/*`)
-2. **MCP Server Access** - All MCP protocol requests proxied through the Gateway
+1. **Registry API Access** (`registry_api_access`) - All REST API requests to the Registry (`/api/*`, `/v0.1/*`)
+2. **MCP Server Access** (`mcp_server_access`) - All MCP protocol requests proxied through the Gateway
+3. **Token Mint** (`token_mint`) - Tokens the auth server signs, recorded at the signing point on both success and failure. This stream stores its fields flat (no nested `identity` / `action` blocks)
 
-Sensitive data such as authentication tokens, session cookies, and passwords are never logged. Credentials are masked to show only the last 6 characters as a hint for debugging.
+Sensitive data such as authentication tokens, session cookies, and passwords are never logged. Credential values are never recorded at all — a credential hint records only that a credential was present, never any part of its value.
 
 ## Durability and Attribution
 
@@ -26,7 +28,7 @@ When audit logging is enabled (`AUDIT_LOG_ENABLED=true`) but no durable sink is 
 
 ### Per-instance attribution
 
-Each audit record carries an `instance_id` identifying the registry replica that produced it, and internal service tokens embed the same per-instance identifier in their subject (`<service>@<instance_id>`) so an internal action is attributable to a specific caller/replica rather than a shared service identity. The identifier is resolved from `AUDIT_INSTANCE_ID`, then `HOSTNAME` (set per-container by Docker and per-pod by Kubernetes), then the host name.
+`registry_api_access` records carry an `instance_id` identifying the registry replica that produced them; `MCPServerAccessRecord` and `TokenMintAuditRecord` declare no such field, so `mcp_server_access` and `token_mint` records are not attributed to a replica. Internal service tokens embed the same per-instance identifier in their subject (`<service>@<instance_id>`) so an internal action is attributable to a specific caller/replica rather than a shared service identity. The identifier is resolved from `AUDIT_INSTANCE_ID`, then `HOSTNAME` (set per-container by Docker and per-pod by Kubernetes), then the host name.
 
 ### Runtime write failures
 
@@ -51,12 +53,12 @@ The following sensitive data is explicitly excluded from audit logs:
 
 ### Data Masking
 
-When credential hints are logged for debugging purposes, they are automatically masked:
+A credential hint records only the *presence* of a credential, never any part of its value:
 
-- Full token: `eyJhbGciOiJSUzI1NiIsInR5...` becomes `***zI1Ni`
-- Tokens shorter than 6 characters become `***`
+- Any credential value — bearer token, session cookie, API key — becomes the fixed marker `***`, regardless of its length.
+- No suffix is emitted: the trailing characters of a short token are a large fraction of its key space, and audit records land in a store that may be read more widely than the request path. The credential *type* (`session_cookie` vs `bearer_token`) is captured separately on the identity, so this loses no diagnostic value.
 
-Query parameters with sensitive names (token, password, key, secret, api_key, etc.) are automatically masked.
+Query parameters with sensitive names (token, password, key, secret, api_key, etc.) are automatically masked, by exact name and by substring, so a new variant fails closed.
 
 ## Event Schemas
 
@@ -79,7 +81,7 @@ Logged for every REST API request to the Registry.
     "scopes": ["registry-admins"],
     "is_admin": true,
     "credential_type": "session_cookie",
-    "credential_hint": "***abc123"
+    "credential_hint": "***"
   },
   "request": {
     "method": "POST",
@@ -109,6 +111,18 @@ Logged for every REST API request to the Registry.
 }
 ```
 
+The durable IdP claim fields (`subject`, `canonical_id`, `principal_name`,
+`object_id`, `tenant_id`, `app_id`) are **present but always `null`** on
+`registry_api_access` records: the record model declares them, so they serialize
+as explicit nulls, but the registry receives only a thin signed identity
+assertion from the auth server rather than the raw IdP claims and so has nothing
+to populate them with — see [Stream coverage](#notes-and-limitations).
+
+Query them with a type or value test, not `$exists`. On this stream
+`{"identity.subject": {"$exists": true}}` matches every record;
+`{"identity.subject": {"$type": "string"}}` matches only records that carry a
+real claim.
+
 ### MCP Server Access Event
 
 Logged for every MCP protocol request proxied through the Gateway.
@@ -123,12 +137,18 @@ Logged for every MCP protocol request proxied through the Gateway.
   "identity": {
     "username": "ai-agent@example.com",
     "auth_method": "jwt_bearer",
-    "provider": "keycloak",
+    "provider": "entra_id",
     "groups": [],
     "scopes": ["mcp-server-cloudflare-docs"],
     "is_admin": false,
     "credential_type": "bearer_token",
-    "credential_hint": "***def456"
+    "credential_hint": "***",
+    "subject": "H2mQ1-9vXk8yTn3rLp0aZ4cFdE7bGjSuVwYx1KtM2No",
+    "canonical_id": "8f4a2c1e-5b3d-4e6f-9a7b-0c1d2e3f4a5b@1c2d3e4f-5a6b-7c8d-9e0f-a1b2c3d4e5f6",
+    "principal_name": "ai-agent@example.com",
+    "object_id": "8f4a2c1e-5b3d-4e6f-9a7b-0c1d2e3f4a5b",
+    "tenant_id": "1c2d3e4f-5a6b-7c8d-9e0f-a1b2c3d4e5f6",
+    "app_id": "d7e8f9a0-1b2c-3d4e-5f60-7a8b9c0d1e2f"
   },
   "mcp_server": {
     "name": "cloudflare-docs",
@@ -153,20 +173,78 @@ Logged for every MCP protocol request proxied through the Gateway.
 }
 ```
 
+### Token Mint Event
+
+Logged at the auth server's token-signing point, on success and on failure. This
+stream has no nested blocks: identity, resource, and outcome fields all sit at
+the top level.
+
+```json
+{
+  "timestamp": "2026-02-06T10:30:00.000Z",
+  "log_type": "token_mint",
+  "version": "1.0",
+  "request_id": "mint-4f1c8a90-...",
+  "correlation_id": "xyz789-...",
+  "username": "ai-agent@example.com",
+  "username_hash": "user_1a2b3c4d",
+  "auth_method": "oauth2",
+  "provider": "entra_id",
+  "internal_caller": "mcp-proxy",
+  "subject": "H2mQ1-9vXk8yTn3rLp0aZ4cFdE7bGjSuVwYx1KtM2No",
+  "canonical_id": "8f4a2c1e-5b3d-4e6f-9a7b-0c1d2e3f4a5b@1c2d3e4f-5a6b-7c8d-9e0f-a1b2c3d4e5f6",
+  "principal_name": "ai-agent@example.com",
+  "object_id": "8f4a2c1e-5b3d-4e6f-9a7b-0c1d2e3f4a5b",
+  "tenant_id": "1c2d3e4f-5a6b-7c8d-9e0f-a1b2c3d4e5f6",
+  "app_id": "d7e8f9a0-1b2c-3d4e-5f60-7a8b9c0d1e2f",
+  "token_kind": "resource",
+  "resource_type": "server",
+  "resource_id": "cloudflare-docs",
+  "token_path": "self_signed",
+  "requested_scopes": ["mcp-server-cloudflare-docs"],
+  "expires_in_seconds": 3600,
+  "outcome": "success",
+  "failure_reason": null
+}
+```
+
+`token_mint` records have no `request` block, so they carry no client IP,
+forwarded-for header, or user agent.
+
 ## Data Fields Reference
 
 ### Identity Fields
 
 | Field | Description |
 |-------|-------------|
-| `username` | Username or identifier of the requester |
-| `auth_method` | Authentication method: `oauth2`, `traditional`, `jwt_bearer`, `anonymous` |
-| `provider` | Identity provider: `cognito`, `entra_id`, `keycloak` |
+| `username` | Human-readable display identity of the requester (email on most OIDC paths) |
+| `auth_method` | Authentication method: `oauth2`, `jwt_bearer`, `anonymous` |
+| `provider` | Identity provider: `cognito`, `entra_id`, `keycloak`, `okta`, `auth0`, `pingfederate` |
 | `groups` | Groups the user belongs to |
 | `scopes` | OAuth scopes granted to the user |
 | `is_admin` | Whether the user has admin privileges |
 | `credential_type` | Type of credential: `session_cookie`, `bearer_token`, `none` |
-| `credential_hint` | Masked hint of the credential (last 6 chars only) |
+| `credential_hint` | Fixed `***` marker recording only that a credential was present. No part of the credential value is emitted — not even a suffix |
+| `subject` | OIDC `sub`: opaque, stable per (user, app); protocol-level correlation |
+| `canonical_id` | Durable identity: Entra `oid@tid` when both claims are present, else `subject` |
+| `principal_name` | Readable principal handle, from the `upn`, `preferred_username`, or `email` claim (in that order). Entra v1.0 tokens carry `upn`; v2.0 tokens carry only `email` |
+| `object_id` | Entra user Object ID (`oid`): immutable per user within a tenant |
+| `tenant_id` | Entra tenant ID (`tid`) of the IdP that authenticated the caller. An IdP-side identifier — this system is single-tenant, so it does not denote a registry tenant, and it is not the gateway's own app registration |
+| `app_id` | Calling application id from the `appid` / `azp` claim |
+
+The last six fields are **nullable, not absent**. The record model declares them,
+so every record carries all six keys and a claim the token did not supply
+serializes as explicit `null` — including for an IdP that issues none of them.
+That distinction matters when you query: `{"identity.subject": {"$exists": true}}`
+matches *every* record on those streams, so filter on
+`{"identity.subject": {"$type": "string"}}` to select only the records that
+actually carry a value. None of the six is an input to any authorization, vault,
+or OBO decision.
+
+**Where they live.** On `registry_api_access` and `mcp_server_access` records
+they sit inside the `identity` block (`identity.principal_name`, etc.). On
+`token_mint` records they are **top-level** fields: that stream has no
+`identity` block, and its readable identity is the flat `username` field.
 
 ### Action Fields (Registry API only)
 
@@ -187,6 +265,63 @@ Logged for every MCP protocol request proxied through the Gateway.
 | `mcp_session_id` | MCP session identifier |
 | `transport` | Transport protocol: `streamable-http`, `sse`, `stdio` |
 | `jsonrpc_id` | JSON-RPC request ID |
+
+### Token Mint Fields (Token Mint only)
+
+`token_mint` records share `timestamp`, `log_type`, `version`, `request_id`, and
+`correlation_id` with the other streams, and carry the six IdP claim fields
+(`subject`, `canonical_id`, `principal_name`, `object_id`, `tenant_id`, `app_id`)
+at the **top level** rather than under `identity`. The stream-specific fields
+are:
+
+| Field | Description |
+|-------|-------------|
+| `username` | Raw human-readable identity of the requesting user (email → `preferred_username` → `sub`); the flat equivalent of `identity.username` |
+| `username_hash` | **Deprecated**, kept for back-compat with dashboards and alerts that key on it: `user_<8 hex>`, the first 8 hex characters (32 bits) of a SHA-256 of `username`. Low entropy by design, so distinct users collide once the population reaches the tens of thousands — a grouping key, never a unique id. Use `username` instead |
+| `auth_method` | Authentication method of the requesting user (`oauth2`, `network-trusted`, etc.) |
+| `provider` | Identity provider, as on `identity.provider` |
+| `internal_caller` | Identity of the internal service that called `/internal/tokens` (for example `mcp-proxy`) |
+| `token_kind` | `user` (unrestricted within scopes) or `resource` (bound to one resource); `unknown` when the mint failed before the kind was resolved |
+| `resource_type` | For resource-bound tokens: `server`, `agent`, `peer-registry`, etc. Top-level here, not under `action` |
+| `resource_id` | For resource-bound tokens: the resource id, e.g. `fininfo` |
+| `token_path` | Which signing path produced the token: `self_signed`, `m2m`, or `unknown` on a failure before the path was chosen |
+| `requested_scopes` | Scopes requested for the token |
+| `expires_in_seconds` | Token lifetime in seconds; `null` when the mint failed before a lifetime was computed |
+| `outcome` | `success` or `failure` |
+| `failure_reason` | Short reason when `outcome` is `failure` (for example `rate_limited`, `provider_error`) |
+
+### Notes and Limitations
+
+**Forward-only identity.** Recording a readable identity applies to new records
+only. Historical records that stored an opaque `sub` as the username are not
+backfilled — no durable map from an old `sub` to a user exists, so any backfill
+would be a guess. Two consequences while the retention window rolls over:
+
+- The distinct-identity metrics count distinct display identities, so one human
+  can be counted twice: once under their old opaque `sub` and once under their
+  new readable identity. This applies to every metric built on the same
+  distinct-count helper over `identity.username` — DAU/WAU/MAU, the agent
+  equivalents (DAA/WAA/MAA), and the executive summary's momentum counters
+  `active_identities_current` / `active_identities_prior` and
+  `active_agents_current` / `active_agents_prior`.
+- A saved filter or alert pinned to an old `sub` value keeps matching that
+  user's historical records, because the readable substring match still finds
+  the `sub` that was stored as the username. Once the claim fields are populated
+  it also matches their new records, through the equality match on
+  `identity.subject`. So such a filter may match *more* than intended, not less.
+  What it genuinely stops matching is the case where the new records carry no
+  `subject` claim at all, because the token did not supply one.
+
+**Stream coverage.** The durable claim fields are populated on the
+`mcp_server_access` and `token_mint` streams, both produced by the auth server,
+which holds the verified IdP claims. They are **not** present on
+`registry_api_access` records. This is an intentional trust boundary, not a gap:
+the auth server hands the registry a thin signed assertion (subject, session id,
+groups, auth method, client id) rather than raw IdP claims, so the registry never
+sees `upn`, `oid`, or `tid` and cannot record them. To correlate across streams,
+match a `registry_api_access` record with an `mcp_server_access` record on
+`identity.username`; match either against a `token_mint` record on that stream's
+top-level `username` field, since `token_mint` has no `identity` block.
 
 ## Data Retention
 
@@ -314,36 +449,56 @@ db.audit_events_default.find({
 Audit logging is designed to never impact request processing:
 
 - Logging happens asynchronously after the response is sent
-- Failures in audit logging are logged as warnings but don't fail requests
-- High-volume scenarios use batched writes (if enabled)
+- A failure to record an event never fails the request; the loss is surfaced as a
+  `CRITICAL` `AUDIT RECORD DROPPED` log event instead (see
+  [Runtime write failures](#runtime-write-failures))
+- Each record is written with its own insert (`insert_one` in
+  `registry/repositories/audit_repository.py`); there is no write batching
 
 ## Compliance Considerations
 
-### SOC 2 / ISO 27001
+This section describes what the system records and what it does not. It is not
+legal advice and asserts no compliance guarantee: the operator is the data
+controller and determines their own obligations. Audit logs are commonly used as
+evidence for frameworks such as SOC 2 and ISO/IEC 27001; what those frameworks
+require of a given deployment is outside the scope of this document.
 
-Audit logs support compliance requirements by capturing:
+### Personal data
 
-- **Who**: User identity with auth method and provider
-- **What**: Operation performed with resource details
-- **When**: Precise UTC timestamp
-- **Where**: Client IP and forwarded-for headers
-- **Outcome**: Success/failure status with error details
+Audit records identify people, by design — attribution is the point of an audit
+trail. Rather than restate the schema, see [Identity Fields](#identity-fields)
+and the per-stream field tables above for exactly what is stored. Beyond the
+identity block, note that records also carry group membership and scopes, the
+client IP, forwarded-for and user-agent values, and — on `registry_api_access`
+records — the request's query parameters, whose values are masked only when the
+parameter *name* looks credential-like (see [Data Masking](#data-masking)).
 
-### GDPR
+Not recorded: credential values (reduced to a fixed `***` marker), request and
+response payloads, tool arguments, and the IdP `name` claim.
 
-- User identifiers (usernames) are logged for accountability
-- No PII beyond usernames is captured
-- Logs can be exported and deleted per data subject requests
-- TTL-based retention supports data minimization
+### Retention
 
-### Additional Recommendations
+Records expire through a TTL index driven by `AUDIT_LOG_MONGODB_TTL_DAYS`
+(default `7`). That index is created only by an initialization script, never by
+the application, so a deployment that has not run one retains audit records
+indefinitely — see [Data Retention](#data-retention).
 
-For production compliance deployments:
+### Access and deletion
 
-1. Stream audit logs to a SIEM (Splunk, Datadog, etc.) for long-term retention
-2. Set up alerts for suspicious patterns (failed auths, privilege escalation)
-3. Regularly review admin actions in the audit log
-4. Document your retention policy and ensure TTL matches it
+Every route under `/api/audit/*` is a `GET` guarded by `require_admin`, so the
+API provides no way to alter or delete a record — including an administrator's
+own activity. Records leave the store by TTL expiry. `GET /api/audit/export`
+produces a filtered extract as JSONL or CSV.
+
+### Operator responsibilities
+
+These are deployment decisions the product does not make for you:
+
+- the lawful basis for this processing, and the notices and records that go with it
+- the retention period, and confirming the TTL index actually exists
+- who holds admin, since the audit UI exposes other users' personal data
+- how you respond to data-subject requests, given there is no deletion endpoint
+- whether to stream the trail to a SIEM for longer retention or alerting
 
 ## Troubleshooting
 

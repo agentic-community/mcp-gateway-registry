@@ -181,6 +181,7 @@ def mint_mcp_proxy_token(
     upstream_url: str,
     auth_method: str = "",
     egress_user: str = "",
+    audit_identity: dict | None = None,
 ) -> str:
     """Mint the per-request /mcp-proxy token in /validate's 200 path.
 
@@ -199,18 +200,30 @@ def mint_mcp_proxy_token(
     ``_canonical_egress_user``). The egress vend keys the vault on this, so it
     MUST match what the consent-write path resolved for the same human — both
     derive it identically. Empty for non-per-user callers.
+
+    ``audit_identity`` carries the audit identity /validate resolved from the
+    VERIFIED token claims (see ``_audit_identity_token_claim``), so the mcp-proxy
+    hop can attribute the OBO token-mint audit record without re-deriving
+    identity from the raw ingress header it holds -- that header is not
+    necessarily the credential /validate authenticated (a cookie-authenticated
+    request's bearer header is never validated), so identity read there is
+    caller-controlled. Signed here, it is not. Omitted when empty so the header
+    stays small.
     """
+    extra_claims: dict = {
+        "server": server_name.split("/", 1)[0] if server_name else "",
+        "upstream_url": upstream_url,
+        "auth_method": auth_method,
+        "egress_user": egress_user or "",
+        "token_use": MCP_PROXY_TOKEN_USE,
+    }
+    if audit_identity:
+        extra_claims["audit_identity"] = audit_identity
     return _mint_internal_token(
         audience=MCP_PROXY_AUDIENCE,
         subject=subject,
         scopes=scopes,
-        extra_claims={
-            "server": server_name.split("/", 1)[0] if server_name else "",
-            "upstream_url": upstream_url,
-            "auth_method": auth_method,
-            "egress_user": egress_user or "",
-            "token_use": MCP_PROXY_TOKEN_USE,
-        },
+        extra_claims=extra_claims,
     )
 
 

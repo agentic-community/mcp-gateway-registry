@@ -80,6 +80,10 @@ const STATUS_PRESETS = [
 interface FilterOptionsCache {
   registry_api?: { usernames: SelectOption[]; serverNames: SelectOption[] };
   mcp_access?: { usernames: SelectOption[]; serverNames: SelectOption[] };
+  // The token_mint stream is selectable but its options are never fetched: only
+  // registry_api and mcp_access are prefetched on mount, so this key stays
+  // absent and the username control falls back to free-text entry.
+  token_mint?: { usernames: SelectOption[]; serverNames: SelectOption[] };
 }
 
 const AuditFilterBar: React.FC<AuditFilterBarProps> = ({
@@ -139,13 +143,15 @@ const AuditFilterBar: React.FC<AuditFilterBarProps> = ({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // When stream changes, serve from cache
+  // When stream changes, serve from cache. token_mint has no prefetched options
+  // (its identities are not enumerated), so CLEAR rather than leave the previous
+  // stream's usernames on screen -- offering registry_api identities while
+  // querying token_mint is worse than an empty list. Free-text entry still
+  // works: the control allows custom values.
   useEffect(() => {
     const cached = optionsCacheRef.current[filters.stream];
-    if (cached) {
-      setUsernameOptions(cached.usernames);
-      setServerNameOptions(cached.serverNames);
-    }
+    setUsernameOptions(cached?.usernames ?? []);
+    setServerNameOptions(cached?.serverNames ?? []);
   }, [filters.stream]);
 
   const handleStreamChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
@@ -337,21 +343,36 @@ const AuditFilterBar: React.FC<AuditFilterBarProps> = ({
           />
         </div>
 
-        {/* Username Filter */}
+        {/* Username / identity filter. The token_mint stream's identities are
+            never enumerated (that aggregation is expensive), so for that stream
+            this control is a free-text search: the dropdown says so and the
+            typed value is committed with Enter. */}
         <div>
           <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
-            {isTokenMintStream ? 'Username (hash)' : 'Username'}
+            Username
           </label>
           <SearchableSelect
             options={usernameOptions}
             value={filters.username || ''}
             onChange={handleUsernameSelect}
-            placeholder={isTokenMintStream ? 'Search username hash...' : 'Search username...'}
+            placeholder={
+              isTokenMintStream ? 'Search identity or paste an IdP id...' : 'Search username...'
+            }
             isLoading={optionsLoading}
             allowCustom={true}
             specialOptions={[{ value: '', label: 'All Users' }]}
             focusColor="focus:ring-blue-500"
+            emptyMessage={
+              isTokenMintStream
+                ? 'Token mint identities are not listed. Type a username, UPN, object id or sub and press Enter to search.'
+                : undefined
+            }
           />
+          {isTokenMintStream && (
+            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              Free-text search: press Enter to search for the identity you typed.
+            </p>
+          )}
         </div>
 
         {/* Operation / MCP Method Filter */}

@@ -84,9 +84,11 @@ class TestBuildQuery:
             auth_decision=None,
         )
 
-        # Username uses case-insensitive regex for partial matching
-        assert query["identity.username"]["$regex"] == "admin"
-        assert query["identity.username"]["$options"] == "i"
+        # Username matches the display identity or any stored identity claim,
+        # via case-insensitive regex for partial matching
+        assert {"identity.username": {"$regex": "admin", "$options": "i"}} in query["$or"]
+        # Opaque identity claims match exactly, not as a substring.
+        assert {"identity.subject": "admin"} in query["$or"]
         assert query["action.operation"] == "create"
         assert query["response.status_code"]["$gte"] == 400
 

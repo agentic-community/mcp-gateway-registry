@@ -36,14 +36,16 @@ class TestTokenMintQuery:
     def test_username_filters_on_raw_username_not_identity(self):
         query = _q(username="alice@example.com")
         # Filters on the raw, human-readable `username` field (not the
-        # deprecated `username_hash`, and not the nested identity field).
-        # The value is regex-escaped (the "." in an email is a metachar).
-        assert "username" in query
-        assert query["username"]["$regex"] == re.escape("alice@example.com")
-        assert query["username"]["$options"] == "i"
+        # deprecated `username_hash`, and not the nested identity field), plus
+        # the top-level identity claims. The value is regex-escaped (the "." in
+        # an email is a metachar).
+        expected = {"$regex": re.escape("alice@example.com"), "$options": "i"}
+        assert {"username": expected} in query["$or"]
+        # Opaque identity claims match exactly (no regex): they are pasted whole.
+        assert {"canonical_id": "alice@example.com"} in query["$or"]
         assert "username_hash" not in query
-        # Must NOT use the registry_api/mcp_access identity field.
-        assert "identity.username" not in query
+        # token_mint has no nested identity block.
+        assert not any(field.startswith("identity.") for clause in query["$or"] for field in clause)
 
     def test_operation_filters_on_token_kind(self):
         query = _q(operation="resource")
@@ -62,6 +64,8 @@ class TestTokenMintQuery:
     def test_combined_filters(self):
         query = _q(username="alice@example.com", operation="user", resource_type="agent")
         assert query["log_type"] == "token_mint"
-        assert query["username"]["$regex"] == re.escape("alice@example.com")
+        assert {"username": {"$regex": re.escape("alice@example.com"), "$options": "i"}} in query[
+            "$or"
+        ]
         assert query["token_kind"] == "user"
         assert query["resource_type"] == "agent"
