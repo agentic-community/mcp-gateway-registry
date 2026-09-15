@@ -1,5 +1,5 @@
 global:
-  existingMongoCredentialsSecret: ""  # If set, use this existing secret instead of creating one
+  existingMongoCredentialsSecret: "" # If set, use this existing secret instead of creating one
   # Image defaults, shared with the other subcharts. Declared here so this chart
   # also renders standalone (`helm template ./charts/mongodb-configure`); the
   # stack chart's global.image overrides these.
@@ -11,7 +11,6 @@ global:
     type: keycloak
     entra:
       adminGroupId:
-
 # Image for the init Job. This chart runs the REGISTRY image, because the
 # initialization script, the scope seed JSONs it loads and the pinned
 # motor/pymongo venv all already live in it at /app. Nothing is copied into a
@@ -21,7 +20,6 @@ image:
   repository: registry # Image name within the registry
   tag: "" # Overrides global.image.tag when set
   pullPolicy: "" # Overrides global.image.pullPolicy when set
-
 # Init Job execution limits.
 job:
   backoffLimit: 4
@@ -45,7 +43,6 @@ job:
       memory: 128Mi
     limits:
       memory: 512Mi
-
 # MongoDB configuration
 mongodb:
   database: mcp_registry
