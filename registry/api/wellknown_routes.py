@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -310,6 +311,20 @@ async def get_oauth_protected_resource() -> JSONResponse:
     return JSONResponse(content=document, headers=OAUTH_DISCOVERY_CACHE_HEADERS)
 
 
+def _registry_url_path_prefix() -> str:
+    """Path component of ``settings.registry_url`` (e.g. ``/registry``), or ``""``.
+
+    Path-prefixed deployments (``ROOT_PATH`` / ``REGISTRY_URL`` with a path)
+    advertise per-server resources of the form ``https://gw/<prefix>/<server>/mcp``.
+    """
+    try:
+        path = urlparse(settings.registry_url).path or ""
+    except (TypeError, ValueError, AttributeError):
+        return ""
+    path = path.rstrip("/")
+    return path if path and path != "/" else ""
+
+
 def _normalize_prm_server_path(server_path: str) -> str:
     """Reduce a path-aware PRM suffix to the registered server path.
 
@@ -317,8 +332,18 @@ def _normalize_prm_server_path(server_path: str) -> str:
     ``/.well-known/oauth-protected-resource/<server>/mcp`` (the connection URL's
     path). Strip a trailing ``/mcp`` transport segment and normalize to the
     leading-slash registered path (e.g. ``obo-echo/mcp`` -> ``/obo-echo``).
+
+    When the gateway runs under a path prefix, the advertised resource is
+    ``https://gw/<prefix>/<server>/mcp`` and RFC 9728 section 3.1 places the
+    well-known segment between host and path, so a client derives
+    ``/.well-known/oauth-protected-resource/<prefix>/<server>/mcp``. Drop the
+    gateway's own prefix first (``registry/obo-echo/mcp`` -> ``/obo-echo``);
+    deployments without a prefix are unaffected.
     """
     p = "/" + server_path.strip("/")
+    prefix = _registry_url_path_prefix()
+    if prefix and (p == prefix or p.startswith(prefix + "/")):
+        p = p[len(prefix) :] or "/"
     if p.endswith("/mcp"):
         p = p[: -len("/mcp")]
     return p or "/"
