@@ -17,6 +17,26 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _record_integrity_degradation(reason: str) -> None:
+    """Increment the rate-alertable audit-integrity counter.
+
+    Lazily imported (the `webhook_service` / `lifecycle_events` precedent) so
+    that importing this module from the auth-server process -- which bootstraps
+    its OWN meter provider in `auth_server.observability.meters` -- does not pull
+    in a second one. Never raises: a metrics failure must not turn an audit
+    problem into a request failure.
+
+    `reason` is a code-supplied constant, never caller data, so the label
+    cardinality stays bounded.
+    """
+    try:
+        from ..observability.meters import audit_integrity_degraded_total
+
+        audit_integrity_degraded_total.add(1, {"reason": reason})
+    except Exception as exc:
+        logger.warning("audit_integrity_degraded_total emit failed: %s", exc)
+
+
 class NonDurableAuditError(RuntimeError):
     """Raised when audit logging would run without a durable sink and the
     deployment requires a durable audit trail.
@@ -164,6 +184,7 @@ class AuditLogger:
                     getattr(record, "request_id", "unknown"),
                     e,
                 )
+                _record_integrity_degradation("record_dropped")
 
     async def close(self) -> None:
         """

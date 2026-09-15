@@ -5,7 +5,7 @@ Tests the MongoDB-only audit logging functionality.
 """
 
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -146,6 +146,70 @@ class TestLogEvent:
         message = dropped[0].getMessage()
         assert "AUDIT RECORD DROPPED" in message
         assert "req-dropped" in message
+
+    async def test_dropped_durable_write_increments_the_integrity_counter(self):
+        """A CRITICAL log line cannot be alerted on as a RATE, so the drop also
+        increments a bounded counter. Without it, "audit records are being lost
+        right now" is invisible to monitoring."""
+        mock_repo = AsyncMock()
+        mock_repo.insert.side_effect = Exception("MongoDB connection failed")
+        logger = AuditLogger(
+            stream_name="test-stream",
+            mongodb_enabled=True,
+            audit_repository=mock_repo,
+        )
+
+        with patch("registry.observability.meters.audit_integrity_degraded_total") as counter:
+            await logger.log_event(make_test_record("req-dropped"))
+
+        counter.add.assert_called_once_with(1, {"reason": "record_dropped"})
+
+    async def test_successful_write_does_not_increment_the_integrity_counter(self):
+        """The healthy path must stay silent, or the alert is meaningless."""
+        mock_repo = AsyncMock()
+        logger = AuditLogger(
+            stream_name="test-stream",
+            mongodb_enabled=True,
+            audit_repository=mock_repo,
+        )
+
+        with patch("registry.observability.meters.audit_integrity_degraded_total") as counter:
+            await logger.log_event(make_test_record("req-ok"))
+
+        counter.add.assert_not_called()
+
+    async def test_counter_labels_carry_no_unbounded_dimension(self):
+        """REGRESSION: no username / request id / tenant id may become a label --
+        that is a cardinality DoS on the metrics backend."""
+        mock_repo = AsyncMock()
+        mock_repo.insert.side_effect = Exception("MongoDB connection failed")
+        logger = AuditLogger(
+            stream_name="test-stream",
+            mongodb_enabled=True,
+            audit_repository=mock_repo,
+        )
+
+        with patch("registry.observability.meters.audit_integrity_degraded_total") as counter:
+            await logger.log_event(make_test_record("req-unbounded"))
+
+        attributes = counter.add.call_args.args[1]
+        assert set(attributes) == {"reason"}
+        assert "req-unbounded" not in attributes.values()
+
+    async def test_metrics_failure_does_not_break_the_request_path(self):
+        """A broken meter must not turn a dropped audit record into a 500."""
+        mock_repo = AsyncMock()
+        mock_repo.insert.side_effect = Exception("MongoDB connection failed")
+        logger = AuditLogger(
+            stream_name="test-stream",
+            mongodb_enabled=True,
+            audit_repository=mock_repo,
+        )
+
+        with patch("registry.observability.meters.audit_integrity_degraded_total") as counter:
+            counter.add.side_effect = RuntimeError("meter exploded")
+
+            await logger.log_event(make_test_record("req-meter-down"))
 
     async def test_multiple_events_logged(self):
         """Multiple events can be logged sequentially."""

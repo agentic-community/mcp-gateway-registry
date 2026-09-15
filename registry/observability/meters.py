@@ -617,6 +617,39 @@ _internal_token_replay_check_counter = _meter.create_counter(
 internal_token_replay_check_total = _CounterAdapter(_internal_token_replay_check_counter)
 
 
+# Audit-trail integrity degradations. Declared identically in
+# auth_server/observability/meters.py (same name, so one PromQL query covers both
+# processes) -- same precedent as token_mint_total above.
+#
+# Every degradation here used to be log-only, and a log line cannot be alerted
+# on as a RATE. reason (closed set, emitted from code -- NEVER a tenant/app id,
+# principal name, username or request id, which would be unbounded):
+#   record_dropped             - a record that should exist does not. Emitted by
+#                                registry/audit/service.py when the durable write
+#                                fails (also CRITICAL logged), and by the auth
+#                                server when the token-mint emit raises after the
+#                                mint already happened.
+#   identity_hop_claim_missing - the /mcp-proxy hop token carried no signed
+#                                audit_identity, so the record falls back to the
+#                                opaque `sub` instead of a readable identity
+#                                (auth server only).
+#   claim_dropped              - a claim that WAS present was malformed or
+#                                oversized and got coerced away/truncated. An
+#                                absent claim does not increment, or every
+#                                non-Entra request would emit a constant stream
+#                                and the rate alert would be useless
+#                                (auth server only).
+audit_integrity_degraded_total = _meter.create_counter(
+    name="mcpgw_registry_audit_integrity_degraded_total",
+    description=(
+        "Audit-integrity degradations, labeled by reason (record_dropped | "
+        "identity_hop_claim_missing | claim_dropped). Rate-alertable counterpart "
+        "to the CRITICAL/WARNING log lines."
+    ),
+    unit="1",
+)
+
+
 # =============================================================================
 # Self-observability of the migration itself
 # =============================================================================

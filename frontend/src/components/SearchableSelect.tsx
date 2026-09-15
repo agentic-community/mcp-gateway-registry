@@ -27,6 +27,12 @@ interface SearchableSelectProps {
   allowCustom?: boolean;  // Allow entering values not in the list
   specialOptions?: SelectOption[];  // Options shown at top (e.g., "* All")
   focusColor?: string;
+  /**
+   * Replaces the built-in "No options available" when the list is empty and
+   * nothing has been typed. For controls whose only input mode is free text
+   * (no enumerable option set) this is where you say so.
+   */
+  emptyMessage?: string;
 }
 
 
@@ -51,6 +57,7 @@ const SearchableSelect: React.FC<SearchableSelectProps> = ({
   allowCustom = false,
   specialOptions = [],
   focusColor,
+  emptyMessage,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -213,11 +220,25 @@ const SearchableSelect: React.FC<SearchableSelectProps> = ({
                 <div className="border-t border-gray-200 dark:border-gray-700" />
               )}
 
-              {/* Filtered options */}
+              {/* Filtered options. With `allowCustom` the typed text is itself a
+                  valid choice, so offer it explicitly rather than dead-ending on
+                  "No matches found" -- the Enter-to-commit path is otherwise
+                  invisible. */}
               {filteredOptions.length === 0 ? (
-                <div className="px-3 py-2 text-sm text-gray-400">
-                  {searchQuery ? 'No matches found' : 'No options available'}
-                </div>
+                allowCustom && searchQuery.trim() ? (
+                  <button
+                    type="button"
+                    onClick={() => handleSelect(searchQuery.trim())}
+                    className="w-full text-left px-3 py-2 text-sm text-gray-900 dark:text-white hover:bg-gray-100 dark:hover:bg-gray-700"
+                  >
+                    Search for "{searchQuery.trim()}"
+                    <span className="ml-2 text-xs text-gray-400">press Enter</span>
+                  </button>
+                ) : (
+                  <div className="px-3 py-2 text-sm text-gray-400">
+                    {searchQuery ? 'No matches found' : emptyMessage || 'No options available'}
+                  </div>
+                )
               ) : (
                 filteredOptions.slice(0, 50).map((option) => (
                   <button
