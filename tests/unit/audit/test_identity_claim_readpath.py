@@ -203,6 +203,30 @@ class TestCsvFormulaNeutralization:
 
             assert cell.startswith(f"'{prefix}"), (prefix, cell)
 
+    def test_whitespace_prefixed_formula_is_neutralized(self):
+        """Excel, Calc and Sheets TRIM a cell before deciding whether it is a
+        formula, so a leading space or newline is not protection -- " =cmd" is
+        live content. A plain `startswith` check misses exactly this."""
+        for lead in (" ", "  ", "\n", "\r\n", " \t", "\t ", "\v", "\f"):
+            for prefix in ("=", "+", "-", "@"):
+                value = f'{lead}{prefix}HYPERLINK("http://attacker/","x")'
+                cell = self._path_cell(value)
+
+                assert cell == f"'{value}", (lead, prefix, cell)
+
+    def test_whitespace_prefixed_formula_in_a_claim_column(self):
+        """A claim value is IdP-authored, so it gets the same treatment."""
+        rows = _csv_rows(
+            [{"request_id": "r", "identity": {"username": "a", "principal_name": "\n=1+1"}}]
+        )
+
+        assert rows[0]["principal_name"] == "'\n=1+1"
+
+    def test_whitespace_prefixed_ordinary_value_is_untouched(self):
+        """Only the formula characters matter: indenting a normal value must not
+        start quoting it."""
+        assert self._path_cell("  /api/servers") == "  /api/servers"
+
     def test_ordinary_values_are_untouched(self):
         """Neutralization must not rewrite normal exports."""
         assert self._path_cell("/api/servers") == "/api/servers"

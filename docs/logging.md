@@ -33,6 +33,24 @@ registry / auth-server
 - **Admin API**: Three endpoints for querying, exporting, and discovering log metadata. All require admin authentication.
 - **Log Viewer UI**: Filter by service, level, hostname, time range, and message content. Supports pagination and JSONL export.
 
+### What does NOT go through this pipeline
+
+Audit records are **not** application logs and never enter the handlers above.
+`registry.audit.sink` emits them on the `registry.audit.records` logger, which
+has `propagate = False` and its own dedicated handler, so an audit record body
+never reaches the rotating file or the `application_logs` collection. That
+matters because an audit record carries durable IdP identity claims
+(`principal_name`, `canonical_id`, `subject`, `object_id`, `tenant_id`,
+`app_id`), and `application_logs` has a much shorter retention
+(`APP_LOG_CENTRALIZED_TTL_DAYS`, 1 day by default) and a different access
+boundary (the admin log API below) than the audit collection. The claim values
+are additionally masked before that dedicated handler runs, because stdout is
+scraped into this same store; full-fidelity claims live only in the durable
+audit store. See [audit-logging.md](audit-logging.md).
+
+Adding `registry.audit.records` to `APP_LOG_EXCLUDED_LOGGERS` is neither needed
+nor sufficient: that setting filters only the MongoDB handler.
+
 ## Configuration Parameters
 
 All parameters use the `APP_LOG_` prefix. The centralized (MongoDB) storage parameters use `APP_LOG_CENTRALIZED_`.
