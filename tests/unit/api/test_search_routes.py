@@ -327,15 +327,25 @@ class TestPydanticModels:
         assert tool.match_context == "test context"
 
     def test_matching_tool_result_defaults(self):
-        """Test MatchingToolResult with default values."""
+        """Test MatchingToolResult with default values.
+
+        relevance_score has no default since issue #1752: every search path grades
+        its tools, so a missing score means a path stopped grading and must fail
+        loudly rather than report 0.0 for a tool that matched.
+        """
         # Arrange & Act
-        tool = MatchingToolResult(tool_name="test_tool")
+        tool = MatchingToolResult(tool_name="test_tool", relevance_score=0.31)
 
         # Assert
         assert tool.tool_name == "test_tool"
         assert tool.description is None
-        assert tool.relevance_score == 0.0
+        assert tool.relevance_score == 0.31
         assert tool.match_context is None
+
+    def test_matching_tool_result_requires_a_score(self):
+        """A tool with no graded score is a bug, not a zero (issue #1752)."""
+        with pytest.raises(ValidationError):
+            MatchingToolResult(tool_name="test_tool")
 
     def test_matching_tool_result_score_validation(self):
         """Test MatchingToolResult score must be between 0 and 1."""

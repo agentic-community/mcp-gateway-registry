@@ -149,13 +149,49 @@ This ensures the API returns meaningful 0-1 scores that the UI can display as pe
 
 ### 3b. Tool Scoring
 
-Tools within matched servers are scored independently based on how well their name and description match the query tokens:
+Tools within matched servers are scored independently based on how well their name and description match the query tokens. `_score_tool_relevance()` is the single scorer, and it blends a capped raw score with token coverage:
 
 ```
-tool_score = keyword_match_quality(tool_name, tool_description, query_tokens)
+raw       = 0.5 per query token found in the tool name
+          + 0.3 per query token found only in the description
+coverage  = matched_tokens / total_query_tokens
+score     = min(1.0, raw) * 0.7 + coverage * 0.3
 ```
 
-Only tools with a non-zero match score are included in results. Tools that don't match the query are excluded even if their parent server matched. This replaces the previous approach where all tools inherited a hardcoded 0.8 score from the server.
+Worked examples for a two-token query:
+
+| Match | Raw | Coverage | Score |
+|-------|-----|----------|-------|
+| One token in the name | 0.5 | 0.5 | 0.50 |
+| One token in the description only | 0.3 | 0.5 | 0.36 |
+| Both tokens in the name | 1.0 | 1.0 | 1.00 |
+
+Only tools with a non-zero score are included. A tool that does not match is excluded even if its parent server matched, so `matching_tools` can be shorter than the server's `num_tools`.
+
+**One scorer on every path.** The search repository has four code paths that produce `matching_tools`: the aggregation pipeline in `search()`, the keyword-merge branch of `search()`, `_client_side_search()`, and `_lexical_only_search()`. All four grade in Python with `_score_tool_relevance()`.
+
+This is an invariant worth stating because it was silently violated for four months. The MongoDB `$filter` / `$map` in `_build_text_boost_stage()` used to stamp a literal `"relevance_score": 1.0` on every keyword-matched tool, so the two aggregation-fed paths reported a perfect score for any tool whose name or description matched the query at all. Since DocumentDB supports `$search: {vectorSearch: ...}` and MongoDB CE does not, the flat score appeared on DocumentDB for every query while the local development stack looked correct. The aggregation now selects candidates and emits no score; Python grades what it selected (issue #1752).
+
+The division of labour that follows from this: **Mongo selects candidates, Python scores them.** Do not add a scoring expression to an aggregation stage. There is no way to keep it in step with `_score_tool_relevance()`, and the failure is silent.
+
+### 3c. Absolute vs Rank-Relative Scores
+
+Two different numbers reach the caller, and conflating them causes confusion:
+
+| Field | Meaning | Range | Comparable across queries |
+|-------|---------|-------|---------------------------|
+| `relevance_score` | Rank-relative, after min-max normalization | 0.0 to 1.0 | No |
+| `similarity_score` | Raw cosine similarity to the query | -1.0 to 1.0 | Yes |
+
+`relevance_score` maps the top-ranked result to exactly 1.0 on every query by construction, however weak the match. That is deliberate (see [Score Normalization](#3a-score-normalization)), because raw RRF scores land between 0.01 and 0.03 and rendered as "1% match" for the best possible hit.
+
+The consequence is that a nonsense query still returns a top hit at 1.0. `similarity_score` is the honest absolute number that sits beside it, computed by `_attach_similarity_scores()`. A server can legitimately return `relevance_score: 1.0` with `similarity_score: 0.02`, which means "this was the best of a bad set".
+
+Notes on `similarity_score`:
+
+- It is **not** a 0-to-1 confidence and must not be rendered as a percentage. Negative values are normal and mean the document is less alike than two random vectors would be.
+- It is `null` when the query was not embedded (lexical fallback mode).
+- It is `null` on tools lifted out of a parent server. Similarity is attached per indexed document path, and a lifted tool carries `server_path` rather than its own `path`. A standalone tool entity, which is its own indexed document, does get a value.
 
 ### 4. Score-Before-Filter Pattern
 
@@ -301,9 +337,12 @@ Search returns grouped results (up to `max_results` total, distributed across en
     {
       "path": "/context7",
       "server_name": "Context7 MCP Server",
+      "num_tools": 4,
       "relevance_score": 1.0,
+      "similarity_score": 0.6412,
       "matching_tools": [
-        {"tool_name": "query-docs", "description": "..."}
+        {"tool_name": "query-docs", "description": "...", "relevance_score": 0.9},
+        {"tool_name": "resolve-library-id", "description": "...", "relevance_score": 0.31}
       ]
     }
   ],
@@ -311,6 +350,8 @@ Search returns grouped results (up to `max_results` total, distributed across en
     {
       "server_path": "/context7",
       "tool_name": "query-docs",
+      "relevance_score": 0.9,
+      "similarity_score": null,
       "inputSchema": {...}
     }
   ],
@@ -320,8 +361,13 @@ Search returns grouped results (up to `max_results` total, distributed across en
       "path": "/virtual/dev-tools",
       "server_name": "Dev Tools",
       "relevance_score": 0.85,
+      "similarity_score": 0.5107,
       "backend_paths": ["/github", "/jira"],
-      "tool_count": 5
+      "backend_count": 2,
+      "num_tools": 5,
+      "matching_tools": [
+        {"tool_name": "create_issue", "description": "...", "relevance_score": 0.45}
+      ]
     }
   ],
   "skills": [...]
@@ -392,7 +438,7 @@ Search returns grouped results (up to `max_results` total, distributed across en
 - Not indexed separately - extracted from parent server documents
 - When a server matches, its tools are checked for keyword matches
 - Top-level `tools[]` array contains full schema (inputSchema)
-- `matching_tools` in server results is a lightweight reference (no schema)
+- `matching_tools` in server results is a lightweight reference (no schema) carrying `tool_name`, `description`, `relevance_score` and `match_context`, sorted best first
 
 ### Virtual MCP Servers
 
@@ -433,16 +479,27 @@ Virtual MCP Servers are indexed in the unified `mcp_embeddings_{dimensions}` col
       "server_name": "Dev Tools",
       "description": "Aggregated development tools",
       "relevance_score": 0.85,
+      "similarity_score": 0.5107,
       "tags": ["development", "tools"],
       "backend_paths": ["/github", "/jira"],
-      "tool_count": 5,
+      "backend_count": 2,
+      "num_tools": 5,
       "matching_tools": [
-        {"tool_name": "github_search"}
+        {"tool_name": "github_search", "relevance_score": 0.45}
       ]
     }
   ]
 }
 ```
+
+**Two shapes, one set of counts.** Note where `num_tools`, `backend_count` and `backend_paths` live in each representation:
+
+| Representation | Location |
+|----------------|----------|
+| Stored document | nested under `metadata` |
+| Search result entry | flattened onto the entry, with no `metadata` key |
+
+The repository's three `virtual_server` branches copy them out of `metadata` onto the result entry. Response projection must therefore read them from the entry, not from `entry["metadata"]`, which does not exist. Reading only the nested location reported `num_tools: 0` and `backend_count: 0` for every virtual server in search results while `matching_tools` was populated, which is the giveaway that the two shapes were confused.
 
 ## Metadata in Search
 
@@ -595,6 +652,8 @@ The same boost weights from hybrid mode apply:
 | Tags           | +1.5        |
 | Metadata       | +1.0        |
 | Tool (each)    | +1.0        |
+
+Note that these boosts score the **document**, not its tools. Tool-level scores come from `_score_tool_relevance()` in Python on this path as well, so a lexical-only search grades tools exactly as hybrid search does. `similarity_score` is `null` in this mode, since no embedding was produced.
 
 ### Recovery
 

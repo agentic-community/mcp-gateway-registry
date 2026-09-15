@@ -366,8 +366,6 @@ def _normalize_scores(
 
     return normalized
 
-    return normalized
-
 
 def _score_tool_relevance(
     tool_name: str,
@@ -410,6 +408,63 @@ def _score_tool_relevance(
     score = min(1.0, score) * 0.7 + token_coverage * 0.3
 
     return round(min(1.0, score), 4)
+
+
+def _grade_matching_tools(
+    matching_tools: list[dict[str, Any]],
+    query_tokens: list[str],
+    entity_name: str = "",
+) -> list[dict[str, Any]]:
+    """Attach a graded relevance_score to tools the aggregation pipeline selected.
+
+    The pipeline's $filter picks candidate tools by regex but does not score them,
+    so Python is the single scorer on every search path (issue #1752). Tools that
+    score 0.0 are dropped rather than returned with a meaningless score.
+
+    Args:
+        matching_tools: Tool entries from the pipeline, each with tool_name and description
+        query_tokens: Tokenized query, already lowercased by _tokenize_query()
+        entity_name: Server or virtual-server name, used only in the drop warning
+
+    Returns:
+        Graded tool entries sorted best first. Entries scoring 0.0 are omitted.
+    """
+    graded: list[dict[str, Any]] = []
+    for tool in matching_tools:
+        score = _score_tool_relevance(
+            tool.get("tool_name") or "",
+            tool.get("description") or "",
+            query_tokens,
+        )
+        if score <= 0.0:
+            continue
+        graded_tool = dict(tool)
+        graded_tool["relevance_score"] = score
+        graded.append(graded_tool)
+
+    graded.sort(key=lambda tool: tool["relevance_score"], reverse=True)
+
+    # The regex $filter and _score_tool_relevance() are expected to agree on which
+    # tools to keep. If they ever disagree, tools vanish from an agent's choices with
+    # no error anywhere, so say so at INFO. On a healthy deployment this never fires.
+    dropped = len(matching_tools) - len(graded)
+    if dropped > 0:
+        logger.info(
+            "Tool grading dropped %d of %d matching tools for %s",
+            dropped,
+            len(matching_tools),
+            entity_name or "<unnamed entity>",
+        )
+
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug(
+            "Graded %d tools for %s: %s",
+            len(graded),
+            entity_name or "<unnamed entity>",
+            [(tool["tool_name"], tool["relevance_score"]) for tool in graded],
+        )
+
+    return graded
 
 
 def _build_status_filter(
@@ -661,10 +716,11 @@ def _build_text_boost_stage(
                         }
                     },
                     "as": "tool",
+                    # No relevance_score here. The aggregation selects candidates and
+                    # Python grades them with _score_tool_relevance() (issue #1752).
                     "in": {
                         "tool_name": "$$tool.name",
                         "description": {"$ifNull": ["$$tool.description", ""]},
-                        "relevance_score": 1.0,
                         "match_context": {
                             "$cond": [
                                 {"$ne": ["$$tool.description", None]},
@@ -1998,7 +2054,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                                 "tool_name": tool_name,
                                 "description": tool.get("description", ""),
                                 "inputSchema": tool_schema_map.get(tool_name, {}),
-                                "relevance_score": tool.get("relevance_score", 0.0),
+                                "relevance_score": tool["relevance_score"],
                                 "match_context": tool.get("match_context", ""),
                             }
                         )
@@ -2178,6 +2234,16 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
         cursor = collection.aggregate(pipeline)
         results = await cursor.to_list(length=max(max_results * 3, 50))
 
+        # Grade the tools the aggregation $filter selected (issue #1752). Without this
+        # the lexical-only path would report every keyword-matched tool at 1.0.
+        for doc in results:
+            if doc.get("matching_tools"):
+                doc["matching_tools"] = _grade_matching_tools(
+                    doc["matching_tools"],
+                    query_tokens,
+                    doc.get("name") or "",
+                )
+
         grouped_results = self._format_lexical_results(results, max_results)
 
         logger.info(
@@ -2271,7 +2337,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                             "tool_name": tool_name,
                             "description": tool.get("description", ""),
                             "inputSchema": tool_schema_map.get(tool_name, {}),
-                            "relevance_score": tool.get("relevance_score", 0.0),
+                            "relevance_score": tool["relevance_score"],
                             "match_context": tool.get("match_context", ""),
                         }
                     )
@@ -2625,6 +2691,17 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             if settings.search_fusion_method == "rrf":
                 selected_results = _normalize_scores(selected_results, max_results)
 
+            # Grade the tools the aggregation $filter selected (issue #1752). Docs added
+            # by the keyword merge above are already graded by the same scorer with the
+            # same tokens, so regrading them changes nothing.
+            for doc, _score in selected_results:
+                if doc.get("matching_tools"):
+                    doc["matching_tools"] = _grade_matching_tools(
+                        doc["matching_tools"],
+                        query_tokens,
+                        doc.get("name") or "",
+                    )
+
             # Group selected results by entity type for the response
             grouped_results: dict[str, list[dict[str, Any]]] = {
                 "servers": [],
@@ -2684,7 +2761,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                                 "tool_name": tool_name,
                                 "description": tool.get("description", ""),
                                 "inputSchema": tool_schema_map.get(tool_name, {}),
-                                "relevance_score": tool.get("relevance_score", 0.0),
+                                "relevance_score": tool["relevance_score"],
                                 "match_context": tool.get("match_context", ""),
                             }
                         )

@@ -599,7 +599,7 @@ const VirtualServerDetailsModal: React.FC<VirtualServerDetailsModalProps> = ({
                           <div className="flex items-center gap-2">
                             {tool.relevance_score !== undefined && (
                               <span className="text-xs text-indigo-600 dark:text-indigo-400">
-                                {Math.round(tool.relevance_score * 100)}%
+                                {Math.round(Math.min(tool.relevance_score, 1) * 100)}%
                               </span>
                             )}
                             <InformationCircleIcon className={`h-4 w-4 text-gray-400 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
@@ -742,7 +742,7 @@ const VirtualServerResultCard: React.FC<VirtualServerResultCardProps> = ({
                   <span className="font-medium text-gray-900 dark:text-white">{tool.tool_name}</span>
                   {tool.relevance_score !== undefined && (
                     <span className="ml-2 text-xs text-indigo-600 dark:text-indigo-400">
-                      {Math.round(tool.relevance_score * 100)}%
+                      {Math.round(Math.min(tool.relevance_score, 1) * 100)}%
                     </span>
                   )}
                   {(tool.description || tool.match_context) && (

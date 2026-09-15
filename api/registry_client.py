@@ -975,7 +975,7 @@ class MatchingToolResult(BaseModel):
 
     tool_name: str = Field(..., description="Tool name")
     description: str | None = Field(None, description="Tool description")
-    relevance_score: float = Field(0.0, ge=0.0, le=1.0, description="Relevance score")
+    relevance_score: float = Field(..., ge=0.0, le=1.0, description="Relevance score")
     match_context: str | None = Field(None, description="Why this tool matched")
     inputSchema: dict[str, Any] | None = Field(
         None, description="JSON Schema for tool input parameters"
@@ -1000,6 +1000,16 @@ class SemanticDiscoveredServer(BaseModel):
     path: str = Field(..., description="Server path")
     server_name: str = Field(..., description="Server name")
     relevance_score: float = Field(..., description="Semantic similarity score")
+    similarity_score: float | None = Field(
+        None,
+        ge=-1.0,
+        le=1.0,
+        description=(
+            "Raw cosine similarity to the query, in [-1.0, 1.0]. Negative means less "
+            "alike than two random vectors, so this is not a 0-to-1 confidence. Null "
+            "when the query was not embedded or the entry has no document path."
+        ),
+    )
     description: str | None = Field(None, description="Server description")
     tags: list[str] = Field(default_factory=list, description="Server tags")
     num_tools: int = Field(0, description="Number of tools")
@@ -1035,6 +1045,16 @@ class ToolSearchResult(BaseModel):
     description: str | None = Field(None, description="Tool description")
     inputSchema: dict[str, Any] | None = Field(None, description="JSON Schema for tool input")
     relevance_score: float = Field(..., ge=0.0, le=1.0, description="Relevance score")
+    similarity_score: float | None = Field(
+        None,
+        ge=-1.0,
+        le=1.0,
+        description=(
+            "Raw cosine similarity to the query, in [-1.0, 1.0]. Negative means less "
+            "alike than two random vectors, so this is not a 0-to-1 confidence. Null "
+            "when the query was not embedded or the entry has no document path."
+        ),
+    )
     match_context: str | None = Field(None, description="Why this tool matched")
     # Endpoint URL for the parent MCP server
     endpoint_url: str | None = Field(
@@ -1051,6 +1071,16 @@ class AgentSearchResult(BaseModel):
 
     path: str = Field(..., description="Agent path for identification")
     relevance_score: float = Field(..., ge=0.0, le=1.0, description="Relevance score")
+    similarity_score: float | None = Field(
+        None,
+        ge=-1.0,
+        le=1.0,
+        description=(
+            "Raw cosine similarity to the query, in [-1.0, 1.0]. Negative means less "
+            "alike than two random vectors, so this is not a 0-to-1 confidence. Null "
+            "when the query was not embedded or the entry has no document path."
+        ),
+    )
     match_context: str | None = Field(None, description="Why this agent matched")
     agent_card: dict[str, Any] = Field(..., description="Full agent card with all details")
 
@@ -1072,6 +1102,16 @@ class SkillSearchResult(BaseModel):
     health_status: str = Field("unknown", description="Health status")
     last_checked_time: str | None = Field(None, description="Last health check time")
     relevance_score: float = Field(..., ge=0.0, le=1.0, description="Relevance score")
+    similarity_score: float | None = Field(
+        None,
+        ge=-1.0,
+        le=1.0,
+        description=(
+            "Raw cosine similarity to the query, in [-1.0, 1.0]. Negative means less "
+            "alike than two random vectors, so this is not a 0-to-1 confidence. Null "
+            "when the query was not embedded or the entry has no document path."
+        ),
+    )
     match_context: str | None = Field(None, description="Why this skill matched")
 
 
@@ -1087,6 +1127,16 @@ class VirtualServerSearchResult(BaseModel):
     backend_paths: list[str] = Field(default_factory=list, description="Backend server paths")
     is_enabled: bool = Field(False, description="Whether virtual server is enabled")
     relevance_score: float = Field(..., ge=0.0, le=1.0, description="Relevance score")
+    similarity_score: float | None = Field(
+        None,
+        ge=-1.0,
+        le=1.0,
+        description=(
+            "Raw cosine similarity to the query, in [-1.0, 1.0]. Negative means less "
+            "alike than two random vectors, so this is not a 0-to-1 confidence. Null "
+            "when the query was not embedded or the entry has no document path."
+        ),
+    )
     match_context: str | None = Field(None, description="Why this matched")
     matching_tools: list[MatchingToolResult] = Field(
         default_factory=list, description="Matching tools"
