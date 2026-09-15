@@ -172,6 +172,9 @@ module "mcp_gateway" {
   registry_rum_snippet_secret_arn = var.registry_rum_snippet_secret_arn
   registry_rum_allowed_hosts      = var.registry_rum_allowed_hosts
 
+  # Search query logging (debug only)
+  search_log_query_text = var.search_log_query_text
+
   # Security scanning configuration
   security_scan_enabled         = var.security_scan_enabled
   security_scan_on_registration = var.security_scan_on_registration

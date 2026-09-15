@@ -1290,10 +1290,14 @@ async def list_agents(
 
     _metadata_paths = parse_and_validate_metadata_fields(metadata_fields)
 
+    # The query is free text a user typed, so it only appears behind the flag
+    # (issue #1752). DEBUG is a verbosity choice, not consent to log user text.
     logger.debug(
         f"list_agents called: limit={limit}, offset={offset}, "
-        f"query={query!r}, enabled_only={enabled_only}, visibility={visibility}"
+        f"enabled_only={enabled_only}, visibility={visibility}"
     )
+    if query and settings.search_log_query_text:
+        logger.info("list_agents query text: %r", query)
 
     # Diagnostics: log at DEBUG with sensitive values redacted. Raw headers carry
     # Authorization/Cookie and the user_context can carry credential material, so
@@ -2832,7 +2836,11 @@ async def discover_agents_semantic(
             detail="Query cannot be empty",
         )
 
-    logger.info(f"User {user_context['username']} semantic search for agents: {query}")
+    # Keep the username, drop the query. Pairing an identity with a search string is
+    # what turns free text into personal data (issue #1752).
+    logger.info(f"User {user_context['username']} semantic search for agents")
+    if settings.search_log_query_text:
+        logger.info("Agent semantic search query text: %s", query)
 
     from ..services.visibility import (
         redact_agent_backend_fields,
@@ -2874,7 +2882,7 @@ async def discover_agents_semantic(
 
             accessible_results.append(agent_data)
 
-        logger.info(f"Semantic search returned {len(accessible_results)} agents for query: {query}")
+        logger.info(f"Semantic search returned {len(accessible_results)} agents")
 
         # Increment semantic search counter (fail-silent)
         from ..repositories.stats_repository import increment_search_counter

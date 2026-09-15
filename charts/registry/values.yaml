@@ -100,6 +100,10 @@ app:
   # ASOR (Workday) integration (independent of peer federation)
   asorAccessToken: "" # Pre-obtained access token for ASOR federation
   workdayTokenUrl: "" # Workday OAuth2 token endpoint URL
+  # Debug only: log the raw user search query at INFO. A query is free text a user
+  # typed and can carry PII, so this stays false outside of debugging. The registry
+  # logs a startup warning while it is on.
+  searchLogQueryText: false
   # Skill security scanning configuration
   skillSecurityScanEnabled: true # Enable/disable skill security scanning
   skillSecurityAnalyzers: "static" # Comma-separated: static, behavioral, llm, meta, virustotal, ai-defense

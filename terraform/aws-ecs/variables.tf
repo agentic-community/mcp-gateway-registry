@@ -706,6 +706,16 @@ variable "enable_route53_dns" {
 }
 
 # =============================================================================
+# SEARCH QUERY LOGGING
+# =============================================================================
+
+variable "search_log_query_text" {
+  description = "Debug only: log the raw user search query at INFO in the registry and mcpgw. A query is free text a user typed and can carry PII, so this defaults to false. Both services log a startup warning while it is enabled."
+  type        = bool
+  default     = false
+}
+
+# =============================================================================
 # SECURITY SCANNING CONFIGURATION
 # =============================================================================
 
@@ -2038,10 +2048,11 @@ variable "registry_extra_env" {
           "GATEWAY_GENERIC_CLIENT_MAX_BODY_SIZE",
           "GATEWAY_PROXY_PREFIX",
           "GATEWAY_GENERIC_STREAM_READ_TIMEOUT_SECONDS",
+          "SEARCH_LOG_QUERY_TEXT",
         ], upper(trimspace(entry.name)))
       )
     ])
-    error_message = "registry_extra_env must not override Terraform-managed variables (AWS_EC2_METADATA_DISABLED or the canonical gateway_* generic-proxy variables; use the gateway_* variables instead)."
+    error_message = "registry_extra_env must not override Terraform-managed variables (AWS_EC2_METADATA_DISABLED, the canonical gateway_* generic-proxy variables, or SEARCH_LOG_QUERY_TEXT; use the matching Terraform variable instead)."
   }
 }
 
@@ -2077,6 +2088,15 @@ variable "mcpgw_extra_env" {
   type        = list(object({ name = string, value = string }))
   default     = []
   sensitive   = true
+
+  validation {
+    condition = alltrue([
+      for entry in var.mcpgw_extra_env : (
+        !contains(["SEARCH_LOG_QUERY_TEXT"], upper(trimspace(entry.name)))
+      )
+    ])
+    error_message = "mcpgw_extra_env must not override Terraform-managed variables (SEARCH_LOG_QUERY_TEXT; use the search_log_query_text variable instead)."
+  }
 }
 
 variable "autoscaling_min_capacity" {

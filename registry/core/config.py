@@ -413,6 +413,12 @@ class Settings(BaseSettings):
     # handles missing embeddings gracefully.
     search_fusion_method: str = "rrf"
 
+    # Debug aid: log the raw user search query. Off by default because a query is
+    # free text a user typed and can contain PII. Turning it on logs the query at
+    # INFO in both the registry and mcpgw, and each logs a startup warning so it
+    # is not left on unnoticed. See docs/SECURITY_GUIDELINES.md.
+    search_log_query_text: bool = False
+
     # Custom entity types (admin-defined schema-driven catalog types)
     custom_entity_types_enabled: bool = Field(
         default=False,

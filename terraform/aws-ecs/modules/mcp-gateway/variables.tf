@@ -486,6 +486,14 @@ variable "bind_host" {
   default     = "0.0.0.0"
 }
 
+# Debug only: log the raw user search query at INFO. Queries can carry PII, so
+# this defaults to false and both the registry and mcpgw warn at startup when on.
+variable "search_log_query_text" {
+  description = "Log the raw user search query at INFO in the registry and mcpgw (debug only)"
+  type        = bool
+  default     = false
+}
+
 # Security Scanning Configuration
 variable "security_scan_enabled" {
   description = "Enable/disable security scanning for MCP servers during registration"

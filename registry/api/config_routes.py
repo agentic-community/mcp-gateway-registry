@@ -180,6 +180,7 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             ("embeddings_model_dimensions", "Dimensions", False),
             ("embeddings_aws_region", "AWS Region", False),
             ("vector_search_ef_search", "Vector Search EF", False),
+            ("search_log_query_text", "Log Raw Search Query", False),
             ("embeddings_api_key", "API Key", True),
             ("embeddings_secret_key", "Secret Key", True),
             ("embeddings_auth_mode", "Auth Mode", False),

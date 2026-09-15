@@ -781,7 +781,11 @@ async def get_servers_json(
     which matches the filtered count for unrestricted users (the dashboard's
     primary caller).
     """
-    logger.debug(f"get_servers_json called: limit={limit}, offset={offset}, query={query!r}")
+    # The query is free text a user typed, so it is only logged behind the flag
+    # (issue #1752). DEBUG is a verbosity choice, not consent to log user text.
+    logger.debug(f"get_servers_json called: limit={limit}, offset={offset}")
+    if query and settings.search_log_query_text:
+        logger.info("get_servers_json query text: %r", query)
 
     # Set audit action for server list
     set_audit_action(request, "list", "server", description="List all servers")

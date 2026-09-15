@@ -374,6 +374,15 @@ tests:
       - failedTemplate:
           errorPattern: "\"RATE_LIMIT_USER_FLOOR_PER_MIN\" is a reserved variable"
 
+  - it: fails when extraEnv contains the search query logging flag (SEARCH_LOG_QUERY_TEXT)
+    set:
+      extraEnv:
+        - name: SEARCH_LOG_QUERY_TEXT
+          value: "true"
+    asserts:
+      - failedTemplate:
+          errorPattern: "\"SEARCH_LOG_QUERY_TEXT\" is a reserved variable"
+
   - it: fails when extraEnv contains a reserved SSRF allowlist name (SSRF_ALLOWED_CIDRS)
     set:
       extraEnv:

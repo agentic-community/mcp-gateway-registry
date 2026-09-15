@@ -103,7 +103,23 @@ sanitizer that isn't called) is equivalent to no check.
   INFO in production; the `# TODO: replace with debug` marker means it was never
   meant to ship at that level. After fixing the reported site, grep the whole
   package for the same variable/pattern — these leaks travel in packs across
-  health-check, connection, and registration code paths.
+  health-check, connection, and registration code paths. (f) **User-supplied free
+  text** (a search query, a description, a prompt) is not loggable by default at
+  any level, DEBUG included. A search query holds whatever a person typed: a
+  customer name, an email address, an account number, an unannounced project. A
+  keyword denylist does not redact it, because the sensitive part is the value the
+  user typed and no denylist word appears in `invoices for jane.doe@acme.com`. Nor
+  does a partial mask (short queries are reconstructable) or a digest (a query
+  carries little entropy, so an unsalted hash falls to a wordlist). Log the token
+  count and the stage flag instead. Derived forms leak the same text: tokenized
+  query lists and a `token_regex` built by joining those tokens ARE the query minus
+  stopwords, so redacting `query` while logging either of them redacts nothing.
+  When an operator genuinely needs the text to explain a result, put it behind a
+  dangerous-toggle flag defaulting to off (`SEARCH_LOG_QUERY_TEXT`), on ONE guarded
+  line per service rather than a conditional inside each existing log call, and
+  warn at startup while it is enabled so it is not left on. Grep every service that
+  handles the same input: one process silencing the query while a second still logs
+  it leaves the text in the logs while an operator believes the flag stopped it.
 - **Never reflect an exception/stack trace into a response the caller sees**
   (CWE-209, CodeQL `py/stack-trace-exposure`). `HTTPException(detail=str(e))`,
   `return {"error": str(e)}` from a route, and `HTMLResponse(f"...{exc}...")` all
