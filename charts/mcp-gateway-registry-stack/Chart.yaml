@@ -28,7 +28,7 @@ dependencies:
     repository: "file://../keycloak-configure"
     condition: keycloak-configure.enabled
   - name: mongodb-configure
-    version: 0.1.0
+    version: 0.2.0
     repository: "file://../mongodb-configure"
     condition: mongodb-configure.enabled
   - name: openbao
