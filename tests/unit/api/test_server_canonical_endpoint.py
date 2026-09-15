@@ -95,6 +95,29 @@ def local_server_info() -> dict[str, Any]:
 
 
 @pytest.fixture
+def multi_tool_server_info() -> dict[str, Any]:
+    """Remote server exposing two tools, for tool-visibility pruning tests."""
+    return {
+        "id": "srv-3",
+        "server_name": "Calculator",
+        "path": "/calculator",
+        "description": "A calculator MCP server",
+        "version": "1.2.0",
+        "proxy_pass_url": BACKEND_URL,
+        "deployment": "remote",
+        "supported_transports": ["streamable-http"],
+        "tags": ["math"],
+        "num_tools": 2,
+        "tool_list": [
+            {"name": "add", "description": "Add", "inputSchema": {}},
+            {"name": "delete_all", "description": "Delete", "inputSchema": {}},
+        ],
+        "auth_scheme": "none",
+        "metadata": {},
+    }
+
+
+@pytest.fixture
 def mock_server_service():
     mock_service = MagicMock()
     mock_service.get_server_info = AsyncMock(return_value=None)
@@ -300,3 +323,56 @@ class TestCanonicalEndpoint:
         args = mock_audit.call_args[0]
         assert args[1] == "read"
         assert args[2] == "server"
+
+    @staticmethod
+    def _internal_meta(data: dict) -> dict:
+        """Return the registry's own _meta namespace block from a canonical doc."""
+        for value in data["_meta"].values():
+            if isinstance(value, dict) and "tool_list" in value:
+                return value
+        return {}
+
+    def test_tool_list_pruned_to_allowlist_for_non_admin(
+        self, test_client_regular, mock_server_service, multi_tool_server_info, regular_user_context
+    ):
+        """A caller granted the server but only a subset of tools sees only that
+        subset in the exported _meta tool_list."""
+        mock_server_service.get_server_info.return_value = dict(multi_tool_server_info)
+        regular_user_context["accessible_tools"] = {"calculator": {"add"}}
+
+        response = test_client_regular.get(URL)
+
+        assert response.status_code == 200
+        internal = self._internal_meta(response.json())
+        assert [t["name"] for t in internal["tool_list"]] == ["add"]
+        assert internal["num_tools"] == 1
+        assert "delete_all" not in response.text
+
+    def test_tool_list_empty_for_non_admin_without_tool_grant(
+        self, test_client_regular, mock_server_service, multi_tool_server_info
+    ):
+        """A caller with server access but no tool allowlist gets an empty tool
+        list (fail closed), not the full inventory."""
+        mock_server_service.get_server_info.return_value = dict(multi_tool_server_info)
+
+        response = test_client_regular.get(URL)
+
+        assert response.status_code == 200
+        internal = self._internal_meta(response.json())
+        assert internal["tool_list"] == []
+        assert internal["num_tools"] == 0
+        assert "add" not in response.text
+        assert "delete_all" not in response.text
+
+    def test_tool_list_full_for_admin(
+        self, test_client_admin, mock_server_service, multi_tool_server_info
+    ):
+        """An admin still sees the complete tool inventory."""
+        mock_server_service.get_server_info.return_value = dict(multi_tool_server_info)
+
+        response = test_client_admin.get(URL)
+
+        assert response.status_code == 200
+        internal = self._internal_meta(response.json())
+        assert {t["name"] for t in internal["tool_list"]} == {"add", "delete_all"}
+        assert internal["num_tools"] == 2

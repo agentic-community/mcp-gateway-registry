@@ -246,7 +246,7 @@ async def get_virtual_server_tools(
     service = get_virtual_server_service()
 
     try:
-        tools = await service.resolve_tools(normalized)
+        tools = await service.resolve_tools(normalized, user_context=user_context)
         return {
             "path": normalized,
             "tools": [t.model_dump(mode="json") for t in tools],

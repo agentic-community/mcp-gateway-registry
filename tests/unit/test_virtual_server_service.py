@@ -605,7 +605,7 @@ class TestToolResolution:
             ],
         }
 
-        tools = await service.resolve_tools("/virtual/dev")
+        tools = await service.resolve_tools("/virtual/dev", user_context={"is_admin": True})
 
         assert len(tools) == 1
         assert tools[0].name == "github_search"
@@ -640,7 +640,7 @@ class TestToolResolution:
             ],
         }
 
-        tools = await service.resolve_tools("/virtual/dev")
+        tools = await service.resolve_tools("/virtual/dev", user_context={"is_admin": True})
 
         assert len(tools) == 1
         assert tools[0].description == "Custom description"
@@ -686,10 +686,154 @@ class TestToolResolution:
             ],
         }
 
-        tools = await service.resolve_tools("/virtual/dev")
+        tools = await service.resolve_tools("/virtual/dev", user_context={"is_admin": True})
 
         assert len(tools) == 1
         assert tools[0].required_scopes == ["github:read"]
+
+    @staticmethod
+    def _multi_backend_config() -> VirtualServerConfig:
+        """Config mapping tools from two backends for access-filter tests."""
+        return VirtualServerConfig(
+            path="/virtual/dev",
+            server_name="Dev",
+            tool_mappings=[
+                ToolMapping(tool_name="search", backend_server_path="/github"),
+                ToolMapping(tool_name="delete_repo", backend_server_path="/github"),
+                ToolMapping(tool_name="create_issue", backend_server_path="/jira"),
+            ],
+        )
+
+    @staticmethod
+    def _multi_backend_docs(path: str) -> dict | None:
+        """Backend server docs keyed by path for access-filter tests."""
+        docs = {
+            "/github": {
+                "server_name": "GitHub",
+                "tool_list": [
+                    {"name": "search", "description": "Search", "inputSchema": {}},
+                    {"name": "delete_repo", "description": "Delete", "inputSchema": {}},
+                ],
+            },
+            "/jira": {
+                "server_name": "Jira",
+                "tool_list": [
+                    {"name": "create_issue", "description": "Create", "inputSchema": {}},
+                ],
+            },
+        }
+        return docs.get(path)
+
+    @pytest.mark.asyncio
+    async def test_resolve_tools_fails_closed_without_context(
+        self, service, mock_vs_repo, mock_server_repo
+    ):
+        """No caller context discloses nothing (fail closed)."""
+        mock_vs_repo.get.return_value = self._multi_backend_config()
+        mock_server_repo.get.side_effect = self._multi_backend_docs
+
+        tools = await service.resolve_tools("/virtual/dev")
+
+        assert tools == []
+
+    @pytest.mark.asyncio
+    async def test_resolve_tools_skips_inaccessible_backend(
+        self, service, mock_vs_repo, mock_server_repo
+    ):
+        """A backend the caller cannot access contributes no tools."""
+        mock_vs_repo.get.return_value = self._multi_backend_config()
+        mock_server_repo.get.side_effect = self._multi_backend_docs
+
+        # Caller can access /github (all its tools) but not /jira.
+        user_context = {
+            "is_admin": False,
+            "accessible_servers": ["github"],
+            "accessible_tools": {"github": {"*"}},
+            "scopes": [],
+        }
+
+        tools = await service.resolve_tools("/virtual/dev", user_context=user_context)
+
+        names = {t.name for t in tools}
+        backends = {t.backend_server_path for t in tools}
+        assert names == {"search", "delete_repo"}
+        assert backends == {"/github"}
+        assert "create_issue" not in names
+
+    @pytest.mark.asyncio
+    async def test_resolve_tools_filters_by_tool_allowlist(
+        self, service, mock_vs_repo, mock_server_repo
+    ):
+        """Server access with a restricted tool set exposes only allowed tools."""
+        mock_vs_repo.get.return_value = self._multi_backend_config()
+        mock_server_repo.get.side_effect = self._multi_backend_docs
+
+        # Access to /github but only the "search" tool within it; no /jira.
+        user_context = {
+            "is_admin": False,
+            "accessible_servers": ["github"],
+            "accessible_tools": {"github": {"search"}},
+            "scopes": [],
+        }
+
+        tools = await service.resolve_tools("/virtual/dev", user_context=user_context)
+
+        assert [t.name for t in tools] == ["search"]
+
+    @pytest.mark.asyncio
+    async def test_resolve_tools_empty_allowlist_fails_closed(
+        self, service, mock_vs_repo, mock_server_repo
+    ):
+        """Server access but no per-tool allowlist entry discloses nothing."""
+        mock_vs_repo.get.return_value = self._multi_backend_config()
+        mock_server_repo.get.side_effect = self._multi_backend_docs
+
+        user_context = {
+            "is_admin": False,
+            "accessible_servers": ["github"],
+            "accessible_tools": {},
+            "scopes": [],
+        }
+
+        tools = await service.resolve_tools("/virtual/dev", user_context=user_context)
+
+        assert tools == []
+
+    @pytest.mark.asyncio
+    async def test_resolve_tools_drops_scope_guarded_tool_without_scope(
+        self, service, mock_vs_repo, mock_server_repo
+    ):
+        """A scope-guarded tool is hidden from a caller lacking the scope."""
+        mock_vs_repo.get.return_value = VirtualServerConfig(
+            path="/virtual/dev",
+            server_name="Dev",
+            tool_mappings=[
+                ToolMapping(tool_name="search", backend_server_path="/github"),
+            ],
+            tool_scope_overrides=[
+                {"tool_alias": "search", "required_scopes": ["github:read"]},
+            ],
+        )
+        mock_server_repo.get.side_effect = self._multi_backend_docs
+
+        base_context = {
+            "is_admin": False,
+            "accessible_servers": ["github"],
+            "accessible_tools": {"github": {"search"}},
+        }
+
+        # Caller lacks github:read -> the scope-guarded tool is dropped.
+        without_scope = await service.resolve_tools(
+            "/virtual/dev", user_context={**base_context, "scopes": []}
+        )
+        assert without_scope == []
+
+        # Caller holding github:read sees it.
+        with_scope = await service.resolve_tools(
+            "/virtual/dev", user_context={**base_context, "scopes": ["github:read"]}
+        )
+        assert [t.name for t in with_scope] == ["search"]
+        assert with_scope[0].required_scopes == ["github:read"]
 
 
 # --- Unit tests for nginx trigger ---
