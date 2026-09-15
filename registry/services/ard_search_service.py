@@ -18,6 +18,7 @@ import json
 import logging
 from typing import Any
 
+from ..auth.asset_permissions import user_has_asset_permission
 from ..repositories.factory import (
     get_agent_repository,
     get_search_repository,
@@ -313,6 +314,14 @@ async def search_and_scope(
         src = _src_for(path)
         if src is None:
             continue
+        skill_name = hit.get("skill_name") or path.strip("/")
+        # Discovery gate FIRST (list_skills), parity with the server/agent
+        # branches above and the search_routes skill branch: a caller with no
+        # list_skills grant sees no skills -- not even public ones -- before the
+        # per-record visibility check. Fails closed.
+        if not user_has_asset_permission("skill", "list", skill_name, user_context):
+            scoped_out += 1
+            continue
         allowed = await user_can_access_skill(
             path,
             hit.get("visibility", ""),
@@ -442,6 +451,13 @@ async def browse(
     if want is None or "skill" in want:
         skills = await get_skill_repository().list_filtered(include_disabled=False)
         for skill in skills:
+            skill_name = getattr(skill, "name", "") or skill.path.strip("/")
+            # Discovery gate FIRST (list_skills), parity with the server/agent
+            # browse branches and search_routes: a caller with no list_skills
+            # grant sees no skills before the per-record visibility check. Fails
+            # closed.
+            if not user_has_asset_permission("skill", "list", skill_name, user_context):
+                continue
             allowed = await user_can_access_skill(
                 skill.path,
                 getattr(skill, "visibility", "") or "",

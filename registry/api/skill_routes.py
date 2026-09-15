@@ -1534,7 +1534,22 @@ def _user_can_access_skill(
     skill: SkillCard,
     user_context: dict,
 ) -> bool:
-    """Check if user can access skill based on visibility."""
+    """Check if the caller may read ``skill``.
+
+    Two-layer gate, matching the list path
+    (``SkillService.list_skills_for_user``) and the semantic-search skill branch:
+    first the type-level ``list_skills`` discovery grant, then the per-record
+    visibility check. A caller with no ``list_skills`` grant discovers zero
+    skills -- including public ones -- so the single-record read routes cannot be
+    used to enumerate or fetch skills outside the caller's discovery scope.
+    Admins bypass both layers via ``user_has_asset_permission``.
+    """
+    # Discovery gate FIRST (list_skills), parity with list_skills_for_user and
+    # the search_routes skill branch. Fails closed: a caller without the grant is
+    # denied before any per-record visibility branch (which defaults to PUBLIC).
+    if not user_has_asset_permission("skill", "list", skill.name, user_context):
+        return False
+
     if user_context.get("is_admin"):
         return True
 
