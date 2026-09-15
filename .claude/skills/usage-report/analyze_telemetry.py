@@ -16,8 +16,9 @@ import json
 import logging
 import os
 import re
+import statistics
 from collections import Counter, defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # Configure logging with basicConfig
 logging.basicConfig(
@@ -1014,6 +1015,302 @@ def _build_internal_installs_md(
             row_counts = " | ".join(str(counts.get(t, 0)) for t in INTERNAL_DEPLOYMENT_TYPES)
             month_total = sum(counts.get(t, 0) for t in INTERNAL_DEPLOYMENT_TYPES)
             lines.append(f"| {month} | {row_counts} | {month_total} |")
+    lines.append("")
+
+    return "\n".join(lines)
+
+
+# Auth-path observability (schema v6) began shipping with this release. Registries
+# on earlier versions emit no auth_path_* fields at all, and the telemetry
+# collector must also be running a build that stores them -- so a zero here means
+# either "nobody upgraded yet" or "the collector is dropping the fields".
+AUTH_PATH_CAPTURE_SINCE_RELEASE = "1.31.0"
+
+# The auth paths the registry is allowed to report (mirrors the collector's
+# allowlist in terraform/telemetry-collector/lambda/collector/schemas.py).
+# Anything else in a share object is dropped rather than trusted.
+AUTH_PATHS = (
+    "session_cookie",
+    "self_signed",
+    "jwt",
+    "boto3",
+    "federation-static",
+    "network-trusted",
+    "keycloak",
+    "cognito",
+    "entra",
+    "okta",
+    "auth0",
+    "pingfederate",
+    "unknown",
+)
+
+# Volume buckets in ascending order, with the midpoint used to weight an
+# instance's share when aggregating the fleet mix. A registry serving 10k+
+# authentications must not count the same as one serving 3.
+AUTH_PATH_VOLUME_MIDPOINTS = {
+    "1-9": 3,
+    "10-99": 30,
+    "100-999": 300,
+    "1k-9k": 3000,
+    "10k+": 10000,
+}
+
+# Fallback weight for a share row whose bucket is missing or unrecognized. The
+# registry always sends bucket and share together, so this only fires on
+# corrupt/partial data; weight it as the smallest bucket rather than dropping
+# the instance or letting it dominate.
+AUTH_PATH_DEFAULT_WEIGHT = AUTH_PATH_VOLUME_MIDPOINTS["1-9"]
+
+
+def _parse_auth_path_share(
+    raw: str,
+) -> dict[str, int]:
+    """Parse an auth_path_share_24h CSV cell into a {path: percent} dict.
+
+    The cell is compact JSON written by the bastion exporter. It is blank for
+    pre-v6 registries and for windows with no authenticated traffic, and may be
+    malformed or carry unexpected keys in historical data. Unknown keys are
+    dropped (matching the collector's allowlist validator) and any unparseable
+    cell yields an empty dict, so a bad row degrades to "not reporting" instead
+    of crashing the report.
+    """
+    if not raw or not raw.strip():
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+
+    share: dict[str, int] = {}
+    for path, pct in parsed.items():
+        if path not in AUTH_PATHS:
+            continue
+        if isinstance(pct, bool) or not isinstance(pct, (int, float)):
+            continue
+        if pct <= 0:
+            continue
+        share[path] = int(round(pct))
+    return share
+
+
+def _latest_auth_path_row(
+    events: list[dict[str, str]],
+) -> tuple[dict[str, int], str, int | None] | None:
+    """Return (share, volume_bucket, window_hours) from an instance's latest reporting event.
+
+    Events must be sorted by timestamp ascending. Walks backwards to the most
+    recent event carrying a parseable non-empty share and reads the bucket and
+    window off that SAME event, so the volume weight always matches the mix it
+    weights. Returns None when the instance never reported a share.
+    """
+    for event in reversed(events):
+        share = _parse_auth_path_share(event.get("auth_path_share_24h", ""))
+        if not share:
+            continue
+        bucket = (event.get("auth_path_volume_bucket_24h") or "").strip()
+        window_raw = (event.get("auth_path_window_hours") or "").strip()
+        window = _safe_int(window_raw) if window_raw else None
+        return share, bucket, window
+    return None
+
+
+def _compute_auth_path(
+    rows: list[dict[str, str]],
+    report_date: str,
+) -> dict:
+    """Compute fleet auth-path-mix metrics from the schema v6 telemetry fields.
+
+    Two independent things can suppress this data: registries older than
+    AUTH_PATH_CAPTURE_SINCE_RELEASE never emit the fields, and a collector
+    Lambda older than the schema-v6 build silently drops them on ingest. So the
+    result reports both sides of the pipeline -- schema_v6_instances (registries
+    announcing v6) against reporting_instances (rows that actually carry a
+    share). v6 registries with zero reporting instances means the collector is
+    the bottleneck.
+
+    Returns:
+        collected: True when at least one instance reported a share.
+        reporting_instances: unique registry_ids with a non-empty share.
+        reporting_instances_yesterday: unique registry_ids that reported a share
+            on the calendar day before report_date, for a day-over-day read on
+            whether emission just started.
+        schema_v6_instances: unique registry_ids whose latest event says
+            schema_version == "6".
+        total_instances: unique identified registry_ids in the window.
+        coverage_pct: reporting_instances as a percentage of total_instances.
+        fleet_share_pct: volume-weighted fleet mix per auth path, descending.
+        per_path_instances: instances reporting each path at all, descending.
+        volume_bucket_counts: reporting instances per volume bucket, ascending.
+        window_hours: min/median/max reported window, empty when nothing reported.
+        capture_since_release: release the fields began shipping in.
+    """
+    events_by_instance: dict[str, list[dict[str, str]]] = defaultdict(list)
+    for row in rows:
+        rid = row.get("registry_id", "").strip()
+        if rid:
+            events_by_instance[rid].append(row)
+
+    total_instances = len(events_by_instance)
+
+    yesterday = ""
+    try:
+        yesterday = (datetime.strptime(report_date, "%Y-%m-%d") - timedelta(days=1)).strftime(
+            "%Y-%m-%d"
+        )
+    except ValueError:
+        logger.warning(f"Unparseable report date {report_date!r}; skipping yesterday comparison")
+
+    weighted_by_path: dict[str, float] = defaultdict(float)
+    weighted_total = 0.0
+    per_path_instances: dict[str, int] = defaultdict(int)
+    bucket_counts: dict[str, int] = defaultdict(int)
+    windows: list[int] = []
+    reporting = 0
+    reporting_yesterday = 0
+    schema_v6 = 0
+
+    for rid, events in events_by_instance.items():
+        events.sort(key=lambda r: r.get("ts", ""))
+
+        if _latest_nonempty(events, "schema_version") == "6":
+            schema_v6 += 1
+
+        if yesterday and any(
+            e.get("ts", "").startswith(yesterday)
+            and _parse_auth_path_share(e.get("auth_path_share_24h", ""))
+            for e in events
+        ):
+            reporting_yesterday += 1
+
+        latest = _latest_auth_path_row(events)
+        if latest is None:
+            continue
+        share, bucket, window = latest
+        reporting += 1
+
+        for path in share:
+            per_path_instances[path] += 1
+        if bucket:
+            bucket_counts[bucket] += 1
+        if window is not None:
+            windows.append(window)
+
+        # Volume-weight the instance's mix by its bucket midpoint. The
+        # denominator uses this instance's own share total rather than a flat
+        # 100 so that dropping a disallowed key renormalizes cleanly instead of
+        # silently shrinking the fleet percentages.
+        weight = AUTH_PATH_VOLUME_MIDPOINTS.get(bucket, AUTH_PATH_DEFAULT_WEIGHT)
+        for path, pct in share.items():
+            weighted_by_path[path] += weight * pct
+        weighted_total += weight * sum(share.values())
+
+    fleet_share_pct: dict[str, float] = {}
+    if weighted_total > 0:
+        unsorted = {
+            path: round(total / weighted_total * 100, 1) for path, total in weighted_by_path.items()
+        }
+        fleet_share_pct = dict(sorted(unsorted.items(), key=lambda kv: (-kv[1], kv[0])))
+
+    window_hours: dict[str, float] = {}
+    if windows:
+        window_hours = {
+            "min": min(windows),
+            "median": float(statistics.median(windows)),
+            "max": max(windows),
+        }
+
+    return {
+        "collected": reporting > 0,
+        "reporting_instances": reporting,
+        "reporting_instances_yesterday": reporting_yesterday,
+        "schema_v6_instances": schema_v6,
+        "total_instances": total_instances,
+        "coverage_pct": (round(reporting / total_instances * 100, 1) if total_instances else 0.0),
+        "fleet_share_pct": fleet_share_pct,
+        "per_path_instances": dict(
+            sorted(per_path_instances.items(), key=lambda kv: (-kv[1], kv[0]))
+        ),
+        "volume_bucket_counts": {
+            bucket: bucket_counts[bucket]
+            for bucket in AUTH_PATH_VOLUME_MIDPOINTS
+            if bucket_counts.get(bucket)
+        },
+        "window_hours": window_hours,
+        "capture_since_release": AUTH_PATH_CAPTURE_SINCE_RELEASE,
+    }
+
+
+def _build_auth_path_md(
+    auth_path: dict,
+) -> str:
+    """Build the 'Auth Path Mix' tables section from _compute_auth_path output.
+
+    Renders the volume-weighted fleet mix, the per-bucket spread, and a coverage
+    line naming both halves of the pipeline. When nothing reported, the section
+    still renders and says which half is missing rather than vanishing.
+    """
+    reporting = auth_path.get("reporting_instances", 0)
+    total = auth_path.get("total_instances", 0)
+    coverage = auth_path.get("coverage_pct", 0.0)
+    schema_v6 = auth_path.get("schema_v6_instances", 0)
+    since = auth_path.get("capture_since_release", AUTH_PATH_CAPTURE_SINCE_RELEASE)
+    fleet_share = auth_path.get("fleet_share_pct", {})
+    per_path = auth_path.get("per_path_instances", {})
+    buckets = auth_path.get("volume_bucket_counts", {})
+    windows = auth_path.get("window_hours", {})
+
+    lines: list[str] = []
+    lines.append("### Auth Path Mix")
+    lines.append("")
+
+    if not auth_path.get("collected"):
+        if schema_v6:
+            lines.append(
+                f"_No auth-path data collected. **{schema_v6}** of {total} instances "
+                f"report schema v6, so registries are upgraded but no row carries an "
+                f"`auth_path_share_24h` value -- the telemetry collector is dropping "
+                f"the fields and needs redeploying._"
+            )
+        else:
+            lines.append(
+                f"_No auth-path data collected. No instance reports schema v6 yet; "
+                f"the fields ship with release {since}._"
+            )
+        lines.append("")
+        return "\n".join(lines)
+
+    lines.append(
+        f"Volume-weighted across the **{reporting}** reporting instance(s): each "
+        f"instance's latest 24h share is weighted by the midpoint of its reported "
+        f"volume bucket, so a 10k+ registry outweighs a 1-9 one."
+    )
+    lines.append("")
+    lines.append("| Auth Path | Fleet Share | Instances Reporting |")
+    lines.append("|-----------|-------------|---------------------|")
+    for path, pct in fleet_share.items():
+        lines.append(f"| `{path}` | {pct}% | {per_path.get(path, 0)} |")
+    lines.append("")
+
+    if buckets:
+        lines.append("| Volume Bucket (24h) | Instances |")
+        lines.append("|---------------------|-----------|")
+        for bucket, count in buckets.items():
+            lines.append(f"| {bucket} | {count} |")
+        lines.append("")
+
+    coverage_line = (
+        f"Coverage: **{reporting}/{total}** instances ({coverage}%) reported an auth-path "
+        f"mix; **{schema_v6}** report schema v6. Capture begins with release {since}."
+    )
+    if windows:
+        coverage_line += (
+            f" Reported windows span {windows.get('min')}-{windows.get('max')}h "
+            f"(median {windows.get('median')}h)."
+        )
+    lines.append(coverage_line)
     lines.append("")
 
     return "\n".join(lines)
@@ -2169,6 +2466,12 @@ def main() -> None:
     internal_installs = _compute_internal_installs(instances, rows)
     md_content = md_content + "\n\n" + _build_internal_installs_md(internal_installs)
 
+    # Auth path mix (schema v6): the fleet-wide auth-path share plus the evidence
+    # of whether registries emit the fields and the collector stores them. Renders
+    # a "not collected yet" state on historical CSVs that lack the columns.
+    auth_path = _compute_auth_path(rows, date_str)
+    md_content = md_content + "\n\n" + _build_auth_path_md(auth_path)
+
     # Build JSON with all computed data
     metrics_json = {
         "report_date": date_str,
@@ -2176,6 +2479,7 @@ def main() -> None:
         "per_cloud_unique_installs": cloud_installs,
         "instance_lifetime": instance_lifetime,
         "internal_installs": internal_installs,
+        "auth_path": auth_path,
         "stickiness": stickiness,
         "sticky_profiles": sticky_profile_counts,
         "sticky_cloud_compute": sticky_cc_counts,

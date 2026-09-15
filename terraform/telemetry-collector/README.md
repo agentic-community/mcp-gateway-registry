@@ -523,9 +523,14 @@ changes if the file path and size are similar.
 ```bash
 cd terraform/telemetry-collector
 
-# Step 1: Rebuild the zip package (see Step 2 in Deployment above)
-cd lambda/collector && pip install -r requirements.txt -t . && cd ../..
-zip -r lambda_function.zip lambda/collector/
+# Step 1: Rebuild the zip package. Dependencies are vendored into lambda/collector/,
+# and the handler is index.lambda_handler, so index.py and schemas.py must land at the
+# ZIP ROOT. Zip from inside the directory; zipping the directory itself nests the
+# handler and the function fails to import.
+cd lambda/collector \
+  && pip install -r requirements.txt -t . \
+  && zip -qr ../../lambda_function.zip . -x '__pycache__/*' '*/__pycache__/*' \
+  && cd ../..
 
 # Step 2: Apply terraform (updates infrastructure and zip hash)
 terraform apply -auto-approve

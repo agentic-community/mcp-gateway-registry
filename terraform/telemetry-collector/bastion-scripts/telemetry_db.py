@@ -117,6 +117,20 @@ HEARTBEAT_COLUMNS = [
     "search_queries_total",
     "search_queries_24h",
     "search_queries_1h",
+    # Schema v6 (registry v1.31.0+) auth-path observability fields. Present on
+    # heartbeat payloads only; the startup payload carries schema_version but
+    # none of the three auth_path_* fields, by design. All three are None
+    # together when the 24h window saw no authenticated traffic, so a blank
+    # trio means "no traffic", not "field missing" -- distinguish the two via
+    # schema_version.
+    #
+    # auth_path_share_24h arrives from DocumentDB as a nested object and is
+    # serialized to compact JSON by _write_csv (a raw dict would land in the
+    # CSV as a Python repr the analyzer cannot parse).
+    "schema_version",
+    "auth_path_share_24h",
+    "auth_path_volume_bucket_24h",
+    "auth_path_window_hours",
     "ts",
     "stored_at",
     "source_ip_hash",
@@ -151,6 +165,11 @@ ALL_COLUMNS = [
     "search_queries_total",
     "search_queries_24h",
     "search_queries_1h",
+    # Schema v6 auth-path observability fields (see HEARTBEAT_COLUMNS).
+    "schema_version",
+    "auth_path_share_24h",
+    "auth_path_volume_bucket_24h",
+    "auth_path_window_hours",
     "ts",
     "stored_at",
     "source_ip_hash",
@@ -454,6 +473,17 @@ def _write_csv(
                 val = doc.get(key)
                 if isinstance(val, dict) and "$date" in val:
                     doc[key] = val["$date"]
+
+            # auth_path_share_24h is a nested {path: percent} object. DictWriter
+            # would stringify it as a Python repr (single quotes), which the
+            # report analyzer cannot json.loads. Emit compact JSON instead, and
+            # an empty cell when the field is absent or None (no traffic in the
+            # window, or a pre-v6 registry that never sends it).
+            share = doc.get("auth_path_share_24h")
+            if isinstance(share, dict):
+                doc["auth_path_share_24h"] = json.dumps(share, separators=(",", ":"))
+            elif share is None:
+                doc["auth_path_share_24h"] = ""
 
             writer.writerow(doc)
 
