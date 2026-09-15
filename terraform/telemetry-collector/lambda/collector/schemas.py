@@ -13,6 +13,7 @@ with the _DETECTION_METHOD_* constants in registry/core/telemetry.py.
 """
 
 from datetime import datetime
+from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -34,6 +35,32 @@ _CLOUD_DETECTION_METHOD_PATTERN = (
 # Allowlist of values for internal_deployment_type. Added in schema v5
 # (issue #1216). Keep in sync with InternalDeploymentType in registry/core/config.py.
 _INTERNAL_DEPLOYMENT_TYPE_PATTERN = r"^(none|dev|workshop|other)$"
+
+# Allowlist of auth-path keys accepted in HeartbeatEvent.auth_path_share_24h.
+# Added in schema v6 (issue #1753). Keep in sync with _KNOWN_AUTH_PATHS in
+# registry/core/telemetry.py and KNOWN_AUTH_PATHS in
+# auth_server/auth_path_stats.py.
+_KNOWN_AUTH_PATHS = frozenset(
+    {
+        "session_cookie",
+        "self_signed",
+        "jwt",
+        "boto3",
+        "federation-static",
+        "network-trusted",
+        "cognito",
+        "keycloak",
+        "entra",
+        "okta",
+        "auth0",
+        "pingfederate",
+        "unknown",
+    }
+)
+
+# Allowlist of values for auth_path_volume_bucket_24h. Added in schema v6.
+# Keep in sync with _auth_path_volume_bucket() in registry/core/telemetry.py.
+_AUTH_PATH_VOLUME_BUCKET_PATTERN = r"^(0|1-9|10-99|100-999|1k-9k|10k\+)$"
 
 
 def _check_cloud_detection_consistency(cloud: str, method: str | None) -> None:
@@ -210,9 +237,19 @@ class HeartbeatEvent(BaseModel):
       storage, federation) -- added in schema v4. Pre-v4 clients omit
       these and the report's analyzer treats the absence as "unknown
       auth/arch/etc" rather than mislabeling the instance.
+    - Observed auth-path mix (auth_path_share_24h and its two companions) --
+      added in schema v6. Shares only, never per-path request counts.
     """
 
     event: str = Field(..., pattern="^heartbeat$")
+    schema_version: str | None = Field(
+        default=None,
+        max_length=8,
+        description=(
+            "Payload schema version. Undeclared before schema v6 and so discarded "
+            "by extra='ignore', which defeated the purpose of sending it."
+        ),
+    )
     registry_id: str | None = Field(default=None, max_length=36, description="Registry card UUID")
     v: str = Field(..., min_length=1, max_length=200, description="Registry version")
     # Deployment-shape fields (schema v4+). Optional because pre-v4 clients
@@ -315,6 +352,30 @@ class HeartbeatEvent(BaseModel):
         pattern=_INTERNAL_DEPLOYMENT_TYPE_PATTERN,
         description="Internal deployment classification. Added in schema v5.",
     )
+    # Observed auth-path mix (added in schema v6, issue #1753). Shares, not
+    # counts -- see registry/core/telemetry.py:_auth_path_fields. All three are
+    # None together when the window saw no /validate traffic.
+    auth_path_share_24h: dict[str, Annotated[int, Field(ge=0, le=100)]] | None = Field(
+        default=None,
+        description=(
+            "Auth path -> integer percentage of /validate requests over the window, "
+            "summing to 100. Added in schema v6."
+        ),
+    )
+    auth_path_volume_bucket_24h: str | None = Field(
+        default=None,
+        pattern=_AUTH_PATH_VOLUME_BUCKET_PATTERN,
+        description=("Order-of-magnitude bucket for the share denominator. Added in schema v6."),
+    )
+    auth_path_window_hours: int | None = Field(
+        default=None,
+        ge=0,
+        le=48,
+        description=(
+            "Hours the auth-path shares accumulated over. The window is reset lazily "
+            "on write, so it can exceed 24. Added in schema v6."
+        ),
+    )
     ts: str = Field(..., description="ISO 8601 timestamp")
 
     @field_validator("ts")
@@ -327,6 +388,18 @@ class HeartbeatEvent(BaseModel):
             raise ValueError(f"Invalid ISO 8601 timestamp: {e}") from e
         return v
 
+    @field_validator("auth_path_share_24h")
+    @classmethod
+    def validate_auth_path_share(cls, v: dict[str, int] | None) -> dict[str, int] | None:
+        """Drop share keys outside the known auth-path set.
+
+        Dropped rather than rejected: a client that learns a new auth path before
+        this collector is redeployed should still land the rest of its heartbeat.
+        """
+        if v is None:
+            return None
+        return {path: share for path, share in v.items() if path in _KNOWN_AUTH_PATHS}
+
     @model_validator(mode="after")
     def _validate_cloud_detection_consistency(self) -> "HeartbeatEvent":
         """Reject payloads where cloud and cloud_detection_method disagree."""
@@ -337,6 +410,7 @@ class HeartbeatEvent(BaseModel):
         json_schema_extra={
             "example": {
                 "event": "heartbeat",
+                "schema_version": "6",
                 "registry_id": "c546a650-8af9-4721-9efb-7df221b2a0d9",
                 "v": "1.0.22",
                 "cloud": "aws",
@@ -353,6 +427,9 @@ class HeartbeatEvent(BaseModel):
                 "search_queries_total": 150,
                 "search_queries_24h": 12,
                 "search_queries_1h": 3,
+                "auth_path_share_24h": {"session_cookie": 62, "keycloak": 31, "unknown": 7},
+                "auth_path_volume_bucket_24h": "100-999",
+                "auth_path_window_hours": 21,
                 "ts": "2026-03-18T12:00:00Z",
             }
         }

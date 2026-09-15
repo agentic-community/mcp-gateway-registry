@@ -279,6 +279,7 @@ exposition form** (after the OTel exporter appends the unit suffix).
 | Metric | Source | Labels | What it counts |
 |---|---|---|---|
 | `mcpgw_registry_auth_request_total` | auth-server | `success`, `method`, `server`, `target_kind` | Authenticated /validate calls. `target_kind` = `a2a_agent` \| `virtual_mcp_server` \| `mcp_server` \| `generic_proxy_skill` \| `generic_proxy_agent` \| `generic_proxy_custom` \| `control_plane` \| `unknown` (routing breakdown; `control_plane` = `/api/*`, static, oauth2 — never counted as a data-plane target). For a gateway-proxied request `server` holds the entity's **authz key** (`skill/skills/pdf`, `rest-endpoint/rest-endpoint/<uuid>`), which is the exact string a `server_access` rule names, so a `success="false"` series points at the rule to write |
+| `mcpgw_registry_auth_path_flush_total` | auth-server | `outcome` (`ok`/`error`) | Whether the auth-path mix reaches the fleet view. The auth-server accumulates its per-path counts in memory and flushes them to the shared `mcp_stats` document once a minute; the registry reads that document when it builds the telemetry heartbeat. A silent flush failure looks exactly like no traffic, so this counter tells the two apart — a failed flush is the only way the heartbeat's auth-path fields go missing, and it also logs at WARNING. Both values exist at zero from startup |
 | `mcpgw_registry_tool_execution_total` | auth-server | `tool_name`, `server_name`, `success`, `method`, `client_name`, `client_version` | MCP tool calls detected at the auth layer |
 | `mcpgw_registry_operation_total` | registry middleware | `operation`, `resource_type`, `success` | Registry API operations (list/create/update/delete/search) |
 | `tool_discovery_total` | registry middleware | `results_count_bucket` | Semantic search calls |
@@ -465,6 +466,60 @@ The three `generic_proxy_*` kinds come from the `X-Generic-Proxy-Kind` marker ng
 | Federation peer sync failures by type | `sum by (peer_id, failure_type)(rate(peer_sync_failures_total[5m]))` |
 | Logout JWT validation failure rate | `rate(mcpgw_registry_logout_jwt_validation_failed_total[5m])` |
 
+#### Auth paths (`method`), and what each one costs
+
+`method` on `mcpgw_registry_auth_request_total` and on
+`mcpgw_registry_auth_request_duration_milliseconds` names the auth path that verified the
+request. Thirteen values: the twelve the code sets on success, plus `unknown`. The label sits on
+the counter and on the histogram, so "how much" and "how slow" are both sliceable per path.
+
+The paths do not cost the same to verify. Two do per-request I/O; the rest work from memory or a
+warm cache.
+
+| Auth path | Verification work | Per-request I/O |
+|---|---|---|
+| `federation-static`, `network-trusted` | Constant-time compare against a configured token | none (`auth_server/server.py:3465`, `:3050`) |
+| `self_signed` | Local HS256 verify with the app secret | none (`auth_server/server.py:2733`) |
+| `session_cookie` | Session-store lookup through `validate_session_cookie` | **yes** (`auth_server/server.py:3637` calls it; the store read is `:1600`). Already metered by `mcpgw_registry_session_store_resolve_total` |
+| `keycloak`, `cognito`, `entra`, `okta`, `auth0`, `pingfederate` | RS256 against a cached JWKS, then `map_groups_to_scopes` against a cached scope map | none while both caches are warm (`auth_server/server.py:3703`, `:3885`; JWKS cache `auth_server/providers/keycloak.py:322`, scope cache `registry/repositories/documentdb/scope_repository.py:211`) |
+| `jwt` | Legacy Cognito path; same cost as `cognito` (`auth_server/server.py:2830`) | none while warm (JWKS cache `:2537`) |
+| `boto3` | AWS SDK credential check — a live Cognito `GetUser` call | **yes** (`auth_server/server.py:2675`) |
+| `unknown` | No path completed; the request failed before or during validation | n/a |
+
+Two things fall out of that table. On a browser-heavy deployment the path paying I/O is
+`session_cookie`, so session-store latency sets the floor for most of your `/validate` traffic.
+And `self_signed` touches no network at all: an HMAC against a local secret is cheaper to verify
+than an RS256 bearer, however warm the JWKS cache is.
+
+**`method` reads `unknown` on every failed request.** The middleware takes it from the
+`X-Auth-Method` response header, which the auth-server sets only on success, so the failure path
+supplies the middleware's own default (`auth_server/metrics_middleware.py:435-439`). Read
+`method` next to `success` or you will file every rejection under a path that was never tried.
+
+Use `increase` rather than `rate` for 24-hour windows. A 24h `rate` scans roughly 5,760 samples
+per series per evaluation and extrapolates at both range edges, which puts a fractional count on
+a whole-number question.
+
+| Goal | Query |
+|---|---|
+| Which auth paths does traffic use (24h) | `sum by (method)(increase(mcpgw_registry_auth_request_total[24h]))` |
+| The same as shares of the total | `sum by (method)(increase(mcpgw_registry_auth_request_total[24h])) / ignoring(method) group_left sum(increase(mcpgw_registry_auth_request_total[24h]))` |
+| Successful traffic only (drops the `unknown` failure bucket) | `sum by (method)(increase(mcpgw_registry_auth_request_total{success="true"}[24h]))` |
+| Mean `/validate` latency per auth path | `sum by (method)(rate(mcpgw_registry_auth_request_duration_milliseconds_sum[30m])) / sum by (method)(rate(mcpgw_registry_auth_request_duration_milliseconds_count[30m]))` |
+| **Mandatory companion panel** for the row above — sample count per path | `sum by (method)(increase(mcpgw_registry_auth_request_duration_milliseconds_count[30m]))` |
+| Legacy-path usage over 30 days (retirement evidence for `jwt`, `boto3`, `federation-static`) | `sum by (method)(increase(mcpgw_registry_auth_request_total{method=~"jwt\|boto3\|federation-static"}[30d]))` |
+| Posture: share carrying a real IdP token versus one we minted | `sum(increase(mcpgw_registry_auth_request_total{method=~"cognito\|keycloak\|entra\|okta\|auth0\|pingfederate\|jwt"}[24h])) / sum(increase(mcpgw_registry_auth_request_total{success="true"}[24h]))` |
+| **Alert:** traffic arriving but no flush succeeding, so the fleet view is going stale | `sum(rate(mcpgw_registry_auth_request_total[15m])) > 0 and sum(rate(mcpgw_registry_auth_path_flush_total{outcome="ok"}[15m])) == 0` |
+
+Ship the latency panel and its sample-count panel together. A path with four observations in the
+window reports a number that means nothing, and a thin path is usually the one you are trying to
+decide about — see the thin-slice warning under
+[Three PromQL assertions to run after a deploy](#three-promql-assertions-to-run-after-a-deploy).
+
+A flush that keeps failing means the fleet view is running on stale data or none, and it is the
+only path by which the heartbeat's auth-path fields disappear. Read the auth-server WARNING logs
+for the flush error alongside the alert.
+
 ### Registry health and operations
 
 | Goal | Query |
@@ -565,7 +620,7 @@ export AUTH=mcp-gateway-registry-auth-server-1     # compose only; on ECS use th
 
 counters() {
   docker exec $AUTH sh -c 'curl -s localhost:9464/metrics' \
-    | grep -E '^mcpgw_registry_(auth_request_total|generic_proxy_)' \
+    | grep -E '^mcpgw_registry_(auth_request_total|auth_path_flush_total|generic_proxy_)' \
     | grep -v duration \
     | sed 's/otel_scope_name="mcp-auth-server",//; s/otel_scope_schema_url="",//; s/otel_scope_version="",//' \
     | sort
@@ -573,7 +628,7 @@ counters() {
 counters
 ```
 
-On a stack that has just started, before any gateway traffic, 47 series already exist at zero — 39 hop outcomes plus the 8 lifecycle values below. That is the point of zero-initialization: a `rate()` alert can bind at deploy instead of waiting for the first failure.
+On a stack that has just started, before any traffic, 49 series already exist at zero — 39 hop outcomes, the 8 lifecycle values below, and the 2 auth-path flush outcomes. That is the point of zero-initialization: a `rate()` alert can bind at deploy instead of waiting for the first failure. An OTel counter does not exist until something increments it, so without seeding the flush-health alert above could never fire.
 
 ```
 mcpgw_registry_generic_proxy_slot_rejected_total{pool="buffered"} 0.0
@@ -584,13 +639,15 @@ mcpgw_registry_generic_proxy_stream_outcome_total{outcome="duration_timeout"} 0.
 mcpgw_registry_generic_proxy_stream_outcome_total{outcome="byte_cap"} 0.0
 mcpgw_registry_generic_proxy_stream_outcome_total{outcome="upstream_error"} 0.0
 mcpgw_registry_generic_proxy_stream_outcome_total{outcome="client_closed"} 0.0
+mcpgw_registry_auth_path_flush_total{outcome="ok"} 0.0
+mcpgw_registry_auth_path_flush_total{outcome="error"} 0.0
 ```
 
 Confirm the startup log said so:
 
 ```bash
 docker compose logs auth-server | grep zero-init
-# zero-init seeded 47/47 generic-proxy series
+# zero-init seeded 49/49 series
 ```
 
 A line reading `zero-init skipped: meter provider is ...` means the SDK meter provider was never installed, so no series were seeded and none of the checks below will show anything.
@@ -601,7 +658,7 @@ On ECS, seeding still happens — `opentelemetry-instrument` installs a real SDK
 aws logs filter-log-events --log-group-name /ecs/mcp-gateway-v2-auth-server \
   --filter-pattern 'zero-init' --start-time $(( ($(date +%s) - 3600) * 1000 )) \
   --query 'events[-3:].message' --output text
-# zero-init seeded 47/47 generic-proxy series
+# zero-init seeded 49/49 series
 
 # the group name comes from the task definition, so read it rather than guessing:
 aws ecs describe-task-definition --task-definition mcp-gateway-v2-auth \

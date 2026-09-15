@@ -110,6 +110,18 @@ auth_request_duration_ms = _meter.create_histogram(
     unit="ms",
 )
 
+auth_path_flush_total = _meter.create_counter(
+    name="mcpgw_registry_auth_path_flush_total",
+    description=(
+        "Auth-path count flushes to the shared stats document, labeled by outcome "
+        "(ok | error). The flush is what carries the per-path traffic mix from "
+        "this process to the registry's telemetry heartbeat, and it fails silently "
+        "by design, so an error series is the only thing that tells an absent mix "
+        "from an unreported one"
+    ),
+    unit="1",
+)
+
 
 # =============================================================================
 # Tool-execution metrics (auth-side, with full client info from headers)
@@ -302,9 +314,12 @@ HOP_OUTCOMES: tuple[str, ...] = (
     "internal_error",
 )
 
+# The flush counter's label set: one closed enum, two values.
+AUTH_PATH_FLUSH_OUTCOMES: tuple[str, ...] = ("ok", "error")
 
-def zero_init_generic_proxy_metrics() -> None:
-    """Seed every known generic-proxy label combination with zero.
+
+def zero_init_metrics() -> None:
+    """Seed every known label combination on this module's counters with zero.
 
     Each add() gets its own try, so one failure cannot skip the rest.
 
@@ -332,6 +347,7 @@ def zero_init_generic_proxy_metrics() -> None:
         for entity_type in HOP_ENTITY_TYPES
         for outcome in HOP_OUTCOMES
     ]
+    seeds += [(auth_path_flush_total, {"outcome": outcome}) for outcome in AUTH_PATH_FLUSH_OUTCOMES]
     seeded = 0
     for instrument, attrs in seeds:
         try:
@@ -339,7 +355,7 @@ def zero_init_generic_proxy_metrics() -> None:
             seeded += 1
         except Exception:  # pragma: no cover - metrics must never break startup
             pass
-    logger.info("zero-init seeded %d/%d generic-proxy series", seeded, len(seeds))
+    logger.info("zero-init seeded %d/%d series", seeded, len(seeds))
 
 
 # =============================================================================

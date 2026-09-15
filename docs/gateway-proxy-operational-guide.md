@@ -585,14 +585,14 @@ sum(rate(mcpgw_registry_generic_proxy_request_total{outcome="internal_error"}[15
 
 `upstream_4xx` is deliberately outside the failure ratio: a caller asking a backend for something it does not have is not a gateway fault. Include it when you care about caller behaviour rather than hop health.
 
-On **docker compose**, confirm with `docker compose logs auth-server | grep zero-init`, which reports `zero-init seeded 47/47 generic-proxy series`. A line reading `zero-init skipped: meter provider is ...` means the SDK meter provider was never installed, so nothing was seeded.
+On **docker compose**, confirm with `docker compose logs auth-server | grep zero-init`, which reports `zero-init seeded 49/49 series`. That total is 47 generic-proxy series plus the 2 outcomes of `mcpgw_registry_auth_path_flush_total`, which the same helper seeds. A line reading `zero-init skipped: meter provider is ...` means the SDK meter provider was never installed, so nothing was seeded.
 
 On **ECS**, both checks work but the paths differ. The log line lives in the per-container v2 group named by the task definition (`/ecs/mcp-gateway-v2-auth-server` — read it with `aws ecs describe-task-definition ... logConfiguration.options."awslogs-group"` rather than guessing, and pick a stream whose id matches a currently running task, since a rolling deploy leaves the replaced task's stream behind):
 
 ```bash
 aws logs filter-log-events --log-group-name /ecs/mcp-gateway-v2-auth-server \
   --filter-pattern 'zero-init' --start-time $(( ($(date +%s) - 3600) * 1000 )) \
-  --query 'events[-1].message' --output text     # zero-init seeded 47/47 generic-proxy series
+  --query 'events[-1].message' --output text     # zero-init seeded 49/49 series
 ```
 
 For the counters themselves, query `sum by (outcome)(mcpgw_registry_generic_proxy_stream_outcome_total)` in Grafana or AMP and expect all six values with the untriggered ones at `0`. The task runs under `opentelemetry-instrument`, so the SDK provider already exists, seeding proceeds, and metrics leave through the `adot-collector` sidecar over OTLP — **nothing listens on `:9464` there**, so `curl localhost:9464/metrics` inside the task returns `Connection refused` and is not a valid check on that surface.

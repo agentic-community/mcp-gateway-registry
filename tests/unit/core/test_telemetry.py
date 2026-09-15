@@ -895,7 +895,7 @@ class TestEmbeddingsTelemetryFields:
 
             assert payload["embeddings_provider"] == "litellm"
             assert payload["embeddings_backend_kind"] == "bedrock"
-            assert payload["schema_version"] == "5"
+            assert payload["schema_version"] == "6"
 
     @pytest.mark.asyncio
     async def test_startup_payload_omits_raw_model_name_and_dimensions(self):
@@ -991,7 +991,7 @@ class TestEmbeddingsTelemetryFields:
 
             assert payload["embeddings_provider"] == "sentence-transformers"
             assert payload["embeddings_backend_kind"] == "sentence-transformers"
-            assert payload["schema_version"] == "5"
+            assert payload["schema_version"] == "6"
             # New v4 deployment-shape fields surface on heartbeat too.
             assert payload["auth"] == "keycloak"
             assert payload["mode"] == "with-gateway"

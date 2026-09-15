@@ -21,6 +21,7 @@ import sys
 import time
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import httpx
 
@@ -57,6 +58,34 @@ _hint_cache: dict[str, tuple[float, str | None]] = {}
 
 # Worst-case probe budget: three providers x 300ms each = 900ms once per process.
 _IMDS_PROBE_TIMEOUT_SECONDS = 0.3
+
+# The closed set of auth paths the auth-server reports. Keep in sync with
+# KNOWN_AUTH_PATHS in auth_server/auth_path_stats.py and with the key allowlist
+# in terraform/telemetry-collector/lambda/collector/schemas.py. Allowlisting on
+# the way out keeps the share dict from turning into a free-text channel if a
+# stray key ever lands in the stats document.
+_KNOWN_AUTH_PATHS: frozenset[str] = frozenset(
+    {
+        "session_cookie",
+        "self_signed",
+        "jwt",
+        "boto3",
+        "federation-static",
+        "network-trusted",
+        "cognito",
+        "keycloak",
+        "entra",
+        "okta",
+        "auth0",
+        "pingfederate",
+        "unknown",
+    }
+)
+
+# The daily window is reset lazily on write, so a registry that goes quiet can
+# carry one well past 24h. Clamped to the collector's `le` bound: reporting a
+# coarse "at least 48" beats having the whole heartbeat rejected.
+_AUTH_PATH_WINDOW_HOURS_MAX = 48
 
 
 def _detect_cloud_from_env() -> str | None:
@@ -634,6 +663,69 @@ def _classification_fields() -> dict:
     }
 
 
+def _auth_path_volume_bucket(total: int) -> str:
+    """Return the order-of-magnitude bucket label for an observed request total.
+
+    Coarse by design: enough to discard a noise sample, not enough to be a
+    traffic meter. A total of 0 never reaches here -- zero volume is reported as
+    None by _auth_path_fields.
+    """
+    if total < 10:
+        return "1-9"
+    if total < 100:
+        return "10-99"
+    if total < 1000:
+        return "100-999"
+    if total < 10000:
+        return "1k-9k"
+    return "10k+"
+
+
+def _auth_path_fields(counts: dict[str, int], window_hours: float) -> dict[str, Any]:
+    """Return the observed auth-path mix keys for the heartbeat payload.
+
+    Shares, not counts: per-path request counts against a stable registry_id
+    would be a traffic meter, and the mix is what the fleet view needs. Two
+    coarse companions travel with the mix so a reader can tell a three-request
+    sample from a full day of traffic.
+
+    All three keys are None when nothing was observed -- never {} and never 0,
+    because an empty mix must not read as a measured one.
+
+    Args:
+        counts: Auth path -> request count over the window. Keys outside
+            _KNOWN_AUTH_PATHS are dropped rather than passed through.
+        window_hours: Hours the counts accumulated over.
+
+    Returns:
+        Dict with keys auth_path_share_24h, auth_path_volume_bucket_24h and
+        auth_path_window_hours.
+    """
+    known = {path: n for path, n in counts.items() if path in _KNOWN_AUTH_PATHS and n > 0}
+    total = sum(known.values())
+    if total == 0:
+        return {
+            "auth_path_share_24h": None,
+            "auth_path_volume_bucket_24h": None,
+            "auth_path_window_hours": None,
+        }
+
+    # Largest remainder: floor every share, then hand the leftover points to the
+    # largest fractional parts, so a reader is never told the mix adds up to 99.
+    exact = {path: n * 100 / total for path, n in known.items()}
+    shares = {path: int(value) for path, value in exact.items()}
+    leftover = 100 - sum(shares.values())
+    ranked = sorted(exact, key=lambda p: (exact[p] - shares[p], known[p], p), reverse=True)
+    for path in ranked[:leftover]:
+        shares[path] += 1
+
+    return {
+        "auth_path_share_24h": shares,
+        "auth_path_volume_bucket_24h": _auth_path_volume_bucket(total),
+        "auth_path_window_hours": min(max(int(window_hours), 0), _AUTH_PATH_WINDOW_HOURS_MAX),
+    }
+
+
 async def _build_startup_payload() -> dict:
     """Build the anonymous startup event payload."""
     from registry.repositories.stats_repository import get_search_counts
@@ -648,7 +740,7 @@ async def _build_startup_payload() -> dict:
 
     return {
         "event": "startup",
-        "schema_version": "5",
+        "schema_version": "6",
         "registry_id": registry_id,
         "v": __version__,
         "py": f"{sys.version_info.major}.{sys.version_info.minor}",
@@ -682,7 +774,7 @@ async def _build_heartbeat_payload() -> dict:
         get_server_repository,
         get_skill_repository,
     )
-    from registry.repositories.stats_repository import get_search_counts
+    from registry.repositories.stats_repository import get_auth_path_counts, get_search_counts
 
     # Calculate uptime
     uptime_hours = 0
@@ -728,6 +820,7 @@ async def _build_heartbeat_payload() -> dict:
     search_backend = "documentdb"
 
     counts = await get_search_counts()
+    auth_path = await get_auth_path_counts()
     registry_id = await _get_registry_id()
     embeddings_backend_kind = _derive_embeddings_backend_kind(
         settings.embeddings_provider,
@@ -737,7 +830,7 @@ async def _build_heartbeat_payload() -> dict:
 
     return {
         "event": "heartbeat",
-        "schema_version": "5",
+        "schema_version": "6",
         "registry_id": registry_id,
         "v": __version__,
         # Deployment-shape fields (schema v4+). Carrying them on every
@@ -767,6 +860,8 @@ async def _build_heartbeat_payload() -> dict:
         "search_queries_total": counts["total"],
         "search_queries_24h": counts["last_24h"],
         "search_queries_1h": counts["last_1h"],
+        # Observed auth-path mix (schema v6+, issue #1753)
+        **_auth_path_fields(auth_path["counts"], auth_path["window_hours"]),
         # Internal/workshop deployment classification (schema v5+, issue #1216)
         **_classification_fields(),
         "ts": datetime.now(UTC).isoformat(),
