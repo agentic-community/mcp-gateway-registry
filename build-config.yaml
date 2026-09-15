@@ -42,6 +42,17 @@ images:
       - latest
     build_args: {}
 
+  # Go /validate fast-path sidecar (issue #1652). Deployed as a sidecar in the
+  # auth-server task/pod; opt-in.
+  go_validate:
+    repo_name: "mcp-gateway-go-validate"
+    dockerfile: "go-validate/Dockerfile"
+    context: "go-validate"
+    description: "Go fast-path sidecar for the auth /validate hot path"
+    tags:
+      - latest
+    build_args: {}
+
   # Keycloak Identity Provider
   keycloak:
     repo_name: "keycloak"
