@@ -88,13 +88,8 @@ create_realm() {
 
     echo "Creating MCP Gateway realm..."
 
-    # Check if realm already exists
-    if realm_exists "$token"; then
-        echo -e "${YELLOW}Realm already exists. Skipping creation...${NC}"
-        return 0
-    fi
-
-    # Create basic realm
+    # Realm settings the bootstrap owns. Declared before the existence check so
+    # the create and the update path cannot drift.
     local realm_json='{
         "realm": "mcp-gateway",
         "enabled": true,
@@ -102,8 +97,33 @@ create_realm() {
         "loginWithEmailAllowed": true,
         "duplicateEmailsAllowed": false,
         "resetPasswordAllowed": true,
-        "editUsernameAllowed": false
+        "editUsernameAllowed": false,
+        "bruteForceProtected": true,
+        "failureFactor": 5,
+        "waitIncrementSeconds": 60,
+        "maxFailureWaitSeconds": 900,
+        "permanentLockout": false
     }'
+
+    # An existing realm is UPDATED, not skipped. Skipping meant a security setting
+    # added here (e.g. bruteForceProtected) never reached a deployment whose realm
+    # already existed, while the script still reported success.
+    if realm_exists "$token"; then
+        local update_status update_response
+        update_response=$(curl -sS -w $'\n%{http_code}' \
+            -X PUT "${KEYCLOAK_URL}/admin/realms/${REALM}" \
+            -H "Authorization: Bearer ${token}" \
+            -H "Content-Type: application/json" \
+            -d "$realm_json")
+        update_status="${update_response##*$'\n'}"
+        if [ "$update_status" = "204" ]; then
+            echo -e "${GREEN}Realm already exists; settings updated.${NC}"
+            return 0
+        fi
+        echo -e "${RED}Failed to update existing realm (HTTP ${update_status})${NC}" >&2
+        echo "  response: ${update_response%$'\n'*}" >&2
+        return 1
+    fi
 
     local response=$(curl -s -o /dev/null -w "%{http_code}" \
         -X POST "${KEYCLOAK_URL}/admin/realms" \
@@ -115,16 +135,25 @@ create_realm() {
         echo -e "${GREEN}Realm created successfully!${NC}"
         return 0
     elif [ "$response" = "409" ]; then
-        echo -e "${YELLOW}Realm already exists. Continuing...${NC}"
-        return 0
-    else
-        echo -e "${RED}Failed to create realm. HTTP status: ${response}${NC}"
-        echo "Response body:"
-        curl -s -X POST "${KEYCLOAK_URL}/admin/realms" \
+        # Existing realm: PUT the settings rather than skipping, otherwise a
+        # security setting added here (e.g. bruteForceProtected) never reaches a
+        # deployment whose realm already exists while the script reports success.
+        local update_status
+        update_status=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X PUT "${KEYCLOAK_URL}/admin/realms/${REALM}" \
             -H "Authorization: Bearer ${token}" \
             -H "Content-Type: application/json" \
-            -d "$realm_json"
-        echo ""
+            -d "$realm_json")
+        if [ "$update_status" = "204" ]; then
+            echo -e "${YELLOW}Realm already exists; settings updated.${NC}"
+            return 0
+        fi
+        echo -e "${RED}Failed to update existing realm (HTTP ${update_status})${NC}" >&2
+        return 1
+    else
+        # No second POST here: re-sending the create just to print a body is a
+        # duplicate create attempt that can succeed on a transient failure.
+        echo -e "${RED}Failed to create realm. HTTP status: ${response}${NC}" >&2
         return 1
     fi
 }
@@ -142,12 +171,21 @@ create_clients() {
     # - Both modes: include both URLs
 
     local redirect_uris='"http://localhost:7860/*", "http://localhost:8888/*"'
-    local web_origins='"http://localhost:7860", "+"'
+    # No "+" wildcard: it expands to the origin of every redirect URI, which in
+    # CloudFront/custom-domain mode silently widens CORS to whatever redirect was
+    # registered. The browser never calls Keycloak via XHR (the auth-server does
+    # the code exchange server-side), so origins are listed explicitly.
+    local web_origins='"http://localhost:7860", "http://localhost:8888"'
+    # Post-logout landing pages, "##"-delimited (Keycloak multi-value attribute).
+    # Set explicitly so the allowlist does NOT fall back to redirectUris, which
+    # includes the auth-server OAuth callback -- not a valid logout destination.
+    local post_logout_uris='http://localhost:7860/*##http://localhost:8888/*'
 
     # Add custom domain URLs if available
     if [ -n "$REGISTRY_URL" ] && [ "$REGISTRY_URL" != "http://localhost:7860" ]; then
         redirect_uris="${redirect_uris}, \"${REGISTRY_URL}/oauth2/callback/keycloak\", \"${REGISTRY_URL}/*\""
         web_origins="${web_origins}, \"${REGISTRY_URL}\""
+        post_logout_uris="${post_logout_uris}##${REGISTRY_URL}/*"
         echo "  - Adding custom domain redirect URIs: ${REGISTRY_URL}"
     fi
 
@@ -155,6 +193,7 @@ create_clients() {
     if [ -n "$CLOUDFRONT_REGISTRY_URL" ]; then
         redirect_uris="${redirect_uris}, \"${CLOUDFRONT_REGISTRY_URL}/oauth2/callback/keycloak\", \"${CLOUDFRONT_REGISTRY_URL}/*\""
         web_origins="${web_origins}, \"${CLOUDFRONT_REGISTRY_URL}\""
+        post_logout_uris="${post_logout_uris}##${CLOUDFRONT_REGISTRY_URL}/*"
         echo "  - Adding CloudFront redirect URIs: ${CLOUDFRONT_REGISTRY_URL}"
     fi
 
@@ -170,11 +209,15 @@ create_clients() {
         "clientAuthenticatorType": "client-secret",
         "redirectUris": ['"${redirect_uris}"'],
         "webOrigins": ['"${web_origins}"'],
+        "attributes": {
+            "post.logout.redirect.uris": "'"${post_logout_uris}"'"
+        },
         "protocol": "openid-connect",
         "standardFlowEnabled": true,
         "implicitFlowEnabled": false,
         "directAccessGrantsEnabled": true,
         "serviceAccountsEnabled": false,
+        "fullScopeAllowed": false,
         "publicClient": false
     }'
 
@@ -187,24 +230,30 @@ create_clients() {
     if [ "$web_response" = "201" ]; then
         echo "  - Web client created"
     elif [ "$web_response" = "409" ]; then
-        echo "  - Web client already exists, updating redirect URIs..."
+        echo "  - Web client already exists, updating..."
         local web_client_uuid=$(curl -s -H "Authorization: Bearer ${token}" \
             "${KEYCLOAK_URL}/admin/realms/${REALM}/clients?clientId=mcp-gateway-web" 2>/dev/null | \
             jq -r 'if type == "array" then (.[0].id // empty) else empty end' 2>/dev/null)
-        if [ -n "$web_client_uuid" ] && [ "$web_client_uuid" != "null" ]; then
-            local update_response=$(curl -s -o /dev/null -w "%{http_code}" \
-                -X PUT "${KEYCLOAK_URL}/admin/realms/${REALM}/clients/${web_client_uuid}" \
-                -H "Authorization: Bearer ${token}" \
-                -H "Content-Type: application/json" \
-                -d "$web_client_json")
-            if [ "$update_response" = "204" ]; then
-                echo -e "  - ${GREEN}Web client updated successfully${NC}"
-            else
-                echo -e "  - ${RED}Failed to update web client (HTTP $update_response)${NC}"
-            fi
+        if [ -z "$web_client_uuid" ] || [ "$web_client_uuid" = "null" ]; then
+            # Silently skipping here used to leave the client unmodified while the
+            # script printed success, so the webOrigins/post-logout hardening never
+            # landed on an existing realm.
+            echo -e "${RED}  - Could not resolve mcp-gateway-web client id; cannot apply client settings${NC}" >&2
+            return 1
         fi
+        local update_response=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X PUT "${KEYCLOAK_URL}/admin/realms/${REALM}/clients/${web_client_uuid}" \
+            -H "Authorization: Bearer ${token}" \
+            -H "Content-Type: application/json" \
+            -d "$web_client_json")
+        if [ "$update_response" != "204" ]; then
+            echo -e "  - ${RED}Failed to update web client (HTTP $update_response)${NC}" >&2
+            return 1
+        fi
+        echo -e "  - ${GREEN}Web client updated successfully${NC}"
     else
-        echo -e "${RED}  - Failed to create web client (HTTP $web_response)${NC}"
+        echo -e "${RED}  - Failed to create web client (HTTP $web_response)${NC}" >&2
+        return 1
     fi
 
     # Create M2M client
@@ -218,6 +267,7 @@ create_clients() {
         "implicitFlowEnabled": false,
         "directAccessGrantsEnabled": false,
         "serviceAccountsEnabled": true,
+        "fullScopeAllowed": false,
         "publicClient": false
     }'
 

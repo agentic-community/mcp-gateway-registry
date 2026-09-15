@@ -764,6 +764,16 @@ services:
       - PING_IDENTITY_DEVOPS_KEY=${PING_IDENTITY_DEVOPS_KEY}
       - SERVER_PROFILE_URL=https://github.com/pingidentity/pingidentity-server-profiles.git
       - SERVER_PROFILE_PATH=getting-started/pingfederate
+      # Bootstrap the console administrator from the operator-supplied
+      # PF_ADMIN_PASS instead of the Ping vendor default. This profile
+      # (getting-started) interpolates PING_IDENTITY_PASSWORD straight into
+      # instance/bulk-config/data.json.subst, where baseline routes it through
+      # administrativeAccounts_items_Administrator_password -- different
+      # mechanism, same operator-settable variable. Empty is NOT neutral: both
+      # profiles' env_vars apply ${PING_IDENTITY_PASSWORD:=2FederateM0re}, and
+      # `:=` substitutes on null, so build_and_run.sh rejects an empty
+      # PF_ADMIN_PASS when PINGFEDERATE_ENABLED is true.
+      - PING_IDENTITY_PASSWORD=${PF_ADMIN_PASS:-}
     # Runtime (9031) and admin (9999) published on loopback only. The admin
     # console in particular must never be reachable from the network.
     ports:

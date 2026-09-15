@@ -25,23 +25,23 @@
       "clientId": "mcp-gateway-web",
       "name": "MCP Gateway Web Client",
       "description": "Web UI authentication client for MCP Gateway Registry",
-      "rootUrl": "${env.REGISTRY_URL}",
-      "adminUrl": "${env.REGISTRY_URL}",
-      "baseUrl": "${env.REGISTRY_URL}",
+      "rootUrl": "${REGISTRY_URL}",
+      "adminUrl": "${REGISTRY_URL}",
+      "baseUrl": "${REGISTRY_URL}",
       "surrogateAuthRequired": false,
       "enabled": true,
       "alwaysDisplayInConsole": false,
       "clientAuthenticatorType": "client-secret",
       "redirectUris": [
-        "${env.AUTH_SERVER_EXTERNAL_URL}/oauth2/callback/keycloak",
-        "${env.REGISTRY_URL}/*",
+        "${AUTH_SERVER_EXTERNAL_URL}/oauth2/callback/keycloak",
+        "${REGISTRY_URL}/*",
         "http://localhost:7860/*",
         "http://localhost:8888/*"
       ],
       "webOrigins": [
-        "${env.REGISTRY_URL}",
+        "${REGISTRY_URL}",
         "http://localhost:7860",
-        "+"
+        "http://localhost:8888"
       ],
       "protocol": "openid-connect",
       "fullScopeAllowed": false,
@@ -56,7 +56,7 @@
         "saml.force.post.binding": "false",
         "saml.multivalued.roles": "false",
         "saml.encrypt": "false",
-        "post.logout.redirect.uris": "+",
+        "post.logout.redirect.uris": "${REGISTRY_URL}/*##http://localhost:7860/*##http://localhost:8888/*",
         "oauth2.device.authorization.grant.enabled": "false",
         "oidc.ciba.grant.enabled": "false",
         "backchannel.logout.session.required": "true",
@@ -249,13 +249,6 @@
       "emailVerified": true,
       "firstName": "Admin",
       "lastName": "User",
-      "credentials": [
-        {
-          "type": "password",
-          "value": "${env.INITIAL_ADMIN_PASSWORD:changeme}",
-          "temporary": true
-        }
-      ],
       "groups": [
         "mcp-registry-admin",
         "mcp-servers-unrestricted"

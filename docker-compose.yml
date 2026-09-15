@@ -1116,6 +1116,14 @@ services:
       - PING_IDENTITY_DEVOPS_KEY=${PING_IDENTITY_DEVOPS_KEY}
       - SERVER_PROFILE_URL=https://github.com/pingidentity/pingidentity-server-profiles.git
       - SERVER_PROFILE_PATH=baseline/pingfederate
+      # Bootstrap the console administrator with the operator's own password
+      # instead of the Ping vendor default. The baseline server profile resolves
+      # administrativeAccounts_items_Administrator_password from
+      # ${PING_IDENTITY_PASSWORD:=2FederateM0re}, so a non-empty value wins.
+      # Left as :- (not :?) so `docker compose up` without the pingfederate
+      # profile is unaffected; init-pingfederate.sh is what fails closed on an
+      # unset or weak PF_ADMIN_PASS.
+      - PING_IDENTITY_PASSWORD=${PF_ADMIN_PASS:-}
     # Runtime (9031/9032) and admin (9999) published on loopback only. The
     # admin console in particular must never be reachable from the network.
     ports:
