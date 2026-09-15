@@ -1301,15 +1301,21 @@ def _build_auth_path_md(
             lines.append(f"| {bucket} | {count} |")
         lines.append("")
 
+    # One instance in a fleet of thousands rounds to 0.0%, which reads as a
+    # contradiction next to a populated table. Floor the display instead.
+    shown = f"{coverage}%" if coverage >= 0.05 else "<0.1%"
     coverage_line = (
-        f"Coverage: **{reporting}/{total}** instances ({coverage}%) reported an auth-path "
+        f"Coverage: **{reporting}/{total}** instances ({shown}) reported an auth-path "
         f"mix; **{schema_v6}** report schema v6. Capture begins with release {since}."
     )
     if windows:
-        coverage_line += (
-            f" Reported windows span {windows.get('min')}-{windows.get('max')}h "
-            f"(median {windows.get('median')}h)."
-        )
+        low, high = windows.get("min"), windows.get("max")
+        if high == 0:
+            coverage_line += " Windows are under an hour old, so the shares are an early sample."
+        else:
+            coverage_line += (
+                f" Reported windows span {low}-{high}h (median {windows.get('median')}h)."
+            )
     lines.append(coverage_line)
     lines.append("")
 

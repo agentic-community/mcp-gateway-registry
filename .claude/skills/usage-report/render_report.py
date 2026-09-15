@@ -453,10 +453,10 @@ def _build_auth_path_status_line(
     schema_v6 = int(auth_path.get("schema_v6_instances") or 0)
     coverage = float(auth_path.get("coverage_pct") or 0.0)
     if reporting > 0:
-        return (
-            f"Collected: {reporting} of {total} instances ({coverage:.1f}%) "
-            f"report an auth-path mix."
-        )
+        # A single instance in a fleet of thousands rounds to 0.0%, which reads as
+        # a contradiction next to "Collected". Floor the display instead.
+        shown = f"{coverage:.1f}%" if coverage >= 0.05 else "<0.1%"
+        return f"Collected: {reporting} of {total} instances ({shown}) report an auth-path mix."
     if schema_v6 > 0:
         return (
             f"Not collected yet: {schema_v6} of {total} instances run telemetry schema v6, "
@@ -510,10 +510,17 @@ def _build_auth_path_window_summary(
     median = window.get("median")
     if median is None:
         return "_No instance reports an auth-path measurement window._"
+    low = int(window.get("min") or 0)
+    high = int(window.get("max") or 0)
+    if high == 0:
+        return (
+            "Reporting instances measure their mix over a window under an hour old, so the "
+            "shares are an early sample. The registry clamps this window to 48 hours."
+        )
+    span = f"{low} to {high} hours" if low != high else f"{high} hours"
     return (
-        f"Reporting instances measure their mix over {int(window.get('min') or 0)} to "
-        f"{int(window.get('max') or 0)} hours, median {float(median):.1f}. "
-        f"The registry clamps this window to 48 hours."
+        f"Reporting instances measure their mix over {span}, median "
+        f"{float(median):.1f}. The registry clamps this window to 48 hours."
     )
 
 
