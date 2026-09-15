@@ -55,22 +55,26 @@ from metrics_middleware import add_auth_metrics_middleware
 from starlette.background import BackgroundTask
 
 try:
+    from auth_path_stats import flush_loop as auth_path_flush_loop
+    from auth_path_stats import flush_once as auth_path_flush_once
     from observability.meters import (
         record_generic_proxy_request,
         record_generic_proxy_slot_rejected,
         record_generic_proxy_stream_outcome,
         redirect_rejected_total,
         token_mint_total,
-        zero_init_generic_proxy_metrics,
+        zero_init_metrics,
     )
 except ImportError:
+    from auth_server.auth_path_stats import flush_loop as auth_path_flush_loop
+    from auth_server.auth_path_stats import flush_once as auth_path_flush_once
     from auth_server.observability.meters import (
         record_generic_proxy_request,
         record_generic_proxy_slot_rejected,
         record_generic_proxy_stream_outcome,
         redirect_rejected_total,
         token_mint_total,
-        zero_init_generic_proxy_metrics,
+        zero_init_metrics,
     )
 try:
     from egress_obo import (
@@ -2262,15 +2266,26 @@ def check_rate_limit(username: str) -> bool:
     return True
 
 
+# The auth-path flush task, held so the lifespan can cancel it on shutdown and so
+# the loop is not garbage-collected mid-flight.
+_auth_path_flush_task: asyncio.Task | None = None
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan context manager for FastAPI application."""
     # Log OTel SDK + metrics emission state (issue #1122)
     _log_otel_state()
 
-    # Materialize the generic-proxy counter series so dashboards and alerts bind
-    # at deploy rather than at first failure (issue #1735).
-    zero_init_generic_proxy_metrics()
+    # Materialize the counter series so dashboards and alerts bind at deploy
+    # rather than at first failure (issue #1735).
+    zero_init_metrics()
+
+    # Carry the per-auth-path request counts to the registry's telemetry
+    # heartbeat. Started here, not via @app.on_event: Starlette ignores on_event
+    # once a lifespan is provided.
+    global _auth_path_flush_task
+    _auth_path_flush_task = asyncio.create_task(auth_path_flush_loop())
 
     # Startup: Load scopes configuration
     global SCOPES_CONFIG
@@ -2324,8 +2339,17 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # Shutdown: Add cleanup code here if needed in the future
     logger.info("Shutting down auth server")
+
+    # Stop the periodic flush, then flush once more: a graceful stop would
+    # otherwise drop whatever accumulated since the last tick.
+    if _auth_path_flush_task is not None:
+        _auth_path_flush_task.cancel()
+        try:
+            await _auth_path_flush_task
+        except asyncio.CancelledError:
+            pass
+    await auth_path_flush_once()
 
 
 # Create FastAPI app

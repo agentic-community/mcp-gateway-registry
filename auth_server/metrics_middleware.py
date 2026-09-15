@@ -28,6 +28,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 # /app (so siblings are imported without the ``auth_server.`` prefix); under
 # pytest the package is rooted at the repo so the prefix is required.
 try:
+    from auth_path_stats import record as record_auth_path
     from observability.meters import (
         auth_request_duration_ms,
         auth_request_total,
@@ -37,6 +38,7 @@ try:
         tool_execution_total,
     )
 except ImportError:
+    from auth_server.auth_path_stats import record as record_auth_path
     from auth_server.observability.meters import (
         auth_request_duration_ms,
         auth_request_total,
@@ -470,6 +472,14 @@ class AuthMetricsMiddleware(BaseHTTPMiddleware):
             # Calculate duration
             duration_ms = (time.perf_counter() - start_time) * 1000
 
+            # Inline, not inside the task below: create_task's return value is
+            # not retained, so an increment made in the task can be dropped when
+            # the loop tears down. This count is what reaches the registry's
+            # telemetry heartbeat as the fleet's auth-path mix, so a request
+            # missing from it is a request missing from that mix. Same coercion
+            # as _emit_auth_metric, for the same reason.
+            record_auth_path(auth_method or "unknown")
+
             # Emit comprehensive metrics asynchronously (fire and forget)
             # 1. Main auth metric
             asyncio.create_task(
@@ -544,10 +554,18 @@ class AuthMetricsMiddleware(BaseHTTPMiddleware):
         auto-instrumentation span attributes for per-request debugging.
         """
         # 1) OTel emission (always-on, in-process, non-blocking)
+        #
+        # `method` is coerced here, not at the header: server.py writes
+        # X-Auth-Method with an `or ""` fallback, so the header is PRESENT but
+        # empty and dispatch's `.get(..., "unknown")` default never fires. A blank
+        # Prometheus label reads as absent, which drops those requests out of
+        # `sum by (method)` entirely. Fixing the header instead would change what
+        # nginx forwards to downstream consumers to repair a metric. One dict
+        # feeds both instruments below, so the histogram is covered too.
         otel_attrs = _label_limiter.bound_attrs(
             {
                 "success": bool_label(success),
-                "method": method,
+                "method": method or "unknown",
                 "server": server_name,
                 "target_kind": target_kind,
             },

@@ -284,7 +284,7 @@ class TestZeroInit:
             patch.object(meters.generic_proxy_stream_outcome_total, "add") as stream_add,
             patch.object(meters.metrics, "get_meter_provider", return_value=MagicMock()),
         ):
-            meters.zero_init_generic_proxy_metrics()
+            meters.zero_init_metrics()
 
         assert {c[0][1]["pool"] for c in slot_add.call_args_list} == {"buffered", "stream"}
         assert {c[0][1]["outcome"] for c in stream_add.call_args_list} == {
@@ -314,7 +314,7 @@ class TestZeroInit:
             patch.object(meters.generic_proxy_stream_outcome_total, "add"),
             patch.object(meters.metrics, "get_meter_provider", return_value=MagicMock()),
         ):
-            meters.zero_init_generic_proxy_metrics()
+            meters.zero_init_metrics()
 
         seeded = {(c[0][1]["entity_type"], c[0][1]["outcome"]) for c in hop_add.call_args_list}
         expected = {(e, o) for e in meters.HOP_ENTITY_TYPES for o in meters.HOP_OUTCOMES}
@@ -338,7 +338,7 @@ class TestZeroInit:
             patch.object(meters.metrics, "get_meter_provider", return_value=provider),
             caplog.at_level("INFO"),
         ):
-            meters.zero_init_generic_proxy_metrics()
+            meters.zero_init_metrics()
 
         slot_add.assert_not_called()
         assert "zero-init skipped" in caplog.text
@@ -356,7 +356,7 @@ class TestZeroInit:
             patch.object(meters.generic_proxy_stream_outcome_total, "add") as stream_add,
             patch.object(meters.metrics, "get_meter_provider", return_value=MagicMock()),
         ):
-            meters.zero_init_generic_proxy_metrics()
+            meters.zero_init_metrics()
 
         assert slot_add.call_count == 2
         assert stream_add.call_count == 6
@@ -370,8 +370,37 @@ class TestZeroInit:
             patch.object(meters.generic_proxy_request_total, "add") as hop_add,
             patch.object(meters.metrics, "get_meter_provider", return_value=MagicMock()),
         ):
-            meters.zero_init_generic_proxy_metrics()
+            meters.zero_init_metrics()
         assert hop_add.call_count == 39
+
+    def test_zero_init_seeds_both_flush_outcomes(self):
+        """The flush-health counter must exist at zero before the first flush.
+
+        An OTel counter is absent until its first increment, and the alert on
+        `outcome="error"` is the only thing that distinguishes a broken auth-path
+        flush from a deployment with no traffic. Unseeded, it cannot bind at deploy
+        -- and it only ever increments on the failure it was meant to have caught.
+        """
+        from auth_server.observability import meters
+
+        with (
+            patch.object(meters.auth_path_flush_total, "add") as flush_add,
+            patch.object(meters.generic_proxy_slot_rejected_total, "add") as slot_add,
+            patch.object(meters.generic_proxy_stream_outcome_total, "add") as stream_add,
+            patch.object(meters.generic_proxy_request_total, "add") as hop_add,
+            patch.object(meters.metrics, "get_meter_provider", return_value=MagicMock()),
+        ):
+            meters.zero_init_metrics()
+
+        seeded = {c[0][1]["outcome"] for c in flush_add.call_args_list}
+        assert seeded == set(meters.AUTH_PATH_FLUSH_OUTCOMES) == {"ok", "error"}
+        assert all(c[0][0] == 0 for c in flush_add.call_args_list)
+        # One seeding mechanism, not two: the flush outcomes join the existing
+        # totals, which is the count the startup log line and docs report.
+        assert (
+            slot_add.call_count + stream_add.call_count + hop_add.call_count + flush_add.call_count
+            == 49
+        )
 
 
 class TestServerNameIsBounded:
@@ -478,3 +507,136 @@ class TestServerNameIsBounded:
             )
 
         assert counter.add.call_args[0][1]["server_name"] == "airegistry-tools"
+
+
+def _validate_request(path: str = "/validate") -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": path,
+            "query_string": b"",
+            "headers": [],
+            "client": ("10.0.0.1", 1234),
+            "server": ("localhost", 80),
+            "scheme": "http",
+        }
+    )
+
+
+class TestBlankAuthMethod:
+    """A blank `method` reads as `unknown` on the metrics, and nowhere else.
+
+    server.py writes `X-Auth-Method: validation_result.get("method") or ""`, so on
+    a validation result with no method the header is PRESENT and empty and
+    dispatch's `.get(..., "unknown")` default never fires. Prometheus treats a
+    blank label value as absent, so those requests drop out of `sum by (method)`
+    entirely. The coercion therefore belongs at emission, not at the header.
+    """
+
+    @staticmethod
+    async def _dispatch_blank(middleware):
+        async def call_next(_request):
+            return Response(status_code=200, headers={"X-Auth-Method": ""})
+
+        with (
+            patch("auth_server.metrics_middleware.auth_request_total") as counter,
+            patch("auth_server.metrics_middleware.auth_request_duration_ms") as hist,
+            patch("auth_server.metrics_middleware.record_emission_path"),
+            patch("auth_server.metrics_middleware.record_auth_path"),
+        ):
+            response = await middleware.dispatch(_validate_request(), call_next)
+            # Emission is fire-and-forget via create_task; let those tasks run.
+            for _ in range(5):
+                await asyncio.sleep(0)
+        return response, counter, hist
+
+    @pytest.mark.asyncio
+    async def test_blank_auth_method_becomes_unknown_on_both_metrics(self, middleware):
+        """One `otel_attrs` dict feeds both instruments, so both must read `unknown`."""
+        _, counter, hist = await self._dispatch_blank(middleware)
+
+        assert counter.add.call_args[0][1]["method"] == "unknown"
+        assert hist.record.call_args[0][1]["method"] == "unknown"
+
+    @pytest.mark.asyncio
+    async def test_auth_method_response_header_unchanged(self, middleware):
+        """The regression guard for the whole approach: the header is byte-identical.
+
+        nginx forwards X-Auth-Method from the auth_request subrequest and downstream
+        consumers read it. Repairing the header instead of the label would change a
+        request contract to fix a metric.
+        """
+        response, _, _ = await self._dispatch_blank(middleware)
+
+        assert response.headers["X-Auth-Method"] == ""
+
+    @pytest.mark.asyncio
+    async def test_histogram_still_carries_no_server_label(self, middleware):
+        """The 1.30.0 contract survives the shared-dict coercion.
+
+        `hist_attrs` is derived from the same `otel_attrs` the counter gets, so a
+        change there is exactly where `server` would leak back onto 16 buckets.
+        """
+        _, counter, hist = await self._dispatch_blank(middleware)
+
+        assert "server" not in hist.record.call_args[0][1]
+        assert "server" in counter.add.call_args[0][1]
+
+
+class TestAuthPathRecording:
+    """Every /validate request is counted once; nothing else is counted at all."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("outcome", [200, 401, 403, 502, "raise"])
+    async def test_record_called_once_per_request_for_every_outcome(self, middleware, outcome):
+        """The count feeds the fleet's auth-path mix, so a missing request is a
+        missing request in that mix. dispatch's `finally` is what makes it
+        exhaustive across success, every failure status, and a raising handler --
+        and the raise must still propagate untouched.
+        """
+
+        async def call_next(_request):
+            if outcome == "raise":
+                raise RuntimeError("validator exploded")
+            headers = {"X-Auth-Method": "session_cookie"} if outcome == 200 else {}
+            return Response(status_code=outcome, headers=headers)
+
+        with (
+            patch("auth_server.metrics_middleware.auth_request_total"),
+            patch("auth_server.metrics_middleware.auth_request_duration_ms"),
+            patch("auth_server.metrics_middleware.record_emission_path"),
+            patch("auth_server.metrics_middleware.record_auth_path") as record,
+        ):
+            if outcome == "raise":
+                with pytest.raises(RuntimeError, match="validator exploded"):
+                    await middleware.dispatch(_validate_request(), call_next)
+            else:
+                await middleware.dispatch(_validate_request(), call_next)
+            for _ in range(5):
+                await asyncio.sleep(0)
+
+        record.assert_called_once()
+        # Only a 200 reports a path: the auth-server sets X-Auth-Method on success
+        # only, so every failure files as `unknown`.
+        assert record.call_args[0][0] == ("session_cookie" if outcome == 200 else "unknown")
+
+    @pytest.mark.asyncio
+    async def test_non_validate_path_records_nothing(self, middleware):
+        """dispatch returns before any instrumentation for a non-/validate path."""
+
+        async def call_next(_request):
+            return Response(status_code=200, headers={"X-Auth-Method": "session_cookie"})
+
+        with (
+            patch("auth_server.metrics_middleware.auth_request_total") as counter,
+            patch("auth_server.metrics_middleware.auth_request_duration_ms"),
+            patch("auth_server.metrics_middleware.record_emission_path"),
+            patch("auth_server.metrics_middleware.record_auth_path") as record,
+        ):
+            await middleware.dispatch(_validate_request(path="/health"), call_next)
+            for _ in range(5):
+                await asyncio.sleep(0)
+
+        record.assert_not_called()
+        counter.add.assert_not_called()

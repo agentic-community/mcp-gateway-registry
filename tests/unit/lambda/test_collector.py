@@ -9,11 +9,20 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import boto3  # noqa: F401  (see the sys.path note below)
+import pymongo  # noqa: F401  (see the sys.path note below)
 import pytest
 from botocore.exceptions import ClientError
 from pydantic import ValidationError
 
-# Add Lambda collector to path for imports
+# Add the Lambda collector to the path for imports. That directory is a
+# deployment bundle carrying vendored copies of pydantic, pymongo and boto3, so
+# two precautions keep it from leaking into the rest of the session: the venv's
+# copies of the shadowed packages are imported above first, so index.py's
+# imports are sys.modules hits, and the path comes back off as soon as the two
+# modules under test are loaded. Without either one, a vendored pymongo ends up
+# in sys.modules and every later `import motor` dies on
+# ModuleNotFoundError: No module named 'pymongo.cursor_shared'.
 lambda_path = (
     Path(__file__).parent.parent.parent.parent
     / "terraform"
@@ -22,16 +31,18 @@ lambda_path = (
     / "collector"
 )
 sys.path.insert(0, str(lambda_path))
-
-from index import (  # noqa: E402
-    _check_rate_limit,
-    _get_credentials,
-    _get_database,
-    _hash_ip,
-    _store_event,
-    lambda_handler,
-)
-from schemas import HeartbeatEvent, StartupEvent  # noqa: E402
+try:
+    from index import (  # noqa: E402
+        _check_rate_limit,
+        _get_credentials,
+        _get_database,
+        _hash_ip,
+        _store_event,
+        lambda_handler,
+    )
+    from schemas import HeartbeatEvent, StartupEvent  # noqa: E402
+finally:
+    sys.path.remove(str(lambda_path))
 
 
 # Reset global singletons between tests
@@ -312,6 +323,108 @@ class TestSchemas:
         payload["internal_deployment_type"] = "production"  # not in the allowed set
         with pytest.raises(ValidationError):
             StartupEvent(**payload)
+
+    # ---- Schema v6 observed auth-path mix (issue #1753) ----
+
+    @staticmethod
+    def _v6_auth_path_fields() -> dict:
+        return {
+            "schema_version": "6",
+            "auth_path_share_24h": {"session_cookie": 62, "keycloak": 31, "unknown": 7},
+            "auth_path_volume_bucket_24h": "100-999",
+            "auth_path_window_hours": 21,
+        }
+
+    def test_auth_path_fields_survive_model_dump(self):
+        """The stored document must carry the mix and the schema version.
+
+        index.py persists validated.model_dump(), and Pydantic drops undeclared
+        keys. Before these fields were declared, a working flush and a dead one
+        looked identical from inside the repo: the fleet view was empty either
+        way.
+        """
+        payload = self._v2_heartbeat_payload()
+        payload.update(self._v6_auth_path_fields())
+
+        dumped = HeartbeatEvent(**payload).model_dump()
+
+        for key, value in self._v6_auth_path_fields().items():
+            assert key in dumped, f"{key} dropped before storage"
+            assert dumped[key] == value, f"{key} altered: {dumped[key]!r}"
+
+    def test_pre_v6_payload_still_validates(self):
+        """The change is additive: an old client must not start failing."""
+        event = HeartbeatEvent(**self._v2_heartbeat_payload())
+
+        assert event.schema_version == "2"
+        assert event.auth_path_share_24h is None
+        assert event.auth_path_volume_bucket_24h is None
+        assert event.auth_path_window_hours is None
+
+    def test_unknown_share_key_dropped_not_rejected(self):
+        """An unrecognised auth path is dropped, and the rest of the heartbeat lands.
+
+        A client that learns a new auth path before this collector is redeployed
+        would otherwise lose its whole payload, and the field must not become a
+        free-text channel either.
+        """
+        payload = self._v2_heartbeat_payload()
+        payload.update(self._v6_auth_path_fields())
+        payload["auth_path_share_24h"] = {"session_cookie": 60, "quantum_handshake": 40}
+
+        event = HeartbeatEvent(**payload)
+
+        assert event.auth_path_share_24h == {"session_cookie": 60}
+        assert event.servers_count == 15
+
+    @pytest.mark.parametrize("share", [101, -1, 1000])
+    def test_out_of_range_share_value_rejected(self, share):
+        """A share outside 0..100 is not a percentage; reject the payload."""
+        payload = self._v2_heartbeat_payload()
+        payload.update(self._v6_auth_path_fields())
+        payload["auth_path_share_24h"] = {"session_cookie": share}
+
+        with pytest.raises(ValidationError):
+            HeartbeatEvent(**payload)
+
+    @pytest.mark.parametrize("bucket", ["42-99", "1k", "10k", "100-999 ", "", "10000+"])
+    def test_invalid_volume_bucket_rejected(self, bucket):
+        """Only the exact bucket strings the registry emits are accepted."""
+        payload = self._v2_heartbeat_payload()
+        payload.update(self._v6_auth_path_fields())
+        payload["auth_path_volume_bucket_24h"] = bucket
+
+        with pytest.raises(ValidationError):
+            HeartbeatEvent(**payload)
+
+    @pytest.mark.parametrize("hours", [49, 200, -1])
+    def test_out_of_range_window_hours_rejected(self, hours):
+        """The le=48 bound is why the registry clamps the window it reports.
+
+        An unclamped window would cost the entire heartbeat, not one field, so
+        the bound has to stay observable from this side too.
+        """
+        payload = self._v2_heartbeat_payload()
+        payload.update(self._v6_auth_path_fields())
+        payload["auth_path_window_hours"] = hours
+
+        with pytest.raises(ValidationError):
+            HeartbeatEvent(**payload)
+
+    def test_null_auth_path_fields_accepted(self):
+        """A window with no traffic sends all three as null, and that must validate."""
+        payload = self._v2_heartbeat_payload()
+        payload["schema_version"] = "6"
+        payload["auth_path_share_24h"] = None
+        payload["auth_path_volume_bucket_24h"] = None
+        payload["auth_path_window_hours"] = None
+
+        dumped = HeartbeatEvent(**payload).model_dump()
+
+        assert dumped["schema_version"] == "6"
+        assert dumped["auth_path_share_24h"] is None
+        assert dumped["auth_path_volume_bucket_24h"] is None
+        assert dumped["auth_path_window_hours"] is None
 
 
 class TestIPHashing:
