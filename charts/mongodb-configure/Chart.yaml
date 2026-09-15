@@ -2,5 +2,7 @@ apiVersion: v2
 name: mongodb-configure
 description: A Helm chart for configuring MongoDB
 type: application
-version: 0.1.0
+# 0.2.0: the init Job runs the registry image's own scripts/init-mongodb-ce.py
+# instead of a ConfigMap copy of it, and re-runs as a Helm hook on upgrade.
+version: 0.2.0
 appVersion: "1.0.0"
