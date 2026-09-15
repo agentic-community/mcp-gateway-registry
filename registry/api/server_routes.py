@@ -2916,6 +2916,15 @@ async def get_server_canonical(
                 detail="You do not have access to this server",
             )
 
+    # Prune the tool_list to what this caller may see before projecting to the
+    # canonical shape, so the _meta block cannot disclose tool names outside the
+    # caller's allowlist. Matches GET /servers/{path}, get_server_details, and
+    # the tool catalog. filter_tools_for_user fails closed (empty allowlist ->
+    # no tools) and passes through admin / wildcard callers; it mutates the
+    # fresh per-request server_info in place and keeps num_tools consistent, so
+    # both fields are carried redacted into to_canonical's INTERNAL_FIELDS _meta.
+    _apply_tool_visibility(server_info, service_path, user_context, endpoint="server_canonical")
+
     canonical, truncated = to_canonical(server_info)
 
     # In with-gateway mode non-admin clients reach servers through the gateway,

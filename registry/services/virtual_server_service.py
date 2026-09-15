@@ -12,6 +12,7 @@ from typing import (
     Optional,
 )
 
+from ..auth.tool_filter import filter_tools_for_user
 from ..exceptions import (
     VirtualServerNotFoundError,
     VirtualServerValidationError,
@@ -38,6 +39,7 @@ from ..services.rating_service import (
     update_rating_details,
     validate_rating,
 )
+from ..services.visibility import user_can_access_server_from_doc
 
 # Configure logging
 logging.basicConfig(
@@ -88,6 +90,34 @@ def _get_effective_tool_name(
 ) -> str:
     """Get the effective tool name (alias if set, otherwise original)."""
     return mapping.alias if mapping.alias else mapping.tool_name
+
+
+def _caller_has_required_scopes(
+    user_context: dict,
+    required_scopes: list[str],
+) -> bool:
+    """Return True when the caller may see a tool guarded by ``required_scopes``.
+
+    Mirrors the Lua data plane's ``_has_scopes`` drop (``virtual_router.lua``):
+    a tool with no required scopes is always visible; otherwise the caller must
+    hold every required scope. Admins bypass, matching the admin pass-through in
+    the sibling read filters (``filter_tools_for_user`` /
+    ``user_can_access_server_from_doc``). Fails closed: a caller with no scopes
+    cannot see a scope-guarded tool.
+
+    Args:
+        user_context: Authenticated caller's context (``is_admin``, ``scopes``).
+        required_scopes: Scopes the tool requires (empty = unguarded).
+
+    Returns:
+        True if the caller may see the tool.
+    """
+    if not required_scopes:
+        return True
+    if user_context.get("is_admin"):
+        return True
+    user_scopes = set(user_context.get("scopes") or [])
+    return all(scope in user_scopes for scope in required_scopes)
 
 
 class VirtualServerService:
@@ -310,23 +340,28 @@ class VirtualServerService:
     async def resolve_tools(
         self,
         path: str,
+        user_context: dict | None = None,
     ) -> list[ResolvedTool]:
-        """Resolve all tools for a virtual server.
+        """Resolve all tools for a virtual server, filtered to the caller.
 
-        Fetches tool metadata from backend servers and applies
-        aliases, version pins, and scope overrides.
+        Fetches tool metadata from backend servers and applies aliases, version
+        pins, and scope overrides, then prunes the result to what ``user_context``
+        may see (see :meth:`_resolve_tool_list`).
 
         Args:
-            path: Virtual server path
+            path: Virtual server path.
+            user_context: Authenticated caller's context. When ``None`` the
+                caller is treated as unauthenticated and NO tools are returned
+                (fail closed).
 
         Returns:
-            List of resolved tools with full metadata
+            List of resolved tools the caller is authorized to see.
         """
         config = await self._repo.get(path)
         if not config:
             raise VirtualServerNotFoundError(path)
 
-        return await self._resolve_tool_list(config)
+        return await self._resolve_tool_list(config, user_context)
 
     async def rate_virtual_server(
         self,
@@ -482,21 +517,56 @@ class VirtualServerService:
     async def _resolve_tool_list(
         self,
         config: VirtualServerConfig,
+        user_context: dict | None = None,
     ) -> list[ResolvedTool]:
-        """Resolve tool mappings to full tool metadata.
+        """Resolve tool mappings to full tool metadata, filtered to the caller.
+
+        Applies the same two authorization layers as every sibling read surface
+        (``/api/tool-catalog`` and semantic search), plus the per-tool scope drop
+        the Lua data plane enforces at request time:
+
+        1. Server access — a mapping's backend is only consulted when the caller
+           can access it (:func:`user_can_access_server_from_doc`).
+        2. Tool access — surviving backend tools pass through the shared
+           allowlist filter (:func:`filter_tools_for_user`); a mapped tool the
+           caller is not allowed to see is dropped.
+        3. Per-tool required scopes — a resolved tool guarded by scope overrides
+           is dropped unless the caller holds every required scope
+           (:func:`_caller_has_required_scopes`), matching ``virtual_router.lua``.
+
+        All three layers fail closed, so the resolved list cannot disclose tool
+        names, descriptions, input schemas, backend paths, or required scopes for
+        backends / tools the caller has no scope to reach.
 
         Args:
-            config: Virtual server configuration
+            config: Virtual server configuration.
+            user_context: Authenticated caller's context. When ``None`` the
+                caller is treated as unauthenticated and NO tools are returned
+                (fail closed).
 
         Returns:
-            List of ResolvedTool with full metadata from backends
+            List of ResolvedTool the caller is authorized to see.
         """
-        resolved = []
+        resolved: list[ResolvedTool] = []
+
+        # Fail closed: without a caller context the access dimension is unknown,
+        # so we must not disclose any backend's tool metadata. Every real request
+        # arrives through nginx_proxied_auth, which always supplies a context.
+        if user_context is None:
+            logger.warning(
+                "Virtual server tool resolution requested without a user context; "
+                "returning empty tool list (fail closed)"
+            )
+            return resolved
 
         # Build scope override lookup
         scope_overrides: dict[str, list[str]] = {}
         for override in config.tool_scope_overrides:
             scope_overrides[override.tool_alias] = override.required_scopes
+
+        # Cache the per-backend visible-tool-name set so filter_tools_for_user
+        # runs once per fetched backend doc rather than once per mapping.
+        allowed_names_cache: dict[str, set[str]] = {}
 
         for mapping in config.tool_mappings:
             effective_name = _get_effective_tool_name(mapping)
@@ -506,14 +576,54 @@ class VirtualServerService:
 
             # If version is pinned, look up version-specific server doc
             if mapping.backend_version:
-                version_id = f"{server_path}:{mapping.backend_version}"
-                server_info = await self._server_repo.get(version_id)
+                doc_key = f"{server_path}:{mapping.backend_version}"
+                server_info = await self._server_repo.get(doc_key)
             else:
+                doc_key = server_path
                 server_info = await self._server_repo.get(server_path)
 
             if not server_info:
                 logger.warning(
                     f"Backend server '{server_path}' not found, skipping tool '{mapping.tool_name}'"
+                )
+                continue
+
+            server_name = server_info.get("server_name", server_path)
+
+            # Layer 1: backend server access. Skip the whole backend when the
+            # caller lacks scope for it, so its tool metadata (names, schemas,
+            # backend path) never leaks. Fails closed; admin / wildcard pass.
+            if not user_can_access_server_from_doc(server_path, server_name, user_context):
+                logger.debug(
+                    "Skipping backend %s for virtual tool '%s': caller lacks server access",
+                    server_path,
+                    mapping.tool_name,
+                )
+                continue
+
+            # Layer 2: per-tool allowlist, computed once per backend doc. A
+            # caller with server access but a restricted tool set only sees the
+            # tools in that set. filter_tools_for_user fails closed (empty
+            # allowlist -> no tools) and passes through admin / wildcard.
+            if doc_key not in allowed_names_cache:
+                filtered = filter_tools_for_user(
+                    server_name,
+                    server_info.get("tool_list", []),
+                    user_context,
+                    endpoint="virtual_server_tools",
+                    server_path=server_path,
+                )
+                allowed_names: set[str] = set()
+                for tool in filtered:
+                    name = tool.get("name") if isinstance(tool, dict) else None
+                    if isinstance(name, str) and name:
+                        allowed_names.add(name)
+                allowed_names_cache[doc_key] = allowed_names
+            if mapping.tool_name not in allowed_names_cache[doc_key]:
+                logger.debug(
+                    "Dropping virtual tool '%s' from backend %s: not in caller's tool allowlist",
+                    mapping.tool_name,
+                    server_path,
                 )
                 continue
 
@@ -531,10 +641,22 @@ class VirtualServerService:
                 )
                 continue
 
+            tool_scopes = scope_overrides.get(effective_name, [])
+
+            # Layer 3: per-tool required scopes, matching the Lua data plane's
+            # request-time drop. A scope-guarded tool the caller cannot reach at
+            # runtime is not disclosed at discovery time either. Fails closed.
+            if not _caller_has_required_scopes(user_context, tool_scopes):
+                logger.debug(
+                    "Dropping virtual tool '%s': caller lacks required scopes %s",
+                    effective_name,
+                    tool_scopes,
+                )
+                continue
+
             # Build resolved tool
             description = mapping.description_override or tool_meta.get("description", "")
             input_schema = tool_meta.get("inputSchema", {})
-            tool_scopes = scope_overrides.get(effective_name, [])
 
             resolved.append(
                 ResolvedTool(
