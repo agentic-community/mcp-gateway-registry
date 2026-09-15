@@ -306,3 +306,140 @@ class TestConfigurePublicClient:
         )
         assert resp.status_code == 400
         assert "client_secret required" in resp.json()["detail"]
+
+
+def _obo_body(**over):
+    """A minimal obo_exchange configure body (provider/client fields unused)."""
+    base = {
+        "egress_auth_mode": "obo_exchange",
+        "target_audience": "api://outlook-mcp-server",
+        "scopes": [],
+    }
+    base.update(over)
+    return base
+
+
+@pytest.mark.unit
+class TestConfigureOboAudience:
+    """obo_exchange: the live write path is the only enforcement point (the
+    ServerInfo model validator is never instantiated in prod). It must enforce
+    the always-on target-audience/scope floor and fail closed -- a config that
+    would let auth_server exchange the user's token for an arbitrary third-party
+    audience must never be persisted."""
+
+    def test_valid_internal_audience_accepted(self, make_client):
+        client = make_client()
+        resp = client.post("/servers/gh/egress-auth", json=_obo_body())
+        assert resp.status_code == 200, resp.text
+        eo = client._svc.updated_with["egress_oauth"]
+        assert eo["target_audience"] == "api://outlook-mcp-server"
+
+    def test_https_host_audience_rejected(self, make_client):
+        # A shared first-party resource is addressable by https:// host URL; a
+        # delegated token for it would be exfiltrated to the server's upstream.
+        client = make_client()
+        resp = client.post(
+            "/servers/gh/egress-auth",
+            json=_obo_body(target_audience="https://graph.microsoft.com"),
+        )
+        assert resp.status_code == 400
+        assert "not an allowed obo_exchange target" in resp.json()["detail"]
+        assert client._svc.updated_with is None
+
+    def test_bare_guid_audience_rejected(self, make_client):
+        # A bare GUID is how a first-party API is directly addressable.
+        client = make_client()
+        resp = client.post(
+            "/servers/gh/egress-auth",
+            json=_obo_body(target_audience="00000003-0000-0000-c000-000000000000"),
+        )
+        assert resp.status_code == 400
+        assert client._svc.updated_with is None
+
+    def test_empty_audience_rejected(self, make_client):
+        client = make_client()
+        resp = client.post("/servers/gh/egress-auth", json=_obo_body(target_audience="   "))
+        assert resp.status_code == 400
+        assert "requires egress_oauth.target_audience" in resp.json()["detail"]
+        assert client._svc.updated_with is None
+
+    def test_malformed_scheme_audience_rejected(self, make_client):
+        client = make_client()
+        resp = client.post("/servers/gh/egress-auth", json=_obo_body(target_audience="api://"))
+        assert resp.status_code == 400
+        assert "malformed" in resp.json()["detail"]
+        assert client._svc.updated_with is None
+
+    def test_scope_for_other_resource_rejected(self, make_client):
+        # An unbound scope for a different resource defeats the target check --
+        # the exchange engine sends scopes verbatim, ignoring target_audience.
+        client = make_client()
+        resp = client.post(
+            "/servers/gh/egress-auth",
+            json=_obo_body(
+                target_audience="api://outlook-mcp-server",
+                scopes=["https://graph.microsoft.com/.default"],
+            ),
+        )
+        assert resp.status_code == 400
+        assert "grants against a resource other than" in resp.json()["detail"]
+        assert client._svc.updated_with is None
+
+    def test_target_scoped_scope_accepted(self, make_client):
+        client = make_client()
+        resp = client.post(
+            "/servers/gh/egress-auth",
+            json=_obo_body(
+                target_audience="api://outlook-mcp-server",
+                scopes=["api://outlook-mcp-server/.default"],
+            ),
+        )
+        assert resp.status_code == 200, resp.text
+        assert client._svc.updated_with["egress_oauth"]["scopes"] == [
+            "api://outlook-mcp-server/.default"
+        ]
+
+    def test_gateway_own_audience_rejected(self, make_client, monkeypatch):
+        monkeypatch.setattr(routes.settings, "auth_provider", "entra", raising=False)
+        monkeypatch.setattr(routes.settings, "entra_client_id", "gw-client-123", raising=False)
+        client = make_client()
+        resp = client.post(
+            "/servers/gh/egress-auth", json=_obo_body(target_audience="gw-client-123")
+        )
+        assert resp.status_code == 400
+        assert "must differ from the gateway's own" in resp.json()["detail"]
+        assert client._svc.updated_with is None
+
+    def test_operator_allowlist_enforced_positively(self, make_client, monkeypatch):
+        # When EGRESS_OBO_ALLOWED_AUDIENCES is set it is authoritative: a target
+        # outside it is rejected even if otherwise well-shaped.
+        monkeypatch.setattr(
+            routes.settings,
+            "egress_obo_allowed_audiences",
+            "api://pinned-mcp-server",
+            raising=False,
+        )
+        client = make_client()
+        resp = client.post(
+            "/servers/gh/egress-auth",
+            json=_obo_body(target_audience="api://outlook-mcp-server"),
+        )
+        assert resp.status_code == 400
+        assert client._svc.updated_with is None
+
+    def test_operator_allowlisted_audience_accepted(self, make_client, monkeypatch):
+        monkeypatch.setattr(
+            routes.settings,
+            "egress_obo_allowed_audiences",
+            "api://pinned-mcp-server",
+            raising=False,
+        )
+        client = make_client()
+        resp = client.post(
+            "/servers/gh/egress-auth",
+            json=_obo_body(target_audience="api://pinned-mcp-server"),
+        )
+        assert resp.status_code == 200, resp.text
+        assert (
+            client._svc.updated_with["egress_oauth"]["target_audience"] == "api://pinned-mcp-server"
+        )
