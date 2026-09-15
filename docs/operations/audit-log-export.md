@@ -254,6 +254,19 @@ A TTL index appears with `expireAfterSeconds` set; documents older
 than that age are removed by MongoDB's TTL monitor (best-effort,
 not real-time).
 
+That index is created only by an initialization script —
+`./scripts/init-documentdb.sh` (which wraps
+`scripts/init-documentdb-indexes.py`) for DocumentDB, or
+`scripts/init-mongodb-ce.py` for MongoDB CE. The application never
+creates it, so an install that skipped that step keeps audit events
+indefinitely. On Kubernetes the `setup-mongodb` Job runs that script
+on every `helm upgrade`, and takes its retention from
+`mongodb-configure.mongodb.auditTtlDays` — so set it there rather
+than on the collection, or an upgrade will reconcile it back. The
+script refuses to *shorten* retention without an explicit opt-in,
+since that would delete existing records. See
+[Data Retention](../audit-logging.md#data-retention).
+
 ---
 
 ## Disabling audit shipping
