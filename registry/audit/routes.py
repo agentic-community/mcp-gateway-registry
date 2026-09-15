@@ -71,6 +71,12 @@ IDENTITY_OPAQUE_SEARCH_FIELDS: tuple[str, ...] = (
     "object_id",
 )
 
+# Upper bound on the `username` filter. It is `re.escape`d and interpolated into
+# a MongoDB regex (see _identity_search_clause), so it must not be unbounded.
+# 256 is the length auth_server caps every stored claim to
+# (`_MAX_AUDIT_CLAIM_LEN`): a longer filter cannot match a stored value anyway.
+MAX_USERNAME_FILTER_LENGTH: int = 256
+
 # Executive summary cache: this endpoint runs many aggregations per call, so a
 # short TTL cache (keyed by the days window) shields the database from repeated
 # page loads / refreshes. Mirrors the /api/stats caching precedent.
@@ -663,6 +669,7 @@ async def get_statistics(
     ),
     username: str | None = Query(
         None,
+        max_length=MAX_USERNAME_FILTER_LENGTH,
         description="Filter statistics to a specific username: matches the display "
         "identity or any stored identity claim (subject/canonical_id/object_id/"
         "principal_name)",
@@ -1243,6 +1250,7 @@ async def get_audit_events(
     ),
     username: str | None = Query(
         None,
+        max_length=MAX_USERNAME_FILTER_LENGTH,
         description="Filter by username: matches the display identity or any stored "
         "identity claim (subject/canonical_id/object_id/principal_name)",
     ),
@@ -1433,8 +1441,20 @@ def _csv_safe(value: Any) -> Any:
     read as text. Only values that actually start with a dangerous character are
     touched, so ordinary values export byte-identical and a negative number
     keeps its meaning to a CSV parser (a leading "-" is quoted, not stripped).
+
+    The dangerous character is looked for BOTH at position 0 and after leading
+    whitespace: Excel, Calc and Sheets trim a cell before deciding whether it is
+    a formula, so " =HYPERLINK(...)" and "\\n=cmd" are live content too and a
+    plain ``startswith`` misses them. The raw check is kept as well because a
+    value that merely BEGINS with a tab or CR is already treated as dangerous
+    here, and stripping first would silently un-protect it.
     """
-    if isinstance(value, str) and value.startswith(_CSV_FORMULA_PREFIXES):
+    if isinstance(value, str) and (
+        value.startswith(_CSV_FORMULA_PREFIXES)
+        # CPython returns `value` itself when nothing is stripped, so the common
+        # (safe) cell costs a comparison, not an allocation.
+        or value.lstrip().startswith(_CSV_FORMULA_PREFIXES)
+    ):
         return f"'{value}"
     return value
 
@@ -1549,6 +1569,7 @@ async def export_audit_events(
     ),
     username: str | None = Query(
         None,
+        max_length=MAX_USERNAME_FILTER_LENGTH,
         description="Filter by username: matches the display identity or any stored "
         "identity claim (subject/canonical_id/object_id/principal_name)",
     ),

@@ -497,6 +497,9 @@ const AuditStatistics: React.FC<AuditStatisticsProps> = ({ stream, days = 7, use
   };
 
   const isMcpStream = stream === 'mcp_access';
+  // The statistics API buckets `$response.status_code`, a field token_mint
+  // records do not carry, so that card can only render an empty state.
+  const isTokenMintStream = stream === 'token_mint';
 
   return (
     <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 mb-6">
@@ -594,13 +597,15 @@ const AuditStatistics: React.FC<AuditStatisticsProps> = ({ stream, days = 7, use
                 </div>
               )}
 
-              {/* Status Distribution */}
-              <div className="border border-gray-100 dark:border-gray-700 rounded-lg p-3">
-                <h4 className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">
-                  Status Distribution
-                </h4>
-                <StatusBar distribution={data.status_distribution} />
-              </div>
+              {/* Status Distribution (streams with HTTP/MCP status only) */}
+              {!isTokenMintStream && (
+                <div className="border border-gray-100 dark:border-gray-700 rounded-lg p-3">
+                  <h4 className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">
+                    Status Distribution
+                  </h4>
+                  <StatusBar distribution={data.status_distribution} />
+                </div>
+              )}
 
               {/* User Activity + Activity Timeline - split panel */}
               <div className={`border border-gray-100 dark:border-gray-700 rounded-lg p-3 lg:col-span-2`}>

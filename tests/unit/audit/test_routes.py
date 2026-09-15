@@ -8,11 +8,19 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
+from fastapi.testclient import TestClient
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from registry.audit.routes import _build_query, _generate_csv, _generate_jsonl, require_admin
+from registry.audit.routes import (
+    MAX_USERNAME_FILTER_LENGTH,
+    _build_query,
+    _generate_csv,
+    _generate_jsonl,
+    require_admin,
+    router,
+)
 
 # =============================================================================
 # Property 11: Admin-Only Audit API Access
@@ -183,3 +191,47 @@ class TestAuditEventDetailEndpoint:
                 )
 
             assert exc_info.value.status_code == 404
+
+
+# =============================================================================
+# Query parameter bounds
+# =============================================================================
+
+
+class TestUsernameFilterLengthBound:
+    """The `username` filter is `re.escape`d and interpolated into a MongoDB
+    regex (`_identity_search_clause`), so an operator must not be able to submit
+    an unbounded pattern. Enforced at the API edge by `max_length`."""
+
+    @pytest.fixture
+    def client(self):
+        app = FastAPI()
+        app.include_router(router)
+        app.dependency_overrides[require_admin] = lambda: {"is_admin": True, "username": "admin"}
+        return TestClient(app, raise_server_exceptions=False)
+
+    @pytest.mark.parametrize("path", ["/audit/events", "/audit/statistics", "/audit/export"])
+    def test_over_long_username_is_rejected(self, client, path):
+        too_long = "a" * (MAX_USERNAME_FILTER_LENGTH + 1)
+
+        response = client.get(path, params={"username": too_long})
+
+        assert response.status_code == 422, path
+        assert any(error["loc"] == ["query", "username"] for error in response.json()["detail"]), (
+            response.json()
+        )
+
+    def test_username_at_the_bound_is_accepted(self, client):
+        """The cap must not reject a legitimate filter: 256 is what auth_server
+        truncates every stored claim to, so anything storable still fits."""
+        mock_repo = MagicMock()
+        mock_repo.find = AsyncMock(return_value=[])
+        mock_repo.count = AsyncMock(return_value=0)
+
+        with patch("registry.audit.routes.get_audit_repository", return_value=mock_repo):
+            response = client.get(
+                "/audit/events",
+                params={"username": "a" * MAX_USERNAME_FILTER_LENGTH},
+            )
+
+        assert response.status_code == 200, response.text

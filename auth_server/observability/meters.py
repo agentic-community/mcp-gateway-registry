@@ -154,6 +154,23 @@ token_mint_total = _meter.create_counter(
 
 
 # =============================================================================
+# Audit-integrity metrics
+# =============================================================================
+
+# Declared with the SAME name in registry/observability/meters.py (as
+# token_mint_total already is) so one PromQL query covers both processes.
+audit_integrity_degraded_total = _meter.create_counter(
+    name="mcpgw_registry_audit_integrity_degraded_total",
+    description=(
+        "Audit-integrity degradations, labeled by reason (record_dropped | "
+        "identity_hop_claim_missing | claim_dropped). Rate-alertable counterpart "
+        "to the CRITICAL/WARNING log lines."
+    ),
+    unit="1",
+)
+
+
+# =============================================================================
 # Redirect-validation metrics (open-redirect hardening, PR #1475 follow-up)
 # =============================================================================
 
@@ -237,7 +254,7 @@ def record_generic_proxy_slot_rejected(pool: str) -> None:
     """Record a generic-proxy capacity rejection (503) for the given pool."""
     try:
         generic_proxy_slot_rejected_total.add(1, {"pool": pool})
-    except Exception:  # pragma: no cover - metrics must never break the hop
+    except Exception:  # nosec B110 # pragma: no cover - metrics must never break the hop
         pass
 
 
@@ -245,7 +262,7 @@ def record_generic_proxy_stream_outcome(outcome: str) -> None:
     """Record a start/terminal outcome for a streaming generic-proxy request."""
     try:
         generic_proxy_stream_outcome_total.add(1, {"outcome": outcome})
-    except Exception:  # pragma: no cover - metrics must never break the hop
+    except Exception:  # nosec B110 # pragma: no cover - metrics must never break the hop
         pass
 
 
@@ -260,7 +277,7 @@ def record_generic_proxy_request(entity_type: str, outcome: str) -> None:
     """
     try:
         generic_proxy_request_total.add(1, {"entity_type": entity_type, "outcome": outcome})
-    except Exception:  # pragma: no cover - metrics must never break the hop
+    except Exception:  # nosec B110 # pragma: no cover - metrics must never break the hop
         pass
 
 
@@ -337,7 +354,7 @@ def zero_init_generic_proxy_metrics() -> None:
         try:
             instrument.add(0, attrs)
             seeded += 1
-        except Exception:  # pragma: no cover - metrics must never break startup
+        except Exception:  # nosec B110 # pragma: no cover - metrics must never break startup
             pass
     logger.info("zero-init seeded %d/%d generic-proxy series", seeded, len(seeds))
 

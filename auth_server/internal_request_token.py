@@ -207,8 +207,16 @@ def mint_mcp_proxy_token(
     identity from the raw ingress header it holds -- that header is not
     necessarily the credential /validate authenticated (a cookie-authenticated
     request's bearer header is never validated), so identity read there is
-    caller-controlled. Signed here, it is not. Omitted when empty so the header
-    stays small.
+    caller-controlled. Signed here, it is not.
+
+    Omitted from the token when falsy, and that case is REACHABLE, not dead: the
+    static-credential /validate branches (federation-static and network-trusted,
+    see ``server._attach_mcp_proxy_token`` call sites) authenticate a machine
+    credential with no IdP claims and pass no audit identity at all. They must
+    not pad the response header nginx copies with an empty claim, and the reader
+    (``server._audit_identity_from_token``) already degrades an absent claim to
+    the verified ``sub`` principal. Chosen over deleting the guard, which would
+    sign ``"audit_identity": null`` on those paths.
     """
     extra_claims: dict = {
         "server": server_name.split("/", 1)[0] if server_name else "",
