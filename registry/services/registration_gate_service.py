@@ -49,11 +49,22 @@ SENSITIVE_FIELD_NAMES: set[str] = {
     "custom_headers_encrypted",
 }
 
-SENSITIVE_HEADERS: set[str] = {
-    "cookie",
-    "authorization",
-    "x-csrf-token",
-}
+# Allowlist of non-credential request headers that may be forwarded to the
+# external admission-control gate. The outbound header set is rebuilt as an
+# allowlist (never a denylist): any header not named here is dropped, so caller
+# and gateway-internal credential headers (e.g. authorization, x-authorization,
+# cookie, x-internal-token-registry and every other reserved identity/token
+# header) can never be exfiltrated to the operator-configured gate, even if new
+# credential headers are introduced later. This fails closed by construction.
+ALLOWED_FORWARD_HEADERS: frozenset[str] = frozenset(
+    {
+        "content-type",
+        "accept",
+        "user-agent",
+        "x-request-id",
+        "x-forwarded-for",
+    }
+)
 
 
 def sanitize_payload(
@@ -197,20 +208,51 @@ async def _build_auth_headers() -> dict[str, str]:
 def _extract_request_headers(
     raw_headers: list[tuple[bytes, bytes]],
 ) -> dict[str, str]:
-    """Extract request headers as a string dict, filtering sensitive headers.
+    """Extract the safe, forwardable request headers as a string dict.
+
+    Only headers named in :data:`ALLOWED_FORWARD_HEADERS` are returned. This is
+    an allowlist by design: any credential or gateway-internal header present on
+    the inbound request (authorization, x-authorization, cookie,
+    x-internal-token-registry, x-user, x-groups, x-api-key, etc.) is dropped and
+    never forwarded to the external admission-control gate. Matching is
+    case-insensitive.
 
     Args:
         raw_headers: Raw ASGI header tuples from the request scope.
 
     Returns:
-        Dictionary of header name to header value strings.
+        Dictionary of allowlisted header name (lowercased) to value strings.
     """
     result = {}
     for name_bytes, value_bytes in raw_headers:
         name = name_bytes.decode("latin-1").lower()
-        if name not in SENSITIVE_HEADERS:
+        if name in ALLOWED_FORWARD_HEADERS:
             result[name] = value_bytes.decode("latin-1")
     return result
+
+
+def _filter_forwardable_headers(
+    headers: dict[str, str],
+) -> dict[str, str]:
+    """Reduce a header dict to the forwardable allowlist (case-insensitive).
+
+    This is the enforcement backstop applied at the outbound sink, independent
+    of how the :class:`RegistrationGateRequest` was constructed. Even if a
+    future caller populates ``request_headers`` directly (bypassing
+    :func:`_extract_request_headers`), credential and gateway-internal headers
+    are dropped here before the payload is serialized to the external gate.
+
+    Args:
+        headers: Header name to value mapping to filter.
+
+    Returns:
+        A new dict containing only allowlisted headers, keyed by lowercased name.
+    """
+    return {
+        name.lower(): value
+        for name, value in headers.items()
+        if name.lower() in ALLOWED_FORWARD_HEADERS
+    }
 
 
 def _is_gate_configured() -> bool:
@@ -279,6 +321,9 @@ async def _call_gate_endpoint(
 
     headers.update(auth_headers)
 
+    gate_request = gate_request.model_copy(
+        update={"request_headers": _filter_forwardable_headers(gate_request.request_headers)}
+    )
     payload_json = gate_request.model_dump_json()
     total_attempts = 1 + max_retries
     last_error = ""

@@ -1,5 +1,6 @@
 """Unit tests for the registration gate (admission control) service."""
 
+import json
 import logging
 from unittest.mock import (
     AsyncMock,
@@ -16,10 +17,12 @@ from registry.schemas.registration_gate_models import (
     RegistrationGateResult,
 )
 from registry.services.registration_gate_service import (
+    ALLOWED_FORWARD_HEADERS,
     GATE_ERROR_MAX_LENGTH,
     _acquire_oauth2_token,
     _build_auth_headers,
     _extract_request_headers,
+    _filter_forwardable_headers,
     _is_gate_configured,
     _sanitize_payload,
     _truncate_error,
@@ -532,10 +535,24 @@ class TestBuildAuthHeaders:
 
 
 class TestExtractRequestHeaders:
-    """Tests for _extract_request_headers."""
+    """Tests for _extract_request_headers (allowlist behaviour)."""
 
     def test_converts_raw_asgi_headers(self):
-        """Raw byte tuples are decoded to string dict."""
+        """Allowlisted byte tuples are decoded to a string dict."""
+        raw = _make_raw_headers(
+            {
+                "content-type": "application/json",
+                "user-agent": "test-client",
+            }
+        )
+
+        result = _extract_request_headers(raw)
+
+        assert result["content-type"] == "application/json"
+        assert result["user-agent"] == "test-client"
+
+    def test_drops_non_allowlisted_host_header(self):
+        """Headers not on the allowlist (e.g. host) are not forwarded."""
         raw = _make_raw_headers(
             {
                 "host": "example.com",
@@ -545,7 +562,7 @@ class TestExtractRequestHeaders:
 
         result = _extract_request_headers(raw)
 
-        assert result["host"] == "example.com"
+        assert "host" not in result
         assert result["content-type"] == "application/json"
 
     def test_filters_authorization_header(self):
@@ -553,14 +570,14 @@ class TestExtractRequestHeaders:
         raw = _make_raw_headers(
             {
                 "authorization": "Bearer secret-token",
-                "host": "example.com",
+                "content-type": "application/json",
             }
         )
 
         result = _extract_request_headers(raw)
 
         assert "authorization" not in result
-        assert result["host"] == "example.com"
+        assert result["content-type"] == "application/json"
 
     def test_filters_cookie_header(self):
         """The 'cookie' header is excluded."""
@@ -590,8 +607,75 @@ class TestExtractRequestHeaders:
         assert "x-csrf-token" not in result
         assert result["user-agent"] == "test-client"
 
+    def test_does_not_forward_caller_x_authorization(self):
+        """The caller's live gateway bearer (x-authorization) is dropped."""
+        raw = _make_raw_headers(
+            {
+                "x-authorization": "Bearer live-gateway-bearer",
+                "x-request-id": "req-xauth",
+            }
+        )
+
+        result = _extract_request_headers(raw)
+
+        assert "x-authorization" not in result
+        assert result["x-request-id"] == "req-xauth"
+
+    def test_does_not_forward_internal_registry_token(self):
+        """The signed internal service token is never forwarded."""
+        raw = _make_raw_headers(
+            {
+                "x-internal-token-registry": "signed-internal-identity-token",
+                "content-type": "application/json",
+            }
+        )
+
+        result = _extract_request_headers(raw)
+
+        assert "x-internal-token-registry" not in result
+        assert result["content-type"] == "application/json"
+
+    def test_drops_all_reserved_credential_headers(self):
+        """Every reserved identity/credential header is dropped by the allowlist."""
+        raw = _make_raw_headers(
+            {
+                "authorization": "Bearer tok",
+                "x-authorization": "Bearer live",
+                "cookie": "sess=123",
+                "x-csrf-token": "csrf",
+                "x-internal-token": "internal",
+                "x-internal-token-generic": "internal-generic",
+                "x-internal-token-registry": "internal-registry",
+                "x-user": "alice",
+                "x-username": "alice",
+                "x-groups": "admins",
+                "x-scopes": "admin",
+                "x-api-key": "api-key-value",
+                "content-type": "application/json",
+            }
+        )
+
+        result = _extract_request_headers(raw)
+
+        forbidden = {
+            "authorization",
+            "x-authorization",
+            "cookie",
+            "x-csrf-token",
+            "x-internal-token",
+            "x-internal-token-generic",
+            "x-internal-token-registry",
+            "x-user",
+            "x-username",
+            "x-groups",
+            "x-scopes",
+            "x-api-key",
+        }
+        assert forbidden.isdisjoint(result.keys())
+        assert result == {"content-type": "application/json"}
+
     def test_filters_multiple_sensitive_headers(self):
-        """All sensitive headers are excluded simultaneously."""
+        """Only allowlisted headers survive when mixed with credentials."""
         raw = _make_raw_headers(
             {
                 "authorization": "Bearer tok",
@@ -604,9 +688,29 @@ class TestExtractRequestHeaders:
 
         result = _extract_request_headers(raw)
 
-        assert len(result) == 2
-        assert result["host"] == "example.com"
-        assert result["x-request-id"] == "req-001"
+        assert result == {"x-request-id": "req-001"}
+
+    def test_forwards_allowlisted_context_headers(self):
+        """Legitimate non-credential context headers still reach the gate."""
+        raw = _make_raw_headers(
+            {
+                "content-type": "application/json",
+                "accept": "application/json",
+                "user-agent": "registry/1.0",
+                "x-request-id": "req-002",
+                "x-forwarded-for": "203.0.113.7",
+            }
+        )
+
+        result = _extract_request_headers(raw)
+
+        assert result == {
+            "content-type": "application/json",
+            "accept": "application/json",
+            "user-agent": "registry/1.0",
+            "x-request-id": "req-002",
+            "x-forwarded-for": "203.0.113.7",
+        }
 
     def test_empty_headers(self):
         """Empty header list returns empty dict."""
@@ -614,17 +718,78 @@ class TestExtractRequestHeaders:
 
         assert result == {}
 
-    def test_header_names_are_lowercased(self):
-        """Header names are lowercased during extraction."""
+    def test_allowlist_matching_is_case_insensitive(self):
+        """Mixed-case allowlisted names match; credential names still drop."""
         raw = [
-            (b"Host", b"example.com"),
             (b"Content-Type", b"application/json"),
+            (b"X-Authorization", b"Bearer live"),
+            (b"X-Request-Id", b"req-003"),
         ]
 
         result = _extract_request_headers(raw)
 
-        assert "host" in result
-        assert "content-type" in result
+        assert "x-authorization" not in result
+        assert result["content-type"] == "application/json"
+        assert result["x-request-id"] == "req-003"
+
+    def test_allowlist_is_exactly_the_expected_safe_set(self):
+        """Pin the allowlist so accidental expansion (esp. credentials) fails."""
+        assert ALLOWED_FORWARD_HEADERS == frozenset(
+            {
+                "content-type",
+                "accept",
+                "user-agent",
+                "x-request-id",
+                "x-forwarded-for",
+            }
+        )
+
+    def test_duplicate_credential_header_tuples_all_dropped(self):
+        """Repeated / mixed-case credential header tuples are every one dropped."""
+        raw = [
+            (b"X-Internal-Token-Registry", b"tok-1"),
+            (b"x-internal-token-registry", b"tok-2"),
+            (b"X-Authorization", b"Bearer a"),
+            (b"x-authorization", b"Bearer b"),
+            (b"content-type", b"application/json"),
+        ]
+
+        result = _extract_request_headers(raw)
+
+        assert result == {"content-type": "application/json"}
+
+
+class TestFilterForwardableHeaders:
+    """Tests for _filter_forwardable_headers (outbound sink backstop)."""
+
+    def test_drops_credential_headers_from_prebuilt_dict(self):
+        """Credential headers injected directly into a dict are stripped."""
+        result = _filter_forwardable_headers(
+            {
+                "x-authorization": "Bearer live",
+                "x-internal-token-registry": "internal",
+                "authorization": "Bearer tok",
+                "cookie": "sess=1",
+                "x-request-id": "req-1",
+            }
+        )
+
+        assert result == {"x-request-id": "req-1"}
+
+    def test_is_case_insensitive(self):
+        """Mixed-case names are normalized and matched against the allowlist."""
+        result = _filter_forwardable_headers(
+            {
+                "Content-Type": "application/json",
+                "X-Authorization": "Bearer live",
+            }
+        )
+
+        assert result == {"content-type": "application/json"}
+
+    def test_empty_dict(self):
+        """Empty input returns an empty dict."""
+        assert _filter_forwardable_headers({}) == {}
 
 
 # ===========================================================================
@@ -862,7 +1027,7 @@ class TestCheckRegistrationGate:
             assert "my-server" in sent_content
 
     async def test_filters_sensitive_headers_before_sending(self):
-        """Sensitive request headers are excluded from gate payload."""
+        """Caller/internal credential headers never reach the outbound payload."""
         mock_response = _make_mock_response(status_code=200)
         mock_client = _make_mock_http_client(response=mock_response)
         mock_settings = _make_mock_settings()
@@ -881,7 +1046,10 @@ class TestCheckRegistrationGate:
                     {
                         "host": "localhost",
                         "authorization": "Bearer secret-token",
+                        "x-authorization": "Bearer live-gateway-bearer",
+                        "x-internal-token-registry": "signed-internal-identity",
                         "x-request-id": "req-001",
+                        "content-type": "application/json",
                     }
                 ),
             )
@@ -889,7 +1057,16 @@ class TestCheckRegistrationGate:
             call_kwargs = mock_client.post.call_args
             sent_content = call_kwargs.kwargs.get("content", "")
             assert "secret-token" not in sent_content
-            assert "localhost" in sent_content
+            assert "live-gateway-bearer" not in sent_content
+            assert "signed-internal-identity" not in sent_content
+            assert "x-authorization" not in sent_content
+            assert "x-internal-token-registry" not in sent_content
+
+            sent_headers = json.loads(sent_content)["request_headers"]
+            assert sent_headers == {
+                "x-request-id": "req-001",
+                "content-type": "application/json",
+            }
 
 
 # ===========================================================================
