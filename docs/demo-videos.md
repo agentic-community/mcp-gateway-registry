@@ -15,7 +15,7 @@ All links verified working as of 2026-06-04.
 
 | If you have... | Watch this | Duration | Added to repo | Why |
 |----------------|------------|:--------:|:-------------:|-----|
-| **Under 1 minute** (why this exists) | [Why the Gateway & Registry Exist](https://github.com/user-attachments/assets/6c4b2269-d579-4165-8181-7fc82538a27a) | 0m 54s | 2026-09-16 | Every new AI resource has to be discovered and governed. The registry handles discovery, the gateway handles governance. **Start here.** |
+| **Under 1 minute** (why this exists) | [Why the Gateway & Registry Exist](https://github.com/user-attachments/assets/fa1c3948-0a1e-419f-974d-bf3f0ba6ec83) | 0m 57s | 2026-09-16 | Every new AI resource has to be discovered and governed. The registry handles discovery, the gateway handles governance. **Start here.** |
 | **~1 minute** (the product tour) | [Registry Overview](https://github.com/user-attachments/assets/97c640db-f78b-4a6c-9662-894f975f66e2) | 0m 59s | 2026-04-06 | The same story with the product on screen: MCP servers, A2A agents, and external registries working together for dynamic tool discovery. |
 | **~5 minutes** (a few focused demos) | [MCP Registry CLI Demo](https://github.com/user-attachments/assets/98200866-e8bd-4ac3-bad6-c6d42b261dbe) then [Dynamic Tool Discovery](https://github.com/user-attachments/assets/cee25b31-61e4-4089-918c-c3757f84518c) | 1m 12s + 5m 13s | 2025-10-28 / 2025-08-22 | See the CLI in action, then watch an agent discover and invoke tools at runtime. |
 | **~15 minutes** (the guided walkthrough) | [OAuth 3-Legged Authentication](https://github.com/user-attachments/assets/3585d258-66a1-458a-bc86-450f917f7cfd) + [Dynamic Tool Discovery](https://github.com/user-attachments/assets/cee25b31-61e4-4089-918c-c3757f84518c) + a couple of feature clips below | ~12-15m total | 2025-08-22 | Covers auth, tool discovery, and your pick of feature demos (each under 1 min). |
@@ -27,7 +27,7 @@ All links verified working as of 2026-06-04.
 
 | Topic | Title | Duration | Added to repo | Author | Link |
 |-------|-------|:--------:|:-------------:|--------|------|
-| **Overview** | Why the Gateway & Registry Exist: discovery and governance in under a minute | 0m 54s | 2026-09-16 | Amit Arora | [Watch](https://github.com/user-attachments/assets/6c4b2269-d579-4165-8181-7fc82538a27a) |
+| **Overview** | Why the Gateway & Registry Exist: discovery and governance in under a minute | 0m 57s | 2026-09-16 | Amit Arora | [Watch](https://github.com/user-attachments/assets/fa1c3948-0a1e-419f-974d-bf3f0ba6ec83) |
 | **Overview** | Registry Overview — servers, agents & skills working together | 0m 59s | 2026-04-06 | Amit Arora | [Watch](https://github.com/user-attachments/assets/97c640db-f78b-4a6c-9662-894f975f66e2) |
 | **Overview** | Full End-to-End Functionality | 19m 52s | 2025-08-22 | Amit Arora | [Watch](https://github.com/user-attachments/assets/5ffd8e81-8885-4412-a4d4-3339bbdba4fb) |
 | **Overview** | AWS Show & Tell — Deploying the Gateway & Registry on AWS | full talk | 2026-03-17 | AWS Events | [Watch](https://www.youtube.com/watch?v=dk0qVukHLGU) |
@@ -52,5 +52,5 @@ All links verified working as of 2026-06-04.
 
 - Durations for GitHub-hosted recordings were measured from the video files. Vidcast durations are approximate (the player is a JavaScript app and does not expose length to a simple fetch); the Codex CLI walkthrough is documented as roughly 3 minutes.
 - There are two related "Tool Discovery" recordings: a longer 5m 13s walkthrough and a 47-second clip. Both are listed above.
-- "Why the Gateway & Registry Exist" is an animated explainer rather than a screen recording, so the note above about the UI changing does not apply to it.
+- "Why the Gateway & Registry Exist" is an animated explainer rather than a screen recording, so the note above about the UI changing does not apply to it. It closes on a QR code for the repo that stays on screen for the last six seconds, which makes it useful as an opener or a closer at a talk.
 - Source legend: **GitHub** = inline mp4 attachment, **YouTube** = external link, **Vidcast** = app.vidcast.io share link.
