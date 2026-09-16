@@ -327,6 +327,7 @@ that server's Connect dialog:
 | Admin URL | `KEYCLOAK_ADMIN_URL` | — | — | Used by setup scripts. |
 | Realm | `KEYCLOAK_REALM` | — | `global.authProvider.keycloak.realm` / `auth-server.keycloak.realm` | e.g. `mcp-gateway`. |
 | Admin username | `KEYCLOAK_ADMIN` | `keycloak_admin` | `global.authProvider.keycloak.adminUsername` | — |
+| Admin realm | `KEYCLOAK_ADMIN_REALM` | — (no first-class variable; pass via `registry_extra_env`) | — (pass via `extraEnv`) | Realm hosting the admin user; defaults to `master`. |
 | Admin password **(secret)** | `KEYCLOAK_ADMIN_PASSWORD` | `keycloak_admin_password` | (auto-generated, stored in `<release>-keycloak` secret) | — |
 | DB password **(secret)** | `KEYCLOAK_DB_PASSWORD` | `keycloak_database_password` | (auto-generated, stored in `<release>-keycloak-postgresql` secret) | — |
 | DB username | — | `keycloak_database_username` | — | — |
