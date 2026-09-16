@@ -59,6 +59,7 @@ class SkillScannerService:
             ai_defense_api_key=settings.skill_scanner_ai_defense_api_key
             or os.getenv("AI_DEFENSE_API_KEY"),
             add_security_pending_tag=settings.skill_security_add_pending_tag,
+            block_on_scan_failure=settings.security_block_on_scan_failure,
         )
 
     async def scan_skill(
