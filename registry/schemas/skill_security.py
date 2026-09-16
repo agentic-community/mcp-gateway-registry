@@ -63,6 +63,14 @@ class SkillSecurityScanConfig(BaseModel):
     add_security_pending_tag: bool = Field(
         default=True, description="Add 'security-pending' tag to unsafe skills"
     )
+    block_on_scan_failure: bool = Field(
+        default=False,
+        description=(
+            "Also disable skills whose scan could not complete. Off by default: "
+            "a failed scan is no verdict at all, so blocking on it takes down a "
+            "skill the scanner never assessed"
+        ),
+    )
 
 
 class SkillSecurityStatus(BaseModel):

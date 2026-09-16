@@ -556,3 +556,110 @@ class TestSkillManagementNotAdminConferring:
         assert _grants_admin({"publish_skill": ["all"]}) is False
         assert _grants_admin({"modify_skill": ["all"]}) is False
         assert _grants_admin({"register_service": ["all"]}) is True
+
+
+# ---------------------------------------------------------------------------
+# A scan that could not complete is not an unsafe verdict.
+#
+# scan_skill() reports is_safe=False with zero findings when it raises, so
+# branching on is_safe alone disabled skills the scanner never assessed — a
+# skill whose SKILL.md merely failed to download, for instance.
+# ---------------------------------------------------------------------------
+
+
+def _make_failed_scan_result(skill_path):
+    """Create a scan result for a scan that raised rather than reached a verdict."""
+    return SkillSecurityScanResult(
+        skill_path=skill_path,
+        scan_timestamp="2026-02-16T10:00:00Z",
+        is_safe=False,
+        critical_issues=0,
+        high_severity=0,
+        analyzers_used=["static"],
+        raw_output={"error": "boom", "scan_failed": True},
+        scan_failed=True,
+        error_message="security scan failed (RuntimeError)",
+    )
+
+
+class TestScanFailureDoesNotDisableSkill:
+    """block_unsafe_skills must act on verdicts, not on scanner errors."""
+
+    @staticmethod
+    def _config(*, block_unsafe=True, block_on_failure=False, add_tag=True):
+        config = MagicMock()
+        config.enabled = True
+        config.scan_on_registration = True
+        config.block_unsafe_skills = block_unsafe
+        config.add_security_pending_tag = add_tag
+        config.block_on_scan_failure = block_on_failure
+        return config
+
+    async def _run(self, scan_result, config):
+        from registry.api.skill_routes import _perform_skill_security_scan_on_registration
+
+        mock_skill = _make_mock_skill(path=scan_result.skill_path)
+        mock_service = AsyncMock()
+        mock_service.toggle_skill = AsyncMock()
+        mock_service.update_skill = AsyncMock()
+
+        mock_scanner = MagicMock()
+        mock_scanner.get_scan_config.return_value = config
+        mock_scanner.scan_skill = AsyncMock(return_value=scan_result)
+
+        with patch(
+            "registry.services.skill_scanner.skill_scanner_service",
+            mock_scanner,
+        ):
+            await _perform_skill_security_scan_on_registration(mock_skill, mock_service)
+
+        return mock_service
+
+    @pytest.mark.asyncio
+    async def test_failed_scan_leaves_skill_enabled(self):
+        """A scan that raised must not disable the skill."""
+        service = await self._run(_make_failed_scan_result("/test-skill"), self._config())
+
+        service.toggle_skill.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_failed_scan_still_tags_security_pending(self):
+        """The warning must stay visible even though the skill stays enabled."""
+        service = await self._run(_make_failed_scan_result("/test-skill"), self._config())
+
+        service.update_skill.assert_called_once()
+        assert "security-pending" in service.update_skill.call_args[0][1]["tags"]
+
+    @pytest.mark.asyncio
+    async def test_real_finding_still_disables_skill(self):
+        """Regression guard: an actual finding must still block."""
+        service = await self._run(_make_unsafe_scan_result("/test-skill"), self._config())
+
+        service.toggle_skill.assert_called_once_with("/test-skill", enabled=False)
+
+    @pytest.mark.asyncio
+    async def test_block_on_scan_failure_restores_fail_closed(self):
+        """Operators who want strict fail-closed registration can opt back in."""
+        service = await self._run(
+            _make_failed_scan_result("/test-skill"),
+            self._config(block_on_failure=True),
+        )
+
+        service.toggle_skill.assert_called_once_with("/test-skill", enabled=False)
+
+    @pytest.mark.asyncio
+    async def test_unsafe_skill_tagged_even_when_blocking_is_off(self):
+        """With blocking off, an unsafe skill must still be labelled.
+
+        The tag used to be nested inside the block_unsafe_skills branch, so
+        turning blocking off left an unsafe skill both enabled and unlabelled —
+        unlike the server and agent paths, which tag independently.
+        """
+        service = await self._run(
+            _make_unsafe_scan_result("/test-skill"),
+            self._config(block_unsafe=False),
+        )
+
+        service.toggle_skill.assert_not_called()
+        service.update_skill.assert_called_once()
+        assert "security-pending" in service.update_skill.call_args[0][1]["tags"]
