@@ -626,6 +626,20 @@ class Settings(BaseSettings):
     security_scan_timeout: int = 60  # 1 minute
     security_add_pending_tag: bool = True
     mcp_scanner_llm_api_key: str = ""  # Optional LLM API key for advanced analysis
+    security_block_on_scan_failure: bool = Field(
+        default=False,
+        description=(
+            "Treat a scan that could not complete as an unsafe verdict. Off by "
+            "default: a scan that raises reports is_safe=False with zero findings, "
+            "so blocking on it disables an asset the scanner never actually "
+            "assessed. Endpoints that cannot be scanned anonymously (per-user "
+            "egress OAuth, for instance) fail this way on every registration. "
+            "Turn it on only if you want strictly fail-closed registration and "
+            "accept that unscannable assets stay disabled. Applies to servers, "
+            "agents and skills alike; the per-type block_unsafe_* settings still "
+            "govern assets the scanner did reach a verdict on."
+        ),
+    )
 
     # Agent security scanning settings (A2A Agents)
     agent_security_scan_enabled: bool = True

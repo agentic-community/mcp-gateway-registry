@@ -555,8 +555,16 @@ async def _perform_security_scan_on_registration(
                     await server_service.update_server(path, server_entry)
                     logger.info(f"Added 'security-pending' tag to {path}")
 
-            # Disable server if configured
-            if scan_config.block_unsafe_servers:
+            # Disable server if configured. A scan that could not complete is not
+            # an unsafe verdict: scan_server() reports is_safe=False with zero
+            # findings when it raises, so blocking on it would disable a server the
+            # scanner never assessed. Servers that cannot be scanned anonymously
+            # fail this way on every registration, which turns any edit to their
+            # definition into an outage. Operators who want strictly fail-closed
+            # registration can opt back in with block_on_scan_failure.
+            if scan_config.block_unsafe_servers and (
+                not scan_result.scan_failed or scan_config.block_on_scan_failure
+            ):
                 from ..repositories.factory import get_search_repository
 
                 await server_service.toggle_service(path, False)

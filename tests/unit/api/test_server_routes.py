@@ -3831,3 +3831,121 @@ class TestMetadataFieldsProjection:
         assert server["metadata"] == {
             "config": {"region": "us-east-1", "tier": "production"},
         }
+
+
+# =============================================================================
+# A scan that could not complete is not an unsafe verdict.
+#
+# scan_server() reports is_safe=False with zero findings when it raises, so
+# branching on is_safe alone disabled servers the scanner never assessed.
+# Servers that cannot be scanned anonymously (per-user egress OAuth, say) fail
+# that way on every registration, which turned any edit to their definition
+# into an outage.
+# =============================================================================
+
+
+def _scan_result(*, scan_failed: bool, critical: int = 0, high: int = 0):
+    """Build an unsafe SecurityScanResult, either inconclusive or a real finding."""
+    from registry.schemas.security import SecurityScanResult
+
+    return SecurityScanResult(
+        server_url="https://example.internal/mcp",
+        server_path="/test-server",
+        scan_timestamp="2025-01-01T00:00:00Z",
+        is_safe=False,
+        critical_issues=critical,
+        high_severity=high,
+        medium_severity=0,
+        low_severity=0,
+        analyzers_used=["yara"],
+        raw_output={},
+        scan_failed=scan_failed,
+        error_message="security scan failed (RuntimeError)" if scan_failed else None,
+    )
+
+
+class TestScanFailureDoesNotDisableServer:
+    """block_unsafe_servers must act on verdicts, not on scanner errors."""
+
+    @staticmethod
+    def _config(*, block_unsafe: bool = True, block_on_failure: bool = False):
+        from registry.schemas.security import SecurityScanConfig
+
+        return SecurityScanConfig(
+            enabled=True,
+            scan_on_registration=True,
+            block_unsafe_servers=block_unsafe,
+            add_security_pending_tag=True,
+            block_on_scan_failure=block_on_failure,
+        )
+
+    async def _run(self, scan_result, scan_config):
+        """Drive the post-registration scan helper with everything mocked."""
+        from registry.api.server_routes import _perform_security_scan_on_registration
+
+        scanner = MagicMock()
+        scanner.get_scan_config.return_value = scan_config
+        scanner.scan_server = AsyncMock(return_value=scan_result)
+
+        service = MagicMock(
+            update_server=AsyncMock(return_value=True),
+            toggle_service=AsyncMock(return_value=True),
+        )
+        search_repo = MagicMock(index_server=AsyncMock())
+        scheduler = MagicMock(mark_dirty=MagicMock())
+
+        with (
+            patch("registry.api.server_routes.security_scanner_service", new=scanner),
+            patch("registry.api.server_routes.server_service", new=service),
+            patch("registry.api.server_routes.fire_scan_complete_event", MagicMock()),
+            patch(
+                "registry.repositories.factory.get_search_repository",
+                return_value=search_repo,
+            ),
+            patch("registry.core.nginx_service.nginx_reload_scheduler", new=scheduler),
+        ):
+            await _perform_security_scan_on_registration(
+                "/test-server",
+                "https://example.internal/mcp",
+                {"tags": [], "server_name": "test"},
+            )
+
+        return service, search_repo, scheduler
+
+    @pytest.mark.asyncio
+    async def test_failed_scan_leaves_server_enabled(self):
+        """A scan that raised must not disable the server."""
+        service, _, scheduler = await self._run(_scan_result(scan_failed=True), self._config())
+
+        service.toggle_service.assert_not_awaited()
+        scheduler.mark_dirty.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_failed_scan_still_tags_security_pending(self):
+        """The warning must stay visible even though the server stays up."""
+        service, _, _ = await self._run(_scan_result(scan_failed=True), self._config())
+
+        service.update_server.assert_awaited_once()
+        _, entry = service.update_server.await_args.args
+        assert "security-pending" in entry["tags"]
+
+    @pytest.mark.asyncio
+    async def test_real_finding_still_disables_server(self):
+        """Regression guard: an actual critical finding must still block."""
+        service, search_repo, scheduler = await self._run(
+            _scan_result(scan_failed=False, critical=1), self._config()
+        )
+
+        service.toggle_service.assert_awaited_once_with("/test-server", False)
+        search_repo.index_server.assert_awaited_once()
+        scheduler.mark_dirty.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_block_on_scan_failure_restores_fail_closed(self):
+        """Operators who want strict fail-closed registration can opt back in."""
+        service, _, _ = await self._run(
+            _scan_result(scan_failed=True),
+            self._config(block_on_failure=True),
+        )
+
+        service.toggle_service.assert_awaited_once_with("/test-server", False)

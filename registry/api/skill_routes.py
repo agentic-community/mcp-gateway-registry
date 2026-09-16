@@ -1639,16 +1639,27 @@ async def _perform_skill_security_scan_on_registration(
         )
 
         auto_disabled = False
-        if not result.is_safe and config.block_unsafe_skills:
-            logger.warning(f"Disabling unsafe skill: {skill.path}")
-            await service.toggle_skill(skill.path, enabled=False)
-            auto_disabled = True
-
+        if not result.is_safe:
+            # Tag independently of blocking, as the server and agent paths do.
+            # While the tag was nested under block_unsafe_skills, turning blocking
+            # off left an unsafe skill both enabled and unlabelled.
             if config.add_security_pending_tag:
                 current_tags = skill.tags or []
                 if "security-pending" not in current_tags:
                     skill.tags = current_tags + ["security-pending"]
                     await service.update_skill(skill.path, {"tags": skill.tags})
+
+            # A scan that could not complete is not an unsafe verdict: scan_skill()
+            # reports is_safe=False with zero findings when it raises, so blocking
+            # on it would disable a skill the scanner never assessed — a skill whose
+            # SKILL.md merely failed to download, say. Operators who want strictly
+            # fail-closed registration can opt back in with block_on_scan_failure.
+            if config.block_unsafe_skills and (
+                not result.scan_failed or config.block_on_scan_failure
+            ):
+                logger.warning(f"Disabling unsafe skill: {skill.path}")
+                await service.toggle_skill(skill.path, enabled=False)
+                auto_disabled = True
 
         # scan_complete webhook (Issue #1330): safe or unsafe path.
         fire_scan_complete_event(
