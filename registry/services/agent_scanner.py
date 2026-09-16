@@ -50,6 +50,7 @@ class AgentScannerService:
             scan_timeout_seconds=settings.agent_security_scan_timeout,
             llm_api_key=settings.a2a_scanner_llm_api_key or os.getenv("A2A_SCANNER_LLM_API_KEY"),
             add_security_pending_tag=settings.agent_security_add_pending_tag,
+            block_on_scan_failure=settings.security_block_on_scan_failure,
         )
 
     async def scan_agent(

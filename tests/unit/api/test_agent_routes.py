@@ -2268,3 +2268,116 @@ class TestRunSecurityScanOnRegistrationUpdatesViaUpdateAgent:
         service_mock.update_agent.assert_not_awaited()
         service_mock.register_agent.assert_not_awaited()
         service_mock.toggle_agent.assert_not_awaited()
+
+
+# =============================================================================
+# A scan that could not complete is not an unsafe verdict.
+#
+# scan_agent() reports is_safe=False with zero findings when it raises, so
+# branching on is_safe alone disabled agents the scanner never assessed.
+# =============================================================================
+
+
+class TestScanFailureDoesNotDisableAgent:
+    """block_unsafe_agents must act on verdicts, not on scanner errors."""
+
+    @staticmethod
+    def _scan_result(*, scan_failed: bool, critical: int = 0, high: int = 0):
+        return MagicMock(
+            is_safe=False,
+            critical_issues=critical,
+            high_severity=high,
+            scan_failed=scan_failed,
+        )
+
+    @staticmethod
+    def _scan_config(*, block_on_failure: bool = False):
+        return MagicMock(
+            enabled=True,
+            scan_on_registration=True,
+            add_security_pending_tag=True,
+            block_unsafe_agents=True,
+            block_on_scan_failure=block_on_failure,
+            analyzers=["yara", "spec"],
+            llm_api_key=None,
+            scan_timeout_seconds=30,
+        )
+
+    async def _run(self, agent_card, scan_result, scan_config):
+        from registry.api.agent_routes import (
+            _perform_agent_security_scan_on_registration,
+        )
+
+        agent_card_dict = agent_card.model_dump()
+
+        scanner_mock = MagicMock()
+        scanner_mock.get_scan_config.return_value = scan_config
+        scanner_mock.scan_agent = AsyncMock(return_value=scan_result)
+
+        existing_card_info = MagicMock()
+        existing_card_info.model_dump.return_value = agent_card_dict.copy()
+
+        service_mock = MagicMock(
+            get_agent_info=AsyncMock(return_value=existing_card_info),
+            register_agent=AsyncMock(),
+            update_agent=AsyncMock(),
+            toggle_agent=AsyncMock(),
+        )
+        search_repo_mock = MagicMock(index_agent=AsyncMock())
+
+        with (
+            patch("registry.api.agent_routes.agent_service", new=service_mock),
+            patch(
+                "registry.services.agent_scanner.agent_scanner_service",
+                new=scanner_mock,
+            ),
+            patch(
+                "registry.api.agent_routes.get_search_repository",
+                return_value=search_repo_mock,
+            ),
+        ):
+            still_enabled = await _perform_agent_security_scan_on_registration(
+                agent_card.path,
+                agent_card,
+                agent_card_dict,
+            )
+
+        return still_enabled, service_mock
+
+    @pytest.mark.asyncio
+    async def test_failed_scan_leaves_agent_enabled_but_tagged(self, sample_agent_card):
+        """A scan that raised must not disable the agent, but must still tag it."""
+        still_enabled, service_mock = await self._run(
+            sample_agent_card,
+            self._scan_result(scan_failed=True),
+            self._scan_config(),
+        )
+
+        assert still_enabled is True
+        service_mock.toggle_agent.assert_not_awaited()
+        _, called_updates = service_mock.update_agent.await_args.args
+        assert "security-pending" in called_updates["tags"]
+
+    @pytest.mark.asyncio
+    async def test_real_finding_still_disables_agent(self, sample_agent_card):
+        """Regression guard: an actual high-severity finding must still block."""
+        still_enabled, service_mock = await self._run(
+            sample_agent_card,
+            self._scan_result(scan_failed=False, high=1),
+            self._scan_config(),
+        )
+
+        assert still_enabled is False
+        service_mock.toggle_agent.assert_awaited_once_with(sample_agent_card.path, False)
+
+    @pytest.mark.asyncio
+    async def test_block_on_scan_failure_restores_fail_closed(self, sample_agent_card):
+        """Operators who want strict fail-closed registration can opt back in."""
+        still_enabled, service_mock = await self._run(
+            sample_agent_card,
+            self._scan_result(scan_failed=True),
+            self._scan_config(block_on_failure=True),
+        )
+
+        assert still_enabled is False
+        service_mock.toggle_agent.assert_awaited_once_with(sample_agent_card.path, False)

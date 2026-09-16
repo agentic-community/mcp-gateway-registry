@@ -75,6 +75,14 @@ class SecurityScanConfig(BaseModel):
     add_security_pending_tag: bool = Field(
         default=True, description="Add 'security-pending' tag to unsafe servers"
     )
+    block_on_scan_failure: bool = Field(
+        default=False,
+        description=(
+            "Also disable servers whose scan could not complete. Off by default: "
+            "a failed scan is no verdict at all, so blocking on it takes down a "
+            "server the scanner never assessed"
+        ),
+    )
 
 
 class ServerSecurityStatus(BaseModel):

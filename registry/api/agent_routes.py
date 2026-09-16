@@ -174,8 +174,14 @@ async def _perform_agent_security_scan_on_registration(
                         await agent_service.update_agent(path, {"tags": current_tags})
                     logger.info(f"Added 'security-pending' tag to agent {path}")
 
-            # Disable agent if configured
-            if scan_config.block_unsafe_agents:
+            # Disable agent if configured. A scan that could not complete is not
+            # an unsafe verdict: scan_agent() reports is_safe=False with zero
+            # findings when it raises, so blocking on it would disable an agent the
+            # scanner never assessed. Operators who want strictly fail-closed
+            # registration can opt back in with block_on_scan_failure.
+            if scan_config.block_unsafe_agents and (
+                not scan_result.scan_failed or scan_config.block_on_scan_failure
+            ):
                 await agent_service.toggle_agent(path, False)
                 logger.warning(f"Disabled agent {path} due to failed security scan")
 
