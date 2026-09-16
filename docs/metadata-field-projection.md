@@ -20,6 +20,17 @@ When `metadata_fields` is omitted, responses are unchanged from their existing b
 | `GET /api/skills/{path}` | Query parameter |
 | `POST /api/search/semantic` | Request body field |
 
+## From the mcpgw MCP tools
+
+The gateway's own MCP tools sit on top of these endpoints, so the same rules apply from an agent's point of view:
+
+| Tool | Metadata behavior |
+|------|-------------------|
+| `list_services` / `list_agents` / `list_skills` | Return the `metadata` object in full, because the underlying list endpoints do |
+| `search_registry` | Accepts a `metadata_fields` argument and forwards it; without it, results carry no metadata |
+
+The asymmetry is the search endpoint's, not the tools': listing returns metadata unless you narrow it, while search returns none unless you ask. An agent that needs to know who owns an asset, or where it came from, has to name those keys when searching — `search_registry(query="billing", metadata_fields="owner_team")`.
+
 ## Examples
 
 ### Basic projection
