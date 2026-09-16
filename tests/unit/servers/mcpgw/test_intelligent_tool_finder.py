@@ -127,8 +127,12 @@ async def _call_search_registry(
     max_results=10,
     capture=None,
     include_discovery_receipt=False,
+    metadata_fields=None,
 ):
     """Helper to call search_registry with mocked HTTP client and token."""
+    kwargs = {}
+    if metadata_fields is not None:
+        kwargs["metadata_fields"] = metadata_fields
     return await _call_with_mocked_registry(
         search_registry,
         mock_response,
@@ -136,6 +140,7 @@ async def _call_search_registry(
         query=query,
         max_results=max_results,
         include_discovery_receipt=include_discovery_receipt,
+        **kwargs,
     )
 
 
@@ -845,3 +850,62 @@ async def test_missing_custom_key_yields_an_empty_list():
 
     assert result["custom"] == []
     assert result["total_results"] == 0
+
+
+# ---------------------------------------------------------------------------
+# search_registry can ask for the metadata a registrant attached to an asset
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_search_registry_omits_metadata_fields_by_default():
+    """Asking for no metadata must stay the default: search returns none unasked."""
+    capture = {}
+    mock_resp = _make_mock_response(servers=[])
+
+    await _call_search_registry(mock_resp, query="anything", capture=capture)
+
+    assert "metadata_fields" not in capture["json"]
+
+
+@pytest.mark.asyncio
+async def test_search_registry_forwards_metadata_fields():
+    """Search drops the metadata subdocument unless the caller names the keys."""
+    capture = {}
+    mock_resp = _make_mock_response(servers=[])
+
+    await _call_search_registry(
+        mock_resp,
+        query="who owns the billing server",
+        metadata_fields="owner_team,owner_person",
+        capture=capture,
+    )
+
+    assert capture["json"]["metadata_fields"] == "owner_team,owner_person"
+
+
+@pytest.mark.asyncio
+async def test_search_registry_returns_projected_metadata_on_results():
+    """The projected metadata rides on the result objects, so pass them through."""
+    server = _make_server_with_tools(1, path="/billing")
+    server["metadata"] = {"owner_team": "platform"}
+    mock_resp = _make_mock_response(servers=[server])
+
+    result = await _call_search_registry(
+        mock_resp,
+        query="billing",
+        metadata_fields="owner_team",
+    )
+
+    assert result["servers"][0]["metadata"] == {"owner_team": "platform"}
+
+
+@pytest.mark.asyncio
+async def test_empty_metadata_fields_is_treated_as_unasked():
+    """An empty string is not a projection request; do not send a 422-bait value."""
+    capture = {}
+    mock_resp = _make_mock_response(servers=[])
+
+    await _call_search_registry(mock_resp, query="anything", metadata_fields="", capture=capture)
+
+    assert "metadata_fields" not in capture["json"]
