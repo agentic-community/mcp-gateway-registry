@@ -718,9 +718,9 @@ async def search_registry(
     ctx: Context | None = None,
 ) -> dict[str, Any]:
     """
-    Discover AI assets (MCP servers, tools, agents, skills) by describing
-    what you need. Use this as your first step when you need a capability
-    you don't currently have.
+    Discover AI assets (MCP servers, tools, agents, skills, and any custom
+    catalog types this registry defines) by describing what you need. Use this
+    as your first step when you need a capability you don't currently have.
 
     Results include connection details so you can use the discovered assets:
     - Servers: have an endpoint_url field you can connect to directly as an
@@ -728,6 +728,9 @@ async def search_registry(
     - Tools: individual capabilities within servers, with inputSchema
     - Agents: autonomous agents with a URL you can delegate tasks to
     - Skills: workflow instructions (use get_skill_content to fetch the full markdown)
+    - Custom: records of a catalog type the registry administrator defined, each
+      naming its type in entity_type; these are catalogued assets rather than
+      endpoints, so use path to look the record up in the registry
 
     When a useful MCP server is found, use the endpoint_url to add it to
     the AI assistant's MCP configuration so its tools become available.
@@ -747,10 +750,11 @@ async def search_registry(
         include_discovery_receipt: Include compact eval metadata about exposed and withheld results
 
     Returns:
-        Dictionary with servers, tools, agents, skills, virtual_servers arrays
-        and metadata. A virtual server is a curated bundle of tools drawn from
-        several backend servers, exposed at one endpoint_url; connect to it the
-        same way you would connect to a server.
+        Dictionary with servers, tools, agents, skills, virtual_servers, custom
+        arrays and metadata. A virtual server is a curated bundle of tools drawn
+        from several backend servers, exposed at one endpoint_url; connect to it
+        the same way you would connect to a server. The custom array is empty on
+        registries with no custom types defined.
     """
     logger.info(f"search_registry called: max_results={max_results}")
     if SEARCH_LOG_QUERY_TEXT:
@@ -767,13 +771,12 @@ async def search_registry(
                 headers=headers,
                 json={
                     "query": query,
-                    "entity_types": [
-                        "mcp_server",
-                        "tool",
-                        "a2a_agent",
-                        "skill",
-                        "virtual_server",
-                    ],
+                    # No entity_types filter. The registry then searches its default
+                    # scope, which covers every built-in type this tool returns plus
+                    # the admin-defined custom types. Custom type names are created at
+                    # runtime, so no hard-coded list can name them, and pinning the
+                    # built-ins is what kept custom records out of discovery. The
+                    # frontend omits the filter for the same reason.
                     "max_results": max_results,
                 },
             )
@@ -784,10 +787,12 @@ async def search_registry(
         tools = data.get("tools", []) if isinstance(data, dict) else []
         agents = data.get("agents", []) if isinstance(data, dict) else []
         skills = data.get("skills", []) if isinstance(data, dict) else []
-        # The request above asks for virtual_server, so the registry matches them and
-        # counts them against max_results. Return them instead of discarding them
-        # (issue #1752). An older registry that omits the key yields [].
+        # Virtual servers and custom entity records are both in the scope the registry
+        # searches, so it matches them, scores them and counts them against
+        # max_results. Return them instead of discarding them (issue #1752). A registry
+        # too old to send either key, or one with custom entity types disabled, yields [].
         virtual_servers = data.get("virtual_servers", []) if isinstance(data, dict) else []
+        custom = data.get("custom", []) if isinstance(data, dict) else []
 
         candidate_results = []
         for tool in tools:
@@ -839,6 +844,17 @@ async def search_registry(
                     "similarity_score": skill.get("relevance_score") or skill.get("score"),
                 }
             )
+        for record in custom:
+            # asset_type carries the custom type's own name rather than a flat
+            # "custom", so a receipt says which kind of record matched.
+            candidate_results.append(
+                {
+                    "asset_type": record.get("entity_type") or "custom",
+                    "service_path": record.get("path") or "",
+                    "name": record.get("name") or "",
+                    "similarity_score": record.get("relevance_score") or record.get("score"),
+                }
+            )
         # Dedupe so a tool returned in both tools[] and a server's matching_tools
         # is counted once. Then split into what the caller saw vs what the limit
         # held back.
@@ -846,13 +862,21 @@ async def search_registry(
         exposed_results = candidate_results[:max_results]
         withheld_results = candidate_results[max_results:]
 
-        total_results = len(servers) + len(tools) + len(agents) + len(skills) + len(virtual_servers)
+        total_results = (
+            len(servers)
+            + len(tools)
+            + len(agents)
+            + len(skills)
+            + len(virtual_servers)
+            + len(custom)
+        )
         result = {
             "servers": servers,
             "tools": tools,
             "agents": agents,
             "skills": skills,
             "virtual_servers": virtual_servers,
+            "custom": custom,
             "query": query,
             "total_results": total_results,
             "status": "success",

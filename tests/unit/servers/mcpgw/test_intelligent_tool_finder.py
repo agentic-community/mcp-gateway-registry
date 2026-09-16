@@ -695,14 +695,20 @@ async def test_missing_virtual_servers_key_yields_an_empty_list():
 
 
 @pytest.mark.asyncio
-async def test_search_registry_still_requests_virtual_servers():
-    """The fix returns them; it must not stop asking for them."""
+async def test_search_registry_does_not_pin_entity_types():
+    """Virtual servers must stay in scope, and so must the custom types.
+
+    The tool used to pin entity_types to the built-in names. Sending no filter
+    leaves the registry searching its default scope, which keeps virtual servers
+    in scope and is the only way to reach custom types, whose names are defined
+    at runtime and so cannot appear in a hard-coded list.
+    """
     capture = {}
     mock_resp = _make_mock_response(servers=[])
 
     await _call_search_registry(mock_resp, query="bundled tools", capture=capture)
 
-    assert "virtual_server" in capture["json"]["entity_types"]
+    assert "entity_types" not in capture["json"]
 
 
 @pytest.mark.asyncio
@@ -715,3 +721,127 @@ async def test_intelligent_tool_finder_no_longer_requests_virtual_servers():
 
     assert "virtual_server" not in capture["json"]["entity_types"]
     assert capture["json"]["entity_types"] == ["mcp_server", "tool", "a2a_agent", "skill"]
+
+
+# ---------------------------------------------------------------------------
+# search_registry returns the custom entity records the registry matched
+# ---------------------------------------------------------------------------
+
+
+def _make_custom_record(
+    entity_type="prompt_template",
+    name="summarize-ticket",
+    path="/prompt_template/summarize-ticket",
+    relevance_score=0.77,
+):
+    """A custom entity payload shaped like CustomEntitySearchResult."""
+    return {
+        "entity_type": entity_type,
+        "path": path,
+        "name": name,
+        "description": "Summarize a support ticket",
+        "tags": ["support"],
+        "visibility": "public",
+        "owner": "platform",
+        "is_enabled": True,
+        "relevance_score": relevance_score,
+    }
+
+
+@pytest.mark.asyncio
+async def test_search_registry_returns_custom_records():
+    """The registry indexes and matches custom records, so the tool must return them."""
+    mock_resp = _make_mock_response()
+    mock_resp.json.return_value = {
+        "servers": [],
+        "tools": [],
+        "agents": [],
+        "skills": [],
+        "virtual_servers": [],
+        "custom": [_make_custom_record()],
+    }
+
+    result = await _call_search_registry(mock_resp, query="summarize a ticket")
+
+    assert result["custom"] == [_make_custom_record()]
+
+
+@pytest.mark.asyncio
+async def test_custom_records_count_toward_total_results():
+    """They consume the max_results budget, so the total has to admit them."""
+    mock_resp = _make_mock_response()
+    mock_resp.json.return_value = {
+        "servers": [_make_server_with_tools(1, path="/a")],
+        "tools": [],
+        "agents": [],
+        "skills": [],
+        "virtual_servers": [],
+        "custom": [
+            _make_custom_record(path="/prompt_template/one", name="one"),
+            _make_custom_record(path="/prompt_template/two", name="two"),
+        ],
+    }
+
+    result = await _call_search_registry(mock_resp, query="prompts")
+
+    assert result["total_results"] == 3
+
+
+@pytest.mark.asyncio
+async def test_custom_records_appear_in_the_discovery_receipt():
+    """asset_type names the custom type, so a receipt shows which kind matched."""
+    mock_resp = _make_mock_response()
+    mock_resp.json.return_value = {
+        "servers": [],
+        "tools": [],
+        "agents": [],
+        "skills": [],
+        "virtual_servers": [],
+        "custom": [
+            _make_custom_record(entity_type="gem", name="tone-of-voice", path="/gem/tone"),
+        ],
+    }
+
+    result = await _call_search_registry(
+        mock_resp,
+        query="tone of voice",
+        max_results=10,
+        include_discovery_receipt=True,
+    )
+
+    assert result["discovery_receipt"]["exposed_results"] == [
+        {
+            "asset_type": "gem",
+            "service_path": "/gem/tone",
+            "name": "tone-of-voice",
+            "similarity_score": 0.77,
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_custom_record_without_a_type_falls_back_to_custom():
+    """A record missing its discriminator still has to be countable in a receipt."""
+    record = _make_custom_record()
+    del record["entity_type"]
+    mock_resp = _make_mock_response()
+    mock_resp.json.return_value = {"servers": [], "custom": [record]}
+
+    result = await _call_search_registry(
+        mock_resp,
+        query="prompts",
+        include_discovery_receipt=True,
+    )
+
+    assert result["discovery_receipt"]["exposed_results"][0]["asset_type"] == "custom"
+
+
+@pytest.mark.asyncio
+async def test_missing_custom_key_yields_an_empty_list():
+    """Registries with custom entity types disabled omit the key; do not raise."""
+    mock_resp = _make_mock_response(servers=[])
+
+    result = await _call_search_registry(mock_resp, query="prompts")
+
+    assert result["custom"] == []
+    assert result["total_results"] == 0
