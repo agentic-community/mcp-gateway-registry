@@ -20,6 +20,14 @@ class ServerInfo(BaseModel):
     enabled: bool = Field(..., alias="is_enabled", description="Whether the server is enabled")
     tags: list[str] = Field(default_factory=list, description="Server tags")
     tool_count: int | None = Field(None, alias="num_tools", description="Number of tools provided")
+    metadata: dict | None = Field(
+        None,
+        description=(
+            "Free-form metadata the registrant attached to the server, e.g. ownership "
+            "or provenance. Returned in full by the list API unless the caller narrows "
+            "it with metadata_fields"
+        ),
+    )
 
 
 class AgentInfo(BaseModel):
@@ -29,6 +37,9 @@ class AgentInfo(BaseModel):
     description: str | None = Field(None, description="Agent description")
     tags: list[str] = Field(default_factory=list, description="Agent tags")
     created_at: str | None = Field(None, description="Creation timestamp")
+    metadata: dict | None = Field(
+        None, description="Free-form metadata the registrant attached to the agent"
+    )
 
 
 class SkillInfo(BaseModel):
@@ -42,6 +53,13 @@ class SkillInfo(BaseModel):
     tags: list[str] = Field(default_factory=list, description="Skill tags")
     target_agents: list[str] = Field(default_factory=list, description="Target agent platforms")
     created_at: str | None = Field(None, description="Creation timestamp")
+    metadata: dict | None = Field(
+        None,
+        description=(
+            "Skill metadata: author, version, and any free-form keys under extra, "
+            "e.g. ownership or provenance"
+        ),
+    )
 
 
 class ToolSearchResult(BaseModel):

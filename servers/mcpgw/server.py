@@ -715,6 +715,7 @@ async def search_registry(
     query: str,
     max_results: int = 10,
     include_discovery_receipt: bool = False,
+    metadata_fields: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
     """
@@ -748,13 +749,21 @@ async def search_registry(
         query: What capability or tool you are looking for (natural language)
         max_results: Number of results to return (default: 10, max: 50)
         include_discovery_receipt: Include compact eval metadata about exposed and withheld results
+        metadata_fields: Comma-separated metadata keys to return on each result,
+            in dot-notation for nested keys (e.g. "owner_team,config.region").
+            Registrants can attach arbitrary metadata to an asset, and search
+            omits all of it unless you name what you want. Ask for it when the
+            question is about an asset rather than about finding one — who owns
+            it, where it came from, how it is configured. Unknown keys are
+            skipped rather than erroring, so it is safe to ask speculatively.
 
     Returns:
         Dictionary with servers, tools, agents, skills, virtual_servers, custom
         arrays and metadata. A virtual server is a curated bundle of tools drawn
         from several backend servers, exposed at one endpoint_url; connect to it
         the same way you would connect to a server. The custom array is empty on
-        registries with no custom types defined.
+        registries with no custom types defined. Results carry a metadata object
+        only when metadata_fields named the keys to include.
     """
     logger.info(f"search_registry called: max_results={max_results}")
     if SEARCH_LOG_QUERY_TEXT:
@@ -765,20 +774,27 @@ async def search_registry(
         max_results = _validate_top_n(max_results)
         headers = await _get_registry_headers(ctx)
 
+        payload: dict[str, Any] = {
+            "query": query,
+            # No entity_types filter. The registry then searches its default
+            # scope, which covers every built-in type this tool returns plus
+            # the admin-defined custom types. Custom type names are created at
+            # runtime, so no hard-coded list can name them, and pinning the
+            # built-ins is what kept custom records out of discovery. The
+            # frontend omits the filter for the same reason.
+            "max_results": max_results,
+        }
+        # Search drops the metadata subdocument unless the caller names the keys
+        # it wants, so forward the request rather than choosing keys here: which
+        # metadata an asset carries is up to whoever registered it.
+        if metadata_fields:
+            payload["metadata_fields"] = metadata_fields
+
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
                 f"{REGISTRY_URL}/api/search/semantic",
                 headers=headers,
-                json={
-                    "query": query,
-                    # No entity_types filter. The registry then searches its default
-                    # scope, which covers every built-in type this tool returns plus
-                    # the admin-defined custom types. Custom type names are created at
-                    # runtime, so no hard-coded list can name them, and pinning the
-                    # built-ins is what kept custom records out of discovery. The
-                    # frontend omits the filter for the same reason.
-                    "max_results": max_results,
-                },
+                json=payload,
             )
             response.raise_for_status()
             data = response.json()
