@@ -1,5 +1,6 @@
 """DocumentDB-based repository for hybrid search (text + vector)."""
 
+import asyncio
 import logging
 import math
 import re
@@ -285,6 +286,29 @@ def _reciprocal_rank_fusion(
 
 
 SCORE_DISPLAY_FLOOR: float = 0.10
+
+# model.encode() is CPU-bound and runs in a worker thread (issue #1751). The
+# thread keeps the event loop free, but unbounded threads would let N concurrent
+# searches run N torch encodes over the same cores and make every one slower, so
+# admission is capped. Torch also parallelises inside a single encode, which is
+# why the cap is small rather than the executor default of min(32, cpu_count+4).
+_ENCODE_CONCURRENCY: int = max(1, settings.embeddings_encode_concurrency)
+_encode_semaphore: asyncio.Semaphore | None = None
+
+
+def _get_encode_semaphore() -> asyncio.Semaphore:
+    """Lazily build the encode semaphore on the running loop.
+
+    Built on first use rather than at import so it binds to the loop that
+    actually serves requests.
+
+    Returns:
+        The process-wide semaphore gating concurrent model.encode() calls.
+    """
+    global _encode_semaphore
+    if _encode_semaphore is None:
+        _encode_semaphore = asyncio.Semaphore(_ENCODE_CONCURRENCY)
+    return _encode_semaphore
 
 
 def _attach_similarity_scores(
@@ -745,6 +769,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
         )
         self._embedding_model = None
         self._embedding_unavailable: bool = False
+        self._doc_count_cache: int | None = None
 
     async def _get_collection(self) -> AsyncIOMotorCollection:
         """Get DocumentDB collection."""
@@ -752,6 +777,25 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             db = await get_documentdb_client()
             self._collection = db[self._collection_name]
         return self._collection
+
+    async def _cached_doc_count(self) -> int:
+        """Total indexed documents, cached for the life of the process.
+
+        Used to report how much of the corpus a vector search covered. The count
+        moves slowly relative to search traffic, so a per-process cache is
+        enough and keeps this off the request path (issue #1751).
+
+        Returns:
+            Document count in the embeddings collection, or 0 if it cannot be read.
+        """
+        if self._doc_count_cache is None:
+            try:
+                collection = await self._get_collection()
+                self._doc_count_cache = await collection.count_documents({})
+            except Exception as exc:
+                logger.debug("Could not count documents for coverage logging: %s", exc)
+                return 0
+        return self._doc_count_cache
 
     async def _get_embedding_model(self):
         """Lazy load embedding model."""
@@ -830,7 +874,12 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             return None
         try:
             model = await self._get_embedding_model()
-            vectors = model.encode(texts)
+            # Offload to a worker thread. encode() is synchronous and CPU-bound,
+            # so calling it directly blocked the event loop for its whole
+            # duration and stalled every other request on this worker,
+            # including health checks and auth (issue #1751).
+            async with _get_encode_semaphore():
+                vectors = await asyncio.to_thread(model.encode, texts)
             return [v.tolist() for v in vectors]
         except Exception as exc:
             logger.warning(
@@ -1846,7 +1895,17 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             # Build query filter
             query_filter = {}
             if entity_types:
-                query_filter["entity_type"] = {"$in": entity_types}
+                # Drop "tool" the way the DocumentDB path does. Tools live inside
+                # their parent server document rather than as standalone entities,
+                # so matching entity_type="tool" can only return nothing. The two
+                # paths disagreed on this before issue #1751: harmless while no
+                # tool documents exist, a divergence the moment any do.
+                #
+                # An empty list here means the caller asked only for "tool", so
+                # match nothing. Omitting the filter would search every type,
+                # which is the opposite of what was requested.
+                searchable_types = [t for t in entity_types if t != "tool"]
+                query_filter["entity_type"] = {"$in": searchable_types}
 
             # Apply lifecycle status and enabled filter
             status_filter = _build_status_filter(
@@ -2481,12 +2540,24 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                     include_disabled=include_disabled,
                 )
 
-            # DocumentDB vector search returns results sorted by similarity.
-            # Run separate vector search per entity type to ensure each type
-            # gets fair representation in the candidate pool (prevents servers
-            # from crowding out agents/skills in large registries).
+            # One global vector search, not one per entity type (issue #1751).
+            #
+            # The per-type loop was added to stop servers crowding out agents and
+            # skills (#1160), but it could not work: $search selects the nearest k
+            # documents before any $match runs, so every pipeline ran the same
+            # global search and only differed in which type it kept afterwards.
+            # Measured on DocumentDB, the union of all per-type pipelines was
+            # exactly k, never k-per-type, so five round trips bought no recall.
+            #
+            # Instead: one query, then filter and distribute in Python. This also
+            # restores the contract _reciprocal_rank_fusion() documents, since a
+            # single query returns one list ordered by similarity rather than
+            # blocks grouped by entity type.
             ef_search = settings.vector_search_ef_search
-            k_per_type = max(max_results * 2, 30)
+            # Over-request: the filters below run after the search, so k must
+            # cover what they will discard. Capped at ef_search because the HNSW
+            # queue cannot yield more candidates than it holds.
+            k_candidates = min(max_results * settings.vector_search_overrequest, ef_search)
 
             status_filter = _build_status_filter(
                 include_draft=include_draft,
@@ -2519,48 +2590,72 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             default_scope = await self._default_search_scope()
             search_types = [t for t in (entity_types or default_scope) if t != "tool"]
 
-            results = []
-            result_ids: set[str] = set()
+            # Nothing searchable (for example entity_types=["tool"], which has no
+            # standalone documents). Skip the vector search rather than paying for
+            # an ANN traversal whose $match can only reject everything.
+            if not search_types:
+                logger.info("No searchable entity types after filtering; skipping vector search")
+                return await self._lexical_only_search(
+                    query,
+                    entity_types,
+                    max_results,
+                    include_draft=include_draft,
+                    include_deprecated=include_deprecated,
+                    include_disabled=include_disabled,
+                )
 
-            for search_type in search_types:
-                pipeline: list[dict[str, Any]] = [
-                    {
-                        "$search": {
-                            "vectorSearch": {
-                                "vector": query_embedding,
-                                "path": "embedding",
-                                "similarity": "cosine",
-                                "k": k_per_type,
-                                "efSearch": ef_search,
-                            }
+            pipeline: list[dict[str, Any]] = [
+                {
+                    "$search": {
+                        "vectorSearch": {
+                            "vector": query_embedding,
+                            "path": "embedding",
+                            "similarity": "cosine",
+                            "k": k_candidates,
+                            "efSearch": ef_search,
                         }
-                    },
-                    {"$match": {"entity_type": search_type}},
-                ]
-                if status_filter:
-                    pipeline.append({"$match": status_filter})
-                if text_boost_stage is not None:
-                    pipeline.append(text_boost_stage)
-                    pipeline.append({"$sort": {"text_boost": -1}})
-                pipeline.append({"$limit": k_per_type})
+                    }
+                },
+                # Post-filters. $search has no filter option on DocumentDB, so
+                # these cannot move inside the search; k above absorbs the loss.
+                {"$match": {"entity_type": {"$in": search_types}}},
+            ]
+            if status_filter:
+                pipeline.append({"$match": status_filter})
+            if text_boost_stage is not None:
+                pipeline.append(text_boost_stage)
 
-                cursor = collection.aggregate(pipeline)
-                type_results = await cursor.to_list(length=k_per_type)
+            cursor = collection.aggregate(pipeline)
+            results = await cursor.to_list(length=k_candidates)
+            result_ids: set[str] = {doc.get("_id") for doc in results}
 
-                for doc in type_results:
-                    doc_id = doc.get("_id")
-                    if doc_id not in result_ids:
-                        results.append(doc)
-                        result_ids.add(doc_id)
-
+            # Survivors versus the requested candidates. A low ratio means the
+            # post-filters ate the search budget and recall is being lost before
+            # ranking even starts, which is invisible without this line.
+            doc_count = await self._cached_doc_count()
             logger.info(
-                "Per-type vector search: %d total candidates "
-                "(k_per_type=%d, efSearch=%d, types=%s)",
+                "Vector search: %d of %d requested candidates survived filtering "
+                "(efSearch=%d, corpus=%d, coverage=%.1f%%, types=%s)",
                 len(results),
-                k_per_type,
+                k_candidates,
                 ef_search,
+                doc_count,
+                (100.0 * k_candidates / doc_count) if doc_count else 0.0,
                 search_types,
             )
+            if doc_count and k_candidates < doc_count * 0.5 and len(results) < max_results:
+                logger.warning(
+                    "Vector search returned %d candidates for max_results=%d while "
+                    "k=%d covers only %.1f%% of %d documents. Post-filters are "
+                    "discarding most of the candidate pool. Raise "
+                    "VECTOR_SEARCH_OVERREQUEST or reduce the share of "
+                    "disabled/draft assets.",
+                    len(results),
+                    max_results,
+                    k_candidates,
+                    100.0 * k_candidates / doc_count,
+                    doc_count,
+                )
 
             # NOTE: DocumentDB does not support $unionWith, so we run a separate
             # keyword query and merge results in Python code after the main pipeline.

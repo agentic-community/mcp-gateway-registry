@@ -403,10 +403,30 @@ class Settings(BaseSettings):
     embeddings_model_name: str = "all-MiniLM-L6-v2"
     embeddings_model_dimensions: int = 384  # 384 for default and 1024 for bedrock titan v2
 
-    # HNSW vector search tuning (only used with DocumentDB backend)
-    # Higher efSearch improves recall at the cost of query latency.
-    # Default 40 may miss documents in small collections; 100 gives near-exact recall.
-    vector_search_ef_search: int = 100
+    # HNSW vector search tuning (only used with the DocumentDB backend; MongoDB
+    # CE and Atlas take the client-side path, where these are inert).
+    #
+    # efSearch is the dynamic candidate queue HNSW keeps during traversal, the
+    # equivalent of numCandidates in MongoDB Atlas. It bounds how many documents
+    # the search can return, so k can never usefully exceed it. DocumentDB caps
+    # it at 1000. Raised from 100 to 1000 in issue #1751: the search runs a
+    # single global query now rather than one per entity type, so the whole
+    # traversal budget goes to that one query.
+    vector_search_ef_search: int = 1000
+
+    # DocumentDB applies $match AFTER the vector search, so k is spent selecting
+    # nearest neighbours before entity_type and status/enabled filtering runs,
+    # and whatever the filters discard is simply lost. Over-request to
+    # compensate; MongoDB Atlas calls this the overrequest pattern and
+    # recommends at least 20x. k = max_results * this, capped at efSearch
+    # (issue #1751).
+    vector_search_overrequest: int = 20
+
+    # Concurrent model.encode() calls allowed process-wide. encode() runs in a
+    # worker thread so it no longer blocks the event loop, but torch also
+    # parallelises inside a single encode, so unbounded threads would make every
+    # concurrent search slower. Small on purpose (issue #1751).
+    embeddings_encode_concurrency: int = 2
 
     # Search fusion method: 'rrf' (Reciprocal Rank Fusion, industry standard)
     # or 'legacy' (previous additive formula). RRF avoids score saturation and
