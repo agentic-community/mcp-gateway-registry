@@ -390,6 +390,12 @@ def _canonical_egress_user(validation_result: dict) -> str:
 # truncating beats either dropping the record or inflating every request.
 _MAX_AUDIT_CLAIM_LEN: int = 256
 
+# The audit display identity when no claim identified the caller. Named because
+# `_audit_identity_display` produces it and the mcp-proxy OBO hop tests for it to
+# avoid preferring it over a verified principal; a literal in both places is how
+# the two drift apart.
+AUDIT_IDENTITY_ANONYMOUS: str = "anonymous"
+
 
 def _claim_str(value: object) -> str | None:
     """Coerce a raw JWT/session claim to a bounded, non-empty ``str``, or ``None``.
@@ -407,9 +413,15 @@ def _claim_str(value: object) -> str | None:
     case). ``bool`` is rejected outright: ``True`` is not an identifier, and
     ``isinstance(True, int)`` would otherwise stringify it to ``"True"``.
     Anything longer than ``_MAX_AUDIT_CLAIM_LEN`` is truncated.
+
+    A string is stripped before the emptiness test, so an all-whitespace claim
+    resolves to ``None`` rather than being stored as an identity value: `"   "`
+    is truthy, and a record whose principal name is three spaces identifies
+    nobody while looking like it does. Surrounding whitespace is not part of any
+    identifier, so trimming it also makes an equality lookup match.
     """
     if isinstance(value, str):
-        return value[:_MAX_AUDIT_CLAIM_LEN] or None
+        return value.strip()[:_MAX_AUDIT_CLAIM_LEN] or None
     if isinstance(value, bool):
         return None
     if isinstance(value, int | float):
@@ -470,7 +482,7 @@ def _audit_identity_display(validation_result: dict) -> str:
         resolved = _claim_str(candidate)
         if resolved:
             return resolved
-    return "anonymous"
+    return AUDIT_IDENTITY_ANONYMOUS
 
 
 def _audit_identity_claims(validation_result: dict) -> dict:
@@ -8060,7 +8072,23 @@ async def mcp_proxy(
                 # Absent claim (rolling deploy) -> the verified `sub` principal,
                 # never the ingress header: opaque but true.
                 obo_display, obo_identity_claims = _audit_identity_from_token(claims)
-                obo_display = obo_display or obo_principal or "anonymous"
+                if not obo_display:
+                    # No signed claim: mid-rolling-deploy an in-flight token can
+                    # predate it. Logged at DEBUG because the fallback is silent
+                    # otherwise, and a replica that NEVER stamps the claim (a
+                    # marker-secret mismatch suppressing the mint, a stale task
+                    # definition) is then indistinguishable from normal operation.
+                    logger.debug(
+                        "mcp_proxy: no audit_identity claim on the hop token for server=%s; "
+                        "attributing the OBO mint to the verified sub principal",
+                        server_name,
+                    )
+                # `_audit_identity_display` resolves to the literal "anonymous"
+                # when no claim identified the caller. That string says strictly
+                # less than the verified principal, so it must not win over it --
+                # plain `or` chaining would keep it, because it is truthy.
+                if obo_display in ("", AUDIT_IDENTITY_ANONYMOUS):
+                    obo_display = obo_principal or AUDIT_IDENTITY_ANONYMOUS
                 try:
                     obo_token = await obo_exchange(
                         get_auth_provider(),

@@ -414,6 +414,42 @@ class TestAuditIdentityClaims:
         assert claims["principal_name"] is None  # unusable shape -> absent, not fatal
         assert claims["canonical_id"] == "o1@42"
 
+    def test_bool_claim_is_rejected_not_stringified(self):
+        # `isinstance(True, int)` is True, so without the explicit bool rejection a
+        # claim of `true` would be stored as the string "True": an identity value
+        # that looks real and identifies nobody.
+        claims = server._audit_identity_claims({"data": {"sub": True, "oid": False}})
+        assert claims["subject"] is None
+        assert claims["object_id"] is None
+
+    def test_list_claim_with_no_usable_member_degrades_to_none(self):
+        # A multivalued mapper can emit a list whose members are all unusable.
+        # Exhausting it must yield None rather than raising inside the
+        # best-effort audit emit, which would drop the whole record.
+        claims = server._audit_identity_claims({"data": {"oid": [None, {}, "  "], "sub": "s"}})
+        assert claims["object_id"] is None
+        assert claims["subject"] == "s"
+
+    def test_whitespace_only_claim_degrades_to_none(self):
+        # `"   "` is truthy, so without a strip it would be STORED as the record's
+        # principal name: a value that identifies nobody while looking like it
+        # does. An operator filtering on it finds nothing and cannot tell why.
+        vr = {"data": {"sub": "s", "upn": "   ", "oid": "\t\n ", "tid": ""}}
+        claims = server._audit_identity_claims(vr)
+        assert claims["principal_name"] is None
+        assert claims["object_id"] is None
+        assert claims["tenant_id"] is None
+        # The usable claim on the same token is unaffected.
+        assert claims["subject"] == "s"
+
+    def test_surrounding_whitespace_is_trimmed_not_stored(self):
+        # Whitespace is not part of any identifier, and an untrimmed copy would
+        # fail the equality lookup the opaque fields are searched by.
+        vr = {"data": {"sub": "  sub-123  ", "upn": " alice@contoso.com\n"}}
+        claims = server._audit_identity_claims(vr)
+        assert claims["subject"] == "sub-123"
+        assert claims["principal_name"] == "alice@contoso.com"
+
     def test_all_none_when_no_claims(self):
         # Nothing to surface: every field is None (the record fields are optional,
         # so records for such tokens are unchanged).
