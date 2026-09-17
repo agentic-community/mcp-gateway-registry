@@ -2557,6 +2557,12 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             # Over-request: the filters below run after the search, so k must
             # cover what they will discard. Capped at ef_search because the HNSW
             # queue cannot yield more candidates than it holds.
+            #
+            # Measured on DocumentDB with efSearch pinned at 1000, vector-stage
+            # latency tracks k rather than efSearch: k=20 took 52ms, k=200 took
+            # 61ms, k=1000 took 155ms. So the cost is materialising documents (each
+            # carries a 384-float embedding), not graph traversal. Sizing efSearch
+            # down for small k was tried and reverted; it targets the wrong term.
             k_candidates = min(max_results * settings.vector_search_overrequest, ef_search)
 
             status_filter = _build_status_filter(
