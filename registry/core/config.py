@@ -627,17 +627,18 @@ class Settings(BaseSettings):
     security_add_pending_tag: bool = True
     mcp_scanner_llm_api_key: str = ""  # Optional LLM API key for advanced analysis
     security_block_on_scan_failure: bool = Field(
-        default=False,
+        default=True,
         description=(
-            "Treat a scan that could not complete as an unsafe verdict. Off by "
-            "default: a scan that raises reports is_safe=False with zero findings, "
-            "so blocking on it disables an asset the scanner never actually "
-            "assessed. Endpoints that cannot be scanned anonymously (per-user "
-            "egress OAuth, for instance) fail this way on every registration. "
-            "Turn it on only if you want strictly fail-closed registration and "
-            "accept that unscannable assets stay disabled. Applies to servers, "
-            "agents and skills alike; the per-type block_unsafe_* settings still "
-            "govern assets the scanner did reach a verdict on."
+            "Treat a scan that could not complete as an unsafe verdict. On by "
+            "default, which preserves the behaviour of earlier releases. Turn it "
+            "off to leave an asset enabled when its scan raised: such a scan "
+            "reports is_safe=False with zero findings, so blocking on it disables "
+            "an asset the scanner never actually assessed, and the asset is still "
+            "tagged security-pending either way. Deployments with endpoints that "
+            "cannot be scanned anonymously (per-user egress OAuth, for instance) "
+            "will want it off, since those fail on every registration. Applies to "
+            "servers, agents and skills alike; the per-type block_unsafe_* "
+            "settings still govern assets the scanner did reach a verdict on."
         ),
     )
 
