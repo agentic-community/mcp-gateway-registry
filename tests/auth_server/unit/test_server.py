@@ -4309,6 +4309,53 @@ class TestMcpProxyOboExchange:
         assert record["display_username"] == "alice@example.com"
         assert "ceo@example.com" not in str(record)
 
+    def test_obo_audit_prefers_the_verified_sub_over_a_signed_anonymous(self, monkeypatch):
+        """A signed display of "anonymous" must not beat the verified principal.
+
+        `_audit_identity_display` returns the literal "anonymous" when no claim
+        identified the caller. That string is truthy, so plain `or` chaining kept
+        it ahead of the verified `sub` -- recording a caller we can actually name
+        as unattributed. The sub is opaque but true, so it wins.
+        """
+        import auth_server.server as server_module
+
+        async def _fake_exchange(provider, subject_token, target_audience, scopes=None):
+            return "exchanged-obo-token"
+
+        patch_httpx, _ = _capture_upstream_headers()
+        patch_audit, emitted = self._capture_mint_audit(server_module)
+        with (
+            patch.object(server_module.settings, "egress_auth_enabled", True),
+            patch.object(server_module, "_vend_egress_token", self._obo_directive_vend),
+            patch.object(server_module, "get_auth_provider", lambda *a, **k: _FakeEntraProvider()),
+            patch.object(server_module, "obo_exchange", _fake_exchange),
+            patch.object(server_module, "_read_mcp_filter_enabled", return_value=False),
+            _patch_scope_repo_allow_all(),
+            patch_httpx,
+            patch_audit,
+        ):
+            client = TestClient(server_module.app)
+            response = client.post(
+                "/mcp-proxy/outlook",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 14,
+                    "method": "tools/call",
+                    "params": {"name": "read_inbox"},
+                },
+                headers={
+                    **_mcp_proxy_token_headers(
+                        server_name="outlook",
+                        audit_identity={"display": server_module.AUDIT_IDENTITY_ANONYMOUS},
+                    ),
+                    "X-Authorization": f"Bearer {_forged_ingress_jwt('test-user')}",
+                },
+            )
+
+        assert response.status_code == 200
+        assert len(emitted) == 1
+        assert emitted[0]["display_username"] == "test-user"
+
     def test_obo_audit_falls_back_to_verified_sub_without_the_hop_claim(self, monkeypatch):
         """Rolling deploy: a hop token minted before the claim existed. The record
         degrades to the verified `sub` -- opaque but true -- and never reads the
