@@ -793,9 +793,11 @@ shared in the stack `shared-secret`.
 | OpenBao address | `OPENBAO_ADDR` | — | `registry.egressAuth.openbao.addr` | OpenBao server URL (openbao backend).                             |
 | OpenBao namespace | `OPENBAO_NAMESPACE` | — | `registry.egressAuth.openbao.namespace` | Enterprise namespaces only.                                       |
 | OpenBao KV mount | `OPENBAO_KV_MOUNT` | — | `registry.egressAuth.openbao.kvMount` | KV v2 mount point (default `secret`).                             |
-| OpenBao auth method | `OPENBAO_AUTH_METHOD` | — | `registry.egressAuth.openbao.authMethod` | `token` \| `kubernetes`. EKS uses `kubernetes` (no static token). |
+| OpenBao auth method | `OPENBAO_AUTH_METHOD` | — | `registry.egressAuth.openbao.authMethod` | `token` \| `kubernetes` \| `approle`. EKS uses `kubernetes` (no static token). |
 | OpenBao token **(secret)** | `OPENBAO_TOKEN` | — | via secret | Static OpenBao/Vault token, root access to all vaulted egress credentials. **Required when `SECRET_STORE_BACKEND=openbao` with `OPENBAO_AUTH_METHOD=token`** — docker-compose references it as `${OPENBAO_TOKEN:?}`, so the stack refuses to start if unset. Not needed with `authMethod=kubernetes` (EKS), which uses the ServiceAccount instead. |
 | OpenBao role | `OPENBAO_ROLE` | — | `registry.egressAuth.openbao.role` | Kubernetes-auth role bound to the registry ServiceAccount.        |
+| OpenBao AppRole role id | `OPENBAO_ROLE_ID` | — | — | AppRole role id; required together with `OPENBAO_SECRET_ID` when `OPENBAO_AUTH_METHOD=approle`. Compose only (Helm uses `kubernetes`, ECS uses `secrets-manager`). |
+| OpenBao AppRole secret id **(secret)** | `OPENBAO_SECRET_ID` | — | — | AppRole secret id; required together with `OPENBAO_ROLE_ID` when `OPENBAO_AUTH_METHOD=approle`. Compose only. |
 
 **Backend by surface:** ECS wires only the `secrets-manager` knobs (`OPENBAO_*`
 omitted); EKS/Helm defaults to `openbao` with `authMethod: kubernetes` and a

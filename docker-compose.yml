@@ -235,6 +235,10 @@ services:
       - OPENBAO_KV_MOUNT=${OPENBAO_KV_MOUNT:-secret}
       - OPENBAO_AUTH_METHOD=${OPENBAO_AUTH_METHOD:-token}
       - OPENBAO_ROLE=${OPENBAO_ROLE:-}
+      # AppRole credentials for OPENBAO_AUTH_METHOD=approle. Empty defaults keep
+      # the token and kubernetes paths unaffected (issue #1771).
+      - OPENBAO_ROLE_ID=${OPENBAO_ROLE_ID:-}
+      - OPENBAO_SECRET_ID=${OPENBAO_SECRET_ID:-}
       # Static token for OPENBAO_AUTH_METHOD=token; matches the dev OpenBao root
       # token. Required for token auth (kubernetes auth is EKS-only).
       - OPENBAO_TOKEN=${OPENBAO_TOKEN:?Set OPENBAO_TOKEN in .env (a strong random value; do not reuse the old dev-root-token default)}
