@@ -47,9 +47,15 @@ COLLECTION_SKILLS = "agent_skills"
 # with registry/audit/models.py::IdentityClaims and with the DocumentDB init
 # (scripts/init-documentdb-indexes.py), which builds the same index set.
 AUDIT_CLAIM_FIELDS = ("principal_name", "subject", "canonical_id", "object_id")
-# Streams that nest the claims under `identity`. `token_mint` instead carries the
-# same values at the TOP level, plus its readable identity in a flat `username`.
-AUDIT_NESTED_LOG_TYPES = ("registry_api_access", "mcp_server_access")
+# Streams whose NESTED claims get an index. `registry_api_access` is deliberately
+# absent even though its records nest the claims the same way: the auth server
+# hands the registry a thin signed assertion rather than raw IdP claims, so those
+# fields are permanent nulls there, and the audit API no longer searches them on
+# that stream (see `_identity_search_clause` in registry/audit/routes.py). It is
+# also the largest stream, so indexing four always-null fields on it was the most
+# expensive way to serve no query. `token_mint` instead carries the same values at
+# the TOP level, plus its readable identity in a flat `username`.
+AUDIT_CLAIM_NESTED_LOG_TYPES = ("mcp_server_access",)
 AUDIT_FLAT_LOG_TYPE = "token_mint"
 # Short stream tokens keep index names well inside Amazon DocumentDB's limit.
 _AUDIT_LOG_TYPE_ABBREV = {
@@ -63,6 +69,10 @@ _AUDIT_LOG_TYPE_ABBREV = {
 LEGACY_AUDIT_CLAIM_INDEXES = tuple(
     [f"identity.{field}_1_timestamp_-1" for field in AUDIT_CLAIM_FIELDS]
     + [f"{field}_1_timestamp_-1" for field in ("username", *AUDIT_CLAIM_FIELDS)]
+    # registry_api_access claim indexes, built by an earlier cut of this script
+    # before the audit API stopped searching claims on that stream. Dropped on the
+    # next run so a cluster that already has them stops paying for them.
+    + [f"audit_claim_api_{field}_idx" for field in AUDIT_CLAIM_FIELDS]
 )
 
 
@@ -279,9 +289,18 @@ def _audit_claim_index_name(log_type: str, field: str) -> str:
 async def _create_audit_claim_indexes(collection, full_name: str) -> None:
     """Create the identity-claim indexes behind the audit username filter.
 
-    An operator pastes an IdP-side value (upn / sub / oid@tid / oid) and the
-    audit API searches every stored claim for it, so each claim needs an index
-    or the whole ``$or`` degrades to a collection scan.
+    An operator pastes an IdP-side value (upn / sub / oid@tid / oid) and the audit
+    API matches it against every claim the stream stores.
+
+    These indexes do NOT stop the identity filter scanning, and it is worth being
+    precise about that: the filter is one ``$or`` mixing equality branches on the
+    claims with case-insensitive regex branches on the readable fields, and an
+    ``$or`` is served by index union only when EVERY branch is indexable, which a
+    case-insensitive regex never is (measured: adding claim indexes left both the
+    plan and the documents examined unchanged). What ``log_type`` leading every key
+    does buy is a bound on the stream, since every audit query filters on it. A
+    seek straight to a claim value additionally needs the equality branches split
+    out of that ``$or``, which is a change to the query, not to the schema.
 
     Shape, and why it is this shape:
 
@@ -293,9 +312,10 @@ async def _create_audit_claim_indexes(collection, full_name: str) -> None:
     * ``partialFilterExpression`` pins each index to the ONE stream whose record
       shape it serves. Without it, every index stores an entry for every audit
       record -- including the ones that carry no claim at all. Measured on a
-      representative 30k-record mix: 2.09 MB across these 13 partial indexes
-      versus 3.46 MB across 9 unpartitioned ones (-40%), and an insert updates
-      4-5 claim indexes instead of all 9.
+      representative 30k-record mix: 2.09 MB across 13 partial indexes versus
+      3.46 MB across 9 unpartitioned ones (-40%), and an insert updates 4-5 claim
+      indexes instead of all 9. That measurement predates dropping the
+      registry_api_access targets, which takes the set from 13 to 9.
     * ``sparse`` is deliberately NOT used. On a compound index it keeps a
       document when ANY indexed field exists, and ``log_type`` always exists, so
       it would be inert here (measured: byte-identical to passing no option).
@@ -312,7 +332,7 @@ async def _create_audit_claim_indexes(collection, full_name: str) -> None:
     """
     targets: list[tuple[str, str]] = [
         (log_type, f"identity.{field}")
-        for log_type in AUDIT_NESTED_LOG_TYPES
+        for log_type in AUDIT_CLAIM_NESTED_LOG_TYPES
         for field in AUDIT_CLAIM_FIELDS
     ]
     targets += [(AUDIT_FLAT_LOG_TYPE, field) for field in ("username", *AUDIT_CLAIM_FIELDS)]
