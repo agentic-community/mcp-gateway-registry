@@ -20,6 +20,7 @@ Nothing in the suite asserted the old per-type behaviour, which is why removing
 it broke no test. These exist so the reverse is not true.
 """
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -219,3 +220,65 @@ class TestNoSearchableTypes:
 
         assert _search_stages(pipelines) == []
         repo._lexical_only_search.assert_awaited_once()
+
+
+class TestVectorAndKeywordRunConcurrently:
+    """The last serialized round trip the reporter named (issue #1751).
+
+    The keyword query does not depend on the vector results, only the merge does,
+    so awaiting them in sequence wasted whichever of the two was smaller.
+    """
+
+    @pytest.mark.asyncio
+    async def test_the_two_queries_overlap_in_time(self) -> None:
+        """Both must be in flight at once, not one after the other."""
+        instance = DocumentDBSearchRepository.__new__(DocumentDBSearchRepository)
+        in_flight = 0
+        peak = 0
+
+        def make_slow_cursor():
+            cursor = MagicMock()
+            cursor.limit = MagicMock(return_value=cursor)
+
+            async def to_list_impl(length=None):
+                nonlocal in_flight, peak
+                in_flight += 1
+                peak = max(peak, in_flight)
+                await asyncio.sleep(0.05)
+                in_flight -= 1
+                return []
+
+            cursor.to_list = to_list_impl
+            return cursor
+
+        collection = MagicMock()
+        collection.aggregate = MagicMock(side_effect=lambda *a, **k: make_slow_cursor())
+        collection.find = MagicMock(side_effect=lambda *a, **k: make_slow_cursor())
+        collection.count_documents = AsyncMock(return_value=400)
+
+        instance._get_collection = AsyncMock(return_value=collection)
+        instance._embed_texts = AsyncMock(return_value=[[0.1, 0.2, 0.3]])
+        instance._default_search_scope = AsyncMock(return_value=["mcp_server"])
+        instance._doc_count_cache = None
+
+        await instance.search("time in tokyo", max_results=10)
+
+        assert peak == 2, f"peak in-flight queries was {peak}, expected the pair to overlap"
+
+    @pytest.mark.asyncio
+    async def test_no_keyword_query_when_there_are_no_usable_tokens(
+        self,
+        repo_and_pipelines,
+    ) -> None:
+        """The regex guard must survive the move into the gathered coroutine.
+
+        A query with no tokens that clear _tokenize_query() must never reach
+        collection.find(), so no attacker-controlled pattern is handed to Mongo.
+        """
+        repo, pipelines = repo_and_pipelines
+        repo._default_search_scope = AsyncMock(return_value=["mcp_server"])
+        collection = await repo._get_collection()
+
+        await repo.search("a", max_results=10)
+
+        collection.find.assert_not_called()
