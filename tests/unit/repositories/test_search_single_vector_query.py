@@ -129,7 +129,7 @@ class TestOverRequest:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("max_results", [1, 5, 10, 50])
-    async def test_k_is_max_results_times_overrequest_capped_by_ef_search(
+    async def test_k_is_max_results_times_overrequest_capped_by_the_budget(
         self,
         repo_and_pipelines,
         max_results,
@@ -145,29 +145,29 @@ class TestOverRequest:
             settings.vector_search_ef_search,
         )
         assert vector["k"] == expected
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("max_results", [1, 5, 10, 20, 50])
+    async def test_ef_search_is_the_configured_budget(
+        self,
+        repo_and_pipelines,
+        max_results,
+    ) -> None:
+        """efSearch is a query-time parameter, currently the configured ceiling.
+
+        Sizing it down for small k was tried and reverted. Measured on DocumentDB
+        with efSearch pinned at 1000, vector-stage latency tracked k (52ms at
+        k=20, 61ms at k=200, 155ms at k=1000), so the cost is materialising
+        documents rather than graph traversal.
+        """
+        repo, pipelines = repo_and_pipelines
+        repo._default_search_scope = AsyncMock(return_value=["mcp_server"])
+
+        await repo.search("time in tokyo", max_results=max_results)
+
+        vector = _search_stages(pipelines)[0]["$search"]["vectorSearch"]
         assert vector["efSearch"] == settings.vector_search_ef_search
-
-    @pytest.mark.asyncio
-    async def test_k_never_exceeds_ef_search(self, repo_and_pipelines) -> None:
-        """HNSW cannot return more candidates than its queue holds."""
-        repo, pipelines = repo_and_pipelines
-        repo._default_search_scope = AsyncMock(return_value=["mcp_server"])
-
-        await repo.search("time in tokyo", max_results=50)
-
-        vector = _search_stages(pipelines)[0]["$search"]["vectorSearch"]
-        assert vector["k"] <= vector["efSearch"]
-
-    @pytest.mark.asyncio
-    async def test_over_request_is_larger_than_the_request(self, repo_and_pipelines) -> None:
-        """The whole point: ask for more than you intend to return."""
-        repo, pipelines = repo_and_pipelines
-        repo._default_search_scope = AsyncMock(return_value=["mcp_server"])
-
-        await repo.search("time in tokyo", max_results=10)
-
-        vector = _search_stages(pipelines)[0]["$search"]["vectorSearch"]
-        assert vector["k"] > 10
+        assert vector["efSearch"] >= vector["k"], "the queue must hold at least k"
 
 
 class TestNoSearchableTypes:
