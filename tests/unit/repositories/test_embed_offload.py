@@ -79,6 +79,7 @@ class TestEncodeIsOffloaded:
         The old code would hold the loop for the whole sleep, pushing the
         heartbeat far past its 10ms schedule.
         """
+
         def encode(texts):
             time.sleep(0.15)
             return [_FakeVector([0.3])]
@@ -102,6 +103,7 @@ class TestEncodeIsOffloaded:
     @pytest.mark.asyncio
     async def test_failure_still_latches_and_returns_none(self) -> None:
         """The offload must not swallow the unavailable latch."""
+
         def encode(texts):
             raise RuntimeError("model gone")
 
