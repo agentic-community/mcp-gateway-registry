@@ -84,11 +84,10 @@ class TestBuildQuery:
             auth_decision=None,
         )
 
-        # Username matches the display identity or any stored identity claim,
-        # via case-insensitive regex for partial matching
-        assert {"identity.username": {"$regex": "admin", "$options": "i"}} in query["$or"]
-        # Opaque identity claims match exactly, not as a substring.
-        assert {"identity.subject": "admin"} in query["$or"]
+        # Username matches the display identity via case-insensitive regex for
+        # partial matching. registry_api searches that field alone: its records
+        # never carry the IdP claim fields (see _identity_search_clause).
+        assert query["$or"] == [{"identity.username": {"$regex": "admin", "$options": "i"}}]
         assert query["action.operation"] == "create"
         assert query["response.status_code"]["$gte"] == 400
 

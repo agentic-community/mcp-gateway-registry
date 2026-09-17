@@ -32,8 +32,8 @@ CLAIM_COLUMNS = [
 
 # Fields the username filter searches, without the stream-specific prefix, split
 # by HOW they match: readable identities as a case-insensitive regex, opaque
-# identifiers by equality (which is what keeps the claim indexes selective -- a
-# case-insensitive unanchored regex walks the whole index).
+# identifiers by equality. Equality is the only form an index can serve, though
+# no claim index exists yet -- see _identity_search_clause.
 READABLE_FIELDS = ["username", "principal_name"]
 OPAQUE_FIELDS = ["subject", "canonical_id", "object_id"]
 SEARCHED_FIELDS = READABLE_FIELDS + OPAQUE_FIELDS
@@ -59,6 +59,18 @@ CLAIMS = {
     "tenant_id": "tid-xyz",
     "app_id": "app-789",
 }
+
+
+def _claim_query(**overrides):
+    """Call _build_query on a stream that actually carries the claim fields.
+
+    ``registry_api`` never populates them (see _identity_search_clause), so its
+    filter is the display username alone and is not the stream to assert claim
+    matching against.
+    """
+    kwargs = {"stream": "mcp_access"}
+    kwargs.update(overrides)
+    return _query(**kwargs)
 
 
 def _query(**overrides):
@@ -213,12 +225,33 @@ class TestUsernameFilterBreadth:
     """An operator holding only an IdP-side value must still find the caller."""
 
     def test_identity_streams_match_every_searched_field(self):
-        """Non-token_mint streams search the nested display + claim fields."""
-        query = _query(username="oid-abc")
+        """Claim-bearing nested streams search the display + claim fields."""
+        query = _claim_query(username="oid-abc")
 
         assert query["$or"] == _expected_clause("identity.", "oid-abc")
         # The filter now lives entirely in $or.
         assert "identity.username" not in query
+
+    def test_registry_api_searches_the_display_username_alone(self):
+        """registry_api records carry the claim fields as permanent nulls.
+
+        The auth server hands the registry a thin signed assertion rather than raw
+        IdP claims, so no registry_api record can ever hold a claim value. Every
+        claim branch there is a per-document predicate that cannot match, on the
+        stream that is both the bulk of the collection and the UI's default view.
+        Dropping them cannot lose a row: no equality or regex predicate matches
+        null.
+        """
+        query = _query(username="oid-abc")
+
+        assert query["$or"] == [{"identity.username": {"$regex": "oid\\-abc", "$options": "i"}}]
+
+    def test_registry_api_still_finds_a_caller_by_display_name(self):
+        """The narrowing must not change what registry_api can find."""
+        query = _query(username="alice")
+        searched = {field for clause in query["$or"] for field in clause}
+
+        assert searched == {"identity.username"}
 
     def test_token_mint_matches_top_level_fields(self):
         """token_mint stores the display username and claims at top level."""
@@ -228,11 +261,10 @@ class TestUsernameFilterBreadth:
         assert "username" not in query
 
     def test_opaque_claims_match_exactly_not_as_a_substring(self):
-        """An opaque id is pasted whole. Exact matching is what makes the claim
-        indexes selective (measured: a case-insensitive unanchored regex examined
-        500 index keys for 11 hits; equality examines 1) and stops a short filter
-        value from sweeping in unrelated users' records."""
-        clauses = _query(username="oid-abc")["$or"]
+        """An opaque id is pasted whole, so exact matching stops a short filter
+        value from sweeping in unrelated users' records. It is also the only form
+        an index could ever serve, for the day one is added."""
+        clauses = _claim_query(username="oid-abc")["$or"]
         by_field = {field: match for clause in clauses for field, match in clause.items()}
 
         for field in OPAQUE_FIELDS:
@@ -242,18 +274,18 @@ class TestUsernameFilterBreadth:
 
     def test_tenant_and_app_are_not_searched(self):
         """tenant_id/app_id identify a tenant or app, not a person."""
-        searched = {field for clause in _query(username="x")["$or"] for field in clause}
+        searched = {field for clause in _claim_query(username="x")["$or"] for field in clause}
 
         assert "identity.tenant_id" not in searched
         assert "identity.app_id" not in searched
 
     def test_opaque_claims_tolerate_a_differently_cased_paste(self):
         """Equality would silently miss an operator who pasted an Entra Object ID
-        in a different case, and a case-insensitive regex cannot use the index
-        (measured: 501 keys examined vs 1). So a lowercase variant is matched via
-        $in -- two index seeks, no silent miss."""
+        in a different case, and a case-insensitive regex could never use an
+        index. So a lowercase variant is matched via $in: no silent miss, and the
+        predicate stays index-eligible."""
         guid = "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"
-        clauses = _query(username=guid)["$or"]
+        clauses = _claim_query(username=guid)["$or"]
         by_field = {field: match for clause in clauses for field, match in clause.items()}
 
         assert by_field["identity.object_id"] == {"$in": [guid, guid.lower()]}
@@ -263,7 +295,7 @@ class TestUsernameFilterBreadth:
         """The common case emits the tightest possible query, not a 1-element $in."""
         by_field = {
             field: match
-            for clause in _query(username="oid-abc")["$or"]
+            for clause in _claim_query(username="oid-abc")["$or"]
             for field, match in clause.items()
         }
 
@@ -317,13 +349,23 @@ class TestStatisticsUsernameFilter:
         ]
 
     async def test_identity_stream_keeps_exact_match_semantics(self):
-        """Non-token_mint statistics anchor the readable regex; claims stay exact."""
-        matches = await self._matches("registry_api", "alice")
+        """Claim-bearing nested statistics anchor the readable regex; claims stay
+        exact."""
+        matches = await self._matches("mcp_access", "alice")
 
         assert matches
         for match in matches:
             assert match["$or"] == _expected_clause("identity.", "alice", anchored=True)
             assert "identity.username" not in match
+
+    async def test_registry_api_statistics_anchor_the_username_alone(self):
+        """The claim narrowing applies to the statistics pipelines too, and both
+        windows get the same clause."""
+        matches = await self._matches("registry_api", "alice")
+
+        assert matches
+        for match in matches:
+            assert match["$or"] == [{"identity.username": {"$regex": "^alice$", "$options": "i"}}]
 
     async def test_token_mint_keeps_partial_match_semantics(self):
         """token_mint statistics stay unanchored on the readable fields."""

@@ -55,11 +55,15 @@ ANONYMOUS_USERNAME: str = "anonymous"
 # this filter.
 #
 # OPAQUE fields are matched EXACTLY. These are identifiers that are pasted whole,
-# never typed partially, and exact matching is what makes the claim indexes
-# selective: a case-insensitive unanchored regex forces MongoDB to walk the whole
-# index (measured: 500 keys examined for 11 hits, versus 1 key for an exact
-# match). Exact matching also avoids a short substring pulling in unrelated
-# users' records.
+# never typed partially. Exact matching avoids a short substring pulling in
+# unrelated users' records, and it is the only form an index can ever serve: a
+# case-insensitive regex has no usable index bounds, anchored or not.
+#
+# No index on these fields exists yet (only `identity.username` is indexed), so
+# today every form of this filter scans. Adding the indexes will not by itself
+# help either, because this list feeds an `$or` that also contains regex
+# branches -- see `_identity_search_clause`. Keep the equality form regardless:
+# it is what makes an index useful the moment the two are separated.
 #
 # `tenant_id` and `app_id` are in neither set: they identify a tenant or an
 # application rather than a person, so matching them would return every caller
@@ -449,13 +453,13 @@ def _identity_search_clause(
     case-insensitive regex -- ``anchored`` selects exact-string vs substring, to
     preserve each caller's pre-existing semantics.
 
-    Opaque identifier fields match by EQUALITY, which is what keeps the claim
-    indexes selective; a case-insensitive regex cannot use index bounds even when
-    anchored (measured on 501 records: equality examined 1 index key, an anchored
-    case-insensitive regex examined all 501). Because equality would otherwise
-    silently miss an operator who pasted an IdP identifier in a different case,
-    a lowercase variant is included via ``$in`` when it differs -- still just two
-    index seeks.
+    Opaque identifier fields match by EQUALITY, because a case-insensitive regex
+    cannot use index bounds even when anchored, while an equality predicate can.
+    NOTE: no index on the claim fields exists yet, so today both forms scan; the
+    equality form is what lets an index help once one is added, and it also avoids
+    a short substring pulling in unrelated users' records. Because equality would
+    otherwise silently miss an operator who pasted an IdP identifier in a
+    different case, a lowercase variant is included via ``$in`` when it differs.
 
     That fold is ONE-DIRECTIONAL: it recovers a value pasted in upper case for
     identifiers an IdP emits in lower case (Entra ``oid``/``tid``, and therefore
@@ -464,11 +468,25 @@ def _identity_search_clause(
     pasted verbatim. Normalizing the stored side instead would corrupt an
     identifier whose case is significant.
 
+    Adding those indexes alone will NOT speed this clause up: MongoDB serves an
+    ``$or`` by index union only when EVERY branch is indexable, and the two
+    readable branches are case-insensitive regexes that never are. Isolating the
+    equality branches from the regex ones is the prerequisite, not the index.
+
     The token_mint stream has no nested `identity` block: it stores the raw,
     human-readable `username` and its identity claims as top-level fields
     (`username_hash` is deprecated). Every other stream nests them under
     `identity`. Records predating the claim capture simply won't match on the
     claim fields.
+
+    The registry_api stream is matched on the display username ALONE. Its records
+    carry the claim fields as explicit nulls and never populate them -- the auth
+    server hands the registry a thin signed assertion rather than raw IdP claims
+    (see docs/audit-logging.md, "Stream coverage"). A claim branch there is a
+    predicate evaluated per document that cannot match, and that stream is the
+    bulk of the collection as well as the UI's default view. Dropping the
+    branches cannot lose a row: neither an equality nor a regex predicate matches
+    null.
 
     Args:
         stream: Log stream type (registry_api, mcp_access or token_mint)
@@ -483,14 +501,20 @@ def _identity_search_clause(
         "$regex": f"^{escaped}$" if anchored else escaped,
         "$options": "i",
     }
+    prefix = "" if stream == "token_mint" else "identity."
+    branches: list[dict[str, Any]] = [{f"{prefix}username": readable_match}]
+
+    # See the docstring: registry_api never carries the claim fields.
+    if stream == "registry_api":
+        return branches
+
     lowered = username.lower()
     opaque_match: Any = username if lowered == username else {"$in": [username, lowered]}
-    prefix = "" if stream == "token_mint" else "identity."
-    return [
-        {f"{prefix}username": readable_match},
-        *({f"{prefix}{field}": readable_match} for field in IDENTITY_READABLE_SEARCH_FIELDS),
-        *({f"{prefix}{field}": opaque_match} for field in IDENTITY_OPAQUE_SEARCH_FIELDS),
-    ]
+    branches.extend(
+        {f"{prefix}{field}": readable_match} for field in IDENTITY_READABLE_SEARCH_FIELDS
+    )
+    branches.extend({f"{prefix}{field}": opaque_match} for field in IDENTITY_OPAQUE_SEARCH_FIELDS)
+    return branches
 
 
 def _build_query(
