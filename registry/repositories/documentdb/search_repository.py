@@ -2553,17 +2553,29 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             # restores the contract _reciprocal_rank_fusion() documents, since a
             # single query returns one list ordered by similarity rather than
             # blocks grouped by entity type.
+            # efSearch is the HNSW traversal queue: an independent quality dial,
+            # set to an absolute ceiling. k is what the caller asked for, scaled.
             ef_search = settings.vector_search_ef_search
-            # Over-request: the filters below run after the search, so k must
-            # cover what they will discard. Capped at ef_search because the HNSW
-            # queue cannot yield more candidates than it holds.
+
+            # Over-request, because the filters below run after the search and k is
+            # spent before they do.
+            #
+            # Clamped to half the queue rather than all of it. HNSW cannot return
+            # more candidates than the queue holds, and a queue exactly the size of
+            # the result set leaves the traversal no room to explore past what it
+            # has already committed to returning, which costs recall at the tail of
+            # k. Half keeps that headroom. The clamp only binds above
+            # max_results=25 at the default multiplier.
             #
             # Measured on DocumentDB with efSearch pinned at 1000, vector-stage
             # latency tracks k rather than efSearch: k=20 took 52ms, k=200 took
             # 61ms, k=1000 took 155ms. So the cost is materialising documents (each
             # carries a 384-float embedding), not graph traversal. Sizing efSearch
             # down for small k was tried and reverted; it targets the wrong term.
-            k_candidates = min(max_results * settings.vector_search_overrequest, ef_search)
+            k_candidates = min(
+                max_results * settings.vector_search_overrequest,
+                max(1, ef_search // 2),
+            )
 
             status_filter = _build_status_filter(
                 include_draft=include_draft,

@@ -672,9 +672,13 @@ When the embedding model becomes available again (e.g., after a restart with cor
 
 | Parameter | Default | Env var | Description |
 |-----------|---------|---------|-------------|
-| `k` | `min(max_results * 20, efSearch)` | derived | Nearest neighbours the search returns. Over-requested on purpose, see below. |
-| `efSearch` | `1000` | `VECTOR_SEARCH_EF_SEARCH` | HNSW traversal queue size, the equivalent of `numCandidates` in MongoDB Atlas. Higher improves recall and costs latency. DocumentDB caps it at 1000. |
-| overrequest multiplier | `20` | `VECTOR_SEARCH_OVERREQUEST` | Multiplier on `max_results` that produces `k`. |
+| `k` | `min(max_results * 20, efSearch / 2)` | derived | Nearest neighbours the search returns. Over-requested on purpose, see below. |
+| `efSearch` | `1000` | `VECTOR_SEARCH_EF_SEARCH` | HNSW traversal queue size, the equivalent of `numCandidates` in MongoDB Atlas. Higher improves recall and costs latency. Range 1-1000, the DocumentDB ceiling, so a typo fails at startup rather than on every query. |
+| overrequest multiplier | `20` | `VECTOR_SEARCH_OVERREQUEST` | Multiplier on `max_results` that produces `k`. Range 1-1000. |
+
+`k` and `efSearch` answer different questions and are set independently. `efSearch` is a quality dial, an absolute ceiling on how hard the traversal works. `k` comes from the caller's `max_results`, scaled.
+
+They are coupled by one physical constraint: HNSW cannot return more candidates than its queue holds. `k` is clamped to **half** the queue rather than all of it, because a queue exactly the size of the result set leaves the traversal no room to explore past what it has already committed to returning, which costs recall at the tail of `k`. At the default multiplier the clamp only binds above `max_results=25`.
 
 ### Why k over-requests
 

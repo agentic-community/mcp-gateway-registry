@@ -412,21 +412,26 @@ class Settings(BaseSettings):
     # it at 1000. Raised from 100 to 1000 in issue #1751: the search runs a
     # single global query now rather than one per entity type, so the whole
     # traversal budget goes to that one query.
-    vector_search_ef_search: int = 1000
+    # Capped at 1000 so a typo fails at startup rather than on every query:
+    # DocumentDB rejects a larger value at query time.
+    vector_search_ef_search: int = Field(default=1000, ge=1, le=1000)
 
     # DocumentDB applies $match AFTER the vector search, so k is spent selecting
     # nearest neighbours before entity_type and status/enabled filtering runs,
     # and whatever the filters discard is simply lost. Over-request to
     # compensate; MongoDB Atlas calls this the overrequest pattern and
-    # recommends at least 20x. k = max_results * this, capped at efSearch
-    # (issue #1751).
-    vector_search_overrequest: int = 20
+    # recommends at least 20x. k = max_results * this, clamped to half of
+    # efSearch (issue #1751).
+    #
+    # Must be at least 1. A zero or negative multiplier would build a pipeline
+    # asking for no candidates.
+    vector_search_overrequest: int = Field(default=20, ge=1, le=1000)
 
     # Concurrent model.encode() calls allowed process-wide. encode() runs in a
     # worker thread so it no longer blocks the event loop, but torch also
     # parallelises inside a single encode, so unbounded threads would make every
     # concurrent search slower. Small on purpose (issue #1751).
-    embeddings_encode_concurrency: int = 2
+    embeddings_encode_concurrency: int = Field(default=2, ge=1, le=64)
 
     # Search fusion method: 'rrf' (Reciprocal Rank Fusion, industry standard)
     # or 'legacy' (previous additive formula). RRF avoids score saturation and
