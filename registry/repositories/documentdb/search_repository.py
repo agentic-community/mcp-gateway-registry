@@ -2643,8 +2643,31 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             if text_boost_stage is not None:
                 pipeline.append(text_boost_stage)
 
-            cursor = collection.aggregate(pipeline)
-            results = await cursor.to_list(length=k_candidates)
+            # Run the vector and keyword queries concurrently (issue #1751). The
+            # keyword query does not depend on the vector results; only the merge
+            # further down does. Awaiting them in sequence wasted whichever of the
+            # two was smaller, and the reporter named this as the last serialized
+            # round trip.
+            #
+            # NOTE: DocumentDB does not support $unionWith, so the keyword pass is a
+            # separate query merged in Python rather than another pipeline stage.
+            async def _run_keyword_query() -> list[dict[str, Any]]:
+                # Skip the keyword pass entirely when there are no escaped tokens,
+                # so no attacker-controlled regex pattern is ever handed to Mongo.
+                if not has_keyword_tokens:
+                    return []
+                keyword_match_filter = _build_keyword_match_filter(
+                    token_regex=token_regex,
+                    entity_types=entity_types,
+                )
+                keyword_limit = max(max_results, 10)
+                keyword_cursor = collection.find(keyword_match_filter).limit(keyword_limit)
+                return await keyword_cursor.to_list(length=keyword_limit)
+
+            results, keyword_results = await asyncio.gather(
+                collection.aggregate(pipeline).to_list(length=k_candidates),
+                _run_keyword_query(),
+            )
             result_ids: set[str] = {doc.get("_id") for doc in results}
 
             # Survivors versus the requested candidates. A low ratio means the
@@ -2674,20 +2697,6 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                     100.0 * k_candidates / doc_count,
                     doc_count,
                 )
-
-            # NOTE: DocumentDB does not support $unionWith, so we run a separate
-            # keyword query and merge results in Python code after the main pipeline.
-            # Skip the keyword pass entirely when there are no escaped tokens so that
-            # no attacker-controlled regex pattern is ever handed to Mongo.
-            keyword_results: list[dict[str, Any]] = []
-            if has_keyword_tokens:
-                keyword_match_filter = _build_keyword_match_filter(
-                    token_regex=token_regex,
-                    entity_types=entity_types,
-                )
-
-                keyword_cursor = collection.find(keyword_match_filter).limit(max(max_results, 10))
-                keyword_results = await keyword_cursor.to_list(length=max(max_results, 10))
 
             logger.info(
                 "Keyword search found %d candidates",
