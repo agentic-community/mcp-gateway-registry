@@ -142,7 +142,7 @@ class TestOverRequest:
         vector = _search_stages(pipelines)[0]["$search"]["vectorSearch"]
         expected = min(
             max_results * settings.vector_search_overrequest,
-            settings.vector_search_ef_search,
+            max(1, settings.vector_search_ef_search // 2),
         )
         assert vector["k"] == expected
 
@@ -167,7 +167,30 @@ class TestOverRequest:
 
         vector = _search_stages(pipelines)[0]["$search"]["vectorSearch"]
         assert vector["efSearch"] == settings.vector_search_ef_search
-        assert vector["efSearch"] >= vector["k"], "the queue must hold at least k"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("max_results", [1, 5, 10, 20, 50])
+    async def test_the_queue_keeps_headroom_past_k(
+        self,
+        repo_and_pipelines,
+        max_results,
+    ) -> None:
+        """A queue exactly the size of k leaves the traversal no room to explore.
+
+        HNSW cannot return more candidates than the queue holds, and a queue equal
+        to the result set costs recall at the tail of k because the search has
+        already committed to everything it is carrying. k is clamped to half the
+        queue so there is always room past it.
+        """
+        repo, pipelines = repo_and_pipelines
+        repo._default_search_scope = AsyncMock(return_value=["mcp_server"])
+
+        await repo.search("time in tokyo", max_results=max_results)
+
+        vector = _search_stages(pipelines)[0]["$search"]["vectorSearch"]
+        assert vector["k"] * 2 <= vector["efSearch"], (
+            f"k={vector['k']} leaves no headroom in a queue of {vector['efSearch']}"
+        )
 
 
 class TestNoSearchableTypes:

@@ -560,6 +560,9 @@ Used by `registry` and `mcpgw` services.
 | Model dimensions | `EMBEDDINGS_MODEL_DIMENSIONS` | `embeddings_model_dimensions` | `mcpgw.app.embeddingsModelDimensions` | Must match model output. |
 | API key **(secret)** | `EMBEDDINGS_API_KEY` | `embeddings_api_key` | `mcpgw.app.embeddingsApiKey` / `mcpgw.app.embeddingsApiKeyExistingSecret` | For `litellm` cloud providers. |
 | Custom API base | `EMBEDDINGS_API_BASE` | — | `mcpgw.app.embeddingsApiBase` | — |
+| Over-request multiplier | `VECTOR_SEARCH_OVERREQUEST` | `vector_search_overrequest` | via `extraEnv` | DocumentDB only. `k = max_results * this`, clamped to half of `efSearch`. Default 20, range 1-1000. Raise it if search logs warn that few candidates survived filtering. |
+| HNSW queue size | `VECTOR_SEARCH_EF_SEARCH` | `vector_search_ef_search` | via `extraEnv` | DocumentDB only. Traversal queue, the analogue of Atlas `numCandidates`. Default 1000, range 1-1000 (the DocumentDB ceiling). |
+| Encode concurrency | `EMBEDDINGS_ENCODE_CONCURRENCY` | `embeddings_encode_concurrency` | via `extraEnv` | Concurrent `model.encode()` calls process-wide. Default 2, range 1-64. |
 | AWS region | `EMBEDDINGS_AWS_REGION` | `embeddings_aws_region` | `mcpgw.app.embeddingsAwsRegion` | Bedrock. |
 | Auth mode | `EMBEDDINGS_AUTH_MODE` | `embeddings_auth_mode` | `registry.embeddings.authMode` | `static` (default) or `idp`. When `idp`, fetches bearer via OAuth2 client credentials. |
 | IdP token endpoint | `EMBEDDINGS_IDP_TOKEN_ENDPOINT` | `embeddings_idp_token_endpoint` | `registry.embeddings.idpTokenEndpoint` | OAuth2 token URL (must be `https://`). Required when `idp`. |
