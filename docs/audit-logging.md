@@ -399,17 +399,29 @@ initialization scripts create the same index set, under the same names:
 | `action.resource_type` + `timestamp` | Query by resource type over time range |
 | `mcp_server.name` | Distinct / filter queries by MCP server name |
 | `log_type` + `resource_type` + `resource_id` + `timestamp: -1` | Query the `token_mint` stream, whose resource fields are top-level |
-| `log_type` + one identity claim + `timestamp: -1`, ×13 | Correlate an IdP-side identifier back to gateway activity. Named `audit_claim_{api,mcp,mint}_{claim}_idx` |
+| `log_type` + one identity claim + `timestamp: -1`, ×9 | Correlate an IdP-side identifier back to gateway activity. Named `audit_claim_{mcp,mint}_{claim}_idx` |
 | `timestamp` (TTL) | Automatic expiration after the configured number of days |
 
-There are 13 claim indexes because each is pinned to a single stream with a
-`partialFilterExpression`: two streams nest the claims under `identity`, while
-`token_mint` carries them at the top level alongside a flat `username`. Pinning
-them keeps each index to the records it can actually serve — measured on a
-representative 30k-record mix, 2.09 MB across these 13 versus 3.46 MB across 9
-unpinned ones, and an insert updates 4–5 claim indexes instead of all 9. `sparse`
-would not work here: on a compound index it keeps a document when *any* indexed
-field exists, and `log_type` always exists.
+Each claim index is pinned to a single stream with a `partialFilterExpression`, so
+it only stores the records it can serve. Measured on a representative 30k-record
+mix, 2.09 MB across 13 pinned indexes versus 3.46 MB across 9 unpinned ones, and
+an insert updates a subset rather than all of them. `sparse` would not work here:
+on a compound index it keeps a document when *any* indexed field exists, and
+`log_type` always exists.
+
+There are 9 rather than 13 because `registry_api_access` gets none. Its records
+nest the claim fields the same way `mcp_server_access` does, but the registry
+receives a thin signed assertion rather than raw IdP claims, so those fields are
+permanent nulls on that stream and the audit API does not search them there. It is
+also the largest stream, so indexing four always-null fields on it was the most
+expensive way to serve no query.
+
+These indexes bound a query to one stream. They do not make the identity filter
+seek: it is a single `$or` mixing claim equality with case-insensitive regex on the
+readable fields, and an `$or` uses an index union only when every branch is
+indexable, which a case-insensitive regex never is. Seeking straight to a claim
+value needs the equality branches split out of that `$or`, which is a change to the
+query rather than to the schema.
 
 ### Schema changes on upgrade
 

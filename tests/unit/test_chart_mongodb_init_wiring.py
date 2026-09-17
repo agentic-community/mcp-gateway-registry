@@ -158,13 +158,13 @@ def test_both_backends_name_the_claim_indexes_identically(repo_root: Path) -> No
     doc = _load_script(repo_root, DOCUMENTDB_SCRIPT)
 
     assert ce.AUDIT_CLAIM_FIELDS == doc.AUDIT_CLAIM_FIELDS
-    assert ce.AUDIT_NESTED_LOG_TYPES == doc.AUDIT_NESTED_LOG_TYPES
+    assert ce.AUDIT_CLAIM_NESTED_LOG_TYPES == doc.AUDIT_CLAIM_NESTED_LOG_TYPES
     assert ce.AUDIT_FLAT_LOG_TYPE == doc.AUDIT_FLAT_LOG_TYPE
 
     def names(module: ModuleType) -> set[str]:
         out = {
             module._audit_claim_index_name(log_type, field)
-            for log_type in module.AUDIT_NESTED_LOG_TYPES
+            for log_type in module.AUDIT_CLAIM_NESTED_LOG_TYPES
             for field in module.AUDIT_CLAIM_FIELDS
         }
         out |= {
@@ -197,3 +197,35 @@ def test_audit_retention_cannot_be_shortened_by_default(repo_root: Path) -> None
         assert "AUDIT_LOG_MONGODB_TTL_ALLOW_SHRINK" in source, (
             f"{relative} no longer guards against shortening audit retention"
         )
+
+
+def test_registry_api_stream_gets_no_claim_index(repo_root: Path) -> None:
+    """`registry_api_access` must not appear among the claim index targets.
+
+    Its records nest the claim fields the same way `mcp_server_access` does, but
+    the auth server hands the registry a thin signed assertion rather than raw IdP
+    claims, so those fields are permanent nulls on that stream and the audit API
+    does not search them there (`_identity_search_clause` in
+    registry/audit/routes.py returns the display username alone for it). Since it
+    is also the largest stream, indexing four always-null fields on it is the most
+    expensive way to serve no query. Both backends must agree on the exclusion.
+    """
+    for relative in (MONGODB_CE_SCRIPT, DOCUMENTDB_SCRIPT):
+        module = _load_script(repo_root, relative)
+
+        assert "registry_api_access" not in module.AUDIT_CLAIM_NESTED_LOG_TYPES, (
+            f"{relative} indexes claim fields on registry_api_access, where they are "
+            "always null and never queried"
+        )
+        names = {
+            module._audit_claim_index_name(log_type, field)
+            for log_type in module.AUDIT_CLAIM_NESTED_LOG_TYPES
+            for field in module.AUDIT_CLAIM_FIELDS
+        }
+        assert not any(name.startswith("audit_claim_api_") for name in names), names
+
+        # And a cluster that already built them must have them dropped.
+        for field in module.AUDIT_CLAIM_FIELDS:
+            assert f"audit_claim_api_{field}_idx" in module.LEGACY_AUDIT_CLAIM_INDEXES, (
+                f"{relative} does not retire the superseded audit_claim_api_{field}_idx"
+            )

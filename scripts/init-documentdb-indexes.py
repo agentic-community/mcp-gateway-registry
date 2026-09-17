@@ -61,7 +61,15 @@ COLLECTION_AUDIT_EVENTS = "audit_events"
 # different names for the same logical index, which is what forced an earlier
 # migration to guess at name variants when dropping one.
 AUDIT_CLAIM_FIELDS = ("principal_name", "subject", "canonical_id", "object_id")
-AUDIT_NESTED_LOG_TYPES = ("registry_api_access", "mcp_server_access")
+# Streams whose NESTED claims get an index. `registry_api_access` is deliberately
+# absent even though its records nest the claims the same way: the auth server
+# hands the registry a thin signed assertion rather than raw IdP claims, so those
+# fields are permanent nulls there, and the audit API no longer searches them on
+# that stream (see `_identity_search_clause` in registry/audit/routes.py). It is
+# also the largest stream, so indexing four always-null fields on it was the most
+# expensive way to serve no query. `token_mint` instead carries the same values at
+# the TOP level, plus its readable identity in a flat `username`.
+AUDIT_CLAIM_NESTED_LOG_TYPES = ("mcp_server_access",)
 AUDIT_FLAT_LOG_TYPE = "token_mint"
 _AUDIT_LOG_TYPE_ABBREV = {
     "registry_api_access": "api",
@@ -73,6 +81,10 @@ _AUDIT_LOG_TYPE_ABBREV = {
 LEGACY_AUDIT_CLAIM_INDEXES = tuple(
     [f"identity_{field}_timestamp_idx" for field in AUDIT_CLAIM_FIELDS]
     + [f"{field}_timestamp_idx" for field in ("username", *AUDIT_CLAIM_FIELDS)]
+    # registry_api_access claim indexes, built by an earlier cut of this script
+    # before the audit API stopped searching claims on that stream. Dropped on the
+    # next run so a cluster that already has them stops paying for them.
+    + [f"audit_claim_api_{field}_idx" for field in AUDIT_CLAIM_FIELDS]
 )
 
 
@@ -573,7 +585,7 @@ async def _create_audit_claim_indexes(
     """
     targets: list[tuple[str, str]] = [
         (log_type, f"identity.{field}")
-        for log_type in AUDIT_NESTED_LOG_TYPES
+        for log_type in AUDIT_CLAIM_NESTED_LOG_TYPES
         for field in AUDIT_CLAIM_FIELDS
     ]
     targets += [(AUDIT_FLAT_LOG_TYPE, field) for field in ("username", *AUDIT_CLAIM_FIELDS)]
