@@ -3,7 +3,7 @@ IAM Manager factory for multi-provider support.
 
 This module provides a unified interface for IAM operations across
 different identity providers (Keycloak, Entra ID, Okta, Auth0, PingFederate,
-and Amazon Cognito).
+Amazon Cognito, and Logto).
 """
 
 import logging
@@ -835,6 +835,241 @@ class CognitoIAMManager:
         raise NotImplementedError(_COGNITO_WRITE_UNSUPPORTED)
 
 
+class LogtoIAMManager:
+    """Logto IAM manager implementation.
+
+    Group semantics: Logto *roles* are the IAM groups. The fork's Logto auth
+    provider emits ``groups = claims["roles"]`` in user JWTs, so every group
+    created here (a Logto role) automatically reaches user tokens, and the
+    group→scope mapping consumes the same names. M2M-type roles appear too —
+    the IAM group list is intentionally the full role list; use
+    ``IDP_GROUP_FILTER_PREFIX`` to narrow it.
+
+    Uses the Management API via an M2M application (client credentials with
+    the ``Logto Management API access`` role); see ``logto_admin.py`` for the
+    token recipe (``resource`` + ``scope=all`` are both mandatory).
+    """
+
+    def __init__(self, client=None):
+        # Client injectable for tests; defaults to the process singleton.
+        if client is None:
+            from .logto_admin import get_logto_admin
+
+            client = get_logto_admin()
+        self._client = client
+
+    # ── mapping helpers ─────────────────────────────────────────────────────
+
+    @staticmethod
+    def _role_to_group(role: dict[str, Any]) -> dict[str, Any]:
+        """Map a Logto role onto the Keycloak-shaped group dict the routes expect."""
+        name = str(role.get("name", ""))
+        return {
+            "id": str(role.get("id", "")),
+            "name": name,
+            "path": f"/{name}" if name else "",
+            "attributes": {"description": [role.get("description") or ""]},
+        }
+
+    @staticmethod
+    def _not_found(what: str) -> Exception:
+        # Message carries "HTTP 404" so iam_errors.looks_not_found classifies it
+        # and management routes translate it to a 404 instead of a 502.
+        from .logto_admin import LogtoAdminError
+
+        return LogtoAdminError(f"{what} not found in Logto (HTTP 404)", status_code=404)
+
+    async def _find_role(self, role_name: str) -> dict[str, Any] | None:
+        roles = await self._client.get_paged("/api/roles")
+        return next((r for r in roles if r.get("name") == role_name), None)
+
+    async def _find_user(self, username: str) -> dict[str, Any] | None:
+        users = await self._client.get_paged(
+            "/api/users", params={"search": username}, max_items=200
+        )
+        return next(
+            (
+                u
+                for u in users
+                if u.get("username") == username or u.get("primaryEmail") == username
+            ),
+            None,
+        )
+
+    async def _user_role_names(self, user_id: str) -> list[str]:
+        roles = await self._client.get_paged(f"/api/users/{user_id}/roles")
+        return [str(r.get("name", "")) for r in roles if r.get("name")]
+
+    @staticmethod
+    def _user_summary(user: dict[str, Any], groups: list[str]) -> dict[str, Any]:
+        full_name = str(user.get("name") or "").strip()
+        first, _, last = full_name.partition(" ")
+        return {
+            "id": str(user.get("id", "")),
+            "username": user.get("username") or user.get("primaryEmail") or "",
+            "email": user.get("primaryEmail"),
+            "firstName": first or None,
+            "lastName": last or None,
+            "enabled": not user.get("isSuspended", False),
+            "groups": groups,
+        }
+
+    async def _assign_user_roles(self, user_id: str, role_ids: list[str]) -> None:
+        if role_ids:
+            await self._client.post(f"/api/users/{user_id}/roles", {"roleIds": role_ids})
+
+    # ── groups ───────────────────────────────────────────────────────────────
+
+    async def list_groups(self) -> list[dict[str, Any]]:
+        """List IAM groups (all Logto roles), filtered by IDP_GROUP_FILTER_PREFIX if set."""
+        roles = await self._client.get_paged("/api/roles")
+        groups = [self._role_to_group(r) for r in roles]
+        return _filter_groups_by_prefix(groups, IDP_GROUP_FILTER_PREFIXES)
+
+    async def create_group(self, group_name: str, description: str = "") -> dict[str, Any]:
+        """Create a group (Logto role)."""
+        role = await self._client.post("/api/roles", {"name": group_name, "description": description})
+        return self._role_to_group(role)
+
+    async def delete_group(self, group_name: str) -> bool:
+        """Delete a group. Cascades in Logto: the role is removed from every holder."""
+        role = await self._find_role(group_name)
+        if role is None:
+            raise self._not_found(f"Logto role '{group_name}'")
+        await self._client.delete(f"/api/roles/{role['id']}")
+        return True
+
+    async def group_exists(self, group_name: str) -> bool:
+        """Check whether a group (Logto role) exists."""
+        return await self._find_role(group_name) is not None
+
+    async def update_group(self, group_name: str, description: str = "") -> dict[str, Any]:
+        """Update a group's description."""
+        role = await self._find_role(group_name)
+        if role is None:
+            raise self._not_found(f"Logto role '{group_name}'")
+        updated = await self._client.patch(f"/api/roles/{role['id']}", {"description": description})
+        return self._role_to_group(updated or {**role, "description": description})
+
+    # ── users ────────────────────────────────────────────────────────────────
+
+    async def list_users(
+        self, search: str | None = None, max_results: int = 500, include_groups: bool = True
+    ) -> list[dict[str, Any]]:
+        """List human users. M2M accounts are not IdP users here; the management
+        route merges MongoDB-registered M2M clients into the user list itself."""
+        params = {"search": search} if search else None
+        users = await self._client.get_paged("/api/users", params=params, max_items=max_results)
+        summaries = []
+        for user in users:
+            groups: list[str] = []
+            if include_groups and user.get("id"):
+                groups = await self._user_role_names(user["id"])
+            summaries.append(self._user_summary(user, groups))
+        return summaries
+
+    async def create_human_user(
+        self,
+        username: str,
+        email: str,
+        first_name: str,
+        last_name: str,
+        groups: list[str],
+        password: str | None = None,
+    ) -> dict[str, Any]:
+        """Create a user in Logto and assign the requested groups (roles must exist)."""
+        payload: dict[str, Any] = {
+            "username": username,
+            "primaryEmail": email,
+            "name": " ".join(p for p in (first_name, last_name) if p),
+        }
+        if password:
+            payload["password"] = password
+        user = await self._client.post("/api/users", payload)
+        if groups:
+            role_ids = []
+            for group_name in groups:
+                role = await self._find_role(group_name)
+                if role is None:
+                    logger.warning(
+                        "create_human_user: group '%s' has no Logto role; skipping assignment",
+                        group_name,
+                    )
+                    continue
+                role_ids.append(role["id"])
+            await self._assign_user_roles(user["id"], role_ids)
+        return self._user_summary(user, groups)
+
+    async def delete_user(self, username: str) -> bool:
+        """Delete a user by username or email."""
+        user = await self._find_user(username)
+        if user is None:
+            raise self._not_found(f"Logto user '{username}'")
+        await self._client.delete(f"/api/users/{user['id']}")
+        return True
+
+    async def update_user_groups(self, username: str, groups: list[str]) -> dict[str, Any]:
+        """Set a user's groups (roles) to exactly the requested list."""
+        user = await self._find_user(username)
+        if user is None:
+            raise self._not_found(f"Logto user '{username}'")
+        current = await self._client.get_paged(f"/api/users/{user['id']}/roles")
+        current_by_name = {r.get("name"): r for r in current}
+        desired = set(groups)
+
+        add_ids = []
+        for group_name in desired - set(current_by_name):
+            role = await self._find_role(group_name)
+            if role is None:
+                logger.warning(
+                    "update_user_groups: group '%s' has no Logto role; skipping", group_name
+                )
+                continue
+            add_ids.append(role["id"])
+        await self._assign_user_roles(user["id"], add_ids)
+
+        for name in set(current_by_name) - desired:
+            await self._client.delete(f"/api/users/{user['id']}/roles/{current_by_name[name]['id']}")
+
+        return {"username": username, "groups": sorted(desired)}
+
+    # ── service accounts ─────────────────────────────────────────────────────
+
+    async def create_service_account(
+        self, client_id: str, groups: list[str], description: str | None = None
+    ) -> dict[str, Any]:
+        """Create a machine-to-machine application in Logto and assign groups (roles).
+
+        Returns the Logto application id as ``client_id`` plus the generated
+        ``secret`` (only exposed at creation time).
+        """
+        app = await self._client.post(
+            "/api/applications",
+            {
+                "name": client_id,
+                "description": description or "",
+                "type": "machine-to-machine",
+            },
+        )
+        role_ids = []
+        for group_name in groups:
+            role = await self._find_role(group_name)
+            if role is None:
+                logger.warning(
+                    "create_service_account: group '%s' has no Logto role; skipping", group_name
+                )
+                continue
+            role_ids.append(role["id"])
+        if role_ids:
+            await self._client.post(f"/api/applications/{app['id']}/roles", {"roleIds": role_ids})
+        return {
+            "client_id": app["id"],
+            "secret": app.get("secret"),
+            "name": client_id,
+            "groups": groups,
+        }
+
+
 def get_iam_manager() -> IAMManager:
     """
     Factory function to get the appropriate IAM manager based on AUTH_PROVIDER.
@@ -867,6 +1102,10 @@ def get_iam_manager() -> IAMManager:
     elif provider == "cognito":
         logger.debug("Using Cognito IAM manager")
         return CognitoIAMManager()
+
+    elif provider == "logto":
+        logger.debug("Using Logto IAM manager")
+        return LogtoIAMManager()
 
     else:
         logger.warning(f"Unknown AUTH_PROVIDER '{provider}', defaulting to Keycloak")

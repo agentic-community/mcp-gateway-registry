@@ -183,6 +183,12 @@ services:
       - KEYCLOAK_REALM=${KEYCLOAK_REALM:-mcp-gateway}
       - KEYCLOAK_CLIENT_ID=${KEYCLOAK_CLIENT_ID:-mcp-gateway-web}
       - KEYCLOAK_CLIENT_SECRET=${KEYCLOAK_CLIENT_SECRET}
+      # Logto IAM manager (AUTH_PROVIDER=logto): Management API access via an
+      # M2M application holding the "Logto Management API access" role. The
+      # token request needs resource + scope=all (see logto_admin.py).
+      - LOGTO_ENDPOINT=${LOGTO_ENDPOINT:-}
+      - LOGTO_MANAGEMENT_M2M_CLIENT_ID=${LOGTO_MANAGEMENT_M2M_CLIENT_ID:-}
+      - LOGTO_MANAGEMENT_M2M_CLIENT_SECRET=${LOGTO_MANAGEMENT_M2M_CLIENT_SECRET:-}
       - KEYCLOAK_ADMIN=${KEYCLOAK_ADMIN:-admin}
       - KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD}
       - KEYCLOAK_M2M_CLIENT_ID=${KEYCLOAK_M2M_CLIENT_ID}
@@ -407,6 +413,11 @@ services:
       # Persist the logto nginx location patch across container recreations
       # (swap-mcp-registry-idp-to-logto); image-baked template lacks logto blocks
       - ./docker/nginx_rev_proxy_http_and_https.conf:/app/docker/nginx_rev_proxy_http_and_https.conf:ro
+      # Logto IAM manager patch (fd/logto-iam): the prebuilt image's
+      # iam_manager.py has no logto branch. Mount the fork's files until the
+      # registry image is rebuilt from this repo; then drop these two mounts.
+      - ./registry/utils/iam_manager.py:/app/registry/utils/iam_manager.py:ro
+      - ./registry/utils/logto_admin.py:/app/registry/utils/logto_admin.py:ro
     depends_on:
       auth-server:
         condition: service_started
