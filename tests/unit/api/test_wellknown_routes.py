@@ -722,3 +722,57 @@ class TestPerServerOAuthProtectedResource:
             client = TestClient(_make_oauth_discovery_app(fake_provider))
             client.get("/.well-known/oauth-protected-resource/obo-echo/mcp")
             assert seen["path"] == "/obo-echo"
+
+    def test_path_normalization_strips_registry_url_prefix(self, fake_provider):
+        """RFC 9728 section 3.1 path-aware URL under a path-prefixed registry_url.
+
+        With ``registry_url=https://gw.example.com/registry`` the advertised
+        per-server resource is ``https://gw.example.com/registry/obo-echo/mcp``, so
+        a client deriving the well-known URL requests
+        ``/.well-known/oauth-protected-resource/registry/obo-echo/mcp``. The handler
+        must look up ``/obo-echo``, not ``/registry/obo-echo``.
+        """
+        s = self._settings()
+        s.registry_url = "https://gw.example.com/registry"
+        seen = {}
+
+        async def _capture(path, *a, **k):
+            seen["path"] = path
+            return {"path": "/obo-echo", "egress_auth_mode": "obo_exchange"}
+
+        with (
+            patch(
+                "registry.api.wellknown_routes._get_active_auth_provider",
+                return_value=fake_provider,
+            ),
+            patch("registry.auth.oauth_metadata.settings", s),
+            patch("registry.api.wellknown_routes.settings", s),
+            patch("registry.api.wellknown_routes.server_service.get_server_info", new=_capture),
+        ):
+            client = TestClient(_make_oauth_discovery_app(fake_provider))
+            resp = client.get("/.well-known/oauth-protected-resource/registry/obo-echo/mcp")
+            assert seen["path"] == "/obo-echo"
+            assert resp.status_code == 200
+            assert resp.json()["resource"] == "https://gw.example.com/registry/obo-echo/mcp"
+
+    def test_path_normalization_without_prefix_is_unchanged(self, fake_provider):
+        """No registry_url path: a leading segment is part of the server path."""
+        s = self._settings()  # registry_url = https://gw.example.com
+        seen = {}
+
+        async def _capture(path, *a, **k):
+            seen["path"] = path
+            return None
+
+        with (
+            patch(
+                "registry.api.wellknown_routes._get_active_auth_provider",
+                return_value=fake_provider,
+            ),
+            patch("registry.auth.oauth_metadata.settings", s),
+            patch("registry.api.wellknown_routes.settings", s),
+            patch("registry.api.wellknown_routes.server_service.get_server_info", new=_capture),
+        ):
+            client = TestClient(_make_oauth_discovery_app(fake_provider))
+            client.get("/.well-known/oauth-protected-resource/registry/obo-echo/mcp")
+            assert seen["path"] == "/registry/obo-echo"
