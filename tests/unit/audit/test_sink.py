@@ -216,9 +216,12 @@ class TestAuditStreamStillWorks:
         assert payload["request_id"] == "req-mint-1"
         assert payload["log_type"] == "token_mint"
         assert payload["outcome"] == "success"
-        # The readable display identity is NOT a claim column and stays verbatim,
-        # so the stream remains usable for attribution.
-        assert payload["username"] == "alice@example.com"
+        # The readable display identity stays PRESENT, so the stream remains
+        # usable for attribution, but an address keeps only its first character
+        # and domain: on an Entra v1.0 access token it holds the same UPN as
+        # principal_name, so emitting it verbatim would undo that field's
+        # redaction. The full value is in the durable audit store.
+        assert payload["username"] == "a***@example.com"
 
     def test_non_claim_fields_are_not_over_redacted(self, audit_stream):
         """REGRESSION: a generic substring redactor (`redact_mapping`) masks any
@@ -283,6 +286,60 @@ class TestAuditStreamStillWorks:
         emit_audit_event(broken)
 
         assert any("emit_audit_event failed" in m for m in app_log_stream.messages)
+
+
+class TestReadableIdentityIsReduced:
+    """The display `username` is the one identity value that stays readable on
+    this stream. It is reduced rather than dropped, because on an Entra v1.0
+    access token `_audit_identity_display` and `principal_name` resolve to the
+    SAME upn -- so redacting the claim while emitting `username` verbatim left the
+    address in the stream unchanged and the claim masking bought nothing."""
+
+    def test_address_keeps_only_first_character_and_domain(self, audit_stream):
+        emit_audit_event(make_mint_record(username="alice@contoso.com"))
+
+        payload = json.loads(audit_stream.messages[0])
+        assert payload["username"] == "a***@contoso.com"
+
+    def test_non_address_identities_are_untouched(self, audit_stream):
+        """An opaque subject, a service identity and the `anonymous` literal are
+        pseudonymous or not personal, and are the only handle an operator has on
+        the line. Reducing them would cost attribution and protect nothing."""
+        for value in ("anonymous", "H2mQ1-9vXk8yTn3rLp0aZ4cFdE7bGjSuVwYx1KtM2No", "mcp-proxy"):
+            audit_stream.messages.clear()
+            emit_audit_event(make_mint_record(username=value))
+
+            payload = json.loads(audit_stream.messages[0])
+            assert payload["username"] == value, value
+
+    def test_malformed_addresses_are_left_alone(self, audit_stream):
+        """No local part or no domain means there is nothing to reduce, and
+        inventing a mask for a value we do not understand would lose data."""
+        for value in ("@contoso.com", "alice@", "@"):
+            audit_stream.messages.clear()
+            emit_audit_event(make_mint_record(username=value))
+
+            payload = json.loads(audit_stream.messages[0])
+            assert payload["username"] == value, value
+
+    def test_tool_filter_identity_is_never_reduced(self, audit_stream):
+        """REGRESSION: this event has NO durable sink, so the stream is the only
+        record that it happened. Reducing its identity would destroy the only copy
+        of who was affected, unlike an audit record whose full value is persisted."""
+        emit_audit_event(
+            ToolFilterAuditEvent(
+                username="alice@contoso.com",
+                endpoint="mcp_tools_list",
+                server_name="outlook",
+                pruned_count=1,
+                kept_count=1,
+                pruned_tool_names=["send_mail"],
+                user_scopes=["outlook-read"],
+            )
+        )
+
+        payload = json.loads(audit_stream.messages[0])
+        assert payload["username"] == "alice@contoso.com"
 
 
 class TestDurablePersistenceIsUnaffected:

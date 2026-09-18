@@ -619,7 +619,8 @@ internal_token_replay_check_total = _CounterAdapter(_internal_token_replay_check
 
 # Audit-trail integrity degradations. Declared identically in
 # auth_server/observability/meters.py (same name, so one PromQL query covers both
-# processes) -- same precedent as token_mint_total above.
+# processes) -- same precedent as mcpgw_registry_token_mint_total, which the auth
+# server declares under the registry prefix for the same reason.
 #
 # Every degradation here used to be log-only, and a log line cannot be alerted
 # on as a RATE. reason (closed set, emitted from code -- NEVER a tenant/app id,
