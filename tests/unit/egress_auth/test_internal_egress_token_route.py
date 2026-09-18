@@ -72,8 +72,12 @@ def make_client(monkeypatch):
 
 
 def _claims(**over):
+    # Shape of a token minted by the current auth-server: the canonical vault id
+    # travels in ``egress_user``. ``sub`` (the login username) is present but is
+    # NOT a fallback for it -- the vend refuses to cross that namespace.
     base = {
         "sub": "alice",
+        "egress_user": "alice",
         "auth_method": "oauth2",
         "upstream_url": "https://api.githubcopilot.com/mcp",
     }
@@ -124,6 +128,26 @@ class TestInternalEgressTokenRoute:
         assert r.json()["consent_required"] is True
         assert r.json()["access_token"] is None
         assert not client._svc.called
+
+    def test_per_user_without_egress_user_claim_consents_and_warns(self, make_client, caplog):
+        # A per-user token that carries no egress_user claim (minted before the
+        # claim existed) must NOT fall back to the token's `sub`: that value is the
+        # login username, a different identifier namespace from the OIDC sub the
+        # consent path wrote, so vending against it reads an empty vault bucket and
+        # the user sees 0 tools. Refuse, and make the refusal visible in the logs --
+        # the old cross-namespace fallback failed completely silently.
+        claims = _claims()
+        del claims["egress_user"]
+        client = make_client(claims, _server())
+        with caplog.at_level("WARNING", logger=routes.logger.name):
+            r = _post(client)
+        assert r.status_code == 200
+        assert r.json()["consent_required"] is True
+        assert r.json()["access_token"] is None
+        assert not client._svc.called
+        warnings = [rec.getMessage() for rec in caplog.records if rec.levelname == "WARNING"]
+        assert any("no egress_user claim" in msg for msg in warnings), warnings
+        assert any("/github-mcp" in msg for msg in warnings), warnings
 
     def test_server_not_oauth_user_consent(self, make_client):
         client = make_client(_claims(), _server(egress_auth_mode="none", egress_oauth=None))
