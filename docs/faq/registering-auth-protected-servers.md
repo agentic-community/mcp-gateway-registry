@@ -51,9 +51,11 @@ Once registered with credentials, the registry automatically:
 
 1. **Health checks** -- Injects the decrypted credential when checking if the server is reachable
 2. **Tool discovery** -- Uses the credential to call the MCP `tools/list` method on the backend server
-3. **Request proxying** -- When clients connect through the gateway, the credential is injected into proxied requests
+3. **Request proxying** -- the registration-time credential is **not** injected into proxied client requests. On the MCP proxy hop the gateway strips the client's ingress auth headers and adds an upstream credential only when the server has an `egress_auth_mode` configured (per-user `pat`, `oauth_user`, or `obo_exchange`; see [Per-User Egress Credential Vault](../egress-credential-vault.md) and [Same-IdP OBO Token Exchange](../obo-token-exchange.md)). `auth_scheme` is the gateway's own credential for health checks and tool discovery
 
 This means tool discovery works the same way for protected servers as it does for public ones -- no additional configuration is needed beyond providing the credential at registration time.
+
+If the upstream also expects a shared, operator-owned credential at runtime, the registration-time credential alone is not enough: configure an egress mode for the server, otherwise proxied calls reach the upstream without any credential.
 
 ## Manually Providing Tools
 
