@@ -21,9 +21,21 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-LOGTO_ENDPOINT: str = os.environ.get("LOGTO_ENDPOINT", "http://logto:3001").rstrip("/")
-LOGTO_MANAGEMENT_M2M_CLIENT_ID: str = os.environ.get("LOGTO_MANAGEMENT_M2M_CLIENT_ID", "")
-LOGTO_MANAGEMENT_M2M_CLIENT_SECRET: str = os.environ.get("LOGTO_MANAGEMENT_M2M_CLIENT_SECRET", "")
+LOGTO_ENDPOINT: str = (
+    os.environ.get("LOGTO_ENDPOINT")
+    or os.environ.get("LOGTO_URL")  # established name in this deployment's .env
+    or os.environ.get("LOGTO_EXTERNAL_URL")
+    or "http://logto:3001"
+).rstrip("/")
+# Dedicated management-client names win; fall back to the deployment's existing
+# M2M application credentials (LOGTO_M2M_*) — the same application carries the
+# "Logto Management API access" role, so no extra secret needs to exist.
+LOGTO_MANAGEMENT_M2M_CLIENT_ID: str = os.environ.get(
+    "LOGTO_MANAGEMENT_M2M_CLIENT_ID"
+) or os.environ.get("LOGTO_M2M_CLIENT_ID", "")
+LOGTO_MANAGEMENT_M2M_CLIENT_SECRET: str = os.environ.get(
+    "LOGTO_MANAGEMENT_M2M_CLIENT_SECRET"
+) or os.environ.get("LOGTO_M2M_CLIENT_SECRET", "")
 # Resource indicator of the Management API. Self-hosted default tenant ships
 # the fixed identifier below; override only for custom tenant setups.
 LOGTO_MANAGEMENT_RESOURCE: str = os.environ.get(
