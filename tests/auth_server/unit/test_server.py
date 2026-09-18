@@ -413,6 +413,25 @@ class TestGroupToScopeMapping:
             assert "read:tools" in scopes
 
     @pytest.mark.asyncio
+    async def test_map_groups_to_scopes_normalizes_leading_slash(self, mock_scopes_config):
+        """A full-group-path IdP claim ('/mcp-admins') still resolves to scopes.
+
+        Keycloak's Group Membership mapper with "Full group path" enabled emits
+        the leading slash; scope mappings are seeded without it, so the bulk
+        query must be issued with the normalized names.
+        """
+        from auth_server.server import map_groups_to_scopes
+
+        mock_repo = AsyncMock()
+        mock_repo.get_group_mappings_bulk.return_value = ["read:servers"]
+
+        with patch("auth_server.server.get_scope_repository", return_value=mock_repo):
+            scopes = await map_groups_to_scopes(["/mcp-admins"])
+
+            assert scopes == ["read:servers"]
+            mock_repo.get_group_mappings_bulk.assert_awaited_once_with(["mcp-admins"])
+
+    @pytest.mark.asyncio
     async def test_map_groups_to_scopes_unknown_group(self, mock_scopes_config):
         """Test mapping with unknown group."""
         from auth_server.server import map_groups_to_scopes
