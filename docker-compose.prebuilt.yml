@@ -185,10 +185,13 @@ services:
       - KEYCLOAK_CLIENT_SECRET=${KEYCLOAK_CLIENT_SECRET}
       # Logto IAM manager (AUTH_PROVIDER=logto): Management API access via an
       # M2M application holding the "Logto Management API access" role. The
-      # token request needs resource + scope=all (see logto_admin.py).
+      # token request needs resource + scope=all (see logto_admin.py). The
+      # LOGTO_MANAGEMENT_M2M_* names are optional overrides; by default the
+      # manager reuses the deployment's existing LOGTO_M2M_* credentials.
+      - LOGTO_URL=${LOGTO_URL:-}
       - LOGTO_ENDPOINT=${LOGTO_ENDPOINT:-}
-      - LOGTO_MANAGEMENT_M2M_CLIENT_ID=${LOGTO_MANAGEMENT_M2M_CLIENT_ID:-}
-      - LOGTO_MANAGEMENT_M2M_CLIENT_SECRET=${LOGTO_MANAGEMENT_M2M_CLIENT_SECRET:-}
+      - LOGTO_M2M_CLIENT_ID=${LOGTO_M2M_CLIENT_ID:-}
+      - LOGTO_M2M_CLIENT_SECRET=${LOGTO_M2M_CLIENT_SECRET:-}
       - KEYCLOAK_ADMIN=${KEYCLOAK_ADMIN:-admin}
       - KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD}
       - KEYCLOAK_M2M_CLIENT_ID=${KEYCLOAK_M2M_CLIENT_ID}
