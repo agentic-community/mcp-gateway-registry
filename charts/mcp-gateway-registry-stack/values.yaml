@@ -192,78 +192,36 @@ mongodb:
 # NOTE: When using Entra (global.authProvider.type: entra), set create: false
 keycloak:
   create: true # Deploy Keycloak in this stack (set to false for external Keycloak or Entra)
+  # Official Keycloak image.
+  # CIMD (Client ID Metadata Documents) requires >= 26.6.
   image:
-    registry: docker.io
-    repository: bitnamilegacy/keycloak
-    tag: 26.3.3-debian-12-r0
-  global:
-    security:
-      allowInsecureImages: true
+    repository: quay.io/keycloak/keycloak
+    tag: "26.6.0"
   auth:
     adminUser: *keycloakAdmin
-    existingSecret: '{{ .Release.Name }}-keycloak'
-  postgresql:
-    auth:
-      existingSecret: '{{ .Release.Name }}-keycloak-postgresql'
-    image:
-      registry: docker.io
-      repository: bitnamilegacy/postgresql
-      tag: 17.6.0-debian-12-r0
-  # Keycloak always serves from its own root (httpRelativePath defaults
-  # to "/" in the Bitnami chart). The registry pod's nginx rewrites
-  # browser traffic under /keycloak before forwarding, so Keycloak
-  # itself doesn't need to know about any URL prefix. DO NOT set
-  # keycloak.httpRelativePath to /keycloak/ — it breaks the /realms
-  # and /resources proxy locations in the registry's nginx config.
-
-  # NOTE: Keycloak uses Bitnami's `extraEnvVars` convention. Our own
-  # subcharts (auth-server, registry, mcpgw) use `extraEnv` instead —
-  # see the `<subchart>.extraEnv` sections later in this file. Both
-  # accept the Kubernetes EnvVar schema (name + value/valueFrom); only
-  # the key name differs.
-  extraEnvVars:
-    - name: KC_PROXY
-      value: edge
-    - name: KC_PROXY_HEADERS
-      value: xforwarded
-  ingress:
-    enabled: false
-  nodeSelector: {}
-  # Lifecycle hook to configure realm SSL settings
-  lifecycleHooks:
-    postStart:
-      exec:
-        command:
-          - "/bin/bash"
-          - "-c"
-          - |
-            (
-              echo "PostStart: Waiting for Keycloak to be ready..."
-              # Determine the base path - check if KC_HTTP_RELATIVE_PATH is set
-              BASE_PATH="${KC_HTTP_RELATIVE_PATH:-}"
-              BASE_URL="http://localhost:8080${BASE_PATH}"
-              echo "Using base URL: $BASE_URL"
-              for i in {1..120}; do
-                if curl -sf ${BASE_URL}/realms/$KC_SPI_ADMIN_REALM > /dev/null 2>&1; then
-                  echo "Keycloak ready after $i attempts"
-                  break
-                fi
-                sleep 5
-              done
-              sleep 10
-              echo "Configuring $KC_SPI_ADMIN_REALM realm..."
-              /opt/bitnami/keycloak/bin/kcadm.sh config credentials \
-                --config /tmp/kcadm.config \
-                --server ${BASE_URL} \
-                --realm $KC_SPI_ADMIN_REALM \
-                --user $KC_BOOTSTRAP_ADMIN_USERNAME \
-                --password $(cat $KC_BOOTSTRAP_ADMIN_PASSWORD_FILE)
-              /opt/bitnami/keycloak/bin/kcadm.sh update \
-                --config /tmp/kcadm.config \
-                realms/$KC_SPI_ADMIN_REALM \
-                -s sslRequired=NONE
-              echo "✓ $KC_SPI_ADMIN_REALM realm configured!"
-            ) > /tmp/poststart-config.log 2>&1 &
+    # Admin password comes from the stack-managed secret
+    # {{ .Release.Name }}-keycloak (auth.existingSecret defaults to it).
+  # Comma-separated KC_FEATURES to enable. "cimd" turns on Keycloak's experimental
+  # Client ID Metadata Documents support (>= 26.6). Empty = none.
+  features: ""
+  # Keycloak serves from its own root; the registry pod's nginx rewrites browser
+  # traffic under /keycloak before forwarding. DO NOT set httpRelativePath to
+  # /keycloak — it breaks the /realms and /resources proxy locations. Proxy
+  # handling uses KC_PROXY_HEADERS=xforwarded; the old KC_PROXY=edge is
+  # deprecated in Keycloak 26 and intentionally dropped. The realm SSL-disable
+  # init is preserved via the subchart's postStart hook (sslInit.enabled).
+  postgres:
+    # Normalized DB identity (no bitnami/bn conventions). The one-time migration
+    # loads data into these via `pg_dump --no-owner --no-acl`.
+    database: keycloak
+    username: keycloak
+    # Bitnami migration. Defaults TRUE and auto-detects: a
+    # pre-upgrade Job dumps the bitnami DB (if reachable) and the new
+    # postgres restores it on first init. If there's nothing to migrate (fresh
+    # install, or a repeat upgrade after the source is gone) it degrades
+    # gracefully to a no-op — so nobody loses a database by forgetting a flag.
+    # A genuine dump failure aborts the upgrade (fail-safe; old release intact).
+    migrateFromBitnami: true
 # Keycloak configuration job
 # Automatically enabled when global.authProvider.type = "keycloak"
 # Set to false to skip configuration (e.g., when using pre-configured Keycloak)
@@ -285,6 +243,18 @@ keycloak-configure:
   # using a pre-configured external Keycloak with its own DCR setup.
   dcr:
     enabled: true
+  # Client ID Metadata Documents (CIMD) realm setup. Requires the Keycloak
+  # server 'cimd' feature (keycloak.features: "cimd" above). trustedDomains is
+  # the allowlist Keycloak fetches CIMD docs from and validates every URL host
+  # inside them against (client_id host + loopback redirect hosts + CDN hosts).
+  cimd:
+    enabled: true
+    trustedDomains:
+      - vscode.dev
+      - code.visualstudio.com
+      - claude.ai
+      - "127.0.0.1"
+      - localhost
 # Mongodb configuration job
 mongodb-configure:
   enabled: true # Whether to run the MongoDB configuration job

@@ -797,6 +797,70 @@ configure_dcr_trusted_hosts() {
     fi
 }
 
+# =============================================================================
+# Client ID Metadata Documents (CIMD) support
+# =============================================================================
+# Lets MCP clients whose client_id is an https URL (e.g. VS Code, Claude Code)
+# authenticate by publishing their own metadata document -- Keycloak fetches +
+# validates it, no pre-registration. Requires the server 'cimd' feature
+# (KC_FEATURES=cimd; Keycloak >= 26.6). Configures a client policy: a
+# `client-id-uri` condition (scheme https + permitted domains) applying a
+# `client-id-metadata-document` executor.
+#
+# NOTE: the executor's permitted-domains must list EVERY host a trusted client's
+# document references -- the client_id host, its loopback redirect hosts
+# (127.0.0.1/localhost), and any logo_uri/client_uri CDN hosts -- or the fetch
+# is rejected ("not trusted domain: host = ...").
+configure_cimd_client_policy() {
+    local token=$1
+    # CIMD_TRUSTED_DOMAINS is a JSON array; default covers VS Code + Claude Code.
+    local domains="${CIMD_TRUSTED_DOMAINS:-[\"vscode.dev\",\"code.visualstudio.com\",\"claude.ai\",\"127.0.0.1\",\"localhost\"]}"
+    echo "Configuring CIMD client policy (trusted domains: ${domains})..."
+
+    # Upsert the 'cimd-vendors' profile (merge: preserve any other profiles).
+    local profiles=$(curl -s -H "Authorization: Bearer ${token}" \
+        "${KEYCLOAK_URL}/admin/realms/${REALM}/client-policies/profiles")
+    local new_profiles=$(echo "$profiles" | jq --argjson d "$domains" '
+        {profiles: (((.profiles // []) | map(select(.name != "cimd-vendors"))) + [{
+            name: "cimd-vendors",
+            description: "CIMD for trusted MCP client vendors",
+            executors: [{
+                executor: "client-id-metadata-document",
+                configuration: {"cimd-allow-permitted-domains": $d}
+            }]
+        }])}')
+    local r1=$(curl -s -o /dev/null -w "%{http_code}" \
+        -X PUT "${KEYCLOAK_URL}/admin/realms/${REALM}/client-policies/profiles" \
+        -H "Authorization: Bearer ${token}" -H "Content-Type: application/json" \
+        -d "$new_profiles")
+
+    # Upsert the 'cimd-vendors-policy' policy (merge: preserve any others).
+    local policies=$(curl -s -H "Authorization: Bearer ${token}" \
+        "${KEYCLOAK_URL}/admin/realms/${REALM}/client-policies/policies")
+    local new_policies=$(echo "$policies" | jq --argjson d "$domains" '
+        {policies: (((.policies // []) | map(select(.name != "cimd-vendors-policy"))) + [{
+            name: "cimd-vendors-policy",
+            description: "CIMD for https client-id URIs on trusted vendor domains",
+            enabled: true,
+            conditions: [{
+                condition: "client-id-uri",
+                configuration: {"client-id-uri-scheme": ["https"], "client-id-uri-allow-permitted-domains": $d}
+            }],
+            profiles: ["cimd-vendors"]
+        }])}')
+    local r2=$(curl -s -o /dev/null -w "%{http_code}" \
+        -X PUT "${KEYCLOAK_URL}/admin/realms/${REALM}/client-policies/policies" \
+        -H "Authorization: Bearer ${token}" -H "Content-Type: application/json" \
+        -d "$new_policies")
+
+    if { [ "$r1" = "204" ] || [ "$r1" = "200" ]; } && { [ "$r2" = "204" ] || [ "$r2" = "200" ]; }; then
+        echo -e "${GREEN}CIMD client policy configured (profile HTTP $r1, policy HTTP $r2).${NC}"
+    else
+        echo -e "${RED}Failed to configure CIMD client policy (profile HTTP $r1, policy HTTP $r2).${NC}"
+        return 1
+    fi
+}
+
 # Main execution
 main() {
     # Get script directory and find .env file
@@ -863,6 +927,15 @@ main() {
         setup_dcr_audience_mapper "$TOKEN"
         configure_dcr_allowed_scopes "$TOKEN"
         configure_dcr_trusted_hosts "$TOKEN"
+
+        # MCP CIMD support (client-id-metadata-document client policy). Requires
+        # the Keycloak server 'cimd' feature (KC_FEATURES=cimd; >= 26.6). Opt-in
+        # via ENABLE_CIMD_CONFIG so it's skipped on servers without the feature.
+        if [ "${ENABLE_CIMD_CONFIG:-false}" = "true" ]; then
+            configure_cimd_client_policy "$TOKEN"
+        else
+            echo -e "${YELLOW}CIMD client policy skipped (set ENABLE_CIMD_CONFIG=true; requires KC_FEATURES=cimd).${NC}"
+        fi
     else
         exit 1
     fi

@@ -1,0 +1,97 @@
+{{- /* Migration is upgrade-only: a fresh install has no legacy Bitnami DB, and
+       the dump Job's pg-secret is only created in the main apply (after any
+       pre-install hooks) -- so gating on .Release.IsUpgrade avoids aborting a
+       clean `helm install` on a missing secret. */ -}}
+{{- if and .Values.create .Values.postgres.migrateFromBitnami .Release.IsUpgrade }}
+{{- $pg := .Values.postgres }}
+{{- $pgSecret := include "keycloak.pgSecretName" . }}
+---
+# Durable scratch volume shared: pre-upgrade dump Job writes restore.sql here;
+# the new postgres mounts it read-only at /docker-entrypoint-initdb.d and runs
+# it on first-init. Created as a pre-upgrade hook so it exists before the dump
+# Job and persists into the main apply. Not deleted post-hook.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "keycloak.migrationPvcName" . }}
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "keycloak.commonLabels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-upgrade
+    "helm.sh/hook-weight": "-20"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- if $pg.persistence.storageClass }}
+  storageClassName: {{ $pg.persistence.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $pg.migrationPvcSize | quote }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-keycloak-pg-migrate-dump
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "keycloak.commonLabels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-upgrade
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        {{- include "keycloak.commonLabels" . | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        fsGroup: 999
+      containers:
+        - name: dump
+          image: "{{ $pg.image.repository }}:{{ $pg.image.tag }}"
+          imagePullPolicy: {{ $pg.image.pullPolicy }}
+          env:
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $pgSecret }}
+                  key: {{ $pg.existingSecretPasswordKey }}
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              SRC="{{ include "keycloak.bitnamiPgService" . }}"
+              PORT="{{ $pg.source.port }}"
+              SRC_USER="{{ $pg.source.username }}"
+              SRC_DB="{{ $pg.source.database }}"
+              # Graceful fallback: only migrate when the legacy DB is
+              # actually reachable with the migration creds. Covers fresh installs
+              # and repeat upgrades (source already gone) -> skip, never abort helm.
+              # (A real pg_dump failure below still aborts -- fail-safe, old release
+              # untouched -- so we never proceed into data loss.)
+              if ! psql -h "$SRC" -p "$PORT" -U "$SRC_USER" -d "$SRC_DB" -tAc "select 1" >/dev/null 2>&1; then
+                echo "No legacy bitnami DB at $SRC_DB@$SRC:$PORT (nothing to migrate); skipping"
+                rm -f /migration/restore.sql || true
+                exit 0
+              fi
+              echo "Dumping $SRC_DB from $SRC (normalized to {{ $pg.database }}/{{ $pg.username }} via --no-owner --no-acl)..."
+              pg_dump -h "$SRC" -p "$PORT" -U "$SRC_USER" -d "$SRC_DB" \
+                --no-owner --no-acl --no-comments \
+                -f /migration/restore.sql
+              echo "Dump complete: $(wc -c < /migration/restore.sql) bytes"
+          volumeMounts:
+            - name: migration
+              mountPath: /migration
+      volumes:
+        - name: migration
+          persistentVolumeClaim:
+            claimName: {{ include "keycloak.migrationPvcName" . }}
+{{- end }}
