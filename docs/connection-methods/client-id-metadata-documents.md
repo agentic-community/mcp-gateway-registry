@@ -58,11 +58,18 @@ origin the IdP redirects back to. Configure it with:
 | `CIMD_CLIENT_NAME` | Human-readable client name (default "AI Registry Tools"). |
 | `CIMD_REDIRECT_URIS` | CSV of allowed callbacks (default `{EGRESS_OAUTH_CALLBACK_BASE_URL or REGISTRY_URL}/oauth2/egress/callback`). |
 | `CIMD_SCOPE` | Space-separated requested scopes (default the advertised OIDC scopes). |
-| `CIMD_LOGO_URI`, `CIMD_CONTACTS` | Optional metadata; omitted when unset. |
+| `CIMD_CACHE_TTL` | Public `max-age` on the document (default 3600). |
+| `CIMD_LOGO_URI`, `CIMD_CONTACTS` | Optional metadata; omitted when unset. See the privacy note below before setting `CIMD_CONTACTS`. |
 
 **Operator consequence:** because the document's URL is the `client_id`, renaming
 or moving the endpoint changes the client_id and breaks any CIMD-aware IdP
 mid-flight. Treat the path as stable.
+
+**`CIMD_CONTACTS` is published publicly.** This endpoint is unauthenticated by
+design, because an IdP has to fetch it before any trust exists. So every address
+in `CIMD_CONTACTS` is world-readable and scrapable the moment the publisher is
+enabled. Use a role alias (`ai-platform@example.com`), never an individual's
+address. The default is empty, so nothing is published unless you set it.
 
 ### The registry consuming an incoming CIMD client_id -- delegated to the IdP
 

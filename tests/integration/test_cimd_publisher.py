@@ -146,3 +146,55 @@ def test_client_id_path_matches_actual_router_mount():
     assert not re.search(r"include_router\(\s*cimd_router\s*,[^)]*prefix=", main_src), (
         "cimd_router must be mounted at root (no prefix) so client_id == served path"
     )
+
+
+def test_client_id_has_exactly_one_construction_site():
+    """`build_cimd_client_id_url` must stay the only place the client_id is built.
+
+    The URL IS the client_id, so two construction sites that drift produce a
+    document advertising one value while an outbound /authorize sends another,
+    and the IdP rejects the request with nothing in the document to explain why.
+    #992's outbound wiring is not in this branch yet; this guards the seam so the
+    future path reuses the helper instead of re-deriving the URL.
+
+    Enforced by source scan rather than by call graph: a new f-string like
+    f"{base}/oauth/client-metadata.json" in some other module is exactly the
+    mistake, and it is invisible to a test that only calls the helper.
+    """
+    import re
+    from pathlib import Path
+
+    from registry.auth.oauth_metadata import CIMD_PATH
+
+    registry_root = Path(__file__).resolve().parents[2] / "registry"
+
+    # Where the path literal or the constant may legitimately appear:
+    #   oauth_metadata.py  - defines CIMD_PATH and the one builder
+    #   wellknown_routes.py - the route decorator, pinned to CIMD_PATH by
+    #                         test_client_id_matches_served_path above
+    ALLOWED = {"oauth_metadata.py", "wellknown_routes.py"}
+
+    # A construction site joins the path onto something else: an f-string with a
+    # preceding brace, or explicit concatenation. A bare mention (a comment, a
+    # docstring, an equality check) is not.
+    joined = re.compile(
+        rf"(\{{[^}}]*\}}\s*{re.escape(CIMD_PATH)})"  # f"{base}/oauth/client-metadata.json"
+        rf"|(\+\s*(?:CIMD_PATH|[\"']{re.escape(CIMD_PATH)}[\"']))"  # base + CIMD_PATH
+        rf"|(\{{[^}}]*\}}\{{CIMD_PATH\}})"  # f"{base}{CIMD_PATH}"
+    )
+
+    offenders = []
+    for path in sorted(registry_root.rglob("*.py")):
+        if path.name in ALLOWED:
+            continue
+        for lineno, line in enumerate(path.read_text().splitlines(), start=1):
+            code = line.split("#", 1)[0]
+            if joined.search(code):
+                rel = path.relative_to(registry_root.parent)
+                offenders.append(f"  {rel}:{lineno}  {line.strip()}")
+
+    assert not offenders, (
+        "The CIMD client_id is constructed somewhere other than "
+        "build_cimd_client_id_url(). Call that helper instead, so the published "
+        "document and any outbound client_id cannot diverge:\n" + "\n".join(offenders)
+    )

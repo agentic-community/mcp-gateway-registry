@@ -6,7 +6,6 @@ from fastapi.responses import JSONResponse
 
 from ..auth.oauth_metadata import (
     build_canonical_resource_url,
-    build_cimd_client_id_url,
     build_cimd_document,
     build_per_server_resource_url,
     build_resource_documentation_url,
@@ -81,12 +80,14 @@ async def get_oauth_client_metadata() -> JSONResponse:
     """
     if not settings.cimd_publisher_enabled:
         raise HTTPException(status_code=404, detail="CIMD publisher is disabled")
-    # The client_id URL is sent to external IdPs; require HTTPS in production.
-    enforce_https(
-        build_cimd_client_id_url(settings.egress_oauth_callback_base),
-        https_required=settings.mcp_https_required,
-    )
+    # Build first, then gate on the document's OWN client_id rather than
+    # recomputing it: the URL we enforce HTTPS on is then provably the URL we
+    # publish, and there is one construction site instead of two that could
+    # drift. Building the dict has no side effects, so nothing is emitted before
+    # the check runs.
     document = build_cimd_document()
+    # The client_id URL is sent to external IdPs; require HTTPS in production.
+    enforce_https(document["client_id"], https_required=settings.mcp_https_required)
     headers = {
         "Cache-Control": f"public, max-age={settings.cimd_cache_ttl}",
         "Content-Type": "application/json",
