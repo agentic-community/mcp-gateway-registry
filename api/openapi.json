@@ -11130,16 +11130,17 @@
             "schema": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "string",
+                  "maxLength": 256
                 },
                 {
                   "type": "null"
                 }
               ],
-              "description": "Filter statistics to a specific username",
+              "description": "Filter statistics to a specific username: matches the display identity or any stored identity claim (subject/canonical_id/object_id/principal_name)",
               "title": "Username"
             },
-            "description": "Filter statistics to a specific username"
+            "description": "Filter statistics to a specific username: matches the display identity or any stored identity claim (subject/canonical_id/object_id/principal_name)"
           },
           {
             "name": "mcp_gateway_session",
@@ -11325,16 +11326,17 @@
             "schema": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "string",
+                  "maxLength": 256
                 },
                 {
                   "type": "null"
                 }
               ],
-              "description": "Filter by username",
+              "description": "Filter by username: matches the display identity or any stored identity claim (subject/canonical_id/object_id/principal_name)",
               "title": "Username"
             },
-            "description": "Filter by username"
+            "description": "Filter by username: matches the display identity or any stored identity claim (subject/canonical_id/object_id/principal_name)"
           },
           {
             "name": "operation",
@@ -11702,16 +11704,17 @@
             "schema": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "string",
+                  "maxLength": 256
                 },
                 {
                   "type": "null"
                 }
               ],
-              "description": "Filter by username",
+              "description": "Filter by username: matches the display identity or any stored identity claim (subject/canonical_id/object_id/principal_name)",
               "title": "Username"
             },
-            "description": "Filter by username"
+            "description": "Filter by username: matches the display identity or any stored identity claim (subject/canonical_id/object_id/principal_name)"
           },
           {
             "name": "operation",
@@ -14948,6 +14951,31 @@
             }
           }
         }
+      }
+    },
+    "/oauth/client-metadata.json": {
+      "get": {
+        "tags": [
+          "Discovery"
+        ],
+        "summary": "Get Oauth Client Metadata",
+        "description": "Publish this registry's CIMD (Client ID Metadata Document) -- issue #992.\n\nDescribes the registry as an OAuth CLIENT so it can authenticate to external\nCIMD-aware IdPs; the document's URL is the registry's client_id. Public,\nunauthenticated, and cacheable (unlike the no-store discovery documents).\nServed only when cimd_publisher_enabled.",
+        "operationId": "get_oauth_client_metadata_oauth_client_metadata_json_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
       }
     },
     "/api/ard/search": {
