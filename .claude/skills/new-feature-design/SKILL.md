@@ -873,7 +873,7 @@ def new_function(
 |-----------|-----------------|
 | `api/registry_client.py` | Add Pydantic response models and client methods for new endpoints |
 | `api/registry_management.py` | Add CLI commands (argparse parsers) and handler functions |
-| `api/openapi.json` | Regenerate OpenAPI spec if using auto-generation |
+| `api/openapi.json` | **Regenerate.** Not auto-generated and not checked by CI, so a new endpoint is invisible to API consumers until someone refreshes it by hand. See below. |
 
 **Example additions for a new endpoint `GET /api/feature/{path}/data`:**
 
@@ -898,6 +898,23 @@ def cmd_feature_data(args: argparse.Namespace) -> None:
 ```
 
 This ensures the registry management CLI stays in sync with backend API capabilities.
+
+#### Regenerating `api/openapi.json`
+
+Any design that adds or changes a route must include this as an explicit task, because nothing enforces it: there is no generator script and no CI check, so the spec drifts silently. It has already shipped stale, missing endpoints from several merged PRs at once.
+
+```bash
+# The container MUST be built from the commit being documented.
+curl -s http://localhost/openapi.json > /tmp/live.json
+python3 - <<'PYEOF'
+import json, pathlib
+spec = json.load(open("/tmp/live.json"))
+spec["info"]["version"] = "X.Y.Z"    # the release this lands in, NOT the app's dev string
+pathlib.Path("api/openapi.json").write_text(json.dumps(spec, indent=2) + "\n")
+PYEOF
+```
+
+Do not pass `ensure_ascii=False`: it rewrites every non-ASCII character in every docstring and buries the real change in hundreds of lines of diff. Full procedure and the semantic-diff check in [CLAUDE.md](../../../CLAUDE.md#regenerating-apiopenapijson).
 
 ### Estimated Lines of Code
 
