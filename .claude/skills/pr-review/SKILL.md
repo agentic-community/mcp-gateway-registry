@@ -307,6 +307,25 @@ After creating the review document, present a summary to the user:
 2. List any blockers that must be addressed
 3. Provide the path to the full review document
 4. Offer to explain any specific findings in detail
+5. **End the response with a clickable link to the PR** (see below)
+
+#### Always end with a clickable PR link
+
+The last line of every review response must be a full markdown link to the PR, so
+the reader can open it without copying a number into a URL bar:
+
+```markdown
+[#1711 — feat: CIMD client metadata document](https://github.com/agentic-community/mcp-gateway-registry/pull/1711)
+```
+
+Rules:
+
+- Use the full `https://github.com/{owner}/{repo}/pull/{number}` URL. A bare
+  `#1711` renders as plain text in the terminal and is not clickable.
+- Include the PR title after the number, so the link says what it points at.
+- This applies to every response about the PR, not just the first one: follow-up
+  answers, "pushed the fixes", and status updates all end with the link.
+- If the response covers more than one PR, link each of them.
 
 ## Review Principles
 
