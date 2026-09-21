@@ -451,7 +451,9 @@ class SecretsManagerStore(SecretStoreBase):
         purpose: str,
     ) -> None:
         root_name = self._secret_name(auth_method, user_id, purpose)
-        document = self._codec.encode(auth_method, user_id, provider, server_path, token)
+        document = self._codec.encode(
+            auth_method, user_id, provider, server_path, token, purpose=purpose
+        )
         await self._mutate(root_name, keys.map_key(provider, server_path), document)
 
     async def _read_with_retry(self, operation: Callable):
@@ -503,7 +505,9 @@ class SecretsManagerStore(SecretStoreBase):
         raw = await self._read_with_retry(lambda: self._get_raw_once(root_name, key))
         if raw is None:
             return None
-        token = self._codec.decode(auth_method, user_id, provider, server_path, raw)
+        token = self._codec.decode(
+            auth_method, user_id, provider, server_path, raw, purpose=purpose
+        )
         if self._codec.needs_migration(raw):
             self._schedule_repair(auth_method, user_id, provider, server_path, raw, token)
         return token
@@ -549,7 +553,9 @@ class SecretsManagerStore(SecretStoreBase):
         """
         root_name = self._secret_name(auth_method, user_id, keys.EGRESS_PURPOSE)
         key = keys.map_key(provider, server_path)
-        encrypted = self._codec.encode(auth_method, user_id, provider, server_path, token)
+        encrypted = self._codec.encode(
+            auth_method, user_id, provider, server_path, token, purpose=keys.EGRESS_PURPOSE
+        )
         try:
             async with self._mutation_guard(root_name) as lease_state:
                 root = await self._call(self._get_document, root_name)
@@ -596,7 +602,9 @@ class SecretsManagerStore(SecretStoreBase):
         rows = await self._read_with_retry(lambda: self._list_raw_once(root_name))
         out: list[tuple[str, str, StoredToken]] = []
         for provider, server_path, raw in rows:
-            token = self._codec.decode(auth_method, user_id, provider, server_path, raw)
+            token = self._codec.decode(
+                auth_method, user_id, provider, server_path, raw, purpose=keys.EGRESS_PURPOSE
+            )
             if self._codec.needs_migration(raw):
                 self._schedule_repair(auth_method, user_id, provider, server_path, raw, token)
             out.append((provider, server_path, token))

@@ -703,31 +703,50 @@ class TestResolveOboDiscoveryBearer:
         monkeypatch.setattr(oauth_engine, "client_credentials_token", fake_grant)
         assert await backend_oauth.resolve_obo_discovery_bearer(_obo_server_info()) is None
 
-    async def test_keycloak_sends_no_default_scope(self, monkeypatch, _entra_gateway):
-        # Keycloak binds audience via a server-side mapper (follow-on): no .default
-        # scope is sent, and the token endpoint is the realm token URL.
+    async def test_keycloak_is_refused_rather_than_minting_an_unaudienced_token(
+        self, monkeypatch, _entra_gateway
+    ):
+        """Keycloak must resolve nothing, even when every setting looks correct.
+
+        This previously returned a token. Keycloak binds the audience through a
+        server-side audience mapper rather than a request scope, so no scope is sent --
+        and neither the charts nor the realm bootstrap create that mapper. The result was
+        a real token audienced to whatever Keycloak defaults to, NOT the server's
+        `target_audience`, sent to a third-party MCP server as `Authorization: Bearer`
+        with nothing downstream re-checking the audience.
+
+        The old HTTPS-only guard made this reachable by following its own advice: it told
+        the operator to set an externally reachable HTTPS Keycloak URL "to use
+        obo_exchange discovery", and doing so led straight here. Fail closed until the
+        mapper exists and the audience contract is testable.
+        """
         for attr, val in (
             ("auth_provider", "keycloak"),
-            ("keycloak_url", "https://kc.example.com"),
+            ("keycloak_url", "https://kc.example.com"),  # the HTTPS problem "fixed"
             ("keycloak_realm", "mcp-gateway"),
             ("keycloak_client_id", "kc-client"),
             ("keycloak_client_secret", "kc-secret"),
         ):
             monkeypatch.setattr(backend_oauth.settings, attr, val, raising=False)
-        captured = {}
 
-        async def fake_grant(cfg, client_id, secret, scopes):
-            captured["token_url"] = cfg.token_url
-            captured["scopes"] = scopes
-            return _token(access="KC")
+        async def fail_grant(*a, **k):
+            raise AssertionError("no token may be requested for a provider we cannot audience")
 
-        monkeypatch.setattr(oauth_engine, "client_credentials_token", fake_grant)
-        assert await backend_oauth.resolve_obo_discovery_bearer(_obo_server_info()) == "KC"
-        assert captured["scopes"] == []
-        assert (
-            captured["token_url"]
-            == "https://kc.example.com/realms/mcp-gateway/protocol/openid-connect/token"
-        )
+        monkeypatch.setattr(oauth_engine, "client_credentials_token", fail_grant)
+        assert await backend_oauth.resolve_obo_discovery_bearer(_obo_server_info()) is None
+
+    @pytest.mark.parametrize("provider", ["cognito", "okta", "auth0", "pingfederate", ""])
+    async def test_unsupported_providers_resolve_nothing(
+        self, monkeypatch, _entra_gateway, provider
+    ):
+        """Only Entra has a gateway client. `cognito` is the shipped compose default."""
+
+        async def fail_grant(*a, **k):
+            raise AssertionError(f"no token may be requested for provider={provider!r}")
+
+        monkeypatch.setattr(backend_oauth.settings, "auth_provider", provider, raising=False)
+        monkeypatch.setattr(oauth_engine, "client_credentials_token", fail_grant)
+        assert await backend_oauth.resolve_obo_discovery_bearer(_obo_server_info()) is None
 
     async def test_with_bearer_uses_obo_discovery_for_obo_server(self, monkeypatch, _entra_gateway):
         # Pure obo server: no auth_scheme=oauth, no oauth_discovery -> falls through

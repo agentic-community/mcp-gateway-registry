@@ -19,7 +19,11 @@ import pytest
 
 from registry.egress_auth.schemas import StoredToken
 from registry.secrets import keys
-from registry.secrets.credential_codec import CredentialCodec, build_credential_codec
+from registry.secrets.credential_codec import (
+    _AAD_PREFIX,
+    CredentialCodec,
+    build_credential_codec,
+)
 from registry.secrets.interfaces import SecretStoreError
 from registry.secrets.openbao.store import OpenBaoStore
 from registry.secrets.secrets_manager.store import SecretsManagerStore
@@ -48,13 +52,13 @@ class TestCredentialCodec:
     def test_disabled_codec_is_passthrough(self):
         codec = build_credential_codec("")
         assert codec.enabled is False
-        doc = codec.encode(*_ADDR, _token())
+        doc = codec.encode(*_ADDR, _token(), purpose=keys.EGRESS_PURPOSE)
         assert doc == _token().model_dump()
         assert codec.needs_migration(doc) is False
 
     def test_encode_produces_versioned_envelope_without_plaintext(self):
         codec = build_credential_codec(_KEY)
-        doc = codec.encode(*_ADDR, _token())
+        doc = codec.encode(*_ADDR, _token(), purpose=keys.EGRESS_PURPOSE)
         assert doc["_encrypted"] is True
         assert doc["version"] == 1
         assert doc["algorithm"] == "AES-256-GCM"
@@ -65,64 +69,87 @@ class TestCredentialCodec:
 
     def test_roundtrip(self):
         codec = build_credential_codec(_KEY)
-        doc = codec.encode(*_ADDR, _token())
-        got = codec.decode(*_ADDR, doc)
+        doc = codec.encode(*_ADDR, _token(), purpose=keys.EGRESS_PURPOSE)
+        got = codec.decode(*_ADDR, doc, purpose=keys.EGRESS_PURPOSE)
         assert got.access_token == "gho_super_secret_pat"
         assert got.refresh_token == "rt_super_secret_refresh"
         assert got.scopes == ["repo", "read:user"]
 
     def test_fresh_nonce_per_encryption(self):
         codec = build_credential_codec(_KEY)
-        a = codec.encode(*_ADDR, _token())
-        b = codec.encode(*_ADDR, _token())
+        a = codec.encode(*_ADDR, _token(), purpose=keys.EGRESS_PURPOSE)
+        b = codec.encode(*_ADDR, _token(), purpose=keys.EGRESS_PURPOSE)
         assert a["nonce"] != b["nonce"]
         assert a["ciphertext"] != b["ciphertext"]
 
     def test_cross_user_substitution_fails(self):
         codec = build_credential_codec(_KEY)
-        doc = codec.encode(*_ADDR, _token())
+        doc = codec.encode(*_ADDR, _token(), purpose=keys.EGRESS_PURPOSE)
         with pytest.raises(SecretStoreError, match="failed authentication"):
-            codec.decode("oauth2", "auth0|other", "github", "/github-mcp/mcp", doc)
+            codec.decode(
+                "oauth2",
+                "auth0|other",
+                "github",
+                "/github-mcp/mcp",
+                doc,
+                purpose=keys.EGRESS_PURPOSE,
+            )
 
     def test_cross_server_substitution_fails(self):
         codec = build_credential_codec(_KEY)
-        doc = codec.encode(*_ADDR, _token())
+        doc = codec.encode(*_ADDR, _token(), purpose=keys.EGRESS_PURPOSE)
         with pytest.raises(SecretStoreError, match="failed authentication"):
-            codec.decode("oauth2", "auth0|abc123", "github", "/other-mcp/mcp", doc)
+            codec.decode(
+                "oauth2",
+                "auth0|abc123",
+                "github",
+                "/other-mcp/mcp",
+                doc,
+                purpose=keys.EGRESS_PURPOSE,
+            )
 
     def test_cross_provider_substitution_fails(self):
         codec = build_credential_codec(_KEY)
-        doc = codec.encode(*_ADDR, _token())
+        doc = codec.encode(*_ADDR, _token(), purpose=keys.EGRESS_PURPOSE)
         with pytest.raises(SecretStoreError, match="failed authentication"):
-            codec.decode("oauth2", "auth0|abc123", "slack", "/github-mcp/mcp", doc)
+            codec.decode(
+                "oauth2",
+                "auth0|abc123",
+                "slack",
+                "/github-mcp/mcp",
+                doc,
+                purpose=keys.EGRESS_PURPOSE,
+            )
 
     def test_wrong_key_fails(self):
-        doc = build_credential_codec(_KEY).encode(*_ADDR, _token())
+        doc = build_credential_codec(_KEY).encode(*_ADDR, _token(), purpose=keys.EGRESS_PURPOSE)
         with pytest.raises(SecretStoreError, match="failed authentication"):
-            build_credential_codec("a-different-root-key-abcdefghijklmnop").decode(*_ADDR, doc)
+            build_credential_codec("a-different-root-key-abcdefghijklmnop").decode(
+                *_ADDR, doc, purpose=keys.EGRESS_PURPOSE
+            )
 
     def test_envelope_without_key_fails_closed(self):
-        doc = build_credential_codec(_KEY).encode(*_ADDR, _token())
+        doc = build_credential_codec(_KEY).encode(*_ADDR, _token(), purpose=keys.EGRESS_PURPOSE)
         with pytest.raises(SecretStoreError, match="not set"):
-            build_credential_codec("").decode(*_ADDR, doc)
+            build_credential_codec("").decode(*_ADDR, doc, purpose=keys.EGRESS_PURPOSE)
 
     def test_unsupported_envelope_fails(self):
         codec = build_credential_codec(_KEY)
-        doc = codec.encode(*_ADDR, _token())
+        doc = codec.encode(*_ADDR, _token(), purpose=keys.EGRESS_PURPOSE)
         doc["version"] = 999
         with pytest.raises(SecretStoreError, match="Unsupported"):
-            codec.decode(*_ADDR, doc)
+            codec.decode(*_ADDR, doc, purpose=keys.EGRESS_PURPOSE)
 
     def test_legacy_plaintext_decoded_and_flagged_for_migration(self):
         codec = build_credential_codec(_KEY)
         legacy = _token().model_dump()
         assert codec.needs_migration(legacy) is True
-        got = codec.decode(*_ADDR, legacy)
+        got = codec.decode(*_ADDR, legacy, purpose=keys.EGRESS_PURPOSE)
         assert got.access_token == "gho_super_secret_pat"
 
     def test_tamper_detected(self):
         codec = build_credential_codec(_KEY)
-        doc = codec.encode(*_ADDR, _token())
+        doc = codec.encode(*_ADDR, _token(), purpose=keys.EGRESS_PURPOSE)
         # Flip a byte of the ciphertext.
         import base64
 
@@ -130,13 +157,20 @@ class TestCredentialCodec:
         ct[0] ^= 0x01
         doc["ciphertext"] = base64.b64encode(bytes(ct)).decode("ascii")
         with pytest.raises(SecretStoreError, match="failed authentication"):
-            codec.decode(*_ADDR, doc)
+            codec.decode(*_ADDR, doc, purpose=keys.EGRESS_PURPOSE)
 
     def test_error_messages_never_leak_plaintext(self):
         codec = build_credential_codec(_KEY)
-        doc = codec.encode(*_ADDR, _token())
+        doc = codec.encode(*_ADDR, _token(), purpose=keys.EGRESS_PURPOSE)
         with pytest.raises(SecretStoreError) as exc:
-            codec.decode("oauth2", "auth0|other", "github", "/github-mcp/mcp", doc)
+            codec.decode(
+                "oauth2",
+                "auth0|other",
+                "github",
+                "/github-mcp/mcp",
+                doc,
+                purpose=keys.EGRESS_PURPOSE,
+            )
         assert "gho_super_secret_pat" not in str(exc.value)
         assert _KEY not in str(exc.value)
 
@@ -144,12 +178,15 @@ class TestCredentialCodec:
         codec = build_credential_codec(_KEY, require_encrypted=True)
         assert codec.require_encrypted is True
         with pytest.raises(SecretStoreError, match="REQUIRE_ENCRYPTED"):
-            codec.decode(*_ADDR, _token().model_dump())
+            codec.decode(*_ADDR, _token().model_dump(), purpose=keys.EGRESS_PURPOSE)
 
     def test_strict_mode_still_decodes_envelope(self):
         codec = build_credential_codec(_KEY, require_encrypted=True)
-        doc = codec.encode(*_ADDR, _token())
-        assert codec.decode(*_ADDR, doc).access_token == "gho_super_secret_pat"
+        doc = codec.encode(*_ADDR, _token(), purpose=keys.EGRESS_PURPOSE)
+        assert (
+            codec.decode(*_ADDR, doc, purpose=keys.EGRESS_PURPOSE).access_token
+            == "gho_super_secret_pat"
+        )
 
     def test_strict_mode_inert_without_key(self):
         # require_encrypted with no key must not silently enable strictness (a
@@ -157,7 +194,10 @@ class TestCredentialCodec:
         codec = build_credential_codec("", require_encrypted=True)
         assert codec.enabled is False
         assert codec.require_encrypted is False
-        assert codec.decode(*_ADDR, _token().model_dump()).access_token == "gho_super_secret_pat"
+        assert (
+            codec.decode(*_ADDR, _token().model_dump(), purpose=keys.EGRESS_PURPOSE).access_token
+            == "gho_super_secret_pat"
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -337,3 +377,58 @@ class TestSecretsManagerEncryption:
             await _sm(secrets_manager_client, encrypted=False).get_token(
                 *_ADDR, purpose=keys.EGRESS_PURPOSE
             )
+
+
+@pytest.mark.unit
+class TestPurposeIsCryptographicallyBound:
+    """The two purposes must be separated by the AEAD tag, not only by the storage path.
+
+    This codec's threat model explicitly includes a write-capable attacker on the backend
+    -- that is what `require_encrypted` defends against ("cannot downgrade an envelope to
+    plaintext or inject a plaintext token"). Under exactly that model, if `purpose` were
+    absent from the associated data, such an attacker could COPY a user's egress
+    ciphertext to the discovery address and the registry would then borrow the user's own
+    runtime credential for its headless calls. That is the precise separation the purpose
+    namespace exists to create, so path-only enforcement is not enough.
+    """
+
+    def test_egress_ciphertext_cannot_be_read_at_the_discovery_address(self):
+        codec = build_credential_codec(_KEY)
+        doc = codec.encode(*_ADDR, _token(), purpose=keys.EGRESS_PURPOSE)
+        with pytest.raises(SecretStoreError):
+            codec.decode(*_ADDR, doc, purpose=keys.DISCOVERY_PURPOSE)
+
+    def test_discovery_ciphertext_cannot_be_read_at_the_egress_address(self):
+        """The reverse direction matters too: it would hand the registry's designated
+        credential to that user's runtime hop."""
+        codec = build_credential_codec(_KEY)
+        doc = codec.encode(*_ADDR, _token(), purpose=keys.DISCOVERY_PURPOSE)
+        with pytest.raises(SecretStoreError):
+            codec.decode(*_ADDR, doc, purpose=keys.EGRESS_PURPOSE)
+
+    @pytest.mark.parametrize("purpose", ["egress", "discovery"])
+    def test_round_trip_within_a_purpose(self, purpose):
+        codec = build_credential_codec(_KEY)
+        doc = codec.encode(*_ADDR, _token(), purpose=purpose)
+        assert codec.decode(*_ADDR, doc, purpose=purpose).access_token == "gho_super_secret_pat"
+
+    def test_egress_aad_is_byte_identical_to_the_pre_purpose_form(self):
+        """The no-migration guarantee, at the crypto layer.
+
+        Every envelope written before purposes existed used an AAD with no purpose
+        segment, and all of them are egress. If the egress AAD ever gains one, every
+        already-vaulted credential fails authentication and every user must re-consent.
+        Do not "tidy" this into unconditionally appending the segment.
+        """
+        pre_purpose = _AAD_PREFIX + (
+            f"1|AES-256-GCM|v1|"
+            f"{keys.encode_segment(_ADDR[0])}|{keys.encode_segment(_ADDR[1])}|"
+            f"{keys.encode_segment(_ADDR[2])}|{keys.encode_segment(_ADDR[3])}"
+        ).encode("ascii")
+        assert CredentialCodec._aad(1, "AES-256-GCM", "v1", *_ADDR, keys.EGRESS_PURPOSE) == (
+            pre_purpose
+        )
+        # ...and a non-egress purpose appends exactly one encoded segment.
+        assert CredentialCodec._aad(1, "AES-256-GCM", "v1", *_ADDR, keys.DISCOVERY_PURPOSE) == (
+            pre_purpose + b"|" + keys.encode_segment(keys.DISCOVERY_PURPOSE).encode("ascii")
+        )
