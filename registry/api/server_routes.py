@@ -514,6 +514,47 @@ async def _disable_server_for_security(
     nginx_reload_scheduler.mark_dirty()
 
 
+async def _apply_unsafe_scan_decision(
+    path: str,
+    server_entry: dict,
+    scan_result: Any,
+    scan_config: Any,
+) -> bool:
+    """Act on a failed scan: block the unsafe tools, or disable the server.
+
+    Callers must already have checked ``scan_config.block_unsafe_servers``.
+
+    Args:
+        path: Server path, for example "/context7".
+        server_entry: Server metadata, passed to the search index on disable.
+        scan_result: The completed scan, read for ``raw_output``.
+        scan_config: Scan configuration carrying the two flags.
+
+    Returns:
+        True when the whole server was disabled.
+    """
+    blocked_tools: dict[str, Any] = {}
+    if scan_config.allow_unsafe_servers:
+        blocked_tools = await server_service.reconcile_security_blocks(path, scan_result.raw_output)
+
+    if blocked_tools:
+        # Opt-in path: the server stays enabled and only its unsafe tools are
+        # blocked. auth_server rejects them on tools/call and hides them from
+        # tools/list.
+        logger.warning(
+            f"Blocked {len(blocked_tools)} unsafe tool(s) on {path} instead of "
+            f"disabling the server: {sorted(blocked_tools)}"
+        )
+        return False
+
+    # Fail closed. Two ways to land here: the opt-in is off, or it is on but the
+    # scan blamed no individual tool (a server-level finding). Staying enabled on
+    # the second one would turn the opt-in into a silent bypass of
+    # block_unsafe_servers.
+    await _disable_server_for_security(path, server_entry)
+    return True
+
+
 async def _perform_security_scan_on_registration(
     path: str,
     proxy_pass_url: str,
@@ -582,26 +623,12 @@ async def _perform_security_scan_on_registration(
 
             # Disable server if configured
             if scan_config.block_unsafe_servers:
-                blocked_tools: dict[str, Any] = {}
-                if scan_config.allow_unsafe_servers:
-                    blocked_tools = await server_service.reconcile_security_blocks(
-                        path, scan_result.raw_output
-                    )
-
-                if blocked_tools:
-                    # Opt-in path: the server stays enabled and only its unsafe
-                    # tools are blocked. auth_server rejects them on tools/call.
-                    logger.warning(
-                        f"Blocked {len(blocked_tools)} unsafe tool(s) on {path} instead of "
-                        f"disabling the server: {sorted(blocked_tools)}"
-                    )
-                else:
-                    # Fail closed. Two ways to land here: the opt-in is off, or it
-                    # is on but the scan blamed no individual tool (a server-level
-                    # finding). Staying enabled on the second one would turn the
-                    # opt-in into a silent bypass of block_unsafe_servers.
-                    await _disable_server_for_security(path, server_entry)
-                    auto_disabled = True
+                auto_disabled = await _apply_unsafe_scan_decision(
+                    path,
+                    server_entry,
+                    scan_result,
+                    scan_config,
+                )
         else:
             logger.info(f"Server {path} passed security scan")
 
@@ -5902,10 +5929,36 @@ async def rescan_server(
             mcp_endpoint=server_info.get("mcp_endpoint"),
         )
 
+        # Apply the per-tool block on rescan too, not just at registration.
+        # Without this, enabling SECURITY_ALLOW_UNSAFE_SERVERS protects only
+        # servers registered afterwards: an operator could enable it, rescan an
+        # already-registered server the scanner flags HIGH, and still get no
+        # block at all.
+        #
+        # Deliberately gated on allow_unsafe_servers alone. Reusing the full
+        # registration decision here would also start applying the pre-existing
+        # whole-server disable, which defaults ON, and would change rescan
+        # behaviour for everyone. With the opt-in off, this branch does nothing
+        # and rescan behaves exactly as before.
+        rescan_config = security_scanner_service.get_scan_config()
+        auto_disabled = False
+        if (
+            not scan_result.is_safe
+            and rescan_config.block_unsafe_servers
+            and rescan_config.allow_unsafe_servers
+        ):
+            auto_disabled = await _apply_unsafe_scan_decision(
+                path,
+                server_info,
+                scan_result,
+                rescan_config,
+            )
+
         # Return the scan result data
         return {
             "server_url": scan_result.server_url,
             "server_path": path,
+            "auto_disabled": auto_disabled,
             "scan_timestamp": scan_result.scan_timestamp,
             "is_safe": scan_result.is_safe,
             "critical_issues": scan_result.critical_issues,
