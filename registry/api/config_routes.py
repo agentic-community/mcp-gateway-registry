@@ -217,6 +217,7 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             ("security_scan_enabled", "Scan Enabled", False),
             ("security_scan_on_registration", "Scan on Registration", False),
             ("security_block_unsafe_servers", "Block Unsafe", False),
+            ("security_allow_unsafe_servers", "Allow Unsafe, Block Tools", False),
             ("security_analyzers", "Analyzers", False),
             ("security_scan_timeout", "Scan Timeout", False),
             ("security_add_pending_tag", "Add Pending Tag", False),

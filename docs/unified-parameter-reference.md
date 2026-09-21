@@ -521,6 +521,7 @@ Only the Helm `mcpgw` subchart and Docker expose these today.
 | Enable scanning | `SECURITY_SCAN_ENABLED` | — | — | — |
 | Scan on registration | `SECURITY_SCAN_ON_REGISTRATION` | — | — | — |
 | Block unsafe | `SECURITY_BLOCK_UNSAFE_SERVERS` | — | — | — |
+| Allow unsafe, block tools | `SECURITY_ALLOW_UNSAFE_SERVERS` | `security_allow_unsafe_servers` | — | Keep a failing server enabled with only its HIGH/CRITICAL tools blocked. Needs `SECURITY_BLOCK_UNSAFE_SERVERS=true`. |
 | Analyzers | `SECURITY_ANALYZERS` | — | — | `yara`, `llm`, `api` (comma-separated). |
 | Scan timeout | `SECURITY_SCAN_TIMEOUT` | — | — | Seconds. |
 | Add pending tag | `SECURITY_ADD_PENDING_TAG` | — | — | Tag servers that fail scan. |

@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from ..core.metrics import ASSET_ID_CONFLICT_TOTAL
@@ -330,7 +330,7 @@ class ServerService:
         return result
 
     @staticmethod
-    def _is_safe_override_key(tool_name: str) -> bool:
+    def is_safe_override_key(tool_name: str) -> bool:
         """Whether a tool name can be used as a Mongo field key.
 
         Tool names become keys under ``tool_overrides``. A name containing
@@ -359,7 +359,7 @@ class ServerService:
         Returns:
             True if the server was found and updated.
         """
-        if not self._is_safe_override_key(tool_name):
+        if not self.is_safe_override_key(tool_name):
             logger.warning(
                 f"Refusing to set override for unusable tool key: "
                 f"server='{path}' tool='{tool_name}'"
@@ -370,7 +370,7 @@ class ServerService:
             "blocked": blocked,
             "source": source,
             "reason": reason,
-            "updated_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.now(UTC).isoformat(),
             "updated_by": updated_by or "system",
         }
         # No cache to invalidate: the proxy reads block state fresh on every
@@ -414,7 +414,7 @@ class ServerService:
                 severity = str(analyzer_findings.get("severity", "")).lower()
                 if severity not in cls._AUTO_BLOCK_SEVERITIES:
                     continue
-                if not cls._is_safe_override_key(tool_name):
+                if not cls.is_safe_override_key(tool_name):
                     logger.warning(
                         f"Scan flagged '{tool_name}' as {severity.upper()} but the name "
                         f"cannot be used as an override key; NOT auto-blocking"
@@ -455,7 +455,7 @@ class ServerService:
                 new_overrides[tool_name] = entry
 
         # 2. Auto-block currently-flagged tools that have no admin decision.
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(UTC).isoformat()
         for tool_name, reason in unsafe.items():
             if tool_name in new_overrides:
                 continue  # admin already decided; leave it alone

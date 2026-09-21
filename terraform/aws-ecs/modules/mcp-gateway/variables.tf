@@ -513,6 +513,12 @@ variable "security_block_unsafe_servers" {
   default     = true
 }
 
+variable "security_allow_unsafe_servers" {
+  description = "Keep a server that fails its scan enabled with only its HIGH/CRITICAL tools blocked. Requires security_block_unsafe_servers=true"
+  type        = bool
+  default     = false
+}
+
 variable "security_analyzers" {
   description = "Comma-separated list of analyzers to use for security scanning (available: yara, llm, api)"
   type        = string

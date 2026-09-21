@@ -97,7 +97,7 @@ class ToolOverride(BaseModel):
 
     blocked: bool = Field(
         default=False,
-        description="True when the tool is blocked (hidden from listings and rejected on call)",
+        description="True when the tool is blocked, meaning tools/call is rejected",
     )
     source: str = Field(
         default="admin",
