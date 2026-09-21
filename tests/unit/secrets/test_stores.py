@@ -397,7 +397,7 @@ class TestOverflowStaleReadRetry:
             "oauth2", "alice", "slack", "/slack", tok_b, purpose=keys.EGRESS_PURPOSE
         )
         # The principal name is encoded; derive the real root secret id from the store.
-        root_name = store._secret_name("oauth2", "alice")
+        root_name = store._secret_name("oauth2", "alice", keys.EGRESS_PURPOSE)
         # Confirm we are actually in the sharded layout.
         root = client.get_secret_value(SecretId=root_name)["SecretString"]
         assert "_egress" in root, "test setup did not reach sharded layout"

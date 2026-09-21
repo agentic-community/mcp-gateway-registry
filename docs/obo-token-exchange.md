@@ -287,18 +287,20 @@ requested in issue #966).
 
 ### Enabling it
 
-**Supported identity providers.** The gateway mints this machine token against its own
-IdP, and only two are implemented: `AUTH_PROVIDER=entra` and `AUTH_PROVIDER=keycloak`.
-Any other value — including the shipped default `cognito`, and `okta`, `auth0` or
-`pingfederate` — has no gateway client to mint from, so discovery resolves nothing and
-the server reports unhealthy with `obo discovery unavailable: gateway IdP client not
-configured`. Combined with the Keycloak constraints below, backend discovery for
-`obo_exchange` servers is **Entra-only in practice**, and requires the manual app
-registration in the next section. Nothing in a default deployment reaches it.
+**Supported identity providers: Entra only.** The gateway mints this machine token
+against its own IdP, and `AUTH_PROVIDER=entra` is the only value implemented. Every
+other — including the shipped default `cognito`, plus `keycloak`, `okta`, `auth0` and
+`pingfederate` — resolves nothing, and the server reports unhealthy. `keycloak` is
+refused deliberately rather than partially working; see [Keycloak](#keycloak) below.
+Backend discovery for `obo_exchange` servers therefore requires Entra plus the manual
+app registration in the next section, and **nothing in a default deployment reaches
+it**.
 
 No extra **registry** configuration: discovery activates automatically for a server
-when `EGRESS_AUTH_ENABLED=true` and `egress_auth_mode=obo_exchange`, reusing the
-registered `egress_oauth.target_audience`. The `target_audience` is re-validated at
+when `EGRESS_AUTH_ENABLED=true`, `egress_auth_mode=obo_exchange`, and the server has
+**no explicit `auth_scheme`** (`none`) — an operator's static credential always wins
+over a derived one — reusing the registered `egress_oauth.target_audience`. The
+`target_audience` is re-validated at
 mint time against the **full** registration control, not just part of it — the
 always-on first-party floor (so the machine token can never be minted for Microsoft
 Graph / ARM / Key Vault), the `EGRESS_OBO_ALLOWED_AUDIENCES` allowlist / shape rule,
@@ -352,27 +354,38 @@ user tokens will still fail discovery.
 
 ### Keycloak
 
-**Not usable on a standard deployment today.** Two blockers, in the order you hit
-them:
+**Refused outright, deliberately.** `_gateway_idp_client` returns nothing for
+`AUTH_PROVIDER=keycloak` regardless of how Keycloak is configured, and logs:
 
-1. **`KEYCLOAK_URL` must be an externally reachable HTTPS URL.** The token request
+```
+obo discovery unavailable: AUTH_PROVIDER=keycloak is not supported for backend
+discovery. Keycloak binds the token audience with a server-side audience mapper that
+this deployment does not create, so the gateway cannot prove a token is audienced to
+the target. Use AUTH_PROVIDER=entra for obo_exchange discovery.
+```
+
+There is no configuration that enables it. That is a change from "nearly working",
+and the reason is the second of two problems:
+
+1. **`KEYCLOAK_URL` is plain HTTP on every shipped deployment.** The token request
    carries the gateway's own `client_secret`, so it goes through the credentialed
-   OAuth SSRF profile, which requires HTTPS and refuses private hosts. Every
-   standard deployment points `KEYCLOAK_URL` at an in-cluster plain-HTTP address
-   (`http://keycloak:8080` on Compose, the headless Service on Helm), which that
-   profile rejects — so the request never leaves the registry. This is deliberate:
-   the fix is an HTTPS Keycloak URL, not a relaxed guard, because the alternative is
-   posting a client secret in cleartext. The registry logs
-   `obo discovery unavailable: KEYCLOAK_URL is ... must be HTTPS` so this is
-   diagnosable rather than appearing as a generic policy rejection.
-2. **Audience binding.** Keycloak binds the audience via a server-side **audience**
-   protocol mapper / client scope on the gateway's service-account client (not a
-   request scope), so no `.default` is sent. Enable *Service accounts* on the
-   gateway client and add an audience mapper for the target client.
+   OAuth SSRF profile, which requires HTTPS and refuses private hosts
+   (`http://keycloak:8080` on Compose, the headless Service on Helm). Relaxing that
+   guard is not the fix, because the alternative is posting a client secret in
+   cleartext.
+2. **Keycloak cannot be given a target audience in the request.** It binds audience
+   through a server-side **audience** protocol mapper on the gateway's service-account
+   client, not a request scope, so no `.default` is sent — and neither the charts nor
+   the realm bootstrap create that mapper.
 
-Until both are addressed, `obo_exchange` backend discovery is Entra-only in
-practice. Under Keycloak the affected servers simply record **unhealthy**, per
-*Failure behavior* below.
+Problem 2 is why the refusal is unconditional rather than gated on HTTPS. Fixing only
+problem 1 used to get past the guard and mint a **real token audienced to whatever
+Keycloak defaults to** — not the server's `target_audience` — which was then sent to a
+third-party MCP server as `Authorization: Bearer`, with nothing downstream re-checking
+`aud`. Failing closed is the only honest state until the mapper is created and the
+audience contract is testable.
+
+Under Keycloak the affected servers record **unhealthy**, per *Failure behavior* below.
 
 ### Failure behavior
 

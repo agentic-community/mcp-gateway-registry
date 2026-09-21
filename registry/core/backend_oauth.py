@@ -172,6 +172,15 @@ async def resolve_bearer(server_info: dict) -> str | None:
     failure so the caller simply omits the Authorization header -- the health
     check then fails/records unhealthy, which is the correct signal. Cached per
     server path with a single-flight lock and config-fingerprint invalidation.
+
+    ``token_url`` MUST be HTTPS. The request carries the operator's ``client_secret``, so
+    it runs under ``CREDENTIALED_OAUTH_PROFILE``, whose ``require_https`` cannot be
+    relaxed -- ``EGRESS_OAUTH_TRUSTED_IDP_HOSTS`` admits a private *host* but never a
+    plaintext scheme. A plain-HTTP IdP is therefore un-onboardable through this tier,
+    including this project's own bundled Keycloak. ``PUT /oauth-config`` validates the
+    URL eagerly so that surfaces as a 400 at config time rather than a silent
+    health-cycle failure -- except for a host that only *resolves* private, since that
+    validation runs with ``resolve=False`` to stay DNS-independent.
     """
     if server_info.get("auth_scheme") != "oauth":
         return None
@@ -524,7 +533,8 @@ async def resolve_obo_discovery_bearer(server_info: dict) -> str | None:
     client = _gateway_idp_client()
     if client is None:
         logger.warning(
-            "obo discovery: gateway IdP client not configured provider=%s path=%s",
+            "obo discovery unavailable: no gateway IdP client usable for backend "
+            "discovery with provider=%s (only 'entra' is supported) path=%s",
             settings.auth_provider,
             _server_path(server_info),
         )
