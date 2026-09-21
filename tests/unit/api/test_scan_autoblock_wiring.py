@@ -142,3 +142,82 @@ class TestScanAutoBlockWiring:
 
         assert out["disabled"] is False
         assert out["reconciled"] is False
+
+
+class TestRescanAppliesTheBlock:
+    """Rescan must reconcile too, or the opt-in only ever protects new servers.
+
+    Before this, `reconcile_security_blocks` ran only at registration. An
+    operator could enable SECURITY_ALLOW_UNSAFE_SERVERS, rescan a server the
+    scanner flags HIGH, and get no block, because rescan recorded the scan and
+    applied no decision at all.
+
+    The rescan branch is gated on allow_unsafe_servers alone, so with the opt-in
+    off it does nothing and rescan behaves exactly as it did before.
+    """
+
+    async def _rescan(
+        self,
+        allow_unsafe: bool,
+        block_unsafe: bool = True,
+        is_safe: bool = False,
+        reconcile_returns: dict | None = None,
+    ) -> dict:
+        from registry.api.server_routes import rescan_server
+
+        scan = _failed_scan() if not is_safe else _failed_scan()
+        scan.is_safe = is_safe
+
+        scanner = AsyncMock()
+        scanner.scan_server = AsyncMock(return_value=scan)
+        scanner.get_scan_config = lambda: _scan_config(allow_unsafe, block_unsafe)
+
+        svc = AsyncMock()
+        svc.get_server_info = AsyncMock(
+            return_value={"server_name": "S", "path": SERVER_PATH, "proxy_pass_url": "http://x/"}
+        )
+        svc.reconcile_security_blocks = AsyncMock(return_value=reconcile_returns or {})
+
+        with (
+            patch("registry.api.server_routes.security_scanner_service", scanner),
+            patch("registry.api.server_routes.server_service", svc),
+            patch(
+                "registry.api.server_routes._disable_server_for_security", AsyncMock()
+            ) as disable,
+            patch("registry.api.server_routes._build_scan_headers_from_credentials", lambda *_: None),
+        ):
+            out = await rescan_server(SERVER_PATH, user_context={"is_admin": True, "username": "a"})
+            return {
+                "reconciled": svc.reconcile_security_blocks.await_count == 1,
+                "disabled": disable.await_count == 1,
+                "response": out,
+            }
+
+    async def test_opt_in_off_changes_nothing(self):
+        """The whole point: existing deployments see identical rescan behaviour."""
+        out = await self._rescan(allow_unsafe=False)
+
+        assert out["reconciled"] is False
+        assert out["disabled"] is False
+
+    async def test_opt_in_on_blocks_the_flagged_tool(self):
+        out = await self._rescan(
+            allow_unsafe=True,
+            reconcile_returns={"bad_tool": {"blocked": True}},
+        )
+
+        assert out["reconciled"] is True
+        assert out["disabled"] is False
+
+    async def test_opt_in_on_with_nothing_blamed_disables(self):
+        """Same fail-closed rule as the registration path."""
+        out = await self._rescan(allow_unsafe=True, reconcile_returns={})
+
+        assert out["reconciled"] is True
+        assert out["disabled"] is True
+
+    async def test_safe_scan_does_nothing(self):
+        out = await self._rescan(allow_unsafe=True, is_safe=True)
+
+        assert out["reconciled"] is False
+        assert out["disabled"] is False
