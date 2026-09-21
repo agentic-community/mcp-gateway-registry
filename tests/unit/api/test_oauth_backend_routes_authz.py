@@ -212,6 +212,54 @@ class TestOAuthConfigReadAuthz:
         assert resp.status_code == 403, resp.text
         mock_server_service.update_server.assert_not_awaited()
 
+    def test_delete_revokes_the_vaulted_token(self, client_owner, server_record):
+        """Clearing the designation must also delete the credential it was borrowing.
+
+        This is the endpoint an operator uses to turn discovery off. Clearing only the
+        designation leaves a live delegated token for a real person in the vault, with no
+        way to reach it: discovery entries are deliberately absent from that user's
+        Connected Accounts, so they cannot self-service it, and server deletion does not
+        touch it either.
+
+        The revoke must address the DESIGNATION's principal, not the caller's -- an admin
+        may be revoking on someone else's behalf.
+        """
+        svc = AsyncMock()
+        with patch("registry.egress_auth.factory.get_egress_auth_service", return_value=svc):
+            resp = client_owner.request("DELETE", "/api/servers/test-server/oauth-discovery")
+        assert resp.status_code == 200, resp.text
+        svc.disconnect.assert_awaited_once()
+        kwargs = svc.disconnect.await_args.kwargs
+        disc = server_record["oauth_discovery"]
+        assert kwargs["auth_method"] == disc["auth_method"]
+        assert kwargs["user_id"] == disc["user_id"]
+        assert kwargs["provider"] == disc["oauth"]["provider"]
+        assert kwargs["server_path"] == "/test-server"
+        assert kwargs["purpose"] == "discovery", "must not revoke the user's egress credential"
+
+    def test_delete_still_succeeds_when_the_vault_revoke_fails(self, client_owner):
+        """The designation is already gone, so discovery has stopped borrowing either way.
+
+        Failing the request would leave the operator unable to complete the action at all.
+        The residue is logged loudly instead.
+        """
+        svc = AsyncMock()
+        svc.disconnect.side_effect = RuntimeError("vault down")
+        with patch("registry.egress_auth.factory.get_egress_auth_service", return_value=svc):
+            resp = client_owner.request("DELETE", "/api/servers/test-server/oauth-discovery")
+        assert resp.status_code == 200, resp.text
+
+    def test_delete_with_no_consent_recorded_does_not_call_the_vault(
+        self, client_owner, server_record
+    ):
+        """A designation may never have been consented, so there is nothing to revoke."""
+        server_record["oauth_discovery"].pop("user_id")
+        svc = AsyncMock()
+        with patch("registry.egress_auth.factory.get_egress_auth_service", return_value=svc):
+            resp = client_owner.request("DELETE", "/api/servers/test-server/oauth-discovery")
+        assert resp.status_code == 200, resp.text
+        svc.disconnect.assert_not_awaited()
+
     @pytest.mark.parametrize(
         "leaked",
         [

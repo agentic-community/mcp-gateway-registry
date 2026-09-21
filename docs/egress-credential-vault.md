@@ -276,32 +276,38 @@ builds keys through `registry/secrets/keys.py`, which applies **one** canonical
 encoding: NFC-normalize, then **base64url (unpadded)**, so each segment contains
 only `[A-Za-z0-9_-]` — never `/`, `|`, `%`, or `=`.
 
-### The key carries no consent `purpose`
+### The key carries the consent `purpose`
 
-One address serves both consent purposes. A `purpose=egress` consent (a user
-connecting their own account for runtime calls) and a `purpose=discovery` consent
-(an admin designating the identity the registry borrows for its own headless
-health checks and tool discovery — see
-[OAuth 2.1 backend discovery](obo-token-exchange.md)) both resolve to
-`(auth_method, user_id, provider, server_path)`.
+Each consent purpose has its **own address space**. A `purpose=egress` consent (a
+user connecting their own account for runtime calls) and a `purpose=discovery`
+consent (an admin designating the identity the registry borrows for its own
+headless health checks and tool discovery — see
+[OAuth 2.1 backend discovery](obo-token-exchange.md)) never resolve to the same
+entry, even for the same principal, provider and server.
 
-That matters when the same principal does both for the same provider **and** the
-same server, because the two consents may use different OAuth clients and scopes:
+`keys.namespaced_prefix` builds the prefix. For `egress` it returns the configured
+prefix **unchanged** — that is deliberate, because every entry written before
+purposes existed is an egress entry, so existing addresses are byte-identical and
+no migration or re-consent is needed. `discovery` nests one segment deeper, inside
+the same configured prefix, so vault policies and IAM scoping that grant the prefix
+keep working untouched:
 
-- **Different `client_id`** — the vend refuses the mismatch and forces re-consent,
-  so each consent *evicts* the other. Headless discovery and that user's runtime
-  egress would take turns breaking, each repaired by a re-consent that breaks the
-  other.
-- **Same `client_id`, different scopes** — the later consent silently changes what
-  the earlier one presents. A user action the registry does not mediate would
-  re-scope the registry's own headless credential.
+```
+egress/b2F1dGgy/YWxpY2U/Z2l0aHVi/L2dpdGh1Yi1tY3A                 <- egress:    4 segments
+egress/ZGlzY292ZXJ5/b2F1dGgy/YWxpY2U/Z2l0aHVi/L2dpdGh1Yi1tY3A    <- discovery: 5 segments
+```
 
-So the callback **refuses to overwrite** an entry bound to a different client,
-rather than clobbering it: the second consent fails with "a different OAuth client
-is already connected for this provider and server". Disconnect the existing
-connection first if you genuinely mean to replace it. The check runs before the
-code exchange, so a single-use authorization code is never spent on a consent that
-will be rejected.
+Depth alone makes a collision impossible, so the two purposes cannot evict,
+re-scope, or read each other. That is why there is no cross-purpose consent check
+to describe: the same principal can hold their own runtime connection to a server
+**and** be the designated discovery identity for it at the same time, and both
+stand. `get_valid_token` takes `purpose` as a required argument with no default,
+because a default is precisely how a caller would cross the boundary by omission.
+
+One consequence to be aware of: `list_for_user` reads the egress space only, so a
+borrowed discovery identity does **not** appear in the consenting user's Connected
+Accounts. Remove it through the server's discovery config
+(`DELETE /api/servers/{path}/oauth-discovery`), which also revokes the stored token.
 
 ### The canonical `user_id` (OIDC `sub`)
 

@@ -1570,5 +1570,6 @@ async def disconnect(
         user_id=user_context.get("egress_user") or user_context.get("username") or "",
         provider=provider,
         server_path=server_path,
+        purpose=keys.EGRESS_PURPOSE,
     )
     return {"status": "revoked"}
