@@ -7,6 +7,7 @@ from ..core.metrics import ASSET_ID_CONFLICT_TOTAL
 from ..exceptions import AssetIdConflictError
 from ..repositories.factory import get_server_repository
 from ..repositories.interfaces import ServerRepositoryBase
+from ..schemas.security import ToolOverride
 from ..utils.credential_encryption import (
     _migrate_auth_type_to_auth_scheme,
     strip_credentials_from_dict,
@@ -366,13 +367,13 @@ class ServerService:
             )
             return False
 
-        override = {
-            "blocked": blocked,
-            "source": source,
-            "reason": reason,
-            "updated_at": datetime.now(UTC).isoformat(),
-            "updated_by": updated_by or "system",
-        }
+        override = ToolOverride(
+            blocked=blocked,
+            source=source,
+            reason=reason,
+            updated_at=datetime.now(UTC).isoformat(),
+            updated_by=updated_by or "system",
+        ).model_dump()
         # No cache to invalidate: the proxy reads block state fresh on every
         # tools/call, so the change takes effect on the next request.
         return await self._repo.set_tool_override(path, tool_name, override)
@@ -459,13 +460,13 @@ class ServerService:
         for tool_name, reason in unsafe.items():
             if tool_name in new_overrides:
                 continue  # admin already decided; leave it alone
-            new_overrides[tool_name] = {
-                "blocked": True,
-                "source": "security_scan",
-                "reason": reason,
-                "updated_at": now,
-                "updated_by": "system",
-            }
+            new_overrides[tool_name] = ToolOverride(
+                blocked=True,
+                source="security_scan",
+                reason=reason,
+                updated_at=now,
+                updated_by="system",
+            ).model_dump()
 
         # Anything previously auto-blocked but no longer flagged simply is not
         # carried forward, which clears the block.
