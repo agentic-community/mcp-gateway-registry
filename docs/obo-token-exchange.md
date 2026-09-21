@@ -287,6 +287,15 @@ requested in issue #966).
 
 ### Enabling it
 
+**Supported identity providers.** The gateway mints this machine token against its own
+IdP, and only two are implemented: `AUTH_PROVIDER=entra` and `AUTH_PROVIDER=keycloak`.
+Any other value — including the shipped default `cognito`, and `okta`, `auth0` or
+`pingfederate` — has no gateway client to mint from, so discovery resolves nothing and
+the server reports unhealthy with `obo discovery unavailable: gateway IdP client not
+configured`. Combined with the Keycloak constraints below, backend discovery for
+`obo_exchange` servers is **Entra-only in practice**, and requires the manual app
+registration in the next section. Nothing in a default deployment reaches it.
+
 No extra **registry** configuration: discovery activates automatically for a server
 when `EGRESS_AUTH_ENABLED=true` and `egress_auth_mode=obo_exchange`, reusing the
 registered `egress_oauth.target_audience`. The `target_audience` is re-validated at
