@@ -20,6 +20,7 @@ import pytest
 from botocore.exceptions import ClientError
 
 from registry.egress_auth.schemas import StoredToken
+from registry.secrets import keys
 from registry.secrets.secrets_manager.store import SecretsManagerStore
 
 pytestmark = [pytest.mark.integration, pytest.mark.live, pytest.mark.asyncio]
@@ -105,7 +106,9 @@ async def test_live_aws_secrets_manager_integration_overflow_lifecycle(
 
     # Step 1: First token fits inline (single JSON map, no manifest).
     print("\n[1] put_token github — expecting inline layout")
-    await store.put_token("oauth2", "integration-user", "github", "/github", token_a)
+    await store.put_token(
+        "oauth2", "integration-user", "github", "/github", token_a, purpose=keys.EGRESS_PURPOSE
+    )
     root_name = store._secret_name("oauth2", "integration-user")
     inline = json.loads(client.get_secret_value(SecretId=root_name)["SecretString"])
     inline_size = len(json.dumps(inline).encode("utf-8"))
@@ -119,7 +122,9 @@ async def test_live_aws_secrets_manager_integration_overflow_lifecycle(
 
     # Step 2: Second token overflows to sharded layout.
     print("\n[2] put_token slack — expecting overflow to sharded layout")
-    await store.put_token("oauth2", "integration-user", "slack", "/slack", token_b)
+    await store.put_token(
+        "oauth2", "integration-user", "slack", "/slack", token_b, purpose=keys.EGRESS_PURPOSE
+    )
     manifest = json.loads(client.get_secret_value(SecretId=root_name)["SecretString"])
     assert "_egress" in manifest, (
         f"Expected sharded manifest but got bare map: {list(manifest.keys())}"
@@ -140,7 +145,9 @@ async def test_live_aws_secrets_manager_integration_overflow_lifecycle(
 
     # Step 3: Read a specific token back from a shard.
     print("\n[3] get_token github — reading from shard")
-    github = await store.get_token("oauth2", "integration-user", "github", "/github")
+    github = await store.get_token(
+        "oauth2", "integration-user", "github", "/github", purpose=keys.EGRESS_PURPOSE
+    )
     assert github is not None and github.access_token == token_a.access_token
     print(f"    access_token length: {len(github.access_token)}")
     print(f"    refresh_token present: {github.refresh_token is not None}")
@@ -156,7 +163,9 @@ async def test_live_aws_secrets_manager_integration_overflow_lifecycle(
 
     # Step 5: Delete one token — should compact back to inline.
     print("\n[5] delete_token slack — expecting compaction to inline")
-    await store.delete_token("oauth2", "integration-user", "slack", "/slack")
+    await store.delete_token(
+        "oauth2", "integration-user", "slack", "/slack", purpose=keys.EGRESS_PURPOSE
+    )
     after_delete = json.loads(client.get_secret_value(SecretId=root_name)["SecretString"])
     after_size = len(json.dumps(after_delete).encode("utf-8"))
     if "_egress" not in after_delete:
@@ -167,12 +176,19 @@ async def test_live_aws_secrets_manager_integration_overflow_lifecycle(
         print(f"    Layout: still sharded ({after_size} bytes, target={store._target_bytes})")
         print("    (remaining entry near target boundary — acceptable)")
     # Either way, the deleted token must not be retrievable.
-    assert await store.get_token("oauth2", "integration-user", "slack", "/slack") is None
+    assert (
+        await store.get_token(
+            "oauth2", "integration-user", "slack", "/slack", purpose=keys.EGRESS_PURPOSE
+        )
+        is None
+    )
     print("    ✓ deleted token is gone")
 
     # Step 6: Delete last token — root secret removed entirely.
     print("\n[6] delete_token github — expecting full cleanup")
-    await store.delete_token("oauth2", "integration-user", "github", "/github")
+    await store.delete_token(
+        "oauth2", "integration-user", "github", "/github", purpose=keys.EGRESS_PURPOSE
+    )
     print(f"    Active secrets remaining: {len(client.active_names)}")
     assert not client.active_names, f"Leaked secrets: {client.active_names}"
     print("    ✓ all secrets cleaned up")

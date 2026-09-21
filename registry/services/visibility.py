@@ -94,6 +94,47 @@ def redact_server_backend_fields(
     return server_dict
 
 
+def redact_oauth_config_for_non_owner(
+    server_dict: dict,
+    user_context: dict | None,
+) -> dict:
+    """Strip the backend-OAuth and discovery-identity config blocks in place unless
+    the caller owns the server (or is an admin).
+
+    ``backend_oauth`` and ``oauth_discovery`` describe the credentials the REGISTRY
+    uses for its own headless calls. Their dedicated endpoints
+    (``GET /servers/{path}/oauth-config``, ``GET /servers/{path}/oauth-discovery``)
+    are owner-or-admin, because ``modify_service`` alone is granted to anyone holding
+    an ``/execute`` scope. ``GET /server_details`` gates only on
+    ``user_can_access_server_path``, which is weaker still, so without this it is a
+    read-side bypass of those guards.
+
+    Secret ciphertext is already removed everywhere by the recursive projection in
+    ``utils.credential_encryption``; what leaks here is the non-secret-but-sensitive
+    remainder: ``token_url``, ``client_id``, the custom authorize/token endpoints, and
+    the designated principal's OIDC ``user_id``.
+
+    The blocks are dropped wholesale rather than field-filtered: no non-owner UI reads
+    them, and an allowlist here would silently start leaking any field added later.
+
+    Args:
+        server_dict: A server dict to redact in place.
+        user_context: Authenticated user context, or None if auth is absent.
+
+    Returns:
+        The same dict, with the OAuth config blocks removed for non-owners.
+    """
+    if user_context and user_context.get("is_admin"):
+        return server_dict
+    username = (user_context or {}).get("username")
+    # Fails closed: an absent username or registered_by cannot establish ownership.
+    if username and server_dict.get("registered_by") == username:
+        return server_dict
+    for field in ("backend_oauth", "oauth_discovery"):
+        server_dict.pop(field, None)
+    return server_dict
+
+
 # Agent card backend-URL fields to strip for non-admins in with-gateway mode.
 # In A2A reverse-proxy mode the registrant's real backend is stored in
 # proxy_pass_url (the advertised ``url`` is the gateway address), so proxy_pass_url

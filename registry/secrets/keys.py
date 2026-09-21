@@ -77,20 +77,55 @@ def map_key(provider: str, server_path: str) -> str:
     return f"{encode_segment(provider)}{MAP_KEY_DELIMITER}{encode_segment(server_path)}"
 
 
+# Consent purposes. These name the two DISJOINT address spaces in the vault, which is
+# what keeps them from interfering: an end user's own runtime credential and the
+# identity the registry borrows for its headless calls are different concerns that
+# happen to share a principal, a provider and a server, so sharing one address made
+# every interaction between them a special case (collision on write, cross-reads,
+# reclassification on refresh). Separate spaces remove the class rather than guarding it.
+EGRESS_PURPOSE = "egress"
+DISCOVERY_PURPOSE = "discovery"
+
+
+def namespaced_prefix(prefix: str, purpose: str) -> str:
+    """Return the vault prefix for ``purpose``.
+
+    ``egress`` yields the prefix UNCHANGED. That is deliberate: every
+    entry written before purposes existed is an egress entry, so leaving that space
+    untouched means no migration and no re-consent -- existing addresses are
+    byte-identical. Any other purpose gets its own sub-namespace.
+
+    The purpose segment is encoded like every other segment so the path alphabet stays
+    uniform and the segment can never contain a separator. It cannot collide with an
+    ``auth_method`` segment either: a collision would require an auth_method literally
+    equal to the purpose, and no per-user method is named ``discovery``.
+    """
+    base = prefix.strip("/")
+    if purpose == EGRESS_PURPOSE:
+        return base
+    return f"{base}/{encode_segment(purpose)}"
+
+
 def openbao_path(
     prefix: str,
     auth_method: str,
     user_id: str,
     provider: str,
     server_path: str,
+    *,
+    purpose: str,
 ) -> str:
     """Build the OpenBao KV-v2 logical path for one connection.
 
-    ``{prefix}/{enc(auth_method)}/{enc(user_id)}/{enc(provider)}/{enc(server_path)}``
-    -- ``/`` only ever appears between encoded segments.
+    ``{namespaced_prefix(prefix, purpose)}/{enc(auth_method)}/{enc(user_id)}/``
+    ``{enc(provider)}/{enc(server_path)}`` -- ``/`` only ever appears between
+    encoded segments.
+
+    This is the ONLY place an OpenBao entry path is composed; ``OpenBaoStore`` delegates
+    here rather than repeating the format, so the two can never drift.
     """
     return (
-        f"{prefix.strip('/')}/"
+        f"{namespaced_prefix(prefix, purpose)}/"
         f"{encode_segment(auth_method)}/{encode_segment(user_id)}/"
         f"{encode_segment(provider)}/{encode_segment(server_path)}"
     )

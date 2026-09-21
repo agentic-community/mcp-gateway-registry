@@ -40,6 +40,16 @@ class TestStateCodec:
         assert out.pkce_verifier == "verifier-secret-value"
         assert out.nonce == "nonce-abc"
 
+    def test_purpose_defaults_to_egress(self):
+        # A state built without an explicit purpose (and any pre-existing blob,
+        # which lacked the field) decodes as the egress default -- backward compat.
+        out = state_codec.decode_state(state_codec.encode_state(_state()))
+        assert out.purpose == "egress"
+
+    def test_purpose_roundtrips_discovery(self):
+        out = state_codec.decode_state(state_codec.encode_state(_state(purpose="discovery")))
+        assert out.purpose == "discovery"
+
     def test_verifier_not_plaintext_in_blob(self):
         # The whole point of AEAD: the PKCE verifier must NOT be readable in the
         # state value (which travels in the URL/Referer/logs).

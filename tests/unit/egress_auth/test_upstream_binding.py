@@ -22,6 +22,7 @@ from registry.egress_auth.upstream_binding import (
     bound_upstreams,
     registered_upstreams,
 )
+from registry.secrets import keys
 from registry.secrets.interfaces import SecretStoreBase
 from registry.utils.credential_encryption import encrypt_credential
 
@@ -34,22 +35,24 @@ NEW_VERSION_BASE = "https://v2.example.net"
 
 class _InMemoryStore(SecretStoreBase):
     def __init__(self) -> None:
-        self._data: dict[tuple[str, str, str, str], StoredToken] = {}
+        self._data: dict[tuple[str, str, str, str, str], StoredToken] = {}
 
-    async def put_token(self, auth_method, user_id, provider, server_path, token):
-        self._data[(auth_method, user_id, provider, server_path)] = token
+    async def put_token(self, auth_method, user_id, provider, server_path, token, *, purpose):
+        self._data[(purpose, auth_method, user_id, provider, server_path)] = token
 
-    async def get_token(self, auth_method, user_id, provider, server_path):
-        return self._data.get((auth_method, user_id, provider, server_path))
+    async def get_token(self, auth_method, user_id, provider, server_path, *, purpose):
+        return self._data.get((purpose, auth_method, user_id, provider, server_path))
 
-    async def delete_token(self, auth_method, user_id, provider, server_path):
-        self._data.pop((auth_method, user_id, provider, server_path), None)
+    async def delete_token(self, auth_method, user_id, provider, server_path, *, purpose):
+        self._data.pop((purpose, auth_method, user_id, provider, server_path), None)
 
     async def list_for_user(self, auth_method, user_id):
+        # Egress space only, mirroring the real backends: the identity the registry
+        # borrowed is not one of the user's own connections.
         return [
             (provider, server_path, token)
-            for (am, uid, provider, server_path), token in self._data.items()
-            if am == auth_method and uid == user_id
+            for (purpose, am, uid, provider, server_path), token in self._data.items()
+            if am == auth_method and uid == user_id and purpose == keys.EGRESS_PURPOSE
         ]
 
 
@@ -77,7 +80,9 @@ async def _seed(svc, *, bound, client_id="Iv1.testclient", **over):
         bound_upstreams=bound,
         **over,
     )
-    await svc._store.put_token("oauth2", "alice", "github", "/github", token)
+    await svc._store.put_token(
+        "oauth2", "alice", "github", "/github", token, purpose=keys.EGRESS_PURPOSE
+    )
 
 
 @pytest.mark.unit
@@ -111,7 +116,12 @@ class TestRetargetIsRefused:
         # binding is the only anchor -- and it refuses.
         assert (
             await svc.get_valid_token(
-                "oauth2", "alice", "/github", egress_oauth, requested_upstream=NEW_BASE
+                "oauth2",
+                "alice",
+                "/github",
+                egress_oauth,
+                requested_upstream=NEW_BASE,
+                purpose=keys.EGRESS_PURPOSE,
             )
             is None
         )
@@ -120,7 +130,12 @@ class TestRetargetIsRefused:
         await _seed(svc, bound=[REGISTERED_BASE])
         assert (
             await svc.get_valid_token(
-                "oauth2", "alice", "/github", egress_oauth, requested_upstream=REGISTERED_BASE
+                "oauth2",
+                "alice",
+                "/github",
+                egress_oauth,
+                requested_upstream=REGISTERED_BASE,
+                purpose=keys.EGRESS_PURPOSE,
             )
             == "gho_secret"
         )
@@ -132,13 +147,23 @@ class TestRetargetIsRefused:
         await _seed(svc, bound=[REGISTERED_BASE])
         assert (
             await svc.get_valid_token(
-                "oauth2", "alice", "/github", egress_oauth, requested_upstream=REGISTERED_BASE
+                "oauth2",
+                "alice",
+                "/github",
+                egress_oauth,
+                requested_upstream=REGISTERED_BASE,
+                purpose=keys.EGRESS_PURPOSE,
             )
             == "gho_secret"
         )
         assert (
             await svc.get_valid_token(
-                "oauth2", "alice", "/github", egress_oauth, requested_upstream=NEW_VERSION_BASE
+                "oauth2",
+                "alice",
+                "/github",
+                egress_oauth,
+                requested_upstream=NEW_VERSION_BASE,
+                purpose=keys.EGRESS_PURPOSE,
             )
             is None
         )
@@ -149,7 +174,12 @@ class TestRetargetIsRefused:
         await _seed(svc, bound=[])
         assert (
             await svc.get_valid_token(
-                "oauth2", "alice", "/github", egress_oauth, requested_upstream=REGISTERED_BASE
+                "oauth2",
+                "alice",
+                "/github",
+                egress_oauth,
+                requested_upstream=REGISTERED_BASE,
+                purpose=keys.EGRESS_PURPOSE,
             )
             is None
         )
@@ -170,6 +200,7 @@ class TestRetargetIsRefused:
                 client_id="Iv1.testclient",
                 bound_upstreams=[REGISTERED_BASE],
             ),
+            purpose=keys.EGRESS_PURPOSE,
         )
 
         async def fake_post(cfg, data, headers):
@@ -178,16 +209,28 @@ class TestRetargetIsRefused:
         monkeypatch.setattr(oauth_engine, "_post_token", fake_post)
         assert (
             await svc.get_valid_token(
-                "oauth2", "alice", "/github", egress_oauth, requested_upstream=REGISTERED_BASE
+                "oauth2",
+                "alice",
+                "/github",
+                egress_oauth,
+                requested_upstream=REGISTERED_BASE,
+                purpose=keys.EGRESS_PURPOSE,
             )
             == "at_refreshed"
         )
-        stored = await svc._store.get_token("oauth2", "alice", "github", "/github")
+        stored = await svc._store.get_token(
+            "oauth2", "alice", "github", "/github", purpose=keys.EGRESS_PURPOSE
+        )
         assert stored.bound_upstreams == [REGISTERED_BASE]
         # And the refreshed credential still vends to the bound host next time.
         assert (
             await svc.get_valid_token(
-                "oauth2", "alice", "/github", egress_oauth, requested_upstream=REGISTERED_BASE
+                "oauth2",
+                "alice",
+                "/github",
+                egress_oauth,
+                requested_upstream=REGISTERED_BASE,
+                purpose=keys.EGRESS_PURPOSE,
             )
             == "at_refreshed"
         )
@@ -205,6 +248,7 @@ class TestRetargetIsRefused:
                 expires_at=(datetime.now(UTC) + timedelta(hours=1)).isoformat(),
                 bound_upstreams=[REGISTERED_BASE],
             ),
+            purpose=keys.EGRESS_PURPOSE,
         )
         # Registered host vends; retargeted host misses.
         assert (
@@ -249,12 +293,18 @@ class TestTokenEndpointBinding:
                 bound_upstreams=[REGISTERED_BASE],
                 bound_token_url=consented_token_url,
             ),
+            purpose=keys.EGRESS_PURPOSE,
         )
         # Upstream binding satisfied; only the token endpoint moved.
         repointed = self._custom_oauth("https://new.example/token")
         assert (
             await svc.get_valid_token(
-                "oauth2", "alice", "/custom", repointed, requested_upstream=REGISTERED_BASE
+                "oauth2",
+                "alice",
+                "/custom",
+                repointed,
+                requested_upstream=REGISTERED_BASE,
+                purpose=keys.EGRESS_PURPOSE,
             )
             is None
         )
@@ -273,6 +323,7 @@ class TestTokenEndpointBinding:
                 bound_upstreams=[REGISTERED_BASE],
                 bound_token_url=token_url,
             ),
+            purpose=keys.EGRESS_PURPOSE,
         )
         assert (
             await svc.get_valid_token(
@@ -281,6 +332,7 @@ class TestTokenEndpointBinding:
                 "/custom",
                 self._custom_oauth(token_url),
                 requested_upstream=REGISTERED_BASE,
+                purpose=keys.EGRESS_PURPOSE,
             )
             == "at"
         )

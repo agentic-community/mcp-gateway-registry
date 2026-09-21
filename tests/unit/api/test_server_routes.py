@@ -142,6 +142,9 @@ def mock_server_service():
         }
     )
     mock_service.update_server = AsyncMock(return_value=True)
+    # $unset companion to update_server: the edit routes call it to genuinely remove
+    # cleared credential fields, which a {"$set"} merge cannot express.
+    mock_service.remove_server_fields = AsyncMock(return_value=None)
     mock_service.remove_server = AsyncMock(return_value=True)
     mock_service.get_enabled_services = AsyncMock(return_value=[])
     mock_service.user_can_access_server_path = AsyncMock(return_value=True)

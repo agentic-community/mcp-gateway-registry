@@ -37,7 +37,11 @@ from ..common.log_redaction import redact_mapping, redact_url
 from ..constants import VALID_AUTH_SCHEMES, DeploymentType, HealthStatus
 from ..core.config import DeploymentMode, settings
 from ..core.metrics import ASSET_ID_SUPPLIED_TOTAL
-from ..core.schemas import AuthCredentialUpdateRequest
+from ..core.schemas import (
+    AuthCredentialUpdateRequest,
+    OAuthBackendConfigRequest,
+    OAuthDiscoveryConfigRequest,
+)
 from ..schemas.registry_card import LifecycleStatus
 from ..schemas.server_update_models import (
     SERVER_REGISTRANT_ONLY_FIELDS,
@@ -60,6 +64,7 @@ from ..services.registration_gate_service import check_registration_gate
 from ..services.security_scanner import security_scanner_service
 from ..services.server_service import server_service
 from ..services.visibility import (
+    redact_oauth_config_for_non_owner,
     redact_server_backend_fields,
     should_redact_backend_urls,
 )
@@ -233,6 +238,39 @@ def _build_scan_headers_from_credentials(
         return json.dumps(headers_dict)
 
     return None
+
+
+async def _build_scan_auth_headers(server_info: dict) -> str | None:
+    """Build scanner auth headers, preferring a resolved OAuth bearer.
+
+    The MCP scanner subprocess extracts the bearer from an ``X-Authorization``
+    header and sends it as ``Authorization: Bearer`` to the target. The scanner
+    MUST authenticate with the SAME credential the registry uses for
+    health/tool-discovery, so this delegates to :func:`backend_oauth.with_bearer`
+    -- the single resolver chain, so the scan path can never drift from
+    discovery. That chain resolves, in order: OAuth 2.0 client_credentials
+    (``auth_scheme == 'oauth'``), a borrowed OAuth 2.1 discovery identity
+    (``oauth_discovery``), then an ``obo_exchange`` machine token. Falls back to
+    the static ``bearer``/``api_key`` header. Returns None (unauthenticated scan)
+    only when nothing is configured.
+    """
+    from ..core import backend_oauth
+
+    # Destination check FIRST, matching the static-credential builder it replaced. The
+    # old path validated before decrypting; resolving first decrypts the stored
+    # client_secret and POSTs the operator's token endpoint, so an attacker-registered
+    # unsafe proxy_pass_url could drive a token mint even though the result would then
+    # be withheld. No credential escapes either way -- but do not do the work, or the
+    # mint, for a destination we are about to reject.
+    if not _scan_destination_is_safe(server_info):
+        return _build_scan_headers_from_credentials(server_info)
+
+    resolved = await backend_oauth.with_bearer(server_info)
+    token = resolved.get(backend_oauth.RESOLVED_BEARER_KEY)
+    if token:
+        return json.dumps({"X-Authorization": f"Bearer {token}"})
+    # No OAuth/discovery token -> fall back to static bearer/api_key (or None).
+    return _build_scan_headers_from_credentials(server_info)
 
 
 def _normalize_health_status(raw_status: Any) -> Any:
@@ -525,7 +563,7 @@ async def _perform_security_scan_on_registration(
 
         # If no explicit headers, try to build from stored credentials
         if not headers_json:
-            headers_json = _build_scan_headers_from_credentials(server_entry)
+            headers_json = await _build_scan_auth_headers(server_entry)
 
         # Run the security scan
         scan_result = await security_scanner_service.scan_server(
@@ -2639,12 +2677,45 @@ async def edit_server_submit(
 
     # Handle auth fields for edit. Local servers must use auth_scheme='none'
     # (validated by ServerInfo); we forcibly clear any submitted auth fields.
+    # Fields that must be genuinely REMOVED, not merely absent from the dict:
+    # update_server issues {"$set": doc}, a partial merge, so popping a key leaves the
+    # stored value intact. Collected here and $unset after the write -- otherwise
+    # "switch to none to revoke" leaves the ciphertext live, and switching back to
+    # bearer later with a blank credential field silently reactivates it.
+    credential_fields_to_unset: list[str] = []
     if is_local:
         updated_server_entry["auth_scheme"] = "none"
+        credential_fields_to_unset += ["auth_credential_encrypted", "auth_header_name"]
         updated_server_entry.pop("auth_credential_encrypted", None)
         updated_server_entry.pop("auth_header_name", None)
     elif auth_scheme and auth_scheme in VALID_AUTH_SCHEMES:
+        # Changing the scheme here DESTROYS credential config: it nulls backend_oauth
+        # for every non-oauth scheme and clears the static credential for 'none'. This
+        # handler authorizes with modify_service only, which is granted to any caller
+        # holding an /execute scope on the server -- the same reason the credential
+        # routes (PATCH /credentials, PUT|GET /oauth-config, PUT|GET|DELETE
+        # /oauth-discovery) all pair it with an ownership check. Without this, a
+        # non-owner could wipe the owner's backend OAuth config by saving the edit
+        # form, and the non-owner redaction makes that an easy ACCIDENT: they open the
+        # modal, see the OAuth fields blanked, change the dropdown, and save.
+        scheme_changed = auth_scheme != (server_info.get("auth_scheme") or "none")
+        if scheme_changed and not user_context.get("is_admin"):
+            if server_info.get("registered_by") != user_context.get("username"):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=(
+                        "Only the server owner or an admin may change the backend "
+                        "authentication scheme, because doing so clears the stored "
+                        "credential configuration."
+                    ),
+                )
         updated_server_entry["auth_scheme"] = auth_scheme
+        # 'oauth' config (backend_oauth) is owned by PUT /servers/{path}/oauth-config;
+        # the edit form never carries it, and the $set merge preserves the stored
+        # config. For every non-oauth scheme, null it so a stale config can't be
+        # silently re-activated by switching back to 'oauth' later.
+        if auth_scheme != "oauth":
+            updated_server_entry["backend_oauth"] = None
         if auth_header_name:
             updated_server_entry["auth_header_name"] = auth_header_name
         if auth_credential and auth_scheme != "none":
@@ -2658,7 +2729,8 @@ async def edit_server_submit(
                     detail="Failed to encrypt credential",
                 )
         elif auth_scheme == "none":
-            # Clear credentials when switching to no auth
+            # Clear credentials when switching to no auth (see the $unset note above)
+            credential_fields_to_unset += ["auth_credential_encrypted", "auth_header_name"]
             updated_server_entry.pop("auth_credential_encrypted", None)
             updated_server_entry.pop("auth_header_name", None)
 
@@ -2726,6 +2798,10 @@ async def edit_server_submit(
 
     if not success:
         raise HTTPException(status_code=500, detail="Failed to save updated server data")
+
+    # $unset what the merge above could only omit (see credential_fields_to_unset).
+    if credential_fields_to_unset:
+        await server_service.remove_server_fields(service_path, credential_fields_to_unset)
 
     # Update DocumentDB search embeddings
     is_enabled = await server_service.is_service_enabled(service_path)
@@ -2813,6 +2889,14 @@ async def get_server_details(
             for server_entry in all_accessible.values():
                 if isinstance(server_entry, dict):
                     redact_server_backend_fields(server_entry)
+        # The registry's own backend-auth credential config is owner-or-admin on its
+        # dedicated GETs. This branch is non-admin only, and it returns EVERY server
+        # the caller can reach in one response -- strictly more exposure than the
+        # single-server path below -- so it needs the same projection. Per-server,
+        # because ownership differs per record.
+        for server_entry in all_accessible.values():
+            if isinstance(server_entry, dict):
+                redact_oauth_config_for_non_owner(server_entry, user_context)
         return all_accessible
 
     # Regular case: return details for a specific server
@@ -2836,6 +2920,13 @@ async def get_server_details(
     # Redaction decision is per-request; compute once so both the local
     # early-return and the multi-version return path apply it.
     redact_backend = should_redact_backend_urls(user_context)
+
+    # The registry's OWN backend-auth credentials config (token_url, client_id, the
+    # custom authorize/token endpoints, the designated principal's OIDC sub) is
+    # owner-or-admin on its dedicated GET endpoints. Access to the server is a weaker
+    # check than ownership, so drop those blocks here for everyone else rather than
+    # letting this endpoint bypass those guards. Applied once, before either return.
+    redact_oauth_config_for_non_owner(server_info, user_context)
 
     # Prune the tool_list to what this caller may see, matching the list
     # endpoint (GET /servers) and the tool catalog. A caller with server
@@ -2997,7 +3088,9 @@ async def get_service_tools(
         return {"service_path": "all", "tools": all_tools, "servers": all_servers_tools}
 
     # Handle specific server case - fetch live tools from MCP server
-    server_info = await server_service.get_server_info(service_path)
+    # include_credentials so an authed upstream (bearer/api_key/oauth) gets its
+    # credential on the live fetch; server_info is never serialized to the client.
+    server_info = await server_service.get_server_info(service_path, include_credentials=True)
     if not server_info:
         raise HTTPException(status_code=404, detail="Service path not registered")
 
@@ -4502,6 +4595,21 @@ async def update_server_auth_credential(
             },
         )
 
+    # 'oauth' (client_credentials) needs a token_url/client_id/scopes config this
+    # request model doesn't carry; route it to the dedicated endpoint.
+    if body.auth_scheme == "oauth":
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": "Use the oauth-config endpoint",
+                "reason": "Configure auth_scheme 'oauth' via PUT /servers/{path}/oauth-config",
+            },
+        )
+
+    # Any non-oauth scheme here clears a stored backend OAuth config so it can't
+    # be silently re-activated later.
+    existing_server["backend_oauth"] = None
+
     # Require credential when scheme is not 'none'
     if body.auth_scheme != "none" and not body.auth_credential:
         return JSONResponse(
@@ -4514,9 +4622,18 @@ async def update_server_auth_credential(
 
     # Build update dict
     existing_server["auth_scheme"] = body.auth_scheme
+    credential_fields_to_unset: list[str] = []
 
     if body.auth_scheme == "none":
-        # Clear credential fields when switching to none
+        # Clear credential fields when switching to none. These must be $unset, not
+        # just popped: update_server merges with {"$set": doc}, so popping alone leaves
+        # the ciphertext in the record and a later switch back to bearer with a blank
+        # credential field would silently reactivate it.
+        credential_fields_to_unset = [
+            "auth_credential_encrypted",
+            "auth_header_name",
+            "credential_updated_at",
+        ]
         existing_server.pop("auth_credential_encrypted", None)
         existing_server.pop("auth_header_name", None)
         existing_server.pop("credential_updated_at", None)
@@ -4550,6 +4667,10 @@ async def update_server_auth_credential(
             },
         )
 
+    # $unset what the merge above could only omit (see credential_fields_to_unset).
+    if credential_fields_to_unset:
+        await server_service.remove_server_fields(server_path, credential_fields_to_unset)
+
     logger.info(
         f"Auth credential updated for '{server_path}' "
         f"(scheme={body.auth_scheme}) by user '{username}'"
@@ -4564,6 +4685,517 @@ async def update_server_auth_credential(
             "auth_header_name": existing_server.get("auth_header_name"),
         },
     )
+
+
+def _backend_oauth_view(server: dict) -> dict:
+    """Non-secret projection of a server's backend OAuth config for GET."""
+    bo = server.get("backend_oauth") or {}
+    return {
+        "configured": server.get("auth_scheme") == "oauth" and bool(bo),
+        "token_url": bo.get("token_url", ""),
+        "client_id": bo.get("client_id", ""),
+        "scopes": bo.get("scopes", []),
+        "token_auth_style": bo.get("token_auth_style", "post_body"),
+        "resource": bo.get("resource"),
+        "has_client_secret": bool(bo.get("client_secret_encrypted")),
+        "updated_at": bo.get("updated_at"),
+    }
+
+
+@router.get("/servers/{server_path:path}/oauth-config")
+async def get_server_oauth_config(
+    request: Request,
+    server_path: str,
+    user_context: Annotated[dict, Depends(nginx_proxied_auth)],
+):
+    """Return the non-secret backend OAuth (client_credentials) config for a server."""
+    set_audit_action(
+        request,
+        "read",
+        "server_credential",
+        resource_id=server_path,
+        description=f"Read backend OAuth config for server {server_path}",
+    )
+    if not server_path.startswith("/"):
+        server_path = "/" + server_path
+    existing_server = await server_service.get_server_info(server_path, include_credentials=True)
+    if not existing_server:
+        return JSONResponse(status_code=404, content={"error": "Server not found"})
+    _check_server_permission(
+        "modify", existing_server.get("server_name", server_path), user_context
+    )
+    # Ownership guard, matching the mutating routes: modify_service alone is
+    # granted to any user holding an /execute scope, which is not sufficient to
+    # read another owner's backend credential config (token_url, client_id and
+    # the custom authorize/token endpoints). Fails closed when ownership cannot
+    # be established.
+    if not user_context.get("is_admin") and existing_server.get(
+        "registered_by"
+    ) != user_context.get("username"):
+        return JSONResponse(
+            status_code=403, content={"error": "Only the server owner or an admin may view this"}
+        )
+    return JSONResponse(status_code=200, content=_backend_oauth_view(existing_server))
+
+
+@router.put("/servers/{server_path:path}/oauth-config")
+async def put_server_oauth_config(
+    request: Request,
+    server_path: str,
+    body: OAuthBackendConfigRequest,
+    user_context: Annotated[dict, Depends(nginx_proxied_auth)],
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
+):
+    """Configure REGISTRY-SELF backend OAuth (client_credentials) for a server.
+
+    Sets ``auth_scheme = "oauth"`` and stores ``backend_oauth`` (token_url,
+    client_id, encrypted client_secret, scopes, token_auth_style, resource). The
+    registry uses this token to authenticate its OWN health checks and tool
+    discovery against an OAuth-backed MCP server. Owner-or-admin only; CSRF
+    protected. ``client_secret`` blank on edit keeps the stored one.
+    """
+    from ..core.backend_oauth import invalidate as invalidate_backend_oauth
+    from ..utils.credential_encryption import encrypt_credential
+
+    set_audit_action(
+        request,
+        "update",
+        "server_credential",
+        resource_id=server_path,
+        description=f"Configure backend OAuth for server {server_path}",
+    )
+    username = user_context.get("username", "unknown")
+
+    if not server_path.startswith("/"):
+        server_path = "/" + server_path
+
+    existing_server = await server_service.get_server_info(server_path, include_credentials=True)
+    if not existing_server:
+        return JSONResponse(status_code=404, content={"error": "Server not found"})
+
+    # Same authorization as the auth-credential PATCH: rewriting the upstream
+    # credential can hijack the connection, so require modify + owner-or-admin.
+    _check_server_permission(
+        "modify", existing_server.get("server_name", server_path), user_context
+    )
+    if not user_context.get("is_admin") and existing_server.get(
+        "registered_by"
+    ) != user_context.get("username"):
+        return JSONResponse(
+            status_code=403,
+            content={
+                "error": "Not authorized",
+                "reason": "You can only modify servers you registered",
+            },
+        )
+
+    # Local (stdio) servers have no HTTP endpoint the registry authenticates to.
+    if existing_server.get("deployment") == "local":
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Backend OAuth is not applicable to local servers"},
+        )
+
+    style = (body.token_auth_style or "post_body").strip()
+    if style not in ("post_body", "basic_header", "none"):
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Invalid token_auth_style", "reason": "post_body|basic_header|none"},
+        )
+    if not body.token_url.strip() or not body.client_id.strip():
+        return JSONResponse(
+            status_code=400,
+            content={"error": "token_url and client_id are required"},
+        )
+    from ..exceptions import UrlValidationError
+    from ..utils.url_guard import CREDENTIALED_OAUTH_PROFILE, validate_url
+
+    # Validate the token endpoint at CONFIG time with the same profile the request will
+    # actually be made under. `_post_token` runs CREDENTIALED_OAUTH_PROFILE at use, so
+    # a plain-HTTP or private-host token_url is already refused there -- but silently,
+    # as a generic "token endpoint blocked by security policy" in a health-cycle log,
+    # long after the operator got a 200 here. The sibling discovery config validates
+    # the equivalent field eagerly; this one should too. resolve=False for the same
+    # reason it does: a DNS-less check keeps config-time validation deterministic.
+    try:
+        validate_url(
+            body.token_url.strip(),
+            profile=CREDENTIALED_OAUTH_PROFILE,
+            require_https=True,
+            resolve=False,
+        )
+    except UrlValidationError as exc:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "token_url rejected", "reason": str(exc)},
+        )
+
+    prior = existing_server.get("backend_oauth") or {}
+    bo: dict = {
+        "token_url": body.token_url.strip(),
+        "client_id": body.client_id.strip(),
+        "scopes": [s.strip() for s in (body.scopes or []) if s.strip()],
+        "token_auth_style": style,
+        "scope_separator": body.scope_separator or " ",
+        "resource": (body.resource or None),
+        "updated_at": datetime.now(UTC).isoformat(),
+    }
+    # client_secret is write-only: a submitted value is encrypted; blank keeps
+    # the stored ciphertext; a public client (style 'none') carries no secret.
+    if body.client_secret:
+        bo["client_secret_encrypted"] = encrypt_credential(body.client_secret)
+    elif style != "none" and prior.get("client_secret_encrypted"):
+        bo["client_secret_encrypted"] = prior["client_secret_encrypted"]
+    elif style != "none":
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": "Missing client_secret",
+                "reason": "client_secret is required unless token_auth_style is 'none'",
+            },
+        )
+
+    existing_server["auth_scheme"] = "oauth"
+    existing_server["backend_oauth"] = bo
+    # These two must genuinely GO, not merely be absent from the in-memory dict:
+    # update_server issues {"$set": doc}, a partial merge, so popping a key leaves the
+    # stored value untouched. Popping alone would leave the encrypted static
+    # credential in the record -- so switching the scheme back to bearer later, with a
+    # blank credential field, silently reactivates a token the operator believes they
+    # revoked -- and would leave a stale auth_header_name (e.g. 'X-API-Key') for the
+    # api_key branch to reuse. Pop for the in-memory view returned below, then $unset
+    # for the record.
+    removed_fields = ["auth_header_name", "auth_credential_encrypted"]
+    for field in removed_fields:
+        existing_server.pop(field, None)
+    existing_server["credential_updated_at"] = datetime.now(UTC).isoformat()
+
+    success = await server_service.update_server(server_path, existing_server)
+    if not success:
+        return JSONResponse(status_code=500, content={"error": "Update failed"})
+    await server_service.remove_server_fields(server_path, removed_fields)
+
+    invalidate_backend_oauth(server_path)
+    logger.info(f"Backend OAuth configured for '{server_path}' by user '{username}'")
+    return JSONResponse(status_code=200, content=_backend_oauth_view(existing_server))
+
+
+def _oauth_discovery_view(server: dict) -> dict:
+    """Non-secret projection of a server's backend-auth discovery-identity config."""
+    disc = server.get("oauth_discovery") or {}
+    oauth = disc.get("oauth") or {}
+    return {
+        "enabled": bool(disc.get("enabled")),
+        "auth_method": disc.get("auth_method", ""),
+        # The designated principal's OIDC sub (disc["user_id"]) is deliberately
+        # NOT projected: it is a vault-address component and no client needs it.
+        # `designated_by` already names the identity for display purposes.
+        #
+        # "designated", NOT "connected": this flag is set when PUT /oauth-discovery
+        # records a principal, which happens BEFORE that principal completes consent
+        # via /oauth2/egress/connect?purpose=discovery. A designated identity with no
+        # vaulted token yields a borrow of None, so callers must not read this as
+        # "discovery will authenticate".
+        "identity_designated": bool(disc.get("user_id")),
+        "designated_by": disc.get("designated_by"),
+        "designated_at": disc.get("designated_at"),
+        # Whether this server's own discovery OAuth provider config is present
+        # (needed for the connect + borrow to resolve a token).
+        "oauth_configured": bool(oauth.get("provider")),
+        "provider": oauth.get("provider"),
+        "scopes": oauth.get("scopes", []),
+        "custom_authorize_url": oauth.get("custom_authorize_url"),
+        "custom_token_url": oauth.get("custom_token_url"),
+        "custom_scope_separator": oauth.get("custom_scope_separator"),
+        "custom_token_auth_style": oauth.get("custom_token_auth_style"),
+        "custom_resource": oauth.get("custom_resource"),
+    }
+
+
+@router.get("/servers/{server_path:path}/oauth-discovery")
+async def get_server_oauth_discovery(
+    request: Request,
+    server_path: str,
+    user_context: Annotated[dict, Depends(nginx_proxied_auth)],
+):
+    """Return the designated discovery-identity config for a server (non-secret)."""
+    set_audit_action(
+        request,
+        "read",
+        "server_credential",
+        resource_id=server_path,
+        description=f"Read discovery identity for server {server_path}",
+    )
+    if not server_path.startswith("/"):
+        server_path = "/" + server_path
+    existing_server = await server_service.get_server_info(server_path, include_credentials=True)
+    if not existing_server:
+        return JSONResponse(status_code=404, content={"error": "Server not found"})
+    _check_server_permission(
+        "modify", existing_server.get("server_name", server_path), user_context
+    )
+    # Ownership guard, matching the mutating routes: modify_service alone is
+    # granted to any user holding an /execute scope. This view names the human
+    # identity the registry borrows (designated_by) and its vault principal, so
+    # it must not be readable by anyone who merely holds execute on the server.
+    # Fails closed when ownership cannot be established.
+    if not user_context.get("is_admin") and existing_server.get(
+        "registered_by"
+    ) != user_context.get("username"):
+        return JSONResponse(
+            status_code=403, content={"error": "Only the server owner or an admin may view this"}
+        )
+    return JSONResponse(status_code=200, content=_oauth_discovery_view(existing_server))
+
+
+@router.put("/servers/{server_path:path}/oauth-discovery")
+async def put_server_oauth_discovery(
+    request: Request,
+    server_path: str,
+    body: OAuthDiscoveryConfigRequest,
+    user_context: Annotated[dict, Depends(nginx_proxied_auth)],
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
+):
+    """Configure backend-auth OAuth 2.1 discovery on a server and designate the
+    CALLER as the borrowed identity.
+
+    REQUIRES the egress feature (``EGRESS_AUTH_ENABLED``). Discovery uses its own
+    provider config under ``oauth_discovery.oauth`` rather than ``egress_oauth``,
+    but it borrows from the per-user OAuth VAULT and the consent that fills that
+    vault is served by the egress OAuth facade -- which the app only mounts under
+    the same flag. Accepting a designation the deployment can never honour would
+    just store config that silently never authenticates, so this fails closed.
+
+    Stores the server's OWN provider config under ``oauth_discovery.oauth`` and
+    records the caller's canonical vault principal. The admin then connects once
+    via ``/oauth2/egress/connect?server=<path>&purpose=discovery``; the registry
+    borrows that vaulted token for its OWN headless health/discovery calls.
+    Owner-or-admin only; CSRF protected. ``client_secret`` blank keeps stored.
+    An existing designation is preserved -- see below.
+    """
+    from ..egress_auth.service import canonical_auth_method, is_per_user_auth_method
+    from .egress_auth_routes import build_oauth_provider_config
+
+    set_audit_action(
+        request,
+        "update",
+        "server_credential",
+        resource_id=server_path,
+        description=f"Configure OAuth discovery identity for server {server_path}",
+    )
+    if not settings.egress_auth_enabled:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": "Egress auth feature is disabled",
+                "reason": (
+                    "OAuth 2.1 discovery borrows a vaulted per-user token, so it "
+                    "requires EGRESS_AUTH_ENABLED=true. Enable the egress feature "
+                    "to designate a discovery identity."
+                ),
+            },
+        )
+    username = user_context.get("username", "unknown")
+
+    if not server_path.startswith("/"):
+        server_path = "/" + server_path
+    existing_server = await server_service.get_server_info(server_path, include_credentials=True)
+    if not existing_server:
+        return JSONResponse(status_code=404, content={"error": "Server not found"})
+
+    _check_server_permission(
+        "modify", existing_server.get("server_name", server_path), user_context
+    )
+    if not user_context.get("is_admin") and existing_server.get(
+        "registered_by"
+    ) != user_context.get("username"):
+        return JSONResponse(
+            status_code=403,
+            content={
+                "error": "Not authorized",
+                "reason": "You can only modify servers you registered",
+            },
+        )
+
+    # Local (stdio) servers short-circuit before the backend-OAuth resolver runs, so a
+    # discovery identity on one can never be read. Reject rather than store config the
+    # deployment cannot honour -- same rule, and the same reason, as the sibling
+    # PUT /oauth-config.
+    if existing_server.get("deployment") == "local":
+        return JSONResponse(
+            status_code=400,
+            content={"error": "OAuth 2.1 discovery is not applicable to local servers"},
+        )
+
+    # Record the caller's canonical vault principal. Must match what the consent
+    # (/oauth2/egress/connect?purpose=discovery) and vend paths key on:
+    # auth_method + egress_user (OIDC sub, else username).
+    #
+    # CANONICALIZE. Every vault write folds per-user IdP method names (keycloak, jwt,
+    # self_signed, ...) into the single `oauth2` bucket so consent-write and vend-read
+    # agree. A browser caller already reports `oauth2`, but a bearer/IdP-JWT caller
+    # carries the raw claim straight through -- storing that verbatim designates an
+    # address the vault can never hold, so the borrow always misses, and the
+    # principal-mismatch guard on the consent route then refuses the browser consent
+    # that would have fixed it. Designating over the API must land in the same bucket
+    # the consent will write to.
+    auth_method = canonical_auth_method({"method": user_context.get("auth_method") or ""})
+    user_id = user_context.get("egress_user") or user_context.get("username") or ""
+    if not is_per_user_auth_method(auth_method) or not user_id:
+        return JSONResponse(
+            status_code=403,
+            content={
+                "error": "Not a per-user identity",
+                "reason": "Only a per-user (e.g. oauth2) principal can be a discovery identity",
+            },
+        )
+
+    # Build (validate + encrypt) this server's OWN discovery OAuth provider config
+    # -- self-contained under Backend Auth, no egress_oauth dependency. Blank
+    # client_secret keeps the stored ciphertext (edit).
+    prior = (existing_server.get("oauth_discovery") or {}).get("oauth") or {}
+    oauth_cfg = build_oauth_provider_config(
+        provider=body.provider,
+        client_id=body.client_id,
+        client_secret=body.client_secret,
+        scopes=body.scopes,
+        custom_authorize_url=body.custom_authorize_url,
+        custom_token_url=body.custom_token_url,
+        custom_scope_separator=body.custom_scope_separator,
+        custom_token_auth_style=body.custom_token_auth_style,
+        custom_resource=body.custom_resource,
+        prior_secret_encrypted=prior.get("client_secret_encrypted"),
+    )
+    oauth_cfg["updated_at"] = datetime.now(UTC).isoformat()
+
+    # Preserve an EXISTING designation. This endpoint both configures the provider
+    # and designates an identity, but the two are different concerns and a caller
+    # editing the former must not silently steal the latter: the frontend PUTs this
+    # on every server save, so without this an owner-or-admin fixing a description
+    # typo would move the designation from whoever consented to themselves. The
+    # borrow addresses the vault by (auth_method, user_id, provider, server_path),
+    # so the re-pointed principal has no vaulted token, get_valid_token returns
+    # None, and discovery degrades to unauthenticated with no operator-visible
+    # signal. To hand the designation over deliberately, DELETE then PUT.
+    prior_disc = existing_server.get("oauth_discovery") or {}
+    prior_auth_method = prior_disc.get("auth_method") or ""
+    prior_user_id = prior_disc.get("user_id") or ""
+    # EITHER field present means a prior designation exists. Requiring both fails
+    # UNSAFELY on a half-written record -- exactly where a silent takeover is hardest
+    # to notice -- so treat a partial designation as one to protect, not to ignore.
+    has_prior = bool(prior_auth_method or prior_user_id)
+    is_same_principal = prior_auth_method == auth_method and prior_user_id == user_id
+    keep_prior = has_prior and not is_same_principal
+
+    if keep_prior:
+        # The designation survives, so the credential it is bound to must too. The
+        # vaulted token records the client_id it was minted under, and the vend
+        # refuses a mismatch -- so letting a non-designee re-point provider/client_id
+        # here would strand admin A's token behind a config it no longer matches,
+        # degrading discovery to unauthenticated with no signal. That is the same end
+        # state the designation guard above exists to prevent, reached by the other
+        # field. Refuse; the operator can DELETE then PUT to reconfigure and
+        # re-designate together.
+        prior_oauth = prior_disc.get("oauth") or {}
+        changed = [
+            field
+            # custom_token_url too: the vend enforces bound_token_url and returns None
+            # on a mismatch, exactly as it does for client_id, so re-pointing it
+            # strands the designee's credential identically.
+            for field in ("provider", "client_id", "custom_token_url")
+            if (prior_oauth.get(field) or "") != (oauth_cfg.get(field) or "")
+        ]
+        if changed:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "error": "Would strand the designated identity's credential",
+                    "reason": (
+                        f"{', '.join(changed)} differs from the configuration "
+                        f"'{prior_disc.get('designated_by')}' consented to, and their "
+                        f"vaulted token is bound to the old client. DELETE this "
+                        f"discovery config and PUT it again to reconfigure and "
+                        f"re-designate together."
+                    ),
+                },
+            )
+        designation = {
+            "auth_method": prior_auth_method,
+            "user_id": prior_user_id,
+            "designated_by": prior_disc.get("designated_by"),
+            "designated_at": prior_disc.get("designated_at"),
+        }
+    elif is_same_principal and has_prior:
+        # The designee re-saving is not a (re-)designation, so preserve the original
+        # timestamp: designated_at records WHEN the identity was designated, and
+        # refreshing it on every unrelated save destroys that.
+        designation = {
+            "auth_method": auth_method,
+            "user_id": user_id,
+            "designated_by": prior_disc.get("designated_by") or username,
+            "designated_at": prior_disc.get("designated_at") or datetime.now(UTC).isoformat(),
+        }
+    else:
+        designation = {
+            "auth_method": auth_method,
+            "user_id": user_id,
+            "designated_by": username,
+            "designated_at": datetime.now(UTC).isoformat(),
+        }
+
+    existing_server["oauth_discovery"] = {
+        "enabled": True,
+        "oauth": oauth_cfg,
+        **designation,
+    }
+    success = await server_service.update_server(server_path, existing_server)
+    if not success:
+        return JSONResponse(status_code=500, content={"error": "Update failed"})
+    if keep_prior:
+        logger.info(
+            f"OAuth discovery config updated for '{server_path}' by '{username}'; kept the "
+            f"existing designation ('{designation.get('designated_by')}') -- DELETE then PUT "
+            f"to take it over"
+        )
+    else:
+        logger.info(
+            f"OAuth discovery configured + identity designated for '{server_path}' by '{username}'"
+        )
+    return JSONResponse(status_code=200, content=_oauth_discovery_view(existing_server))
+
+
+@router.delete("/servers/{server_path:path}/oauth-discovery")
+async def delete_server_oauth_discovery(
+    request: Request,
+    server_path: str,
+    user_context: Annotated[dict, Depends(nginx_proxied_auth)],
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
+):
+    """Clear the discovery-identity designation (discovery stops borrowing)."""
+    set_audit_action(
+        request,
+        "delete",
+        "server_credential",
+        resource_id=server_path,
+        description=f"Clear OAuth discovery identity for server {server_path}",
+    )
+    if not server_path.startswith("/"):
+        server_path = "/" + server_path
+    existing_server = await server_service.get_server_info(server_path, include_credentials=True)
+    if not existing_server:
+        return JSONResponse(status_code=404, content={"error": "Server not found"})
+    _check_server_permission(
+        "modify", existing_server.get("server_name", server_path), user_context
+    )
+    if not user_context.get("is_admin") and existing_server.get(
+        "registered_by"
+    ) != user_context.get("username"):
+        return JSONResponse(status_code=403, content={"error": "Not authorized"})
+    existing_server["oauth_discovery"] = None
+    success = await server_service.update_server(server_path, existing_server)
+    if not success:
+        return JSONResponse(status_code=500, content={"error": "Update failed"})
+    return JSONResponse(status_code=200, content=_oauth_discovery_view(existing_server))
 
 
 @router.post("/servers/toggle")
@@ -5762,7 +6394,7 @@ async def rescan_server(
         )
 
     # Build auth headers for the scanner if server has stored credentials
-    headers_json = _build_scan_headers_from_credentials(server_info)
+    headers_json = await _build_scan_auth_headers(server_info)
 
     logger.info(
         f"Manual security scan requested by user={user_context.get('username')} server={path} endpoint={redact_url(server_url)}",
@@ -6556,6 +7188,13 @@ async def get_server(
     # Defense in depth: project a fresh recursive token-free response even
     # though ServerService already strips credentials on ordinary reads.
     server_info = strip_credentials_from_dict(server_info)
+
+    # The registry's OWN backend-auth credential config is owner-or-admin on its
+    # dedicated GETs, and this endpoint gates only on user_can_access_server_path --
+    # weaker still. strip_credentials_from_dict above removes only the *_encrypted /
+    # client_secret names, so token_url, client_id, the custom authorize/token
+    # endpoints and the designated principal's OIDC sub would all survive it.
+    redact_oauth_config_for_non_owner(server_info, user_context)
 
     # Strip internal backend URLs for non-admin users in with-gateway mode.
     # In registry-only mode, users need the URL to connect directly.

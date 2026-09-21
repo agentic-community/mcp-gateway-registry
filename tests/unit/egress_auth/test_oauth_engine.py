@@ -130,6 +130,57 @@ class TestExchangeAndRefresh:
             )
 
 
+@pytest.mark.unit
+class TestClientCredentials:
+    """RFC 6749 §4.4 client_credentials grant for REGISTRY-SELF backend auth."""
+
+    def _cfg(self):
+        return OAuthProviderConfig(
+            name="backend-client-credentials",
+            display_name="Backend OAuth",
+            authorize_url="https://idp.example/token",
+            token_url="https://idp.example/token",
+            use_pkce=False,
+        )
+
+    async def test_grant_type_and_scopes(self, monkeypatch):
+        captured = {}
+
+        async def fake_post(cfg, data, headers):
+            captured.update(data)
+            return {"access_token": "cc_tok", "token_type": "Bearer", "expires_in": 3600}
+
+        monkeypatch.setattr(oauth_engine, "_post_token", fake_post)
+        tok = await oauth_engine.client_credentials_token(
+            self._cfg(), "cid", "secret", ["api:read", "api:write"]
+        )
+        assert captured["grant_type"] == "client_credentials"
+        assert captured["scope"] == "api:read api:write"
+        assert captured["client_id"] == "cid"
+        assert captured["client_secret"] == "secret"
+        assert tok.access_token == "cc_tok"
+        assert tok.expires_at is not None
+        # client_credentials has no refresh token.
+        assert tok.refresh_token is None
+
+    async def test_no_scopes_omits_scope_param(self, monkeypatch):
+        captured = {}
+
+        async def fake_post(cfg, data, headers):
+            captured.update(data)
+            return {"access_token": "t", "expires_in": 60}
+
+        monkeypatch.setattr(oauth_engine, "_post_token", fake_post)
+        await oauth_engine.client_credentials_token(self._cfg(), "cid", "secret", [])
+        assert "scope" not in captured
+
+    async def test_missing_secret_confidential_raises(self, monkeypatch):
+        # post_body (default) is a confidential style; a missing secret must fail
+        # closed before any network call.
+        with pytest.raises(oauth_engine.OAuthEngineError, match="no client_secret"):
+            await oauth_engine.client_credentials_token(self._cfg(), "cid", None, ["s"])
+
+
 def _make_jwt(exp: int | None) -> str:
     """Minimal unsigned JWT (header.payload.sig) carrying an optional ``exp`` claim."""
 
@@ -399,9 +450,10 @@ class TestQuirkParsers:
             token_endpoint_auth_style="basic_header",
         )
         data, headers = oauth_engine._build_token_request(cfg, "cid", "sec", {"grant_type": "x"})
-        assert headers["Authorization"].startswith("Basic ")
-        assert "client_secret" not in data  # secret is in the header, not the body
-        assert data["client_id"] == "cid"
+        expected = base64.b64encode(b"cid:sec").decode()
+        assert headers["Authorization"] == f"Basic {expected}"
+        assert "client_id" not in data
+        assert "client_secret" not in data
 
     def test_post_body_auth_style_default(self):
         cfg = PROVIDER_REGISTRY["github"]

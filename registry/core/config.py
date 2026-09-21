@@ -938,6 +938,17 @@ class Settings(BaseSettings):
             "Defaults to the app's `api://<client-id>` form when unset."
         ),
     )
+    entra_login_base_url: str = Field(
+        default="https://login.microsoftonline.com",
+        description=(
+            "Entra ID login base URL for the gateway's OWN token endpoint, used "
+            "by the client_credentials grant that authenticates headless backend "
+            "discovery/health against obo_exchange servers. Override for sovereign "
+            "clouds: US Gov `https://login.microsoftonline.us`, China "
+            "`https://login.partner.microsoftonline.cn`. Mirrors the auth-server's "
+            "ENTRA_LOGIN_BASE_URL."
+        ),
+    )
 
     # IdP Group Filtering (applies to all identity providers)
     idp_group_filter_prefix: str = Field(

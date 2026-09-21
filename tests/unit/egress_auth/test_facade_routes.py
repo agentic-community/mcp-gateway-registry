@@ -201,3 +201,118 @@ class TestConnectRoute:
         )
         assert r.status_code == 302
         assert r.headers["location"].startswith("https://github.com/login/oauth/authorize")
+
+
+@pytest.mark.unit
+class TestConnectDiscovery:
+    """purpose=discovery: the backend-auth headless borrow. Requires the
+    egress feature flag; reads the server's OWN oauth_discovery.oauth; owner or
+    admin only."""
+
+    def _disc_server(self, **over) -> dict:
+        base = {
+            "path": "/tableau",
+            "registered_by": "alice",  # matches USER.username -> owner
+            "oauth_discovery": {
+                "enabled": True,
+                "oauth": {
+                    "provider": "custom",
+                    "client_id": "cid",
+                    "client_secret_encrypted": "enc",
+                    "scopes": ["tableau:content:read"],
+                    "custom_authorize_url": "https://sso.example.com/authorize",
+                    "custom_token_url": "https://sso.example.com/token",
+                },
+                # A designation must exist before consent: connecting first would vault
+                # an entry nothing reads, which then blocks this principal's own egress
+                # consent for the same provider+server. USER has no egress_user, so the
+                # canonical principal is (oauth2, username).
+                "auth_method": "oauth2",
+                "user_id": "alice",
+                "designated_by": "alice",
+            },
+        }
+        base.update(over)
+        return base
+
+    def test_discovery_connect_redirects_to_provider(self, client):
+        c = client(server=self._disc_server())
+        r = c.get(
+            "/oauth2/egress/connect",
+            params={"server": "/tableau", "purpose": "discovery"},
+        )
+        assert r.status_code == 302
+        assert r.headers["location"].startswith("https://github.com/login/oauth/authorize")
+
+    def test_discovery_connect_404s_when_feature_disabled(self, client):
+        """Discovery consent REQUIRES the egress feature, like every other purpose.
+
+        An earlier revision exempted purpose=discovery from this gate on the theory
+        that backend-auth discovery was independent of egress. It is not: the consent
+        writes into the per-user egress vault and the borrow reads from it, so the
+        exemption only ever let a deployment accept a designation its own vend path
+        was switched off for. The router also only mounts this route under the same
+        flag, so the exemption was unreachable in production and purely misleading.
+        """
+        c = client(server=self._disc_server(), enabled=False)
+        r = c.get(
+            "/oauth2/egress/connect",
+            params={"server": "/tableau", "purpose": "discovery"},
+        )
+        assert r.status_code == 404
+
+    def test_discovery_connect_no_config_400(self, client):
+        c = client(server={"path": "/tableau", "registered_by": "alice"})
+        r = c.get(
+            "/oauth2/egress/connect",
+            params={"server": "/tableau", "purpose": "discovery"},
+        )
+        assert r.status_code == 400
+
+    def test_discovery_connect_non_owner_denied(self, client):
+        c = client(server=self._disc_server(registered_by="someone-else"))
+        r = c.get(
+            "/oauth2/egress/connect",
+            params={"server": "/tableau", "purpose": "discovery"},
+        )
+        assert r.status_code == 403
+
+    def test_discovery_connect_requires_a_designation_first(self, client):
+        """Consenting before anyone is designated is a self-inflicted lockout.
+
+        handle_callback vaults at the CONSENTING principal while the borrow reads the
+        DESIGNATED one, so with no designation the entry is written where nothing looks
+        -- and because it is recorded purpose='discovery', it then blocks this same
+        person's own egress consent for that provider+server with a 409 about something
+        they never knowingly created.
+        """
+        disc = self._disc_server()
+        disc["oauth_discovery"] = {**disc["oauth_discovery"], "auth_method": "", "user_id": ""}
+        c = client(server=disc)
+        r = c.get(
+            "/oauth2/egress/connect",
+            params={"server": "/tableau", "purpose": "discovery"},
+        )
+        assert r.status_code == 400, r.text
+        assert "no discovery identity is designated" in r.text
+
+    def test_discovery_connect_refuses_a_principal_other_than_the_designee(self, client):
+        """Owner-or-admin authorizes you to DESIGNATE, not to consent as someone else.
+
+        A second admin completing this flow would vault a token at their own address
+        while discovery keeps reading the designee's -- silent degradation to
+        unauthenticated, with only a log line.
+        """
+        disc = self._disc_server()
+        disc["oauth_discovery"] = {
+            **disc["oauth_discovery"],
+            "user_id": "some-other-admin-sub",
+            "designated_by": "other-admin",
+        }
+        c = client(server=disc)
+        r = c.get(
+            "/oauth2/egress/connect",
+            params={"server": "/tableau", "purpose": "discovery"},
+        )
+        assert r.status_code == 403, r.text
+        assert "designated to" in r.text

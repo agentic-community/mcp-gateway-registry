@@ -198,7 +198,7 @@ class TestOpenBaoEncryption:
     async def test_encrypted_roundtrip_and_ciphertext_at_rest(self):
         client = _FakeHvacClient()
         store = _openbao(client, encrypted=True)
-        await store.put_token(*_ADDR, _token())
+        await store.put_token(*_ADDR, _token(), purpose=keys.EGRESS_PURPOSE)
 
         # The one persisted KV entry must be a ciphertext envelope, not the token.
         stored = list(client.secrets.kv.v2._data.values())
@@ -207,19 +207,21 @@ class TestOpenBaoEncryption:
         assert "gho_super_secret_pat" not in json.dumps(stored[0])
         assert "rt_super_secret_refresh" not in json.dumps(stored[0])
 
-        got = await store.get_token(*_ADDR)
+        got = await store.get_token(*_ADDR, purpose=keys.EGRESS_PURPOSE)
         assert got.access_token == "gho_super_secret_pat"
         assert got.refresh_token == "rt_super_secret_refresh"
 
     async def test_read_repair_on_get(self):
         client = _FakeHvacClient()
         # Seed a legacy plaintext entry with a disabled-codec store.
-        await _openbao(client, encrypted=False).put_token(*_ADDR, _token())
+        await _openbao(client, encrypted=False).put_token(
+            *_ADDR, _token(), purpose=keys.EGRESS_PURPOSE
+        )
         plaintext_doc = next(iter(client.secrets.kv.v2._data.values()))
         assert "_encrypted" not in plaintext_doc
         enc = _openbao(client, encrypted=True)
 
-        got = await enc.get_token(*_ADDR)
+        got = await enc.get_token(*_ADDR, purpose=keys.EGRESS_PURPOSE)
         assert got.access_token == "gho_super_secret_pat"
         await _drain(enc)
 
@@ -232,19 +234,25 @@ class TestOpenBaoEncryption:
         # a concurrent refresh then writes a NEW token. Compare-and-set must make
         # the repair skip, NOT roll the credential back to the stale token.
         client = _FakeHvacClient()
-        await _openbao(client, encrypted=False).put_token(*_ADDR, _token("old_access"))
+        await _openbao(client, encrypted=False).put_token(
+            *_ADDR, _token("old_access"), purpose=keys.EGRESS_PURPOSE
+        )
         enc = _openbao(client, encrypted=True)
-        got = await enc.get_token(*_ADDR)  # schedules repair with expected=plaintext(old)
+        got = await enc.get_token(
+            *_ADDR, purpose=keys.EGRESS_PURPOSE
+        )  # schedules repair with expected=plaintext(old)
         assert got.access_token == "old_access"
         # Refresh commits a new token (an envelope) before the repair task runs.
-        await enc.put_token(*_ADDR, _token("new_access"))
+        await enc.put_token(*_ADDR, _token("new_access"), purpose=keys.EGRESS_PURPOSE)
         await _drain(enc)
-        final = await enc.get_token(*_ADDR)
+        final = await enc.get_token(*_ADDR, purpose=keys.EGRESS_PURPOSE)
         assert final.access_token == "new_access"  # not rolled back
 
     async def test_read_repair_on_list(self):
         client = _FakeHvacClient()
-        await _openbao(client, encrypted=False).put_token(*_ADDR, _token())
+        await _openbao(client, encrypted=False).put_token(
+            *_ADDR, _token(), purpose=keys.EGRESS_PURPOSE
+        )
         enc = _openbao(client, encrypted=True)
         conns = await enc.list_for_user(_ADDR[0], _ADDR[1])
         assert [(p, s) for p, s, _ in conns] == [(_ADDR[2], _ADDR[3])]
@@ -253,17 +261,19 @@ class TestOpenBaoEncryption:
 
     async def test_missing_key_fails_closed_on_encrypted_entry(self):
         client = _FakeHvacClient()
-        await _openbao(client, encrypted=True).put_token(*_ADDR, _token())
+        await _openbao(client, encrypted=True).put_token(
+            *_ADDR, _token(), purpose=keys.EGRESS_PURPOSE
+        )
         # A replica without the key must NOT return plaintext.
         with pytest.raises(SecretStoreError):
-            await _openbao(client, encrypted=False).get_token(*_ADDR)
+            await _openbao(client, encrypted=False).get_token(*_ADDR, purpose=keys.EGRESS_PURPOSE)
 
 
 @pytest.mark.unit
 class TestSecretsManagerEncryption:
     async def test_encrypted_roundtrip_and_ciphertext_at_rest(self, secrets_manager_client):
         store = _sm(secrets_manager_client, encrypted=True)
-        await store.put_token(*_ADDR, _token())
+        await store.put_token(*_ADDR, _token(), purpose=keys.EGRESS_PURPOSE)
 
         name = f"mcp/egress/{keys.user_principal(_ADDR[0], _ADDR[1])}"
         raw = secrets_manager_client.get_secret_value(SecretId=name)["SecretString"]
@@ -271,18 +281,20 @@ class TestSecretsManagerEncryption:
         assert "rt_super_secret_refresh" not in raw
         assert "_encrypted" in raw
 
-        got = await store.get_token(*_ADDR)
+        got = await store.get_token(*_ADDR, purpose=keys.EGRESS_PURPOSE)
         assert got.access_token == "gho_super_secret_pat"
         assert got.refresh_token == "rt_super_secret_refresh"
 
     async def test_read_repair_on_get(self, secrets_manager_client):
-        await _sm(secrets_manager_client, encrypted=False).put_token(*_ADDR, _token())
+        await _sm(secrets_manager_client, encrypted=False).put_token(
+            *_ADDR, _token(), purpose=keys.EGRESS_PURPOSE
+        )
         name = f"mcp/egress/{keys.user_principal(_ADDR[0], _ADDR[1])}"
         before = secrets_manager_client.get_secret_value(SecretId=name)["SecretString"]
         assert "gho_super_secret_pat" in before  # plaintext at rest
 
         enc = _sm(secrets_manager_client, encrypted=True)
-        got = await enc.get_token(*_ADDR)
+        got = await enc.get_token(*_ADDR, purpose=keys.EGRESS_PURPOSE)
         assert got.access_token == "gho_super_secret_pat"
         await _drain(enc)
 
@@ -290,7 +302,9 @@ class TestSecretsManagerEncryption:
         assert "gho_super_secret_pat" not in after
 
     async def test_read_repair_on_list(self, secrets_manager_client):
-        await _sm(secrets_manager_client, encrypted=False).put_token(*_ADDR, _token())
+        await _sm(secrets_manager_client, encrypted=False).put_token(
+            *_ADDR, _token(), purpose=keys.EGRESS_PURPOSE
+        )
         enc = _sm(secrets_manager_client, encrypted=True)
         conns = await enc.list_for_user(_ADDR[0], _ADDR[1])
         assert [(p, s) for p, s, _ in conns] == [(_ADDR[2], _ADDR[3])]
@@ -300,16 +314,26 @@ class TestSecretsManagerEncryption:
         assert "gho_super_secret_pat" not in after
 
     async def test_read_repair_does_not_clobber_concurrent_refresh(self, secrets_manager_client):
-        await _sm(secrets_manager_client, encrypted=False).put_token(*_ADDR, _token("old_access"))
+        await _sm(secrets_manager_client, encrypted=False).put_token(
+            *_ADDR, _token("old_access"), purpose=keys.EGRESS_PURPOSE
+        )
         enc = _sm(secrets_manager_client, encrypted=True)
-        got = await enc.get_token(*_ADDR)  # schedules compare-and-set repair (expected=old)
+        got = await enc.get_token(
+            *_ADDR, purpose=keys.EGRESS_PURPOSE
+        )  # schedules compare-and-set repair (expected=old)
         assert got.access_token == "old_access"
-        await enc.put_token(*_ADDR, _token("new_access"))  # concurrent refresh
+        await enc.put_token(
+            *_ADDR, _token("new_access"), purpose=keys.EGRESS_PURPOSE
+        )  # concurrent refresh
         await _drain(enc)
-        final = await enc.get_token(*_ADDR)
+        final = await enc.get_token(*_ADDR, purpose=keys.EGRESS_PURPOSE)
         assert final.access_token == "new_access"  # not rolled back
 
     async def test_missing_key_fails_closed_on_encrypted_entry(self, secrets_manager_client):
-        await _sm(secrets_manager_client, encrypted=True).put_token(*_ADDR, _token())
+        await _sm(secrets_manager_client, encrypted=True).put_token(
+            *_ADDR, _token(), purpose=keys.EGRESS_PURPOSE
+        )
         with pytest.raises(SecretStoreError):
-            await _sm(secrets_manager_client, encrypted=False).get_token(*_ADDR)
+            await _sm(secrets_manager_client, encrypted=False).get_token(
+                *_ADDR, purpose=keys.EGRESS_PURPOSE
+            )

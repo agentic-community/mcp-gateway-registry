@@ -723,6 +723,20 @@ class ServerService:
         )
         return server_info["num_stars"]
 
+    async def remove_server_fields(self, path: str, fields: list[str]) -> None:
+        """Actually DELETE fields from a server document.
+
+        ``update_server`` issues ``{"$set": doc}`` -- a partial merge -- so popping a
+        key from the in-memory dict only omits it from ``$set`` and leaves the stored
+        value in place. That is deliberate for the merge semantics other callers rely
+        on, but it means "clear this credential" cannot be expressed by popping: the
+        ciphertext survives, and switching the scheme back later silently reactivates
+        it. Use this when a field must genuinely go, and note it is a SEPARATE write
+        from the ``update_server`` that reshaped the rest of the record.
+        """
+        for field in fields:
+            await self._repo.update_field(path, field, None)
+
     async def remove_server(self, path: str) -> bool:
         """Remove a server and all its version documents from the registry.
 
@@ -752,6 +766,13 @@ class ServerService:
             return False
 
         deleted_count = await self._repo.delete_with_versions(path)
+        if deleted_count > 0:
+            # Drop the in-process backend-OAuth bearer and its single-flight lock.
+            # Nothing else prunes them, so without this a deleted server's live access
+            # token stays resident in memory until the process restarts.
+            from registry.core.backend_oauth import invalidate as invalidate_backend_oauth
+
+            invalidate_backend_oauth(path)
         return deleted_count > 0
 
     async def add_server_version(

@@ -11,6 +11,8 @@ from fastapi import WebSocket
 from registry.constants import DeploymentType, HealthStatus
 
 from ..common.log_redaction import redact_url
+from ..core.backend_oauth import RESOLVED_BEARER_KEY as _BACKEND_OAUTH_TOKEN_KEY
+from ..core.backend_oauth import with_bearer as _with_backend_oauth
 from ..core.config import settings
 from ..core.endpoint_utils import get_endpoint_url_from_server_info
 from ..exceptions import UrlValidationError
@@ -450,6 +452,11 @@ class HealthMonitoringService:
         proxy_pass_url = server_info.get("proxy_pass_url")
         new_status = previous_status
 
+        # Resolve+cache an OAuth2 client_credentials bearer (no-op unless
+        # auth_scheme == 'oauth') so the synchronous header builder attaches it
+        # to both the liveness probe and any triggered tool fetch.
+        server_info = await _with_backend_oauth(server_info)
+
         try:
             # Try to reach the service endpoint using transport-aware checking
             is_healthy, status_detail = await self._check_server_endpoint_transport_aware(
@@ -573,6 +580,19 @@ class HealthMonitoringService:
                 f"Merged encrypted health headers count={len(decrypted):d} names={sorted(entry['name'] for entry in decrypted)}",
             )
 
+        # A pre-resolved OAuth bearer (client_credentials OR a borrowed per-user
+        # discovery-identity token) is the only credential when present; set by the
+        # async caller (backend_oauth.with_bearer), whose tiers bow out when an
+        # explicit static auth_scheme exists. Gated by the destination check above.
+        #
+        # ALWAYS 'Authorization' -- never auth_header_name. See the matching note
+        # in core/mcp_client.py: inheriting an api_key server's 'X-API-Key' would
+        # emit `X-API-Key: Bearer <oauth-token>`, which no upstream reads correctly.
+        resolved_bearer = server_info.get(_BACKEND_OAUTH_TOKEN_KEY)
+        if resolved_bearer:
+            headers["Authorization"] = f"Bearer {resolved_bearer}"
+            logger.debug("Added resolved OAuth bearer header to health request")
+            return headers
         auth_scheme = server_info.get("auth_scheme", "none")
         encrypted_credential = server_info.get("auth_credential_encrypted")
         if auth_scheme != "none" and encrypted_credential:
@@ -1313,7 +1333,7 @@ class HealthMonitoringService:
 
         from ..services.server_service import server_service
 
-        server_info = await server_service.get_server_info(service_path)
+        server_info = await server_service.get_server_info(service_path, include_credentials=True)
         if not server_info:
             return "error: server not registered", None
 
@@ -1328,6 +1348,10 @@ class HealthMonitoringService:
             return HealthStatus.LOCAL, None
 
         proxy_pass_url = server_info.get("proxy_pass_url")
+
+        # Resolve+cache an OAuth2 client_credentials bearer (no-op unless
+        # auth_scheme == 'oauth') for the probe and any triggered tool fetch.
+        server_info = await _with_backend_oauth(server_info)
 
         # Record check time
         last_checked_time = datetime.now(UTC)

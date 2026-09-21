@@ -26,6 +26,7 @@ import os
 import pytest
 
 from registry.egress_auth.schemas import StoredToken
+from registry.secrets import keys
 
 hvac = pytest.importorskip("hvac")
 
@@ -91,23 +92,45 @@ def store():
 @pytest.mark.asyncio
 class TestOpenBaoStoreIntegration:
     async def test_get_miss_returns_none(self, store):
-        assert await store.get_token("oauth2", "ghost", "github", "/x") is None
+        assert (
+            await store.get_token("oauth2", "ghost", "github", "/x", purpose=keys.EGRESS_PURPOSE)
+            is None
+        )
 
     async def test_put_get_delete_roundtrip(self, store):
-        await store.put_token("oauth2", "alice", "github", "/github-mcp", _token())
-        got = await store.get_token("oauth2", "alice", "github", "/github-mcp")
+        await store.put_token(
+            "oauth2", "alice", "github", "/github-mcp", _token(), purpose=keys.EGRESS_PURPOSE
+        )
+        got = await store.get_token(
+            "oauth2", "alice", "github", "/github-mcp", purpose=keys.EGRESS_PURPOSE
+        )
         assert got is not None and got.access_token == "gho_real_access"
         assert got.refresh_token == "rt_real" and got.scopes == ["repo", "read:user"]
 
-        await store.delete_token("oauth2", "alice", "github", "/github-mcp")
-        assert await store.get_token("oauth2", "alice", "github", "/github-mcp") is None
+        await store.delete_token(
+            "oauth2", "alice", "github", "/github-mcp", purpose=keys.EGRESS_PURPOSE
+        )
+        assert (
+            await store.get_token(
+                "oauth2", "alice", "github", "/github-mcp", purpose=keys.EGRESS_PURPOSE
+            )
+            is None
+        )
         # idempotent
-        await store.delete_token("oauth2", "alice", "github", "/github-mcp")
+        await store.delete_token(
+            "oauth2", "alice", "github", "/github-mcp", purpose=keys.EGRESS_PURPOSE
+        )
 
     async def test_list_for_user_enumerates_only_that_principal(self, store):
-        await store.put_token("oauth2", "bob", "github", "/github-mcp", _token("b-gh"))
-        await store.put_token("oauth2", "bob", "slack", "/slack-mcp", _token("b-sl"))
-        await store.put_token("oauth2", "carol", "github", "/github-mcp", _token("c-gh"))
+        await store.put_token(
+            "oauth2", "bob", "github", "/github-mcp", _token("b-gh"), purpose=keys.EGRESS_PURPOSE
+        )
+        await store.put_token(
+            "oauth2", "bob", "slack", "/slack-mcp", _token("b-sl"), purpose=keys.EGRESS_PURPOSE
+        )
+        await store.put_token(
+            "oauth2", "carol", "github", "/github-mcp", _token("c-gh"), purpose=keys.EGRESS_PURPOSE
+        )
 
         conns = await store.list_for_user("oauth2", "bob")
         assert sorted((p, s) for p, s, _ in conns) == [
@@ -119,12 +142,23 @@ class TestOpenBaoStoreIntegration:
     async def test_auth_method_namespacing_isolates_static_key_from_real_user(self, store):
         # On a REAL store: an operator-named static key "dave" must not read
         # the oauth2 user "dave"'s token.
-        await store.put_token("oauth2", "dave", "github", "/github-mcp", _token("real"))
         await store.put_token(
-            "network-trusted", "dave", "github", "/github-mcp", _token("staticbot")
+            "oauth2", "dave", "github", "/github-mcp", _token("real"), purpose=keys.EGRESS_PURPOSE
         )
-        real = await store.get_token("oauth2", "dave", "github", "/github-mcp")
-        bot = await store.get_token("network-trusted", "dave", "github", "/github-mcp")
+        await store.put_token(
+            "network-trusted",
+            "dave",
+            "github",
+            "/github-mcp",
+            _token("staticbot"),
+            purpose=keys.EGRESS_PURPOSE,
+        )
+        real = await store.get_token(
+            "oauth2", "dave", "github", "/github-mcp", purpose=keys.EGRESS_PURPOSE
+        )
+        bot = await store.get_token(
+            "network-trusted", "dave", "github", "/github-mcp", purpose=keys.EGRESS_PURPOSE
+        )
         assert real.access_token == "real"
         assert bot.access_token == "staticbot"
 
@@ -141,16 +175,26 @@ class TestOpenBaoStoreIntegration:
     ):
         # Proves the canonicalization produces valid OpenBao paths for the
         # characters that would otherwise break KV path segments.
-        await store.put_token(auth_method, user_id, provider, server_path, _token("hk"))
-        got = await store.get_token(auth_method, user_id, provider, server_path)
+        await store.put_token(
+            auth_method, user_id, provider, server_path, _token("hk"), purpose=keys.EGRESS_PURPOSE
+        )
+        got = await store.get_token(
+            auth_method, user_id, provider, server_path, purpose=keys.EGRESS_PURPOSE
+        )
         assert got is not None and got.access_token == "hk"
         conns = await store.list_for_user(auth_method, user_id)
         assert (provider, server_path) in [(p, s) for p, s, _ in conns]
 
     async def test_overwrite_same_key_updates_in_place(self, store):
-        await store.put_token("oauth2", "erin", "github", "/github-mcp", _token("v1"))
-        await store.put_token("oauth2", "erin", "github", "/github-mcp", _token("v2"))
-        got = await store.get_token("oauth2", "erin", "github", "/github-mcp")
+        await store.put_token(
+            "oauth2", "erin", "github", "/github-mcp", _token("v1"), purpose=keys.EGRESS_PURPOSE
+        )
+        await store.put_token(
+            "oauth2", "erin", "github", "/github-mcp", _token("v2"), purpose=keys.EGRESS_PURPOSE
+        )
+        got = await store.get_token(
+            "oauth2", "erin", "github", "/github-mcp", purpose=keys.EGRESS_PURPOSE
+        )
         assert got.access_token == "v2"
         # still exactly one connection, not two
         conns = await store.list_for_user("oauth2", "erin")

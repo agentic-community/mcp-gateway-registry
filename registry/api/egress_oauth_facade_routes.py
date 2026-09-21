@@ -108,6 +108,7 @@ def _login_bootstrap_redirect(request: Request) -> RedirectResponse:
 async def egress_connect(
     request: Request,
     server: str = "",
+    purpose: str = "egress",
 ) -> object:
     """Session-verified front door for MCP URL-mode elicitation.
 
@@ -131,6 +132,15 @@ async def egress_connect(
          close-tab page; the client then retries the original tool call (same
          bearer) and the vend now HITs.
     """
+    if purpose not in ("egress", "discovery"):
+        return JSONResponse(
+            {"error": "invalid_request", "error_description": "invalid purpose"},
+            status_code=400,
+        )
+    # BOTH purposes are gated on EGRESS_AUTH_ENABLED. Discovery uses its own
+    # provider config, but it vaults and borrows through the egress machinery, and
+    # this router is only mounted under that flag anyway -- so exempting discovery
+    # here only ever produced a claim the deployment could not honour.
     if not _feature_on():
         return JSONResponse({"error": "not_found"}, status_code=404)
 
@@ -144,11 +154,28 @@ async def egress_connect(
     server_path = as_facade._normalize_server_path(server_path)
 
     server_info = await server_service.get_server_info(server_path, include_credentials=True)
-    if not as_facade.is_server_egress_configured(server_info):
-        return JSONResponse(
-            {"error": "invalid_request", "error_description": "server has no per-user egress auth"},
-            status_code=400,
-        )
+    if purpose == "discovery":
+        # Backend-auth discovery carries its own provider config; no egress needed.
+        disc = (server_info or {}).get("oauth_discovery") or {}
+        oauth_cfg = disc.get("oauth")
+        if not oauth_cfg:
+            return JSONResponse(
+                {
+                    "error": "invalid_request",
+                    "error_description": "server has no oauth discovery config",
+                },
+                status_code=400,
+            )
+    else:
+        if not as_facade.is_server_egress_configured(server_info):
+            return JSONResponse(
+                {
+                    "error": "invalid_request",
+                    "error_description": "server has no per-user egress auth",
+                },
+                status_code=400,
+            )
+        oauth_cfg = server_info["egress_oauth"]
 
     # Session bootstrap: no gateway session -> log in via Keycloak, return here.
     user_context = await _optional_session(request)
@@ -165,12 +192,63 @@ async def egress_connect(
             status_code=403,
         )
 
+    # Discovery connect is a backend-admin operation: only the server owner or an
+    # admin may vault a token the registry will borrow for its own discovery.
+    if purpose == "discovery" and not (
+        user_context.get("is_admin")
+        or (server_info or {}).get("registered_by") == user_context.get("username")
+    ):
+        return JSONResponse(
+            {"error": "access_denied", "error_description": "owner or admin only"},
+            status_code=403,
+        )
+
     # Bind the consent state to the canonical egress principal (OIDC-sub-based
     # ``egress_user``, else ``username``) -- the SAME id the vend, the vault, and
     # the callback account-swap guard use. Using bare ``username`` here would bind
     # the state to a different id than the callback resolves, so the guard would
     # reject every callback with "state user mismatch" whenever egress_user is set.
     egress_user_id = user_context.get("egress_user") or user_context.get("username") or ""
+
+    # The consent must come from the DESIGNATED principal, not merely from someone
+    # authorized to designate. handle_callback vaults at the consenting principal's
+    # address, while resolve_discovery_bearer reads at the designated one -- so a
+    # second owner-or-admin completing this flow writes a token at their own address
+    # that discovery never looks at. Discovery then degrades to unauthenticated with
+    # only a log line, and the stray entry (recorded purpose='discovery') later
+    # refuses that person's own egress connection for the same provider and server.
+    if purpose == "discovery":
+        designated = (server_info or {}).get("oauth_discovery") or {}
+        want_method = designated.get("auth_method") or ""
+        want_user = designated.get("user_id") or ""
+        # A designation must EXIST first. Consenting before anyone is designated vaults
+        # an entry nothing reads, which then 409s this person's own egress consent for
+        # the same provider and server -- a self-inflicted lockout with no visible
+        # cause. PUT .../oauth-discovery is what creates the designation.
+        if not (want_method and want_user):
+            return JSONResponse(
+                {
+                    "error": "invalid_request",
+                    "error_description": (
+                        "no discovery identity is designated for this server; "
+                        "configure it (PUT .../oauth-discovery) before connecting"
+                    ),
+                },
+                status_code=400,
+            )
+        if want_method != auth_method or want_user != egress_user_id:
+            return JSONResponse(
+                {
+                    "error": "access_denied",
+                    "error_description": (
+                        f"this server's discovery identity is designated to "
+                        f"'{designated.get('designated_by') or want_user}'; only that "
+                        f"principal can complete the connection. Re-designate it "
+                        f"(PUT .../oauth-discovery) to connect as someone else."
+                    ),
+                },
+                status_code=403,
+            )
 
     # Provider consent leg, via the existing web Connected-Accounts path: the
     # callback stores the token + shows the close-tab page. No client-side code
@@ -181,7 +259,8 @@ async def egress_connect(
         client_id_audit=user_context.get("client_id") or "",
         session_id=user_context.get("session_id") or "",
         server_path=server_path,
-        egress_oauth=server_info["egress_oauth"],
+        egress_oauth=oauth_cfg,
+        purpose=purpose,
     )
     logger.info(
         "egress connect: user=%s server=%s -> provider consent",
