@@ -561,11 +561,19 @@ class EgressAuthService:
         user_id: str,
         provider: str,
         server_path: str,
+        *,
+        purpose: str,
     ) -> None:
-        """Delete the vault entry (idempotent). Provider-side revoke is a future follow-on."""
-        await self._store.delete_token(
-            auth_method, user_id, provider, server_path, purpose=keys.EGRESS_PURPOSE
-        )
+        """Delete the vault entry (idempotent). Provider-side revoke is a future follow-on.
+
+        ``purpose`` is required with no default, for the same reason the vend requires it.
+        A default would silently pin every caller to one address space, which is how the
+        discovery space ended up reachable for writes and reads but not deletes. Revoking
+        a designation MUST reach the discovery entry: otherwise turning discovery off
+        leaves a live delegated credential for a real person that nothing removes and
+        nobody sees, since it is deliberately absent from that user's Connected Accounts.
+        """
+        await self._store.delete_token(auth_method, user_id, provider, server_path, purpose=purpose)
 
     # -- pat (static per-user PAT / API-key) ---------------------------------- #
 

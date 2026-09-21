@@ -704,8 +704,44 @@ class TestVendRefreshDisconnect:
         # tokens never leak into the connection view
         assert not hasattr(conns[0], "access_token")
 
-        await svc.disconnect("oauth2", "alice", "github", "/github-mcp")
+        await svc.disconnect(
+            "oauth2", "alice", "github", "/github-mcp", purpose=keys.EGRESS_PURPOSE
+        )
         assert await svc.list_connections("oauth2", "alice") == []
+
+    @pytest.mark.parametrize("purpose", ["egress", "discovery"])
+    async def test_disconnect_only_removes_its_own_purpose(
+        self, svc, egress_oauth, monkeypatch, purpose
+    ):
+        """Revoking one purpose must reach that purpose, and leave the other standing.
+
+        Both halves matter. `disconnect` was pinned to egress, so the discovery space had
+        write and read paths but no delete path: turning discovery off left a live
+        delegated token for a real person that no UI surfaces -- discovery entries are
+        deliberately absent from Connected Accounts, so the user could not revoke it
+        either. And the user's own Connected Accounts action must not be able to revoke a
+        discovery designation, which is an owner/admin concern.
+        """
+        _stub_exchange(monkeypatch)
+        for session, p in (("sess-1", "egress"), ("sess-2", "discovery")):
+            url = svc.build_consent_url(
+                "oauth2", "alice", "Iv1.testclient", session, "/github-mcp", egress_oauth, purpose=p
+            )
+            await svc.handle_callback(
+                "c", _extract_state(url), egress_oauth, "alice", "oauth2", bound_upstreams=[BOUND]
+            )
+
+        await svc.disconnect("oauth2", "alice", "github", "/github-mcp", purpose=purpose)
+
+        other = "discovery" if purpose == "egress" else "egress"
+        assert (
+            await svc._store.get_token("oauth2", "alice", "github", "/github-mcp", purpose=purpose)
+            is None
+        ), "the targeted purpose was not revoked"
+        assert (
+            await svc._store.get_token("oauth2", "alice", "github", "/github-mcp", purpose=other)
+            is not None
+        ), "revoking one purpose destroyed the other"
 
     async def test_list_for_non_per_user_is_empty(self, svc):
         assert await svc.list_connections("network-trusted", "alice") == []
