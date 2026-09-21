@@ -6,6 +6,8 @@ behavior on misconfig / token-endpoint failure.
 """
 
 import asyncio
+import pathlib
+import re
 from datetime import UTC, datetime
 
 import pytest
@@ -788,3 +790,83 @@ class TestResolveOboDiscoveryBearer:
         si = _obo_server_info(auth_scheme="bearer", auth_credential_encrypted="enc")
         out = await backend_oauth.with_bearer(si)
         assert backend_oauth.RESOLVED_BEARER_KEY not in out
+
+
+@pytest.mark.unit
+class TestDiscoveryCredentialStaysOutOfRuntime:
+    """The borrowed identity is for DISCOVERY only: list tools, health, scan -- never execute.
+
+    Using the designated user's vaulted credential to enumerate a server's tools is the
+    intended behaviour; that is the whole point of the borrow. Using it to EXECUTE a tool
+    on behalf of some other caller is not, and would turn a one-time consent into a
+    standing proxy for that person's access.
+
+    Today that holds because tool execution never enters this Python app at all -- nginx
+    proxies `tools/call` straight to the upstream, forwarding the caller's own
+    Authorization header. Nothing enforces it, though, so a future execute path added
+    here could reach the resolver by reusing a discovery helper. These tests pin the
+    boundary at the only two places it can be observed in source.
+    """
+
+    RESOLVER_NAMES = ("with_bearer", "RESOLVED_BEARER_KEY", "_backend_oauth_bearer")
+
+    def _repo_root(self) -> pathlib.Path:
+        return pathlib.Path(__file__).resolve().parents[3]
+
+    def test_runtime_data_plane_never_references_the_resolver(self):
+        """The auth server and the generated nginx config are the runtime path.
+
+        Neither may mention the resolver or the key it stashes. A hit here means a
+        resolved discovery credential became reachable from end-user traffic.
+        """
+        root = self._repo_root()
+        targets = [*(root / "auth_server").rglob("*.py"), root / "registry/core/nginx_service.py"]
+        offenders = []
+        for path in targets:
+            if not path.is_file():
+                continue
+            text = path.read_text(encoding="utf-8", errors="ignore")
+            for name in self.RESOLVER_NAMES:
+                if name in text:
+                    offenders.append(f"{path.relative_to(root)}: {name}")
+        assert not offenders, (
+            "the runtime data plane must not reach the discovery resolver; found: "
+            + "; ".join(offenders)
+        )
+
+    def test_resolver_consumers_are_only_discovery_call_sites(self):
+        """`with_bearer` may only be called from health, tool discovery, and the scanner.
+
+        All three are the registry acting as itself. If a new caller appears, it must be
+        reviewed against this boundary rather than inheriting the credential silently.
+        """
+        root = self._repo_root()
+        allowed = {
+            "registry/core/backend_oauth.py",  # defines it
+            "registry/core/mcp_client.py",  # tool discovery + connection check
+            "registry/health/service.py",  # health checks
+            "registry/api/server_routes.py",  # _build_scan_auth_headers
+        }
+        callers = set()
+        for path in (root / "registry").rglob("*.py"):
+            text = path.read_text(encoding="utf-8", errors="ignore")
+            if re.search(r"(?<!def )with_bearer\s*\(", text) or "RESOLVED_BEARER_KEY" in text:
+                callers.add(str(path.relative_to(root)))
+        assert callers <= allowed, "unreviewed consumer of the discovery credential: " + ", ".join(
+            sorted(callers - allowed)
+        )
+
+    def test_tool_execution_has_no_python_implementation_to_leak_into(self):
+        """Execute is proxied by nginx, so there is no server-side call path to audit.
+
+        If this fails, someone added tool invocation to the app and it MUST be checked
+        against the boundary above -- the discovery credential must not be attached to it.
+        """
+        root = self._repo_root()
+        hits = []
+        for sub in ("registry", "auth_server"):
+            for path in (root / sub).rglob("*.py"):
+                text = path.read_text(encoding="utf-8", errors="ignore")
+                if re.search(r"\b(async )?def (call_tool|invoke_tool|execute_tool)\b", text):
+                    hits.append(str(path.relative_to(root)))
+        assert not hits, "tool execution implemented in: " + ", ".join(hits)

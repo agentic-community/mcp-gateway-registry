@@ -114,3 +114,83 @@ class TestPerformImmediateHealthCheckLocal:
         # Don't stamp last_check_time — no actual check happened.
         assert last_checked is None
         assert "/local-srv" not in service.server_last_check_time
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+class TestIncompleteBackendOAuthIsNamed:
+    """An 'oauth' scheme with no usable backend_oauth is named, not probed.
+
+    Registration is two-step -- POST the server, then PUT /oauth-config -- so a failed or
+    abandoned second step leaves this state legitimately. Probing anyway spends a request
+    per cycle to produce a generic transport error, and the only record of the real cause
+    was a log line.
+    """
+
+    @pytest.mark.parametrize(
+        "backend_oauth",
+        [
+            None,
+            {},
+            {"client_id": "cc"},  # no token_url
+            {"token_url": "https://idp.example.com/token"},  # no client_id
+        ],
+    )
+    async def test_incomplete_config_is_reported_by_name_without_probing(self, backend_oauth):
+        service = HealthMonitoringService()
+        client = AsyncMock()
+        server_info = {
+            "deployment": "remote",
+            "proxy_pass_url": "https://upstream.example.com/mcp",
+            "auth_scheme": "oauth",
+            "backend_oauth": backend_oauth,
+        }
+
+        changed = await service._check_single_service(client, "/oauth-srv", server_info)
+
+        assert changed is True
+        assert service.server_health_status["/oauth-srv"] == (
+            "unhealthy: backend OAuth not configured"
+        )
+        # No request is spent on a server that provably cannot authenticate.
+        client.get.assert_not_called()
+        client.post.assert_not_called()
+        # The check still records a timestamp, or the scheduler cannot pace itself.
+        assert "/oauth-srv" in service.server_last_check_time
+
+    async def test_a_complete_config_is_not_short_circuited(self):
+        """Guard against the check swallowing servers that ARE configured."""
+        service = HealthMonitoringService()
+        client = AsyncMock()
+        server_info = {
+            "deployment": "remote",
+            "proxy_pass_url": "https://upstream.example.com/mcp",
+            "auth_scheme": "oauth",
+            "backend_oauth": {
+                "token_url": "https://idp.example.com/token",
+                "client_id": "cc-client",
+            },
+        }
+
+        await service._check_single_service(client, "/oauth-srv", server_info)
+
+        assert service.server_health_status["/oauth-srv"] != (
+            "unhealthy: backend OAuth not configured"
+        )
+
+    @pytest.mark.parametrize("scheme", ["none", "bearer", "api_key", None])
+    async def test_other_schemes_are_untouched(self, scheme):
+        """Only the 'oauth' scheme is gated; nothing else gains a new failure mode."""
+        service = HealthMonitoringService()
+        client = AsyncMock()
+        server_info = {
+            "deployment": "remote",
+            "proxy_pass_url": "https://upstream.example.com/mcp",
+            "auth_scheme": scheme,
+        }
+
+        await service._check_single_service(client, "/other-srv", server_info)
+
+        assert service.server_health_status["/other-srv"] != (
+            "unhealthy: backend OAuth not configured"
+        )
