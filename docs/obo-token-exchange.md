@@ -382,6 +382,51 @@ registry omits the header and the health check records the server **unhealthy** 
 the correct signal. It never falls back to an unauthenticated scan or to the
 runtime OBO path.
 
+
+### Scope and limits of "discovery"
+
+Two things this does **not** mean, both worth stating because the name invites the
+other reading:
+
+- **It is not OAuth metadata discovery.** The registry does not fetch an upstream's
+  RFC 9728 protected-resource metadata or an authorization server's RFC 8414
+  metadata, does not read a `WWW-Authenticate` challenge to locate an AS, and does
+  not perform Dynamic Client Registration (see ADR 0001). "Discovery" here means the
+  registry's *own* discovery calls — health, `tools/list`, security scan — can
+  authenticate to a server that requires OAuth. An operator supplies the authorize
+  and token endpoints; nothing is probed.
+- **It is not available to a registry-only deployment.** A borrowed OAuth 2.1
+  identity lives in the per-user credential vault, so it requires
+  `EGRESS_AUTH_ENABLED`, a configured secret store, and gateway mode. With the egress
+  feature off, a stored designation is inert; the UI says so and both resolvers log
+  which setting is wrong, rather than the server simply going unhealthy with no
+  explanation. Tier 2 (`client_credentials` from the server's own backend-auth
+  config) has no such requirement and works in any deployment.
+
+### Operational notes
+
+- **Runtime Keycloak OBO is not implemented.** `_keycloak_exchange_body` raises
+  `OboUnsupportedIdpError`, so `obo_exchange` is Entra-only end to end — runtime
+  *and* discovery. A Keycloak-backed server cannot use `obo_exchange` at all today.
+- **Tier 2 reads the vault on every health cycle.** Unlike tiers 1 and 3 it is not
+  cached, so each cycle is a fresh secret-store read plus a token request. On AWS
+  Secrets Manager that is a billed API call per server per cycle, and is subject to
+  throttling — worth accounting for when sizing the health interval against a large
+  number of `oauth`-scheme servers.
+- **A private-resolving token endpoint is accepted at config time and refused at
+  use.** `PUT /oauth-config` validates `token_url` with the same credentialed profile
+  the request will run under, but with `resolve=False` so config-time validation does
+  not depend on DNS. A host like `https://idp.internal:8443` that *resolves* to a
+  private address therefore passes validation and is then refused on every health
+  cycle, logged as a policy rejection. Use a publicly resolvable HTTPS token
+  endpoint; relaxing the guard is not the fix, since it exists to stop the registry
+  posting a client secret to a private or plaintext host.
+- **`resource` is not the Entra spelling.** Tier 2 sends an RFC 8707 `resource`
+  parameter when one is configured. Entra v2 does not accept it — it expects the
+  target to be named as `scope=<App ID URI>/.default`. Configure scopes rather than
+  `resource` for Entra-protected servers; `resource` is for authorization servers
+  that implement RFC 8707.
+
 ---
 
 ## The RFC 8707 resource / Entra App ID URI constraint
