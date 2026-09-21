@@ -455,6 +455,21 @@ class HealthMonitoringService:
         # Resolve+cache an OAuth2 client_credentials bearer (no-op unless
         # auth_scheme == 'oauth') so the synchronous header builder attaches it
         # to both the liveness probe and any triggered tool fetch.
+        #
+        # An 'oauth' scheme with no usable backend_oauth is reported by NAME rather than
+        # probed. Registration is two-step -- POST the server, then PUT /oauth-config --
+        # so a failed or abandoned second step leaves exactly this state legitimately.
+        # Probing anyway produces a generic transport failure, and the only record of the
+        # real cause is a log line the operator never sees, so the server looks broken for
+        # an unrelated reason. This is the one misconfiguration the registry can name with
+        # certainty before making a request.
+        if (server_info.get("auth_scheme") or "none") == "oauth":
+            bo = server_info.get("backend_oauth") or {}
+            if not bo.get("token_url") or not bo.get("client_id"):
+                new_status = "unhealthy: backend OAuth not configured"
+                self.server_health_status[service_path] = new_status
+                self.server_last_check_time[service_path] = datetime.now(UTC)
+                return previous_status != new_status
         server_info = await _with_backend_oauth(server_info)
 
         try:
