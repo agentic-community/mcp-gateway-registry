@@ -184,7 +184,9 @@ class TestRescanAppliesTheBlock:
             patch(
                 "registry.api.server_routes._disable_server_for_security", AsyncMock()
             ) as disable,
-            patch("registry.api.server_routes._build_scan_headers_from_credentials", lambda *_: None),
+            patch(
+                "registry.api.server_routes._build_scan_headers_from_credentials", lambda *_: None
+            ),
         ):
             out = await rescan_server(SERVER_PATH, user_context={"is_admin": True, "username": "a"})
             return {
