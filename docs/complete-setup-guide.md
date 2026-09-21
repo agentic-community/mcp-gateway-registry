@@ -314,6 +314,7 @@ The steps above cover the minimum to boot a local Keycloak stack. This subsectio
 | `SSRF_ALLOWED_HOSTS` / `SSRF_ALLOWED_CIDRS` | Allowlist internal MCP/A2A upstreams through the SSRF guard. | Internal (private-IP) targets are marked unhealthy; the cloud-metadata IP is never allowed. |
 | `AUDIT_LOG_REQUIRE_DURABLE=true` | Keep it on: guarantees a durable, queryable audit trail. | Default `true`; the registry refuses to start if audit logging is on with no durable sink. Only set `false` in dev. |
 | `SECURITY_SCAN_ENABLED` / `SECURITY_BLOCK_UNSAFE_SERVERS` | Scan and block unsafe MCP servers / A2A agents at registration. | Code default `true`, but **Terraform defaults these to `false`** — enable them for a hardened deploy. |
+| `SECURITY_ALLOW_UNSAFE_SERVERS` | Keep a failing server enabled with only its HIGH/CRITICAL tools blocked, instead of disabling the whole server. Needs `SECURITY_BLOCK_UNSAFE_SERVERS=true`. | Default `false`: a failing server is disabled outright. |
 | `FEDERATION_ENCRYPTION_KEY` | Required on an importing registry to store peer federation tokens at rest. | Peer tokens cannot be stored. |
 | `ingress_cidr_blocks` (Terraform) | Restrict ALB ingress to your CIDR(s). | Defaults to `0.0.0.0/0` (open to the world). |
 
