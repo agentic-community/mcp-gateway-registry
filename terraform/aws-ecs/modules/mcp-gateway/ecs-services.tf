@@ -1272,6 +1272,10 @@ module "ecs_service_registry" {
           value = tostring(var.security_block_unsafe_servers)
         },
         {
+          name  = "SECURITY_ALLOW_UNSAFE_SERVERS"
+          value = tostring(var.security_allow_unsafe_servers)
+        },
+        {
           name  = "SECURITY_ANALYZERS"
           value = var.security_analyzers
         },

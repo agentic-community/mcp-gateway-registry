@@ -3850,7 +3850,7 @@ class TestToggleTool:
         info["tool_list"] = [{"name": "healthcheck"}, {"name": "list_services"}]
         mock_server_service.get_server_info.return_value = info
         mock_server_service.set_tool_blocked = AsyncMock(return_value=True)
-        mock_server_service._is_safe_override_key.return_value = True
+        mock_server_service.is_safe_override_key.return_value = True
 
         with patch(
             "registry.auth.dependencies.user_has_ui_permission_for_service", return_value=True

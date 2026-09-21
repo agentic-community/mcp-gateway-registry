@@ -489,6 +489,31 @@ def _parse_and_validate_custom_headers(
     return validated
 
 
+async def _disable_server_for_security(
+    path: str,
+    server_entry: dict,
+) -> None:
+    """Disable a server that failed its security scan.
+
+    Turns the server off, reflects that in the search index, and marks the nginx
+    config dirty so the route stops being served.
+
+    Args:
+        path: Server path, for example "/mcpgw".
+        server_entry: Server metadata, passed to the search index.
+    """
+    from ..core.nginx_service import nginx_reload_scheduler
+    from ..repositories.factory import get_search_repository
+
+    await server_service.toggle_service(path, False)
+    logger.warning(f"Disabled server {path} due to failed security scan")
+
+    search_repo = get_search_repository()
+    await search_repo.index_server(path, server_entry, is_enabled=False)
+
+    nginx_reload_scheduler.mark_dirty()
+
+
 async def _perform_security_scan_on_registration(
     path: str,
     proxy_pass_url: str,
@@ -557,20 +582,26 @@ async def _perform_security_scan_on_registration(
 
             # Disable server if configured
             if scan_config.block_unsafe_servers:
-                from ..repositories.factory import get_search_repository
+                blocked_tools: dict[str, Any] = {}
+                if scan_config.allow_unsafe_servers:
+                    blocked_tools = await server_service.reconcile_security_blocks(
+                        path, scan_result.raw_output
+                    )
 
-                await server_service.toggle_service(path, False)
-                auto_disabled = True
-                logger.warning(f"Disabled server {path} due to failed security scan")
-
-                # Update search index with disabled state
-                search_repo = get_search_repository()
-                await search_repo.index_server(path, server_entry, is_enabled=False)
-
-                # Signal nginx config needs regeneration (debounced)
-                from ..core.nginx_service import nginx_reload_scheduler
-
-                nginx_reload_scheduler.mark_dirty()
+                if blocked_tools:
+                    # Opt-in path: the server stays enabled and only its unsafe
+                    # tools are blocked. auth_server rejects them on tools/call.
+                    logger.warning(
+                        f"Blocked {len(blocked_tools)} unsafe tool(s) on {path} instead of "
+                        f"disabling the server: {sorted(blocked_tools)}"
+                    )
+                else:
+                    # Fail closed. Two ways to land here: the opt-in is off, or it
+                    # is on but the scan blamed no individual tool (a server-level
+                    # finding). Staying enabled on the second one would turn the
+                    # opt-in into a silent bypass of block_unsafe_servers.
+                    await _disable_server_for_security(path, server_entry)
+                    auto_disabled = True
         else:
             logger.info(f"Server {path} passed security scan")
 
@@ -1195,7 +1226,7 @@ async def toggle_tool_route(
 
     # Tool names become Mongo field keys; "." and a leading "$" would be
     # written somewhere the read side never looks (a silent fail-open).
-    if not server_service._is_safe_override_key(payload.tool_name):
+    if not server_service.is_safe_override_key(payload.tool_name):
         raise HTTPException(
             status_code=400,
             detail=(
