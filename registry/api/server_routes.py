@@ -5167,45 +5167,6 @@ async def put_server_oauth_discovery(
     return JSONResponse(status_code=200, content=_oauth_discovery_view(existing_server))
 
 
-async def _revoke_discovery_credential(server_path: str, prior_disc: dict) -> None:
-    """Delete the vault entry a discovery designation was borrowing from.
-
-    Best-effort and idempotent: a designation may never have been consented, so there is
-    often nothing to delete. A failure here must not fail the caller's request -- the
-    designation is already gone, so discovery has stopped borrowing either way -- but it
-    IS logged loudly, because the residue is a live delegated credential for a real
-    person that no UI surfaces.
-
-    The address is rebuilt from the designation rather than from the current request's
-    principal: an admin may be revoking on someone else's behalf, so the caller is not
-    necessarily the consenting user.
-    """
-    auth_method = prior_disc.get("auth_method")
-    user_id = prior_disc.get("user_id")
-    provider = (prior_disc.get("oauth") or {}).get("provider")
-    if not (auth_method and user_id and provider):
-        return
-    try:
-        from ..egress_auth.factory import get_egress_auth_service
-        from ..secrets import keys as _keys
-
-        await get_egress_auth_service().disconnect(
-            auth_method=auth_method,
-            user_id=user_id,
-            provider=provider,
-            server_path=server_path,
-            purpose=_keys.DISCOVERY_PURPOSE,
-        )
-        logger.info("revoked discovery credential for server=%s provider=%s", server_path, provider)
-    except Exception:
-        logger.exception(
-            "FAILED to revoke discovery credential for server=%s provider=%s -- a delegated "
-            "token may remain in the vault with no UI surface; remove it manually",
-            server_path,
-            provider,
-        )
-
-
 @router.delete("/servers/{server_path:path}/oauth-discovery")
 async def delete_server_oauth_discovery(
     request: Request,
@@ -5244,7 +5205,9 @@ async def delete_server_oauth_discovery(
     success = await server_service.update_server(server_path, existing_server)
     if not success:
         return JSONResponse(status_code=500, content={"error": "Update failed"})
-    await _revoke_discovery_credential(server_path, prior_disc)
+    from ..services.discovery_credential import revoke_discovery_credential
+
+    await revoke_discovery_credential(server_path, prior_disc)
     # Drop any cached tier-1 token for this server so discovery stops presenting the
     # identity we just revoked, rather than serving it until the entry ages out.
     from ..core.backend_oauth import invalidate as invalidate_backend_oauth

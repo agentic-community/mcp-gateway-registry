@@ -226,7 +226,9 @@ class OpenBaoStore(SecretStoreBase):
         purpose: str,
     ) -> None:
         path = self._rel_path(auth_method, user_id, provider, server_path, purpose)
-        document = self._codec.encode(auth_method, user_id, provider, server_path, token)
+        document = self._codec.encode(
+            auth_method, user_id, provider, server_path, token, purpose=purpose
+        )
 
         def _write() -> None:
             self._client.secrets.kv.v2.create_or_update_secret(
@@ -272,7 +274,9 @@ class OpenBaoStore(SecretStoreBase):
             raise SecretStoreError(f"OpenBao get failed: {exc}") from exc
         if not raw:
             return None
-        token = self._codec.decode(auth_method, user_id, provider, server_path, raw)
+        token = self._codec.decode(
+            auth_method, user_id, provider, server_path, raw, purpose=purpose
+        )
         if self._codec.needs_migration(raw):
             self._schedule_repair(auth_method, user_id, provider, server_path, raw, token, purpose)
         return token
@@ -323,7 +327,9 @@ class OpenBaoStore(SecretStoreBase):
         logged and retried on the next read; a CAS conflict is a silent skip.
         """
         path = self._rel_path(auth_method, user_id, provider, server_path, purpose)
-        document = self._codec.encode(auth_method, user_id, provider, server_path, token)
+        document = self._codec.encode(
+            auth_method, user_id, provider, server_path, token, purpose=purpose
+        )
 
         def _read_current() -> tuple[dict | None, int | None]:
             try:
@@ -435,7 +441,9 @@ class OpenBaoStore(SecretStoreBase):
 
         out: list[tuple[str, str, StoredToken]] = []
         for provider, server_path, raw in rows:
-            token = self._codec.decode(auth_method, user_id, provider, server_path, raw)
+            token = self._codec.decode(
+                auth_method, user_id, provider, server_path, raw, purpose=keys.EGRESS_PURPOSE
+            )
             if self._codec.needs_migration(raw):
                 # list_for_user enumerates the egress space only, so repair there too.
                 self._schedule_repair(

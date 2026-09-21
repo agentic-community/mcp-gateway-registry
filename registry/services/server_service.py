@@ -754,6 +754,12 @@ class ServerService:
         """
         from .search_index_cleanup import remove_from_search_index_with_retry
 
+        # Read the designation BEFORE anything is deleted. It is the only record of which
+        # vault address holds the borrowed token, and it dies with the server document.
+        # Needs include_credentials so the oauth_discovery block is present at all.
+        existing = await self.get_server_info(path, include_credentials=True)
+        prior_disc = (existing or {}).get("oauth_discovery") or {}
+
         if not await remove_from_search_index_with_retry(
             self._search_repo,
             path,
@@ -773,6 +779,16 @@ class ServerService:
             from registry.core.backend_oauth import invalidate as invalidate_backend_oauth
 
             invalidate_backend_oauth(path)
+            # Revoke the delegated credential a discovery designation was borrowing.
+            # This lives here rather than in the delete ROUTES because eight call sites
+            # reach this method -- two API routes plus six federation/reconciliation
+            # paths -- and the residue is not a recoverable orphan: discovery entries are
+            # deliberately absent from the consenting user's Connected Accounts, and the
+            # designation that named the address is gone with the document, so nothing
+            # can find it afterwards.
+            from .discovery_credential import revoke_discovery_credential
+
+            await revoke_discovery_credential(path, prior_disc)
         return deleted_count > 0
 
     async def add_server_version(

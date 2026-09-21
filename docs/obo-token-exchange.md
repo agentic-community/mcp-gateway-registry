@@ -400,19 +400,29 @@ other reading:
   `EGRESS_AUTH_ENABLED`, a configured secret store, and gateway mode. With the egress
   feature off, a stored designation is inert; the UI says so and both resolvers log
   which setting is wrong, rather than the server simply going unhealthy with no
-  explanation. Tier 2 (`client_credentials` from the server's own backend-auth
-  config) has no such requirement and works in any deployment.
+  explanation. Tier 1 (`client_credentials` from the server's own backend-auth config,
+  `auth_scheme: oauth`) has no such requirement and works in any deployment.
+
+The tier numbers below match `with_bearer` in `registry/core/backend_oauth.py`:
+**1** = `client_credentials` from the server's own config (`auth_scheme: oauth`),
+**2** = a borrowed OAuth 2.1 discovery identity from the vault (`auth_scheme: none`
+plus `oauth_discovery.enabled`), **3** = a gateway app-only token for an
+`obo_exchange` server (`auth_scheme: none`).
 
 ### Operational notes
 
 - **Runtime Keycloak OBO is not implemented.** `_keycloak_exchange_body` raises
   `OboUnsupportedIdpError`, so `obo_exchange` is Entra-only end to end — runtime
-  *and* discovery. A Keycloak-backed server cannot use `obo_exchange` at all today.
+  *and* discovery. A Keycloak-backed server cannot use `obo_exchange` at all today,
+  and `_gateway_idp_client` refuses `AUTH_PROVIDER=keycloak` outright for discovery
+  rather than minting a token whose audience it cannot constrain.
 - **Tier 2 reads the vault on every health cycle.** Unlike tiers 1 and 3 it is not
-  cached, so each cycle is a fresh secret-store read plus a token request. On AWS
+  cached, so each cycle is a fresh secret-store read plus a possible refresh. On AWS
   Secrets Manager that is a billed API call per server per cycle, and is subject to
   throttling — worth accounting for when sizing the health interval against a large
-  number of `oauth`-scheme servers.
+  number of servers carrying a **discovery designation** (tier 2 applies to
+  `auth_scheme: none` servers, not to `oauth`-scheme ones, which are tier 1 and are
+  cached).
 - **A private-resolving token endpoint is accepted at config time and refused at
   use.** `PUT /oauth-config` validates `token_url` with the same credentialed profile
   the request will run under, but with `resolve=False` so config-time validation does
@@ -420,12 +430,18 @@ other reading:
   private address therefore passes validation and is then refused on every health
   cycle, logged as a policy rejection. Use a publicly resolvable HTTPS token
   endpoint; relaxing the guard is not the fix, since it exists to stop the registry
-  posting a client secret to a private or plaintext host.
-- **`resource` is not the Entra spelling.** Tier 2 sends an RFC 8707 `resource`
+  posting a client secret to a private or plaintext host. An internal HTTPS IdP needs
+  an explicit entry in `EGRESS_OAUTH_TRUSTED_IDP_HOSTS` (hosts only, no CIDRs).
+- **`resource` is not the Entra spelling.** Tier 1 sends an RFC 8707 `resource`
   parameter when one is configured. Entra v2 does not accept it — it expects the
   target to be named as `scope=<App ID URI>/.default`. Configure scopes rather than
   `resource` for Entra-protected servers; `resource` is for authorization servers
   that implement RFC 8707.
+- **Revoking a designation needs the secret store reachable.** `DELETE
+  /oauth-discovery` and server deletion both revoke the vaulted credential, and that
+  path depends on `SECRET_STORE_BACKEND` rather than `EGRESS_AUTH_ENABLED` — so it
+  still works with the egress feature off. If both are cleared, the revoke cannot run
+  and the residue is logged at exception level for manual removal.
 
 ---
 

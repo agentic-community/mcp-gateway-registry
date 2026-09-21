@@ -358,30 +358,37 @@ def _gateway_idp_client() -> tuple[str, str, str] | None:
         login_base = (settings.entra_login_base_url or _DEFAULT_ENTRA_LOGIN_BASE_URL).rstrip("/")
         return client_id, client_secret, f"{login_base}/{tenant}/oauth2/v2.0/token"
     if provider == "keycloak":
-        client_id = settings.keycloak_client_id or ""
-        client_secret = settings.keycloak_client_secret or ""
-        base = (settings.keycloak_url or "").rstrip("/")
-        realm = settings.keycloak_realm or ""
-        if not (client_id and client_secret and base and realm):
-            return None
-        # Fail LEGIBLY on the common misconfiguration. The token request carries the
-        # gateway's client_secret, so it goes through CREDENTIALED_OAUTH_PROFILE,
-        # which requires HTTPS and refuses private hosts. KEYCLOAK_URL is an
-        # in-cluster plain-HTTP URL on every standard deployment
+        # NOT SUPPORTED, and deliberately fails closed rather than nearly working.
+        #
+        # Two things are missing, and only one of them is visible. The token request
+        # carries the gateway's client_secret, so it goes through
+        # CREDENTIALED_OAUTH_PROFILE, which requires HTTPS and refuses private hosts;
+        # KEYCLOAK_URL is an in-cluster plain-HTTP URL on every shipped deployment
         # (``http://keycloak:8080`` on compose, the headless Service on Helm), so the
-        # guard rejects it and the operator would otherwise only see a generic
-        # "token endpoint blocked by security policy" with no hint at the cause.
-        # Relaxing the guard is not the fix -- it exists to stop us posting a client
-        # secret in cleartext. An external HTTPS Keycloak URL is required.
-        if not base.lower().startswith("https://"):
-            logger.warning(
-                "obo discovery unavailable: KEYCLOAK_URL is %r, but the gateway token "
-                "endpoint must be HTTPS (it receives the gateway client_secret). Set an "
-                "externally reachable HTTPS Keycloak URL to use obo_exchange discovery.",
-                base,
-            )
-            return None
-        return client_id, client_secret, f"{base}/realms/{realm}/protocol/openid-connect/token"
+        # guard rejects it. Relaxing that guard is not the fix -- it exists to stop us
+        # posting a client secret in cleartext.
+        #
+        # The second is the dangerous one. Keycloak binds the audience through a
+        # server-side audience mapper rather than a request scope, so
+        # :func:`_obo_discovery_scopes` sends NO scope. Neither the charts nor the realm
+        # bootstrap create that mapper. An operator who fixes only the HTTPS problem
+        # therefore gets past this function and mints a token audienced to whatever
+        # Keycloak defaults to -- not ``target_audience`` -- which is then sent to a
+        # third-party MCP server as ``Authorization: Bearer``. Nothing downstream
+        # re-checks the audience, so the failure is silent and the token is real.
+        #
+        # Returning None unconditionally is the only honest state until the mapper is
+        # created and the scope/audience contract is testable. The previous message told
+        # the operator to set an HTTPS URL "to use obo_exchange discovery", which led
+        # straight into that path.
+        logger.warning(
+            "obo discovery unavailable: AUTH_PROVIDER=keycloak is not supported for "
+            "backend discovery. Keycloak binds the token audience with a server-side "
+            "audience mapper that this deployment does not create, so the gateway cannot "
+            "prove a token is audienced to the target. Use AUTH_PROVIDER=entra for "
+            "obo_exchange discovery."
+        )
+        return None
     return None
 
 
@@ -390,9 +397,11 @@ def _obo_discovery_scopes(provider: str, target: str) -> list[str]:
 
     Entra: ``<target>/.default`` requests the application permissions (app roles)
     the gateway app has been granted on the target resource -- the only scope form
-    Entra accepts for an app-only (client_credentials) token. Keycloak binds the
-    audience via a server-side client-scope/audience mapper, not a request scope
-    (follow-on), so no scope is sent.
+    Entra accepts for an app-only (client_credentials) token.
+
+    Only Entra reaches this. An empty list would mean "mint a token with no audience
+    constraint and send it upstream anyway", which is why :func:`_gateway_idp_client`
+    refuses every other provider rather than letting one fall through to here.
     """
     if provider == "entra":
         return [f"{target}/.default"]
