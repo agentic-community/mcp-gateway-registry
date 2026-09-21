@@ -509,7 +509,7 @@ class SecretsManagerStore(SecretStoreBase):
             auth_method, user_id, provider, server_path, raw, purpose=purpose
         )
         if self._codec.needs_migration(raw):
-            self._schedule_repair(auth_method, user_id, provider, server_path, raw, token)
+            self._schedule_repair(auth_method, user_id, provider, server_path, raw, token, purpose)
         return token
 
     def _schedule_repair(
@@ -520,6 +520,7 @@ class SecretsManagerStore(SecretStoreBase):
         server_path: str,
         expected_plaintext: dict,
         token: StoredToken,
+        purpose: str,
     ) -> None:
         """Fire-and-forget a read-repair migration.
 
@@ -528,7 +529,9 @@ class SecretsManagerStore(SecretStoreBase):
         task set retains a reference so it is not garbage-collected.
         """
         task = asyncio.ensure_future(
-            self._migrate(auth_method, user_id, provider, server_path, expected_plaintext, token)
+            self._migrate(
+                auth_method, user_id, provider, server_path, expected_plaintext, token, purpose
+            )
         )
         self._repair_tasks.add(task)
         task.add_done_callback(self._repair_tasks.discard)
@@ -541,6 +544,7 @@ class SecretsManagerStore(SecretStoreBase):
         server_path: str,
         expected_plaintext: dict,
         token: StoredToken,
+        purpose: str,
     ) -> None:
         """Re-encrypt a legacy plaintext entry, compare-and-set under the lease.
 
@@ -551,10 +555,10 @@ class SecretsManagerStore(SecretStoreBase):
         rather than rolling a freshly-refreshed token back to the stale one.
         Best-effort: any failure is logged and retried on the next read.
         """
-        root_name = self._secret_name(auth_method, user_id, keys.EGRESS_PURPOSE)
+        root_name = self._secret_name(auth_method, user_id, purpose)
         key = keys.map_key(provider, server_path)
         encrypted = self._codec.encode(
-            auth_method, user_id, provider, server_path, token, purpose=keys.EGRESS_PURPOSE
+            auth_method, user_id, provider, server_path, token, purpose=purpose
         )
         try:
             async with self._mutation_guard(root_name) as lease_state:
@@ -606,6 +610,15 @@ class SecretsManagerStore(SecretStoreBase):
                 auth_method, user_id, provider, server_path, raw, purpose=keys.EGRESS_PURPOSE
             )
             if self._codec.needs_migration(raw):
-                self._schedule_repair(auth_method, user_id, provider, server_path, raw, token)
+                # list_for_user enumerates the egress space only, so repair there too.
+                self._schedule_repair(
+                    auth_method,
+                    user_id,
+                    provider,
+                    server_path,
+                    raw,
+                    token,
+                    keys.EGRESS_PURPOSE,
+                )
             out.append((provider, server_path, token))
         return out

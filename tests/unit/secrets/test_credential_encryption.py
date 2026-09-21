@@ -432,3 +432,76 @@ class TestPurposeIsCryptographicallyBound:
         assert CredentialCodec._aad(1, "AES-256-GCM", "v1", *_ADDR, keys.DISCOVERY_PURPOSE) == (
             pre_purpose + b"|" + keys.encode_segment(keys.DISCOVERY_PURPOSE).encode("ascii")
         )
+
+
+@pytest.mark.unit
+class TestReadRepairHonoursPurpose:
+    """Read-repair must rewrite the entry at the address it was READ from.
+
+    Encryption is OFF by default, so the common upgrade path is: entries exist in
+    plaintext, an operator sets a key, and each read lazily re-encrypts. If the repair
+    path hardcodes one purpose, a discovery entry is never re-encrypted -- a delegated
+    HUMAN token stays plaintext at rest indefinitely and nothing reports it. Worse on the
+    one-document-per-principal backend, where it also takes the mutation lease on the
+    USER'S EGRESS document before discovering there is nothing to compare, contending
+    with that user's own writes once per health cycle (tier 2 is uncached).
+    """
+
+    @pytest.mark.parametrize("purpose", ["egress", "discovery"])
+    async def test_secrets_manager_repairs_in_place(self, secrets_manager_client, purpose):
+        await _sm(secrets_manager_client, encrypted=False).put_token(
+            *_ADDR, _token(), purpose=purpose
+        )
+        name = (
+            f"{keys.namespaced_prefix('mcp/egress', purpose)}/"
+            f"{keys.user_principal(_ADDR[0], _ADDR[1])}"
+        )
+        assert (
+            "gho_super_secret_pat"
+            in (secrets_manager_client.get_secret_value(SecretId=name)["SecretString"])
+        ), "precondition: plaintext at rest"
+
+        enc = _sm(secrets_manager_client, encrypted=True)
+        assert (await enc.get_token(*_ADDR, purpose=purpose)).access_token == (
+            "gho_super_secret_pat"
+        )
+        await _drain(enc)
+
+        after = secrets_manager_client.get_secret_value(SecretId=name)["SecretString"]
+        assert "gho_super_secret_pat" not in after, f"{purpose} entry was not re-encrypted in place"
+        # ...and it must still be READABLE. Encrypting under the wrong purpose would bind
+        # an AAD the reader never reproduces, silently destroying the credential: the
+        # plaintext is gone and the tag can never authenticate again.
+        assert (await enc.get_token(*_ADDR, purpose=purpose)).access_token == (
+            "gho_super_secret_pat"
+        ), f"{purpose} entry was re-encrypted under the wrong AAD and is now unreadable"
+
+    async def test_secrets_manager_repair_does_not_touch_the_other_purpose(
+        self, secrets_manager_client
+    ):
+        """Repairing discovery must not read, lease, or rewrite the egress document."""
+        plain = _sm(secrets_manager_client, encrypted=False)
+        await plain.put_token(*_ADDR, _token("egress-token"), purpose=keys.EGRESS_PURPOSE)
+        await plain.put_token(*_ADDR, _token("discovery-token"), purpose=keys.DISCOVERY_PURPOSE)
+
+        egress_name = f"mcp/egress/{keys.user_principal(_ADDR[0], _ADDR[1])}"
+        before = secrets_manager_client.get_secret_value(SecretId=egress_name)["SecretString"]
+
+        enc = _sm(secrets_manager_client, encrypted=True)
+        await enc.get_token(*_ADDR, purpose=keys.DISCOVERY_PURPOSE)
+        await _drain(enc)
+
+        after = secrets_manager_client.get_secret_value(SecretId=egress_name)["SecretString"]
+        assert after == before, "a discovery repair rewrote the user's egress document"
+
+    @pytest.mark.parametrize("purpose", ["egress", "discovery"])
+    async def test_openbao_repairs_in_place(self, purpose):
+        client = _FakeHvacClient()
+        await _openbao(client, encrypted=False).put_token(*_ADDR, _token(), purpose=purpose)
+        enc = _openbao(client, encrypted=True)
+        assert (await enc.get_token(*_ADDR, purpose=purpose)).access_token == (
+            "gho_super_secret_pat"
+        )
+        await _drain(enc)
+        repaired = next(iter(client.secrets.kv.v2._data.values()))
+        assert repaired.get("_encrypted") is True, f"{purpose} entry was not re-encrypted in place"
