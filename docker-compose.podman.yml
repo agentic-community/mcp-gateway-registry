@@ -181,6 +181,9 @@ services:
       - ENTRA_CLIENT_ID=${ENTRA_CLIENT_ID}
       - ENTRA_CLIENT_SECRET=${ENTRA_CLIENT_SECRET}
       - ENTRA_ENABLED=${ENTRA_ENABLED:-false}
+      # Sovereign-cloud login host for the registry's OWN client_credentials
+      # grant (headless backend discovery/health against obo_exchange servers).
+      - ENTRA_LOGIN_BASE_URL=${ENTRA_LOGIN_BASE_URL:-https://login.microsoftonline.com}
       # PingFederate configuration
       - PINGFEDERATE_BASE_URL=${PINGFEDERATE_BASE_URL:-}
       - PINGFEDERATE_EXTERNAL_URL=${PINGFEDERATE_EXTERNAL_URL:-}

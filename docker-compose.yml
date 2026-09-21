@@ -310,6 +310,9 @@ services:
       - ENTRA_CLIENT_SECRET=${ENTRA_CLIENT_SECRET}
       - ENTRA_ENABLED=${ENTRA_ENABLED:-false}
       - ENTRA_APPLICATION_ID_URI=${ENTRA_APPLICATION_ID_URI:-}
+      # Sovereign-cloud login host for the registry's OWN client_credentials
+      # grant (headless backend discovery/health against obo_exchange servers).
+      - ENTRA_LOGIN_BASE_URL=${ENTRA_LOGIN_BASE_URL:-https://login.microsoftonline.com}
       # IdP group filtering (applies to all identity providers)
       - IDP_GROUP_FILTER_PREFIX=${IDP_GROUP_FILTER_PREFIX:-}
       # Login-time IdP group allowlist (blank = auto-derive from scope mappings)

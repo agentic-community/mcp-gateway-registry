@@ -276,6 +276,33 @@ builds keys through `registry/secrets/keys.py`, which applies **one** canonical
 encoding: NFC-normalize, then **base64url (unpadded)**, so each segment contains
 only `[A-Za-z0-9_-]` — never `/`, `|`, `%`, or `=`.
 
+### The key carries no consent `purpose`
+
+One address serves both consent purposes. A `purpose=egress` consent (a user
+connecting their own account for runtime calls) and a `purpose=discovery` consent
+(an admin designating the identity the registry borrows for its own headless
+health checks and tool discovery — see
+[OAuth 2.1 backend discovery](obo-token-exchange.md)) both resolve to
+`(auth_method, user_id, provider, server_path)`.
+
+That matters when the same principal does both for the same provider **and** the
+same server, because the two consents may use different OAuth clients and scopes:
+
+- **Different `client_id`** — the vend refuses the mismatch and forces re-consent,
+  so each consent *evicts* the other. Headless discovery and that user's runtime
+  egress would take turns breaking, each repaired by a re-consent that breaks the
+  other.
+- **Same `client_id`, different scopes** — the later consent silently changes what
+  the earlier one presents. A user action the registry does not mediate would
+  re-scope the registry's own headless credential.
+
+So the callback **refuses to overwrite** an entry bound to a different client,
+rather than clobbering it: the second consent fails with "a different OAuth client
+is already connected for this provider and server". Disconnect the existing
+connection first if you genuinely mean to replace it. The check runs before the
+code exchange, so a single-use authorization code is never spent on a consent that
+will be rejected.
+
 ### The canonical `user_id` (OIDC `sub`)
 
 `user_id` is the caller's **OIDC `sub`**, not their display username. The `sub`

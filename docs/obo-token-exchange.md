@@ -42,6 +42,7 @@ against Graph) and exercising the flow against the `mcp-entra` Helm release.
 - [Runtime sequence](#runtime-sequence)
 - [How `obo_exchange` differs from the 3LO vault](#how-obo_exchange-differs)
 - [Registration contract](#registration-contract)
+- [Backend discovery (health / tool-list)](#backend-discovery-for-obo_exchange-servers-health--tool-list)
 - [The RFC 8707 resource / Entra App ID URI constraint](#resource-constraint)
 - [Environment variables](#environment-variables)
 - [1. Entra app registration](#1-entra-app-registration)
@@ -258,6 +259,119 @@ validates the token it receives against two facts the gateway guarantees: the
 **expected `aud`** (its own app, registered as `target_audience`) and the **shared
 issuer** (the same IdP — already known). If it exchanges the token again for a
 downstream resource, it does so against those same facts.
+
+---
+
+## Backend discovery for `obo_exchange` servers (health / tool-list)
+
+`obo_exchange` sources the **runtime** token per user, per request (above). But the
+registry also runs **headless** health checks and tool discovery against the
+server — with no user present and no ingress JWT — so it cannot perform an OBO
+exchange for those calls (there is no `subject_token`). Discovery therefore
+authenticates as the **gateway itself** using the OAuth 2.0 `client_credentials`
+grant, requesting a token audienced to the server's `target_audience`. This is the
+machine-identity analogue of the per-user exchange.
+
+| | Runtime (`obo_exchange`) | Discovery (this section) |
+|---|---|---|
+| Grant | `jwt-bearer` / RFC 8693 token exchange | `client_credentials` (RFC 6749 §4.4) |
+| Identity | the end user (`sub` preserved) | the gateway app itself (no user) |
+| Where | auth-server `mcp_proxy` hop | registry (`backend_oauth.resolve_obo_discovery_bearer`) |
+| Credential | gateway IdP client creds + user JWT | gateway IdP client creds only |
+| Token claims | `aud`=server app, `sub`=user | `aud`=server app, `roles`=app role(s), **no user/`scp`** |
+
+The discovery token is used **only** for the registry's own health/tool-list calls
+(and security scan). It is never injected on the end-user egress hop — that hop
+continues to use the per-user OBO exchange (the discovery/runtime auth separation
+requested in issue #966).
+
+### Enabling it
+
+No extra **registry** configuration: discovery activates automatically for a server
+when `EGRESS_AUTH_ENABLED=true` and `egress_auth_mode=obo_exchange`, reusing the
+registered `egress_oauth.target_audience`. The `target_audience` is re-validated at
+mint time against the **full** registration control, not just part of it — the
+always-on first-party floor (so the machine token can never be minted for Microsoft
+Graph / ARM / Key Vault), the `EGRESS_OBO_ALLOWED_AUDIENCES` allowlist / shape rule,
+**and** the gateway's-own-audience check. That last one matters more here than for
+the runtime grant: Entra rejects a same-app OBO *exchange* at runtime, but it will
+happily issue `api://<gateway-client-id>/.default` to the gateway itself. Sending
+that upstream would hand a third-party MCP server a token audienced to this gateway,
+in the form its own ingress accepts.
+
+Sovereign clouds: set `ENTRA_LOGIN_BASE_URL` (US Gov
+`https://login.microsoftonline.us`, China `https://login.partner.microsoftonline.cn`);
+the gateway's token endpoint is derived from it.
+
+### Entra changes required
+
+A `client_credentials` (app-only) token can carry **only application permissions
+(app roles)**, never delegated scopes. So, in addition to the general app setup in
+[§1](#1-entra-app-registration):
+
+**On the TARGET internal MCP server's app registration** (the resource being
+discovered):
+
+1. **Expose an Application ID URI** — *Expose an API* → set `api://<target-client-id>`
+   (or a custom `api://<name>`). This exact value is the server's `target_audience`.
+2. **Define an App Role for applications** — *App roles* → *Create app role* →
+   **Allowed member types = Applications** (e.g. value `Discovery.Access`). An
+   assignable application app role is what lets `<target>/.default` mint a token
+   for this resource.
+
+**On the GATEWAY app registration** (the registry's existing app —
+`ENTRA_CLIENT_ID`):
+
+3. **Add API permission** — *API permissions* → *Add a permission* → **My APIs** →
+   select the target server app → **Application permissions** → check the app role
+   from step 2.
+4. **Grant admin consent** — click *Grant admin consent for <tenant>*. Application
+   permissions **always** require admin consent; without it the token request fails
+   (`AADSTS65001`).
+5. **Client secret** — reuse the gateway's existing secret (`ENTRA_CLIENT_SECRET`).
+   No new or per-server secret.
+
+**Token behavior.** The registry requests
+`POST {ENTRA_LOGIN_BASE_URL}/{tenant}/oauth2/v2.0/token` with
+`grant_type=client_credentials`, `client_id`/`client_secret` = the gateway app,
+and `scope=api://<target>/.default`. The issued token has `aud=api://<target>`, a
+`roles` claim, **no `scp`**, and its subject is the gateway service principal — no
+user. **The internal MCP server MUST accept app-only tokens** (validate `aud` +
+`roles`, tolerate the absence of a user/`scp`) for at least its discovery
+endpoints (`initialize`, `tools/list`); a server that only accepts delegated
+user tokens will still fail discovery.
+
+### Keycloak
+
+**Not usable on a standard deployment today.** Two blockers, in the order you hit
+them:
+
+1. **`KEYCLOAK_URL` must be an externally reachable HTTPS URL.** The token request
+   carries the gateway's own `client_secret`, so it goes through the credentialed
+   OAuth SSRF profile, which requires HTTPS and refuses private hosts. Every
+   standard deployment points `KEYCLOAK_URL` at an in-cluster plain-HTTP address
+   (`http://keycloak:8080` on Compose, the headless Service on Helm), which that
+   profile rejects — so the request never leaves the registry. This is deliberate:
+   the fix is an HTTPS Keycloak URL, not a relaxed guard, because the alternative is
+   posting a client secret in cleartext. The registry logs
+   `obo discovery unavailable: KEYCLOAK_URL is ... must be HTTPS` so this is
+   diagnosable rather than appearing as a generic policy rejection.
+2. **Audience binding.** Keycloak binds the audience via a server-side **audience**
+   protocol mapper / client scope on the gateway's service-account client (not a
+   request scope), so no `.default` is sent. Enable *Service accounts* on the
+   gateway client and add an audience mapper for the target client.
+
+Until both are addressed, `obo_exchange` backend discovery is Entra-only in
+practice. Under Keycloak the affected servers simply record **unhealthy**, per
+*Failure behavior* below.
+
+### Failure behavior
+
+Fail-closed: if the token cannot be minted (feature off, gateway client
+unconfigured, target audience blocked, or the IdP rejects the request), the
+registry omits the header and the health check records the server **unhealthy** —
+the correct signal. It never falls back to an unauthenticated scan or to the
+runtime OBO path.
 
 ---
 
