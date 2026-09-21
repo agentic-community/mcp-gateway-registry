@@ -2529,6 +2529,105 @@ async def filter_tools_list_response(
     return kept
 
 
+def _is_sse_content_type(content_type: str) -> bool:
+    """Whether a response is Server-Sent Events."""
+    return "text/event-stream" in (content_type or "").lower()
+
+
+def _should_filter_tools_list(
+    filter_enabled: bool,
+    incoming_method: str,
+    status_code: int,
+    content_type: str,
+) -> bool:
+    """Whether this upstream response's tool list must be filtered.
+
+    SSE counts. Streamable-http upstreams answer tools/list with
+    text/event-stream, and this gate used to require application/json, so for
+    those servers the tool-level filter silently never ran and the unfiltered
+    list was forwarded (true since #1026). Narrowing the content types here
+    re-opens that hole, so this is asserted directly in the unit tests.
+    """
+    if not filter_enabled or incoming_method != "tools/list":
+        return False
+    if not 200 <= status_code < 300:
+        return False
+    lowered = (content_type or "").lower()
+    return "application/json" in lowered or _is_sse_content_type(lowered)
+
+
+async def _filter_sse_tools_list_body(
+    body_text: str,
+    server_name: str,
+    user_scopes: list[str],
+) -> str | None:
+    """Filter the tools array carried inside an SSE tools/list response.
+
+    Streamable-http upstreams answer tools/list with ``text/event-stream``
+    ("event: message" then a "data:" line holding the JSON-RPC payload) rather
+    than plain JSON. The filter used to require ``application/json``, so for
+    those upstreams it never ran and the unfiltered tool list was forwarded.
+
+    Rewrites each ``data:`` payload that carries ``result.tools`` and leaves the
+    SSE framing byte-identical otherwise, so session semantics are unaffected.
+
+    Args:
+        body_text: The decoded SSE response body.
+        server_name: Registered server name, transport suffix already stripped.
+        user_scopes: The caller's scopes.
+
+    Returns:
+        The rewritten body, or None when a ``data:`` payload could not be parsed.
+        None means the caller MUST fail closed: this is known to be a tools/list
+        response, so forwarding a body we could not inspect would leak the very
+        tools the filter exists to withhold.
+    """
+    out: list[str] = []
+    filtered_any = False
+
+    for line in body_text.split("\n"):
+        stripped = line.lstrip()
+        if not stripped.startswith("data:"):
+            out.append(line)
+            continue
+
+        payload = stripped[len("data:") :].strip()
+        if not payload:
+            out.append(line)
+            continue
+
+        try:
+            parsed = json.loads(payload)
+        except json.JSONDecodeError as exc:
+            logger.error(
+                f"_filter_sse_tools_list_body: server={server_name} could not parse an "
+                f"SSE data payload ({exc}); failing closed rather than forwarding an "
+                f"unfiltered tools list"
+            )
+            return None
+
+        result = parsed.get("result") if isinstance(parsed, dict) else None
+        if not (isinstance(result, dict) and isinstance(result.get("tools"), list)):
+            out.append(line)
+            continue
+
+        result["tools"] = await filter_tools_list_response(
+            server_name,
+            user_scopes,
+            result["tools"],
+        )
+        parsed["result"] = result
+        filtered_any = True
+        indent = line[: len(line) - len(stripped)]
+        out.append(f"{indent}data: {json.dumps(parsed)}")
+
+    if not filtered_any:
+        # No tools array anywhere: an error result or a notification frame. There
+        # is nothing to withhold, so forward it untouched.
+        logger.debug(f"_filter_sse_tools_list_body: server={server_name} carried no tools array")
+    return "\n".join(out)
+
+
 def validate_scope_subset(user_scopes: list[str], requested_scopes: list[str]) -> bool:
     """
     Validate that requested scopes are a subset of user's current scopes.
@@ -8471,12 +8570,12 @@ async def mcp_proxy(
             detail="Upstream MCP server error",
         ) from exc
 
-    # Only filter successful tools/list JSON responses.
-    should_filter = (
-        filter_enabled
-        and incoming_method == "tools/list"
-        and 200 <= status_code < 300
-        and "application/json" in content_type.lower()
+    is_sse_response = _is_sse_content_type(content_type)
+    should_filter = _should_filter_tools_list(
+        filter_enabled=filter_enabled,
+        incoming_method=incoming_method,
+        status_code=status_code,
+        content_type=content_type,
     )
 
     # Apply the response-header allowlist. Anything outside
@@ -8511,6 +8610,31 @@ async def mcp_proxy(
         # MCP client that expects either JSON-RPC or SSE.
         return Response(
             content=body_bytes,
+            status_code=status_code,
+            media_type=content_type,
+            headers=response_headers,
+        )
+
+    if is_sse_response:
+        try:
+            sse_text = body_bytes.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            logger.error(
+                f"mcp_proxy: tools/list SSE body for server={server_name} is not UTF-8 "
+                f"({exc}); failing closed"
+            )
+            raise HTTPException(status_code=502, detail="Upstream MCP server error")
+        rewritten = await _filter_sse_tools_list_body(
+            sse_text,
+            _registered_server_from_proxy_path(server_name),
+            user_scopes,
+        )
+        if rewritten is None:
+            # Could not inspect the payload. Forwarding it would leak the tools the
+            # filter exists to withhold, so refuse instead.
+            raise HTTPException(status_code=502, detail="Upstream MCP server error")
+        return Response(
+            content=rewritten.encode("utf-8"),
             status_code=status_code,
             media_type=content_type,
             headers=response_headers,
