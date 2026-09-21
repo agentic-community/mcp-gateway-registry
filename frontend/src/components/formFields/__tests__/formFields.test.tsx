@@ -146,6 +146,70 @@ describe('AuthSchemeFields', () => {
     expect(document.querySelector('input[type="password"]')).toBeInTheDocument();
     expect(screen.getByText('Header Name')).toBeInTheDocument();
   });
+
+  it('offers no OAuth 2.1 scheme option (discovery is not a scheme)', () => {
+    render(<AuthSchemeFields scheme="none" {...base} />);
+    expect(screen.getByText('OAuth 2.0 (client credentials)')).toBeInTheDocument();
+    expect(
+      screen.queryByText(/OAuth 2\.1 \(delegated/),
+    ).not.toBeInTheDocument();
+  });
+
+  it('omits the discovery toggle unless the parent enables it', () => {
+    render(<AuthSchemeFields scheme="none" {...base} />);
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+  });
+
+  it('reports discovery toggle changes independently of the scheme', () => {
+    const onDiscoveryEnabledChange = jest.fn();
+    render(
+      <AuthSchemeFields
+        scheme="bearer"
+        {...base}
+        showDiscoveryToggle
+        discoveryEnabled={false}
+        onDiscoveryEnabledChange={onDiscoveryEnabledChange}
+      />,
+    );
+    // The credential field for the real scheme coexists with the toggle.
+    expect(document.querySelector('input[type="password"]')).toBeInTheDocument();
+    const toggle = screen.getByRole('checkbox', {
+      name: /Discovery Identity \(OAuth 2\.1\)/,
+    });
+    expect(toggle).not.toBeChecked();
+    fireEvent.click(toggle);
+    expect(onDiscoveryEnabledChange).toHaveBeenCalledWith(true);
+    expect(base.onSchemeChange).not.toHaveBeenCalled();
+  });
+
+  it('shows the obo discovery panel for an obo server with scheme none', () => {
+    render(
+      <AuthSchemeFields
+        scheme="none"
+        {...base}
+        oboDiscoveryActive
+        oboTargetAudience="api://internal-mcp"
+      />,
+    );
+    expect(
+      screen.getByText(/discovery uses a gateway machine token/i),
+    ).toBeInTheDocument();
+    expect(screen.getByText('api://internal-mcp')).toBeInTheDocument();
+  });
+
+  it('hides the obo discovery panel once an explicit scheme is selected', () => {
+    render(
+      <AuthSchemeFields
+        scheme="bearer"
+        {...base}
+        oboDiscoveryActive
+        oboTargetAudience="api://internal-mcp"
+      />,
+    );
+    expect(
+      screen.queryByText(/discovery uses a gateway machine token/i),
+    ).not.toBeInTheDocument();
+  });
 });
 
 describe('ProxyField', () => {

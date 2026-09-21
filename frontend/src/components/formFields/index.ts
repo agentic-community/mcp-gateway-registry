@@ -18,6 +18,11 @@ export type { UpstreamHeader } from './UpstreamHeadersField';
 export { default as MetadataField } from './MetadataField';
 export { default as AuthSchemeFields } from './AuthSchemeFields';
 export type { AuthScheme } from './AuthSchemeFields';
+export { toAuthScheme } from './AuthSchemeFields';
+export { default as OAuthClientCredentialsFields } from './OAuthClientCredentialsFields';
+export type { OAuthClientCredentialsValues } from './OAuthClientCredentialsFields';
+export { default as DiscoveryIdentityFields } from './DiscoveryIdentityFields';
+export type { DiscoveryIdentityValues } from './DiscoveryIdentityFields';
 export {
   FIELD,
   FIELD_BASE,

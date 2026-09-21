@@ -23,8 +23,18 @@ import LocalRuntimeFormPanel from '../components/LocalRuntimeFormPanel';
 import DuplicateCheckModal from '../components/DuplicateCheckModal';
 import { useDuplicateCheck } from '../hooks/useDuplicateCheck';
 import type { ExistingEntity } from '../types/duplicateCheck';
-import { FIELD, LABEL, ProxyField } from '../components/formFields';
+import {
+  FIELD,
+  LABEL,
+  ProxyField,
+  AuthSchemeFields,
+  type AuthScheme,
+  OAuthClientCredentialsFields,
+  DiscoveryIdentityFields,
+} from '../components/formFields';
 import { pathFromName } from '../utils/slug';
+import { isEgressAuthEnabled } from '../utils/egressAuth';
+import { useRegistryConfig } from '../hooks/useRegistryConfig';
 import Button from '../components/Button';
 
 
@@ -84,9 +94,27 @@ interface ServerFormData {
   mcp_endpoint: string;
   sse_endpoint: string;
   metadata: string;
-  auth_scheme: string;
+  auth_scheme: AuthScheme;
   auth_credential: string;
   auth_header_name: string;
+  oauth_token_url: string;
+  oauth_client_id: string;
+  oauth_client_secret: string;
+  oauth_token_auth_style: string;
+  oauth_scopes: string;
+  oauth_resource: string;
+  oauth_discovery_provider: string;
+  oauth_discovery_client_id: string;
+  oauth_discovery_client_secret: string;
+  oauth_discovery_scopes: string;
+  oauth_discovery_custom_authorize_url: string;
+  oauth_discovery_custom_token_url: string;
+  oauth_discovery_custom_scope_separator: string;
+  oauth_discovery_custom_token_auth_style: string;
+  oauth_discovery_custom_resource: string;
+  // Discovery Identity (OAuth 2.1): an INDEPENDENT flag, orthogonal to
+  // auth_scheme. Persisted after create via PUT /servers/{path}/oauth-discovery.
+  oauth_discovery_enabled: boolean;
   custom_headers: Array<{ name: string; value: string }>;
   status: string;
   provider_organization: string;
@@ -151,6 +179,22 @@ const initialServerForm: ServerFormData = {
   auth_scheme: 'none',
   auth_credential: '',
   auth_header_name: 'X-API-Key',
+  oauth_token_url: '',
+  oauth_client_id: '',
+  oauth_client_secret: '',
+  oauth_token_auth_style: 'post_body',
+  oauth_scopes: '',
+  oauth_resource: '',
+  oauth_discovery_provider: '',
+  oauth_discovery_client_id: '',
+  oauth_discovery_client_secret: '',
+  oauth_discovery_scopes: '',
+  oauth_discovery_custom_authorize_url: '',
+  oauth_discovery_custom_token_url: '',
+  oauth_discovery_custom_scope_separator: '',
+  oauth_discovery_custom_token_auth_style: '',
+  oauth_discovery_custom_resource: '',
+  oauth_discovery_enabled: false,
   custom_headers: [],
   status: 'active',
   provider_organization: '',
@@ -205,6 +249,25 @@ const RegisterPage: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
   const [mcpRegistryNotice, setMcpRegistryNotice] = useState<string | null>(null);
+
+  // Discovery Identity requires the egress-auth feature (the backend only vends a
+  // borrowed discovery token when EGRESS_AUTH_ENABLED, which needs a gateway), so
+  // the create form offers it under exactly the same gate the edit modal uses.
+  const [egressEnabled, setEgressEnabled] = useState(false);
+  const { config: registryConfig } = useRegistryConfig();
+  useEffect(() => {
+    let active = true;
+    void isEgressAuthEnabled().then(enabled => {
+      if (active) setEgressEnabled(enabled);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+  const egressFeatureAvailable =
+    egressEnabled &&
+    registryConfig?.deployment_mode === 'with-gateway' &&
+    serverForm.deployment !== 'local';
 
   // Registration deduplication. The hook owns the modal state, the
   // sticky-disabled flag, the AbortController, and all of the network
@@ -612,6 +675,70 @@ const RegisterPage: React.FC = () => {
         },
       });
 
+      // OAuth 2.0 client-credentials and OAuth 2.1 discovery configs live on
+      // separate admin endpoints and require the server to exist — persist them
+      // right after create. They are independent of each other (a server may
+      // carry both), so both run when selected. A failure here does not undo the
+      // (successful) registration.
+      const serverPath = serverForm.path.startsWith('/')
+        ? serverForm.path
+        : `/${serverForm.path}`;
+      const needsOAuthConfig =
+        serverForm.deployment === 'remote' && serverForm.auth_scheme === 'oauth';
+      const needsDiscoveryConfig =
+        egressFeatureAvailable && serverForm.oauth_discovery_enabled;
+      try {
+        if (needsOAuthConfig || needsDiscoveryConfig) {
+          const csrf = await axios.get('/api/auth/csrf-token');
+          const csrfHeaders: Record<string, string> = {};
+          if (csrf.data?.csrf_token) csrfHeaders['X-CSRF-Token'] = csrf.data.csrf_token;
+          if (needsOAuthConfig) {
+            const oauthScopes = serverForm.oauth_scopes
+              .split(/[,\s]+/).map((s) => s.trim()).filter(Boolean);
+            await axios.put(
+              `/api/servers${serverPath}/oauth-config`,
+              {
+                token_url: serverForm.oauth_token_url.trim(),
+                client_id: serverForm.oauth_client_id.trim(),
+                client_secret: serverForm.oauth_client_secret || undefined,
+                scopes: oauthScopes,
+                token_auth_style: serverForm.oauth_token_auth_style || 'post_body',
+                resource: serverForm.oauth_resource.trim() || undefined,
+              },
+              { headers: csrfHeaders }
+            );
+          }
+          if (needsDiscoveryConfig) {
+            const discoveryScopes = serverForm.oauth_discovery_scopes
+              .split(/[,\s]+/).map((s) => s.trim()).filter(Boolean);
+            await axios.put(
+              `/api/servers${serverPath}/oauth-discovery`,
+              {
+                provider: serverForm.oauth_discovery_provider.trim(),
+                client_id: serverForm.oauth_discovery_client_id.trim(),
+                client_secret: serverForm.oauth_discovery_client_secret || undefined,
+                scopes: discoveryScopes,
+                custom_authorize_url: serverForm.oauth_discovery_custom_authorize_url || undefined,
+                custom_token_url: serverForm.oauth_discovery_custom_token_url || undefined,
+                custom_scope_separator: serverForm.oauth_discovery_custom_scope_separator || undefined,
+                custom_token_auth_style: serverForm.oauth_discovery_custom_token_auth_style || undefined,
+                custom_resource: serverForm.oauth_discovery_custom_resource || undefined,
+              },
+              { headers: csrfHeaders }
+            );
+          }
+        }
+      } catch (cfgErr: unknown) {
+        const cfgAxios = cfgErr as { response?: { data?: { detail?: string; error?: string } }; message?: string };
+        const detail = cfgAxios.response?.data?.error || cfgAxios.response?.data?.detail || cfgAxios.message;
+        setToast({
+          message: `Server registered, but its OAuth config failed to save (${detail || 'unknown error'}). Add it from Edit.`,
+          type: 'error',
+        });
+        setTimeout(() => navigate('/'), 2500);
+        return;
+      }
+
       setToast({ message: 'Server registered successfully!', type: 'success' });
       setTimeout(() => navigate('/'), 1500);
     } catch (error: unknown) {
@@ -624,7 +751,7 @@ const RegisterPage: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [serverForm, navigate]);
+  }, [serverForm, navigate, egressFeatureAvailable]);
 
 
   const performAgentRegistration = useCallback(async (): Promise<void> => {
@@ -882,7 +1009,17 @@ const RegisterPage: React.FC = () => {
                   ? 'bg-purple-600 text-white border-purple-600'
                   : 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600'
               }`}
-              onClick={() => setServerForm(prev => ({ ...prev, deployment: 'local', auth_scheme: 'none' }))}
+              onClick={() =>
+                setServerForm(prev => ({
+                  ...prev,
+                  deployment: 'local',
+                  auth_scheme: 'none',
+                  // Discovery is remote-only, so clear the flag rather than leaving it
+                  // set behind a hidden control -- otherwise the config the operator
+                  // entered is silently dropped on create with no indication why.
+                  oauth_discovery_enabled: false,
+                }))
+              }
             >
               Local (stdio)
             </button>
@@ -986,68 +1123,54 @@ const RegisterPage: React.FC = () => {
             machine, and have no proxy URL for /mcp or /sse path overrides. */}
         {serverForm.deployment === 'remote' && (
           <>
-            <div className="md:col-span-2 mt-4">
-              <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-4 flex items-center">
-                <span className="bg-blue-100 dark:bg-blue-900 text-blue-600 dark:text-blue-300 px-2 py-1 rounded text-xs mr-2">Optional</span>
-                Backend Authentication
-              </h3>
-              <p className="text-sm text-gray-500 dark:text-gray-400 -mt-2 mb-4">
-                Configure credentials the gateway will use when proxying requests to your backend MCP server.
-              </p>
-            </div>
-
-            <div>
-              <label className={labelClass}>Authentication Scheme</label>
-              <select
-                className={inputClass}
-                value={serverForm.auth_scheme}
-                onChange={(e) => {
-                  const newScheme = e.target.value;
-                  setServerForm(prev => ({
+            <div className="md:col-span-2">
+              <AuthSchemeFields
+                scheme={serverForm.auth_scheme}
+                credential={serverForm.auth_credential}
+                headerName={serverForm.auth_header_name}
+                showDiscoveryToggle={egressFeatureAvailable}
+                discoveryEnabled={serverForm.oauth_discovery_enabled}
+                onDiscoveryEnabledChange={(enabled) =>
+                  setServerForm((prev) => ({ ...prev, oauth_discovery_enabled: enabled }))
+                }
+                onSchemeChange={(newScheme) =>
+                  setServerForm((prev) => ({
                     ...prev,
                     auth_scheme: newScheme,
                     auth_credential: newScheme === 'none' ? '' : prev.auth_credential,
-                    auth_header_name: newScheme === 'api_key' ? prev.auth_header_name : 'X-API-Key',
-                  }));
-                }}
-              >
-                <option value="none">None</option>
-                <option value="bearer">Bearer Token</option>
-                <option value="api_key">API Key</option>
-              </select>
+                    auth_header_name:
+                      newScheme === 'api_key' ? prev.auth_header_name : 'X-API-Key',
+                  }))
+                }
+                onCredentialChange={(v) =>
+                  setServerForm((prev) => ({ ...prev, auth_credential: v }))
+                }
+                onHeaderNameChange={(v) =>
+                  setServerForm((prev) => ({ ...prev, auth_header_name: v }))
+                }
+              />
             </div>
-
-            {serverForm.auth_scheme !== 'none' && (
-              <div>
-                <label className={labelClass}>
-                  {serverForm.auth_scheme === 'bearer' ? 'Bearer Token' : 'API Key'} *
-                </label>
-                <input
-                  type="password"
-                  className={inputClass}
-                  value={serverForm.auth_credential}
-                  onChange={(e) => setServerForm(prev => ({ ...prev, auth_credential: e.target.value }))}
-                  placeholder={serverForm.auth_scheme === 'bearer' ? 'Enter bearer token' : 'Enter API key'}
+            {serverForm.auth_scheme === 'oauth' && (
+              <div className="md:col-span-2">
+                <OAuthClientCredentialsFields
+                  values={serverForm}
+                  onChange={(patch) => setServerForm((prev) => ({ ...prev, ...patch }))}
                 />
-                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                  This credential is stored securely and never displayed after saving.
-                </p>
               </div>
             )}
-
-            {serverForm.auth_scheme === 'api_key' && (
-              <div>
-                <label className={labelClass}>Header Name</label>
-                <input
-                  type="text"
-                  className={inputClass}
-                  value={serverForm.auth_header_name}
-                  onChange={(e) => setServerForm(prev => ({ ...prev, auth_header_name: e.target.value }))}
-                  placeholder="X-API-Key"
+            {egressFeatureAvailable && serverForm.oauth_discovery_enabled && (
+              <div className="md:col-span-2">
+                <DiscoveryIdentityFields
+                  values={serverForm}
+                  onChange={(patch) => setServerForm((prev) => ({ ...prev, ...patch }))}
+                  footer={
+                    <p className="text-xs text-gray-500 dark:text-gray-400">
+                      After registering, open this server in Edit and use
+                      &ldquo;Connect account for discovery&rdquo; to grant the registry an
+                      account for headless discovery.
+                    </p>
+                  }
                 />
-                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                  The HTTP header name used to send the API key (default: X-API-Key)
-                </p>
               </div>
             )}
 
