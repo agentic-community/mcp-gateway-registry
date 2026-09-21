@@ -254,6 +254,7 @@ than polling `GET /api/servers/{path}/security-scan`.
 - `tags_applied`: e.g. `["security-pending"]` when the scan flagged the asset.
 - `auto_disabled`: `true` when the asset was disabled because it failed the scan and
   `SECURITY_BLOCK_UNSAFE_SERVERS` (or the agent/skill equivalent) is enabled.
+  Note: with `SECURITY_ALLOW_UNSAFE_SERVERS=true` a failing server whose unsafe tools were blocked individually stays enabled, so this is `false` even though the scan failed. Read `tags_applied` and `is_safe` to detect that case.
 - `scan_error`: a short, sanitized message when the scan raised (never a stack trace).
 
 ### Signature verification

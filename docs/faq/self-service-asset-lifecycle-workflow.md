@@ -155,6 +155,7 @@ Lifecycle status and the enabled/disabled toggle are **two independent things**.
   state described above. It is what the self-service workflow drives.
 - **Enabled / disabled** (`is_enabled`) is an operational switch. When the automated security
   scan **fails**, the asset is registered but **disabled** (if `SECURITY_BLOCK_UNSAFE_SERVERS` is enabled) and tagged `security-pending`. This is a separate, admin-override style control, not a lifecycle status change.
+  With `SECURITY_ALLOW_UNSAFE_SERVERS=true` a failing server instead stays **enabled** with only its HIGH/CRITICAL tools blocked, and is disabled only when the scan blames no individual tool.
 
 Key consequences:
 
