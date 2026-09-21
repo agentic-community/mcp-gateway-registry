@@ -8,6 +8,7 @@ and must round-trip identically.
 
 import pytest
 
+from registry.egress_auth.service import is_per_user_auth_method
 from registry.secrets import keys
 
 
@@ -95,7 +96,51 @@ class TestKeyComposition:
         assert "/" not in server_part  # server_path slashes were encoded
 
     def test_openbao_path_segment_count(self) -> None:
-        path = keys.openbao_path("mcp/egress", "oauth2", "auth0|abc", "github", "/x/y")
+        path = keys.openbao_path(
+            "mcp/egress", "oauth2", "auth0|abc", "github", "/x/y", purpose=keys.EGRESS_PURPOSE
+        )
         # prefix has one "/", then 4 encoded segments each joined by "/"
         # mcp/egress/<auth>/<user>/<provider>/<server>  => 5 slashes total
         assert path.count("/") == 5
+
+
+@pytest.mark.unit
+class TestPurposeNamespace:
+    """`purpose` selects a disjoint address space, and egress keeps its old addresses."""
+
+    def test_egress_prefix_is_byte_identical_to_the_pre_purpose_layout(self) -> None:
+        """The no-migration guarantee. Do not "tidy" this into always appending.
+
+        Every entry written before purposes existed is an egress entry, so if the egress
+        prefix ever gains a segment, every already-vaulted credential becomes unreadable
+        and every user has to re-consent. The pre-purpose builder was simply
+        ``prefix.strip("/")``, so that is what egress must still produce.
+        """
+        for prefix in ("egress", "/egress", "egress/", "mcp/egress-tokens"):
+            assert keys.namespaced_prefix(prefix, keys.EGRESS_PURPOSE) == prefix.strip("/")
+
+    def test_discovery_gets_its_own_space(self) -> None:
+        egress = keys.namespaced_prefix("egress", keys.EGRESS_PURPOSE)
+        discovery = keys.namespaced_prefix("egress", keys.DISCOVERY_PURPOSE)
+        assert discovery != egress
+        # Nested under the configured prefix, so existing vault policies / IAM scoping
+        # that grant the prefix keep working without a deployment change.
+        assert discovery.startswith(f"{egress}/")
+
+    def test_the_two_spaces_cannot_collide(self) -> None:
+        """Depth alone separates them: egress is 4 segments past the prefix, discovery 5."""
+        args = ("oauth2", "alice", "github", "/github-mcp")
+        egress = keys.openbao_path("egress", *args, purpose=keys.EGRESS_PURPOSE)
+        discovery = keys.openbao_path("egress", *args, purpose=keys.DISCOVERY_PURPOSE)
+        assert egress != discovery
+        assert discovery.count("/") == egress.count("/") + 1
+        # No egress path can ever equal a discovery path, for ANY principal: a collision
+        # would need an auth_method segment equal to the encoded purpose, i.e. an
+        # auth_method literally named "discovery", which is not a per-user method.
+        assert not is_per_user_auth_method(keys.DISCOVERY_PURPOSE)
+
+    def test_purpose_segment_is_encoded_like_every_other_segment(self) -> None:
+        discovery = keys.namespaced_prefix("egress", keys.DISCOVERY_PURPOSE)
+        segment = discovery.rsplit("/", 1)[-1]
+        assert segment == keys.encode_segment(keys.DISCOVERY_PURPOSE)
+        assert keys.decode_segment(segment) == keys.DISCOVERY_PURPOSE

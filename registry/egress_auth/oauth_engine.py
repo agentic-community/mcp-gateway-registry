@@ -217,7 +217,6 @@ def _build_token_request(
     if cfg.token_endpoint_auth_style == TokenEndpointAuthStyle.BASIC_HEADER:
         basic = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
         headers["Authorization"] = f"Basic {basic}"
-        data["client_id"] = client_id
     else:  # POST_BODY (default)
         data["client_id"] = client_id
         data["client_secret"] = client_secret
@@ -341,3 +340,29 @@ async def refresh_token(
     data, headers = _build_token_request(cfg, client_id, client_secret, form)
     payload = await _post_token(cfg, data, headers)
     return _to_stored_token(cfg, payload, client_id, fallback_refresh=refresh_token_value)
+
+
+async def client_credentials_token(
+    cfg: OAuthProviderConfig,
+    client_id: str,
+    client_secret: str | None,
+    scopes: list[str] | None = None,
+) -> StoredToken:
+    """Acquire a token via the OAuth 2.0 ``client_credentials`` grant (RFC 6749 §4.4).
+
+    Used for machine-to-machine auth where the registry itself is the client
+    (e.g. authenticating to an OAuth-backed MCP server for health checks and
+    tool discovery). No user, no refresh token: the caller re-acquires when the
+    cached token nears expiry. The token endpoint receives the operator
+    client_secret, so the request goes through the same SSRF/rebinding-safe
+    client as the other grants (public HTTPS token endpoints only).
+    """
+    form: dict = {"grant_type": "client_credentials"}
+    if scopes:
+        form["scope"] = cfg.scope_separator.join(scopes)
+    # RFC 8707: bind the issued token to a specific protected resource when set.
+    if cfg.resource:
+        form["resource"] = cfg.resource
+    data, headers = _build_token_request(cfg, client_id, client_secret, form)
+    payload = await _post_token(cfg, data, headers)
+    return _to_stored_token(cfg, payload, client_id)

@@ -127,6 +127,29 @@ _ENDPOINTS = [
         "json",
         {"export_type": "single", "collections": ["servers"]},
     ),
+    # Backend-auth OAuth config + OAuth 2.1 discovery identity
+    # (nginx_proxied_auth mutations that write an encrypted client_secret).
+    (
+        "oauth_config_put",
+        "put",
+        "/api/servers/test-server/oauth-config",
+        "json",
+        {"token_url": "https://idp.example.com/token", "client_id": "cid"},
+    ),
+    (
+        "oauth_discovery_put",
+        "put",
+        "/api/servers/test-server/oauth-discovery",
+        "json",
+        {"provider": "github", "client_id": "cid"},
+    ),
+    (
+        "oauth_discovery_delete",
+        "delete",
+        "/api/servers/test-server/oauth-discovery",
+        None,
+        None,
+    ),
 ]
 
 

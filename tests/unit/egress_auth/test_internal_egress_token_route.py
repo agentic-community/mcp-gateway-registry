@@ -12,6 +12,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import registry.api.egress_auth_routes as routes
+from registry.secrets import keys
 
 
 class _StubRepo:
@@ -236,17 +237,22 @@ class _InMemoryStore(SecretStoreBase):
     def __init__(self):
         self._d = {}
 
-    async def put_token(self, a, u, p, s, t):
-        self._d[(a, u, p, s)] = t
+    async def put_token(self, a, u, p, s, t, *, purpose):
+        self._d[(purpose, a, u, p, s)] = t
 
-    async def get_token(self, a, u, p, s):
-        return self._d.get((a, u, p, s))
+    async def get_token(self, a, u, p, s, *, purpose):
+        return self._d.get((purpose, a, u, p, s))
 
-    async def delete_token(self, a, u, p, s):
-        self._d.pop((a, u, p, s), None)
+    async def delete_token(self, a, u, p, s, *, purpose):
+        self._d.pop((purpose, a, u, p, s), None)
 
     async def list_for_user(self, a, u):
-        return [(p, s, t) for (aa, uu, p, s), t in self._d.items() if aa == a and uu == u]
+        # Egress space only, mirroring the real backends.
+        return [
+            (p, s, t)
+            for (purpose, aa, uu, p, s), t in self._d.items()
+            if aa == a and uu == u and purpose == keys.EGRESS_PURPOSE
+        ]
 
 
 @pytest.fixture
@@ -259,7 +265,7 @@ def make_real_client(monkeypatch):
         monkeypatch.setattr(routes, "verify_mcp_proxy_token", lambda tok: claims)
         monkeypatch.setattr(routes, "get_server_repository", lambda: _StubRepo(server))
         store = _InMemoryStore()
-        store._d[("oauth2", "alice", "github", "/github-mcp")] = StoredToken(
+        store._d[(keys.EGRESS_PURPOSE, "oauth2", "alice", "github", "/github-mcp")] = StoredToken(
             access_token="gho_real",
             client_id="Iv1.x",
             expires_at="2999-01-01T00:00:00+00:00",

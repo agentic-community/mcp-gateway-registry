@@ -198,17 +198,22 @@ class OpenBaoStore(SecretStoreBase):
         user_id: str,
         provider: str,
         server_path: str,
+        purpose: str,
     ) -> str:
-        # hvac takes a path relative to the mount, so strip our prefix logic into
-        # the KV "path" (it does NOT include the mount or the "/data/" infix).
-        return (
-            f"{self._prefix}/"
-            f"{keys.encode_segment(auth_method)}/{keys.encode_segment(user_id)}/"
-            f"{keys.encode_segment(provider)}/{keys.encode_segment(server_path)}"
+        # hvac takes a path relative to the mount, so this is the KV "path" (it does NOT
+        # include the mount or the "/data/" infix). Delegated to `keys` so the entry-path
+        # format has exactly one construction site.
+        return keys.openbao_path(
+            self._prefix, auth_method, user_id, provider, server_path, purpose=purpose
         )
 
     def _principal_rel_prefix(self, auth_method: str, user_id: str) -> str:
-        return f"{self._prefix}/{keys.encode_segment(auth_method)}/{keys.encode_segment(user_id)}"
+        # Egress space only: `list_for_user` backs the user's Connected Accounts, and the
+        # identity the registry borrowed is not one of the user's own connections.
+        return (
+            f"{keys.namespaced_prefix(self._prefix, keys.EGRESS_PURPOSE)}/"
+            f"{keys.encode_segment(auth_method)}/{keys.encode_segment(user_id)}"
+        )
 
     async def put_token(
         self,
@@ -217,8 +222,10 @@ class OpenBaoStore(SecretStoreBase):
         provider: str,
         server_path: str,
         token: StoredToken,
+        *,
+        purpose: str,
     ) -> None:
-        path = self._rel_path(auth_method, user_id, provider, server_path)
+        path = self._rel_path(auth_method, user_id, provider, server_path, purpose)
         document = self._codec.encode(auth_method, user_id, provider, server_path, token)
 
         def _write() -> None:
@@ -239,8 +246,10 @@ class OpenBaoStore(SecretStoreBase):
         user_id: str,
         provider: str,
         server_path: str,
+        *,
+        purpose: str,
     ) -> StoredToken | None:
-        path = self._rel_path(auth_method, user_id, provider, server_path)
+        path = self._rel_path(auth_method, user_id, provider, server_path, purpose)
 
         def _read() -> dict | None:
             try:
@@ -265,7 +274,7 @@ class OpenBaoStore(SecretStoreBase):
             return None
         token = self._codec.decode(auth_method, user_id, provider, server_path, raw)
         if self._codec.needs_migration(raw):
-            self._schedule_repair(auth_method, user_id, provider, server_path, raw, token)
+            self._schedule_repair(auth_method, user_id, provider, server_path, raw, token, purpose)
         return token
 
     def _schedule_repair(
@@ -276,6 +285,7 @@ class OpenBaoStore(SecretStoreBase):
         server_path: str,
         expected_plaintext: dict,
         token: StoredToken,
+        purpose: str,
     ) -> None:
         """Fire-and-forget a read-repair migration.
 
@@ -284,7 +294,9 @@ class OpenBaoStore(SecretStoreBase):
         the task is not garbage-collected mid-flight.
         """
         task = asyncio.ensure_future(
-            self._migrate(auth_method, user_id, provider, server_path, expected_plaintext, token)
+            self._migrate(
+                auth_method, user_id, provider, server_path, expected_plaintext, token, purpose
+            )
         )
         self._repair_tasks.add(task)
         task.add_done_callback(self._repair_tasks.discard)
@@ -297,6 +309,7 @@ class OpenBaoStore(SecretStoreBase):
         server_path: str,
         expected_plaintext: dict,
         token: StoredToken,
+        purpose: str,
     ) -> None:
         """Re-encrypt a legacy plaintext entry atomically, ONLY if it is unchanged.
 
@@ -309,7 +322,7 @@ class OpenBaoStore(SecretStoreBase):
         credential back to the stale token. Best-effort: a genuine failure is
         logged and retried on the next read; a CAS conflict is a silent skip.
         """
-        path = self._rel_path(auth_method, user_id, provider, server_path)
+        path = self._rel_path(auth_method, user_id, provider, server_path, purpose)
         document = self._codec.encode(auth_method, user_id, provider, server_path, token)
 
         def _read_current() -> tuple[dict | None, int | None]:
@@ -352,8 +365,10 @@ class OpenBaoStore(SecretStoreBase):
         user_id: str,
         provider: str,
         server_path: str,
+        *,
+        purpose: str,
     ) -> None:
-        path = self._rel_path(auth_method, user_id, provider, server_path)
+        path = self._rel_path(auth_method, user_id, provider, server_path, purpose)
 
         def _delete() -> None:
             self._client.secrets.kv.v2.delete_metadata_and_all_versions(
@@ -422,6 +437,15 @@ class OpenBaoStore(SecretStoreBase):
         for provider, server_path, raw in rows:
             token = self._codec.decode(auth_method, user_id, provider, server_path, raw)
             if self._codec.needs_migration(raw):
-                self._schedule_repair(auth_method, user_id, provider, server_path, raw, token)
+                # list_for_user enumerates the egress space only, so repair there too.
+                self._schedule_repair(
+                    auth_method,
+                    user_id,
+                    provider,
+                    server_path,
+                    raw,
+                    token,
+                    keys.EGRESS_PURPOSE,
+                )
             out.append((provider, server_path, token))
         return out

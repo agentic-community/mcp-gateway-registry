@@ -30,6 +30,7 @@ from registry.egress_auth.schemas import (
     TokenEndpointAuthStyle,
 )
 from registry.egress_auth.state_codec import InvalidState, decode_state, encode_state
+from registry.secrets import keys
 from registry.secrets.interfaces import SecretStoreBase
 
 logger = logging.getLogger(__name__)
@@ -262,6 +263,7 @@ class EgressAuthService:
         session_id: str,
         server_path: str,
         egress_oauth: dict,
+        purpose: str = "egress",
     ) -> str:
         """Build the provider authorize URL with an AEAD-encrypted, single-use state."""
         cfg = resolve_provider(egress_oauth)
@@ -277,6 +279,7 @@ class EgressAuthService:
             pkce_verifier=verifier,
             nonce=secrets.token_urlsafe(16),
             issued_at=datetime.now(UTC).isoformat(),
+            purpose=purpose,
         )
         return oauth_engine.build_authorize_url(
             cfg=cfg,
@@ -345,10 +348,21 @@ class EgressAuthService:
         # consent time; the vend refuses any other upstream / token URL (see
         # egress_auth.upstream_binding and get_valid_token).
         token = token.model_copy(
-            update={"bound_upstreams": list(bound_upstreams), "bound_token_url": cfg.token_url}
+            update={
+                "bound_upstreams": list(bound_upstreams),
+                "bound_token_url": cfg.token_url,
+            }
         )
+        # `purpose` is part of the ADDRESS, not the payload: this write cannot land on
+        # an entry belonging to the other purpose, so there is nothing to collide with,
+        # evict, or re-scope, and no stored field a later refresh could reclassify.
         await self._store.put_token(
-            state.auth_method, state.user_id, state.provider, state.server_path, token
+            state.auth_method,
+            state.user_id,
+            state.provider,
+            state.server_path,
+            token,
+            purpose=state.purpose,
         )
         return EgressConnection(
             provider=state.provider,
@@ -369,6 +383,7 @@ class EgressAuthService:
         egress_oauth: dict,
         *,
         requested_upstream: str,
+        purpose: str,
     ) -> str | None:
         """Vend a valid access token, refreshing if near expiry. None on miss.
 
@@ -376,12 +391,21 @@ class EgressAuthService:
         connection, the connection is dead (refresh_failed), the caller is not a
         per-user principal, or the stored client_id no longer matches (rotated
         provider app -> force re-consent).
+
+        ``purpose`` is required, not defaulted, because it selects which vault address
+        space to read: a user's own runtime credential (``egress``) and the identity the
+        registry borrows for its headless calls (``discovery``) live at different
+        addresses. A caller therefore cannot reach the other purpose's credential at
+        all -- not "is refused after reading it". Defaulting would let a caller cross
+        the boundary by omission, which is the whole failure mode.
         """
         if not is_per_user_auth_method(auth_method):
             return None
 
         provider = egress_oauth["provider"]
-        token = await self._store.get_token(auth_method, user_id, provider, server_path)
+        token = await self._store.get_token(
+            auth_method, user_id, provider, server_path, purpose=purpose
+        )
         if token is None or token.status == "refresh_failed":
             return None
 
@@ -427,7 +451,7 @@ class EgressAuthService:
 
         if self._is_near_expiry(token):
             token = await self._refresh_single_flight(
-                auth_method, user_id, server_path, egress_oauth, token
+                auth_method, user_id, server_path, egress_oauth, token, purpose
             )
         return token.access_token if token else None
 
@@ -438,27 +462,33 @@ class EgressAuthService:
         server_path: str,
         egress_oauth: dict,
         token: StoredToken,
+        purpose: str,
     ) -> StoredToken | None:
         """Single-flight refresh: cross-replica lease + post-acquire double-check.
 
         The post-acquire re-read is the CORRECTNESS anchor (a second waiter that
         finds a fresh token after acquiring does nothing); the lease only prevents
         refresh storms / rotating-refresh churn across replicas. The lease key is
-        the canonical vault tuple so it matches the vault namespacing exactly.
+        the canonical vault tuple -- purpose included -- so it matches the vault
+        namespacing exactly and two purposes never contend for one lease.
         """
         provider = egress_oauth["provider"]
-        key = f"{auth_method}|{user_id}|{provider}|{server_path}"
+        key = f"{purpose}|{auth_method}|{user_id}|{provider}|{server_path}"
 
         acquired = await self._lease.acquire(key, self._holder, self._lease_ttl)
         if not acquired:
             # Could not take the lease (another replica is refreshing). Re-read
             # once -- if it refreshed, use that; else fall back to the stale token
             # rather than racing a concurrent refresh against a rotating provider.
-            current = await self._store.get_token(auth_method, user_id, provider, server_path)
+            current = await self._store.get_token(
+                auth_method, user_id, provider, server_path, purpose=purpose
+            )
             return current if current and current.status != "refresh_failed" else None
 
         try:
-            current = await self._store.get_token(auth_method, user_id, provider, server_path)
+            current = await self._store.get_token(
+                auth_method, user_id, provider, server_path, purpose=purpose
+            )
             if current and not self._is_near_expiry(current):
                 return current  # another waiter already refreshed
             if current is None or not current.refresh_token:
@@ -475,20 +505,28 @@ class EgressAuthService:
                 # Dead refresh token: mark the entry failed so the next vend
                 # returns None -> consent URL, rather than retrying forever.
                 failed = current.model_copy(update={"status": "refresh_failed"})
-                await self._store.put_token(auth_method, user_id, provider, server_path, failed)
+                await self._store.put_token(
+                    auth_method, user_id, provider, server_path, failed, purpose=purpose
+                )
                 logger.warning(
                     "egress refresh failed (dead refresh token) for %s/%s; marked refresh_failed",
                     provider,
                     server_path,
                 )
                 return None
+            # Carry the consent-time bindings forward. The refreshed token is written
+            # back to the address it was read from, so a refresh cannot move an entry
+            # between purposes -- the failure mode that existed while purpose was a
+            # mutable payload field a rewrite could drop.
             new = new.model_copy(
                 update={
                     "bound_upstreams": current.bound_upstreams,
                     "bound_token_url": current.bound_token_url,
                 }
             )
-            await self._store.put_token(auth_method, user_id, provider, server_path, new)
+            await self._store.put_token(
+                auth_method, user_id, provider, server_path, new, purpose=purpose
+            )
             return new
         finally:
             await self._lease.release(key, self._holder)
@@ -525,7 +563,9 @@ class EgressAuthService:
         server_path: str,
     ) -> None:
         """Delete the vault entry (idempotent). Provider-side revoke is a future follow-on."""
-        await self._store.delete_token(auth_method, user_id, provider, server_path)
+        await self._store.delete_token(
+            auth_method, user_id, provider, server_path, purpose=keys.EGRESS_PURPOSE
+        )
 
     # -- pat (static per-user PAT / API-key) ---------------------------------- #
 
@@ -557,7 +597,9 @@ class EgressAuthService:
         """
         if not is_per_user_auth_method(auth_method):
             return None
-        token = await self._store.get_token(auth_method, user_id, provider, server_path)
+        token = await self._store.get_token(
+            auth_method, user_id, provider, server_path, purpose=keys.EGRESS_PURPOSE
+        )
         if token is None:
             return None
         # Enforce the bounded lifetime at the sink: an expired PAT is a MISS.
@@ -581,7 +623,9 @@ class EgressAuthService:
         token: StoredToken,
     ) -> None:
         """Store a per-user PAT (thin wrapper over the SecretStore)."""
-        await self._store.put_token(auth_method, user_id, provider, server_path, token)
+        await self._store.put_token(
+            auth_method, user_id, provider, server_path, token, purpose=keys.EGRESS_PURPOSE
+        )
 
     async def get_pat_status(
         self,
@@ -597,7 +641,9 @@ class EgressAuthService:
         """
         if not is_per_user_auth_method(auth_method):
             return None
-        return await self._store.get_token(auth_method, user_id, provider, server_path)
+        return await self._store.get_token(
+            auth_method, user_id, provider, server_path, purpose=keys.EGRESS_PURPOSE
+        )
 
     async def delete_pat(
         self,
@@ -607,4 +653,6 @@ class EgressAuthService:
         server_path: str,
     ) -> None:
         """Delete the caller's stored PAT (idempotent)."""
-        await self._store.delete_token(auth_method, user_id, provider, server_path)
+        await self._store.delete_token(
+            auth_method, user_id, provider, server_path, purpose=keys.EGRESS_PURPOSE
+        )

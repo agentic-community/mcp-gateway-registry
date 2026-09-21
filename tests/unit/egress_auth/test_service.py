@@ -15,6 +15,7 @@ from registry.egress_auth.service import (
     canonical_auth_method,
     is_per_user_auth_method,
 )
+from registry.secrets import keys
 from registry.secrets.interfaces import SecretStoreBase
 from registry.utils.credential_encryption import encrypt_credential
 
@@ -23,22 +24,24 @@ class _InMemoryStore(SecretStoreBase):
     """In-process SecretStore for orchestration tests (no external backend)."""
 
     def __init__(self) -> None:
-        self._data: dict[tuple[str, str, str, str], StoredToken] = {}
+        self._data: dict[tuple[str, str, str, str, str], StoredToken] = {}
 
-    async def put_token(self, auth_method, user_id, provider, server_path, token):
-        self._data[(auth_method, user_id, provider, server_path)] = token
+    async def put_token(self, auth_method, user_id, provider, server_path, token, *, purpose):
+        self._data[(purpose, auth_method, user_id, provider, server_path)] = token
 
-    async def get_token(self, auth_method, user_id, provider, server_path):
-        return self._data.get((auth_method, user_id, provider, server_path))
+    async def get_token(self, auth_method, user_id, provider, server_path, *, purpose):
+        return self._data.get((purpose, auth_method, user_id, provider, server_path))
 
-    async def delete_token(self, auth_method, user_id, provider, server_path):
-        self._data.pop((auth_method, user_id, provider, server_path), None)
+    async def delete_token(self, auth_method, user_id, provider, server_path, *, purpose):
+        self._data.pop((purpose, auth_method, user_id, provider, server_path), None)
 
     async def list_for_user(self, auth_method, user_id):
+        # Egress space only, mirroring the real backends: the identity the registry
+        # borrowed is not one of the user's own connections.
         return [
             (provider, server_path, token)
-            for (am, uid, provider, server_path), token in self._data.items()
-            if am == auth_method and uid == user_id
+            for (purpose, am, uid, provider, server_path), token in self._data.items()
+            if am == auth_method and uid == user_id and purpose == keys.EGRESS_PURPOSE
         ]
 
 
@@ -183,9 +186,224 @@ class TestConsentAndCallback:
 
         # vend hits (same canonical key the consent wrote under)
         token = await svc.get_valid_token(
-            "oauth2", "alice", "/github-mcp", egress_oauth, requested_upstream=BOUND
+            "oauth2",
+            "alice",
+            "/github-mcp",
+            egress_oauth,
+            requested_upstream=BOUND,
+            purpose=keys.EGRESS_PURPOSE,
         )
         assert token == "at_new"
+
+    async def test_cross_purpose_consents_coexist(self, svc, egress_oauth, monkeypatch):
+        """A discovery consent and the same admin's own egress consent must BOTH stand.
+
+        `purpose` is part of the vault address, so these two do not share an entry. That
+        turns what used to be a refused write into the behaviour operators actually want:
+        one person can hold their own runtime connection to a server AND be the
+        designated discovery identity for it, at the same time, with neither evicting
+        nor re-scoping the other.
+
+        Both directions of the old damage are covered by construction -- there is no
+        shared entry to evict, and no second write to re-scope the first.
+        """
+        _stub_exchange(monkeypatch)
+        for session, purpose in (("sess-1", "egress"), ("sess-2", "discovery")):
+            url = svc.build_consent_url(
+                "oauth2",
+                "alice",
+                "Iv1.testclient",
+                session,
+                "/github-mcp",
+                egress_oauth,
+                purpose=purpose,
+            )
+            conn = await svc.handle_callback(
+                "c",
+                _extract_state(url),
+                egress_oauth,
+                "alice",
+                "oauth2",
+                bound_upstreams=[BOUND],
+            )
+            assert conn.server_path == "/github-mcp"
+
+        # Two entries, not one: the second consent did not overwrite the first.
+        for purpose in (keys.EGRESS_PURPOSE, keys.DISCOVERY_PURPOSE):
+            assert (
+                await svc._store.get_token(
+                    "oauth2", "alice", "github", "/github-mcp", purpose=purpose
+                )
+                is not None
+            )
+        # And the user's own connection list shows only their own connection.
+        conns = await svc.list_connections("oauth2", "alice")
+        assert len(conns) == 1
+
+    async def test_same_purpose_re_consent_survives_a_rotated_client(
+        self, svc, egress_oauth, monkeypatch
+    ):
+        """The guard must NOT key on client_id.
+
+        A client_id difference is also the signature of an ordinary rotated-provider
+        -app re-consent, which `get_valid_token` deliberately forces by returning None
+        on its client-id binding check. Refusing it would deadlock that documented
+
+        recovery: the vend sends the user to re-consent, the re-consent is refused, and
+        the callback renders a generic "try again" that can never succeed. This is the
+        regression guard for that loop.
+        """
+        _stub_exchange(monkeypatch)
+        url = svc.build_consent_url(
+            "oauth2", "alice", "Iv1.testclient", "sess-1", "/github-mcp", egress_oauth
+        )
+        await svc.handle_callback(
+            "c1", _extract_state(url), egress_oauth, "alice", "oauth2", bound_upstreams=[BOUND]
+        )
+
+        rotated = {**egress_oauth, "client_id": "Iv1.rotatedclient"}
+        url2 = svc.build_consent_url(
+            "oauth2", "alice", "Iv1.rotatedclient", "sess-2", "/github-mcp", rotated
+        )
+        conn = await svc.handle_callback(
+            "c2", _extract_state(url2), rotated, "alice", "oauth2", bound_upstreams=[BOUND]
+        )
+        assert conn.server_path == "/github-mcp"
+        # And the rotated credential is what a subsequent vend returns.
+        assert (
+            await svc.get_valid_token(
+                "oauth2",
+                "alice",
+                "/github-mcp",
+                rotated,
+                requested_upstream=BOUND,
+                purpose=keys.EGRESS_PURPOSE,
+            )
+            == "at_new"
+        )
+
+    async def test_re_consent_with_the_same_client_still_works(
+        self, svc, egress_oauth, monkeypatch
+    ):
+        """The guard must not block ordinary re-consent (expiry, revoked grant)."""
+        _stub_exchange(monkeypatch)
+        for session in ("sess-1", "sess-2"):
+            url = svc.build_consent_url(
+                "oauth2", "alice", "Iv1.testclient", session, "/github-mcp", egress_oauth
+            )
+            conn = await svc.handle_callback(
+                "c", _extract_state(url), egress_oauth, "alice", "oauth2", bound_upstreams=[BOUND]
+            )
+            assert conn.server_path == "/github-mcp"
+
+    @pytest.mark.parametrize(
+        "written_as,read_as", [("egress", "discovery"), ("discovery", "egress")]
+    )
+    async def test_vend_cannot_reach_the_other_purpose(
+        self, svc, egress_oauth, monkeypatch, written_as, read_as
+    ):
+        """A reader must not be able to reach the other purpose's credential.
+
+        Not "is refused after reading it" -- the two live at different vault addresses,
+        so the wrong-purpose read finds nothing at all. Both directions matter: an
+        egress entry read as discovery would put the registry's health / discovery /
+        scan calls on a token the user consented for themselves, and a discovery entry
+        read as egress would hand the registry's designated credential to that user's
+        runtime hop.
+        """
+        _stub_exchange(monkeypatch)
+        url = svc.build_consent_url(
+            "oauth2",
+            "alice",
+            "Iv1.testclient",
+            "sess-1",
+            "/github-mcp",
+            egress_oauth,
+            purpose=written_as,
+        )
+        await svc.handle_callback(
+            "c", _extract_state(url), egress_oauth, "alice", "oauth2", bound_upstreams=[BOUND]
+        )
+
+        async def _vend(purpose):
+            return await svc.get_valid_token(
+                "oauth2",
+                "alice",
+                "/github-mcp",
+                egress_oauth,
+                requested_upstream=BOUND,
+                purpose=purpose,
+            )
+
+        # Same principal, provider, server and client -- only the purpose differs.
+        assert await _vend(read_as) is None
+        # ...and the matching purpose still vends, so this is a boundary, not a block.
+        assert await _vend(written_as) == "at_new"
+
+    @pytest.mark.parametrize("purpose", ["egress", "discovery"])
+    async def test_refresh_keeps_an_entry_in_its_own_purpose(
+        self, svc, egress_oauth, monkeypatch, purpose
+    ):
+        """A refresh must not move an entry between purposes.
+
+        Regression guard for a real defect: while `purpose` was a mutable field on the
+        stored payload, the refresh rebuilt the token via `model_copy` and did not carry
+        it over, so the model default silently reclassified a refreshed discovery entry
+        as egress. That inverted the separation -- the end-user runtime hop would then
+        accept the registry's borrowed credential -- and it was reachable on the
+        ordinary borrow within one token lifetime.
+
+        Now the address carries the purpose and the payload does not, so the write-back
+        lands where it was read from. This exercises the REAL service and store rather
+        than a stubbed egress service, which is why the original defect survived: every
+        borrow test substituted a fake that never refreshed.
+        """
+        _stub_exchange(monkeypatch)
+        url = svc.build_consent_url(
+            "oauth2",
+            "alice",
+            "Iv1.testclient",
+            "sess-1",
+            "/github-mcp",
+            egress_oauth,
+            purpose=purpose,
+        )
+        await svc.handle_callback(
+            "c", _extract_state(url), egress_oauth, "alice", "oauth2", bound_upstreams=[BOUND]
+        )
+
+        # Force the stored entry near expiry so the next vend actually refreshes.
+        stored = await svc._store.get_token(
+            "oauth2", "alice", "github", "/github-mcp", purpose=purpose
+        )
+        await svc._store.put_token(
+            "oauth2",
+            "alice",
+            "github",
+            "/github-mcp",
+            stored.model_copy(update={"expires_at": "2000-01-01T00:00:00+00:00"}),
+            purpose=purpose,
+        )
+        _stub_exchange(monkeypatch, access_token="at_refreshed")
+
+        async def _vend(as_purpose):
+            return await svc.get_valid_token(
+                "oauth2",
+                "alice",
+                "/github-mcp",
+                egress_oauth,
+                requested_upstream=BOUND,
+                purpose=as_purpose,
+            )
+
+        assert await _vend(purpose) == "at_refreshed"
+        # The refresh wrote back to the same space, and created nothing in the other.
+        other = "discovery" if purpose == "egress" else "egress"
+        assert await _vend(other) is None
+        assert (
+            await svc._store.get_token("oauth2", "alice", "github", "/github-mcp", purpose=other)
+            is None
+        )
 
     async def test_replay_is_rejected(self, svc, egress_oauth, monkeypatch):
         _stub_exchange(monkeypatch)
@@ -291,7 +509,12 @@ class TestPublicClientFlow:
         assert captured["resource"] == egress_oauth_public["custom_resource"]
 
         token = await svc.get_valid_token(
-            "oauth2", "alice", "/datadog-user", egress_oauth_public, requested_upstream=BOUND_DD
+            "oauth2",
+            "alice",
+            "/datadog-user",
+            egress_oauth_public,
+            requested_upstream=BOUND_DD,
+            purpose=keys.EGRESS_PURPOSE,
         )
         assert token == "at_public"
 
@@ -315,9 +538,15 @@ class TestPublicClientFlow:
                 client_id="dcr-public-client-id",
                 bound_upstreams=[BOUND_DD],
             ),
+            purpose=keys.EGRESS_PURPOSE,
         )
         token = await svc.get_valid_token(
-            "oauth2", "alice", "/datadog-user", egress_oauth_public, requested_upstream=BOUND_DD
+            "oauth2",
+            "alice",
+            "/datadog-user",
+            egress_oauth_public,
+            requested_upstream=BOUND_DD,
+            purpose=keys.EGRESS_PURPOSE,
         )
         assert token == "at_refreshed"
         assert captured["grant_type"] == "refresh_token"
@@ -330,7 +559,12 @@ class TestVendRefreshDisconnect:
     async def test_vend_miss_returns_none(self, svc, egress_oauth):
         assert (
             await svc.get_valid_token(
-                "oauth2", "nobody", "/github-mcp", egress_oauth, requested_upstream=BOUND
+                "oauth2",
+                "nobody",
+                "/github-mcp",
+                egress_oauth,
+                requested_upstream=BOUND,
+                purpose=keys.EGRESS_PURPOSE,
             )
             is None
         )
@@ -340,11 +574,21 @@ class TestVendRefreshDisconnect:
         # write a token under a network-trusted bucket directly, then confirm
         # get_valid_token refuses it (denylist) even though the entry exists.
         await svc._store.put_token(
-            "network-trusted", "alice", "github", "/github-mcp", StoredToken(access_token="x")
+            "network-trusted",
+            "alice",
+            "github",
+            "/github-mcp",
+            StoredToken(access_token="x"),
+            purpose=keys.EGRESS_PURPOSE,
         )
         assert (
             await svc.get_valid_token(
-                "network-trusted", "alice", "/github-mcp", egress_oauth, requested_upstream=BOUND
+                "network-trusted",
+                "alice",
+                "/github-mcp",
+                egress_oauth,
+                requested_upstream=BOUND,
+                purpose=keys.EGRESS_PURPOSE,
             )
             is None
         )
@@ -363,10 +607,16 @@ class TestVendRefreshDisconnect:
                 client_id="Iv1.testclient",
                 bound_upstreams=[BOUND],
             ),
+            purpose=keys.EGRESS_PURPOSE,
         )
         _stub_exchange(monkeypatch, access_token="at_refreshed")
         token = await svc.get_valid_token(
-            "oauth2", "alice", "/github-mcp", egress_oauth, requested_upstream=BOUND
+            "oauth2",
+            "alice",
+            "/github-mcp",
+            egress_oauth,
+            requested_upstream=BOUND,
+            purpose=keys.EGRESS_PURPOSE,
         )
         assert token == "at_refreshed"
 
@@ -383,6 +633,7 @@ class TestVendRefreshDisconnect:
                 client_id="Iv1.testclient",
                 bound_upstreams=[BOUND],
             ),
+            purpose=keys.EGRESS_PURPOSE,
         )
 
         async def dead_post(cfg, data, headers):
@@ -391,16 +642,28 @@ class TestVendRefreshDisconnect:
         monkeypatch.setattr(oauth_engine, "_post_token", dead_post)
         assert (
             await svc.get_valid_token(
-                "oauth2", "alice", "/github-mcp", egress_oauth, requested_upstream=BOUND
+                "oauth2",
+                "alice",
+                "/github-mcp",
+                egress_oauth,
+                requested_upstream=BOUND,
+                purpose=keys.EGRESS_PURPOSE,
             )
             is None
         )
         # entry is now refresh_failed -> still a miss (consent needed), no retry storm
-        stored = await svc._store.get_token("oauth2", "alice", "github", "/github-mcp")
+        stored = await svc._store.get_token(
+            "oauth2", "alice", "github", "/github-mcp", purpose=keys.EGRESS_PURPOSE
+        )
         assert stored.status == "refresh_failed"
         assert (
             await svc.get_valid_token(
-                "oauth2", "alice", "/github-mcp", egress_oauth, requested_upstream=BOUND
+                "oauth2",
+                "alice",
+                "/github-mcp",
+                egress_oauth,
+                requested_upstream=BOUND,
+                purpose=keys.EGRESS_PURPOSE,
             )
             is None
         )
@@ -412,11 +675,17 @@ class TestVendRefreshDisconnect:
             "github",
             "/github-mcp",
             StoredToken(access_token="a", client_id="OLD-client-id", bound_upstreams=[BOUND]),
+            purpose=keys.EGRESS_PURPOSE,
         )
         # configured client_id is Iv1.testclient != OLD-client-id -> no vend
         assert (
             await svc.get_valid_token(
-                "oauth2", "alice", "/github-mcp", egress_oauth, requested_upstream=BOUND
+                "oauth2",
+                "alice",
+                "/github-mcp",
+                egress_oauth,
+                requested_upstream=BOUND,
+                purpose=keys.EGRESS_PURPOSE,
             )
             is None
         )
