@@ -42,7 +42,7 @@ def _server_doc() -> dict[str, Any]:
 class TestApplyToolVisibility:
     """Direct coverage of the in-place pruning helper."""
 
-    def test_restricted_user_sees_only_allowed_tools(self):
+    async def test_restricted_user_sees_only_allowed_tools(self):
         server_info = _server_doc()
         user_context = {
             "username": "u",
@@ -50,22 +50,22 @@ class TestApplyToolVisibility:
             "accessible_servers": ["test-server"],
             "accessible_tools": {"/test-server": {"read_item"}},
         }
-        server_routes._apply_tool_visibility(
+        await server_routes._apply_tool_visibility(
             server_info, "/test-server", user_context, endpoint="server_detail"
         )
         names = [t["name"] for t in server_info["tool_list"]]
         assert names == ["read_item"]
         assert server_info["num_tools"] == 1
 
-    def test_admin_sees_all_tools(self):
+    async def test_admin_sees_all_tools(self):
         server_info = _server_doc()
-        server_routes._apply_tool_visibility(
+        await server_routes._apply_tool_visibility(
             server_info, "/test-server", {"is_admin": True}, endpoint="server_detail"
         )
         assert len(server_info["tool_list"]) == 3
         assert server_info["num_tools"] == 3
 
-    def test_missing_allowlist_fails_closed(self):
+    async def test_missing_allowlist_fails_closed(self):
         server_info = _server_doc()
         user_context = {
             "username": "u",
@@ -73,15 +73,15 @@ class TestApplyToolVisibility:
             "accessible_servers": ["test-server"],
             "accessible_tools": {},  # no entry for this server
         }
-        server_routes._apply_tool_visibility(
+        await server_routes._apply_tool_visibility(
             server_info, "/test-server", user_context, endpoint="server_detail"
         )
         assert server_info["tool_list"] == []
         assert server_info["num_tools"] == 0
 
-    def test_non_list_tool_list_left_untouched(self):
+    async def test_non_list_tool_list_left_untouched(self):
         server_info = {"server_name": "s", "tool_list": None}
-        server_routes._apply_tool_visibility(
+        await server_routes._apply_tool_visibility(
             server_info, "/s", {"is_admin": False}, endpoint="server_detail"
         )
         assert server_info["tool_list"] is None
