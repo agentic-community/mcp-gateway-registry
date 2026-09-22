@@ -20,6 +20,7 @@ from ..services.agent_service import agent_service
 from ..services.custom_entity_scopes import entity_scope as _entity_scope
 from ..services.custom_entity_scopes import resolve_list_grant as _resolve_list_grant
 from ..services.server_service import server_service
+from ..services.tool_blocks import blocked_names_for, hide_blocked_tools
 from ..services.virtual_server_service import get_virtual_server_service
 from ..utils.metadata import parse_and_validate_metadata_fields, project_metadata
 
@@ -455,6 +456,66 @@ class SemanticSearchResponse(BaseModel):
     total_custom: int = 0
 
 
+async def _hide_blocked_virtual_tools(
+    vs_path: str,
+    tools: list[dict],
+    blocked_cache: dict[str, set[str]],
+) -> list[dict]:
+    """Drop virtual-server tools whose BACKEND tool is security-blocked.
+
+    Blocks are written on the real server a scan ran against, so a virtual server
+    path never carries overrides of its own. Each tool is resolved back to its
+    backend through the virtual server's tool mappings, honouring aliases, and
+    checked against that backend's blocked set.
+
+    Fails open only when the mapping cannot be read at all, which is logged; the
+    tools/call block still refuses the invocation in that case.
+
+    Args:
+        vs_path: Virtual server path.
+        tools: Tool entries already pruned by the per-caller scope filter.
+        blocked_cache: Per-request memo shared with the other search sections.
+
+    Returns:
+        The tools whose backend counterpart is not blocked.
+    """
+    if not tools:
+        return []
+
+    try:
+        vs_config = await get_virtual_server_service().get_virtual_server(vs_path)
+    except Exception as exc:
+        logger.error(f"virtual-server block lookup failed for {vs_path}: {exc}")
+        return list(tools)
+    if not vs_config:
+        return list(tools)
+
+    # Both the original name and the alias map to the same backend tool.
+    backend_of: dict[str, tuple[str, str]] = {}
+    for tm in vs_config.tool_mappings:
+        target = (tm.backend_server_path, tm.tool_name)
+        backend_of[tm.tool_name] = target
+        if tm.alias:
+            backend_of[tm.alias] = target
+
+    kept = []
+    for tool in tools:
+        name = tool.get("tool_name") or tool.get("name", "")
+        mapped = backend_of.get(name)
+        if mapped is None:
+            kept.append(tool)
+            continue
+        backend_path, backend_tool = mapped
+        if backend_tool in await blocked_names_for(backend_path, blocked_cache):
+            logger.info(
+                f"virtual server {vs_path} hides {name!r}: backend {backend_path} "
+                f"blocks {backend_tool!r}"
+            )
+            continue
+        kept.append(tool)
+    return kept
+
+
 async def _get_tool_schema_for_virtual_server(
     vs_path: str,
     tool_name: str,
@@ -682,12 +743,15 @@ async def semantic_search(
         server_name_for_filter = server.get("server_name", "")
         server_path_for_filter = server.get("path", "")
         raw_matching_tools = server.get("matching_tools", [])
-        allowed_matching = filter_tools_for_user(
-            server_name_for_filter,
-            raw_matching_tools,
-            user_context,
-            endpoint="semantic_search",
-            server_path=server_path_for_filter,
+        allowed_matching = await hide_blocked_tools(
+            server_path_for_filter,
+            filter_tools_for_user(
+                server_name_for_filter,
+                raw_matching_tools,
+                user_context,
+                endpoint="semantic_search",
+                server_path=server_path_for_filter,
+            ),
         )
         matching_tools = [
             MatchingToolResult(
@@ -733,12 +797,15 @@ async def semantic_search(
         # (filtered) tool_list so the UI badge matches the visible list
         # rather than the pre-filter count.
         full_tool_list = (server_full_info or {}).get("tool_list") or []
-        allowed_full = filter_tools_for_user(
-            server_name_for_filter,
-            full_tool_list,
-            user_context,
-            endpoint="semantic_search",
-            server_path=server_path_for_filter,
+        allowed_full = await hide_blocked_tools(
+            server_path_for_filter,
+            filter_tools_for_user(
+                server_name_for_filter,
+                full_tool_list,
+                user_context,
+                endpoint="semantic_search",
+                server_path=server_path_for_filter,
+            ),
         )
         filtered_num_tools = len(allowed_full)
 
@@ -793,10 +860,20 @@ async def semantic_search(
     }
 
     filtered_tools: list[ToolSearchResult] = []
+    # One entry per server path, so a flat result set spanning many servers does
+    # not issue a block lookup per row.
+    blocked_cache: dict[str, set[str]] = {}
     for tool in raw_results.get("tools", []):
         server_path = tool.get("server_path", "")
         server_name = tool.get("server_name", "")
         if not await _user_can_access_server(server_path, server_name, user_context):
+            continue
+
+        # A security-blocked tool must not appear in search. intelligent_tool_finder
+        # is built on this endpoint, and a tool is blocked for HIGH:PROMPT INJECTION
+        # because its description carries the injection, so returning it here would
+        # hand the payload to the model that the tools/call block refuses.
+        if tool.get("tool_name", "") in await blocked_names_for(server_path, blocked_cache):
             continue
 
         # Issue #1026: tool-level prune after server access check
@@ -974,6 +1051,15 @@ async def semantic_search(
             endpoint="semantic_search",
             server_path=vs_path,
         )
+        # A block lives on the BACKEND server, never on the virtual path, so the
+        # virtual path is resolved per tool through its mapping. Looking blocks up
+        # on vs_path alone would always miss and let a virtual server re-expose a
+        # tool the gateway refuses on tools/call.
+        allowed_vs_matching = await _hide_blocked_virtual_tools(
+            vs_path,
+            allowed_vs_matching,
+            blocked_cache,
+        )
         # Build matching tools with schema lookup from backend servers
         # Only include tools that matched the search query
         matching_tools = []
@@ -1006,12 +1092,16 @@ async def semantic_search(
         # count when the virtual server has no enumerable tool_list.
         vs_tool_list = _virtual_server_field(vs, "tool_list", []) or []
         if vs_tool_list:
-            allowed_vs_full = filter_tools_for_user(
-                vs_name_for_filter,
-                vs_tool_list,
-                user_context,
-                endpoint="semantic_search",
-                server_path=vs_path,
+            allowed_vs_full = await _hide_blocked_virtual_tools(
+                vs_path,
+                filter_tools_for_user(
+                    vs_name_for_filter,
+                    vs_tool_list,
+                    user_context,
+                    endpoint="semantic_search",
+                    server_path=vs_path,
+                ),
+                blocked_cache,
             )
             vs_num_tools = len(allowed_vs_full)
         else:

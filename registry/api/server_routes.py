@@ -59,6 +59,7 @@ from ..services.lifecycle_events import (
 from ..services.registration_gate_service import check_registration_gate
 from ..services.security_scanner import security_scanner_service
 from ..services.server_service import server_service
+from ..services.tool_blocks import annotate_blocked_tools, hide_blocked_tools
 from ..services.visibility import (
     redact_server_backend_fields,
     should_redact_backend_urls,
@@ -313,12 +314,13 @@ def _coerce_metadata_to_dict(parsed_metadata: Any, path: str) -> dict[str, Any]:
     return {}
 
 
-def _apply_tool_visibility(
+async def _apply_tool_visibility(
     server_info: dict,
     server_path: str,
     user_context: dict,
     *,
     endpoint: str,
+    blocked_mode: str = "annotate",
 ) -> None:
     """Prune a single-server response's ``tool_list`` to the caller's allowlist.
 
@@ -334,6 +336,10 @@ def _apply_tool_visibility(
         server_path: The registered server path, used for the allowlist lookup.
         user_context: The authenticated caller's context.
         endpoint: Label for the tool-filter audit event.
+        blocked_mode: How a security-blocked tool surfaces. "annotate" keeps the
+            entry and marks it, for operator-facing responses the UI renders.
+            "hide" drops it, for machine-readable descriptors like server.json
+            whose purpose is telling a client what it may call.
     """
     raw_tools = server_info.get("tool_list")
     if not isinstance(raw_tools, list):
@@ -348,6 +354,14 @@ def _apply_tool_visibility(
     # Safe to mutate: server_service.get_server_info() returns a fresh
     # per-request document (not a shared/cached dict), so this cannot poison a
     # cache or a concurrent request.
+    # Security blocks surface differently by audience. An operator needs to see
+    # that a tool is blocked and why, or nobody can act on it. A machine-readable
+    # descriptor like server.json exists to tell a client what it may call, so a
+    # blocked tool must not appear there at all.
+    if blocked_mode == "hide":
+        filtered = await hide_blocked_tools(server_path, filtered)
+    else:
+        filtered = await annotate_blocked_tools(server_path, filtered)
     server_info["tool_list"] = filtered
     # Keep the badge/count consistent with what is actually rendered.
     server_info["num_tools"] = len(filtered)
@@ -982,13 +996,19 @@ async def get_servers_json(
             # num_tools falls back to the stored count, which equals the
             # filtered count for unrestricted users (the dashboard caller).
             if include_tools:
-                _filtered_tools = filter_tools_for_user(
-                    server_name,
-                    server_info.get("tool_list") or [],
-                    user_context or {},
-                    endpoint="servers",
-                    server_path=path,
+                _filtered_tools = await annotate_blocked_tools(
+                    path,
+                    filter_tools_for_user(
+                        server_name,
+                        server_info.get("tool_list") or [],
+                        user_context or {},
+                        endpoint="servers",
+                        server_path=path,
+                    ),
                 )
+                # num_tools stays the visible count. A blocked tool is still
+                # listed (marked), so it still counts; the UI greys it instead of
+                # implying the server lost a tool.
                 _num_tools = len(_filtered_tools)
             else:
                 _filtered_tools = []
@@ -2988,7 +3008,7 @@ async def get_server_details(
     # endpoint (GET /servers) and the tool catalog. A caller with server
     # access but a restricted tool set must not see tool names outside that
     # set. filter_tools_for_user fails closed and passes through admin/wildcard.
-    _apply_tool_visibility(server_info, service_path, user_context, endpoint="server_details")
+    await _apply_tool_visibility(server_info, service_path, user_context, endpoint="server_details")
 
     # Apply metadata projection if requested (Issue #1277)
     _metadata_paths = parse_and_validate_metadata_fields(metadata_fields)
@@ -3070,7 +3090,13 @@ async def get_server_canonical(
     # no tools) and passes through admin / wildcard callers; it mutates the
     # fresh per-request server_info in place and keeps num_tools consistent, so
     # both fields are carried redacted into to_canonical's INTERNAL_FIELDS _meta.
-    _apply_tool_visibility(server_info, service_path, user_context, endpoint="server_canonical")
+    await _apply_tool_visibility(
+        server_info,
+        service_path,
+        user_context,
+        endpoint="server_canonical",
+        blocked_mode="hide",
+    )
 
     canonical, truncated = to_canonical(server_info)
 
@@ -6739,7 +6765,7 @@ async def get_server(
     # endpoint (GET /servers), the tool catalog, and get_server_details. A
     # caller with server access but a restricted tool set must not read tool
     # names outside that set. Fails closed; admin/wildcard pass through.
-    _apply_tool_visibility(server_info, path, user_context, endpoint="server_detail")
+    await _apply_tool_visibility(server_info, path, user_context, endpoint="server_detail")
 
     # Normalize visibility for servers stored before the write-side fix
     # always persisted the field (#1181). Matches the default-on-read
