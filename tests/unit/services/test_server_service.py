@@ -561,7 +561,10 @@ class TestUpdateServer:
         # Assert
         assert result is True
         mock_server_repository.update.assert_called_once_with(
-            sample_server_dict["path"], updated_server
+            sample_server_dict["path"],
+            updated_server,
+            updated_fields=None,
+            expected_updated_at=None,
         )
         mock_search_repository.index_server.assert_called_once()
 
@@ -582,7 +585,12 @@ class TestUpdateServer:
 
         # Assert
         assert result is False
-        mock_server_repository.update.assert_called_once_with("/nonexistent", sample_server_dict)
+        mock_server_repository.update.assert_called_once_with(
+            "/nonexistent",
+            sample_server_dict,
+            updated_fields=None,
+            expected_updated_at=None,
+        )
 
     @pytest.mark.asyncio
     async def test_update_server_calls_repository(
@@ -605,7 +613,10 @@ class TestUpdateServer:
 
         # Assert - verify orchestration
         mock_server_repository.update.assert_called_once_with(
-            sample_server_dict["path"], updated_server
+            sample_server_dict["path"],
+            updated_server,
+            updated_fields=None,
+            expected_updated_at=None,
         )
 
     @pytest.mark.asyncio
