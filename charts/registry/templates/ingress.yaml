@@ -1,6 +1,8 @@
 {{- if .Values.ingress.enabled }}
 {{- $routingMode := .Values.global.ingress.routingMode | default "subdomain" }}
 {{- $domain := .Values.global.domain | default .Values.ingress.hostname }}
+{{- $registrySubdomain := .Values.global.ingress.registrySubdomain | default "mcpregistry" }}
+{{- $additionalHostnames := .Values.global.ingress.additionalHostnames | default (list) }}
 {{- $globalPaths := .Values.global.ingress.paths | default dict }}
 {{- $pathPrefix := (get $globalPaths "registry") | default .Values.ingress.path | default "/registry" }}
 {{- /*
@@ -78,8 +80,50 @@ spec:
                 name: {{ .Values.app.name }}
                 port:
                   name: http
+    {{- range $hostname := $additionalHostnames }}
+    {{- if $hostname }}
+    - host: {{ $hostname | quote }}
+      http:
+        paths:
+          - path: {{ $pathPrefix }}
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $.Values.app.name }}
+                port:
+                  name: http
+          - path: /oauth2
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $.Values.app.name }}
+                port:
+                  name: http
+          - path: /keycloak
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $.Values.app.name }}
+                port:
+                  name: http
+          - path: /realms
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $.Values.app.name }}
+                port:
+                  name: http
+          - path: /resources
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $.Values.app.name }}
+                port:
+                  name: http
+    {{- end }}
+    {{- end }}
     {{- else }}
-    - host: {{ printf "mcpregistry.%s" $domain | quote }}
+    - host: {{ printf "%s.%s" $registrySubdomain $domain | quote }}
       http:
         paths:
           - path: /
@@ -89,5 +133,19 @@ spec:
                 name: {{ .Values.app.name }}
                 port:
                   name: http
+    {{- range $hostname := $additionalHostnames }}
+    {{- if $hostname }}
+    - host: {{ $hostname | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $.Values.app.name }}
+                port:
+                  name: http
+    {{- end }}
+    {{- end }}
     {{- end }}
 {{- end }}

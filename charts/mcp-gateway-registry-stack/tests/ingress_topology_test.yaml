@@ -54,6 +54,32 @@ tests:
           path: spec.rules[0].http.paths
           count: 1
 
+  - it: registry ingress supports a custom subdomain and additional hostnames
+    templates:
+      - charts/registry/templates/ingress.yaml
+    set:
+      global:
+        domain: example.com
+        ingress:
+          routingMode: subdomain
+          tls: true
+          registrySubdomain: mcp-gateway
+          additionalHostnames:
+            - mcp-registry.example.com
+    asserts:
+      - equal:
+          path: spec.rules[0].host
+          value: mcp-gateway.example.com
+      - equal:
+          path: spec.rules[1].host
+          value: mcp-registry.example.com
+      - equal:
+          path: spec.rules[1].http.paths[0].path
+          value: /
+      - lengthEqual:
+          path: spec.rules
+          count: 2
+
   # keycloak-configure Job runs on every helm install/upgrade so the
   # realm's client redirect URIs stay in sync with the computed URLs.
   - it: keycloak-configure Job has helm hook annotations
