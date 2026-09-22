@@ -34,6 +34,7 @@ This document provides a comprehensive overview of the MCP Gateway & Registry so
 - **Self-Signed JWT Tokens**: Human users can generate tokens for CLI tools and AI coding assistants
 - **Secure Token Management**: OAuth token refresh and validation with centralized session management
 - **MCP Server Security Scanning**: Integrated vulnerability scanning with Cisco AI Defense MCP Scanner
+- **Per-Tool Blocking**: Block an individual unsafe tool instead of disabling a whole server, automatically from a security scan or by hand from the UI, CLI or API. Blocked tools are rejected on `tools/call` and hidden from tool listings and search
 - **Compliance Audit Logging**: Comprehensive audit logs for all API and MCP access events with TTL-based retention, credential masking, and admin UI for compliance monitoring
 
 ## Intelligent Tool Discovery

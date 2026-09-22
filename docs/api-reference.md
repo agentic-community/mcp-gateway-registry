@@ -507,6 +507,34 @@ This section implements the official [Anthropic MCP Registry API specification](
 
 ---
 
+#### 3a. Toggle One Tool (Per-Tool Block)
+
+**Endpoints:**
+- `POST /api/toggle-tool/{service_path:path}` - session-authenticated, used by the UI
+- `POST /api/servers/toggle-tool/{service_path:path}` - bearer token, used by the CLI and Python client
+
+Both enforce identical authorization; only the authentication dependency differs.
+
+**Purpose:** Block or unblock a single tool while leaving the server and its other tools enabled. A blocked tool is rejected on `tools/call` and withheld from `tools/list`, semantic search and `server.json`. It stays visible, marked, on `GET /api/servers` so an operator can act on it.
+
+**Authentication:** Requires the same `toggle_service` permission as the server-level toggle. Non-admin callers must also have access to the server.
+
+**JSON Body:**
+- `tool_name` (string) - must be a tool on that server
+- `enabled` (boolean) - `false` blocks the tool, `true` unblocks it
+
+**Response:** `200 OK` with `{"tool_name": "...", "enabled": true|false}`
+
+**Error Codes:**
+- `404 Not Found` - Service path not registered
+- `403 Forbidden` - Caller lacks `toggle_service` permission, or lacks access to the server
+- `400 Bad Request` - Tool is not on that server, or its name contains `.` or starts with `$` and cannot be used as a storage key
+- `500 Internal Server Error` - Write failed
+
+A manual decision is recorded with `source="admin"` and survives later security rescans, which preserve admin entries rather than recomputing over them. See [security-scanner.md](security-scanner.md) for the auto-blocking behaviour this overrides.
+
+---
+
 #### 4. Register Service (UI)
 
 **Endpoint:** `POST /api/register`
@@ -591,11 +619,16 @@ This section implements the official [Anthropic MCP Registry API specification](
     {
       "name": "tool_name",
       "description": "string",
-      "inputSchema": {}
+      "inputSchema": {},
+      "blocked": false,
+      "block_reason": null,
+      "block_source": null
     }
   ]
 }
 ```
+
+`blocked` is always present. When it is `true` the tool is rejected on `tools/call`, and `block_reason` carries why (for example `HIGH:PROMPT INJECTION`) with `block_source` either `security_scan` or `admin`. Blocked tools are **kept** in this response, marked, because it feeds the operator UI; the agent-facing projections (`tools/list` through the gateway, semantic search, `server.json`) omit them instead. See [security-scanner.md](security-scanner.md).
 
 **Error Codes:**
 - `404 Not Found` - Service not found
