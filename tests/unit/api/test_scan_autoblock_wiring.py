@@ -218,8 +218,83 @@ class TestRescanAppliesTheBlock:
         assert out["reconciled"] is True
         assert out["disabled"] is True
 
-    async def test_safe_scan_does_nothing(self):
+    async def test_safe_scan_reconciles_but_never_disables(self):
+        """A passing scan reconciles, so a no-longer-flagged tool gets released.
+
+        This assertion used to read `reconciled is False`, which encoded a bug: a
+        tool whose finding went away kept its auto-block forever, because
+        reconciliation only ran on an unsafe scan. See
+        TestSafeScanClearsStaleBlocks for the case that exposed it.
+        """
         out = await self._rescan(allow_unsafe=True, is_safe=True)
+
+        assert out["reconciled"] is True
+        assert out["disabled"] is False
+
+
+class TestSafeScanClearsStaleBlocks:
+    """A passing scan must clear a block the scan no longer reproduces.
+
+    Found while fixing a real false positive: search_registry on the gateway's own
+    MCP server was auto-blocked HIGH:CREDENTIAL HARVESTING because its docstring
+    named claude_desktop_config.json, which Cisco's credential_harvesting rule
+    matches unconditionally. After rewording the docstring the tool scans clean,
+    but reconciliation only ran when a scan came back UNSAFE, so the stale block
+    would have survived every future rescan with no way to clear it short of an
+    admin override.
+
+    Reconciliation is what clears it: scan-sourced entries are rebuilt from the
+    current scan, so one that is no longer flagged is simply not carried forward.
+    """
+
+    async def _safe_rescan(self, allow_unsafe: bool = True) -> dict:
+        from registry.api.server_routes import rescan_server
+
+        scan = _failed_scan(tool_name=None)
+        scan.is_safe = True
+
+        scanner = AsyncMock()
+        scanner.scan_server = AsyncMock(return_value=scan)
+        scanner.get_scan_config = lambda: _scan_config(allow_unsafe)
+
+        svc = AsyncMock()
+        svc.get_server_info = AsyncMock(
+            return_value={"server_name": "S", "path": SERVER_PATH, "proxy_pass_url": "http://x/"}
+        )
+        svc.reconcile_security_blocks = AsyncMock(return_value={})
+
+        with (
+            patch("registry.api.server_routes.security_scanner_service", scanner),
+            patch("registry.api.server_routes.server_service", svc),
+            patch(
+                "registry.api.server_routes._disable_server_for_security", AsyncMock()
+            ) as disable,
+            patch(
+                "registry.api.server_routes._build_scan_headers_from_credentials",
+                lambda *_: None,
+            ),
+        ):
+            await rescan_server(SERVER_PATH, user_context={"is_admin": True, "username": "a"})
+            return {
+                "reconciled": svc.reconcile_security_blocks.await_count == 1,
+                "disabled": disable.await_count == 1,
+            }
+
+    async def test_safe_rescan_reconciles(self):
+        """The whole point: a clean scan still runs reconciliation."""
+        out = await self._safe_rescan()
+
+        assert out["reconciled"] is True
+
+    async def test_safe_rescan_never_disables(self):
+        """A passing scan must not trip the fail-closed disable."""
+        out = await self._safe_rescan()
+
+        assert out["disabled"] is False
+
+    async def test_opt_in_off_skips_it(self):
+        """Without the opt-in, a safe rescan behaves exactly as before."""
+        out = await self._safe_rescan(allow_unsafe=False)
 
         assert out["reconciled"] is False
         assert out["disabled"] is False

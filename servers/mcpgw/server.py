@@ -724,7 +724,7 @@ async def search_registry(
 
     Results include connection details so you can use the discovered assets:
     - Servers: have an endpoint_url field you can connect to directly as an
-      MCP server (e.g. add to mcp.json or claude_desktop_config.json)
+      MCP server (add it to your MCP client's server configuration)
     - Tools: individual capabilities within servers, with inputSchema
     - Agents: autonomous agents with a URL you can delegate tasks to
     - Skills: workflow instructions (use get_skill_content to fetch the full markdown)
