@@ -242,6 +242,83 @@ WARNING: Server failed security scan - Review required before use
 
 This workflow ensures that vulnerable servers never become accessible to AI agents without explicit administrator review and remediation.
 
+## Per-Tool Blocking: Keeping a Server Up With Only Its Unsafe Tools Blocked
+
+The default above is all-or-nothing. A server with twelve safe tools and one tool flagged CRITICAL is switched off entirely, and operators lose the eleven working tools to quarantine one. An AWS documentation server is a real example: a scan flagged 2 of its 6 tools for prompt injection, so the all-or-nothing response costs you the 4 clean tools as well, including `aws___list_regions` and `aws___read_documentation`.
+
+`SECURITY_ALLOW_UNSAFE_SERVERS=true` adds a middle setting. A failing scan then leaves the server **enabled** and blocks only the tools flagged CRITICAL or HIGH.
+
+```bash
+# Both are required: the opt-in only has effect while blocking is on.
+SECURITY_BLOCK_UNSAFE_SERVERS=true
+SECURITY_ALLOW_UNSAFE_SERVERS=true
+```
+
+Default is `false`, so behaviour is unchanged until you opt in.
+
+### What a blocked tool means
+
+| Surface | Behaviour |
+|---------|-----------|
+| `tools/call` | rejected with 403, ahead of the scope check, so an admin or wildcard scope cannot bypass it |
+| `tools/list` through the gateway | the tool is absent |
+| Semantic search and `intelligent_tool_finder` | the tool is absent |
+| `server.json` | the tool is absent |
+| Registry UI and `GET /api/servers` | the tool is listed, marked `blocked` with the reason, so an operator can see and act on it |
+
+Hiding a blocked tool from the agent-facing surfaces is a security requirement, not a tidiness one. A tool earns a `HIGH:PROMPT INJECTION` block because its **description** carries the injection, and `tools/list` and search are what hand descriptions to a model. Refusing the call while still advertising the description would stop the wrong half of the attack.
+
+### When the block is applied
+
+Auto-blocking runs wherever a scan completes: at registration, and on a rescan. Enabling the flag does **not** retroactively block anything, so an existing server needs a rescan before its blocks appear:
+
+```bash
+uv run python api/registry_management.py --token-file .token rescan --path /context7
+```
+
+If the scan marks a server unsafe but blames no individual tool (a server-level finding), there is nothing to block per tool and the whole server is disabled, exactly as it would be with the opt-in off. The setting narrows the response where it can; it never widens what is reachable.
+
+### Blocking or unblocking a tool by hand
+
+An administrator can override either way. In the UI, open a server's **Tools** dialog: each tool has a toggle, and a blocked tool is struck through with a `BLOCKED` badge and its reason.
+
+From the CLI, with the `toggle_service` permission:
+
+```bash
+# Block one tool. The server and its other tools keep working.
+uv run python api/registry_management.py --token-file .token \
+  toggle-tool --path /context7 --tool resolve-library-id --enabled false
+
+# Unblock it.
+uv run python api/registry_management.py --token-file .token \
+  toggle-tool --path /context7 --tool resolve-library-id --enabled true
+```
+
+Or through the Python client:
+
+```python
+from registry_client import RegistryClient
+
+client = RegistryClient(registry_url="https://your-registry", token=token)
+client.toggle_tool("/context7", "resolve-library-id", enabled=False)
+```
+
+**A manual decision outranks the scanner and survives rescans.** An unblock is stored as `source="admin"` rather than deleted, and reconciliation preserves admin entries. Without that, the next scan would re-block a tool the scanner still flags and the override would be meaningless. The same holds in reverse: a tool you blocked by hand stays blocked even if a later scan finds it clean.
+
+### Endpoints
+
+| Method | Endpoint | Authentication |
+|--------|----------|----------------|
+| POST | `/api/toggle-tool/{path}` | session cookie (used by the UI) |
+| POST | `/api/servers/toggle-tool/{path}` | bearer token (used by the CLI and client) |
+
+Both take `{"tool_name": "...", "enabled": true|false}` and enforce identical authorization.
+
+### Limitations
+
+- A tool whose name contains `.` or starts with `$` cannot be blocked, because names are stored as document keys. The API rejects the attempt rather than writing a block that would silently never apply, and auto-blocking skips such a tool with a warning.
+- When every tool on a server is blocked, the server stays enabled while serving nothing. It reads as healthy to a client and is not.
+
 ## Manual On-Demand Security Scans (API)
 
 Administrators can trigger manual security scans for specific servers using the REST API or CLI commands. This is useful for:
@@ -926,6 +1003,8 @@ chmod 755 security_scans
 ### MCP Server API Endpoints
 - **Trigger Server Scan:** `POST /api/servers/{path}/rescan` - Admin-only manual security scan for MCP servers
 - **Query Server Results:** `GET /api/servers/{path}/security-scan` - Retrieve MCP server scan results
+- **Block/Unblock One Tool (API):** `POST /api/servers/toggle-tool/{path}` - Bearer-token route used by the CLI and Python client
+- **Block/Unblock One Tool (UI):** `POST /api/toggle-tool/{path}` - Session-authenticated route used by the registry UI
 
 ### A2A Agent API Endpoints
 - **Trigger Agent Scan:** `POST /api/agents/{path}/rescan` - Admin-only manual security scan for A2A agents
@@ -946,6 +1025,16 @@ uv run python api/registry_management.py --token-file .oauth-tokens/ingress.json
 # Get server scan results
 uv run python api/registry_management.py --token-file .oauth-tokens/ingress.json \
   --registry-url http://localhost security-scan --path /server-path
+
+# Block one tool, leaving the server and its other tools working
+uv run python api/registry_management.py --token-file .oauth-tokens/ingress.json \
+  --registry-url http://localhost toggle-tool --path /server-path \
+  --tool some_tool --enabled false
+
+# Unblock it (recorded as an admin decision, so a later rescan will not undo it)
+uv run python api/registry_management.py --token-file .oauth-tokens/ingress.json \
+  --registry-url http://localhost toggle-tool --path /server-path \
+  --tool some_tool --enabled true
 ```
 
 #### A2A Agent Security Commands

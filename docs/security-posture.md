@@ -603,6 +603,7 @@ Comprehensive scans of all enabled servers on a schedule:
 
 **Automated Response:**
 - Critical/High severity: Server/agent/skill automatically disabled
+- Per-tool alternative: with `SECURITY_ALLOW_UNSAFE_SERVERS=true` an MCP server stays enabled and only its CRITICAL/HIGH tools are blocked, rejected on `tools/call` and withheld from `tools/list`, semantic search and `server.json`. A finding that blames no individual tool still disables the whole server
 - Security-pending tag applied for admin review
 - Detailed JSON report saved to `security_scans/` directory
 - UI indicators (shield icons) show security status
