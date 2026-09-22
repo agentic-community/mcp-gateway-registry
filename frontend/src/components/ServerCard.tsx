@@ -182,6 +182,11 @@ interface Tool {
   name: string;
   description?: string;
   schema?: any;
+  // Set by the registry when a security scan or an admin blocked the tool.
+  // The gateway rejects tools/call for it, so it must not read as callable.
+  blocked?: boolean;
+  block_reason?: string | null;
+  block_source?: string | null;
 }
 
 
@@ -268,6 +273,7 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
   const egressConnect = egressConnectProp ?? egressCtx.stateByPath.get(server.path);
   const onEgressChanged = onEgressChangedProp ?? egressCtx.reload;
   const [tools, setTools] = useState<Tool[]>([]);
+  const [togglingTool, setTogglingTool] = useState<string | null>(null);
   const [loadingTools, setLoadingTools] = useState(false);
   const [showTools, setShowTools] = useState(false);
   const [showConfig, setShowConfig] = useState(false);
@@ -326,6 +332,61 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
       setLoadingTools(false);
     }
   }, [server.path, loadingTools, onShowToast]);
+
+  /**
+   * Block or unblock one tool on this server.
+   *
+   * A blocked tool is rejected on tools/call and hidden from the agent-facing
+   * projections. The registry requires the same toggle_service permission as the
+   * server-level switch, so this control is gated on the same `canToggle` flag.
+   */
+  const handleToggleTool = useCallback(
+    async (toolName: string, enabled: boolean) => {
+      setTogglingTool(toolName);
+      try {
+        // Cookie-authenticated sessions need the CSRF header, same as the other
+        // mutating calls from this UI.
+        const csrfResp = await axios.get('/api/auth/csrf-token');
+        const csrfToken = csrfResp.data?.csrf_token;
+        const headers: Record<string, string> = {};
+        if (csrfToken) {
+          headers['X-CSRF-Token'] = csrfToken;
+        }
+        await axios.post(
+          `/api/toggle-tool${server.path}`,
+          { tool_name: toolName, enabled },
+          { headers }
+        );
+        // Update in place rather than refetching. The modal is already open, and
+        // the gateway reads block state fresh on every call, so there is no cache
+        // to wait on.
+        setTools((prev) =>
+          prev.map((t) =>
+            t.name === toolName
+              ? {
+                  ...t,
+                  blocked: !enabled,
+                  block_reason: enabled ? null : 'Disabled by admin',
+                  block_source: enabled ? null : 'admin',
+                }
+              : t
+          )
+        );
+        onShowToast?.(`Tool '${toolName}' ${enabled ? 'enabled' : 'blocked'}`, 'success');
+      } catch (error) {
+        console.error('Failed to toggle tool:', error);
+        const detail =
+          axios.isAxiosError(error) && error.response?.data?.detail
+            ? String(error.response.data.detail)
+            : 'Failed to update tool';
+        onShowToast?.(detail, 'error');
+      } finally {
+        setTogglingTool(null);
+      }
+    },
+    [server.path, onShowToast]
+  );
+
 
   const handleRefreshHealth = useCallback(async () => {
     if (loadingRefresh) return;
@@ -960,10 +1021,55 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
                   };
 
                   return (
-                    <div key={index} className="border border-gray-200 dark:border-gray-700 rounded-lg p-4">
-                      <h4 className="font-medium text-gray-900 dark:text-white mb-2">
-                        {tool.name}
-                      </h4>
+                    <div
+                      key={index}
+                      className={`border rounded-lg p-4 ${
+                        tool.blocked
+                          ? 'border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-950/30'
+                          : 'border-gray-200 dark:border-gray-700'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-3 mb-2">
+                          <h4
+                            className={`font-medium flex items-center gap-2 ${
+                              tool.blocked
+                                ? 'text-gray-500 dark:text-gray-400 line-through'
+                                : 'text-gray-900 dark:text-white'
+                            }`}
+                          >
+                            {tool.name}
+                            {tool.blocked && (
+                              <span className="text-xs font-semibold uppercase tracking-wide px-2 py-0.5 rounded bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200 no-underline">
+                                Blocked
+                              </span>
+                            )}
+                          </h4>
+                        {canToggle && !isArdDiscovery && (
+                          <div className="flex items-center gap-2 shrink-0">
+                            <span className="text-xs text-gray-500 dark:text-gray-400">
+                              {tool.blocked ? 'Blocked' : 'Enabled'}
+                            </span>
+                            <ToggleSwitch
+                              checked={!tool.blocked}
+                              onChange={(checked) => handleToggleTool(tool.name, checked)}
+                              ariaLabel={`${tool.blocked ? 'Enable' : 'Block'} tool ${tool.name}`}
+                              accent={cardAccent}
+                              disabled={togglingTool === tool.name}
+                            />
+                          </div>
+                        )}
+                      </div>
+                      {tool.blocked && (
+                        <p className="text-xs text-red-700 dark:text-red-300 mb-2">
+                          Calls to this tool are rejected
+                          {tool.block_reason ? `: ${tool.block_reason}` : ''}
+                          {tool.block_source === 'security_scan'
+                            ? ' (blocked automatically by a security scan)'
+                            : tool.block_source === 'admin'
+                              ? ' (blocked by an administrator)'
+                              : ''}
+                        </p>
+                      )}
                       {tool.description && (
                         <div className="mb-2">
                           <p className={`text-sm text-gray-600 dark:text-gray-300 ${!isExpanded ? 'line-clamp-2' : ''}`}>

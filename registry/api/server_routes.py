@@ -3145,12 +3145,15 @@ async def get_service_tools(
             server_name = server_info.get("server_name", "Unknown")
             # Issue #1026: prune per-server before aggregation. Skip
             # servers where the user has zero visible tools.
-            filtered_list = filter_tools_for_user(
-                server_name,
-                tool_list,
-                user_context,
-                endpoint="tools_all",
-                server_path=path,
+            filtered_list = await annotate_blocked_tools(
+                path,
+                filter_tools_for_user(
+                    server_name,
+                    tool_list,
+                    user_context,
+                    endpoint="tools_all",
+                    server_path=path,
+                ),
             )
             if not filtered_list:
                 continue
@@ -3210,12 +3213,15 @@ async def get_service_tools(
             if cached_tools is not None and isinstance(cached_tools, list):
                 logger.warning(f"Failed to fetch live tools for {service_path}, using cached tools")
                 # Issue #1026: filter cached fallback path
-                cached_filtered = filter_tools_for_user(
-                    server_info.get("server_name", ""),
-                    cached_tools,
-                    user_context,
-                    endpoint="tools_service",
-                    server_path=service_path,
+                cached_filtered = await annotate_blocked_tools(
+                    service_path,
+                    filter_tools_for_user(
+                        server_info.get("server_name", ""),
+                        cached_tools,
+                        user_context,
+                        endpoint="tools_service",
+                        server_path=service_path,
+                    ),
                 )
                 return {
                     "service_path": service_path,
@@ -3257,12 +3263,15 @@ async def get_service_tools(
                 logger.error(f"Failed to save updated tool list for {service_path}")
 
         # Issue #1026: filter live tools before returning
-        filtered_tools = filter_tools_for_user(
-            server_info.get("server_name", ""),
-            tool_list,
-            user_context,
-            endpoint="tools_service",
-            server_path=service_path,
+        filtered_tools = await annotate_blocked_tools(
+            service_path,
+            filter_tools_for_user(
+                server_info.get("server_name", ""),
+                tool_list,
+                user_context,
+                endpoint="tools_service",
+                server_path=service_path,
+            ),
         )
         return {"service_path": service_path, "tools": filtered_tools, "cached": False}
 
@@ -3278,12 +3287,15 @@ async def get_service_tools(
                 f"Error fetching live tools for {service_path}, falling back to cached tools: {e}"
             )
             # Issue #1026: filter cached fallback path
-            cached_filtered = filter_tools_for_user(
-                server_info.get("server_name", ""),
-                cached_tools,
-                user_context,
-                endpoint="tools_service",
-                server_path=service_path,
+            cached_filtered = await annotate_blocked_tools(
+                service_path,
+                filter_tools_for_user(
+                    server_info.get("server_name", ""),
+                    cached_tools,
+                    user_context,
+                    endpoint="tools_service",
+                    server_path=service_path,
+                ),
             )
             return {"service_path": service_path, "tools": cached_filtered, "cached": True}
         raise HTTPException(status_code=500, detail="Error fetching tools")
