@@ -1219,22 +1219,33 @@ class ToolTogglePayload(BaseModel):
     enabled: bool
 
 
-@router.post("/toggle-tool/{service_path:path}")
-async def toggle_tool_route(
-    request: Request,
+async def _toggle_tool_impl(
     service_path: str,
-    payload: ToolTogglePayload,
-    user_context: Annotated[dict, Depends(enhanced_auth)] = None,
-    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
-):
-    """Block or unblock a single tool on a server.
+    payload: "ToolTogglePayload",
+    user_context: dict,
+) -> dict:
+    """Block or unblock a single tool. Shared by the UI and API routes.
 
-    Uses the same toggle_service permission as the server-level toggle;
-    there is no separate per-tool permission.
+    This repo exposes each mutation twice: a session-authenticated route the UI
+    calls, and an API sibling that accepts a bearer token. Those siblings have
+    drifted on authorization before, with the API copy skipping a check the UI
+    copy enforced, so both call this one function and neither can diverge.
+
+    Uses the same toggle_service permission as the server-level toggle; there is
+    no separate per-tool permission.
+
+    Args:
+        service_path: Server path, normalised to a leading slash by the caller.
+        payload: The tool name and its desired enabled state.
+        user_context: The authenticated caller.
+
+    Returns:
+        ``{"tool_name": ..., "enabled": ...}``
+
+    Raises:
+        HTTPException: 404 unknown server, 403 no permission or no access,
+            400 unknown tool or unusable override key, 500 write failure.
     """
-    if not service_path.startswith("/"):
-        service_path = "/" + service_path
-
     server_info = await server_service.get_server_info(service_path)
     if not server_info:
         raise HTTPException(status_code=404, detail="Service path not registered")
@@ -1299,6 +1310,39 @@ async def toggle_tool_route(
         f"{'enabled' if payload.enabled else 'blocked'} by user '{user_context['username']}'"
     )
     return {"tool_name": payload.tool_name, "enabled": payload.enabled}
+
+
+@router.post("/toggle-tool/{service_path:path}")
+async def toggle_tool_route(
+    request: Request,
+    service_path: str,
+    payload: ToolTogglePayload,
+    user_context: Annotated[dict, Depends(enhanced_auth)] = None,
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
+):
+    """Block or unblock a single tool on a server (session-authenticated, for the UI)."""
+    if not service_path.startswith("/"):
+        service_path = "/" + service_path
+    return await _toggle_tool_impl(service_path, payload, user_context)
+
+
+@router.post("/servers/toggle-tool/{service_path:path}")
+async def toggle_tool_api(
+    service_path: str,
+    payload: ToolTogglePayload,
+    user_context: Annotated[dict, Depends(nginx_proxied_auth)] = None,
+    _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
+):
+    """Block or unblock a single tool on a server (bearer-token API sibling).
+
+    Same behaviour and same authorization as POST /api/toggle-tool/{path}; only
+    the authentication dependency differs, matching how /api/servers/toggle
+    relates to /api/toggle/{path}. Needed because the CLI and registry_client
+    authenticate with a token, which enhanced_auth does not accept.
+    """
+    if not service_path.startswith("/"):
+        service_path = "/" + service_path
+    return await _toggle_tool_impl(service_path, payload, user_context)
 
 
 # --- Registration deduplication ---
