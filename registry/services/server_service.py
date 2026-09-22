@@ -302,6 +302,13 @@ class ServerService:
                     server_info["proxy_target_host"] = pin["proxy_target_host"]
                 # Re-enabling clears any prior refresh auto-disable.
                 server_info["proxy_disabled_reason"] = None
+                if updated_fields is not None:
+                    updated_fields = [
+                        *updated_fields,
+                        "proxy_resolved_ips",
+                        "proxy_target_host",
+                        "proxy_disabled_reason",
+                    ]
             # Credential-misdirection guard: an MCP server's effective target is
             # proxy_target_url OR (fallback) proxy_pass_url. Use effective_proxy_target
             # (NOT resolve_proxy_target) so the comparison is routability-agnostic:
@@ -310,11 +317,20 @@ class ServerService:
             # and skip the clear, letting a repoint-before-enable carry the old
             # host's secret to a new host. effective_proxy_target omits that gate,
             # so a host change is caught even while the server is disabled.
+            _pre_repoint_keys = set(server_info)
             clear_upstream_headers_on_repoint(
                 server_info,
                 existing_target=effective_proxy_target("mcp_server", dict(existing or {})),
                 new_target=effective_proxy_target("mcp_server", merged),
             )
+            if updated_fields is not None:
+                # The guard's cleared header fields must join the write scope
+                # or a field-scoped $set skips them and the stale headers
+                # survive the repoint.
+                updated_fields = [
+                    *updated_fields,
+                    *(f for f in server_info if f not in _pre_repoint_keys),
+                ]
 
         result = await self._repo.update(
             path,
