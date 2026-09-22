@@ -645,6 +645,16 @@ async def _perform_security_scan_on_registration(
                 )
         else:
             logger.info(f"Server {path} passed security scan")
+            # Same reason as the rescan path: a passing scan must still reconcile,
+            # or a tool that stopped being flagged keeps its auto-block. Admin
+            # decisions survive; scan-sourced entries this scan did not reproduce
+            # are dropped.
+            if scan_config.block_unsafe_servers and scan_config.allow_unsafe_servers:
+                cleared = await server_service.reconcile_security_blocks(
+                    path, scan_result.raw_output
+                )
+                if cleared:
+                    logger.info(f"Server {path} passed; {len(cleared)} tool override(s) remain")
 
         # Emit scan_complete webhook (Issue #1330) on both safe and unsafe paths.
         fire_scan_complete_event(
@@ -6024,17 +6034,28 @@ async def rescan_server(
         # and rescan behaves exactly as before.
         rescan_config = security_scanner_service.get_scan_config()
         auto_disabled = False
-        if (
-            not scan_result.is_safe
-            and rescan_config.block_unsafe_servers
-            and rescan_config.allow_unsafe_servers
-        ):
-            auto_disabled = await _apply_unsafe_scan_decision(
-                path,
-                server_info,
-                scan_result,
-                rescan_config,
-            )
+        if rescan_config.block_unsafe_servers and rescan_config.allow_unsafe_servers:
+            if not scan_result.is_safe:
+                auto_disabled = await _apply_unsafe_scan_decision(
+                    path,
+                    server_info,
+                    scan_result,
+                    rescan_config,
+                )
+            else:
+                # A passing scan still has to reconcile, or a tool that stopped
+                # being flagged keeps its auto-block forever. reconcile drops
+                # scan-sourced entries that this scan did not reproduce and keeps
+                # admin decisions. Deliberately NOT the decision helper: that
+                # disables the server when nothing is blocked, which on a safe
+                # scan would be backwards.
+                cleared = await server_service.reconcile_security_blocks(
+                    path, scan_result.raw_output
+                )
+                logger.info(
+                    f"Server {path} passed rescan; reconciled tool blocks, "
+                    f"{len(cleared)} override(s) remain"
+                )
 
         # Return the scan result data
         return {
