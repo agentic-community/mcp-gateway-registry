@@ -83,7 +83,7 @@ spec:
                 name: {{ .Values.app.existingSecret | default .Values.app.envSecretName }}
             {{- if eq (.Values.global.authProvider.type | default "keycloak") "keycloak" }}
             - secretRef:
-                name: keycloak-client-secret
+                name: {{ .Values.global.existingKeycloakClientSecret | default "keycloak-client-secret" }}
             {{- end }}
             - secretRef:
                 name: {{ .Values.global.existingMongoCredentialsSecret | default "mongo-credentials" }}
