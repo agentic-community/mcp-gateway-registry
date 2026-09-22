@@ -9,7 +9,7 @@ rules:
     # `update` and `patch` are required because the Job is a
     # post-install + post-upgrade Helm hook and uses
     # `kubectl create ... --dry-run=client -o yaml | kubectl apply -f -`
-    # to idempotently write keycloak-client-secret and
-    # registry-login-credentials. Plain `create` would 403 on upgrade
-    # when those Secrets already exist.
+    # to idempotently write registry-login-credentials (and to read the
+    # passwords already stored there). Plain `create` would 403 on upgrade
+    # when that Secret already exists.
     verbs: ["get", "watch", "list", "create", "update", "patch"]
