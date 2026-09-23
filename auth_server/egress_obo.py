@@ -31,6 +31,10 @@ _RFC8693_ACCESS_TOKEN_TYPE = "urn:ietf:params:oauth:token-type:access_token"  # 
 # Network timeout for the IdP token endpoint call (matches _vend_egress_token).
 _TOKEN_EXCHANGE_TIMEOUT_SECONDS: float = 10.0
 
+# Upper bound for IdP-supplied text (error code / error_description) that is
+# written to the log or carried in an exception message.
+_IDP_TEXT_MAX_CHARS: int = 200
+
 
 class OboExchangeError(Exception):
     """Base error for OBO token-exchange failures."""
@@ -135,9 +139,13 @@ def _keycloak_exchange_body(
     OPTIONAL with a server-chosen default, which is exactly why relying on it
     is an interop hazard.
 
-    ``scope`` is sent only when explicit scopes are requested; omitting it
-    makes Keycloak apply the **requesting** client's default client scopes —
-    the gateway's own client, not the audience client.
+    ``scope`` is sent only when explicit scopes are requested. When it is
+    omitted, whose default client scopes apply depends on the implementation:
+    legacy exchange mints the token for the ``audience`` client and applies
+    that client's default scopes and protocol mappers, while standard exchange
+    applies the requesting client's (the gateway's) default scopes and filters
+    ``aud`` down to the requested audience; it narrows ``aud`` and cannot add
+    an audience those scopes do not already provide.
     """
     body: dict[str, str] = {
         "grant_type": _RFC8693_TOKEN_EXCHANGE_GRANT,
@@ -153,7 +161,32 @@ def _keycloak_exchange_body(
     return body
 
 
-def _map_token_error(status_code: int, payload: dict, kind: str = "") -> OboExchangeError:
+def _sanitize_idp_text(value: object) -> str:
+    """Return IdP-supplied text that is safe to log or carry in an error.
+
+    The token endpoint's ``error``/``error_description`` fields are untrusted
+    input. Every non-printable character (CR, LF, tab and the other C0/C1
+    controls, U+2028/U+2029 line separators, bidi overrides) becomes a space
+    so the text cannot forge extra log lines or reorder what a reader sees,
+    and the result is truncated so a verbose IdP cannot flood the log.
+
+    Args:
+        value: The raw field from the IdP's JSON body.
+
+    Returns:
+        The sanitized text; empty when ``value`` is not a string.
+    """
+    if not isinstance(value, str):
+        return ""
+    cleaned = "".join(ch if ch.isprintable() else " " for ch in value)
+    return cleaned.strip()[:_IDP_TEXT_MAX_CHARS]
+
+
+def _map_token_error(
+    status_code: int,
+    payload: dict[str, object],
+    kind: str,
+) -> OboExchangeError:
     """Map an IdP token-endpoint error response to a typed exception.
 
     ``kind`` is the IdP family (``entra``/``keycloak``). It exists so a
@@ -161,16 +194,16 @@ def _map_token_error(status_code: int, payload: dict, kind: str = "") -> OboExch
     other IdP: the codes overlap but their causes and fixes do not. Codes whose
     meaning is provider-independent stay in the shared branches below.
     """
-    err = (payload.get("error") or "").strip()
+    err = _sanitize_idp_text(payload.get("error"))
     if err == "interaction_required":
         return OboConsentRequired("IdP requires consent")
     if err in ("invalid_grant", "invalid_token"):
         # invalid_grant spans both user-fixable (expired/no-permission) and
         # config (gateway not granted access) cases; re-auth is the safer of the
         # two, since retrying with a fresh token is cheap and a config problem
-        # simply fails again. The IdP's error_description is logged, not
-        # returned: it is operator diagnostics, not something the calling agent
-        # can act on.
+        # simply fails again. The IdP's error_description is not returned: it
+        # is operator diagnostics, not something the calling agent can act on
+        # (it is logged only for Keycloak's invalid_request).
         # Keycloak never answers invalid_grant for token-exchange. Up to 25.x
         # it reports an expired or unusable subject_token as invalid_token,
         # which is the same user-fixable situation; from 26.0 legacy exchange
@@ -340,15 +373,24 @@ async def obo_exchange(
             payload = resp.json()
         except ValueError:
             payload = {}
-        # error_description is the only way to tell apart the situations that
-        # share an error code (notably invalid_request on standard exchange).
-        # It carries IdP configuration text, never a token or a secret, and is
-        # truncated so a verbose IdP cannot flood the log.
-        description = str(payload.get("error_description") or "")[:200]
+        if not isinstance(payload, dict):
+            # Valid JSON that is not an object ([], null, "oops", 3) carries no
+            # error fields; treat it like a non-JSON body.
+            payload = {}
+        # Only the standard error code and the status are logged: an OAuth
+        # token endpoint's error_description can echo the client_id and
+        # credential context (docs/SECURITY_GUIDELINES.md). The one exception
+        # is Keycloak's invalid_request, which it returns for several
+        # unrelated situations (see _map_token_error); its error_description is
+        # the only way to tell them apart, so it is logged there, sanitized.
+        error_code = _sanitize_idp_text(payload.get("error")) or "unknown"
+        description = ""
+        if kind == "keycloak" and error_code == "invalid_request":
+            description = _sanitize_idp_text(payload.get("error_description"))
         logger.warning(
             "obo_exchange: IdP token exchange failed status=%s error=%s description=%s",
             resp.status_code,
-            payload.get("error") or "unknown",
+            error_code,
             description or "-",
         )
         raise _map_token_error(resp.status_code, payload, kind)
@@ -361,8 +403,10 @@ async def obo_exchange(
         # exception and the caller returns 500 instead of a typed JSON-RPC
         # failure.
         raise OboExchangeError("IdP returned 200 with a non-JSON body") from exc
+    if not isinstance(success_payload, dict):
+        raise OboExchangeError("IdP returned 200 with a JSON body that is not an object")
 
     access_token = success_payload.get("access_token")
-    if not access_token:
+    if not isinstance(access_token, str) or not access_token:
         raise OboExchangeError("IdP returned 200 but no access_token")
     return access_token
