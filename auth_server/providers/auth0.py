@@ -569,6 +569,7 @@ class Auth0Provider(AuthProvider):
                 - email: User's email address
                 - name: User's display name
                 - groups: List of group memberships
+                - subject: The id_token ``sub`` (the egress vault key)
 
         Raises:
             ValueError: If the ID token is missing from the response.
@@ -603,6 +604,8 @@ class Auth0Provider(AuthProvider):
                 "email": id_token_claims.get("email"),
                 "name": id_token_claims.get("name") or id_token_claims.get("given_name"),
                 "groups": groups,
+                # Persisted as the session subject: the egress vault keys on it.
+                "subject": id_token_claims.get("sub"),
             }
 
         except IdTokenVerificationError:

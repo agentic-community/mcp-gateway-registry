@@ -696,6 +696,7 @@ When using Keycloak as the authentication provider, the following configuration 
 | `response_type` | OAuth response type | ✅ | `"code"` |
 | `grant_type` | OAuth grant type | ✅ | `"authorization_code"` |
 | `username_claim` | JWT claim for username | ✅ | `"email"` |
+| `subject_claim` | Userinfo field holding the stable user id that keys the egress credential vault. Set it when the userinfo response has no `sub` | ❌ | `"id"` (default: `"sub"`) |
 | `groups_claim` | JWT claim for groups | ❌ | `"cognito:groups"` |
 | `email_claim` | JWT claim for email | ✅ | `"email"` |
 | `name_claim` | JWT claim for name | ✅ | `"name"` |

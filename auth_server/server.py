@@ -5476,7 +5476,8 @@ async def generate_user_token(
             # keys on; stamp the OIDC sub as ``egress_user`` so a bearer minted
             # here vends against the SAME id the browser-consent path wrote (see
             # _canonical_egress_user). Omitted when there is no OIDC sub (non-
-            # session / legacy callers) -- the vend then falls back to username.
+            # session / legacy callers) -- the per-user vend then refuses the
+            # token rather than key the vault on its username ``sub``.
             if egress_user:
                 jwt_claims["egress_user"] = egress_user
 
@@ -6668,6 +6669,13 @@ async def oauth2_callback(
         # for IdPs that return large groups claims (e.g. Entra ID with many
         # group memberships) and keeps id_token off the client entirely.
         session_max_age = OAUTH2_CONFIG.get("session", {}).get("max_age_seconds", 28800)
+        if not mapped_user.get("subject"):
+            logger.warning(
+                "OAuth2 login via %s yielded no subject; per-user egress vends from "
+                "tokens minted for this session will be refused (set subject_claim "
+                "for the provider)",
+                provider,
+            )
         # id_token is encrypted at rest server-side and required for OIDC SSO
         # logout (id_token_hint).
         from session_store import create_session
@@ -6848,15 +6856,19 @@ async def get_user_info(access_token: str, provider_config: dict) -> dict:
 
 def map_user_info(user_info: dict, provider_config: dict) -> dict:
     """Map provider-specific user info to our standard format"""
+    # Stable subject: persisted into the session so the egress vault can key on it
+    # consistently (see _canonical_egress_user). OIDC userinfo names it "sub";
+    # userinfo endpoints that are not OIDC (GitHub /user, Google oauth2/v2) expose
+    # the stable account id under another name, configured via subject_claim. A
+    # provider that yields none leaves the session without a subject, and every
+    # bearer token minted from it is refused at the per-user egress vend.
+    subject = user_info.get(provider_config.get("subject_claim") or "sub")
     mapped = {
         "username": user_info.get(provider_config["username_claim"]),
         "email": user_info.get(provider_config["email_claim"]),
         "name": user_info.get(provider_config["name_claim"]),
-        # OIDC subject: stable across id_tokens and access_tokens for the same
-        # (user, app) on every provider. Persisted into the session so the egress
-        # vault can key on it consistently (see canonical_egress_user); "sub" is
-        # the standard claim name across IdPs.
-        "subject": user_info.get("sub"),
+        # GitHub's id is an integer; the vault key is a string.
+        "subject": str(subject) if subject not in (None, "") else None,
         "groups": [],
     }
 

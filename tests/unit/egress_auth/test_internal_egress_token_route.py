@@ -358,6 +358,28 @@ class TestOboExchangeVendDefense:
         assert body["mode"] == "obo_exchange"
         assert body["obo_target_audience"] == "api://outlook-mcp-server"
 
+    def test_obo_directive_vends_without_egress_user_claim(self, make_client):
+        # obo_exchange is stateless: it never reads the vault, so the missing
+        # vault id that refuses a per-user oauth/pat vend must not block it.
+        claims = _claims()
+        del claims["egress_user"]
+        client = make_client(
+            claims,
+            _server(
+                egress_auth_mode="obo_exchange",
+                egress_oauth={
+                    "target_audience": "api://outlook-mcp-server",
+                    "scopes": ["api://outlook-mcp-server/.default"],
+                },
+            ),
+        )
+        r = _post(client)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["mode"] == "obo_exchange"
+        assert body["consent_required"] is False
+        assert not client._svc.called
+
     def test_disallowed_stored_audience_refused(self, make_client):
         # A directive that predates the write-path floor names a first-party
         # resource; vending it would exfiltrate a delegated token upstream.
