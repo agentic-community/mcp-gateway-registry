@@ -369,10 +369,13 @@ async def obo_exchange(
     # only. EGRESS_OAUTH_TRUSTED_IDP_HOSTS (#1707) relaxes the public-address
     # requirement for the named IdP hosts, not the TLS requirement, so the
     # shipped in-cluster http://keycloak:8080 default cannot serve OBO as-is.
-    # An internal CA works via the process trust store (SSL_CERT_FILE); there
-    # is no per-hop CA-bundle setting. In-cluster non-TLS OBO is deliberately
-    # out of scope pending an explicit, operator-gated design (see
-    # docs/design/egress-auth-design.md).
+    # An internal CA works only through the process environment, and there is
+    # no per-hop CA-bundle setting: httpx (this POST) reads SSL_CERT_FILE and
+    # the Keycloak provider's requests calls read REQUESTS_CA_BUNDLE. Each
+    # REPLACES the certifi bundle, so both must point at a combined bundle
+    # (public roots plus the internal CA). In-cluster non-TLS OBO is
+    # deliberately out of scope pending an explicit, operator-gated design
+    # (see docs/design/egress-auth-design.md).
     try:
         validate_url(
             token_url,
