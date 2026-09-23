@@ -693,20 +693,6 @@ async def vend_egress_token(
         logger.info("egress vend: non-per-user auth_method %r -> consent", auth_method)
         return EgressTokenResponse(consent_required=True)
 
-    # A per-user principal with no resolved vault id: refuse rather than guess.
-    # Reachable for tokens minted before the ``egress_user`` claim existed; those
-    # expire within one short token TTL, and the next mint carries the claim, so
-    # this is self-healing. Log it -- the previous cross-namespace fallback made
-    # this failure completely invisible.
-    if not sub:
-        logger.warning(
-            "egress vend: per-user auth_method %r with no egress_user claim for %s "
-            "-> consent (refusing to key the vault on the token's username sub)",
-            auth_method,
-            body.server_path,
-        )
-        return EgressTokenResponse(consent_required=True)
-
     # Normalize the server path: mcp_proxy passes the first path segment without a
     # leading slash ("github"), but server entries, the vault key, and the consent
     # state all use the slash-prefixed path ("/github"). Without this, the lookup
@@ -739,6 +725,21 @@ async def vend_egress_token(
         )
 
     egress_oauth = server["egress_oauth"]
+
+    # A per-user principal with no resolved vault id: refuse rather than guess.
+    # Reachable for tokens minted before the ``egress_user`` claim existed; those
+    # expire within one short token TTL, and the next mint carries the claim, so
+    # this is self-healing. Log it -- the previous cross-namespace fallback made
+    # this failure completely invisible. obo_exchange is exempt: it is stateless,
+    # never reads the vault, and the exchange keys on the raw ingress JWT.
+    if not sub and egress_mode != "obo_exchange":
+        logger.warning(
+            "egress vend: per-user auth_method %r with no egress_user claim for %s "
+            "-> consent (refusing to key the vault on the token's username sub)",
+            auth_method,
+            server_path,
+        )
+        return EgressTokenResponse(consent_required=True)
 
     # pat: vend the stored per-user PAT. This branch runs BEFORE oauth_user so a
     # pat server is never routed through svc.get_valid_token (which resolves an

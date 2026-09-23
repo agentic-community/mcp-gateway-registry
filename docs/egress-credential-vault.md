@@ -338,6 +338,14 @@ logging a warning instead of keying on that token's `sub`. Both make the
 otherwise-silent "consent succeeds, then 0 tools" failure visible; a token
 minted before the claim existed is refused for at most one token lifetime and
 the next mint carries the claim.
+
+The session subject comes from the IdP at login: the id_token `sub` (Auth0 and
+the other id_token providers), or the userinfo field named by the provider's
+`subject_claim` (default `sub`; `id` for GitHub and Google, whose userinfo
+endpoints have no `sub`). A provider that yields no subject logs a warning at
+login, and its bearer tokens are refused at the per-user vend. Auth0, GitHub, and
+Google sessions created before the subject was captured keyed their grants on the
+username; those users sign in again and reconnect each egress server once.
 `auth_method` still canonicalizes across IdP methods (see below), so the full
 key is stable regardless of how the same human authenticated.
 

@@ -158,6 +158,18 @@ class TestPatVend:
         _post(client)
         assert client._svc.get_pat_kwargs["user_id"] == "alice-oidc-sub"
 
+    def test_missing_egress_user_claim_consents_without_vend(self, make_client):
+        # pat keys the vault on the caller id; the token's username `sub` is a
+        # different namespace, so a token without egress_user is refused.
+        claims = _claims()
+        del claims["egress_user"]
+        client = make_client(claims, _server())
+        r = _post(client)
+        assert r.status_code == 200
+        assert r.json()["consent_required"] is True
+        assert r.json()["access_token"] is None
+        assert not client._svc.get_pat_called
+
     def test_upstream_mismatch_403(self, make_client):
         # A forged upstream not in the registered set -> refuse before vend.
         client = make_client(_claims(upstream_url="https://attacker.example/mcp"), _server())

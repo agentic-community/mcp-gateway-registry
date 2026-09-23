@@ -86,6 +86,7 @@ providers:
     grant_type: "authorization_code"
     # GitHub specific claim mapping
     username_claim: "login"
+    subject_claim: "id"  # /user has no "sub"; the numeric id survives login renames
     groups_claim: null  # GitHub doesn't provide groups in basic scope
     email_claim: "email"
     name_claim: "name"
@@ -140,6 +141,7 @@ providers:
     grant_type: "authorization_code"
     # Google specific claim mapping
     username_claim: "email"
+    subject_claim: "id"  # oauth2/v2/userinfo has no "sub"; its "id" is the OIDC sub
     groups_claim: null  # Google doesn't provide groups in basic scope
     email_claim: "email"
     name_claim: "name"
