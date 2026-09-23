@@ -4270,6 +4270,50 @@ class _FakeEntraProvider:
     token_url = "https://login.microsoftonline.com/t/oauth2/v2.0/token"
 
 
+def _keycloak_obo_provider():
+    """A real KeycloakProvider, its local test JWKS, and a signer for exchanged tokens.
+
+    The OBO engine verifies the token Keycloak returns through the provider
+    (signature, issuer, expiry, target audience) before forwarding it, so the
+    Keycloak pipeline tests need tokens that provider would accept. Returns
+    ``(provider, jwks, sign)`` where ``sign(audience)`` mints such a token.
+    """
+    import json as _json
+    import time as _time
+
+    import jwt as _jwt
+    from cryptography.hazmat.primitives.asymmetric import rsa as _rsa
+    from jwt.algorithms import RSAAlgorithm as _RSAAlgorithm
+
+    from auth_server.providers.keycloak import KeycloakProvider
+
+    provider = KeycloakProvider(
+        keycloak_url="https://kc.example.com",
+        realm="test-realm",
+        client_id="gateway-web",
+        client_secret="gw-secret",
+        m2m_client_id="gateway-m2m",
+    )
+    private_key = _rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    public_jwk = _json.loads(_RSAAlgorithm.to_jwk(private_key.public_key()))
+    public_jwk.update({"kid": "obo-test-kid", "alg": "RS256", "use": "sig"})
+    jwks = {"keys": [public_jwk]}
+
+    def sign(audience: list[str]) -> str:
+        now = int(_time.time())
+        claims = {
+            "iss": provider.realm_url,
+            "aud": audience,
+            "sub": "test-user",
+            "azp": "gateway-web",
+            "iat": now,
+            "exp": now + 300,
+        }
+        return _jwt.encode(claims, private_key, algorithm="RS256", headers={"kid": "obo-test-kid"})
+
+    return provider, jwks, sign
+
+
 class TestMcpProxyOboExchange:
     """Phase 3 seam: obo_exchange branch in mcp_proxy.
 
@@ -4956,6 +5000,124 @@ class TestMcpProxyOboExchange:
         # The exchanged token reached the upstream Authorization header.
         sent = {k.lower(): v for k, v in captured["headers"].items()}
         assert sent["authorization"] == "Bearer real-exchanged-token"
+
+    @staticmethod
+    async def _keycloak_obo_directive_vend(token, server):
+        return {
+            "mode": "obo_exchange",
+            "obo_target_audience": "finance-mcp-server",
+            "obo_scopes": [],
+        }
+
+    def _run_keycloak_obo(self, audience: list[str]):
+        """Drive /mcp-proxy through the REAL obo_exchange engine and a REAL
+        KeycloakProvider. The IdP token endpoint, the provider's JWKS (a local
+        test key) and the upstream are mocked, and the registry vend, auth
+        provider lookup, MCP filter and scope repository are patched as in the
+        Entra pipeline test. The exchanged token Keycloak "returns" carries
+        ``audience``. Returns (response, idp_post, captured, ingress_jwt,
+        exchanged_token).
+        """
+        import auth_server.server as server_module
+
+        provider, jwks, sign = _keycloak_obo_provider()
+        exchanged_token = sign(audience)
+
+        class _IdpResp:
+            status_code = 200
+
+            def json(self):
+                return {"access_token": exchanged_token}
+
+        idp_post = AsyncMock(return_value=_IdpResp())
+
+        upstream_resp = _build_mock_upstream_response(
+            status_code=200,
+            headers={"content-type": "application/json"},
+            body=b'{"jsonrpc":"2.0","id":1,"result":{}}',
+        )
+        upstream_cm = AsyncMock()
+        upstream_cm.__aenter__ = AsyncMock(return_value=upstream_resp)
+        upstream_cm.__aexit__ = AsyncMock(return_value=False)
+        captured: dict = {}
+
+        def _stream(method, url, **kwargs):
+            captured["headers"] = kwargs.get("headers", {})
+            return upstream_cm
+
+        def _unified_client(*a, **k):
+            c = MagicMock()
+            c.post = idp_post  # engine's IdP token call (driven via post_with_reconnect)
+            c.stream = MagicMock(side_effect=_stream)  # upstream proxy stream
+            return c
+
+        ingress_jwt = _obo_ingress_jwt("test-user")
+
+        with (
+            patch.object(server_module.settings, "egress_auth_enabled", True),
+            patch.object(server_module, "_vend_egress_token", self._keycloak_obo_directive_vend),
+            patch.object(server_module, "get_auth_provider", lambda *a, **k: provider),
+            patch.object(provider, "get_jwks", return_value=jwks),
+            patch("registry.utils.url_guard.shared_guarded_async_client", _unified_client),
+            patch.object(server_module, "_read_mcp_filter_enabled", return_value=False),
+            _patch_scope_repo_allow_all(),
+        ):
+            client = TestClient(server_module.app)
+            response = client.post(
+                "/mcp-proxy/finance",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
+                    "params": {"name": "get_balance"},
+                },
+                headers={
+                    **_mcp_proxy_token_headers(server_name="finance"),
+                    "X-Authorization": f"Bearer {ingress_jwt}",
+                },
+            )
+        return response, idp_post, captured, ingress_jwt, exchanged_token
+
+    def test_keycloak_obo_integration_real_exchange_only_idp_mocked(self):
+        """Keycloak twin of the Entra pipeline test: directive -> subject ->
+        RFC 8693 body -> exchange -> verification of the exchanged token ->
+        strip -> inject -> forward."""
+        response, idp_post, captured, ingress_jwt, exchanged = self._run_keycloak_obo(
+            ["finance-mcp-server"]
+        )
+
+        assert response.status_code == 200
+        # The engine built the RFC 8693 token-exchange body from the directive + subject.
+        idp_body = idp_post.call_args.kwargs["data"]
+        assert idp_body["grant_type"] == "urn:ietf:params:oauth:grant-type:token-exchange"
+        assert idp_body["subject_token"] == ingress_jwt
+        assert idp_body["subject_token_type"] == "urn:ietf:params:oauth:token-type:access_token"
+        assert idp_body["requested_token_type"] == "urn:ietf:params:oauth:token-type:access_token"
+        assert idp_body["audience"] == "finance-mcp-server"
+        # The verified exchanged token reached the upstream Authorization header,
+        # and the user's gateway credentials were stripped.
+        sent = {k.lower(): v for k, v in captured["headers"].items()}
+        assert sent["authorization"] == f"Bearer {exchanged}"
+        assert "x-authorization" not in sent
+        assert "cookie" not in sent
+        assert "x-internal-token" not in sent
+        assert all(ingress_jwt not in str(value) for value in sent.values())
+
+    def test_keycloak_obo_refuses_a_token_the_gateway_would_accept(self):
+        """An exchanged token that also carries ``mcp-gateway`` is never
+        forwarded: legacy Keycloak exchange keeps the audience client's
+        default-scope audiences, and the realm's ``basic`` scope adds
+        ``mcp-gateway``."""
+        response, _, captured, _, _ = self._run_keycloak_obo(["finance-mcp-server", "mcp-gateway"])
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["error"]["message"] == "obo_exchange_failed"
+        detail = body["error"]["data"]["detail"]
+        assert "would accept" in detail
+        # The caller is not told which gateway audiences the token carried.
+        assert "mcp-gateway" not in detail
+        assert "headers" not in captured, "the upstream must not be called"
 
 
 class TestMcpProxyPatMode:
