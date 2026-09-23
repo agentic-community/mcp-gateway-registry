@@ -7,8 +7,11 @@ Covers:
 - IdP error-code -> typed exception mapping.
 - No caching: two calls hit the token endpoint twice.
 - Missing gateway credentials -> config error.
+- Malformed IdP responses (non-object JSON, non-string fields) stay typed, and
+  IdP text reaches the log without control characters.
 """
 
+import logging
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -41,7 +44,7 @@ class _FakeKeycloakProvider:
 
 
 class _FakeResponse:
-    def __init__(self, status_code: int, payload: dict):
+    def __init__(self, status_code: int, payload: object):
         self.status_code = status_code
         self._payload = payload
         self.text = str(payload)
@@ -218,8 +221,9 @@ class TestKeycloakExchangeBody:
         assert body["client_secret"] == "gw-secret"
         assert "assertion" not in body
         assert "requested_token_use" not in body
-        # No explicit scopes -> omit the field entirely so Keycloak applies
-        # the target client's defaults.
+        # No explicit scopes -> omit the field entirely; whose default scopes
+        # Keycloak then applies depends on which implementation serves the
+        # request (see _keycloak_exchange_body).
         assert "scope" not in body
 
     @pytest.mark.asyncio
@@ -363,6 +367,134 @@ class TestUnsupportedAndConfig:
 
         with pytest.raises(OboConfigError):
             await obo_exchange(_NoCreds(), subject_token="j", target_audience="a")
+
+
+@pytest.mark.unit
+class TestMalformedIdpResponses:
+    """Valid JSON that is not the expected shape must stay inside the
+    OboExchangeError family on both the error and the success path, and
+    IdP-supplied text must reach the log without control characters."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("body", [[], None, "oops", 3])
+    async def test_non_object_error_body_is_typed_error(self, monkeypatch, body):
+        cap: dict = {}
+        _patch_post(monkeypatch, _FakeResponse(400, body), cap)
+        with pytest.raises(OboExchangeError, match="error=unknown"):
+            await obo_exchange(
+                _FakeKeycloakProvider(), subject_token="j", target_audience="srv-client"
+            )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("body", [[], None, "oops", 3])
+    async def test_non_object_success_body_is_typed_error(self, monkeypatch, body):
+        cap: dict = {}
+        _patch_post(monkeypatch, _FakeResponse(200, body), cap)
+        with pytest.raises(OboExchangeError, match="not an object"):
+            await obo_exchange(
+                _FakeKeycloakProvider(), subject_token="j", target_audience="srv-client"
+            )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("access_token", [{"a": 1}, 5, ""])
+    async def test_non_string_access_token_is_typed_error(self, monkeypatch, access_token):
+        cap: dict = {}
+        _patch_post(monkeypatch, _FakeResponse(200, {"access_token": access_token}), cap)
+        with pytest.raises(OboExchangeError, match="no access_token"):
+            await obo_exchange(
+                _FakeKeycloakProvider(), subject_token="j", target_audience="srv-client"
+            )
+
+    @pytest.mark.asyncio
+    async def test_non_string_error_code_is_typed_error(self, monkeypatch):
+        cap: dict = {}
+        _patch_post(monkeypatch, _FakeResponse(400, {"error": 5}), cap)
+        with pytest.raises(OboExchangeError, match="error=unknown"):
+            await obo_exchange(
+                _FakeKeycloakProvider(), subject_token="j", target_audience="srv-client"
+            )
+
+    @pytest.mark.asyncio
+    async def test_idp_text_is_logged_without_control_characters(self, monkeypatch, caplog):
+        """A newline in the IdP's error text must not be able to forge a log line."""
+        cap: dict = {}
+        _patch_post(
+            monkeypatch,
+            _FakeResponse(
+                400,
+                {"error": "invalid_request\n", "error_description": "bad\r\nFORGED entry\tx"},
+            ),
+            cap,
+        )
+        with caplog.at_level(logging.WARNING):
+            with pytest.raises(OboExchangeError):
+                await obo_exchange(
+                    _FakeKeycloakProvider(), subject_token="j", target_audience="srv-client"
+                )
+        messages = [
+            r.getMessage() for r in caplog.records if "IdP token exchange failed" in r.getMessage()
+        ]
+        assert messages, "the failed exchange must be logged"
+        for message in messages:
+            assert "\r" not in message
+            assert "\n" not in message
+            assert "\t" not in message
+        assert "bad  FORGED entry x" in messages[0]
+
+    def test_unicode_line_breaks_and_bidi_are_neutralized(self):
+        raw = "a b c\u0085d‮e\x1bf"
+        assert egress_obo._sanitize_idp_text(raw) == "a b c d e f"
+
+    def test_idp_text_is_truncated(self):
+        assert len(egress_obo._sanitize_idp_text("x" * 500)) == egress_obo._IDP_TEXT_MAX_CHARS
+
+    def test_non_string_idp_text_is_dropped(self):
+        assert egress_obo._sanitize_idp_text(5) == ""
+        assert egress_obo._sanitize_idp_text(None) == ""
+
+    @pytest.mark.asyncio
+    async def test_error_description_is_not_logged_for_entra(self, monkeypatch, caplog):
+        """OAuth error bodies can echo the client_id and credential context, so
+        only the error code and status are logged (SECURITY_GUIDELINES)."""
+        cap: dict = {}
+        _patch_post(
+            monkeypatch,
+            _FakeResponse(
+                400,
+                {"error": "invalid_request", "error_description": "AADSTS700016 app gw-client"},
+            ),
+            cap,
+        )
+        with caplog.at_level(logging.WARNING):
+            with pytest.raises(OboExchangeError):
+                await obo_exchange(
+                    _FakeEntraProvider(), subject_token="j", target_audience="api://srv"
+                )
+        logged = " ".join(r.getMessage() for r in caplog.records)
+        assert "error=invalid_request" in logged
+        assert "AADSTS700016" not in logged
+
+    @pytest.mark.asyncio
+    async def test_error_description_is_logged_only_for_keycloak_invalid_request(
+        self, monkeypatch, caplog
+    ):
+        cap: dict = {}
+        _patch_post(
+            monkeypatch,
+            _FakeResponse(
+                403,
+                {"error": "access_denied", "error_description": "Client not allowed to exchange"},
+            ),
+            cap,
+        )
+        with caplog.at_level(logging.WARNING):
+            with pytest.raises(OboConfigError):
+                await obo_exchange(
+                    _FakeKeycloakProvider(), subject_token="j", target_audience="srv-client"
+                )
+        logged = " ".join(r.getMessage() for r in caplog.records)
+        assert "error=access_denied" in logged
+        assert "Client not allowed to exchange" not in logged
 
 
 @pytest.mark.unit
