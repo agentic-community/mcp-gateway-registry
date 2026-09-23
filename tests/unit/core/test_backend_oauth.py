@@ -811,6 +811,15 @@ class TestResolveOboDiscoveryBearer:
         assert backend_oauth.RESOLVED_BEARER_KEY not in out
 
 
+def _is_vendored(path: pathlib.Path) -> bool:
+    """Whether a path sits inside vendored dependencies rather than our source.
+
+    The boundary tests below scan the tree for symbol names. Installed packages
+    legitimately use the same names, so they must not be scanned.
+    """
+    return ".venv" in path.parts or "site-packages" in path.parts or "node_modules" in path.parts
+
+
 @pytest.mark.unit
 class TestDiscoveryCredentialStaysOutOfRuntime:
     """The borrowed identity is for DISCOVERY only: list tools, health, scan -- never execute.
@@ -839,7 +848,14 @@ class TestDiscoveryCredentialStaysOutOfRuntime:
         resolved discovery credential became reachable from end-user traffic.
         """
         root = self._repo_root()
-        targets = [*(root / "auth_server").rglob("*.py"), root / "registry/core/nginx_service.py"]
+        # Exclude vendored dependencies. A virtualenv under auth_server/ is gitignored,
+        # so CI never sees one and this passed there, but any developer who has
+        # installed one gets ~23k third-party files walked: the Anthropic SDK defines
+        # `with_bearer` and the MCP SDK defines `call_tool`, so both assertions below
+        # fire on library code. A guard that cries wolf locally is a guard someone
+        # loosens, and these two are the only enforcement of the boundary.
+        targets = [p for p in (root / "auth_server").rglob("*.py") if not _is_vendored(p)]
+        targets.append(root / "registry/core/nginx_service.py")
         offenders = []
         for path in targets:
             if not path.is_file():
@@ -885,6 +901,8 @@ class TestDiscoveryCredentialStaysOutOfRuntime:
         hits = []
         for sub in ("registry", "auth_server"):
             for path in (root / sub).rglob("*.py"):
+                if _is_vendored(path):  # see the note in the test above
+                    continue
                 text = path.read_text(encoding="utf-8", errors="ignore")
                 if re.search(r"\b(async )?def (call_tool|invoke_tool|execute_tool)\b", text):
                     hits.append(str(path.relative_to(root)))
