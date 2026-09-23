@@ -626,6 +626,83 @@ When the health check service performs periodic checks, it:
    - Bearer: `Authorization: Bearer <decrypted_token>`
    - API Key: `<auth_header_name>: <decrypted_key>`
 
+A static `bearer` or `api_key` credential is one of four sources the header can come
+from. For a server that requires OAuth before it will answer `initialize`, the
+registry resolves a credential through `with_bearer` in
+`registry/core/backend_oauth.py` instead:
+
+| `auth_scheme` | Condition | Credential the health check presents |
+|---------------|-----------|--------------------------------------|
+| `bearer` / `api_key` | a stored credential | the static credential below, which always wins |
+| `oauth` | the server's own `backend_oauth` config | a `client_credentials` token the registry mints. Works with the egress feature off |
+| `none` | `oauth_discovery.enabled` | a per-user OAuth 2.1 identity, consented once by an owner or admin and borrowed from the credential vault. Needs `EGRESS_AUTH_ENABLED` |
+| `none` | `egress_auth_mode: obo_exchange` | an app-only token minted as the gateway itself. **Entra only**; refused under Keycloak |
+
+The tiers are mutually exclusive and each fails closed: a failure means no header, so
+the server records unhealthy rather than falling back to a different principal. A
+stored static credential is never shadowed by a resolved one.
+
+Tool discovery and the security scanner use the same resolver, so they cannot present a
+different identity than the health check did.
+
+See [Backend discovery for `obo_exchange` servers](obo-token-exchange.md#backend-discovery-for-obo_exchange-servers-health--tool-list)
+for the tier numbering, the Entra prerequisites, why Keycloak is refused, and the
+operational notes.
+
+#### Enabling a discovery identity (two passes through the modal)
+
+The consent runs against the **saved** discovery config, not the form you are looking
+at, because the backend reads the stored provider and client. So the flow is two
+passes, and the Connect button is disabled on the first one:
+
+1. Open the server's edit modal. Set **Backend Authentication** to `None`: the
+   Discovery Identity checkbox stays disabled until you do, because an explicit
+   `auth_scheme` always wins over a borrowed identity.
+2. Tick **Discovery Identity (OAuth 2.1)** and fill in the provider, client ID, client
+   secret and scopes.
+3. **Save Changes.** The modal closes.
+4. **Reopen** the modal. Connect is now enabled, because the config it will consent
+   against is the one now stored.
+5. Click **Connect** inside the Discovery Identity block and complete the browser
+   consent.
+
+Step 4 is easy to miss: on the first pass Connect looks broken rather than pending.
+
+**Click the Connect inside the Discovery Identity block**, not the one under Egress
+Auth. A server can have both, both may name the same provider, and the consent URL's
+`purpose` parameter defaults to `egress`:
+
+| Block | Consent URL | Vaults at | Serves |
+|-------|-------------|-----------|--------|
+| Egress Auth | `/oauth2/egress/connect?server=...` | egress address (4 segments) | `tools/call`, per user, at runtime |
+| Discovery Identity | `/oauth2/egress/connect?server=...&purpose=discovery` | discovery address (5 segments) | `initialize` and `tools/list`, headless |
+
+Consenting on the wrong one succeeds and vaults a real credential, just at the other
+purpose's address, so the discovery identity stays unconnected with no error surfaced.
+
+#### Confirming it worked
+
+A designated-but-unconnected identity is **not** obvious from the server's health. The
+previous `tool_list` persists, so the server can keep reporting healthy with a stale
+tool count while the resolver cannot produce a credential at all. Check one of these
+instead:
+
+- The registry log stops emitting `oauth discovery: no valid vaulted token for
+  path=... (identity not connected or refresh failed)`, which it writes once per health
+  cycle until the consent lands.
+- `last_checked_iso` becomes populated on the server record.
+- The tool count changes. Re-discovering as a different identity rarely returns exactly
+  the number the old credential did.
+
+Under a KV vault the two purposes are visible as separate branches, which is the
+clearest single check:
+
+```
+secret/mcp/egress/
+  b2F1dGgy/       <- base64("oauth2"), the 4-segment egress address
+  ZGlzY292ZXJ5/   <- base64("discovery"), the 5-segment discovery address
+```
+
 **Example health check with auth:**
 
 ```python
