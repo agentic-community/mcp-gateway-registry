@@ -7540,7 +7540,14 @@ async def _vend_egress_token(
         # (already-trusted internal target). Timeout per-request; a keep-alive
         # closed while idle is transparently re-POSTed once (the registry
         # re-derives + re-vends per request, so the POST is idempotent).
-        from auth_server.observability.meters import record_egress_conn_reset
+        #
+        # Flat-first import: the container flattens auth_server/* into /app, so
+        # the packaged form resolves only when running from the repo root (tests).
+        try:
+            from observability.meters import record_egress_conn_reset
+        except ImportError:
+            from auth_server.observability.meters import record_egress_conn_reset
+
         from registry.utils.url_guard import post_with_reconnect, shared_plain_async_client
 
         client = shared_plain_async_client()
