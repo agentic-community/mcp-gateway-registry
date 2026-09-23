@@ -175,8 +175,16 @@ async def test_pinning_coalesces_hostnames_sharing_an_ip(monkeypatch):
     # IP: two different hostnames that resolve to the SAME public IP pin to the same
     # origin -- the mechanism behind cross-hostname connection coalescing on a shared
     # client. The Host header and TLS SNI stay the ORIGINAL hostname per request, so
-    # routing and cert identity are unaffected and each request is independently
-    # validated+pinned (no SSRF bypass).
+    # routing stays correct and each request is independently validated+pinned (no
+    # SSRF bypass).
+    #
+    # What coalescing DOES change: sni_hostname only takes effect on the handshake
+    # that OPENS a connection. A second hostname reusing that connection performs no
+    # handshake, so nothing re-checks that the cert covers it -- a request to C can
+    # succeed over B's connection where C's own cert would have failed. That is
+    # acceptable here (both hostnames resolving to one IP means one TLS terminator
+    # legitimately serves both, so no credential reaches a new party), but it is NOT
+    # "cert identity is unaffected". See the coalescing NOTE in url_guard.
     from registry.utils import url_guard as ug
 
     async def _fake_resolve(hostname, port, allowlist, *, allow_private=False):
@@ -190,7 +198,9 @@ async def test_pinning_coalesces_hostnames_sharing_an_ip(monkeypatch):
         pinned = await transport._pin_request_async(httpx.Request("POST", f"https://{host}/mcp"))
         pinned_hosts.append(pinned.url.host)
         assert pinned.headers["host"] == host  # Host preserved (routing)
-        assert pinned.extensions["sni_hostname"] == host  # SNI preserved (TLS identity)
+        # SNI is set per request, but only matters on the handshake that opens the
+        # connection (see the note above).
+        assert pinned.extensions["sni_hostname"] == host
 
     # Both hostnames pinned to the same IP -> same httpcore pool origin -> coalesce.
     assert pinned_hosts == ["203.0.113.7", "203.0.113.7"]

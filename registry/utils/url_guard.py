@@ -1170,8 +1170,11 @@ def guarded_async_client(
 #     TLS connection whose cert was verified for whichever host opened it. This is
 #     safe -- each request is independently pinned and its Host header is correct,
 #     and reaching host C over host B's connection requires C to already resolve to
-#     that IP -- but it is a behavioral change vs the old per-call clients. Do NOT
-#     enable http2 on these clients (it would coalesce far more aggressively).
+#     that IP -- but it is a behavioral change vs the old per-call clients. Be precise
+#     about what is lost: cert scope is checked only for the hostname that OPENS the
+#     connection, since a reusing request performs no handshake. A request to C can
+#     therefore succeed over B's connection where C's own cert would have failed. Do
+#     NOT enable http2 on these clients (it would coalesce far more aggressively).
 #   * No shared default identity state -- no default auth headers (callers pass the
 #     credential per request). Cookie persistence is disabled via a no-store cookie
 #     jar (see _disable_cookie_persistence / _NoStoreCookieJar): a Set-Cookie is never
