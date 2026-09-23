@@ -579,14 +579,17 @@ async def _apply_unsafe_scan_decision(
     Args:
         path: Server path, for example "/context7".
         server_entry: Server metadata, passed to the search index on disable.
-        scan_result: The completed scan, read for ``raw_output``.
+        scan_result: The completed scan, read for ``raw_output`` and ``scan_failed``.
         scan_config: Scan configuration carrying the two flags.
 
     Returns:
         True when the whole server was disabled.
     """
     blocked_tools: dict[str, Any] = {}
-    if scan_config.allow_unsafe_servers:
+    # A scan that could not run has no tool_results, so reconciling it would read
+    # "nothing is flagged any more" and clear every existing auto-block. Leave the
+    # overrides as they are and fall through to the whole-server decision.
+    if scan_config.allow_unsafe_servers and not scan_result.scan_failed:
         blocked_tools = await server_service.reconcile_security_blocks(path, scan_result.raw_output)
 
     if blocked_tools:
@@ -6694,12 +6697,20 @@ async def rescan_server(
         auto_disabled = False
         if rescan_config.block_unsafe_servers and rescan_config.allow_unsafe_servers:
             if not scan_result.is_safe:
-                auto_disabled = await _apply_unsafe_scan_decision(
-                    path,
-                    server_info,
-                    scan_result,
-                    rescan_config,
-                )
+                # Same rule as registration: a scan that could not run is no
+                # verdict, so it disables only under block_on_scan_failure.
+                if scan_result.scan_failed and not rescan_config.block_on_scan_failure:
+                    logger.warning(
+                        f"Rescan of {path} could not complete; server and tool "
+                        f"overrides left unchanged"
+                    )
+                else:
+                    auto_disabled = await _apply_unsafe_scan_decision(
+                        path,
+                        server_info,
+                        scan_result,
+                        rescan_config,
+                    )
             else:
                 # A passing scan still has to reconcile, or a tool that stopped
                 # being flagged keeps its auto-block forever. reconcile drops
