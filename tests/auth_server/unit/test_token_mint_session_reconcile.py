@@ -109,8 +109,10 @@ class TestSessionReconciliation:
 
     @pytest.mark.asyncio
     async def test_session_without_subject_returns_empty_subject(self):
-        # A session predating subject persistence yields no canonical egress id;
-        # the vend then falls back to username (pre-existing behavior).
+        # A session with no persisted subject (created before subject persistence,
+        # or by an IdP that yields none) has no canonical egress id. The mint then
+        # omits egress_user, and the per-user vend refuses the token rather than
+        # key the vault on its username sub.
         ctx = {"groups": [], "scopes": [], "session_id": "s1"}
         session = {"username": "alice", "groups": ["developers"]}
         with (
