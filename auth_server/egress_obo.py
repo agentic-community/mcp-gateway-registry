@@ -212,7 +212,14 @@ async def obo_exchange(
     # private/metadata IP (including a post-config DNS rebind) at connect time.
     # Resolve from the canonical module at request time so policy instrumentation
     # and tests cannot be bypassed by a stale imported client reference.
-    from auth_server.observability.meters import record_egress_conn_reset
+    #
+    # Flat-first import: the container flattens auth_server/* into /app, so the
+    # packaged form resolves only when running from the repo root (tests).
+    try:
+        from observability.meters import record_egress_conn_reset
+    except ImportError:
+        from auth_server.observability.meters import record_egress_conn_reset
+
     from registry.utils.url_guard import post_with_reconnect, shared_guarded_async_client
 
     try:
