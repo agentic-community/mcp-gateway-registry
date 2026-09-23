@@ -12,8 +12,13 @@ Security invariants:
   NEVER cached or reused across users. This module holds no cache.
 - The gateway authenticates with its OWN IdP client credentials (read from the
   provider object), not any per-server secret.
+- A Keycloak-exchanged token is verified and refused if it would also be
+  accepted by this gateway: legacy exchange keeps the audience client's
+  default-scope audiences, so the forwarded token must not become a gateway
+  credential in the upstream's hands.
 """
 
+import asyncio
 import logging
 
 import httpx
@@ -255,6 +260,65 @@ def _map_token_error(
     )
 
 
+async def _refuse_gateway_valid_token(
+    idp_provider: object,
+    token: str,
+    target_audience: str,
+) -> None:
+    """Fail closed unless an exchanged Keycloak token is safe to forward upstream.
+
+    The exchanged token leaves the gateway, so it must not also be a credential
+    for the gateway itself: an upstream that received it could replay it
+    against the gateway as the user. Legacy Keycloak token exchange (V1)
+    applies the audience client's default client scopes, and the realm's
+    ``mcp-gateway`` audience mapper on the ``basic`` scope then lands in
+    ``aud``. The provider verifies the token (JWKS signature, issuer, expiry,
+    target audience, ``sub``) before ``aud`` is inspected. It runs in a worker
+    thread because the provider fetches its JWKS synchronously; the provider is
+    built per request, so the JWKS is fetched on every exchange, as it already
+    is on /validate.
+
+    Args:
+        idp_provider: The gateway's Keycloak provider.
+        token: The access token returned by the exchange.
+        target_audience: The audience the exchange was requested for.
+
+    Raises:
+        OboConfigError: The token would also be accepted by this gateway.
+        OboExchangeError: The token failed verification.
+    """
+    # obo_exchange already refused a Keycloak provider without this method
+    # before sending anything; a missing verifier would still fail closed below.
+    check = getattr(idp_provider, "exchanged_token_gateway_audiences", None)
+    try:
+        leaked = await asyncio.to_thread(check, token, target_audience)
+    except Exception as exc:
+        # Fail closed on any verification error (signature, issuer, expiry,
+        # missing target audience or sub, unreachable or malformed JWKS): an
+        # unverified token is never forwarded. The verifier's messages are
+        # written by the gateway and name at most the token's issuer or key id,
+        # never the token itself; they are sanitized like IdP text.
+        logger.warning(
+            "obo_exchange: exchanged token failed verification type=%s reason=%s",
+            type(exc).__name__,
+            _sanitize_idp_text(str(exc)) or "-",
+        )
+        raise OboExchangeError("IdP returned a token that failed verification") from exc
+    if leaked:
+        # The audiences and the remedy go to the operator's log only; the
+        # caller gets a generic message.
+        logger.error(
+            "obo_exchange: exchanged token carries gateway audience(s) %s; refusing to "
+            "forward it. Keep gateway audiences out of the target client's default "
+            "client scopes, or use standard token exchange (Keycloak 26.2+; see the "
+            "Keycloak prerequisites in docs/design/egress-auth-design.md)",
+            leaked,
+        )
+        raise OboConfigError(
+            "IdP returned a token that this gateway itself would accept; refusing to forward it"
+        )
+
+
 async def obo_exchange(
     idp_provider: object,
     subject_token: str,
@@ -281,6 +345,12 @@ async def obo_exchange(
     callers invoke this per request.
     """
     kind = _idp_kind(idp_provider)
+    if kind == "keycloak" and not callable(
+        getattr(idp_provider, "exchanged_token_gateway_audiences", None)
+    ):
+        # Checked before anything is sent: without it the exchanged token could
+        # not be verified, so the client secret and the user's JWT must not leave.
+        raise OboConfigError("IdP provider cannot verify exchanged tokens")
     client_id = getattr(idp_provider, "client_id", "") or ""
     client_secret = getattr(idp_provider, "client_secret", "") or ""
     token_url = getattr(idp_provider, "token_url", "") or ""
@@ -409,4 +479,6 @@ async def obo_exchange(
     access_token = success_payload.get("access_token")
     if not isinstance(access_token, str) or not access_token:
         raise OboExchangeError("IdP returned 200 but no access_token")
+    if kind == "keycloak":
+        await _refuse_gateway_valid_token(idp_provider, access_token, target_audience)
     return access_token

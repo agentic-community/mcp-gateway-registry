@@ -37,10 +37,24 @@ class _FakeEntraProvider:
 
 
 class _FakeKeycloakProvider:
-    def __init__(self):
+    def __init__(
+        self,
+        leaked: list[str] | None = None,
+        verify_error: Exception | None = None,
+    ):
         self.client_id = "gw-client"
         self.client_secret = "gw-secret"
         self.token_url = "https://kc.example/realms/r/protocol/openid-connect/token"
+        self.leaked = leaked or []
+        self.verify_error = verify_error
+        self.checked: list[tuple[str, str]] = []
+
+    def exchanged_token_gateway_audiences(self, token: str, target_audience: str) -> list[str]:
+        """Stand-in for KeycloakProvider's verification of the exchanged token."""
+        self.checked.append((token, target_audience))
+        if self.verify_error is not None:
+            raise self.verify_error
+        return list(self.leaked)
 
 
 class _FakeResponse:
@@ -367,6 +381,85 @@ class TestUnsupportedAndConfig:
 
         with pytest.raises(OboConfigError):
             await obo_exchange(_NoCreds(), subject_token="j", target_audience="a")
+
+
+@pytest.mark.unit
+class TestKeycloakExchangedTokenGuard:
+    """The exchanged Keycloak token is verified before it is returned, and a
+    token the gateway itself would accept is never forwarded (legacy exchange
+    keeps the audience client's default-scope audiences)."""
+
+    @pytest.mark.asyncio
+    async def test_exchanged_token_is_checked_against_the_target(self, monkeypatch):
+        cap: dict = {}
+        _patch_post(monkeypatch, _FakeResponse(200, {"access_token": "obo-tok"}), cap)
+        provider = _FakeKeycloakProvider()
+        token = await obo_exchange(
+            provider, subject_token="j", target_audience="finance-mcp-server"
+        )
+        assert token == "obo-tok"
+        assert provider.checked == [("obo-tok", "finance-mcp-server")]
+
+    @pytest.mark.asyncio
+    async def test_token_with_gateway_audience_is_refused(self, monkeypatch):
+        cap: dict = {}
+        _patch_post(monkeypatch, _FakeResponse(200, {"access_token": "obo-tok"}), cap)
+        provider = _FakeKeycloakProvider(leaked=["mcp-gateway"])
+        with pytest.raises(OboConfigError, match="would accept") as excinfo:
+            await obo_exchange(provider, subject_token="j", target_audience="finance-mcp-server")
+        # The caller-visible text must not reflect the gateway's audiences.
+        assert "mcp-gateway" not in str(excinfo.value)
+
+    @pytest.mark.asyncio
+    async def test_verification_failure_fails_closed(self, monkeypatch):
+        cap: dict = {}
+        _patch_post(monkeypatch, _FakeResponse(200, {"access_token": "obo-tok"}), cap)
+        provider = _FakeKeycloakProvider(verify_error=ValueError("bad signature"))
+        with pytest.raises(OboExchangeError, match="failed verification") as excinfo:
+            await obo_exchange(provider, subject_token="j", target_audience="finance-mcp-server")
+        assert type(excinfo.value) is OboExchangeError
+
+    @pytest.mark.asyncio
+    async def test_verification_failure_reason_is_logged_without_the_token(
+        self, monkeypatch, caplog
+    ):
+        cap: dict = {}
+        _patch_post(monkeypatch, _FakeResponse(200, {"access_token": "obo-tok"}), cap)
+        provider = _FakeKeycloakProvider(verify_error=ValueError("aud mismatch\nforged"))
+        with caplog.at_level(logging.WARNING):
+            with pytest.raises(OboExchangeError):
+                await obo_exchange(
+                    provider, subject_token="j", target_audience="finance-mcp-server"
+                )
+        logged = [r.getMessage() for r in caplog.records if "failed verification" in r.getMessage()]
+        assert logged and "reason=aud mismatch forged" in logged[0]
+        assert all("obo-tok" not in message for message in logged)
+
+    @pytest.mark.asyncio
+    async def test_provider_without_verifier_is_config_error(self, monkeypatch):
+        class _KeycloakWithoutVerifier:
+            client_id = "gw-client"
+            client_secret = "gw-secret"
+            token_url = "https://kc.example/realms/r/protocol/openid-connect/token"
+
+        cap: dict = {}
+        _patch_post(monkeypatch, _FakeResponse(200, {"access_token": "obo-tok"}), cap)
+        with pytest.raises(OboConfigError, match="cannot verify"):
+            await obo_exchange(
+                _KeycloakWithoutVerifier(), subject_token="j", target_audience="finance-mcp-server"
+            )
+        # Refused before the client secret and the user's JWT were sent.
+        assert cap["calls"] == 0
+
+    @pytest.mark.asyncio
+    async def test_entra_path_is_unchanged(self, monkeypatch):
+        """The check covers the Keycloak branch only."""
+        cap: dict = {}
+        _patch_post(monkeypatch, _FakeResponse(200, {"access_token": "obo-tok"}), cap)
+        token = await obo_exchange(
+            _FakeEntraProvider(), subject_token="j", target_audience="api://srv"
+        )
+        assert token == "obo-tok"
 
 
 @pytest.mark.unit
