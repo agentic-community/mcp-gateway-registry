@@ -17,6 +17,8 @@ from enum import Enum
 
 from pydantic import BaseModel, Field
 
+from registry.secrets import keys
+
 
 class EgressAuthMode(str, Enum):
     """How the gateway authenticates to the upstream MCP server on egress.
@@ -164,3 +166,11 @@ class OAuthState(BaseModel):
     pkce_verifier: str | None = None
     nonce: str
     issued_at: str
+    # Consent purpose: "egress" (the user's own runtime credential) or "discovery" (the
+    # identity the registry borrows for its headless calls). This selects BOTH the server
+    # config the callback resolves -- `oauth_discovery.oauth` for discovery, `egress_oauth`
+    # otherwise -- and the vault ADDRESS SPACE the resulting token is written to, so the
+    # two never share an entry. It does NOT affect the feature gate: both purposes require
+    # EGRESS_AUTH_ENABLED, since both use the per-user vault.
+    # Default-valued so pre-existing state blobs decode as "egress".
+    purpose: str = keys.EGRESS_PURPOSE

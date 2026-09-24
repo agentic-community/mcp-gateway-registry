@@ -3,7 +3,7 @@ global:
   image:
     # Container registry (host + optional namespace). Shared default across subcharts.
     registry: public.ecr.aws/p3v1o3c6
-    tag: 1.30.0
+    tag: 1.31.0
     pullPolicy: IfNotPresent
   cloud:
     # AWS region for cloud detection in telemetry. Set this when deploying
@@ -450,6 +450,7 @@ entra:
   tenantId: ""
   scopeFormat: "" # Entra PRM scope form: "v1" (api://<app-id>/<scope>) or "v2" (bare, default). Set "v1" only if your app exposes v1-style api:// scopes (issue #990).
   applicationIdUri: "" # Application ID URI (e.g. api://<app-id>). Used as the v1 scope prefix and accepted as a token audience. Defaults to api://<clientId>.
+  loginBaseUrl: "" # Entra login host for the registry's OWN client_credentials grant (headless backend discovery against obo_exchange servers). Leave empty on standard Entra deployments; set only for sovereign clouds (e.g. https://login.microsoftonline.us) or air-gapped deployments. Mirrors the auth-server's value.
 # IdP group filtering (applies to all identity providers)
 # When set, only groups matching any of these prefixes are shown in IAM > Groups
 # Example: "mcp-,registry-,ai-"
@@ -537,6 +538,12 @@ egressAuth:
   tokenRefreshSkewSeconds: "300"
   refreshWorkerIntervalSeconds: "300"
   stateTtlSeconds: "600"
+  # Egress httpx client connection pooling (shared by url_guard). Keep
+  # httpPoolKeepaliveExpirySeconds below the shortest upstream/LB idle timeout.
+  httpPoolMaxConnections: "100"
+  httpPoolMaxKeepalive: "20"
+  httpPoolKeepaliveExpirySeconds: "30"
+  httpPoolConnectRetries: "1"
   # obo_exchange target_audience allowlist (whitespace-separated). Optional.
   # When set, an obo server may only use a listed audience (authoritative positive
   # control against a confused-deputy that points obo at a shared first-party API).

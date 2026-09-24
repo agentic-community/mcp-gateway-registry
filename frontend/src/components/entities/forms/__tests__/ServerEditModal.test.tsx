@@ -15,6 +15,12 @@ const baseForm: ServerEditForm = {
   auth_scheme: 'none',
   auth_credential: '',
   auth_header_name: 'X-API-Key',
+  oauth_token_url: '',
+  oauth_client_id: '',
+  oauth_client_secret: '',
+  oauth_scopes: '',
+  oauth_token_auth_style: 'post_body',
+  oauth_resource: '',
   status: 'active',
   deployment: 'remote',
   local_runtime: {
@@ -36,6 +42,16 @@ const baseForm: ServerEditForm = {
   egress_custom_token_auth_style: '',
   egress_custom_resource: '',
   egress_target_audience: '',
+  oauth_discovery_enabled: false,
+  oauth_discovery_provider: '',
+  oauth_discovery_client_id: '',
+  oauth_discovery_client_secret: '',
+  oauth_discovery_scopes: '',
+  oauth_discovery_custom_authorize_url: '',
+  oauth_discovery_custom_token_url: '',
+  oauth_discovery_custom_scope_separator: '',
+  oauth_discovery_custom_token_auth_style: '',
+  oauth_discovery_custom_resource: '',
 };
 
 // Harness that owns the form state so controlled-input edits are observable.
@@ -45,12 +61,14 @@ function Harness({
   onClose = jest.fn(),
   loading = false,
   egressEnabled = false,
+  withGateway = true,
 }: {
   initial?: ServerEditForm;
   onSave?: () => void;
   onClose?: () => void;
   loading?: boolean;
   egressEnabled?: boolean;
+  withGateway?: boolean;
 }) {
   const [form, setForm] = useState<ServerEditForm>(initial);
   return (
@@ -60,6 +78,7 @@ function Harness({
       setForm={setForm}
       loading={loading}
       egressEnabled={egressEnabled}
+      withGateway={withGateway}
       onSave={onSave}
       onClose={onClose}
     />
@@ -135,6 +154,139 @@ describe('ServerEditModal', () => {
   it('hides the egress section for local deployments even when enabled', () => {
     render(<Harness initial={{ ...baseForm, deployment: 'local' }} egressEnabled />);
     expect(screen.queryByText('Egress Auth')).not.toBeInTheDocument();
+  });
+
+  it('hides the egress section in registry-only mode even when the feature is enabled', () => {
+    render(<Harness egressEnabled withGateway={false} />);
+    expect(screen.queryByText('Egress Auth')).not.toBeInTheDocument();
+  });
+
+  it('hides the discovery-identity block while the flag is off', () => {
+    render(<Harness egressEnabled />);
+    // The toggle is offered, but the config block stays collapsed.
+    expect(
+      screen.getByRole('checkbox', { name: /Discovery Identity \(OAuth 2\.1\)/ }),
+    ).not.toBeChecked();
+    expect(
+      screen.queryByRole('heading', { name: 'Discovery Identity (OAuth 2.1)' }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('reveals the discovery-identity block when the flag is on', () => {
+    render(<Harness initial={{ ...baseForm, oauth_discovery_enabled: true }} egressEnabled />);
+    expect(
+      screen.getByRole('heading', { name: 'Discovery Identity (OAuth 2.1)' }),
+    ).toBeInTheDocument();
+  });
+
+  it('reveals the discovery-identity block when the toggle is checked', () => {
+    render(<Harness egressEnabled />);
+    fireEvent.click(
+      screen.getByRole('checkbox', { name: /Discovery Identity \(OAuth 2\.1\)/ }),
+    );
+    expect(
+      screen.getByRole('heading', { name: 'Discovery Identity (OAuth 2.1)' }),
+    ).toBeInTheDocument();
+  });
+
+  it('offers no discovery identity when the egress feature is disabled', () => {
+    // Discovery borrows a vaulted per-user token, which the backend only vends
+    // when EGRESS_AUTH_ENABLED — so neither the toggle nor the block may show,
+    // even for a server that already has discovery enabled.
+    render(
+      <Harness
+        initial={{ ...baseForm, oauth_discovery_enabled: true }}
+        egressEnabled={false}
+      />,
+    );
+    expect(
+      screen.queryByRole('checkbox', { name: /Discovery Identity \(OAuth 2\.1\)/ }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('heading', { name: 'Discovery Identity (OAuth 2.1)' }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('offers no discovery identity in registry-only mode', () => {
+    render(
+      <Harness
+        initial={{ ...baseForm, oauth_discovery_enabled: true }}
+        egressEnabled
+        withGateway={false}
+      />,
+    );
+    expect(
+      screen.queryByRole('checkbox', { name: /Discovery Identity \(OAuth 2\.1\)/ }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('heading', { name: 'Discovery Identity (OAuth 2.1)' }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('warns that a discovery identity is inert alongside an explicit scheme', () => {
+    // The two are orthogonal in the DATA MODEL -- a server may carry both, and the
+    // backend stores both -- but they are NOT both effective. resolve_discovery_bearer
+    // bows out for any explicit auth_scheme, because a resolved OAuth bearer
+    // short-circuits the header builders and would silently drop the static
+    // credential. An earlier revision of this test asserted both simply rendering,
+    // which let an operator configure a discovery identity, complete an interactive
+    // OAuth consent, and vault a token nothing ever reads. The UI must say so.
+    render(
+      <Harness
+        initial={{ ...baseForm, auth_scheme: 'bearer', oauth_discovery_enabled: true }}
+        egressEnabled
+      />,
+    );
+    // Both are still editable -- the config is storable, just not in effect.
+    expect(
+      screen.getByPlaceholderText('Leave blank to keep current credential'),
+    ).toHaveAttribute('type', 'password');
+    expect(
+      screen.getByRole('heading', { name: 'Discovery Identity (OAuth 2.1)' }),
+    ).toBeInTheDocument();
+    // ...and the operator is told which one actually wins.
+    expect(screen.getByText(/Not in effect/)).toBeInTheDocument();
+  });
+
+  it('does not warn when the scheme is none, where discovery does apply', () => {
+    render(
+      <Harness
+        initial={{ ...baseForm, auth_scheme: 'none', oauth_discovery_enabled: true }}
+        egressEnabled
+      />,
+    );
+    expect(screen.queryByText(/Not in effect/)).not.toBeInTheDocument();
+  });
+
+  it('disables discovery Connect when no provider is selected', () => {
+    render(<Harness initial={{ ...baseForm, oauth_discovery_enabled: true }} egressEnabled />);
+    expect(
+      screen.getByRole('button', { name: 'Connect account for discovery' }),
+    ).toBeDisabled();
+  });
+
+  it('enables discovery Connect for a saved config but disables it on unsaved edits', () => {
+    render(
+      <Harness
+        initial={{
+          ...baseForm,
+          oauth_discovery_enabled: true,
+          oauth_discovery_provider: 'github',
+          oauth_discovery_client_id: 'abc',
+        }}
+        egressEnabled
+      />,
+    );
+    expect(
+      screen.getByRole('button', { name: 'Connect account for discovery' }),
+    ).toBeEnabled();
+    // Editing a discovery field diverges from the saved snapshot -> Connect
+    // disabled until the change is saved (it would otherwise consent against
+    // the stale saved client).
+    fireEvent.change(screen.getByDisplayValue('abc'), { target: { value: 'xyz' } });
+    expect(
+      screen.getByRole('button', { name: 'Connect account for discovery' }),
+    ).toBeDisabled();
   });
 
   it('shows the target audience field only in obo_exchange mode', () => {

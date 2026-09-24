@@ -11,6 +11,8 @@ from fastapi import WebSocket
 from registry.constants import DeploymentType, HealthStatus
 
 from ..common.log_redaction import redact_url
+from ..core.backend_oauth import RESOLVED_BEARER_KEY as _BACKEND_OAUTH_TOKEN_KEY
+from ..core.backend_oauth import with_bearer as _with_backend_oauth
 from ..core.config import settings
 from ..core.endpoint_utils import get_endpoint_url_from_server_info
 from ..exceptions import UrlValidationError
@@ -19,6 +21,7 @@ from ..utils.url_guard import (
     PROXY_PROFILE,
     guarded_async_client,
     proxy_profile_for_entity_target,
+    shared_guarded_async_client,
     validate_url,
 )
 
@@ -351,7 +354,6 @@ class HealthMonitoringService:
 
     async def _perform_health_checks(self):
         """Perform health checks on all enabled services."""
-        import httpx
 
         from ..services.server_service import server_service
 
@@ -373,45 +375,43 @@ class HealthMonitoringService:
         HEALTH_CHECK_BATCH_SIZE = 10
         HEALTH_CHECK_BATCH_DELAY_SECONDS = 0.5
 
-        async with (
-            guarded_async_client(
-                profile=PROXY_PROFILE,
-                timeout=httpx.Timeout(settings.health_check_timeout_seconds),
-            ) as client,
-            guarded_async_client(
-                profile=BUILTIN_AIREGISTRY_TOOLS_PROFILE,
-                timeout=httpx.Timeout(settings.health_check_timeout_seconds),
-            ) as builtin_client,
-        ):
-            check_tasks = []
-            for service_path in enabled_services:
-                server_info = await server_service.get_server_info(
-                    service_path, include_credentials=True
+        # Process-lifetime pooled clients (owned by the app lifespan; closed on
+        # shutdown via aclose_shared_clients). Reused across cycles so a server is
+        # not re-handshaked every cycle, and within a cycle the initialize+probe to
+        # one server reuse a connection. Per-request timeouts are passed on each
+        # stream/post below; the SSRF guard still validates+pins every request.
+        client = shared_guarded_async_client(profile=PROXY_PROFILE)
+        builtin_client = shared_guarded_async_client(profile=BUILTIN_AIREGISTRY_TOOLS_PROFILE)
+
+        check_tasks = []
+        for service_path in enabled_services:
+            server_info = await server_service.get_server_info(
+                service_path, include_credentials=True
+            )
+            if server_info and server_info.get("proxy_pass_url"):
+                check_tasks.append((service_path, server_info))
+
+        # Execute health checks in staggered batches
+        for batch_start in range(0, len(check_tasks), HEALTH_CHECK_BATCH_SIZE):
+            batch = check_tasks[batch_start : batch_start + HEALTH_CHECK_BATCH_SIZE]
+            batch_coros = []
+            for path, info in batch:
+                profile = proxy_profile_for_entity_target(
+                    "mcp_server", path, info["proxy_pass_url"]
                 )
-                if server_info and server_info.get("proxy_pass_url"):
-                    check_tasks.append((service_path, server_info))
+                selected_client = (
+                    builtin_client if profile is BUILTIN_AIREGISTRY_TOOLS_PROFILE else client
+                )
+                batch_coros.append(self._check_single_service(selected_client, path, info))
+            results = await asyncio.gather(*batch_coros, return_exceptions=True)
 
-            # Execute health checks in staggered batches
-            for batch_start in range(0, len(check_tasks), HEALTH_CHECK_BATCH_SIZE):
-                batch = check_tasks[batch_start : batch_start + HEALTH_CHECK_BATCH_SIZE]
-                batch_coros = []
-                for path, info in batch:
-                    profile = proxy_profile_for_entity_target(
-                        "mcp_server", path, info["proxy_pass_url"]
-                    )
-                    selected_client = (
-                        builtin_client if profile is BUILTIN_AIREGISTRY_TOOLS_PROFILE else client
-                    )
-                    batch_coros.append(self._check_single_service(selected_client, path, info))
-                results = await asyncio.gather(*batch_coros, return_exceptions=True)
+            for result in results:
+                if isinstance(result, bool) and result:
+                    status_changed = True
 
-                for result in results:
-                    if isinstance(result, bool) and result:
-                        status_changed = True
-
-                # Pause between batches to avoid CPU/connection spikes
-                if batch_start + HEALTH_CHECK_BATCH_SIZE < len(check_tasks):
-                    await asyncio.sleep(HEALTH_CHECK_BATCH_DELAY_SECONDS)
+            # Pause between batches to avoid CPU/connection spikes
+            if batch_start + HEALTH_CHECK_BATCH_SIZE < len(check_tasks):
+                await asyncio.sleep(HEALTH_CHECK_BATCH_DELAY_SECONDS)
 
         # Only broadcast if something actually changed
         if status_changed:
@@ -449,6 +449,26 @@ class HealthMonitoringService:
 
         proxy_pass_url = server_info.get("proxy_pass_url")
         new_status = previous_status
+
+        # Resolve+cache an OAuth2 client_credentials bearer (no-op unless
+        # auth_scheme == 'oauth') so the synchronous header builder attaches it
+        # to both the liveness probe and any triggered tool fetch.
+        #
+        # An 'oauth' scheme with no usable backend_oauth is reported by NAME rather than
+        # probed. Registration is two-step -- POST the server, then PUT /oauth-config --
+        # so a failed or abandoned second step leaves exactly this state legitimately.
+        # Probing anyway produces a generic transport failure, and the only record of the
+        # real cause is a log line the operator never sees, so the server looks broken for
+        # an unrelated reason. This is the one misconfiguration the registry can name with
+        # certainty before making a request.
+        if (server_info.get("auth_scheme") or "none") == "oauth":
+            bo = server_info.get("backend_oauth") or {}
+            if not bo.get("token_url") or not bo.get("client_id"):
+                new_status = "unhealthy: backend OAuth not configured"
+                self.server_health_status[service_path] = new_status
+                self.server_last_check_time[service_path] = datetime.now(UTC)
+                return previous_status != new_status
+        server_info = await _with_backend_oauth(server_info)
 
         try:
             # Try to reach the service endpoint using transport-aware checking
@@ -573,6 +593,19 @@ class HealthMonitoringService:
                 f"Merged encrypted health headers count={len(decrypted):d} names={sorted(entry['name'] for entry in decrypted)}",
             )
 
+        # A pre-resolved OAuth bearer (client_credentials OR a borrowed per-user
+        # discovery-identity token) is the only credential when present; set by the
+        # async caller (backend_oauth.with_bearer), whose tiers bow out when an
+        # explicit static auth_scheme exists. Gated by the destination check above.
+        #
+        # ALWAYS 'Authorization' -- never auth_header_name. See the matching note
+        # in core/mcp_client.py: inheriting an api_key server's 'X-API-Key' would
+        # emit `X-API-Key: Bearer <oauth-token>`, which no upstream reads correctly.
+        resolved_bearer = server_info.get(_BACKEND_OAUTH_TOKEN_KEY)
+        if resolved_bearer:
+            headers["Authorization"] = f"Bearer {resolved_bearer}"
+            logger.debug("Added resolved OAuth bearer header to health request")
+            return headers
         auth_scheme = server_info.get("auth_scheme", "none")
         encrypted_credential = server_info.get("auth_credential_encrypted")
         if auth_scheme != "none" and encrypted_credential:
@@ -1313,7 +1346,7 @@ class HealthMonitoringService:
 
         from ..services.server_service import server_service
 
-        server_info = await server_service.get_server_info(service_path)
+        server_info = await server_service.get_server_info(service_path, include_credentials=True)
         if not server_info:
             return "error: server not registered", None
 
@@ -1328,6 +1361,10 @@ class HealthMonitoringService:
             return HealthStatus.LOCAL, None
 
         proxy_pass_url = server_info.get("proxy_pass_url")
+
+        # Resolve+cache an OAuth2 client_credentials bearer (no-op unless
+        # auth_scheme == 'oauth') for the probe and any triggered tool fetch.
+        server_info = await _with_backend_oauth(server_info)
 
         # Record check time
         last_checked_time = datetime.now(UTC)

@@ -129,3 +129,48 @@ tests:
       - equal:
           path: data.EGRESS_OAUTH_TRUSTED_IDP_HOSTS
           value: "keycloak.internal.example.com,login.corp.example.net"
+
+  - it: renders the egress HTTP pool knobs with their defaults
+    set:
+      egressAuth:
+        enabled: true
+    asserts:
+      # These four feed httpx.Limits on the pooled egress clients. Only this suite
+      # checks the configmap actually carries them: helm lint / template /
+      # kubeconform do not look at data contents.
+      - equal:
+          path: data.EGRESS_HTTP_POOL_MAX_CONNECTIONS
+          value: "100"
+      - equal:
+          path: data.EGRESS_HTTP_POOL_MAX_KEEPALIVE
+          value: "20"
+      - equal:
+          path: data.EGRESS_HTTP_POOL_KEEPALIVE_EXPIRY_SECONDS
+          value: "30"
+      - equal:
+          path: data.EGRESS_HTTP_POOL_CONNECT_RETRIES
+          value: "1"
+
+  - it: honours overridden egress HTTP pool knobs
+    set:
+      egressAuth:
+        enabled: true
+        httpPoolMaxConnections: "250"
+        httpPoolMaxKeepalive: "50"
+        httpPoolKeepaliveExpirySeconds: "15"
+        httpPoolConnectRetries: "3"
+    asserts:
+      - equal:
+          path: data.EGRESS_HTTP_POOL_MAX_CONNECTIONS
+          value: "250"
+      - equal:
+          path: data.EGRESS_HTTP_POOL_MAX_KEEPALIVE
+          value: "50"
+      # Keep this below the shortest upstream/LB idle timeout: too high turns every
+      # idle gap into a reset, which shows up as mcpgw_registry_egress_conn_reset_total.
+      - equal:
+          path: data.EGRESS_HTTP_POOL_KEEPALIVE_EXPIRY_SECONDS
+          value: "15"
+      - equal:
+          path: data.EGRESS_HTTP_POOL_CONNECT_RETRIES
+          value: "3"

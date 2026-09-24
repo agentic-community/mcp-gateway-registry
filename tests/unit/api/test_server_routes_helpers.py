@@ -301,3 +301,75 @@ class TestBuildScanHeadersDestinationRevalidation:
             return_value="s3cret",
         ):
             assert _build_scan_headers_from_credentials(server) is None
+
+
+@pytest.mark.unit
+class TestBuildScanAuthHeaders:
+    """The scanner must authenticate with the SAME credential as health/tool
+    discovery, resolved through the single ``backend_oauth.with_bearer`` chain.
+    Regression: ``obo_exchange`` servers were absent from the scan path, so an
+    auth-requiring obo server scanned unauthenticated -> upstream 401 -> runtime
+    error. Routing through with_bearer covers OAuth 2.0 / 2.1 / obo uniformly."""
+
+    async def test_resolved_bearer_becomes_x_authorization(self):
+        from registry.api import server_routes
+        from registry.core import backend_oauth
+
+        server = {
+            "path": "/obo-echo",
+            "auth_scheme": "none",
+            "egress_auth_mode": "obo_exchange",
+            "proxy_pass_url": "https://backend.example.com",
+        }
+
+        async def fake_with_bearer(si):
+            return {**si, backend_oauth.RESOLVED_BEARER_KEY: "OBO-CC"}
+
+        with (
+            patch.object(backend_oauth, "with_bearer", side_effect=fake_with_bearer),
+            patch.object(server_routes, "_scan_destination_is_safe", return_value=True),
+        ):
+            headers = await server_routes._build_scan_auth_headers(server)
+
+        assert headers is not None
+        assert "X-Authorization" in headers
+        assert "OBO-CC" in headers
+
+    async def test_resolved_bearer_refused_on_unsafe_destination(self):
+        from registry.api import server_routes
+        from registry.core import backend_oauth
+
+        async def fake_with_bearer(si):
+            return {**si, backend_oauth.RESOLVED_BEARER_KEY: "OBO-CC"}
+
+        with (
+            patch.object(backend_oauth, "with_bearer", side_effect=fake_with_bearer),
+            patch.object(server_routes, "_scan_destination_is_safe", return_value=False),
+        ):
+            result = await server_routes._build_scan_auth_headers(
+                {"path": "/obo-echo", "egress_auth_mode": "obo_exchange"}
+            )
+
+        assert result is None
+
+    async def test_no_token_falls_back_to_static_credentials(self):
+        from registry.api import server_routes
+        from registry.core import backend_oauth
+
+        async def fake_with_bearer(si):
+            return si  # no resolved bearer stashed
+
+        with (
+            patch.object(backend_oauth, "with_bearer", side_effect=fake_with_bearer),
+            patch.object(
+                server_routes,
+                "_build_scan_headers_from_credentials",
+                return_value="STATIC",
+            ) as fallback,
+        ):
+            result = await server_routes._build_scan_auth_headers(
+                {"path": "/x", "auth_scheme": "bearer"}
+            )
+
+        assert result == "STATIC"
+        fallback.assert_called_once()

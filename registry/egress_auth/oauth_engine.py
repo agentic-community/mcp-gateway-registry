@@ -30,7 +30,10 @@ from registry.egress_auth.schemas import (
     TokenEndpointAuthStyle,
 )
 from registry.exceptions import UrlValidationError
-from registry.utils.url_guard import CREDENTIALED_OAUTH_PROFILE, guarded_async_client
+from registry.utils.url_guard import (
+    CREDENTIALED_OAUTH_PROFILE,
+    shared_guarded_async_client,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -214,7 +217,6 @@ def _build_token_request(
     if cfg.token_endpoint_auth_style == TokenEndpointAuthStyle.BASIC_HEADER:
         basic = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
         headers["Authorization"] = f"Basic {basic}"
-        data["client_id"] = client_id
     else:  # POST_BODY (default)
         data["client_id"] = client_id
         data["client_secret"] = client_secret
@@ -232,11 +234,15 @@ async def _post_token(cfg: OAuthProviderConfig, data: dict, headers: dict) -> di
     # requires HTTPS, so proxy allowlist entries cannot weaken this path.
     # Built-in providers resolve to public HTTPS hosts and pass unchanged.
     try:
-        async with guarded_async_client(
-            profile=CREDENTIALED_OAUTH_PROFILE,
-            timeout=_HTTP_TIMEOUT,
-        ) as client:
-            resp = await client.post(cfg.token_url, data=data, headers=headers)
+        # Pooled, process-lifetime SSRF-guarded client (keep-alive reuse across
+        # exchange/refresh calls). Timeout is per-request. NOTE: unlike the OBO and
+        # vend hops, this is NOT wrapped in a keep-alive reconnect retry: both grant
+        # types here are single-use/rotating (an authorization_code is single-use; a
+        # refresh_token rotates), so a blind re-POST after a connection reset could
+        # double-spend the grant -> invalid_grant. A reset instead surfaces as a
+        # transient "unreachable" error the refresh worker / caller retries safely.
+        client = shared_guarded_async_client(profile=CREDENTIALED_OAUTH_PROFILE)
+        resp = await client.post(cfg.token_url, data=data, headers=headers, timeout=_HTTP_TIMEOUT)
     except UrlValidationError as exc:
         # The pinned guard rejected the target before sending any credential.
         # Keep the wrapped detail out of higher-level logs and browser responses.
@@ -334,3 +340,29 @@ async def refresh_token(
     data, headers = _build_token_request(cfg, client_id, client_secret, form)
     payload = await _post_token(cfg, data, headers)
     return _to_stored_token(cfg, payload, client_id, fallback_refresh=refresh_token_value)
+
+
+async def client_credentials_token(
+    cfg: OAuthProviderConfig,
+    client_id: str,
+    client_secret: str | None,
+    scopes: list[str] | None = None,
+) -> StoredToken:
+    """Acquire a token via the OAuth 2.0 ``client_credentials`` grant (RFC 6749 §4.4).
+
+    Used for machine-to-machine auth where the registry itself is the client
+    (e.g. authenticating to an OAuth-backed MCP server for health checks and
+    tool discovery). No user, no refresh token: the caller re-acquires when the
+    cached token nears expiry. The token endpoint receives the operator
+    client_secret, so the request goes through the same SSRF/rebinding-safe
+    client as the other grants (public HTTPS token endpoints only).
+    """
+    form: dict = {"grant_type": "client_credentials"}
+    if scopes:
+        form["scope"] = cfg.scope_separator.join(scopes)
+    # RFC 8707: bind the issued token to a specific protected resource when set.
+    if cfg.resource:
+        form["resource"] = cfg.resource
+    data, headers = _build_token_request(cfg, client_id, client_secret, form)
+    payload = await _post_token(cfg, data, headers)
+    return _to_stored_token(cfg, payload, client_id)

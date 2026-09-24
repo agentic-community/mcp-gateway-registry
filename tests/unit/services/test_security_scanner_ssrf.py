@@ -9,11 +9,16 @@ the scan must fail closed (no subprocess) when it points at a
 private/metadata/loopback target.
 """
 
+import ast
+import json
 import logging
+import os
 import subprocess
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+from registry.services import security_scanner
 
 
 def _make_service():
@@ -249,3 +254,119 @@ def test_scanner_does_not_log_or_raise_stderr(caplog):
     assert str(exc_info.value) == "Security scanner command failed"
     assert "query-secret" not in caplog.text
     assert "stderr-secret" not in caplog.text
+
+
+def test_scan_credential_is_never_placed_in_argv():
+    """A scan credential must reach the child through the environment, not the command line.
+
+    `mcp-scanner remote` only takes a credential as `--bearer-token` / `--header`, both of
+    which land in the child's argv and are readable by anything that can see `ps` or
+    /proc/<pid>/cmdline for the life of the scan. That was tolerable while the value was
+    an operator's static scan token. It is not now that the resolver chain can hand this
+    function a *delegated human* OAuth token (a borrowed discovery identity) or the
+    gateway's own app-only token -- argv is a far lower bar than the vault those come
+    from, needing no key and no decryption.
+
+    `X-Authorization` is the only spelling asserted because it is the only one the
+    registry produces: both `_build_scan_auth_headers` (resolved OAuth) and
+    `_build_scan_headers_from_credentials` (static bearer) emit it.
+    """
+    service = _make_service()
+    token = "delegated-user-token-must-not-appear"  # nosec B105 - test fixture
+    completed = MagicMock(stdout="[]", stderr="", returncode=0)
+
+    with patch(
+        "registry.services.security_scanner.subprocess.run", return_value=completed
+    ) as mock_run:
+        service._run_mcp_scanner(
+            server_url="https://public.example/mcp",
+            analyzers="test",
+            api_key=None,
+            headers=json.dumps({"X-Authorization": f"Bearer {token}"}),
+            timeout=5,
+        )
+
+    mock_run.assert_called_once()
+    argv = mock_run.call_args.args[0]
+    env = mock_run.call_args.kwargs["env"]
+
+    assert not any(token in str(a) for a in argv), f"credential leaked into argv: {argv}"
+    assert "--bearer-token" not in argv, "the flag must be re-attached inside the child"
+    # It still has to actually get there, or the scan silently loses authentication and
+    # the whole discovery chain becomes pointless for an authed server.
+    assert env[security_scanner._SCANNER_BEARER_ENV] == token
+
+
+def test_scan_without_a_credential_sets_no_bearer_env():
+    """No credential resolved -> nothing in the environment for the shim to attach."""
+    service = _make_service()
+    completed = MagicMock(stdout="[]", stderr="", returncode=0)
+
+    with patch(
+        "registry.services.security_scanner.subprocess.run", return_value=completed
+    ) as mock_run:
+        service._run_mcp_scanner(
+            server_url="https://public.example/mcp",
+            analyzers="test",
+            api_key=None,
+            headers=None,
+            timeout=5,
+        )
+
+    assert security_scanner._SCANNER_BEARER_ENV not in mock_run.call_args.kwargs["env"]
+
+
+def test_shim_reattaches_the_credential_flag_inside_the_child():
+    """The shim must move the env value back onto mcp-scanner's own flag.
+
+    Asserting only that the real CLI is reachable is vacuous -- `--bearer-token` appears
+    in its `--help` output whether or not the shim attached anything, so dropping the
+    re-attachment would pass while silently degrading every authenticated scan to
+    unauthenticated. This stubs mcpscanner.cli and captures the argv the shim actually
+    hands over.
+    """
+    import subprocess as _sp
+    import sys as _sys
+
+    probe = (
+        "import sys, types;"
+        "m = types.ModuleType('mcpscanner.cli');"
+        "m.cli_entry_point = lambda: (print(repr(sys.argv)), 0)[1];"
+        "pkg = types.ModuleType('mcpscanner'); pkg.cli = m;"
+        "sys.modules['mcpscanner'] = pkg; sys.modules['mcpscanner.cli'] = m;"
+        + security_scanner._SCANNER_SHIM
+    )
+    env = dict(os.environ)
+    env[security_scanner._SCANNER_BEARER_ENV] = "shim-probe-token"  # nosec B105
+    result = _sp.run(
+        [_sys.executable, "-c", probe, "remote", "--server-url", "https://x.example/mcp"],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=120,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr[-400:]
+    argv = ast.literal_eval(result.stdout.strip())
+    assert argv[0] == "mcp-scanner"
+    assert "--bearer-token" in argv, "the shim did not re-attach the credential flag"
+    assert argv[argv.index("--bearer-token") + 1] == "shim-probe-token"
+    # ...and it must be consumed from the environment, not left for a grandchild.
+    assert "MCP_GATEWAY_SCAN_BEARER" not in result.stdout
+
+
+def test_shim_reaches_the_real_scanner_entry_point():
+    """Separately: the import path in the shim must actually exist."""
+    import subprocess as _sp
+    import sys as _sys
+
+    result = _sp.run(
+        [_sys.executable, "-c", security_scanner._SCANNER_SHIM, "remote", "--help"],
+        capture_output=True,
+        text=True,
+        env=dict(os.environ),
+        timeout=180,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr[-400:]
+    assert "--server-url" in result.stdout

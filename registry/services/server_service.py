@@ -868,6 +868,20 @@ class ServerService:
         )
         return server_info["num_stars"]
 
+    async def remove_server_fields(self, path: str, fields: list[str]) -> None:
+        """Actually DELETE fields from a server document.
+
+        ``update_server`` issues ``{"$set": doc}`` -- a partial merge -- so popping a
+        key from the in-memory dict only omits it from ``$set`` and leaves the stored
+        value in place. That is deliberate for the merge semantics other callers rely
+        on, but it means "clear this credential" cannot be expressed by popping: the
+        ciphertext survives, and switching the scheme back later silently reactivates
+        it. Use this when a field must genuinely go, and note it is a SEPARATE write
+        from the ``update_server`` that reshaped the rest of the record.
+        """
+        for field in fields:
+            await self._repo.update_field(path, field, None)
+
     async def remove_server(self, path: str) -> bool:
         """Remove a server and all its version documents from the registry.
 
@@ -885,6 +899,12 @@ class ServerService:
         """
         from .search_index_cleanup import remove_from_search_index_with_retry
 
+        # Read the designation BEFORE anything is deleted. It is the only record of which
+        # vault address holds the borrowed token, and it dies with the server document.
+        # Needs include_credentials so the oauth_discovery block is present at all.
+        existing = await self.get_server_info(path, include_credentials=True)
+        prior_disc = (existing or {}).get("oauth_discovery") or {}
+
         if not await remove_from_search_index_with_retry(
             self._search_repo,
             path,
@@ -897,6 +917,23 @@ class ServerService:
             return False
 
         deleted_count = await self._repo.delete_with_versions(path)
+        if deleted_count > 0:
+            # Drop the in-process backend-OAuth bearer and its single-flight lock.
+            # Nothing else prunes them, so without this a deleted server's live access
+            # token stays resident in memory until the process restarts.
+            from registry.core.backend_oauth import invalidate as invalidate_backend_oauth
+
+            invalidate_backend_oauth(path)
+            # Revoke the delegated credential a discovery designation was borrowing.
+            # This lives here rather than in the delete ROUTES because eight call sites
+            # reach this method -- two API routes plus six federation/reconciliation
+            # paths -- and the residue is not a recoverable orphan: discovery entries are
+            # deliberately absent from the consenting user's Connected Accounts, and the
+            # designation that named the address is gone with the document, so nothing
+            # can find it afterwards.
+            from .discovery_credential import revoke_discovery_credential
+
+            await revoke_discovery_credential(path, prior_disc)
         return deleted_count > 0
 
     async def add_server_version(

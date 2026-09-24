@@ -452,6 +452,83 @@ class EgressOAuthConfig(BaseModel):
     updated_at: str | None = None
 
 
+class BackendOAuthConfig(BaseModel):
+    """Per-server OAuth2 ``client_credentials`` config for REGISTRY-SELF backend
+    auth (``auth_scheme == "oauth"``).
+
+    This is how the registry authenticates to an OAuth-backed MCP server for its
+    OWN health checks and tool discovery -- the machine-to-machine analogue of
+    the static ``bearer`` / ``api_key`` schemes. It is unrelated to
+    ``EgressOAuthConfig`` (per-user egress vault, brokered through the gateway).
+
+    None on ServerInfo == not configured. The client_secret is Fernet-encrypted
+    with the same key as every other backend credential and is never returned in
+    API responses.
+    """
+
+    token_url: str = Field(default="", description="OAuth2 token endpoint (public HTTPS).")
+    client_id: str = Field(default="", description="OAuth client_id for the grant.")
+    client_secret_encrypted: str | None = Field(
+        default=None,
+        description="Fernet-encrypted client_secret. Never returned in API responses.",
+    )
+    scopes: list[str] = Field(default_factory=list)
+    token_auth_style: str = Field(
+        default="post_body",
+        description="Where the client_secret goes: 'post_body' (default) or 'basic_header'.",
+    )
+    scope_separator: str = Field(
+        default=" ", description="Separator joining scopes in the token request."
+    )
+    resource: str | None = Field(
+        default=None,
+        description="RFC 8707 resource indicator, sent as the 'resource' token param when set.",
+    )
+    updated_at: str | None = None
+
+
+class OAuthDiscoveryConfig(BaseModel):
+    """Designated per-user identity the registry BORROWS for headless health
+    checks and tool discovery against an OAuth 2.1 (per-user) MCP server.
+
+    This is a BACKEND-AUTH concern (registry -> server for health/discovery) and is
+    configured separately from ``egress_oauth``, so it does not need
+    ``egress_auth_mode='oauth_user'``. It DOES require the egress feature
+    (``EGRESS_AUTH_ENABLED``): the borrowed token lives in the per-user OAuth vault
+    and the consent that fills it is served by the egress OAuth facade, which is only
+    mounted under that flag. Servers whose authorization server only offers
+    ``authorization_code`` (no ``client_credentials``) cannot be discovered with a
+    machine token. Instead, an admin connects their own account once (interactive
+    consent, stored in the shared OAuth vault) and designates that connection here;
+    the registry vends THAT principal's vaulted token (refreshing as needed) for its
+    own discovery calls.
+
+    ``oauth`` holds this server's own provider/client/scopes for the borrow --
+    self-contained under Backend Auth, so discovery no longer piggybacks on
+    ``egress_oauth``. The consent + refresh reuse the shared OAuth engine
+    (``egress_auth/oauth_engine.py``) and the same vault key
+    ``(auth_method, user_id, provider, server_path)``; only the config surface
+    moved here.
+
+    Tradeoffs (by design): discovery can't run until the identity connects, the
+    token is one human's delegated credential used for a system operation, and
+    the discovered tool list reflects that user's visibility.
+    """
+
+    enabled: bool = Field(default=False)
+    # This server's own OAuth provider/client/scopes for the discovery borrow.
+    # Reuses the provider-config shape the shared consent/refresh engine already
+    # accepts (build_consent_url / get_valid_token). Independent of egress_oauth.
+    oauth: EgressOAuthConfig | None = Field(default=None)
+    # Vault principal to borrow: the ingress auth_method + canonical user id
+    # (OIDC sub, else username) recorded when the identity was designated.
+    auth_method: str = Field(default="")
+    user_id: str = Field(default="")
+    # Non-secret display fields for the config view / audit.
+    designated_by: str | None = None
+    designated_at: str | None = None
+
+
 class ServerVersion(BaseModel):
     """Represents a single version of an MCP server.
 
@@ -718,7 +795,8 @@ class ServerInfo(ProxyableMixin):
     # Backend authentication (replaces legacy auth_type)
     auth_scheme: str = Field(
         default="none",
-        description="Authentication scheme for backend server: none, bearer, api_key",
+        description="Authentication scheme for backend server: none, bearer, api_key, oauth "
+        "(OAuth2 client_credentials, config in backend_oauth).",
     )
     auth_credential_encrypted: str | None = Field(
         default=None,
@@ -730,6 +808,19 @@ class ServerInfo(ProxyableMixin):
     )
     credential_updated_at: str | None = Field(
         default=None, description="ISO timestamp of last credential update."
+    )
+    backend_oauth: BackendOAuthConfig | None = Field(
+        default=None,
+        description="OAuth2 client_credentials config for REGISTRY-SELF backend auth. "
+        "Required (token_url + client_id) when auth_scheme is 'oauth'.",
+    )
+    oauth_discovery: OAuthDiscoveryConfig | None = Field(
+        default=None,
+        description="Backend-auth per-user identity borrowed for headless health/tool "
+        "discovery against an OAuth 2.1 (per-user) server. Carries its own oauth "
+        "provider config rather than reusing egress_oauth, so it needs no "
+        "egress_auth_mode='oauth_user'; it does however require the egress feature "
+        "(EGRESS_AUTH_ENABLED), since the borrowed token lives in the per-user vault.",
     )
 
     # Custom HTTP headers (encrypted values, names public) are inherited from
@@ -1017,6 +1108,67 @@ class AuthCredentialUpdateRequest(BaseModel):
     auth_header_name: str | None = Field(
         default=None, description="Custom header name. Default: X-API-Key for api_key"
     )
+
+
+class OAuthBackendConfigRequest(BaseModel):
+    """Request model for configuring REGISTRY-SELF backend OAuth (client_credentials).
+
+    Sets ``auth_scheme = "oauth"`` and the ``backend_oauth`` config on a server so
+    the registry can authenticate to an OAuth-backed MCP server for health checks
+    and tool discovery. ``client_secret`` is write-only: blank on edit keeps the
+    stored one.
+    """
+
+    token_url: str = Field(..., description="OAuth2 token endpoint (public HTTPS).")
+    client_id: str = Field(..., description="OAuth client_id for the client_credentials grant.")
+    client_secret: str | None = Field(
+        default=None,
+        description="Client secret (write-only). Blank on edit keeps the stored one. "
+        "Omit for a public client (token_auth_style='none').",
+    )
+    scopes: list[str] = Field(default_factory=list)
+    token_auth_style: str = Field(
+        default="post_body",
+        description="Where the client_secret goes: 'post_body' (default), 'basic_header', or 'none'.",
+    )
+    scope_separator: str | None = Field(
+        default=None, description="Separator joining scopes (default single space)."
+    )
+    resource: str | None = Field(
+        default=None, description="RFC 8707 resource indicator (optional)."
+    )
+    # No auth_header_name: a resolved OAuth bearer is always sent as
+    # `Authorization: Bearer <token>`. It is not interchangeable with a static
+    # credential, so it must not inherit an api_key server's header name -- see the
+    # note in registry/core/mcp_client.py. Header naming remains configurable for the
+    # static bearer/api_key schemes via the register/edit/credentials routes.
+
+
+class OAuthDiscoveryConfigRequest(BaseModel):
+    """Request model for configuring backend-auth OAuth 2.1 discovery-identity.
+
+    Stores the server's own per-user OAuth provider config under
+    ``oauth_discovery.oauth`` and designates the CALLER as the borrowed identity.
+    REQUIRES the egress feature (``EGRESS_AUTH_ENABLED``): the borrowed token lives in
+    the per-user OAuth vault and the consent that fills it is served by the egress
+    OAuth facade, so the endpoint rejects the request when it is off.
+    ``client_secret`` is write-only: blank on edit keeps the stored one. Provider
+    ``custom`` supplies the authorize/token URLs.
+    """
+
+    provider: str = Field(..., description="Provider key ('custom' for OAuth 2.1 servers).")
+    client_id: str = Field(default="", description="OAuth client_id.")
+    client_secret: str | None = Field(
+        default=None,
+        description="Client secret (write-only). Blank on edit keeps the stored one. "
+        "Omit for a custom public client (custom_token_auth_style='none').",
+    )
+    scopes: list[str] = Field(default_factory=list)
+    custom_authorize_url: str | None = None
+    custom_token_url: str | None = None
+    custom_scope_separator: str | None = None
+    custom_token_auth_style: str | None = None
+    custom_resource: str | None = None
 
 
 class OAuth2Provider(BaseModel):
