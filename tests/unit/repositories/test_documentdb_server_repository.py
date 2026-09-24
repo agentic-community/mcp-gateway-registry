@@ -221,7 +221,7 @@ class TestUpdate:
         assert await repo.update("/a", {"server_name": "A"}) is False
 
     async def test_writes_slash_variant_id(self, repo, mock_collection):
-        """A card stored under '/a/' is writable as '/a' (issue #1716).
+        """A card stored under '/a/' is writable as '/a'.
 
         get() already falls back to the slash variant when reading, so a
         read-then-write flow on such a card must resolve the same _id or
@@ -271,12 +271,41 @@ class TestUpdate:
             "updated_at": "2026-01-01T00:00:00",
         }
 
+    async def test_revision_miss_does_not_fall_back_to_variant(self, repo, mock_collection):
+        """A guarded miss on a card that exists is a lost race, not a variant miss.
+
+        If the exact _id is present but its revision moved, the write must
+        fail; falling back to the slash variant would apply the $set to a
+        different card and break the compare-and-set.
+        """
+        mock_collection.update_one.return_value = MagicMock(matched_count=0)
+        # The probe finds the exact card present with a moved revision.
+        mock_collection.find_one = AsyncMock(return_value={"_id": "/a"})
+        result = await repo.update(
+            "/a",
+            {"server_name": "A"},
+            expected_updated_at="2026-01-01T00:00:00",
+        )
+        assert result is False
+        assert mock_collection.update_one.call_count == 1
+        assert mock_collection.update_one.call_args[0][0] == {
+            "_id": "/a",
+            "updated_at": "2026-01-01T00:00:00",
+        }
+
 
 class TestDelete:
     async def test_deletes_existing(self, repo, mock_collection):
         mock_collection.find_one.return_value = {"_id": "/a", "server_name": "A"}
         mock_collection.delete_one.return_value = MagicMock(deleted_count=1)
         assert await repo.delete("/a") is True
+
+    async def test_deletes_card_stored_under_slash_variant(self, repo, mock_collection):
+        """A card stored under '/a/' is deletable as '/a', like get()/update()."""
+        mock_collection.find_one.return_value = {"_id": "/a/", "server_name": "A"}
+        mock_collection.delete_one.return_value = MagicMock(deleted_count=1)
+        assert await repo.delete("/a") is True
+        assert mock_collection.delete_one.call_args[0][0] == {"_id": {"$in": ["/a", "/a/"]}}
 
     async def test_not_found_returns_false(self, repo, mock_collection):
         mock_collection.find_one.return_value = None
@@ -371,6 +400,13 @@ class TestStateMethods:
         mock_collection.update_one.return_value = MagicMock(matched_count=1)
         assert await repo.set_state("/a", True) is True
 
+    async def test_set_state_writes_card_stored_under_slash_variant(self, repo, mock_collection):
+        """A card stored under '/a/' is toggleable as '/a', like get()/update()."""
+        mock_collection.find_one.return_value = {"_id": "/a/", "server_name": "A"}
+        mock_collection.update_one.return_value = MagicMock(matched_count=1)
+        assert await repo.set_state("/a", False) is True
+        assert mock_collection.update_one.call_args[0][0] == {"_id": {"$in": ["/a", "/a/"]}}
+
     async def test_set_state_not_found(self, repo, mock_collection):
         mock_collection.find_one.return_value = None
         assert await repo.set_state("/a", True) is False
@@ -430,6 +466,12 @@ class TestUpdateField:
         assert await repo.update_field("/a", "tags", ["x"]) is True
         spec = mock_collection.update_one.call_args[0][1]
         assert spec == {"$set": {"tags": ["x"]}}
+
+    async def test_matches_either_slash_variant(self, repo, mock_collection):
+        """A card stored under '/a/' is writable as '/a', like get()/update()."""
+        mock_collection.update_one.return_value = MagicMock(modified_count=1)
+        assert await repo.update_field("/a", "tags", ["x"]) is True
+        assert mock_collection.update_one.call_args[0][0] == {"_id": {"$in": ["/a", "/a/"]}}
 
     async def test_none_value_unsets(self, repo, mock_collection):
         mock_collection.update_one.return_value = MagicMock(modified_count=1)
