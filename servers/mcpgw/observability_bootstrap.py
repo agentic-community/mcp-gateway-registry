@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 # helpful no-op behavior is preserved when the SDK isn't running.
 _tool_invocations_counter: Any = None
 _tool_duration_histogram: Any = None
+_egress_conn_reset_counter: Any = None
 
 
 def _get_tool_instruments() -> tuple[Any, Any] | tuple[None, None]:
@@ -54,6 +55,47 @@ def _get_tool_instruments() -> tuple[Any, Any] | tuple[None, None]:
         unit="ms",
     )
     return _tool_invocations_counter, _tool_duration_histogram
+
+
+def _get_egress_conn_reset_counter() -> Any:
+    """Return the pooled-egress reconnect Counter, creating it lazily."""
+    global _egress_conn_reset_counter
+
+    if _egress_conn_reset_counter is not None:
+        return _egress_conn_reset_counter
+
+    try:
+        from opentelemetry import metrics
+    except ImportError:
+        return None
+
+    meter = metrics.get_meter("mcp-gateway-mcpgw")
+    # Same metric NAME the auth-server emits for its pooled egress hops
+    # (auth_server/observability/meters.py), distinguished by the site label, so one
+    # query covers every pooled path in the deployment. Aggregate by job/instance to
+    # attribute a series to a process.
+    _egress_conn_reset_counter = meter.create_counter(
+        name="mcpgw_registry_egress_conn_reset_total",
+        description=(
+            "Pooled egress HTTP requests that hit a closed keep-alive connection and "
+            "were transparently retried once, labeled by site (mcpgw_registry | "
+            "mcpgw_m2m_token from this process). A rising count means "
+            "EGRESS_HTTP_POOL_KEEPALIVE_EXPIRY_SECONDS is set above an upstream/LB "
+            "idle timeout."
+        ),
+        unit="1",
+    )
+    return _egress_conn_reset_counter
+
+
+def record_egress_conn_reset(site: str) -> None:
+    """Record one pooled-client keep-alive reconnect retry for ``site``.
+
+    No-op when ``opentelemetry`` is not importable, matching ``track_tool``.
+    """
+    counter = _get_egress_conn_reset_counter()
+    if counter is not None:
+        counter.add(1, {"site": site})
 
 
 def track_tool(

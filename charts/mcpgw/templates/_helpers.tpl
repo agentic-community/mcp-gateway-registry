@@ -58,3 +58,22 @@ Call as: {{- include "mcpgw.validateExtraEnv" . -}}
   {{- $_ := set $seen $e.name $i -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+Render a value that may legitimately be zero, falling back only when it is unset.
+
+Sprig's `default` treats 0 as empty, so `x | default "20"` silently replaces a
+numeric 0 (`--set app.httpPoolMaxKeepalive=0`, or an unquoted 0 in a values file)
+with the default -- which disables the EGRESS_HTTP_POOL_* runtime rollback lever.
+Only nil and "" fall back here.
+
+Call as: {{ include "mcpgw.valueOrDefault" (list .Values.app.httpPoolMaxKeepalive "20") }}
+*/}}
+{{- define "mcpgw.valueOrDefault" -}}
+{{- $value := index . 0 -}}
+{{- if or (kindIs "invalid" $value) (eq (toString $value) "") -}}
+{{- index . 1 -}}
+{{- else -}}
+{{- toString $value -}}
+{{- end -}}
+{{- end -}}

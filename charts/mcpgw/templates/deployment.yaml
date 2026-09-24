@@ -53,6 +53,8 @@ spec:
           envFrom:
             - configMapRef:
                 name: mcpgw-app-log-config
+            - configMapRef:
+                name: mcpgw-http-pool-config
             - secretRef:
                 name: {{ .Values.app.existingSecret | default .Values.app.envSecretName }}
             {{- if .Values.global.sharedSecretName }}

@@ -71,6 +71,26 @@ async def test_pool_limits_reflect_settings():
     assert limits.keepalive_expiry == 11.0
 
 
+@pytest.mark.parametrize(
+    "factory",
+    [
+        lambda: shared_guarded_async_client(profile=PROXY_PROFILE),
+        lambda: shared_plain_async_client(),
+    ],
+)
+async def test_configured_limits_reach_the_connection_pool(factory):
+    # Regression guard: httpx.AsyncClient DROPS its own ``limits=`` whenever an
+    # explicit ``transport=`` is supplied (AsyncClient._init_transport returns the
+    # given transport untouched), so the limits must be constructed ON the transport.
+    # Asserting _pool_limits() alone passed while every EGRESS_HTTP_POOL_* value was
+    # inert and the pools ran on httpx's defaults (100/20/5s).
+    pool = factory()._transport._pool
+    assert pool._max_connections == 42
+    assert pool._max_keepalive_connections == 7
+    assert pool._keepalive_expiry == 11.0
+    assert pool._retries == 3
+
+
 async def test_no_default_auth_header():
     # No shared default identity header: credentials ride per-request only.
     for client in (

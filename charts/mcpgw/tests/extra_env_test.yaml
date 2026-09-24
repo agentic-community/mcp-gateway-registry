@@ -44,7 +44,9 @@ tests:
                 key: my-key
       # Order: chart-managed env vars come first, then user extraEnv entries.
       # Indices shift whenever a chart-managed env var is inserted; update
-      # these assertions AND the NOTE block whenever the set changes.
+      # these assertions AND the NOTE block whenever the set changes. Adding
+      # an `envFrom:` source (e.g. mcpgw-http-pool-config) does NOT shift
+      # these — only the envFrom index map in the next test.
       # NOTE: assumes no github* fields set (default values), so only
       # NODE_NAME, HOST and the unconditional Issue #1122 OTel block render
       # before extraEnv.
@@ -94,19 +96,30 @@ tests:
             configMapRef:
               name: my-external-config
               optional: true
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content:
+            configMapRef:
+              name: mcpgw-http-pool-config
       # Order: chart-managed mcpgw-app-log-config is envFrom[0],
-      # mcpgw-secret is envFrom[1]; user entries are last.
+      # mcpgw-http-pool-config is envFrom[1], mcpgw-secret is envFrom[2];
+      # user entries are last. Indices shift whenever a chart-managed
+      # envFrom source is inserted; update these assertions AND this
+      # comment whenever the set changes.
       - equal:
           path: spec.template.spec.containers[0].envFrom[0].configMapRef.name
           value: mcpgw-app-log-config
       - equal:
-          path: spec.template.spec.containers[0].envFrom[1].secretRef.name
-          value: mcpgw-secret
+          path: spec.template.spec.containers[0].envFrom[1].configMapRef.name
+          value: mcpgw-http-pool-config
       - equal:
           path: spec.template.spec.containers[0].envFrom[2].secretRef.name
+          value: mcpgw-secret
+      - equal:
+          path: spec.template.spec.containers[0].envFrom[3].secretRef.name
           value: my-external-secrets
       - equal:
-          path: spec.template.spec.containers[0].envFrom[3].configMapRef.name
+          path: spec.template.spec.containers[0].envFrom[4].configMapRef.name
           value: my-external-config
 
   - it: fails when extraEnv contains a reserved name (HOST)
