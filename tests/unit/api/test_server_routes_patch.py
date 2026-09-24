@@ -493,7 +493,7 @@ class TestServerPatch:
         assert called_dict["description"] == "patched"
 
     def test_patch_write_is_scoped_to_supplied_fields(self, client):
-        """Only client-supplied fields are persisted (issue #1716).
+        """Only client-supplied fields are persisted.
 
         The merged card is still computed for gates and webhooks, but the
         repository write must carry the patch's field scope so a field a
@@ -525,7 +525,7 @@ class TestServerPatch:
         assert kwargs["updated_fields"] == ["description"]
 
     def test_patch_write_carries_read_revision_for_if_match(self, client):
-        """With If-Match, the revision joins the atomic repository write (issue #1716)."""
+        """With If-Match, the revision joins the atomic repository write."""
         ts = datetime(2026, 1, 1, tzinfo=UTC)
         existing = _existing(updated_at=ts)
         if_match = f'W/"{int(ts.timestamp() * 1000)}"'
@@ -555,7 +555,7 @@ class TestServerPatch:
         assert kwargs["expected_updated_at"] == existing["updated_at"]
 
     def test_patch_412_when_revision_guard_fails_save(self, client):
-        """A guarded write that matched nothing is a lost-update race, not a 500 (issue #1716)."""
+        """A guarded write that matched nothing is a lost-update race, not a 500."""
         ts = datetime(2026, 1, 1, tzinfo=UTC)
         existing = _existing(updated_at=ts)
         if_match = f'W/"{int(ts.timestamp() * 1000)}"'

@@ -246,10 +246,10 @@ class ServerService:
         Args:
             updated_fields: When given, only these fields (plus
                 ``updated_at``) are persisted; concurrent writes to other
-                fields survive (issue #1716). None writes every field.
+                fields survive. None writes every field.
             expected_updated_at: When given, the update only lands if the
                 stored ``updated_at`` still equals this value, enforced
-                atomically in the repository write (issue #1716).
+                atomically in the repository write.
 
         Raises:
             UrlValidationError: If the update sets a proxy_pass_url that fails
@@ -317,20 +317,13 @@ class ServerService:
             # and skip the clear, letting a repoint-before-enable carry the old
             # host's secret to a new host. effective_proxy_target omits that gate,
             # so a host change is caught even while the server is disabled.
-            _pre_repoint_keys = set(server_info)
-            clear_upstream_headers_on_repoint(
+            cleared = clear_upstream_headers_on_repoint(
                 server_info,
                 existing_target=effective_proxy_target("mcp_server", dict(existing or {})),
                 new_target=effective_proxy_target("mcp_server", merged),
             )
-            if updated_fields is not None:
-                # The guard's cleared header fields must join the write scope
-                # or a field-scoped $set skips them and the stale headers
-                # survive the repoint.
-                updated_fields = [
-                    *updated_fields,
-                    *(f for f in server_info if f not in _pre_repoint_keys),
-                ]
+            if updated_fields is not None and cleared:
+                updated_fields = [*updated_fields, *cleared]
 
         result = await self._repo.update(
             path,

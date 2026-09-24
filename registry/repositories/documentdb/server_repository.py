@@ -433,19 +433,19 @@ class DocumentDBServerRepository(ServerRepositoryBase):
                 layering their change over a fetched card). Only the
                 fields named in ``updated_fields`` (plus ``updated_at``)
                 are written, so concurrent writers touching other fields
-                are not overwritten (issue #1716). When omitted, every
-                field is written (legacy full-card behaviour).
+                are not overwritten (#1716). When omitted, every field is
+                written (legacy full-card behaviour).
             expected_updated_at: Optional ``updated_at`` value the caller
                 read. When given, it participates in the same
                 ``update_one`` filter as the ``_id`` match, so the
                 compare-and-set is atomic: if another writer persisted a
                 change since this caller read the card, the filter
-                matches nothing and the update fails (issue #1716).
+                matches nothing and the update fails.
 
         Like :meth:`get`, a card stored under the slash variant of
         ``path`` is written through the variant that exists, so a read
         that found the card is never followed by a write that silently
-        misses it (issue #1716).
+        misses it. A revision miss on the exact card never falls back.
         """
         logger.debug(
             f"DocumentDB WRITE: Updating server at '{path}' in collection '{self._collection_name}'"
@@ -478,12 +478,8 @@ class DocumentDBServerRepository(ServerRepositoryBase):
             if unset_ops:
                 update_spec["$unset"] = unset_ops
 
-            # Try the exact _id first; on a miss, a card stored under the
-            # slash variant (readable that way via get(), issue #1716)
-            # still gets the write, guarded by the same revision
-            # predicate. Each update_one is atomic on its own; a miss on
-            # both forms means either the card is gone or the stored
-            # updated_at moved, and both must fail the write.
+            # Exact _id first, then its slash variant, each with the same
+            # revision predicate; a miss on both fails the write.
             def _filter_for(id_value: str) -> dict[str, Any]:
                 if expected_updated_at is None:
                     return {"_id": id_value}
@@ -493,6 +489,13 @@ class DocumentDBServerRepository(ServerRepositoryBase):
             if result.matched_count == 0:
                 alternate_path = path.rstrip("/") if path.endswith("/") else path + "/"
                 if alternate_path != path:
+                    if expected_updated_at is not None and await collection.find_one(
+                        {"_id": path}, {"_id": 1}
+                    ):
+                        # The exact card exists with a moved revision: a lost
+                        # race, never a variant miss.
+                        logger.info(f"Server at '{path}' revision mismatch; concurrent update won")
+                        return False
                     result = await collection.update_one(_filter_for(alternate_path), update_spec)
 
             if result.matched_count == 0:
@@ -523,14 +526,15 @@ class DocumentDBServerRepository(ServerRepositoryBase):
         collection = await self._get_collection()
 
         try:
-            server_doc = await collection.find_one({"_id": path})
+            # Match either slash variant, like get()/update().
+            server_doc = await collection.find_one({"_id": {"$in": self._path_variants(path)}})
             if not server_doc:
                 logger.error(f"Server at '{path}' not found in DocumentDB")
                 return False
 
             server_name = server_doc.get("server_name", "Unknown")
 
-            result = await collection.delete_one({"_id": path})
+            result = await collection.delete_one({"_id": {"$in": self._path_variants(path)}})
 
             if result.deleted_count == 0:
                 logger.error(f"Failed to delete server at '{path}'")
@@ -629,7 +633,8 @@ class DocumentDBServerRepository(ServerRepositoryBase):
         collection = await self._get_collection()
 
         try:
-            server_doc = await collection.find_one({"_id": path})
+            # Match either slash variant, like get()/update().
+            server_doc = await collection.find_one({"_id": {"$in": self._path_variants(path)}})
             if not server_doc:
                 logger.error(f"Server at '{path}' not found in DocumentDB")
                 return False
@@ -637,7 +642,7 @@ class DocumentDBServerRepository(ServerRepositoryBase):
             server_name = server_doc.get("server_name", path)
 
             result = await collection.update_one(
-                {"_id": path},
+                {"_id": {"$in": self._path_variants(path)}},
                 {"$set": {"is_enabled": enabled, "updated_at": datetime.utcnow().isoformat()}},
             )
 
@@ -721,15 +726,17 @@ class DocumentDBServerRepository(ServerRepositoryBase):
     ) -> bool:
         """Update a single field on a document."""
         collection = await self._get_collection()
+        # Match either slash variant, like get()/update().
+        path_filter = {"_id": {"$in": self._path_variants(path)}}
 
         if value is None:
             result = await collection.update_one(
-                {"_id": path},
+                path_filter,
                 {"$unset": {field: ""}},
             )
         else:
             result = await collection.update_one(
-                {"_id": path},
+                path_filter,
                 {"$set": {field: value}},
             )
 

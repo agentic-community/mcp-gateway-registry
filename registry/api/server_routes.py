@@ -7188,9 +7188,7 @@ async def update_server_endpoint(
             detail=f"Registration denied by policy gate: {gate_result.error_message}",
         )
 
-    # PUT replaces the card, so it keeps the full-field write; the
-    # revision guard moves into the same repository write as the $set so
-    # the If-Match check above is not just advisory (issue #1716).
+    # Full-card write; the If-Match revision joins the atomic repository write.
     success = await server_service.update_server(
         path,
         merged,
@@ -7349,10 +7347,7 @@ async def patch_server_endpoint(
             detail="Empty patch body",
         )
 
-    # Only fields the client supplied are written, so a concurrently
-    # updated field absent from the patch survives (issue #1716).
-    # Null-valued fields stay in the scope: the merge stores None for
-    # them, same as before.
+    # Only supplied fields are written; null-valued fields stay in the scope.
     patch_fields = sorted(patch_dict.keys())
 
     # Changing the lifecycle status requires a dedicated permission (Issue #1330),
@@ -7394,9 +7389,6 @@ async def patch_server_endpoint(
         expected_updated_at=(existing.get("updated_at") if client_ts is not None else None),
     )
     if not success:
-        # A revision-guarded write that matched nothing means the card
-        # changed after the caller read it; anything else is a failed
-        # save (issue #1716).
         if client_ts is not None:
             raise HTTPException(
                 status_code=status.HTTP_412_PRECONDITION_FAILED,
