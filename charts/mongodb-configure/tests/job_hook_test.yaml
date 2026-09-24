@@ -50,9 +50,18 @@ tests:
 
   - it: uses the registry image, so the script and its venv are already present
     asserts:
-      - equal:
+      # Assert the REPOSITORY and leave the tag out of it. What this case exists
+      # to prove is that the job runs the registry image, which already carries
+      # the script and its venv, rather than building one at runtime. The tag is
+      # incidental here, and pinning it broke this suite on every release: the
+      # chart default tracks the current version, so the automated
+      # "update image tags to <version>" PR failed its own CI. The override case
+      # below sets a tag explicitly and covers the tag plumbing.
+      - matchRegex:
           path: spec.template.spec.containers[0].image
-          value: public.ecr.aws/p3v1o3c6/registry:1.30.0
+          # Quoted: the trailing colon is part of the pattern, and an unquoted
+          # scalar ending in ":" is not valid YAML here.
+          pattern: "^public\\.ecr\\.aws/p3v1o3c6/registry:"
     # A per-chart override still wins over the global default.
   - it: honours an image override
     set:
