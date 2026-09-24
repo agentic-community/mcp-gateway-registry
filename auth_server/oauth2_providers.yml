@@ -146,6 +146,23 @@ providers:
     enabled: "${GOOGLE_ENABLED}"
 
 # Default session settings
+  logto:
+    display_name: "Logto"
+    client_id: "${LOGTO_CLIENT_ID}"
+    client_secret: "${LOGTO_CLIENT_SECRET}"
+    auth_url: "${LOGTO_EXTERNAL_URL}/oidc/auth"
+    token_url: "${LOGTO_URL}/oidc/token"
+    user_info_url: "${LOGTO_URL}/oidc/me"
+    logout_url: "${LOGTO_EXTERNAL_URL}/oidc/session/end"
+    scopes: ["openid", "email", "profile", "offline_access"]
+    response_type: "code"
+    grant_type: "authorization_code"
+    username_claim: "username"
+    groups_claim: "roles"
+    email_claim: "email"
+    name_claim: "name"
+    enabled: "${LOGTO_ENABLED}"
+
 session:
   max_age_seconds: 28800  # 8 hours
   cookie_name: "mcp_oauth_session"

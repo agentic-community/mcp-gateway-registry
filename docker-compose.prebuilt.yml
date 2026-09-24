@@ -421,7 +421,9 @@ services:
 
   # Auth service (separate and scalable) - using pre-built image
   auth-server:
-    image: ${ECR_REGISTRY:-public.ecr.aws/p3v1o3c6}/auth-server:${AUTH_SERVER_VERSION:-latest}
+    # Local build with the logto provider patch (swap-mcp-registry-idp-to-logto);
+    # original: ${ECR_REGISTRY:-public.ecr.aws/p3v1o3c6}/auth-server:${AUTH_SERVER_VERSION:-latest}
+    image: mcp-auth-server:logto
     environment:
       - REGISTRY_URL=${REGISTRY_URL}
       # Request-source trust (audit client IP + OAuth external-URL host allowlist)
@@ -494,6 +496,14 @@ services:
       - KEYCLOAK_CLIENT_SECRET=${KEYCLOAK_CLIENT_SECRET}
       - KEYCLOAK_M2M_CLIENT_ID=${KEYCLOAK_M2M_CLIENT_ID:-mcp-gateway-m2m}
       - KEYCLOAK_M2M_CLIENT_SECRET=${KEYCLOAK_M2M_CLIENT_SECRET}
+      - LOGTO_ENABLED=${LOGTO_ENABLED:-false}
+      - LOGTO_URL=${LOGTO_URL:-http://idp-logto:3001}
+      - LOGTO_EXTERNAL_URL=${LOGTO_EXTERNAL_URL:-http://localhost:3001}
+      - LOGTO_CLIENT_ID=${LOGTO_CLIENT_ID}
+      - LOGTO_CLIENT_SECRET=${LOGTO_CLIENT_SECRET}
+      - LOGTO_M2M_CLIENT_ID=${LOGTO_M2M_CLIENT_ID}
+      - LOGTO_M2M_CLIENT_SECRET=${LOGTO_M2M_CLIENT_SECRET}
+      - LOGTO_M2M_RESOURCE=${LOGTO_M2M_RESOURCE}
       # Entra ID configuration
       - ENTRA_TENANT_ID=${ENTRA_TENANT_ID}
       - ENTRA_CLIENT_ID=${ENTRA_CLIENT_ID}
@@ -644,6 +654,7 @@ services:
 
   # Prometheus for metrics collection - using canonical upstream image
   prometheus:
+    profiles: ["observability"]  # trimmed: disk-constrained host
     image: prom/prometheus:${PROMETHEUS_VERSION:-v3.11.3}
     # Operator dashboard: published on loopback only (no auth on Prometheus).
     ports:
@@ -667,6 +678,7 @@ services:
 
   # Grafana for metrics visualization - using canonical upstream image
   grafana:
+    profiles: ["observability"]  # trimmed: disk-constrained host
     image: grafana/grafana:${GRAFANA_VERSION:-12.3.1}
     # Operator dashboard: published on loopback only. Reach it via an SSH
     # tunnel for remote access rather than exposing it to the network.
@@ -908,9 +920,10 @@ services:
       - ./scripts/mcp-servers-unrestricted-read.json:/app/scripts/mcp-servers-unrestricted-read.json:ro
       - ./scripts/mcp-servers-unrestricted-execute.json:/app/scripts/mcp-servers-unrestricted-execute.json:ro
       - ./scripts/federation-service.json:/app/scripts/federation-service.json:ro
+      - ./wheels:/wheels:ro
     command: >
       sh -c "
-      pip install --quiet motor pymongo &&
+      pip install --quiet --no-index --find-links=/wheels motor pymongo &&
       python /app/scripts/init-mongodb-ce.py
       "
     restart: "no"
