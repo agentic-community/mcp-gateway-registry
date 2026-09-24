@@ -210,6 +210,36 @@ do
 end
 
 -- ---------------------------------------------------------------------------
+print("test: _forward_identity_headers strips caller/internal credential headers")
+do
+    -- A backend must never receive the caller's gateway bearer, the registry
+    -- session cookie, or the gateway's own signed internal tokens; the Lua
+    -- subrequest inherits the parent request's headers, so they are cleared
+    -- here as defense in depth (the _vs_backend location also clears them).
+    ngx.req._headers = {
+        ["Authorization"] = "Bearer gw",
+        ["X-Authorization"] = "Bearer gw",
+        ["Proxy-Authorization"] = "Bearer gw",
+        ["Cookie"] = "session=abc",
+        ["X-Internal-Token"] = "signed",
+        ["X-Internal-Token-Registry"] = "signed",
+        ["X-Internal-Token-Generic"] = "signed",
+    }
+    ngx.var.auth_user = "alice"
+    ngx.var.auth_username = "alice@corp"
+    M._forward_identity_headers()
+    check(ngx.req._headers["Authorization"] == nil, "Authorization cleared")
+    check(ngx.req._headers["X-Authorization"] == nil, "X-Authorization cleared")
+    check(ngx.req._headers["Proxy-Authorization"] == nil, "Proxy-Authorization cleared")
+    check(ngx.req._headers["Cookie"] == nil, "Cookie cleared")
+    check(ngx.req._headers["X-Internal-Token"] == nil, "X-Internal-Token cleared")
+    check(ngx.req._headers["X-Internal-Token-Registry"] == nil,
+        "X-Internal-Token-Registry cleared")
+    check(ngx.req._headers["X-Internal-Token-Generic"] == nil,
+        "X-Internal-Token-Generic cleared")
+end
+
+-- ---------------------------------------------------------------------------
 print("test: _handle_tools_list keeps empty schema arrays as [] (issue #1532)")
 do
     dict._store["tools_enriched:srv3"] = nil

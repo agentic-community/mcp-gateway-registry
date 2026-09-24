@@ -14,7 +14,12 @@ from urllib.parse import urlparse
 import httpx
 
 from registry.common.log_redaction import redact_url
-from registry.constants import REGISTRY_CONSTANTS, DeploymentType, HealthStatus
+from registry.constants import (
+    REGISTRY_CONSTANTS,
+    RESERVED_CUSTOM_HEADER_NAMES,
+    DeploymentType,
+    HealthStatus,
+)
 from registry.schemas.proxy_mixin import _assert_egress_allowed, build_proxy_client_path
 
 from .config import settings
@@ -55,6 +60,79 @@ _NGINX_AGENT_PATH_SAFE = re.compile(r"^[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*$")
 # newlines) remain excluded because they are not hex digits.
 _NGINX_AGENT_URL_SAFE = re.compile(
     r"^https?://[A-Za-z0-9.\-]+(?::\d+)?(?:/(?:[A-Za-z0-9._~\-/]|%[0-9A-Fa-f]{2})*)?$"
+)
+
+
+def _canonical_header_name(name: str) -> str:
+    """Title-case a lowercased HTTP header name for an nginx directive.
+
+    nginx header matching is case-insensitive, but emitting canonical casing
+    (``x-authorization`` -> ``X-Authorization``) keeps the generated config
+    readable and stable.
+    """
+    return "-".join(part.capitalize() for part in name.split("-"))
+
+
+# Request headers that must NEVER be relayed to the registrant-controlled (not
+# fully trusted) MCP backend behind a generated ``/_vs_backend`` location. nginx
+# forwards inbound request headers by default (proxy_pass_request_headers on) and
+# a Lua ngx.location.capture subrequest inherits the parent request's headers, so
+# each must be explicitly cleared on the egress hop -- default-drop, fail closed.
+# Relaying any of them would let a malicious upstream capture and replay the
+# caller's gateway bearer (Authorization / X-Authorization), the registry session
+# Cookie, or the gateway's own signed internal token against the registry API, or
+# spoof a gateway-internal identity/routing header (the #1391 confused-deputy /
+# credential-leak class).
+#
+# The strip set is DERIVED from the canonical reserved-header denylist
+# (``RESERVED_CUSTOM_HEADER_NAMES`` -- the "never forward to a registrant
+# backend" set) minus two small, explicit carve-outs, so a header added to the
+# canonical set is stripped here automatically and the two lists cannot drift.
+# ``test_vs_backend_strip_set_derives_from_reserved`` enforces the derivation.
+
+# Carve-out (a): framing / hop-by-hop / content headers that nginx itself manages
+# or that this block re-sets. The _vs_backend block sets Host / Accept /
+# Content-Type explicitly, nginx owns the transfer framing (content-length) and
+# drops hop-by-hop headers on its own; blanket-clearing these would break the
+# proxied request, and none carries a caller credential or a spoofable trust
+# signal. Note the client-IP / forwarding headers (x-forwarded-*, x-real-ip) are
+# deliberately NOT carved out here -- the canonical reserved set marks them
+# "never forward to a registrant backend", and re-sending them (even re-set via
+# $proxy_add_x_forwarded_for, which only appends) would leave the attacker's
+# leftmost value intact -- so they are stripped like every other reserved header.
+_VS_BACKEND_FRAMING_HEADERS: frozenset[str] = frozenset(
+    {
+        "content-type",
+        "content-length",
+        "accept",
+        "host",
+        "connection",
+        "keep-alive",
+        "te",
+        "trailer",
+        "transfer-encoding",
+        "upgrade",
+    }
+)
+
+# Carve-out (b): identity headers the _vs_backend block RE-SETS from the
+# gateway-validated request variables ($http_x_user / $http_x_username, which
+# virtual_router.lua populates from $auth_user / $auth_username). They carry the
+# gateway-validated caller identity a backend needs for attribution and are
+# overwritten from trusted values (never passed through from the client), so they
+# are re-set rather than cleared.
+_VS_BACKEND_RESET_IDENTITY_HEADERS: frozenset[str] = frozenset(
+    {
+        "x-user",
+        "x-username",
+    }
+)
+
+# Everything else in the canonical reserved set -- all ingress credentials, the
+# gateway-internal signed tokens, and the internal routing/identity headers this
+# block does NOT re-set -- is cleared on egress.
+_VS_BACKEND_STRIPPED_HEADERS: frozenset[str] = (
+    RESERVED_CUSTOM_HEADER_NAMES - _VS_BACKEND_FRAMING_HEADERS - _VS_BACKEND_RESET_IDENTITY_HEADERS
 )
 
 
@@ -2096,6 +2174,77 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
         logger.info(f"Generated {len(blocks)} generic-proxy location blocks")
         return blocks
 
+    @staticmethod
+    def _vs_backend_credential_clears(indent: str = "        ") -> str:
+        """nginx directives that drop every non-framing, non-identity header on
+        egress to a registrant-controlled virtual-server backend.
+
+        Emitted inside the ``/_vs_backend`` location so the caller's gateway
+        bearer, registry session cookie, the gateway's own signed internal
+        tokens, and every internal routing/identity header this block does not
+        re-set can never leak to (or be replayed / spoofed from) an untrusted
+        upstream. Default-drop / fail closed: the set is DERIVED from the
+        canonical ``RESERVED_CUSTOM_HEADER_NAMES`` denylist minus the framing and
+        re-set-identity carve-outs, so a newly reserved header is stripped here
+        automatically.
+
+        Args:
+            indent: Leading whitespace applied to each emitted directive so the
+                block lines up inside the surrounding ``location { ... }``.
+
+        Returns:
+            Newline-joined ``proxy_set_header <name> "";`` directives, sorted for
+            deterministic config output.
+        """
+        return "\n".join(
+            f'{indent}proxy_set_header {_canonical_header_name(name)} "";'
+            for name in sorted(_VS_BACKEND_STRIPPED_HEADERS)
+        )
+
+    @staticmethod
+    async def _backend_is_routable(
+        backend_path: str,
+        server_info: dict,
+    ) -> bool:
+        """Whether a backend server may receive virtual-server traffic.
+
+        Mirrors the enable + health gate the direct-route generator applies and
+        additionally refuses a security-quarantined backend, so disabling or
+        quarantining a backend removes it from every virtual server that maps it
+        (a virtual server must not become a bypass around the direct-route
+        controls). Fails closed: a disabled, security-disabled or not-yet-healthy
+        backend is treated as not routable.
+
+        Args:
+            backend_path: Registered backend server path from a tool mapping.
+            server_info: The backend's stored document.
+
+        Returns:
+            True only when the backend is enabled, not security-disabled, and
+            currently healthy.
+        """
+        if not server_info.get("is_enabled", False):
+            return False
+        if server_info.get("is_disabled_for_security", False):
+            return False
+
+        from ..health.service import health_service
+
+        # Server ``_id``s are stored with inconsistent trailing slashes and a
+        # mapping may reference either form, so probe the normalized variants
+        # before giving up -- otherwise a healthy backend would be dropped on a
+        # slash mismatch (false negative). An absent status stays UNKNOWN, which
+        # is_healthy() rejects, matching the direct generator's fail-closed
+        # behaviour for a backend that has not been probed yet.
+        stem = "/" + backend_path.strip("/")
+        health_status: str = HealthStatus.UNKNOWN
+        for key in (backend_path, stem, stem + "/"):
+            status = health_service.server_health_status.get(key)
+            if status is not None:
+                health_status = status
+                break
+        return HealthStatus.is_healthy(health_status)
+
     async def _generate_virtual_backend_locations(
         self,
         virtual_servers: list,
@@ -2136,6 +2285,17 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
                 proxy_pass_url = server_info.get("proxy_pass_url", "")
                 if not proxy_pass_url:
                     logger.warning(f"No proxy_pass_url for backend server: {backend_path}")
+                    continue
+
+                # Do not emit a live backend location for a disabled, quarantined
+                # (security-disabled) or unhealthy backend. Without this a virtual
+                # server would keep routing traffic to a backend that the direct
+                # route already refuses, turning virtual servers into a bypass of
+                # the enable/quarantine controls. Fail closed.
+                if not await self._backend_is_routable(backend_path, server_info):
+                    logger.warning(
+                        f"Skipping non-routable backend for virtual server mapping: {backend_path}"
+                    )
                     continue
 
                 # Determine upstream host from proxy_pass_url
@@ -2198,6 +2358,8 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
                         f"        proxy_pass {backend_var};"
                     )
 
+                credential_clears = self._vs_backend_credential_clears()
+
                 block = f"""
     location {location_path} {{
         internal;
@@ -2206,17 +2368,20 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
         proxy_ssl_server_name on;
         proxy_set_header Host {safe_upstream_host};
         # SECURITY: this location proxies directly to a registrant-controlled
-        # (not fully trusted) MCP backend. Never relay the caller's registry
-        # credential here -- clearing Authorization AND Cookie prevents a
-        # malicious registered upstream from capturing and replaying the
-        # caller's gateway bearer token or registry session cookie against the
-        # registry API. This location is reached via a Lua subrequest that
-        # inherits the parent request's headers, so Cookie must be explicitly
-        # cleared or the user's session cookie would be forwarded verbatim.
-        # The gateway authenticates the upstream via its own mechanism, not by
-        # forwarding the caller's credential.
-        proxy_set_header Authorization "";
-        proxy_set_header Cookie "";
+        # (not fully trusted) MCP backend. It must NEVER relay the caller's
+        # registry credential or a gateway-internal header. The clears below are
+        # derived from the canonical reserved-header denylist minus the framing
+        # headers nginx manages and the identity headers this block re-sets from
+        # validated variables -- so all ingress credentials (Authorization,
+        # X-Authorization -- where this gateway's own clients carry the bearer --,
+        # Proxy-Authorization, Cookie), the gateway's signed internal tokens, and
+        # every internal routing/identity header (X-Scopes, X-Original-URL,
+        # X-Server-Name, ...) are dropped. This location is reached via a Lua
+        # subrequest that inherits the parent request's headers, so every one must
+        # be cleared explicitly (nginx forwards inbound request headers by
+        # default) -- default-drop, fail closed. The gateway authenticates the
+        # upstream via its own mechanism, not by forwarding the caller's header.
+{credential_clears}
         # Forward the validated caller identity so backends can attribute
         # write operations to the authenticated user.  These are set as
         # request headers by virtual_router.lua (ngx.req.set_header) before
@@ -2276,16 +2441,29 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
 
                     # Get tool metadata from the backend server
                     server_info = await server_repo.get(tm.backend_server_path)
+
+                    # Drop tools whose backend is disabled, quarantined
+                    # (security-disabled) or unhealthy so a virtual server can
+                    # neither route to nor advertise a backend the direct route
+                    # refuses. Mirrors the backend-location generator; fail closed.
+                    if not server_info or not await self._backend_is_routable(
+                        tm.backend_server_path, server_info
+                    ):
+                        logger.warning(
+                            f"Dropping tool '{tm.tool_name}' from virtual server "
+                            f"{vs.path}: backend {tm.backend_server_path} not routable"
+                        )
+                        continue
+
                     description = tm.description_override or ""
                     input_schema: dict[str, Any] = {}
 
-                    if server_info:
-                        server_tools = server_info.get("tool_list", [])
-                        for st in server_tools:
-                            if st.get("name") == tm.tool_name:
-                                description = tm.description_override or st.get("description", "")
-                                input_schema = st.get("inputSchema", st.get("input_schema", {}))
-                                break
+                    server_tools = server_info.get("tool_list", [])
+                    for st in server_tools:
+                        if st.get("name") == tm.tool_name:
+                            description = tm.description_override or st.get("description", "")
+                            input_schema = st.get("inputSchema", st.get("input_schema", {}))
+                            break
 
                     input_schema = _ensure_mcp_compliant_schema(input_schema)
 
@@ -2317,9 +2495,16 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
                     "tool_backend_map": tool_backend_map,
                 }
 
+                # Write atomically: a torn write (e.g. disk full mid-dump) would
+                # otherwise leave a truncated JSON file that virtual_router.lua
+                # cannot parse. Render to a sibling temp file, then os.replace()
+                # (atomic within a directory) so the router only ever sees a
+                # complete mapping or the previous good one.
                 mapping_path = mappings_dir / f"{server_id}.json"
-                with open(mapping_path, "w") as f:
+                tmp_path = mappings_dir / f"{server_id}.json.tmp"
+                with open(tmp_path, "w") as f:
                     json.dump(mapping_data, f, indent=2, default=str)
+                os.replace(tmp_path, mapping_path)
 
                 logger.debug(f"Wrote virtual server mapping: {mapping_path}")
 
