@@ -132,7 +132,7 @@ tests:
   # must equal what Keycloak actually emits, otherwise DCR'd MCP clients
   # 401 on /validate. Browser auth redirects land on /realms/.../auth
   # (handled by the registry nginx /realms/ location).
-  - it: KEYCLOAK_EXTERNAL_URL is bare mcpregistry.<domain> in subdomain mode
+  - it: KEYCLOAK_EXTERNAL_URL follows the configured registry subdomain
     templates:
       - templates/oauth-provider-secret.yaml
     set:
@@ -141,11 +141,12 @@ tests:
         ingress:
           routingMode: subdomain
           tls: true
+          registrySubdomain: mcp-gateway
     asserts:
       - equal:
           path: data.KEYCLOAK_EXTERNAL_URL
-          # base64 of https://mcpregistry.example.com
-          value: aHR0cHM6Ly9tY3ByZWdpc3RyeS5leGFtcGxlLmNvbQ==
+          # base64 of https://mcp-gateway.example.com
+          value: aHR0cHM6Ly9tY3AtZ2F0ZXdheS5leGFtcGxlLmNvbQ==
 
   - it: KEYCLOAK_EXTERNAL_URL is bare <domain> in path mode (no /keycloak, no /registry)
     templates:
@@ -179,7 +180,7 @@ tests:
           # base64 of https://example.com
           value: aHR0cHM6Ly9leGFtcGxlLmNvbQ==
 
-  - it: AUTH_SERVER_EXTERNAL_URL in subdomain mode is the registry hostname
+  - it: AUTH_SERVER_EXTERNAL_URL follows the configured registry subdomain
     templates:
       - charts/auth-server/templates/secret.yaml
     set:
@@ -188,11 +189,60 @@ tests:
         ingress:
           routingMode: subdomain
           tls: true
+          registrySubdomain: mcp-gateway
     asserts:
       - equal:
           path: data.AUTH_SERVER_EXTERNAL_URL
-          # base64 of https://mcpregistry.example.com
-          value: aHR0cHM6Ly9tY3ByZWdpc3RyeS5leGFtcGxlLmNvbQ==
+          # base64 of https://mcp-gateway.example.com
+          value: aHR0cHM6Ly9tY3AtZ2F0ZXdheS5leGFtcGxlLmNvbQ==
+
+  - it: registry public URL and gateway server name follow the configured subdomain
+    templates:
+      - charts/registry/templates/secret.yaml
+    set:
+      global:
+        domain: example.com
+        ingress:
+          routingMode: subdomain
+          tls: true
+          registrySubdomain: mcp-gateway
+    asserts:
+      - equal:
+          path: data.REGISTRY_URL
+          value: aHR0cHM6Ly9tY3AtZ2F0ZXdheS5leGFtcGxlLmNvbQ==
+      - equal:
+          path: data.GATEWAY_ADDITIONAL_SERVER_NAMES
+          value: bWNwLWdhdGV3YXkuZXhhbXBsZS5jb20=
+
+  - it: mcpgw public URL follows the configured registry subdomain
+    templates:
+      - charts/mcpgw/templates/secret.yaml
+    set:
+      global:
+        domain: example.com
+        ingress:
+          routingMode: subdomain
+          tls: true
+          registrySubdomain: mcp-gateway
+    asserts:
+      - equal:
+          path: data.REGISTRY_EXTERNAL_URL
+          value: aHR0cHM6Ly9tY3AtZ2F0ZXdheS5leGFtcGxlLmNvbQ==
+
+  - it: Keycloak client registry URL follows the configured registry subdomain
+    templates:
+      - charts/keycloak-configure/templates/secret.yaml
+    set:
+      global:
+        domain: example.com
+        ingress:
+          routingMode: subdomain
+          tls: true
+          registrySubdomain: mcp-gateway
+    asserts:
+      - equal:
+          path: data.REGISTRY_URL
+          value: aHR0cHM6Ly9tY3AtZ2F0ZXdheS5leGFtcGxlLmNvbQ==
 
   # auth-server FastAPI root_path is always empty — it has no ingress
   # of its own; nginx strips any path prefix before forwarding.

@@ -13,8 +13,8 @@ Keycloak ingresses are disabled by default, so the ALB must forward
 their browser-facing paths to the registry Service — nginx handles the
 final hop to the auth-server / Keycloak ClusterIP Services.
 
-Subdomain mode does not need these extra rules: `/` on
-mcpregistry.<domain> already catches every browser-facing path and
+Subdomain mode does not need these extra rules: `/` on the configured
+registry hostname already catches every browser-facing path and
 nginx does the internal routing.
 */ -}}
 apiVersion: networking.k8s.io/v1

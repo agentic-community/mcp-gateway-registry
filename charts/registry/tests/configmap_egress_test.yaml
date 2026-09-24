@@ -61,6 +61,21 @@ tests:
           path: data.EGRESS_OAUTH_CALLBACK_BASE_URL
           value: "https://agents-path.example.com"
 
+  - it: derives the subdomain callback URL from the configured registry prefix
+    set:
+      global:
+        domain: example.com
+        ingress:
+          routingMode: subdomain
+          registrySubdomain: mcp-gateway
+          tls: true
+      egressAuth:
+        enabled: true
+    asserts:
+      - equal:
+          path: data.EGRESS_OAUTH_CALLBACK_BASE_URL
+          value: "https://mcp-gateway.example.com"
+
   - it: defaults timeouts + path prefix when only enabled
     set:
       egressAuth:
