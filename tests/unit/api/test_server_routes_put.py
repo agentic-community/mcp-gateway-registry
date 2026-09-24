@@ -661,3 +661,111 @@ class TestServerPut:
         # Credentials are stripped from the webhook payload.
         card_data = kwargs["card_data"]
         assert "auth_credential_encrypted" not in card_data
+
+
+@pytest.mark.unit
+@pytest.mark.api
+@pytest.mark.servers
+class TestServerPutRevisionGuard:
+    """The If-Match check is enforced by the write itself, not just up front.
+
+    A matching If-Match header only proves the card matched when the handler
+    read it; the revision re-joins the repository write as a compare-and-set,
+    so a writer that lands between the read and the write loses to the guard.
+    """
+
+    def test_put_if_match_forwards_revision_and_keeps_full_field_write(self, client):
+        """A current If-Match reaches update_server as expected_updated_at.
+
+        PUT replaces the card, so the write must stay full-field: no
+        updated_fields scope is attached even under If-Match.
+        """
+        ts = datetime(2026, 1, 1, tzinfo=UTC)
+        existing = _existing(updated_at=ts)
+        if_match = f'W/"{int(ts.timestamp() * 1000)}"'
+
+        with (
+            patch("registry.api.server_routes.server_service") as svc,
+            patch(
+                "registry.auth.dependencies.user_has_ui_permission_for_service",
+                return_value=True,
+            ),
+            patch(
+                "registry.api.server_routes.check_registration_gate",
+                AsyncMock(return_value=_gate_allow()),
+            ),
+            patch("registry.api.server_routes.send_registration_webhook", AsyncMock()),
+        ):
+            svc.get_server_info = AsyncMock(side_effect=[existing, existing])
+            svc.update_server = AsyncMock(return_value=True)
+
+            response = client.put(
+                "/servers/test-server",
+                json=_valid_put_body(),
+                headers={"If-Match": if_match},
+            )
+
+        assert response.status_code == 200
+        kwargs = svc.update_server.call_args.kwargs
+        assert kwargs["expected_updated_at"] == existing["updated_at"]
+        assert "updated_fields" not in kwargs
+
+    def test_put_if_match_lost_write_race_returns_412(self, client):
+        """A guarded write that matched nothing is a lost-update race, not a 500.
+
+        The header matched at read time, but the repository compare-and-set
+        found the stored revision moved; the caller must see 412 so it can
+        re-read and retry.
+        """
+        ts = datetime(2026, 1, 1, tzinfo=UTC)
+        existing = _existing(updated_at=ts)
+        if_match = f'W/"{int(ts.timestamp() * 1000)}"'
+
+        with (
+            patch("registry.api.server_routes.server_service") as svc,
+            patch(
+                "registry.auth.dependencies.user_has_ui_permission_for_service",
+                return_value=True,
+            ),
+            patch(
+                "registry.api.server_routes.check_registration_gate",
+                AsyncMock(return_value=_gate_allow()),
+            ),
+            patch("registry.api.server_routes.send_registration_webhook", AsyncMock()),
+        ):
+            svc.get_server_info = AsyncMock(side_effect=[existing, None])
+            svc.update_server = AsyncMock(return_value=False)
+
+            response = client.put(
+                "/servers/test-server",
+                json=_valid_put_body(),
+                headers={"If-Match": if_match},
+            )
+
+        assert response.status_code == 412
+        assert "If-Match" in response.json()["detail"]
+
+    def test_put_without_if_match_sends_no_guard_kwargs(self, client):
+        """Without If-Match the write is unguarded and full-field."""
+        existing = _existing()
+        with (
+            patch("registry.api.server_routes.server_service") as svc,
+            patch(
+                "registry.auth.dependencies.user_has_ui_permission_for_service",
+                return_value=True,
+            ),
+            patch(
+                "registry.api.server_routes.check_registration_gate",
+                AsyncMock(return_value=_gate_allow()),
+            ),
+            patch("registry.api.server_routes.send_registration_webhook", AsyncMock()),
+        ):
+            svc.get_server_info = AsyncMock(side_effect=[existing, existing])
+            svc.update_server = AsyncMock(return_value=True)
+
+            response = client.put("/servers/test-server", json=_valid_put_body())
+
+        assert response.status_code == 200
+        kwargs = svc.update_server.call_args.kwargs
+        assert kwargs["expected_updated_at"] is None
+        assert "updated_fields" not in kwargs
