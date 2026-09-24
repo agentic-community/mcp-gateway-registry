@@ -1403,6 +1403,134 @@
         ]
       }
     },
+    "/api/toggle-tool/{service_path}": {
+      "post": {
+        "tags": [
+          "Server Management"
+        ],
+        "summary": "Toggle Tool Route",
+        "description": "Block or unblock a single tool on a server (session-authenticated, for the UI).",
+        "operationId": "toggle_tool_route_api_toggle_tool__service_path__post",
+        "parameters": [
+          {
+            "name": "service_path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Service Path"
+            }
+          },
+          {
+            "name": "mcp_gateway_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Mcp Gateway Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolTogglePayload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/servers/toggle-tool/{service_path}": {
+      "post": {
+        "tags": [
+          "Server Management"
+        ],
+        "summary": "Toggle Tool Api",
+        "description": "Block or unblock a single tool on a server (bearer-token API sibling).\n\nSame behaviour and same authorization as POST /api/toggle-tool/{path}; only\nthe authentication dependency differs, matching how /api/servers/toggle\nrelates to /api/toggle/{path}. Needed because the CLI and registry_client\nauthenticate with a token, which enhanced_auth does not accept.",
+        "operationId": "toggle_tool_api_api_servers_toggle_tool__service_path__post",
+        "parameters": [
+          {
+            "name": "service_path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Service Path"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolTogglePayload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
     "/api/servers/check-duplicates": {
       "post": {
         "tags": [
@@ -2797,7 +2925,7 @@
           "Server Management"
         ],
         "summary": "Delete Server Oauth Discovery",
-        "description": "Clear the discovery-identity designation (discovery stops borrowing).",
+        "description": "Clear the discovery-identity designation AND revoke the token it vaulted.",
         "operationId": "delete_server_oauth_discovery_api_servers__server_path__oauth_discovery_delete",
         "parameters": [
           {
@@ -26405,6 +26533,25 @@
           "relevance_score"
         ],
         "title": "ToolSearchResult"
+      },
+      "ToolTogglePayload": {
+        "properties": {
+          "tool_name": {
+            "type": "string",
+            "title": "Tool Name"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          }
+        },
+        "type": "object",
+        "required": [
+          "tool_name",
+          "enabled"
+        ],
+        "title": "ToolTogglePayload",
+        "description": "Body for the per-tool enable/disable toggle."
       },
       "ToolValidationResult": {
         "properties": {
