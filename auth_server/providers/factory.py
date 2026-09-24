@@ -10,6 +10,7 @@ from .base import AuthProvider
 from .cognito import CognitoProvider
 from .entra import EntraIdProvider
 from .keycloak import KeycloakProvider
+from .logto import LogtoProvider
 from .okta import OktaProvider
 from .pingfederate import PingFederateProvider
 
@@ -163,7 +164,7 @@ def get_auth_provider(provider_type: str | None = None) -> AuthProvider:
     """Factory function to get the appropriate auth provider.
 
     Args:
-        provider_type: Type of provider to create ('cognito', 'keycloak', or 'entra').
+        provider_type: Type of provider to create ('cognito', 'keycloak', 'entra', 'okta', 'auth0', 'pingfederate', or 'logto').
                       If None, uses AUTH_PROVIDER environment variable.
 
     Returns:
@@ -188,6 +189,8 @@ def get_auth_provider(provider_type: str | None = None) -> AuthProvider:
         return _create_auth0_provider()
     elif provider_type == "pingfederate":
         return _create_pingfederate_provider()
+    elif provider_type == "logto":
+        return _create_logto_provider()
     else:
         raise ValueError(f"Unknown auth provider: {provider_type}")
 
@@ -463,3 +466,43 @@ def _get_provider_health_info() -> dict:
             "status": "error",
             "error": str(e),
         }
+
+
+def _create_logto_provider() -> LogtoProvider:
+    """Create and configure Logto provider."""
+    logto_url = os.environ.get("LOGTO_URL")
+    logto_external_url = os.environ.get("LOGTO_EXTERNAL_URL") or logto_url
+    client_id = os.environ.get("LOGTO_CLIENT_ID")
+    client_secret = os.environ.get("LOGTO_CLIENT_SECRET")
+
+    # Optional M2M configuration
+    m2m_client_id = os.environ.get("LOGTO_M2M_CLIENT_ID")
+    m2m_client_secret = os.environ.get("LOGTO_M2M_CLIENT_SECRET")
+    m2m_resource = os.environ.get("LOGTO_M2M_RESOURCE")
+
+    missing_vars = []
+    if not logto_url:
+        missing_vars.append("LOGTO_URL")
+    if not client_id:
+        missing_vars.append("LOGTO_CLIENT_ID")
+    if not client_secret:
+        missing_vars.append("LOGTO_CLIENT_SECRET")
+
+    if missing_vars:
+        raise ValueError(
+            f"Missing required Logto configuration: {', '.join(missing_vars)}. "
+            "Please set these environment variables."
+        )
+
+    logger.info(
+        f"Initializing Logto provider at {logto_url} (external: {logto_external_url})"
+    )
+    return LogtoProvider(
+        logto_url=logto_url,
+        client_id=client_id,
+        client_secret=client_secret,
+        logto_external_url=logto_external_url,
+        m2m_client_id=m2m_client_id,
+        m2m_client_secret=m2m_client_secret,
+        m2m_resource=m2m_resource,
+    )
