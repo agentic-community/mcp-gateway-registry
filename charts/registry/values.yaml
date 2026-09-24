@@ -636,6 +636,8 @@ ingress:
   # - subdomain: mcpregistry.domain.com
   # - path: domain.com/registry (configurable via path setting)
   routingMode: subdomain
+  # Registry hostname prefix used in subdomain mode.
+  registrySubdomain: mcpregistry
   # Path prefix when using path-based routing (default: /registry)
   path: /registry
 # Frontend RUM (feature #1471): base64-encoded HTML snippet served as /rum.js

@@ -16,19 +16,20 @@ It must equal the same public host the registry/auth-server are reached on, so w
 derive it from global.domain + the ingress routing mode exactly like the public
 URLs in secret.yaml ($authServerHost):
   - path mode:      {protocol}://{domain}            (siblings share the ALB host)
-  - subdomain mode: {protocol}://mcpregistry.{domain}
+  - subdomain mode: {protocol}://{registrySubdomain}.{domain}
 An explicit egressAuth.oauthCallbackBaseUrl wins (e.g. a custom front door). The
 app refuses to start with EGRESS_AUTH_ENABLED=true and an empty value, so this
 default keeps the out-of-the-box stack deploy from crash-looping.
 */ -}}
 {{- $routingMode := .Values.global.ingress.routingMode | default "subdomain" }}
 {{- $domain := .Values.global.domain | default "localhost" }}
+{{- $registrySubdomain := .Values.global.ingress.registrySubdomain | default "mcpregistry" }}
 {{- $protocol := ternary "https" "http" .Values.global.ingress.tls }}
 {{- $derivedCallbackBaseUrl := "" }}
 {{- if eq $routingMode "path" }}
   {{- $derivedCallbackBaseUrl = printf "%s://%s" $protocol $domain }}
 {{- else }}
-  {{- $derivedCallbackBaseUrl = printf "%s://mcpregistry.%s" $protocol $domain }}
+  {{- $derivedCallbackBaseUrl = printf "%s://%s.%s" $protocol $registrySubdomain $domain }}
 {{- end }}
 {{- $callbackBaseUrl := .Values.egressAuth.oauthCallbackBaseUrl | default $derivedCallbackBaseUrl }}
 apiVersion: v1
