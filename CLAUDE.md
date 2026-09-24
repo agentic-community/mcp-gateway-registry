@@ -764,6 +764,12 @@ working in those areas.
 - **Injection:** sanitize at EVERY interpolation site AND validate at the source
   (a sanitizer that exists but isn't called is worthless); `re.escape` user input
   in regex/`$regex` queries.
+- **Shell/interpreter injection:** never interpolate untrusted data into a
+  `python3 -c` string, a heredoc body, or `eval` — pass it as DATA (stdin/argv/
+  file) to a real script and `json.loads` it there; replace `eval` with a bash
+  array (`cmd=(prog "$v"); "${cmd[@]}"`). Sweep every sibling sink, and validate
+  remote-derived URLs/fields (http(s) only, no whitespace/control chars) at the
+  source, failing closed.
 - **Authorization:** deny by default; never treat a broad/execute scope as admin;
   enforce ownership server-side before every mutation across the whole endpoint
   family; `dict.get("k")` not `getattr(dict, "k")`; no substring matching for

@@ -29,6 +29,12 @@ CROSS_MARK="✗"
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
+# Data-only helper for handling untrusted server config / scanner / health
+# output. The config JSON is piped to it on stdin so registrant-controlled
+# values never reach an interpreter or shell code position (no "python3 -c"
+# string interpolation, no eval).
+HELPER="$SCRIPT_DIR/_service_config.py"
+
 # Load environment variables from .env file if it exists
 if [ -f "$PROJECT_ROOT/.env" ]; then
     set -a  # automatically export all variables
@@ -93,10 +99,10 @@ verify_server_in_list() {
     print_info "Checking server in service list..."
 
     if output=$(cd "$PROJECT_ROOT" && uv run cli/mcp_client.py --url "${GATEWAY_URL}/mcpgw/mcp" call --tool list_services --args '{}' 2>&1); then
-        if echo "$output" | grep -q "$service_name"; then
+        if echo "$output" | grep -Fq -- "$service_name"; then
             if [ "$should_exist" = "true" ]; then
                 print_success "Server found in service list"
-                echo "$output" | grep -A2 -B2 "$service_name"
+                echo "$output" | grep -F -A2 -B2 -- "$service_name"
                 return 0
             else
                 print_error "Server still exists in service list (should be removed)"
@@ -123,105 +129,10 @@ parse_health_output() {
     local json_output="$1"
     local service_filter="$2"
 
-    # Write output to temp file to avoid shell escaping issues
-    local temp_file=$(mktemp)
-    echo "$json_output" > "$temp_file"
-
-    # Use Python to parse JSON and format output
-    python3 -c "
-import json
-import sys
-from datetime import datetime, timezone
-import re
-
-try:
-    # Read from temp file
-    with open('$temp_file', 'r') as f:
-        output = f.read()
-
-    # Look for the main JSON response (starts after authentication message)
-    json_start = output.find('{')
-    if json_start == -1:
-        print('No JSON found in output')
-        sys.exit(1)
-
-    # Find the matching closing brace
-    brace_count = 0
-    json_end = json_start
-    for i, char in enumerate(output[json_start:], json_start):
-        if char == '{':
-            brace_count += 1
-        elif char == '}':
-            brace_count -= 1
-            if brace_count == 0:
-                json_end = i + 1
-                break
-
-    json_text = output[json_start:json_end]
-    data = json.loads(json_text)
-
-    # Extract health data from structuredContent if available, otherwise from top level
-    if 'structuredContent' in data:
-        health_data = data['structuredContent']
-    else:
-        # Fallback to top level if no structuredContent
-        health_data = data
-
-    current_time = datetime.now(timezone.utc)
-
-    print('Health Check Results:')
-    print('=' * 50)
-
-    for service_path, info in health_data.items():
-        # Skip if filtering for specific service and this doesn't match
-        if '$service_filter' and '$service_filter' not in service_path:
-            continue
-
-        status = info.get('status', 'unknown')
-        last_checked = info.get('last_checked_iso', '')
-        num_tools = info.get('num_tools', 0)
-
-        # Calculate time difference
-        if last_checked:
-            try:
-                check_time = datetime.fromisoformat(last_checked.replace('Z', '+00:00'))
-                time_diff = current_time - check_time
-                seconds_ago = int(time_diff.total_seconds())
-                time_str = f'{seconds_ago} seconds ago'
-            except:
-                time_str = 'unknown time'
-        else:
-            time_str = 'never checked'
-
-        # Format status with color indicators
-        if status == 'healthy':
-            status_display = '✓ healthy'
-        elif status == 'unhealthy':
-            status_display = '✗ unhealthy'
-        elif 'auth-expired' in status:
-            status_display = '⚠ healthy-auth-expired'
-        else:
-            status_display = f'? {status}'
-
-        print(f'Service: {service_path}')
-        print(f'  Status: {status_display}')
-        print(f'  Last checked: {time_str}')
-        print(f'  Tools available: {num_tools}')
-        print()
-
-except json.JSONDecodeError as e:
-    print(f'Error parsing JSON: {e}')
-    with open('$temp_file', 'r') as f:
-        print('Raw output:')
-        print(f.read())
-    sys.exit(1)
-except Exception as e:
-    print(f'Error processing health check: {e}')
-    sys.exit(1)
-"
-
-    # Clean up temp file
-    rm -f "$temp_file"
+    # Parse/format via the data-only helper: health output arrives on stdin and
+    # the (registrant-derived) service filter as an argv value, so neither is
+    # ever interpolated into interpreter source.
+    printf '%s' "$json_output" | python3 "$HELPER" format-health "$service_filter"
 }
 
 run_health_check() {
@@ -251,117 +162,11 @@ run_health_check() {
 validate_config() {
     local config_json="$1"
 
-    # Use Python to validate fields according to register_service tool spec
-    python3 -c "
-import json
-import sys
-
-try:
-    config = json.loads('''$config_json''')
-
-    # Required fields (based on register_service tool spec)
-    required_fields = ['server_name', 'path', 'proxy_pass_url']
-    missing_fields = []
-
-    for field in required_fields:
-        if field not in config or not config[field]:
-            missing_fields.append(field)
-
-    if missing_fields:
-        print(f'ERROR: Missing required fields in config: {missing_fields}')
-        sys.exit(1)
-
-    # Handle bedrock-agentcore specific URL formatting
-    auth_provider = config.get('auth_provider', '')
-    if auth_provider == 'bedrock-agentcore':
-        # Ensure path begins and ends with '/'
-        path = config['path']
-        if not path.startswith('/'):
-            path = '/' + path
-        if not path.endswith('/'):
-            path = path + '/'
-        config['path'] = path
-
-        # Ensure proxy_pass_url ends with '/' and does not have '/mcp' or '/mcp/' at the end
-        proxy_url = config['proxy_pass_url']
-        # Remove trailing '/mcp/' or '/mcp'
-        if proxy_url.endswith('/mcp/'):
-            proxy_url = proxy_url[:-5]  # Remove '/mcp/'
-        elif proxy_url.endswith('/mcp'):
-            proxy_url = proxy_url[:-4]  # Remove '/mcp'
-        # Ensure it ends with '/'
-        if not proxy_url.endswith('/'):
-            proxy_url = proxy_url + '/'
-        config['proxy_pass_url'] = proxy_url
-
-    # Validate field types and constraints
-    errors = []
-
-    # server_name: must be string and non-empty
-    if not isinstance(config['server_name'], str) or not config['server_name'].strip():
-        errors.append('server_name must be a non-empty string')
-
-    # path: must be string, start with '/', and be unique URL path prefix
-    if not isinstance(config['path'], str):
-        errors.append('path must be a string')
-    elif not config['path'].startswith('/'):
-        errors.append('path must start with \"/\"')
-    elif len(config['path']) < 2:
-        errors.append('path must be more than just \"/\"')
-
-    # proxy_pass_url: must be string and valid URL format
-    if not isinstance(config['proxy_pass_url'], str):
-        errors.append('proxy_pass_url must be a string')
-    elif not (config['proxy_pass_url'].startswith('http://') or config['proxy_pass_url'].startswith('https://')):
-        errors.append('proxy_pass_url must start with http:// or https://')
-
-    # Check for unknown fields (not part of tool spec)
-    allowed_fields = {'server_name', 'path', 'proxy_pass_url', 'description', 'tags', 'num_tools', 'license', 'auth_provider', 'auth_scheme', 'supported_transports', 'headers', 'tool_list', 'repository_url', 'website_url', 'package_npm'}
-    unknown_fields = set(config.keys()) - allowed_fields
-    if unknown_fields:
-        errors.append(f'Unknown fields not allowed by register_service tool spec: {sorted(unknown_fields)}')
-
-    # Optional field validations
-    if 'description' in config and config['description'] is not None:
-        if not isinstance(config['description'], str):
-            errors.append('description must be a string')
-
-    if 'tags' in config and config['tags'] is not None:
-        if not isinstance(config['tags'], list):
-            errors.append('tags must be a list')
-        elif not all(isinstance(tag, str) for tag in config['tags']):
-            errors.append('all tags must be strings')
-
-    if 'num_tools' in config and config['num_tools'] is not None:
-        if not isinstance(config['num_tools'], int) or config['num_tools'] < 0:
-            errors.append('num_tools must be a non-negative integer')
-
-    if 'license' in config and config['license'] is not None:
-        if not isinstance(config['license'], str):
-            errors.append('license must be a string')
-
-    if errors:
-        print('ERROR: Config validation failed:')
-        for error in errors:
-            print(f'  - {error}')
-        sys.exit(1)
-
-    # Extract service name from path for validation
-    service_name = config['path'].lstrip('/').rstrip('/')
-
-    # Output both the modified config and service name
-    # First line: modified config as JSON
-    # Second line: service name
-    print(json.dumps(config))
-    print(service_name)
-
-except json.JSONDecodeError as e:
-    print(f'ERROR: Invalid JSON in config: {e}')
-    sys.exit(1)
-except Exception as e:
-    print(f'ERROR: Config validation failed: {e}')
-    sys.exit(1)
-"
+    # Validate/normalize via the data-only helper. The untrusted config is piped
+    # on stdin so a value containing triple-quotes or shell metacharacters cannot
+    # break out into interpreter/shell code. Emits the normalized config JSON on
+    # line one and the derived service name on line two; exits non-zero on failure.
+    printf '%s' "$config_json" | python3 "$HELPER" validate
 }
 
 add_service() {
@@ -402,11 +207,7 @@ add_service() {
 
     # Extract service_path from config for later use
     local service_path
-    service_path=$(python3 -c "
-import json
-config = json.loads('''$config_json''')
-print(config.get('path', ''))
-")
+    service_path=$(printf '%s' "$config_json" | python3 "$HELPER" get path)
 
     echo "=== Adding Service: $service_name ==="
 
@@ -415,23 +216,11 @@ print(config.get('path', ''))
 
     # Extract proxy_pass_url for security scanning
     local proxy_pass_url
-    proxy_pass_url=$(python3 -c "
-import json
-config = json.loads('''$config_json''')
-print(config.get('proxy_pass_url', ''))
-")
+    proxy_pass_url=$(printf '%s' "$config_json" | python3 "$HELPER" get proxy_pass_url)
 
     # Extract headers from config if present
     local headers_json
-    headers_json=$(python3 -c "
-import json
-config = json.loads('''$config_json''')
-headers = config.get('headers', {})
-if headers:
-    print(json.dumps(headers))
-else:
-    print('')
-")
+    headers_json=$(printf '%s' "$config_json" | python3 "$HELPER" get --omit-falsy headers)
 
     # Check if LLM analyzer is requested and API key is available
     if [[ "$analyzers" == *"llm"* ]]; then
@@ -468,63 +257,47 @@ else:
     # Run scan using Python CLI and capture JSON output
     # Note: Scanner exits with code 1 when unsafe, so we need to capture both success and "failure" cases
     local scan_exit_code=0
-    local scan_cmd="cd \"$PROJECT_ROOT\" && uv run cli/mcp_security_scanner.py --server-url \"$scan_url\" --analyzers \"$analyzers\" --json"
+    # Build the scan command as an argv array so untrusted values (scan_url,
+    # headers) are passed as data and never re-parsed by a shell via eval.
+    local -a scan_cmd=(uv run cli/mcp_security_scanner.py --server-url "$scan_url" --analyzers "$analyzers" --json)
 
     # Add headers if present in config
     if [ -n "$headers_json" ]; then
         print_info "Using custom headers from config for security scan"
-        scan_cmd="$scan_cmd --headers '$headers_json'"
+        scan_cmd+=(--headers "$headers_json")
     fi
 
-    scan_output=$(eval "$scan_cmd" 2>&1) || scan_exit_code=$?
+    # Scrub the operator's ambient scan bearer token from the scan subshell: the
+    # server being added is not yet vetted and its proxy_pass_url is registrant/
+    # remote-controlled, so the external scanner must never forward a stored
+    # credential to that URL. Authenticated scans of a trusted server go through
+    # the standalone "scan" subcommand or an explicit config header instead.
+    scan_output=$(cd "$PROJECT_ROOT" && env -u MCP_SCAN_BEARER_TOKEN "${scan_cmd[@]}" 2>&1) || scan_exit_code=$?
     print_info "scan_exit_code - $scan_exit_code"
 
-    # Exit code 0 = safe, exit code 1 = unsafe, exit code 2 = error
-    if [ $scan_exit_code -eq 0 ]; then
-        print_success "Security scan passed - Server is SAFE"
-    elif [ $scan_exit_code -eq 1 ]; then
-        print_error "Security scan failed - Server has critical or high severity issues"
-        print_info "Server will be registered but marked as UNHEALTHY with security-pending status"
-
-        # Add security-pending tag to config_json BEFORE registration
-        echo ""
-        echo "====Adding security-pending tag to configuration===="
-        print_info "Adding 'security-pending' tag to server configuration before registration..."
-
-        config_json=$(python3 -c "
-import json
-import sys
-
-try:
-    config = json.loads('''$config_json''')
-
-    # Add security-pending tag if not already present
-    tags = config.get('tags', [])
-    if 'security-pending' not in tags:
-        tags.append('security-pending')
-        config['tags'] = tags
-
-    print(json.dumps(config))
-    sys.exit(0)
-except Exception as e:
-    print(f'Failed to add tag: {e}', file=sys.stderr)
-    sys.exit(1)
-")
-
-        if [ $? -eq 0 ]; then
-            print_success "Added 'security-pending' tag to configuration"
+    # Fail closed: only a clean scan (exit code 0) may register. A non-zero exit
+    # (1 = critical/high findings, 2+ = scanner error) means the server is NOT
+    # verified safe, so it is NOT registered at all. Registration auto-enables a
+    # server and there is no atomic "register-disabled" path in the API, so a
+    # register-then-disable flow would briefly expose the auto-enabled,
+    # registrant-controlled backend. The detailed scan report is written under
+    # security_scans/ for operator review; fix the findings and re-run.
+    if [ "$scan_exit_code" -ne 0 ]; then
+        if [ "$scan_exit_code" -eq 1 ]; then
+            print_error "Security scan failed - Server has critical or high severity issues"
         else
-            print_error "Failed to add 'security-pending' tag to configuration"
-            exit 1
+            print_error "Security scan encountered an error (exit code: $scan_exit_code)"
         fi
-    else
-        print_error "Security scan encountered an error (exit code: $scan_exit_code)"
-        print_info "Server will be registered but marked as UNHEALTHY with security-pending status"
+        print_error "Failing closed: the server was NOT registered because its security scan did not pass."
+        print_info "Review the security scan report under security_scans/ and re-run once the server passes."
+        exit 1
     fi
+
+    print_success "Security scan passed - Server is SAFE"
 
     echo ""
 
-    # Register the service
+    # Register the service (only reached after a clean security scan).
     if ! run_mcp_command "register_service" "$config_json" "Registering service"; then
         exit 1
     fi
@@ -535,59 +308,6 @@ except Exception as e:
 
     if ! verify_server_in_list "$service_path" "true"; then
         exit 1
-    fi
-
-    if [ $scan_exit_code -eq 1 ]; then
-        #Disabling the server
-        echo ""
-        echo "====Disabling the server===="
-
-        # Disable the just-registered (auto-enabled) server via the public,
-        # user-authenticated toggle endpoint, reusing the same gateway JWT the
-        # rest of this script uses (the ingress token from credentials-provider).
-        #
-        # This is the security-scan safety net. A server that FAILED its scan was
-        # auto-enabled at registration and must be disabled here. If it cannot be
-        # disabled (no token, expired token, or a token lacking toggle_service on
-        # this server), fail closed with exit 1 rather than leave an unscanned
-        # server enabled and reachable. The ingress identity must hold
-        # toggle_service (admin or per-server) for the servers it registers.
-        local token_file="$PROJECT_ROOT/.oauth-tokens/ingress.json"
-        local auth_token
-        auth_token=$(python3 -c "import json; d=json.load(open('$token_file')); print(d.get('access_token') or d.get('tokens', {}).get('access_token') or '')" 2>/dev/null)
-
-        if [ -z "$auth_token" ]; then
-            print_error "No gateway token at $token_file - cannot disable server (run credentials-provider/generate_creds.sh)"
-            print_error "Failing closed: the server failed its security scan and could not be disabled."
-            exit 1
-        fi
-
-        # Set the server to disabled (false); it was auto-enabled at registration.
-        print_info "Calling toggle endpoint with: ${GATEWAY_URL}/api/servers/toggle"
-        print_info "Service path: $service_path"
-
-        output=$(curl -s -w "\nHTTP_STATUS:%{http_code}" -X POST "${GATEWAY_URL}/api/servers/toggle" \
-            -H "Authorization: Bearer $auth_token" \
-            --data-urlencode "path=$service_path" \
-            --data-urlencode "new_state=false" 2>&1)
-
-        # Extract HTTP status code from response
-        http_status=$(echo "$output" | grep "HTTP_STATUS:" | cut -d':' -f2)
-        response_body=$(echo "$output" | sed '/HTTP_STATUS:/d')
-
-        print_info "Toggle API HTTP Status: $http_status"
-        print_info "Toggle API Response: $response_body"
-
-        if [ "$http_status" != "200" ]; then
-            print_error "Failed to disable server - HTTP Status: $http_status"
-            print_error "Response: $response_body"
-            print_error "Failing closed: the server failed its security scan and could not be disabled."
-            print_info "Ensure the gateway identity has toggle_service permission for this server."
-            exit 1
-        fi
-
-        print_success "Server disabled due to failed security scan"
-        print_info "Review the security scan report before enabling this server"
     fi
 
     # Run health check
@@ -669,17 +389,8 @@ test_service() {
 
     # Extract description and tags for testing
     local description tags_json
-    description=$(python3 -c "
-import json
-config = json.loads('''$config_json''')
-print(config.get('description', ''))
-")
-    tags_json=$(python3 -c "
-import json
-config = json.loads('''$config_json''')
-tags = config.get('tags', [])
-print(json.dumps(tags))
-")
+    description=$(printf '%s' "$config_json" | python3 "$HELPER" get description)
+    tags_json=$(printf '%s' "$config_json" | python3 "$HELPER" get tags)
 
     echo "=== Testing Service: $service_name ==="
 
@@ -806,24 +517,25 @@ scan_server_security() {
         fi
     fi
 
-    # Build command
-    local cmd="cd \"$PROJECT_ROOT\" && uv run cli/mcp_security_scanner.py --server-url \"$server_url\" --analyzers \"$analyzers\""
+    # Build the command as an argv array so untrusted values (server_url,
+    # api_key, headers) are passed as data and never re-parsed by a shell.
+    local -a cmd=(uv run cli/mcp_security_scanner.py --server-url "$server_url" --analyzers "$analyzers")
 
     # Add API key if provided
     if [ -n "$api_key" ]; then
-        cmd="$cmd --api-key \"$api_key\""
+        cmd+=(--api-key "$api_key")
     fi
 
     # Add headers if provided
     if [ -n "$headers" ]; then
-        cmd="$cmd --headers '$headers'"
+        cmd+=(--headers "$headers")
     fi
 
     print_info "Running security scan..."
     print_info "Analyzers: $analyzers"
 
     # Run scan and capture exit code
-    if eval "$cmd"; then
+    if (cd "$PROJECT_ROOT" && "${cmd[@]}"); then
         print_success "Security scan completed - Server is SAFE"
         return 0
     else
