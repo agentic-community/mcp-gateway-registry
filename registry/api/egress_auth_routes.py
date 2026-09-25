@@ -1414,17 +1414,32 @@ async def initiate_consent(
             status.HTTP_403_FORBIDDEN, detail="this caller cannot connect a per-user account"
         )
 
-    url = get_egress_auth_service().build_consent_url(
-        auth_method=auth_method,
-        # Canonical egress user (OIDC sub, else username): must match the id the
-        # vend path derives from the mcp-proxy token so one human maps to one
-        # vault bucket regardless of token type / provider. See #933.
-        user_id=user_context.get("egress_user") or user_context.get("username") or "",
-        client_id_audit=user_context.get("client_id") or "",
-        session_id=user_context.get("session_id") or "",
-        server_path=server_path,
-        egress_oauth=server["egress_oauth"],
-    )
+    try:
+        url = get_egress_auth_service().build_consent_url(
+            auth_method=auth_method,
+            # Canonical egress user (OIDC sub, else username): must match the id the
+            # vend path derives from the mcp-proxy token so one human maps to one
+            # vault bucket regardless of token type / provider. See #933.
+            user_id=user_context.get("egress_user") or user_context.get("username") or "",
+            client_id_audit=user_context.get("client_id") or "",
+            session_id=user_context.get("session_id") or "",
+            server_path=server_path,
+            egress_oauth=server["egress_oauth"],
+        )
+    except EgressAuthError as exc:
+        # build_consent_url now validates the client secret before redirecting, so a
+        # server missing it fails here instead of after a pointless round trip to
+        # the provider. Same redaction rule as the callback: the exception text can
+        # embed SECRET_KEY hints, so log the type and return a fixed message.
+        logger.warning(f"egress consent refused server={server_path} type={type(exc).__name__}")
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "server's egress OAuth configuration is incomplete: the client "
+                "secret is missing or unreadable. Set it on the server's egress "
+                "auth config and try again."
+            ),
+        ) from exc
     return {"authorize_url": url}
 
 
@@ -1504,11 +1519,23 @@ async def egress_callback(
     except EgressAuthError as exc:
         # Detail to server logs only. Do NOT reflect the exception text into the
         # browser response: EgressAuthError messages embed internal state (e.g.
-        # decryption / SECRET_KEY hints, wrapped upstream errors) — a
+        # decryption / SECRET_KEY hints, wrapped upstream errors) -- a
         # stack-trace/internal-detail exposure. Show a generic message.
+        #
+        # "Connection failed" was that generic message, and it cost real debugging
+        # time: it reads as a network fault, so the first place people look is DNS,
+        # TLS and firewalls, none of which are ever the cause here. By this point
+        # the request has arrived and been processed. Name the two things an
+        # operator can act on, and say where the reason is, without reproducing it.
         logger.warning(f"egress callback failed type={type(exc).__name__}")
         return HTMLResponse(
-            "<h3>Connection failed. Please close this tab and try connecting again.</h3>",
+            "<h3>Could not complete the connection.</h3>"
+            "<p>The request reached the registry, so this is not a network problem. "
+            "Either the sign-in took too long and the request expired, or this "
+            "server's egress OAuth configuration is incomplete.</p>"
+            "<p>Close this tab and try connecting again. If it fails a second time, "
+            "check the server's egress OAuth client ID and client secret. An "
+            "administrator can find the specific reason in the registry logs.</p>",
             status_code=400,
         )
     except SecretStoreError as exc:
