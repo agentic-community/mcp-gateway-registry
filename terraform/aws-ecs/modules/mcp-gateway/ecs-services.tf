@@ -60,6 +60,13 @@ module "ecs_service_auth" {
     },
     var.enable_observability ? {
       AMPRemoteWrite = aws_iam_policy.adot_amp_write[0].arn
+    } : {},
+    # The OBO exchanged-token cache makes the auth-server a
+    # SecretStore client, but ONLY for its reserved "obo-cache" namespace. Attach
+    # the scoped policy (NOT the registry's full egress-vault grant) and only when
+    # the cache is enabled on the secrets-manager backend.
+    var.egress_auth_enabled && var.egress_obo_cache_enabled && var.egress_secret_store_backend == "secrets-manager" ? {
+      OboCacheVaultAccess = aws_iam_policy.ecs_auth_server_obo_cache_vault_access[0].arn
     } : {}
   )
 
@@ -592,8 +599,9 @@ module "ecs_service_auth" {
           name  = "OTEL_EXPORTER_OTLP_PROTOCOL"
           value = "grpc"
         },
-        # Per-user egress credential vault: auth-server only needs the feature
-        # flag and the internal vend URL (it does NOT touch the secret store).
+        # Per-user egress credential vault: auth-server needs the feature flag
+        # and the internal vend URL, plus  the secret-store backend
+        # env below once the OBO exchanged-token cache is enabled.
         # AUTH_SERVER_NGINX_MARKER_SECRET is injected via secrets/valueFrom below
         # (required unconditionally, not just for egress).
         {
@@ -627,6 +635,35 @@ module "ecs_service_auth" {
         {
           name  = "EGRESS_HTTP_POOL_CONNECT_RETRIES"
           value = tostring(var.egress_http_pool_connect_retries)
+        },
+        # Enabling the OBO exchanged-token cache makes the
+        # auth-server a SecretStore client (previously only the registry was),
+        # so it now carries the same secret-store backend env as the registry.
+        {
+          name  = "SECRET_STORE_BACKEND"
+          value = var.egress_secret_store_backend
+        },
+        {
+          name  = "SECRETS_MANAGER_KMS_KEY_ID"
+          value = var.egress_secrets_manager_kms_key_id
+        },
+        {
+          name  = "SECRETS_MANAGER_PATH_PREFIX"
+          value = var.egress_secrets_manager_path_prefix
+        },
+        # Opt-in OBO exchanged-token cache. Default off keeps the
+        # stateless per-request exchange. Mirrors the registry container.
+        {
+          name  = "EGRESS_OBO_CACHE_ENABLED"
+          value = tostring(var.egress_obo_cache_enabled)
+        },
+        {
+          name  = "EGRESS_OBO_CACHE_MAX_TTL_SECONDS"
+          value = tostring(var.egress_obo_cache_max_ttl_seconds)
+        },
+        {
+          name  = "EGRESS_OBO_CACHE_EXPIRY_SKEW_SECONDS"
+          value = tostring(var.egress_obo_cache_expiry_skew_seconds)
         }
         ],
         # PR #947: MongoDB connection string override (plain-text variant).
@@ -1950,6 +1987,20 @@ module "ecs_service_registry" {
         {
           name  = "EGRESS_OBO_ALLOWED_AUDIENCES"
           value = var.egress_obo_allowed_audiences
+        },
+        # Opt-in OBO exchanged-token cache in the per-user
+        # SecretStore. Default off keeps the stateless per-request exchange.
+        {
+          name  = "EGRESS_OBO_CACHE_ENABLED"
+          value = tostring(var.egress_obo_cache_enabled)
+        },
+        {
+          name  = "EGRESS_OBO_CACHE_MAX_TTL_SECONDS"
+          value = tostring(var.egress_obo_cache_max_ttl_seconds)
+        },
+        {
+          name  = "EGRESS_OBO_CACHE_EXPIRY_SKEW_SECONDS"
+          value = tostring(var.egress_obo_cache_expiry_skew_seconds)
         },
         # Hosts whose OAuth token endpoints may resolve to private addresses, for a
         # self-hosted IdP (Keycloak, Entra over Private Link). Exact hostnames only;

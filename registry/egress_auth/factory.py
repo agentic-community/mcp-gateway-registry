@@ -81,7 +81,38 @@ def get_egress_auth_service() -> EgressAuthService:
     return _egress_service
 
 
+_lease_manager = None
+
+
+def get_egress_lease_manager():
+    """Return the cross-replica single-flight lease manager (Mongo-backed).
+
+    Reused by the auth-server OBO token cache. Falls back to an
+    in-process lease (per-replica single-flight only) when the Mongo operational
+    repo is unavailable, so the cache still functions in single-replica/dev.
+    """
+    global _lease_manager
+    if _lease_manager is not None:
+        return _lease_manager
+    try:
+        from registry.repositories.documentdb.egress_operational_repository import (
+            EgressOperationalRepository,
+        )
+
+        _lease_manager = _MongoLeaseManager(EgressOperationalRepository())
+    except Exception as exc:  # pragma: no cover - dev/file-backend fallback
+        from registry.egress_auth.service import _InProcessLeaseManager
+
+        logger.warning(
+            "Egress operational repo unavailable (%s); OBO cache single-flight is per-replica only",
+            exc,
+        )
+        _lease_manager = _InProcessLeaseManager()
+    return _lease_manager
+
+
 def reset_egress_auth_service() -> None:
-    """Reset the singleton. USE ONLY IN TESTS."""
-    global _egress_service
+    """Reset the singletons. USE ONLY IN TESTS."""
+    global _egress_service, _lease_manager
     _egress_service = None
+    _lease_manager = None

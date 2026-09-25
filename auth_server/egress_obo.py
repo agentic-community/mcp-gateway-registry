@@ -76,6 +76,23 @@ def _idp_kind(idp_provider: object) -> str:
     return "unsupported"
 
 
+def _coerce_expires_in(value: object) -> int | None:
+    """Coerce an IdP ``expires_in`` to a positive int, else None.
+
+    The Entra ``jwt-bearer`` exchange response carries ``expires_in`` (seconds);
+    A missing, non-numeric, or non-positive value must never raise into the hot
+    path nor be treated as a lifetime. ``None`` means "unknown lifetime" so the
+    OBO cache declines to store (fail-closed); non-caching callers ignore it.
+    """
+    if not isinstance(value, int | float | str):
+        return None
+    try:
+        seconds = int(value)
+    except (TypeError, ValueError):
+        return None
+    return seconds if seconds > 0 else None
+
+
 def _entra_exchange_body(
     client_id: str,
     client_secret: str,
@@ -144,7 +161,7 @@ async def obo_exchange(
     subject_token: str,
     target_audience: str,
     scopes: list[str] | None = None,
-) -> str:
+) -> tuple[str, int | None]:
     """Perform the OBO exchange: re-audience the ingress JWT to ``target_audience``.
 
     Args:
@@ -155,7 +172,9 @@ async def obo_exchange(
         scopes: audience-scoped scopes; empty/None -> ``.default`` for Entra.
 
     Returns:
-        The exchanged access token (``aud`` = target, ``sub`` = the user).
+        ``(access_token, expires_in)`` -- the exchanged token (``aud`` = target,
+        ``sub`` = the user) and its lifetime in seconds, or ``None`` when the IdP
+        did not return a usable ``expires_in``.
 
     Raises:
         OboReauthRequired, OboConsentRequired, OboConfigError,
@@ -253,7 +272,8 @@ async def obo_exchange(
         )
         raise _map_token_error(resp.status_code, payload)
 
-    access_token = resp.json().get("access_token")
+    success_payload = resp.json()
+    access_token = success_payload.get("access_token")
     if not access_token:
         raise OboExchangeError("IdP returned 200 but no access_token")
-    return access_token
+    return access_token, _coerce_expires_in(success_payload.get("expires_in"))

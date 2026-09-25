@@ -2242,6 +2242,29 @@ variable "egress_obo_allowed_audiences" {
   default     = ""
 }
 
+variable "egress_obo_cache_enabled" {
+  description = <<-EOT
+    Opt-in: cache exchanged OBO tokens in the per-user SecretStore so repeated
+    calls by the same principal to the same audience reuse a still-valid token
+    instead of re-exchanging. Default off preserves the stateless per-request
+    exchange.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "egress_obo_cache_max_ttl_seconds" {
+  description = "Hard cap (seconds) on the OBO cache reuse window, applied below the token's real expiry. Bounds revocation/conditional-access re-evaluation latency on cache hits."
+  type        = number
+  default     = 300
+}
+
+variable "egress_obo_cache_expiry_skew_seconds" {
+  description = "Never reuse a cached OBO token within this many seconds of its expiry. Must be < EGRESS_OBO_CACHE_MAX_TTL_SECONDS."
+  type        = number
+  default     = 30
+}
+
 variable "egress_oauth_trusted_idp_hosts" {
   description = <<-EOT
     Optional comma-separated hostnames of operator-controlled OAuth/OIDC identity

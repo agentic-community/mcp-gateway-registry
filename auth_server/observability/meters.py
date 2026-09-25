@@ -213,6 +213,51 @@ egress_conn_reset_total = _meter.create_counter(
 )
 
 
+# =============================================================================
+# OBO token-cache metrics (opt-in EGRESS_OBO_CACHE_ENABLED)
+# =============================================================================
+
+obo_cache_hit = _meter.create_counter(
+    name="mcpgw_obo_cache_hit_total",
+    description="OBO exchanged-token cache hits (a valid cached token was reused), labeled by idp",
+    unit="1",
+)
+
+obo_cache_miss = _meter.create_counter(
+    name="mcpgw_obo_cache_miss_total",
+    description="OBO cache misses (no usable cached token; a live exchange follows), labeled by idp",
+    unit="1",
+)
+
+obo_exchange_performed = _meter.create_counter(
+    name="mcpgw_obo_exchange_performed_total",
+    description="Live OBO token exchanges performed against the IdP, labeled by idp",
+    unit="1",
+)
+
+obo_exchange_failure = _meter.create_counter(
+    name="mcpgw_obo_exchange_failure_total",
+    description="Live OBO token exchanges that failed, labeled by idp",
+    unit="1",
+)
+
+obo_cache_store_error = _meter.create_counter(
+    name="mcpgw_obo_cache_store_error_total",
+    description="OBO cache SecretStore ops that degraded / failed closed, labeled by op (get | put)",
+    unit="1",
+)
+
+obo_cache_unstorable = _meter.create_counter(
+    name="mcpgw_obo_cache_unstorable_total",
+    description=(
+        "OBO exchanges that succeeded but could not be cached because the IdP "
+        "returned no usable expires_in (opaque/short-lived token), labeled by idp. "
+        "A nonzero value means the cache can never populate for that IdP."
+    ),
+    unit="1",
+)
+
+
 def record_egress_conn_reset(site: str) -> None:
     """Record a pooled-client keep-alive reconnect retry for the given site."""
     egress_conn_reset_total.add(1, {"site": site})

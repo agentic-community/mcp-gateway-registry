@@ -1408,6 +1408,14 @@ aws_registry_federation_enabled = true
 # App ID URI / bare client-id only, no https host URLs or GUIDs), so shared
 # first-party APIs (Graph/ARM/Key Vault) are rejected at registration.
 # egress_obo_allowed_audiences       = "api://outlook-mcp-server api://calendar-mcp-server"
+# Opt-in: cache exchanged OBO tokens in the per-user SecretStore so repeated calls
+# by the same principal to the same audience reuse a still-valid token instead of
+# re-exchanging. Default off preserves the stateless per-request exchange. MAX_TTL
+# caps the reuse window below the token's real expiry; EXPIRY_SKEW keeps a margin
+# before expiry and must be < the max TTL.
+# egress_obo_cache_enabled             = false
+# egress_obo_cache_max_ttl_seconds     = 300
+# egress_obo_cache_expiry_skew_seconds = 30
 # Hostnames of operator-controlled IdPs whose OAuth token endpoints may resolve to
 # private addresses. Needed for a self-hosted IdP (Keycloak, or Entra over Private
 # Link), where the token endpoint resolves to RFC1918 and egress consent would

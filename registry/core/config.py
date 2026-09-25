@@ -1830,6 +1830,35 @@ class Settings(BaseSettings):
             "an explicit, audited set of internal server audiences."
         ),
     )
+    egress_obo_cache_enabled: bool = Field(
+        default=False,
+        description=(
+            "Opt-in: cache exchanged OBO tokens in the per-user SecretStore so "
+            "repeated calls by the same principal to the same audience reuse a "
+            "still-valid token instead of re-exchanging. Default off preserves the "
+            "stateless per-request exchange. On a hit the gateway skips the IdP's "
+            "per-request re-authorization for up to the reuse window -- keep the "
+            "max TTL small (or off) where per-call conditional-access matters."
+        ),
+    )
+    egress_obo_cache_max_ttl_seconds: int = Field(
+        default=300,
+        ge=1,
+        le=3600,
+        description=(
+            "Hard cap (seconds) on the OBO cache reuse window, applied below the "
+            "token's real expiry. Bounds revocation/CA-re-evaluation latency on hits."
+        ),
+    )
+    egress_obo_cache_expiry_skew_seconds: int = Field(
+        default=30,
+        ge=1,
+        le=600,
+        description=(
+            "Never reuse a cached OBO token within this many seconds of its expiry "
+            "(applied once, on read). Must be < EGRESS_OBO_CACHE_MAX_TTL_SECONDS."
+        ),
+    )
     auth_server_nginx_marker_secret: str = Field(
         default="",
         description=(
@@ -2375,6 +2404,45 @@ class Settings(BaseSettings):
         The nginx marker secret is required unconditionally (in __init__), not
         just for egress, since it guards all mcp-proxy token minting.
         """
+        if self.egress_obo_cache_enabled:
+            if not self.egress_auth_enabled:
+                raise ValueError(
+                    "EGRESS_OBO_CACHE_ENABLED=true requires EGRESS_AUTH_ENABLED=true "
+                    "(the cache only applies to obo_exchange servers)."
+                )
+            if self.egress_obo_cache_expiry_skew_seconds >= self.egress_obo_cache_max_ttl_seconds:
+                raise ValueError(
+                    "EGRESS_OBO_CACHE_EXPIRY_SKEW_SECONDS "
+                    f"({self.egress_obo_cache_expiry_skew_seconds}) must be < "
+                    "EGRESS_OBO_CACHE_MAX_TTL_SECONDS "
+                    f"({self.egress_obo_cache_max_ttl_seconds}); otherwise every "
+                    "cached token is born expired."
+                )
+            if self.secret_store_backend not in ("openbao", "secrets-manager"):
+                raise ValueError(
+                    "EGRESS_OBO_CACHE_ENABLED=true requires SECRET_STORE_BACKEND to be "
+                    f"'openbao' or 'secrets-manager'; got {self.secret_store_backend!r}."
+                )
+            if self.secret_store_backend == "openbao" and self.openbao_auth_method != "kubernetes":  # nosec B105 - backend name comparison, not a secret  # pragma: allowlist secret
+                import logging as _logging
+
+                _logging.getLogger(__name__).warning(
+                    "EGRESS_OBO_CACHE_ENABLED=true with OPENBAO_AUTH_METHOD=%r: the "
+                    "OBO cache is NOT confined to the obo-cache namespace by a scoped "
+                    "kubernetes-auth role. Use OPENBAO_AUTH_METHOD=kubernetes (the "
+                    "auth-server-obo-cache role), or scope the OpenBao token's own policy "
+                    "to the obo-cache path.",
+                    self.openbao_auth_method,
+                )
+            if self.auth_provider not in ("entra", "keycloak"):
+                import logging as _logging
+
+                _logging.getLogger(__name__).warning(
+                    "EGRESS_OBO_CACHE_ENABLED=true but auth_provider=%r has no OBO "
+                    "token-exchange path; the cache will never populate.",
+                    self.auth_provider,
+                )
+
         if not self.egress_auth_enabled:
             return
 

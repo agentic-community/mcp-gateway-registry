@@ -239,11 +239,46 @@ egressAuth:
   httpPoolMaxKeepalive: "20"
   httpPoolKeepaliveExpirySeconds: "30"
   httpPoolConnectRetries: "1"
+  # Opt-in exchanged-OBO-token cache. Enabling this makes the
+  # AUTH-SERVER a SecretStore client for the first time (the cache lives in the
+  # per-user SecretStore), so the secret-store backend config below MUST be set
+  # to match the registry chart. Default off preserves the stateless per-request
+  # exchange. MUST match registry.egressAuth.oboCache*.
+  oboCacheEnabled: "false"
+  # Hard cap (seconds) on the OBO cache reuse window, applied below the token's
+  # real expiry. Bounds revocation / conditional-access re-evaluation latency on
+  # cache hits.
+  oboCacheMaxTtlSeconds: "300"
+  # Never reuse a cached OBO token within this many seconds of its expiry. Must be
+  # < oboCacheMaxTtlSeconds.
+  oboCacheExpirySkewSeconds: "30"
   # nginx marker secret. REQUIRED for standalone deployment (chart render fails
   # if empty) -- it guards all mcp-proxy token minting and the app requires it
   # at startup. Set a strong random value, identical to the registry's. In the
   # stack it is auto-generated + shared, so leave empty there.
   markerSecret: ""
+  # Secret-store backend config. Only consumed when
+  # oboCacheEnabled=true, which turns the auth-server into a SecretStore client;
+  # otherwise the auth-server never touches the secret store. These MUST match the
+  # registry chart's egressAuth secret-store settings so both pods read/write the
+  # same per-user store.
+  # Secret store for per-user tokens: openbao | secrets-manager.
+  secretStoreBackend: "openbao" # pragma: allowlist secret
+  secretsManager:
+    kmsKeyId: "" # Optional CMK; empty uses the AWS-managed key.
+    pathPrefix: "mcp/egress"
+  openbao:
+    addr: "" # e.g. http://openbao.default.svc:8200
+    namespace: "" # Enterprise namespaces only.
+    kvMount: "secret"
+    authMethod: "kubernetes" # token | kubernetes — kubernetes is required for the scoped OBO role
+    # OpenBao kubernetes-auth role for the OBO cache. A SEPARATE, SCOPED role:
+    # the stack's openbao-init binds it to the auth-server
+    # ServiceAccount with a policy limited to the reserved "obo-cache" namespace,
+    # NOT the registry's broad mcp-egress policy -- so the auth-server can
+    # read/write its own cache entries but never any user's PAT/3LO secrets.
+    # Requires authMethod: kubernetes.
+    role: "auth-server-obo-cache"
 # PingFederate integration (used when authProvider.type = "pingfederate")
 pingfederate:
   enabled: false
