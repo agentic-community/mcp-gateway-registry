@@ -77,6 +77,27 @@ tests:
             name: SSRF_ALLOWED_CIDRS
             value: "172.20.0.0/16"
 
+  - it: renders SECURITY_BLOCK_ON_SCAN_FAILURE true by default
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SECURITY_BLOCK_ON_SCAN_FAILURE
+            value: "true"
+
+  - it: renders SECURITY_BLOCK_ON_SCAN_FAILURE false when the operator opts out
+    # Regression guard for `| default true`, which treats false as empty and
+    # would render "true" here.
+    set:
+      app:
+        securityBlockOnScanFailure: false
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SECURITY_BLOCK_ON_SCAN_FAILURE
+            value: "false"
+
   - it: appends extraEnv entries after chart-managed env vars
     set:
       extraEnv:
@@ -131,7 +152,8 @@ tests:
       # MCP_TOKEN_MAX_TTL_HOURS, always rendered) is env[54]/env[55];
       # the six unconditional GATEWAY_* generic-proxy vars are env[56]-env[61];
       # AWS_EC2_METADATA_DISABLED (chart-managed security constant, always
-      # rendered) is env[62];
+      # rendered) is env[62]; SECURITY_BLOCK_ON_SCAN_FAILURE (always rendered)
+      # directly follows it;
       # user extraEnv entries are appended at the end (env[63] onward).
       #
       # The seven CIMD publisher vars (always rendered) sit at env[16]-env[22],
@@ -283,9 +305,12 @@ tests:
           value: AWS_EC2_METADATA_DISABLED
       - equal:
           path: spec.template.spec.containers[0].env[56].name
-          value: MY_FLAG
+          value: SECURITY_BLOCK_ON_SCAN_FAILURE
       - equal:
           path: spec.template.spec.containers[0].env[57].name
+          value: MY_FLAG
+      - equal:
+          path: spec.template.spec.containers[0].env[58].name
           value: MY_SECRET_VAR
 
   - it: appends extraEnvFrom entries after chart-managed envFrom sources
@@ -356,6 +381,15 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: "\"CIMD_PUBLISHER_ENABLED\" is a reserved variable"
+
+  - it: fails when extraEnv contains an env-block reserved name (SECURITY_BLOCK_ON_SCAN_FAILURE)
+    set:
+      extraEnv:
+        - name: SECURITY_BLOCK_ON_SCAN_FAILURE
+          value: "false"
+    asserts:
+      - failedTemplate:
+          errorPattern: "\"SECURITY_BLOCK_ON_SCAN_FAILURE\" is a reserved variable"
 
   - it: fails when extraEnv contains an env-block reserved name (INTERNAL_TOKEN_TTL_SECONDS)
     set:

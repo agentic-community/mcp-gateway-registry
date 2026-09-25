@@ -1294,6 +1294,10 @@ module "ecs_service_registry" {
           value = tostring(var.security_allow_unsafe_servers)
         },
         {
+          name  = "SECURITY_BLOCK_ON_SCAN_FAILURE"
+          value = tostring(var.security_block_on_scan_failure)
+        },
+        {
           name  = "SECURITY_ANALYZERS"
           value = var.security_analyzers
         },

@@ -380,6 +380,20 @@ oauth2_allowed_redirect_uris = ""
 # dedup_max_suggestions           = 3
 
 # ============================================================================
+# SECURITY SCANNING
+# ============================================================================
+#
+# Whether a scan that could not complete counts as an unsafe verdict, for
+# servers, agents and skills alike. Default true: the asset is disabled, as in
+# earlier releases. Set false to keep it enabled; it is still tagged
+# security-pending. Endpoints that cannot be scanned anonymously (per-user
+# egress OAuth, for instance) fail the scan on every registration, so
+# deployments with them will want this off. Only matters when scanning and the
+# per-type block settings are on.
+#
+# security_block_on_scan_failure = true
+
+# ============================================================================
 # STORAGE BACKEND
 # ============================================================================
 # Selects where the registry stores servers, agents, scopes, and embeddings.

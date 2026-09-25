@@ -519,6 +519,12 @@ variable "security_allow_unsafe_servers" {
   default     = false
 }
 
+variable "security_block_on_scan_failure" {
+  description = "Treat a scan that could not complete as unsafe (servers, agents and skills). Set false to keep an unassessed asset enabled and tagged security-pending, e.g. for endpoints that cannot be scanned anonymously"
+  type        = bool
+  default     = true
+}
+
 variable "security_analyzers" {
   description = "Comma-separated list of analyzers to use for security scanning (available: yara, llm, api)"
   type        = string

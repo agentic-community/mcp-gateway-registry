@@ -176,13 +176,14 @@ module "mcp_gateway" {
   search_log_query_text = var.search_log_query_text
 
   # Security scanning configuration
-  security_scan_enabled         = var.security_scan_enabled
-  security_scan_on_registration = var.security_scan_on_registration
-  security_block_unsafe_servers = var.security_block_unsafe_servers
-  security_allow_unsafe_servers = var.security_allow_unsafe_servers
-  security_analyzers            = var.security_analyzers
-  security_scan_timeout         = var.security_scan_timeout
-  security_add_pending_tag      = var.security_add_pending_tag
+  security_scan_enabled          = var.security_scan_enabled
+  security_scan_on_registration  = var.security_scan_on_registration
+  security_block_unsafe_servers  = var.security_block_unsafe_servers
+  security_allow_unsafe_servers  = var.security_allow_unsafe_servers
+  security_block_on_scan_failure = var.security_block_on_scan_failure
+  security_analyzers             = var.security_analyzers
+  security_scan_timeout          = var.security_scan_timeout
+  security_add_pending_tag       = var.security_add_pending_tag
 
   # Microsoft Entra ID configuration
   entra_enabled                             = var.entra_enabled

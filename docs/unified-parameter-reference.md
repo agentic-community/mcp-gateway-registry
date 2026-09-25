@@ -522,6 +522,7 @@ Only the Helm `mcpgw` subchart and Docker expose these today.
 | Scan on registration | `SECURITY_SCAN_ON_REGISTRATION` | — | — | — |
 | Block unsafe | `SECURITY_BLOCK_UNSAFE_SERVERS` | — | — | — |
 | Allow unsafe, block tools | `SECURITY_ALLOW_UNSAFE_SERVERS` | `security_allow_unsafe_servers` | — | Keep a failing server enabled with only its HIGH/CRITICAL tools blocked. Needs `SECURITY_BLOCK_UNSAFE_SERVERS=true`. |
+| Block on scan failure | `SECURITY_BLOCK_ON_SCAN_FAILURE` | `security_block_on_scan_failure` | `registry.app.securityBlockOnScanFailure` | Treat a scan that could not complete as unsafe, for servers, agents and skills alike. Default `true`: the asset is disabled, as in earlier releases. `false` keeps it enabled and tagged `security-pending`; set it when endpoints cannot be scanned anonymously (e.g. per-user egress OAuth), since those fail on every registration. The per-type block settings still govern assets the scanner did reach a verdict on. |
 | Analyzers | `SECURITY_ANALYZERS` | — | — | `yara`, `llm`, `api` (comma-separated). |
 | Scan timeout | `SECURITY_SCAN_TIMEOUT` | — | — | Seconds. |
 | Add pending tag | `SECURITY_ADD_PENDING_TAG` | — | — | Tag servers that fail scan. |
