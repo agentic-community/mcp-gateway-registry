@@ -86,3 +86,22 @@ Call as: {{- include "auth-server.validateExtraEnv" . -}}
   {{- $_ := set $seen $e.name $i -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+Render a value that may legitimately be zero, falling back only when it is unset.
+
+Sprig's `default` treats 0 as empty, so `x | default "20"` silently replaces a
+numeric 0 (`--set egressAuth.httpPoolMaxKeepalive=0`, or an unquoted 0 in a
+values file) with the default -- which disables the EGRESS_HTTP_POOL_* runtime
+rollback lever. Only nil and "" fall back here.
+
+Call as: {{ include "auth-server.valueOrDefault" (list .Values.egressAuth.httpPoolMaxKeepalive "20") }}
+*/}}
+{{- define "auth-server.valueOrDefault" -}}
+{{- $value := index . 0 -}}
+{{- if or (kindIs "invalid" $value) (eq (toString $value) "") -}}
+{{- index . 1 -}}
+{{- else -}}
+{{- toString $value -}}
+{{- end -}}
+{{- end -}}

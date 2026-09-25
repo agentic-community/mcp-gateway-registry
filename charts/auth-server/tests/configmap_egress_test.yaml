@@ -128,3 +128,23 @@ tests:
       - equal:
           path: data.EGRESS_HTTP_POOL_CONNECT_RETRIES
           value: "3"
+
+  - it: renders a numeric zero pool knob instead of replacing it with the default
+    # MAX_KEEPALIVE=0 / KEEPALIVE_EXPIRY=0 is the documented runtime rollback lever;
+    # Sprig's `default` would turn a numeric 0 back into "20" / "30".
+    set:
+      egressAuth:
+        enabled: true
+        httpPoolMaxKeepalive: 0
+        httpPoolKeepaliveExpirySeconds: 0
+        httpPoolConnectRetries: 0
+    asserts:
+      - equal:
+          path: data.EGRESS_HTTP_POOL_MAX_KEEPALIVE
+          value: "0"
+      - equal:
+          path: data.EGRESS_HTTP_POOL_KEEPALIVE_EXPIRY_SECONDS
+          value: "0"
+      - equal:
+          path: data.EGRESS_HTTP_POOL_CONNECT_RETRIES
+          value: "0"

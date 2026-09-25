@@ -1397,7 +1397,8 @@ aws_registry_federation_enabled = true
 # egress_oauth_callback_base_url     = "https://mcpgateway.example.com"
 # egress_token_refresh_skew_seconds  = 300
 # egress_state_ttl_seconds           = 600
-# Egress httpx client connection pooling (shared by url_guard; registry + auth-server).
+# Egress httpx client connection pooling. Forwarded to all three egress consumers:
+# registry + auth-server (via url_guard) and the mcpgw MCP server.
 # Keep the keepalive expiry below the shortest upstream/LB idle timeout.
 # egress_http_pool_max_connections          = 100
 # egress_http_pool_max_keepalive            = 20
