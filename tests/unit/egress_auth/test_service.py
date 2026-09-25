@@ -450,15 +450,25 @@ class TestConsentAndCallback:
                 "c", "garbage-state", egress_oauth, "alice", "oauth2", bound_upstreams=[BOUND]
             )
 
-    async def test_confidential_provider_still_requires_secret(self, svc, monkeypatch):
+    async def test_confidential_provider_still_requires_secret(
+        self, svc, egress_oauth, monkeypatch
+    ):
         # A confidential (github) config whose stored secret is missing must
         # fail closed at the callback -- NOT silently proceed secretless.
+        #
+        # build_consent_url now refuses a secretless config up front (see
+        # TestConsentRefusesBeforeRedirecting), so the state is minted while the
+        # secret IS present and removed before the callback. That is the sequence
+        # that reaches this guard in production: consent was granted, then the
+        # secret was deleted or SECRET_KEY rotated before the user came back. The
+        # earlier guard must not become the ONLY one -- a callback can still be
+        # reached with a state minted before the config changed.
         _stub_exchange(monkeypatch)
+        url = svc.build_consent_url(
+            "oauth2", "alice", "Iv1.testclient", "sess-1", "/github-mcp", egress_oauth
+        )
         secretless = dict(EGRESS_OAUTH)
         secretless["client_secret_encrypted"] = None
-        url = svc.build_consent_url(
-            "oauth2", "alice", "Iv1.testclient", "sess-1", "/github-mcp", secretless
-        )
         with pytest.raises(service.EgressAuthError, match="client_secret_encrypted missing"):
             await svc.handle_callback(
                 "c", _extract_state(url), secretless, "alice", "oauth2", bound_upstreams=[BOUND]
@@ -745,6 +755,76 @@ class TestVendRefreshDisconnect:
 
     async def test_list_for_non_per_user_is_empty(self, svc):
         assert await svc.list_connections("network-trusted", "alice") == []
+
+
+@pytest.mark.unit
+class TestConsentRefusesBeforeRedirecting:
+    """A server with no usable client secret must fail at Connect, not at callback.
+
+    The secret is only read during the code exchange, so such a server used to send
+    the user out to the provider, through consent, and back to a generic failure
+    page whose real cause was in the registry log. Everything needed to refuse is
+    known before the redirect.
+    """
+
+    def test_missing_secret_refuses_without_building_a_url(self, svc):
+        cfg = dict(EGRESS_OAUTH)
+        cfg.pop("client_secret_encrypted", None)
+        with pytest.raises(service.EgressAuthError, match="client_secret_encrypted missing"):
+            svc.build_consent_url(
+                auth_method="oauth2",
+                user_id="alice",
+                client_id_audit="Iv1.testclient",
+                session_id="sess-1",
+                server_path="/github-mcp",
+                egress_oauth=cfg,
+            )
+
+    def test_undecryptable_secret_refuses(self, svc, monkeypatch):
+        """A rotated SECRET_KEY leaves ciphertext that cannot be read."""
+        monkeypatch.setattr(
+            "registry.utils.credential_encryption.decrypt_credential",
+            lambda _enc: None,
+        )
+        cfg = dict(EGRESS_OAUTH)
+        cfg["client_secret_encrypted"] = "unreadable-ciphertext"
+        with pytest.raises(service.EgressAuthError, match="could not decrypt"):
+            svc.build_consent_url(
+                auth_method="oauth2",
+                user_id="alice",
+                client_id_audit="Iv1.testclient",
+                session_id="sess-1",
+                server_path="/github-mcp",
+                egress_oauth=cfg,
+            )
+
+    def test_public_client_still_builds_a_url(self, svc, egress_oauth_public):
+        """token_endpoint_auth_method=none has no secret BY DESIGN.
+
+        The guard must not turn a legitimate public client into a dead Connect
+        button, which is the obvious way to get this check wrong.
+        """
+        url = svc.build_consent_url(
+            auth_method="oauth2",
+            user_id="alice",
+            client_id_audit="",
+            session_id="sess-1",
+            server_path="/datadog",
+            egress_oauth=egress_oauth_public,
+        )
+        assert url.startswith("https://app.datadoghq.com/oauth2/v1/authorize?")
+        assert "state=" in url
+
+    def test_configured_server_is_unaffected(self, svc, egress_oauth):
+        url = svc.build_consent_url(
+            auth_method="oauth2",
+            user_id="alice",
+            client_id_audit="Iv1.testclient",
+            session_id="sess-1",
+            server_path="/github-mcp",
+            egress_oauth=egress_oauth,
+        )
+        assert url.startswith("https://github.com/login/oauth/authorize?")
 
 
 def _extract_state(authorize_url: str) -> str:
