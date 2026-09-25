@@ -249,3 +249,38 @@ class TestBothHealthPathsAgree:
         from registry.api.server_routes import _normalize_health_status
 
         assert _normalize_health_status(DISCOVERY_IDENTITY_UNCONNECTED) == "unhealthy"
+
+
+@pytest.mark.unit
+class TestScanFailureMessageNamesTheCause:
+    """The scan modal renders error_message, so that string is the operator's only clue.
+
+    Chain: _scan_failure_message -> SecurityScanResult.error_message -> the scan API ->
+    SecurityScanModal.tsx, which renders "Error: {error_message}". Before this it read
+    "security scan failed (RuntimeError)", naming a Python exception and nothing
+    actionable.
+    """
+
+    @staticmethod
+    def _msg(headers):
+        from registry.services.security_scanner import _scan_failure_message
+
+        return _scan_failure_message(RuntimeError("boom"), headers)
+
+    def test_unauthenticated_scan_says_so(self):
+        message = self._msg(None)
+        assert "without a credential" in message
+        assert "rescan" in message.lower()
+
+    def test_it_still_names_the_exception_type(self):
+        """Losing the type would cost the operators who DO read logs."""
+        assert "RuntimeError" in self._msg(None)
+
+    def test_authenticated_failure_is_not_blamed_on_credentials(self):
+        """A scan that had a credential and still failed must not misdirect."""
+        message = self._msg('{"X-Authorization": "Bearer t"}')
+        assert "without a credential" not in message
+        assert message == "security scan failed (RuntimeError)"
+
+    def test_empty_header_string_counts_as_unauthenticated(self):
+        assert "without a credential" in self._msg("")
