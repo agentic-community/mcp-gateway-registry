@@ -233,8 +233,23 @@ class ServerService:
             "is_new_version": False,
         }
 
-    async def update_server(self, path: str, server_info: dict[str, Any]) -> bool:
+    async def update_server(
+        self,
+        path: str,
+        server_info: dict[str, Any],
+        *,
+        updated_fields: list[str] | None = None,
+        expected_updated_at: str | None = None,
+    ) -> bool:
         """Update an existing server.
+
+        Args:
+            updated_fields: When given, only these fields (plus
+                ``updated_at``) are persisted; concurrent writes to other
+                fields survive. None writes every field.
+            expected_updated_at: When given, the update only lands if the
+                stored ``updated_at`` still equals this value, enforced
+                atomically in the repository write.
 
         Raises:
             UrlValidationError: If the update sets a proxy_pass_url that fails
@@ -287,6 +302,13 @@ class ServerService:
                     server_info["proxy_target_host"] = pin["proxy_target_host"]
                 # Re-enabling clears any prior refresh auto-disable.
                 server_info["proxy_disabled_reason"] = None
+                if updated_fields is not None:
+                    updated_fields = [
+                        *updated_fields,
+                        "proxy_resolved_ips",
+                        "proxy_target_host",
+                        "proxy_disabled_reason",
+                    ]
             # Credential-misdirection guard: an MCP server's effective target is
             # proxy_target_url OR (fallback) proxy_pass_url. Use effective_proxy_target
             # (NOT resolve_proxy_target) so the comparison is routability-agnostic:
@@ -295,13 +317,20 @@ class ServerService:
             # and skip the clear, letting a repoint-before-enable carry the old
             # host's secret to a new host. effective_proxy_target omits that gate,
             # so a host change is caught even while the server is disabled.
-            clear_upstream_headers_on_repoint(
+            cleared = clear_upstream_headers_on_repoint(
                 server_info,
                 existing_target=effective_proxy_target("mcp_server", dict(existing or {})),
                 new_target=effective_proxy_target("mcp_server", merged),
             )
+            if updated_fields is not None and cleared:
+                updated_fields = [*updated_fields, *cleared]
 
-        result = await self._repo.update(path, server_info)
+        result = await self._repo.update(
+            path,
+            server_info,
+            updated_fields=updated_fields,
+            expected_updated_at=expected_updated_at,
+        )
 
         if result:
             # Update search index

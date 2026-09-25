@@ -128,8 +128,23 @@ class ServerRepositoryBase(ABC):
         self,
         path: str,
         server_info: dict[str, Any],
+        *,
+        updated_fields: list[str] | None = None,
+        expected_updated_at: str | None = None,
     ) -> bool:
-        """Update an existing server."""
+        """Update an existing server.
+
+        Args:
+            path: Server path as used by callers; both trailing-slash
+                forms of the stored ``_id`` are matched, like :meth:`get`.
+            server_info: Full merged server dict. When ``updated_fields``
+                is given, only those fields (plus ``updated_at``) are
+                written so concurrent writes to other fields survive;
+                ``None`` writes every field.
+            expected_updated_at: When given, the write only lands if the
+                stored ``updated_at`` still equals this value (atomic
+                compare-and-set); a revision miss returns ``False``.
+        """
         pass
 
     @abstractmethod

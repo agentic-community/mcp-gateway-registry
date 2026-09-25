@@ -7188,8 +7188,18 @@ async def update_server_endpoint(
             detail=f"Registration denied by policy gate: {gate_result.error_message}",
         )
 
-    success = await server_service.update_server(path, merged)
+    # Full-card write; the If-Match revision joins the atomic repository write.
+    success = await server_service.update_server(
+        path,
+        merged,
+        expected_updated_at=(existing.get("updated_at") if client_ts is not None else None),
+    )
     if not success:
+        if client_ts is not None:
+            raise HTTPException(
+                status_code=status.HTTP_412_PRECONDITION_FAILED,
+                detail="If-Match does not match current server version",
+            )
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={"detail": "Failed to save server"},
@@ -7337,6 +7347,9 @@ async def patch_server_endpoint(
             detail="Empty patch body",
         )
 
+    # Only supplied fields are written; null-valued fields stay in the scope.
+    patch_fields = sorted(patch_dict.keys())
+
     # Changing the lifecycle status requires a dedicated permission (Issue #1330),
     # separate from modify_service, so a scope can grant "edit metadata" without
     # "promote/deprecate". Only enforced when the status actually changes.
@@ -7369,8 +7382,18 @@ async def patch_server_endpoint(
             detail=f"Registration denied by policy gate: {gate_result.error_message}",
         )
 
-    success = await server_service.update_server(path, merged)
+    success = await server_service.update_server(
+        path,
+        merged,
+        updated_fields=patch_fields,
+        expected_updated_at=(existing.get("updated_at") if client_ts is not None else None),
+    )
     if not success:
+        if client_ts is not None:
+            raise HTTPException(
+                status_code=status.HTTP_412_PRECONDITION_FAILED,
+                detail="If-Match does not match current server version",
+            )
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={"detail": "Failed to save server"},

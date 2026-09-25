@@ -137,3 +137,69 @@ class TestUpdateServerProxy:
         persisted = repo.update.call_args[0][1]
         assert persisted["proxy_disabled_reason"] is None
         assert persisted["proxy_resolved_ips"] == ["93.184.216.34"]
+
+    async def test_field_scoped_update_includes_pinned_proxy_fields(self):
+        # The scope must carry the re-pinned fields or the $set skips them.
+        repo = AsyncMock()
+        repo.get.return_value = {
+            "path": "/s",
+            "is_proxied": True,
+            "proxy_pass_url": "https://ok.example/",
+            "proxy_disabled_reason": "was auto-disabled",
+            "deployment": "remote",
+        }
+        repo.update.return_value = True
+        repo.get_state.return_value = False
+        service = _service_with_repo(repo)
+        m = _settings()
+        try:
+            with patch("socket.getaddrinfo", return_value=_addrinfo("93.184.216.34")):
+                await service.update_server(
+                    "/s",
+                    {"proxy_pass_url": "https://ok.example/"},
+                    updated_fields=["proxy_pass_url"],
+                )
+        finally:
+            m.stop()
+        kwargs = repo.update.call_args.kwargs
+        assert kwargs["updated_fields"] == [
+            "proxy_pass_url",
+            "proxy_resolved_ips",
+            "proxy_target_host",
+            "proxy_disabled_reason",
+        ]
+        persisted = repo.update.call_args[0][1]
+        assert persisted["proxy_resolved_ips"] == ["93.184.216.34"]
+        assert persisted["proxy_disabled_reason"] is None
+
+    async def test_field_scoped_repoint_includes_cleared_header_fields(self):
+        # A field-scoped repoint must persist the cleared custom-header
+        # fields or the stale headers outlive the guard that cleared them.
+        repo = AsyncMock()
+        repo.get.return_value = {
+            "path": "/s",
+            "is_proxied": True,
+            "proxy_target_url": "https://old.example/",
+            "custom_headers_encrypted": "ciphertext",
+            "custom_header_names": ["x-api-key"],
+            "deployment": "remote",
+        }
+        repo.update.return_value = True
+        repo.get_state.return_value = False
+        service = _service_with_repo(repo)
+        m = _settings()
+        try:
+            with patch("socket.getaddrinfo", return_value=_addrinfo("93.184.216.34")):
+                await service.update_server(
+                    "/s",
+                    {"proxy_target_url": "https://new.example/"},
+                    updated_fields=["proxy_target_url"],
+                )
+        finally:
+            m.stop()
+        kwargs = repo.update.call_args.kwargs
+        assert "custom_headers_encrypted" in kwargs["updated_fields"]
+        assert "custom_header_names" in kwargs["updated_fields"]
+        persisted = repo.update.call_args[0][1]
+        assert persisted["custom_headers_encrypted"] is None
+        assert persisted["custom_header_names"] == []
