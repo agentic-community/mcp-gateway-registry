@@ -12,9 +12,11 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from registry.health.service import HealthMonitoringService
+from registry.health.service import DISCOVERY_IDENTITY_UNCONNECTED, HealthMonitoringService
 
-_UNCONNECTED = "unhealthy: discovery identity designated but not connected"
+# Import the constant rather than duplicating the string: a reworded status must
+# fail these tests, not silently make them assert nothing.
+_UNCONNECTED = DISCOVERY_IDENTITY_UNCONNECTED
 
 
 def _designated(**overrides) -> dict:
@@ -190,3 +192,60 @@ class TestUnconnectedWarningIsRateLimited:
 
         record = next(r for r in caplog.records if "designated but not connected" in r.message)
         assert record.levelname == "WARNING"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+class TestBothHealthPathsAgree:
+    """The periodic loop and the on-demand refresh must not disagree.
+
+    Each resolves credentials and records status independently, so a gate written
+    into only one of them is a gate the UI can miss. That is exactly what happened
+    on the first pass: the loop recorded the server unhealthy while the card, which
+    the refresh feeds, still read "Healthy, 45 tools". They share one predicate now.
+    """
+
+    async def test_immediate_check_names_it_too(self):
+        service = HealthMonitoringService()
+        info = _designated()
+
+        with (
+            patch(
+                "registry.services.server_service.server_service.get_server_info",
+                AsyncMock(return_value=info),
+            ),
+            patch(
+                "registry.health.service._with_backend_oauth",
+                AsyncMock(side_effect=lambda i: i),
+            ),
+        ):
+            status, checked = await service.perform_immediate_health_check("/gh")
+
+        assert status == _UNCONNECTED
+        assert checked is not None
+        assert service.server_health_status["/gh"] == _UNCONNECTED
+
+    async def test_immediate_check_respects_a_static_credential(self):
+        """The same false positive, on the path the UI actually calls."""
+        service = HealthMonitoringService()
+        info = _designated(auth_scheme="bearer", auth_credential_encrypted="ENC")
+
+        with (
+            patch(
+                "registry.services.server_service.server_service.get_server_info",
+                AsyncMock(return_value=info),
+            ),
+            patch(
+                "registry.health.service._with_backend_oauth",
+                AsyncMock(side_effect=lambda i: i),
+            ),
+        ):
+            status, _ = await service.perform_immediate_health_check("/gh")
+
+        assert status != _UNCONNECTED
+
+    async def test_the_api_normalizes_it_to_unhealthy(self):
+        """The UI reads a normalized enum, so the status must survive that mapping."""
+        from registry.api.server_routes import _normalize_health_status
+
+        assert _normalize_health_status(DISCOVERY_IDENTITY_UNCONNECTED) == "unhealthy"
