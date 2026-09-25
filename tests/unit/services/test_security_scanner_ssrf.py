@@ -146,7 +146,19 @@ async def test_scan_failure_omits_query_and_raw_exception_detail(caplog):
     assert "query-secret" not in caplog.text
     assert "raw-exception-secret" not in caplog.text
     assert "raw-exception-secret" not in str(result.model_dump())
-    assert result.error_message == "security scan failed (RuntimeError)"
+
+    # The message names the exception TYPE and nothing from the exception or the URL.
+    # This was an equality check against the bare prefix; the message now also tells
+    # the operator when the scan ran without a credential, which is the common cause
+    # and the only thing the UI's scan modal shows them. Equality would forbid that
+    # useful text, so assert the property the equality existed to protect instead:
+    # the safe prefix is intact and nothing from the request leaked in.
+    assert result.error_message is not None
+    assert result.error_message.startswith("security scan failed (RuntimeError)")
+    assert "query-secret" not in result.error_message
+    assert "raw-exception-secret" not in result.error_message
+    assert "public.example" not in result.error_message
+    assert "api_key" not in result.error_message
 
 
 def test_scanner_does_not_log_stdout_body_or_query(caplog):
