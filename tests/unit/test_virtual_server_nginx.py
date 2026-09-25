@@ -37,6 +37,40 @@ def _make_vs_config(
     )
 
 
+def _routable_backend(proxy_pass_url="https://api.github.com", **extra):
+    """Build a backend server_info dict that passes the routability gate.
+
+    A virtual server only emits a backend location / mapping entry for a backend
+    that is enabled, not security-disabled, and healthy. Tests that expect a
+    location to be produced must return an enabled backend; the module-level
+    ``_healthy_backends`` fixture supplies the healthy state.
+    """
+    return {"proxy_pass_url": proxy_pass_url, "is_enabled": True, **extra}
+
+
+@pytest.fixture(autouse=True)
+def _healthy_backends():
+    """Report every backend as healthy for the duration of a test.
+
+    ``_backend_is_routable`` consults the health-service singleton; seed it so
+    the enable/quarantine gate is what these tests exercise, not health flapping.
+    Restored afterwards so the shared singleton does not leak across tests.
+    """
+    from registry.constants import HealthStatus
+    from registry.health.service import health_service
+
+    class _AllHealthy(dict):
+        def get(self, key, default=None):
+            return HealthStatus.HEALTHY
+
+    original = health_service.server_health_status
+    health_service.server_health_status = _AllHealthy()
+    try:
+        yield
+    finally:
+        health_service.server_health_status = original
+
+
 class TestGenerateVirtualServerBlocks:
     """Tests for _generate_virtual_server_blocks.
 
@@ -182,9 +216,7 @@ class TestGenerateVirtualBackendLocations:
     async def test_generates_internal_locations(self, mock_server_repository):
         """Test that internal location blocks are generated for backends."""
         vs = _make_vs_config()
-        mock_server_repository.get.return_value = {
-            "proxy_pass_url": "https://api.github.com",
-        }
+        mock_server_repository.get.return_value = _routable_backend()
 
         from registry.core.nginx_service import NginxConfigService
 
@@ -203,9 +235,9 @@ class TestGenerateVirtualBackendLocations:
     async def test_preserves_nested_mcp_transport_path(self, mock_server_repository):
         """A configured /mcp/... endpoint must not receive a second /mcp suffix."""
         vs = _make_vs_config()
-        mock_server_repository.get.return_value = {
-            "proxy_pass_url": "https://insights.example.com/mcp/http",
-        }
+        mock_server_repository.get.return_value = _routable_backend(
+            "https://insights.example.com/mcp/http"
+        )
 
         from registry.core.nginx_service import NginxConfigService
 
@@ -219,10 +251,10 @@ class TestGenerateVirtualBackendLocations:
     async def test_explicit_mcp_endpoint_keeps_proxy_host(self, mock_server_repository):
         """Explicit endpoint paths use the private proxy host for internal routing."""
         vs = _make_vs_config()
-        mock_server_repository.get.return_value = {
-            "proxy_pass_url": "http://insights-service:8000",
-            "mcp_endpoint": "https://public.example.com/custom/mcp/http",
-        }
+        mock_server_repository.get.return_value = _routable_backend(
+            "http://insights-service:8000",
+            mcp_endpoint="https://public.example.com/custom/mcp/http",
+        )
 
         from registry.core.nginx_service import NginxConfigService
 
@@ -243,9 +275,7 @@ class TestGenerateVirtualBackendLocations:
         upstream. Both must be cleared instead.
         """
         vs = _make_vs_config()
-        mock_server_repository.get.return_value = {
-            "proxy_pass_url": "https://api.github.com",
-        }
+        mock_server_repository.get.return_value = _routable_backend()
 
         from registry.core.nginx_service import NginxConfigService
 
@@ -258,6 +288,37 @@ class TestGenerateVirtualBackendLocations:
         # user's registry session cookie must also be cleared before reaching
         # the untrusted backend.
         assert 'proxy_set_header Cookie "";' in result
+        # The gateway's own clients present the caller's bearer in
+        # X-Authorization (auth_server treats it as the primary gateway
+        # credential), so it MUST be cleared too or a registrant-controlled
+        # backend could capture and replay it against the registry API.
+        assert 'proxy_set_header X-Authorization "";' in result
+        assert "proxy_set_header X-Authorization $http_x_authorization;" not in result
+        # Other caller / internal credentials that must never egress.
+        assert 'proxy_set_header Proxy-Authorization "";' in result
+        assert 'proxy_set_header X-Internal-Token "";' in result
+        assert 'proxy_set_header X-Internal-Token-Registry "";' in result
+        assert 'proxy_set_header X-Internal-Token-Generic "";' in result
+        # Gateway-internal routing/identity headers a client could otherwise pass
+        # THROUGH nginx to the backend (confused-deputy / spoofing) are cleared too.
+        assert 'proxy_set_header X-Scopes "";' in result
+        assert 'proxy_set_header X-Original-Url "";' in result
+        assert 'proxy_set_header X-Server-Name "";' in result
+        assert 'proxy_set_header X-Groups "";' in result
+        assert 'proxy_set_header X-Client-Id "";' in result
+        # The validated caller identity is RE-SET from trusted variables, not
+        # cleared, so backends can still attribute writes to the user.
+        assert 'proxy_set_header X-User "";' not in result
+        assert 'proxy_set_header X-Username "";' not in result
+        # Client-IP / forwarding headers are stripped too (not re-sent): the
+        # canonical reserved set marks them "never forward to a registrant
+        # backend", and re-setting X-Forwarded-For via $proxy_add_x_forwarded_for
+        # would leave the caller's spoofable leftmost value intact.
+        assert 'proxy_set_header X-Forwarded-For "";' in result
+        assert 'proxy_set_header X-Real-Ip "";' in result
+        assert 'proxy_set_header X-Forwarded-Proto "";' in result
+        assert 'proxy_set_header X-Forwarded-Host "";' in result
+        assert "$proxy_add_x_forwarded_for" not in result
 
     @pytest.mark.asyncio
     async def test_identity_headers_forwarded_via_http_vars(self, mock_server_repository):
@@ -273,9 +334,7 @@ class TestGenerateVirtualBackendLocations:
         ($auth_user) do not propagate into subrequest contexts.
         """
         vs = _make_vs_config()
-        mock_server_repository.get.return_value = {
-            "proxy_pass_url": "https://api.github.com",
-        }
+        mock_server_repository.get.return_value = _routable_backend()
 
         from registry.core.nginx_service import NginxConfigService
 
@@ -295,9 +354,9 @@ class TestGenerateVirtualBackendLocations:
         vs = _make_vs_config()
         # A docker-compose-style service name (no dot) is not resolvable in every
         # environment; a literal proxy_pass to it would make nginx fail to start.
-        mock_server_repository.get.return_value = {
-            "proxy_pass_url": "http://currenttime-server:8000/",
-        }
+        mock_server_repository.get.return_value = _routable_backend(
+            "http://currenttime-server:8000/"
+        )
 
         from registry.core.nginx_service import NginxConfigService
 
@@ -318,9 +377,7 @@ class TestGenerateVirtualBackendLocations:
             ToolMapping(tool_name="issues", backend_server_path="/github"),
         ]
         vs = _make_vs_config(tool_mappings=mappings)
-        mock_server_repository.get.return_value = {
-            "proxy_pass_url": "https://api.github.com",
-        }
+        mock_server_repository.get.return_value = _routable_backend()
 
         from registry.core.nginx_service import NginxConfigService
 
@@ -358,6 +415,49 @@ class TestGenerateVirtualBackendLocations:
 
         assert result == ""
 
+    @pytest.mark.asyncio
+    async def test_skips_disabled_backend(self, mock_server_repository):
+        """A disabled backend must not be reachable through a virtual server."""
+        vs = _make_vs_config()
+        mock_server_repository.get.return_value = _routable_backend(is_enabled=False)
+
+        from registry.core.nginx_service import NginxConfigService
+
+        service = NginxConfigService()
+        result = await service._generate_virtual_backend_locations([vs])
+
+        assert result == ""
+
+    @pytest.mark.asyncio
+    async def test_skips_security_disabled_backend(self, mock_server_repository):
+        """A security-quarantined backend must not be reachable via a virtual server."""
+        vs = _make_vs_config()
+        mock_server_repository.get.return_value = _routable_backend(is_disabled_for_security=True)
+
+        from registry.core.nginx_service import NginxConfigService
+
+        service = NginxConfigService()
+        result = await service._generate_virtual_backend_locations([vs])
+
+        assert result == ""
+
+    @pytest.mark.asyncio
+    async def test_skips_unhealthy_backend(self, mock_server_repository):
+        """An unhealthy backend must not be reachable through a virtual server."""
+        vs = _make_vs_config()
+        mock_server_repository.get.return_value = _routable_backend()
+
+        from registry.constants import HealthStatus
+        from registry.core.nginx_service import NginxConfigService
+        from registry.health.service import health_service
+
+        # Report the backend as unhealthy for this test only.
+        health_service.server_health_status = {"/github": HealthStatus.UNHEALTHY_TIMEOUT}
+        service = NginxConfigService()
+        result = await service._generate_virtual_backend_locations([vs])
+
+        assert result == ""
+
 
 class TestWriteVirtualServerMappings:
     """Tests for _write_virtual_server_mappings.
@@ -370,6 +470,7 @@ class TestWriteVirtualServerMappings:
         """Test that mapping JSON file is written for each virtual server."""
         vs = _make_vs_config()
         mock_server_repository.get.return_value = {
+            "is_enabled": True,
             "server_name": "GitHub",
             "tool_list": [
                 {
@@ -381,7 +482,11 @@ class TestWriteVirtualServerMappings:
         }
 
         m = mock_open()
-        with patch("registry.core.nginx_service.Path") as mock_path_cls, patch("builtins.open", m):
+        with (
+            patch("registry.core.nginx_service.Path") as mock_path_cls,
+            patch("registry.core.nginx_service.os.replace"),
+            patch("builtins.open", m),
+        ):
             mock_mappings_dir = MagicMock()
             mock_path_cls.return_value = mock_mappings_dir
             mock_mapping_file = MagicMock()
@@ -408,6 +513,7 @@ class TestWriteVirtualServerMappings:
             ],
         )
         mock_server_repository.get.return_value = {
+            "is_enabled": True,
             "server_name": "GitHub",
             "tool_list": [
                 {
@@ -426,6 +532,7 @@ class TestWriteVirtualServerMappings:
         with (
             patch("registry.core.nginx_service.Path") as mock_path_cls,
             patch("json.dump", side_effect=capture_write),
+            patch("registry.core.nginx_service.os.replace"),
         ):
             mock_mappings_dir = MagicMock()
             mock_path_cls.return_value = mock_mappings_dir
@@ -459,6 +566,7 @@ class TestWriteVirtualServerMappings:
             ],
         )
         mock_server_repository.get.return_value = {
+            "is_enabled": True,
             "server_name": "GitHub",
             "tool_list": [
                 {"name": "search", "description": "Search", "inputSchema": {}},
@@ -473,6 +581,7 @@ class TestWriteVirtualServerMappings:
         with (
             patch("registry.core.nginx_service.Path") as mock_path_cls,
             patch("json.dump", side_effect=capture_write),
+            patch("registry.core.nginx_service.os.replace"),
         ):
             mock_mappings_dir = MagicMock()
             mock_path_cls.return_value = mock_mappings_dir
@@ -497,6 +606,7 @@ class TestWriteVirtualServerMappings:
             ],
         )
         mock_server_repository.get.return_value = {
+            "is_enabled": True,
             "server_name": "GitHub",
             "tool_list": [
                 {"name": "search", "description": "Search", "inputSchema": {}},
@@ -511,6 +621,7 @@ class TestWriteVirtualServerMappings:
         with (
             patch("registry.core.nginx_service.Path") as mock_path_cls,
             patch("json.dump", side_effect=capture_write),
+            patch("registry.core.nginx_service.os.replace"),
         ):
             mock_mappings_dir = MagicMock()
             mock_path_cls.return_value = mock_mappings_dir
@@ -527,6 +638,49 @@ class TestWriteVirtualServerMappings:
         assert "tool_backend_map" in written_data
         assert "search" in written_data["tool_backend_map"]
         assert "/_vs_backend" in written_data["tool_backend_map"]["search"]["backend_location"]
+
+    @pytest.mark.asyncio
+    async def test_disabled_backend_tools_dropped(self, mock_server_repository):
+        """Tools whose backend is disabled are dropped from the mapping so the
+        Lua router can neither advertise nor route to a disabled backend."""
+        vs = _make_vs_config(
+            tool_mappings=[
+                ToolMapping(tool_name="search", backend_server_path="/github"),
+            ],
+        )
+        mock_server_repository.get.return_value = {
+            "is_enabled": False,
+            "server_name": "GitHub",
+            "proxy_pass_url": "https://api.github.com",
+            "tool_list": [
+                {"name": "search", "description": "Search", "inputSchema": {}},
+            ],
+        }
+
+        written_data = {}
+
+        def capture_write(data, f, **kwargs):
+            written_data.update(data)
+
+        with (
+            patch("registry.core.nginx_service.Path") as mock_path_cls,
+            patch("json.dump", side_effect=capture_write),
+            patch("registry.core.nginx_service.os.replace"),
+        ):
+            mock_mappings_dir = MagicMock()
+            mock_path_cls.return_value = mock_mappings_dir
+            mock_mapping_file = MagicMock()
+            mock_mappings_dir.__truediv__ = MagicMock(return_value=mock_mapping_file)
+
+            m = mock_open()
+            with patch("builtins.open", m):
+                from registry.core.nginx_service import NginxConfigService
+
+                service = NginxConfigService()
+                await service._write_virtual_server_mappings([vs])
+
+        assert written_data["tools"] == []
+        assert written_data["tool_backend_map"] == {}
 
 
 class TestSanitizePathForLocation:
@@ -589,3 +743,110 @@ class TestIsHostResolvableAtStartup:
         from registry.core.nginx_service import NginxConfigService
 
         assert NginxConfigService._is_host_resolvable_at_startup("") is False
+
+
+class TestVsBackendStripSet:
+    """The vs-backend credential-strip set must stay DERIVED from the canonical
+    reserved-header denylist so it cannot silently drop a credential or drift."""
+
+    def test_vs_backend_strip_set_derives_from_reserved(self):
+        """Strip set == RESERVED_CUSTOM_HEADER_NAMES minus the two documented
+        carve-outs, and the three sets exactly partition the reserved set.
+
+        This means a header added to the canonical reserved denylist is stripped
+        on vs-backend egress automatically (or this test fails), and no reserved
+        header can be excluded from stripping without appearing in an explicit,
+        reviewed carve-out.
+        """
+        from registry.constants import RESERVED_CUSTOM_HEADER_NAMES
+        from registry.core.nginx_service import (
+            _VS_BACKEND_FRAMING_HEADERS,
+            _VS_BACKEND_RESET_IDENTITY_HEADERS,
+            _VS_BACKEND_STRIPPED_HEADERS,
+        )
+
+        # Carve-outs must be subsets of the canonical set (no typos / stray names).
+        assert _VS_BACKEND_FRAMING_HEADERS <= RESERVED_CUSTOM_HEADER_NAMES
+        assert _VS_BACKEND_RESET_IDENTITY_HEADERS <= RESERVED_CUSTOM_HEADER_NAMES
+        # ... and disjoint from each other.
+        assert not (_VS_BACKEND_FRAMING_HEADERS & _VS_BACKEND_RESET_IDENTITY_HEADERS)
+
+        # The derivation and a complete partition of the reserved set.
+        assert _VS_BACKEND_STRIPPED_HEADERS == (
+            RESERVED_CUSTOM_HEADER_NAMES
+            - _VS_BACKEND_FRAMING_HEADERS
+            - _VS_BACKEND_RESET_IDENTITY_HEADERS
+        )
+        assert (
+            _VS_BACKEND_STRIPPED_HEADERS
+            | _VS_BACKEND_FRAMING_HEADERS
+            | _VS_BACKEND_RESET_IDENTITY_HEADERS
+        ) == RESERVED_CUSTOM_HEADER_NAMES
+
+        # Pin the carve-outs to explicit snapshots: EXPANDING a carve-out (which
+        # would stop stripping a credential/internal header) must fail here.
+        assert _VS_BACKEND_FRAMING_HEADERS == frozenset(
+            {
+                "content-type",
+                "content-length",
+                "accept",
+                "host",
+                "connection",
+                "keep-alive",
+                "te",
+                "trailer",
+                "transfer-encoding",
+                "upgrade",
+            }
+        )
+        assert _VS_BACKEND_RESET_IDENTITY_HEADERS == frozenset({"x-user", "x-username"})
+
+        # Spot-check the security-critical headers that MUST be stripped.
+        for name in (
+            "authorization",
+            "x-authorization",
+            "proxy-authorization",
+            "cookie",
+            "set-cookie",
+            "x-internal-token",
+            "x-internal-token-registry",
+            "x-internal-token-generic",
+            "x-scopes",
+            "x-groups",
+            "x-client-id",
+            "x-original-url",
+            "x-server-name",
+            "x-tool-name",
+            "x-entity-path",
+            "x-original-method",
+            "x-body",
+            "x-body-uninspectable",
+            "x-forwarded-for",
+            "x-forwarded-proto",
+            "x-forwarded-host",
+            "x-real-ip",
+        ):
+            assert name in _VS_BACKEND_STRIPPED_HEADERS
+        # ... and the re-set identity headers are NOT stripped.
+        assert "x-user" not in _VS_BACKEND_STRIPPED_HEADERS
+        assert "x-username" not in _VS_BACKEND_STRIPPED_HEADERS
+
+    def test_credential_clears_emit_canonical_sorted_directives(self):
+        """The emitted directives are canonical-cased, sorted, and cover the set."""
+        from registry.core.nginx_service import (
+            _VS_BACKEND_STRIPPED_HEADERS,
+            NginxConfigService,
+        )
+
+        rendered = NginxConfigService._vs_backend_credential_clears()
+        lines = rendered.splitlines()
+        # One directive per stripped header, sorted by lowercased name.
+        assert len(lines) == len(_VS_BACKEND_STRIPPED_HEADERS)
+        expected = [
+            f'        proxy_set_header {"-".join(p.capitalize() for p in name.split("-"))} "";'
+            for name in sorted(_VS_BACKEND_STRIPPED_HEADERS)
+        ]
+        assert lines == expected
+        # Canonical casing sanity.
+        assert '        proxy_set_header X-Authorization "";' in lines
+        assert '        proxy_set_header X-Internal-Token-Registry "";' in lines

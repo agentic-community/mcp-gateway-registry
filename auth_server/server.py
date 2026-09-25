@@ -2211,6 +2211,77 @@ async def _get_blocked_tools(server_name: str) -> set[str]:
     return await get_server_repository().get_blocked_tools(path)
 
 
+def _backend_reachable(server_info: dict | None) -> bool:
+    """Request-time gate: a backend must be enabled and not security-disabled.
+
+    Enforced at ``/validate`` so a virtual server cannot keep reaching a backend
+    that has been disabled or security-quarantined while the generated nginx
+    config / cached virtual mapping still lags behind the state change. Fails
+    closed: a missing document (deleted / unknown backend) is unreachable. Health
+    is intentionally not gated here -- an enabled backend that is transiently
+    unhealthy simply fails its own subrequest, whereas disable/quarantine are
+    authorization decisions that must bite immediately.
+    """
+    if not server_info:
+        return False
+    if not server_info.get("is_enabled", False):
+        return False
+    if server_info.get("is_disabled_for_security", False):
+        return False
+    return True
+
+
+async def _tool_call_denied(server_name: str, tool_name: str) -> str | None:
+    """Return a deny reason for a ``tools/call``, or ``None`` to allow.
+
+    A virtual server exposes aggregated tools under a virtual alias, while both
+    the scanner block state and the enable/quarantine state live on the OWNING
+    backend server. Resolve the alias through the virtual server's tool mappings
+    and enforce, at request time, that (1) the backend is enabled and not
+    security-disabled and (2) the tool is not blocked on that backend under its
+    ORIGINAL name -- so a tool blocked on a backend, or a disabled/quarantined
+    backend, cannot be reached through any virtual server that maps it, even
+    before the generated nginx config catches up. For a normal server only the
+    blocked-tool check applies, with the tool name unchanged.
+
+    Raises on an indeterminate lookup (unknown virtual server, unmapped tool, or
+    backend read error) so the caller fails closed and denies the call rather
+    than proceeding on an empty block set.
+    """
+    path = await _resolve_server_path(server_name)
+    if path.startswith("/virtual/"):
+        from registry.repositories.factory import get_virtual_server_repository
+
+        config = await get_virtual_server_repository().get(path)
+        if config is None:
+            raise LookupError(f"virtual server not found: {path}")
+        # Check EVERY mapping whose exposed name matches, not just the first.
+        # The mapping-file writer keys tool_backend_map by exposed name and the
+        # LAST duplicate wins there, so a first-match-only authorization check
+        # could diverge from what the data plane routes to. Uniqueness is
+        # enforced at write time, but resolving all matches keeps this gate
+        # fail-closed even against a document that bypassed that validation:
+        # deny if ANY matching backend is unreachable or blocks the tool.
+        matched = False
+        server_repo = get_server_repository()
+        for tm in config.tool_mappings:
+            effective = tm.alias if tm.alias else tm.tool_name
+            if effective != tool_name:
+                continue
+            matched = True
+            if not _backend_reachable(await server_repo.get(tm.backend_server_path)):
+                return "disabled or quarantined backend"
+            blocked = await server_repo.get_blocked_tools(tm.backend_server_path)
+            if tm.tool_name in blocked:
+                return "blocked tool"
+        if not matched:
+            raise LookupError(f"tool '{tool_name}' not mapped by virtual server {path}")
+        return None
+
+    blocked = await _get_blocked_tools(server_name)
+    return "blocked tool" if tool_name in blocked else None
+
+
 async def validate_server_tool_access(
     server_name: str,
     method: str,
@@ -2239,14 +2310,14 @@ async def validate_server_tool_access(
     """
     if method == "tools/call" and tool_name:
         try:
-            blocked = await _get_blocked_tools(server_name)
+            deny_reason = await _tool_call_denied(server_name, tool_name)
         except Exception as exc:
-            # Fail closed: if block state is indeterminate, deny the call.
-            logger.error(f"blocked-tool lookup failed for {server_name}: {exc}")
-            logger.info(f"Access denied (block lookup): server='{server_name}' tool='{tool_name}'")
+            # Fail closed: if the block / backend state is indeterminate, deny.
+            logger.error(f"tools/call gate lookup failed for {server_name}: {exc}")
+            logger.info(f"Access denied (gate lookup): server='{server_name}' tool='{tool_name}'")
             return False
-        if tool_name in blocked:
-            logger.info(f"Access denied (blocked tool): server='{server_name}' tool='{tool_name}'")
+        if deny_reason:
+            logger.info(f"Access denied ({deny_reason}): server='{server_name}' tool='{tool_name}'")
             return False
 
     try:
