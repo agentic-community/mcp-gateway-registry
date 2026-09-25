@@ -45,7 +45,7 @@ The receipt is a caller-visible eval/debugging signal, not an operator audit tra
 A useful receipt answers four questions:
 
 1. **What was requested?** The natural-language discovery query.
-2. **What was exposed?** The tools, agents, or skills returned to the agent, with scores and the configured result limit.
+2. **What was exposed?** The tools, agents, skills, or custom entity records returned to the agent, with scores and the configured result limit. A custom record carries the name of its own custom type in `asset_type`, so treat that field as an open set rather than a fixed enum.
 3. **What stayed out?** How many candidate results were withheld because they fell outside the result budget, plus the highest-scoring withheld items themselves (`top_withheld`) so you can tell whether the tool you wanted was a near miss or genuinely absent.
 4. **What was the outcome?** The overall `status` and a `stop_reason` describing why discovery ended.
 
