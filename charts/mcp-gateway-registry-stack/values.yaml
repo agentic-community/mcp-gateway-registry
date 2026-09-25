@@ -8,7 +8,7 @@ global:
   image:
     # Container registry (host + optional namespace), e.g. "public.ecr.aws/p3v1o3c6"
     registry: public.ecr.aws/p3v1o3c6
-    tag: 1.30.0
+    tag: 1.31.0
     pullPolicy: IfNotPresent
   # When installing chart from repository, add --set global.chartVersion=$(git rev-parse HEAD) to add the git hash to a configmap for debugging
   chartVersion:
@@ -59,6 +59,11 @@ global:
   # also fronted by the registry pod's in-cluster nginx reverse proxy.
   ingress:
     inboundCidrs: # optional comma separated list of allowed inbound CIDR ranges
+    # Optional ALB ssl-policy applied to the HTTPS listener. Leave empty to
+    # let the AWS Load Balancer Controller use its own default
+    # (ELBSecurityPolicy-2016-08). Set a modern policy such as
+    # ELBSecurityPolicy-TLS-1-2-Ext-2018-06 when clients require newer TLS.
+    sslPolicy:
     # Default ALB scheme applied to every ingress in the stack. Stack-level
     # override of each subchart's own global.ingress.scheme. Individual
     # ingresses can still override via <subchart>.ingress.scheme for cases
@@ -297,6 +302,12 @@ mongodb-configure:
     password: *mongoPassword
     database: *mongoDatabase
     connectionString: *mongoConnectionString
+    # Audit log retention, applied to the audit_events TTL index by the init
+    # Job. Set it HERE rather than out-of-band: the Job re-runs on every
+    # `helm upgrade`, so a value only present in the cluster is not durable.
+    # Shortening it deletes existing audit records, so the script refuses to
+    # unless mongodb-configure.mongodb.auditTtlAllowShrink is also true.
+    auditTtlDays: 7
 # Registry service configuration
 registry:
   app:
@@ -473,6 +484,17 @@ registry:
     ideOauthCallbackPort: 0
     # Demo server configuration
     disableAiRegistryToolsServer: false # Set to true to disable auto-registration of the built-in airegistry-tools server
+  # Egress HTTP connection pooling (operational tuning). Surfaced here because these
+  # are the egress knobs an operator tunes on a LIVE deployment -- keep
+  # httpPoolKeepaliveExpirySeconds below the shortest upstream/LB idle timeout. The
+  # rest of the egress credential-vault config (oauthTrustedIdpHosts, secretsManager,
+  # callback URLs) is set-once feature config and stays subchart-defaulted. These MUST
+  # match auth-server.egressAuth below.
+  egressAuth:
+    httpPoolMaxConnections: "100" # Max total egress connections in the pool
+    httpPoolMaxKeepalive: "20" # Max idle keep-alive connections retained
+    httpPoolKeepaliveExpirySeconds: "30" # Idle keep-alive lifetime (s); below LB idle timeout
+    httpPoolConnectRetries: "1" # Transport-level connect retries
   # AWS Agent Registry Federation
   awsRegistry:
     federationEnabled: false # Enable AWS Agent Registry federation (overrides MongoDB config on startup)
@@ -602,6 +624,14 @@ auth-server:
     gatewayGenericAcquireTimeoutSeconds: 5
     gatewayGenericStreamMaxDurationSeconds: 3600
     gatewayGenericStreamMaxBytes: "104857600" # string to avoid Helm float sci-notation
+  # Egress HTTP connection pooling (operational tuning). MUST match
+  # registry.egressAuth above. See that block for guidance; the rest of egressAuth
+  # (oauthTrustedIdpHosts, secretsManager, callback URLs) stays subchart-defaulted.
+  egressAuth:
+    httpPoolMaxConnections: "100" # Max total egress connections in the pool
+    httpPoolMaxKeepalive: "20" # Max idle keep-alive connections retained
+    httpPoolKeepaliveExpirySeconds: "30" # Idle keep-alive lifetime (s); below LB idle timeout
+    httpPoolConnectRetries: "1" # Transport-level connect retries
   metrics:
     # Standard OTel SDK var. Setting this activates the OTLP push exporter.
     otelExporterOtlpEndpoint: "" # OTLP endpoint URL (e.g., http://otel-collector:4317)

@@ -1718,6 +1718,15 @@ class SkillSearchResponse(BaseModel):
     total_count: int = Field(0, description="Total matches")
 
 
+class ToolToggleResponse(BaseModel):
+    """Response model for the per-tool block toggle."""
+
+    tool_name: str = Field(..., description="Name of the tool that was toggled")
+    enabled: bool = Field(
+        ..., description="New state. False means the tool is blocked and tools/call is rejected"
+    )
+
+
 class SkillToggleResponse(BaseModel):
     """Response model for skill toggle."""
 
@@ -1864,6 +1873,10 @@ class RegistryClient:
             # The server rate endpoint (POST /api/servers/{path}/rate) takes a
             # JSON RatingRequest body, not form data.
             or endpoint.endswith("/rate")
+            # The per-tool block toggle takes a JSON ToolTogglePayload. Server
+            # registration on /api/servers is form-encoded, so this needs naming
+            # explicitly rather than relying on the /api/servers prefix.
+            or "/toggle-tool" in endpoint
             or (method in ("PUT", "PATCH") and endpoint.startswith("/api/servers/"))
         ):
             # Send as JSON for agent, management, search, federation, and import endpoints
@@ -3096,6 +3109,54 @@ class RegistryClient:
         self._make_request(method="DELETE", endpoint=f"/api/agents{path}")
 
         logger.info(f"Agent deleted successfully: {path}")
+
+    def toggle_tool(
+        self,
+        service_path: str,
+        tool_name: str,
+        enabled: bool,
+    ) -> ToolToggleResponse:
+        """
+        Block or unblock a single tool on a server.
+
+        A blocked tool is rejected on ``tools/call`` and withheld from the
+        agent-facing projections (the proxy's ``tools/list``, semantic search,
+        ``server.json``). The server itself stays enabled, so its other tools keep
+        working.
+
+        Blocking by hand records ``source="admin"``, which a later security rescan
+        preserves. That is what makes an unblock durable: without it the next scan
+        would re-block a tool the scanner still flags.
+
+        Args:
+            service_path: Server path, for example "/context7"
+            tool_name: Tool to toggle. Must exist on that server
+            enabled: True to unblock, False to block
+
+        Returns:
+            ToolToggleResponse with the new state
+
+        Raises:
+            requests.HTTPError: 404 if the server is not registered, 400 if the
+                tool is not on that server or its name cannot be used as a storage
+                key, 403 without the toggle_service permission
+        """
+        if not service_path.startswith("/"):
+            service_path = "/" + service_path
+
+        logger.info(f"Toggling tool {tool_name!r} on {service_path} to enabled={enabled}")
+
+        response = self._make_request(
+            method="POST",
+            # The /api/servers/... sibling accepts a bearer token; /api/toggle-tool
+            # is session-authenticated for the UI and would 401 here.
+            endpoint=f"/api/servers/toggle-tool{service_path}",
+            data={"tool_name": tool_name, "enabled": enabled},
+        )
+
+        result = response.json()
+        logger.info(f"Tool toggled: {result.get('tool_name')} -> enabled={result.get('enabled')}")
+        return ToolToggleResponse(**result)
 
     def toggle_agent(self, path: str, enabled: bool) -> AgentToggleResponse:
         """

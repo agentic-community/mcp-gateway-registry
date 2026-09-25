@@ -20,6 +20,19 @@ logger = logging.getLogger(__name__)
 pytestmark = [pytest.mark.unit, pytest.mark.auth]
 
 
+@pytest.fixture(autouse=True)
+def _stub_blocked_tools():
+    """Stub the per-tool block lookup for every test in this module.
+
+    validate_server_tool_access reads blocked tools from DocumentDB on every
+    tools/call and fails CLOSED when that read errors. These tests have no live
+    repository, so without this stub every tools/call would 403. Any test that
+    actually exercises blocking should patch _get_blocked_tools itself.
+    """
+    with patch("auth_server.server._get_blocked_tools", new=AsyncMock(return_value=set())):
+        yield
+
+
 # =============================================================================
 # HELPER FUNCTION TESTS
 # =============================================================================
@@ -1532,6 +1545,132 @@ class TestGenerateTokenEndpoint:
         # Assert
         assert response.status_code == 429
         assert "Rate limit exceeded" in response.json()["detail"]
+
+    def test_multivalued_email_still_produces_a_mint_audit_record(self, auth_env_vars):
+        """REGRESSION (audit evasion by claim shape): a Keycloak multivalued
+        `email` mapper propagates a LIST into the mint audit record's `username`,
+        which Pydantic refuses to coerce -- the ValidationError was raised INSIDE
+        the best-effort emit and swallowed, silently dropping the whole record
+        while the token was still minted. All 7 mint sites now resolve the display
+        value through the ONE `_claim_str`-backed resolver.
+        """
+        import auth_server.server as server_module
+
+        records: list[object] = []
+        client = TestClient(server_module.app)
+        with (
+            patch.object(server_module, "emit_audit_event", records.append),
+            patch.object(server_module, "get_audit_logger", return_value=None),
+        ):
+            response = client.post(
+                "/internal/tokens",
+                json={
+                    "user_context": {
+                        "username": "alice",
+                        "scopes": ["read:servers"],
+                        "auth_method": "oauth2",
+                        "provider": "keycloak",
+                        # The multivalued mapper: a JSON array, not a string.
+                        "email": ["alice@example.com", "alice.alias@example.com"],
+                    },
+                    "requested_scopes": ["read:servers"],
+                    "expires_in_hours": 8,
+                },
+                headers=_internal_auth_headers(auth_env_vars),
+            )
+
+        assert response.status_code == 200
+        assert len(records) == 1, "the audit record was dropped"
+        record = records[0]
+        # First usable member of the multivalued claim, as a plain string.
+        assert record.username == "alice@example.com"
+        assert record.username_hash == server_module.hash_username("alice")
+
+
+class TestEmitTokenMintAuditIdentityCoercion:
+    """`_emit_token_mint_audit` is the ONE cap/coercion point for this stream.
+
+    Both identity values it receives are IdP-claim-derived at several of its call
+    sites, and their shape is the IdP's choice. Unguarded, a multivalued mapper
+    (list) raises in `hash_username` or in Pydantic INSIDE the best-effort block,
+    which swallows it and drops the whole record while the token is still minted.
+    Isolated here so the guarantee holds even if a call site stops pre-resolving.
+    """
+
+    _COMMON = {
+        "request_id": "req-1",
+        "correlation_id": None,
+        "auth_method": "oauth2",
+        "provider": "keycloak",
+        "internal_caller": "registry",
+        "token_kind": "user",
+        "resource_type": None,
+        "resource_id": None,
+        "token_path": "self_signed",  # nosec B106 - audit metadata label
+        "requested_scopes": [],
+        "expires_in_seconds": 3600,
+        "outcome": "success",
+    }
+
+    async def _emit(self, **kwargs):
+        import auth_server.server as server_module
+
+        records: list[object] = []
+        with (
+            patch.object(server_module, "emit_audit_event", records.append),
+            patch.object(server_module, "get_audit_logger", return_value=None),
+        ):
+            await server_module._emit_token_mint_audit(**self._COMMON, **kwargs)
+        return records
+
+    async def test_list_display_and_list_username_still_record(self):
+        import auth_server.server as server_module
+
+        records = await self._emit(
+            username=["alice", "alice.alias"],
+            display_username=["alice@example.com", "alice.alias@example.com"],
+        )
+        assert len(records) == 1, "the audit record was dropped"
+        assert records[0].username == "alice@example.com"
+        assert records[0].username_hash == server_module.hash_username("alice")
+
+    async def test_unusable_identity_shapes_degrade_to_anonymous_not_to_nothing(self):
+        # A record attributed to "anonymous" is still a record; a dropped record
+        # is audit evasion by claim shape.
+        records = await self._emit(username={"bad": 1}, display_username=True)
+        assert len(records) == 1
+        assert records[0].username == "anonymous"
+        assert records[0].username_hash == "anonymous"
+
+    async def test_oversized_identity_is_capped_not_dropped(self):
+        records = await self._emit(username="u" * 500, display_username="d" * 500)
+        import auth_server.server as server_module
+
+        assert len(records) == 1
+        assert len(records[0].username) == server_module._MAX_AUDIT_CLAIM_LEN
+
+    async def test_a_dropped_record_is_counted(self):
+        """The emit is best-effort by design (a mint must never fail on
+        observability), which is exactly why a loss here cannot be silent."""
+        import auth_server.server as server_module
+
+        degraded: list[dict] = []
+
+        def _boom(_record):
+            raise RuntimeError("audit sink down")
+
+        with (
+            patch.object(server_module, "emit_audit_event", _boom),
+            patch.object(server_module, "get_audit_logger", return_value=None),
+            patch.object(
+                server_module,
+                "audit_integrity_degraded_total",
+                type("_C", (), {"add": staticmethod(lambda n, labels: degraded.append(labels))})(),
+            ),
+        ):
+            await server_module._emit_token_mint_audit(**self._COMMON, username="alice")
+
+        assert degraded == [{"reason": "record_dropped"}]
 
 
 class TestInternalRouterGate:
@@ -3519,6 +3658,7 @@ def _mcp_proxy_token_headers(
     server_name: str = "office-docs",
     upstream_url: str = "https://upstream.example/mcp",
     scopes: list[str] | None = None,
+    audit_identity: dict | None = None,
 ) -> dict:
     """Build the X-Internal-Token nginx would forward to /mcp-proxy.
 
@@ -3539,8 +3679,28 @@ def _mcp_proxy_token_headers(
         scopes=["admin:all"] if scopes is None else scopes,
         server_name=server_name,
         upstream_url=upstream_url,
+        audit_identity=audit_identity,
     )
     return {"X-Internal-Token": token}
+
+
+def _forged_ingress_jwt(sub: str = "test-user", **claims: str) -> str:
+    """An UNSIGNED-in-practice ingress JWT carrying attacker-chosen identity.
+
+    nginx forwards the client's raw Authorization/X-Authorization to the
+    /mcp-proxy hop, and /validate does NOT signature-verify that header when the
+    request authenticated on a session cookie. So a caller can present a JWT
+    signed with a key nobody trusts, matching only the principal binding
+    (``sub``), and choose every other claim. Nothing derived from this token may
+    reach an audit record.
+    """
+    import jwt as _jwt
+
+    return _jwt.encode(
+        {"sub": sub, "preferred_username": sub, **claims},
+        "attacker-chosen-key",
+        algorithm="HS256",
+    )
 
 
 def _obo_ingress_jwt(sub: str = "test-user") -> str:
@@ -4084,7 +4244,24 @@ def _capture_upstream_headers():
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=False)
 
-    return patch("auth_server.server.httpx.AsyncClient", return_value=mock_client), captured
+    # The egress (token-injected) stream uses the pooled shared_guarded_async_client;
+    # the non-egress stream uses server.httpx.AsyncClient. Patch BOTH to the same
+    # mock so either path records the forwarded headers.
+    from contextlib import contextmanager
+
+    @contextmanager
+    def _patch_both():
+        with (
+            patch("auth_server.server.httpx.AsyncClient", return_value=mock_client),
+            patch(
+                "registry.utils.url_guard.shared_guarded_async_client",
+                return_value=mock_client,
+            ),
+        ):
+            yield
+
+    captured["client"] = mock_client
+    return _patch_both(), captured
 
 
 class _FakeEntraProvider:
@@ -4153,6 +4330,350 @@ class TestMcpProxyOboExchange:
         assert "x-authorization" not in sent
         assert "cookie" not in sent
         assert "x-internal-token" not in sent
+        # The pooled (shared) egress client must NOT be closed per request; only
+        # the per-call non-egress client is. This is the egress path (guarded pool).
+        captured["client"].aclose.assert_not_called()
+
+    @staticmethod
+    def _capture_mint_audit(server_module):
+        """Patch the token-mint audit emitter and capture its kwargs."""
+        emitted: list[dict] = []
+
+        async def _record(**kwargs):
+            emitted.append(kwargs)
+
+        return patch.object(server_module, "_emit_token_mint_audit", _record), emitted
+
+    # The audit identity /validate would have signed into the hop token for an
+    # Entra delegated caller, keyed on sub=test-user so the OBO principal binding passes.
+    _SIGNED_AUDIT_IDENTITY = {
+        "display": "alice@example.com",
+        "subject": "test-user",
+        "canonical_id": "user-object-id@tenant-id",
+        "principal_name": "alice@example.com",
+        "object_id": "user-object-id",
+        "tenant_id": "tenant-id",
+        "app_id": "client-app-id",
+    }
+
+    def test_obo_audit_record_is_attributed_from_the_signed_hop_claim(self, monkeypatch):
+        """The OBO mint record carries the readable identity AND the durable
+        claims, sourced from the verified internal token."""
+        import auth_server.server as server_module
+
+        ingress_jwt = _obo_ingress_jwt("test-user")
+
+        async def _fake_exchange(provider, subject_token, target_audience, scopes=None):
+            return "exchanged-obo-token"
+
+        patch_httpx, _ = _capture_upstream_headers()
+        patch_audit, emitted = self._capture_mint_audit(server_module)
+        with (
+            patch.object(server_module.settings, "egress_auth_enabled", True),
+            patch.object(server_module, "_vend_egress_token", self._obo_directive_vend),
+            patch.object(server_module, "get_auth_provider", lambda *a, **k: _FakeEntraProvider()),
+            patch.object(server_module, "obo_exchange", _fake_exchange),
+            patch.object(server_module, "_read_mcp_filter_enabled", return_value=False),
+            _patch_scope_repo_allow_all(),
+            patch_httpx,
+            patch_audit,
+        ):
+            client = TestClient(server_module.app)
+            response = client.post(
+                "/mcp-proxy/outlook",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 11,
+                    "method": "tools/call",
+                    "params": {"name": "read_inbox"},
+                },
+                headers={
+                    **_mcp_proxy_token_headers(
+                        server_name="outlook",
+                        audit_identity=self._SIGNED_AUDIT_IDENTITY,
+                    ),
+                    "X-Authorization": f"Bearer {ingress_jwt}",
+                },
+            )
+
+        assert response.status_code == 200
+        assert len(emitted) == 1
+        record = emitted[0]
+        assert record["outcome"] == "success"
+        # Readable USER value, not the opaque sub (the reported bug).
+        assert record["display_username"] == "alice@example.com"
+        # username (-> username_hash) stays the VERIFIED principal, unchanged.
+        assert record["username"] == "test-user"
+        # Durable claims ride along so an opaque sub can be correlated.
+        assert record["identity_claims"]["canonical_id"] == "user-object-id@tenant-id"
+        assert record["identity_claims"]["object_id"] == "user-object-id"
+        assert record["identity_claims"]["tenant_id"] == "tenant-id"
+
+    def test_obo_audit_identity_ignores_a_forged_ingress_header(self, monkeypatch):
+        """REGRESSION (audit integrity): the audit identity must come from the
+        signed hop claim, never from the raw ingress header.
+
+        nginx forwards that header to this hop, and /validate never
+        signature-verifies it when the request authenticated on a session cookie
+        -- while the OBO principal bind compares only `sub`, which the caller
+        knows (it is their own). Deriving the audit identity from the header
+        therefore let a caller write another user's name into the audit trail.
+        """
+        import auth_server.server as server_module
+
+        # Same principal (so the bind passes), attacker-chosen readable identity.
+        forged_jwt = _forged_ingress_jwt(
+            "test-user",
+            upn="ceo@example.com",
+            email="ceo@example.com",
+            preferred_username="ceo@example.com",
+        )
+
+        async def _fake_exchange(provider, subject_token, target_audience, scopes=None):
+            return "exchanged-obo-token"
+
+        patch_httpx, _ = _capture_upstream_headers()
+        patch_audit, emitted = self._capture_mint_audit(server_module)
+        with (
+            patch.object(server_module.settings, "egress_auth_enabled", True),
+            patch.object(server_module, "_vend_egress_token", self._obo_directive_vend),
+            patch.object(server_module, "get_auth_provider", lambda *a, **k: _FakeEntraProvider()),
+            patch.object(server_module, "obo_exchange", _fake_exchange),
+            patch.object(server_module, "_read_mcp_filter_enabled", return_value=False),
+            _patch_scope_repo_allow_all(),
+            patch_httpx,
+            patch_audit,
+        ):
+            client = TestClient(server_module.app)
+            response = client.post(
+                "/mcp-proxy/outlook",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 12,
+                    "method": "tools/call",
+                    "params": {"name": "read_inbox"},
+                },
+                headers={
+                    **_mcp_proxy_token_headers(
+                        server_name="outlook",
+                        audit_identity=self._SIGNED_AUDIT_IDENTITY,
+                    ),
+                    "X-Authorization": f"Bearer {forged_jwt}",
+                },
+            )
+
+        assert response.status_code == 200
+        assert len(emitted) == 1
+        record = emitted[0]
+        assert record["display_username"] == "alice@example.com"
+        assert "ceo@example.com" not in str(record)
+
+    def test_obo_audit_prefers_the_verified_sub_over_a_signed_anonymous(self, monkeypatch):
+        """A signed display of "anonymous" must not beat the verified principal.
+
+        `_audit_identity_display` returns the literal "anonymous" when no claim
+        identified the caller. That string is truthy, so plain `or` chaining kept
+        it ahead of the verified `sub` -- recording a caller we can actually name
+        as unattributed. The sub is opaque but true, so it wins.
+        """
+        import auth_server.server as server_module
+
+        async def _fake_exchange(provider, subject_token, target_audience, scopes=None):
+            return "exchanged-obo-token"
+
+        patch_httpx, _ = _capture_upstream_headers()
+        patch_audit, emitted = self._capture_mint_audit(server_module)
+        with (
+            patch.object(server_module.settings, "egress_auth_enabled", True),
+            patch.object(server_module, "_vend_egress_token", self._obo_directive_vend),
+            patch.object(server_module, "get_auth_provider", lambda *a, **k: _FakeEntraProvider()),
+            patch.object(server_module, "obo_exchange", _fake_exchange),
+            patch.object(server_module, "_read_mcp_filter_enabled", return_value=False),
+            _patch_scope_repo_allow_all(),
+            patch_httpx,
+            patch_audit,
+        ):
+            client = TestClient(server_module.app)
+            response = client.post(
+                "/mcp-proxy/outlook",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 14,
+                    "method": "tools/call",
+                    "params": {"name": "read_inbox"},
+                },
+                headers={
+                    **_mcp_proxy_token_headers(
+                        server_name="outlook",
+                        audit_identity={"display": server_module.AUDIT_IDENTITY_ANONYMOUS},
+                    ),
+                    "X-Authorization": f"Bearer {_forged_ingress_jwt('test-user')}",
+                },
+            )
+
+        assert response.status_code == 200
+        assert len(emitted) == 1
+        assert emitted[0]["display_username"] == "test-user"
+
+    def test_obo_audit_falls_back_to_verified_sub_without_the_hop_claim(self, monkeypatch):
+        """Rolling deploy: a hop token minted before the claim existed. The record
+        degrades to the verified `sub` -- opaque but true -- and never reads the
+        ingress header for a readable identity."""
+        import auth_server.server as server_module
+
+        forged_jwt = _forged_ingress_jwt("test-user", upn="ceo@example.com")
+
+        async def _fake_exchange(provider, subject_token, target_audience, scopes=None):
+            return "exchanged-obo-token"
+
+        patch_httpx, _ = _capture_upstream_headers()
+        patch_audit, emitted = self._capture_mint_audit(server_module)
+        # Falling back to the opaque sub is a degradation of the audit trail, not a
+        # neutral outcome: it must be counted so an operator can alert on the rate.
+        degraded: list[dict] = []
+        patch_metric = patch.object(
+            server_module,
+            "audit_integrity_degraded_total",
+            type("_C", (), {"add": staticmethod(lambda n, labels: degraded.append(labels))})(),
+        )
+        with (
+            patch.object(server_module.settings, "egress_auth_enabled", True),
+            patch.object(server_module, "_vend_egress_token", self._obo_directive_vend),
+            patch.object(server_module, "get_auth_provider", lambda *a, **k: _FakeEntraProvider()),
+            patch.object(server_module, "obo_exchange", _fake_exchange),
+            patch.object(server_module, "_read_mcp_filter_enabled", return_value=False),
+            _patch_scope_repo_allow_all(),
+            patch_httpx,
+            patch_audit,
+            patch_metric,
+        ):
+            client = TestClient(server_module.app)
+            response = client.post(
+                "/mcp-proxy/outlook",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 13,
+                    "method": "tools/call",
+                    "params": {"name": "read_inbox"},
+                },
+                headers={
+                    # No audit_identity claim on the hop token.
+                    **_mcp_proxy_token_headers(server_name="outlook"),
+                    "X-Authorization": f"Bearer {forged_jwt}",
+                },
+            )
+
+        assert response.status_code == 200
+        assert len(emitted) == 1
+        record = emitted[0]
+        assert record["display_username"] == "test-user"
+        assert "ceo@example.com" not in str(record)
+        assert degraded == [{"reason": "identity_hop_claim_missing"}]
+
+    def test_obo_mint_record_is_joinable_to_the_validate_access_record(self):
+        """REGRESSION (cross-stream join): the OBO mint record was emitted with
+        correlation_id=None, so nothing tied it to the mcp_server_access record
+        /validate wrote for the SAME request -- the two audit streams could not be
+        joined at all. /validate now signs its request_id as `rid` on the hop
+        token, and this record carries it as correlation_id (its own request_id
+        must stay unique for the (request_id, log_type) index).
+        """
+        import auth_server.server as server_module
+
+        ingress_jwt = _obo_ingress_jwt("test-user")
+
+        async def _fake_exchange(provider, subject_token, target_audience, scopes=None):
+            return "exchanged-obo-token"
+
+        patch_httpx, _ = _capture_upstream_headers()
+        patch_audit, emitted = self._capture_mint_audit(server_module)
+        with (
+            patch.object(server_module.settings, "egress_auth_enabled", True),
+            patch.object(server_module, "_vend_egress_token", self._obo_directive_vend),
+            patch.object(server_module, "get_auth_provider", lambda *a, **k: _FakeEntraProvider()),
+            patch.object(server_module, "obo_exchange", _fake_exchange),
+            patch.object(server_module, "_read_mcp_filter_enabled", return_value=False),
+            _patch_scope_repo_allow_all(),
+            patch_httpx,
+            patch_audit,
+        ):
+            client = TestClient(server_module.app)
+            response = client.post(
+                "/mcp-proxy/outlook",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 14,
+                    "method": "tools/call",
+                    "params": {"name": "read_inbox"},
+                },
+                headers={
+                    **_mcp_proxy_token_headers(
+                        server_name="outlook",
+                        audit_identity={
+                            **self._SIGNED_AUDIT_IDENTITY,
+                            "rid": "req-validate-abc",
+                        },
+                    ),
+                    "X-Authorization": f"Bearer {ingress_jwt}",
+                },
+            )
+
+        assert response.status_code == 200
+        assert len(emitted) == 1
+        record = emitted[0]
+        # The join key: equal to the /validate request_id for this request.
+        assert record["correlation_id"] == "req-validate-abc"
+        # ...while this record keeps its own unique key, so the composite unique
+        # index (request_id, log_type) is not violated by the second stream.
+        assert record["request_id"] != "req-validate-abc"
+        assert record["request_id"]
+
+    def test_obo_mint_record_without_rid_still_audits(self):
+        """A hop token minted before `rid` existed (rolling deploy): the record is
+        unjoined -- exactly the previous behaviour -- and must never be lost."""
+        import auth_server.server as server_module
+
+        ingress_jwt = _obo_ingress_jwt("test-user")
+
+        async def _fake_exchange(provider, subject_token, target_audience, scopes=None):
+            return "exchanged-obo-token"
+
+        patch_httpx, _ = _capture_upstream_headers()
+        patch_audit, emitted = self._capture_mint_audit(server_module)
+        with (
+            patch.object(server_module.settings, "egress_auth_enabled", True),
+            patch.object(server_module, "_vend_egress_token", self._obo_directive_vend),
+            patch.object(server_module, "get_auth_provider", lambda *a, **k: _FakeEntraProvider()),
+            patch.object(server_module, "obo_exchange", _fake_exchange),
+            patch.object(server_module, "_read_mcp_filter_enabled", return_value=False),
+            _patch_scope_repo_allow_all(),
+            patch_httpx,
+            patch_audit,
+        ):
+            client = TestClient(server_module.app)
+            response = client.post(
+                "/mcp-proxy/outlook",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 15,
+                    "method": "tools/call",
+                    "params": {"name": "read_inbox"},
+                },
+                headers={
+                    # Legacy claim shape: identity, but no `rid`.
+                    **_mcp_proxy_token_headers(
+                        server_name="outlook",
+                        audit_identity=self._SIGNED_AUDIT_IDENTITY,
+                    ),
+                    "X-Authorization": f"Bearer {ingress_jwt}",
+                },
+            )
+
+        assert response.status_code == 200
+        assert len(emitted) == 1
+        record = emitted[0]
+        assert record["correlation_id"] is None
+        assert record["display_username"] == "alice@example.com"
 
     def test_obo_no_bearer_jwt_is_terminal_no_consent(self, monkeypatch):
         """Session-cookie / M2M caller (no bearer ingress JWT) -> terminal error,
@@ -4304,6 +4825,59 @@ class TestMcpProxyOboExchange:
         # ...and with the feature off, the obo branch never injects a token.
         assert "authorization" not in sent
 
+    def test_internal_hop_token_never_reaches_a_plain_registered_upstream(self):
+        """REGRESSION (credential + identity leak, non-egress path): X-Internal-Token
+        is a SECRET_KEY-signed gateway-internal credential AND it carries the
+        caller's signed `audit_identity` claim (UPN/email, Entra oid/tid/appid) in
+        a payload anyone can base64-decode.
+
+        It used to be stripped only by _EGRESS_STRIP_HEADERS, which is applied on
+        the vault/OBO branches ALONE -- so for a plain registered MCP server
+        (egress off / no vend) the registrant's backend received both the token and
+        the caller's identity. This path had no coverage at all.
+        """
+        import auth_server.server as server_module
+
+        hop_headers = _mcp_proxy_token_headers(
+            server_name="plain",
+            audit_identity={
+                "display": "alice@contoso.example",
+                "subject": "test-user",
+                "principal_name": "alice@contoso.example",
+                "object_id": "00000000-0000-0000-0000-00000000oid1",
+                "tenant_id": "00000000-0000-0000-0000-00000000tid1",
+                "rid": "req-validate-abc",
+            },
+        )
+        hop_token = hop_headers["X-Internal-Token"]
+        # Pin the premise: the token really does carry the readable identity, so
+        # this test fails for the right reason if the strip regresses.
+        assert "alice@contoso.example" in str(
+            server_module._audit_identity_from_token(
+                jwt.decode(hop_token, options={"verify_signature": False})
+            )
+        )
+
+        patch_httpx, captured = _capture_upstream_headers()
+        with (
+            patch.object(server_module.settings, "egress_auth_enabled", False),
+            patch.object(server_module, "_read_mcp_filter_enabled", return_value=False),
+            _patch_scope_repo_allow_all(),
+            patch_httpx,
+        ):
+            client = TestClient(server_module.app)
+            response = client.post(
+                "/mcp-proxy/plain",
+                json={"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "x"}},
+                headers=hop_headers,
+            )
+
+        assert response.status_code == 200
+        sent = {k.lower(): v for k, v in captured["headers"].items()}
+        assert "x-internal-token" not in sent
+        assert hop_token not in sent.values()
+        assert "alice@contoso.example" not in str(sent)
+
     def test_obo_integration_real_exchange_only_idp_mocked(self, monkeypatch):
         """Full pipeline through mcp_proxy with the REAL obo_exchange engine;
         only the IdP token HTTP endpoint is mocked. Proves the wiring: directive
@@ -4313,7 +4887,6 @@ class TestMcpProxyOboExchange:
         global httpx.AsyncClient, so a SINGLE unified mock client serves both and
         httpx is patched exactly once (two patches would collide on the same name).
         """
-        from contextlib import asynccontextmanager
 
         import auth_server.server as server_module
 
@@ -4339,26 +4912,23 @@ class TestMcpProxyOboExchange:
             captured["headers"] = kwargs.get("headers", {})
             return upstream_cm
 
-        @asynccontextmanager
-        async def _unified_client(*a, **k):
+        def _unified_client(*a, **k):
             c = MagicMock()
-            c.post = idp_post  # engine's IdP token call
-            c.stream = MagicMock(side_effect=_stream)  # upstream proxy call
-            yield c
+            c.post = idp_post  # engine's IdP token call (driven via post_with_reconnect)
+            c.stream = MagicMock(side_effect=_stream)  # upstream proxy stream
+            return c
 
         ingress_jwt = _obo_ingress_jwt("test-user")
 
-        # The engine's IdP token POST now goes through the SSRF-guarded client
-        # (registry.utils.url_guard.guarded_async_client), imported lazily inside
-        # egress_obo.obo_exchange, so patch it at its source module. The upstream
-        # proxy hop still uses server_module.httpx.AsyncClient. Both are pointed at
-        # the same unified mock client so a single fake serves the two calls.
+        # Both the engine's IdP token POST (egress_obo) and the upstream proxy
+        # stream now flow through the pooled ``shared_guarded_async_client`` in
+        # registry.utils.url_guard (imported lazily inside both call sites). One
+        # unified fake client serves the .post and .stream calls.
         with (
             patch.object(server_module.settings, "egress_auth_enabled", True),
             patch.object(server_module, "_vend_egress_token", self._obo_directive_vend),
             patch.object(server_module, "get_auth_provider", lambda *a, **k: _FakeEntraProvider()),
-            patch.object(server_module.httpx, "AsyncClient", _unified_client),
-            patch("registry.utils.url_guard.guarded_async_client", _unified_client),
+            patch("registry.utils.url_guard.shared_guarded_async_client", _unified_client),
             patch.object(server_module, "_read_mcp_filter_enabled", return_value=False),
             _patch_scope_repo_allow_all(),
         ):
@@ -5080,6 +5650,47 @@ class TestForwardHeadersProxyContextStrip:
         the issue explicitly asks that it stay untouched (compatibility)."""
         out = self._forward({"X-Forwarded-For": "203.0.113.5"})
         assert out.get("X-Forwarded-For") == "203.0.113.5"
+
+
+class TestForwardHeadersInternalTokenStrip:
+    """The gateway-internal hop tokens must never be copied onto the egress hop.
+
+    X-Internal-Token is minted by /validate, signed with SECRET_KEY, bound to the
+    resolved upstream -- and it carries the caller's signed `audit_identity` claim
+    (UPN/email, Entra oid/tid/appid). It was previously dropped only by
+    _EGRESS_STRIP_HEADERS, applied on the vault/OBO branches alone, so every plain
+    registered MCP server's backend received it. The strip is unconditional here.
+    """
+
+    def _forward(self, incoming, relay=False):
+        from auth_server.server import _forward_headers
+
+        return _forward_headers(incoming, relay_authorization=relay)
+
+    def test_strips_each_internal_hop_token_header(self):
+        from auth_server.server import _INTERNAL_HOP_TOKEN_HEADERS
+
+        # Enumerated from the set itself so a name added there is covered too.
+        assert _INTERNAL_HOP_TOKEN_HEADERS  # not silently empty
+        for lower in _INTERNAL_HOP_TOKEN_HEADERS:
+            name = "-".join(part.capitalize() for part in lower.split("-"))
+            out = self._forward({name: "signed.hop.jwt", "Accept": "application/json"})
+            assert name.lower() not in {k.lower() for k in out}, name
+            assert out.get("Accept") == "application/json"
+
+    def test_case_insensitive(self):
+        out = self._forward({"x-internal-token": "t", "X-INTERNAL-TOKEN-GENERIC": "g"})
+        assert out == {}
+
+    def test_relay_does_not_re_admit_the_hop_token(self):
+        """The built-in internal registry-tools server DOES receive the relayed
+        ingress Authorization -- but not a token minted for a different hop."""
+        out = self._forward(
+            {"X-Internal-Token": "t", "X-Authorization": "Bearer ingress"},
+            relay=True,
+        )
+        assert "x-internal-token" not in {k.lower() for k in out}
+        assert out.get("X-Authorization") == "Bearer ingress"
 
 
 class TestInternalRelayDecision:
@@ -5880,9 +6491,9 @@ class TestEntraLogoutQueryStringGuard:
 
 
 def _patch_vend_httpx(*, status_code=None, json_body=None, raise_exc=None):
-    """Patch auth_server.server.httpx.AsyncClient for the vend POST path
-    (``async with httpx.AsyncClient(...) as c: await c.post(...)``)."""
-    mock_client = AsyncMock()
+    """Patch the pooled shared_plain_async_client for the vend POST path
+    (``client = shared_plain_async_client(); await post_with_reconnect(client, ...)``)."""
+    mock_client = MagicMock()
     if raise_exc is not None:
         mock_client.post = AsyncMock(side_effect=raise_exc)
     else:
@@ -5890,9 +6501,7 @@ def _patch_vend_httpx(*, status_code=None, json_body=None, raise_exc=None):
         resp.status_code = status_code
         resp.json = MagicMock(return_value=json_body)
         mock_client.post = AsyncMock(return_value=resp)
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
-    return patch("auth_server.server.httpx.AsyncClient", return_value=mock_client)
+    return patch("registry.utils.url_guard.shared_plain_async_client", return_value=mock_client)
 
 
 class TestVendEgressTokenTransientClassification:
@@ -6282,3 +6891,42 @@ class TestToolsListFilterDiagnostics:
             kept = asyncio.run(filter_tools_list_response("office-docs", ["grp"], [{"name": "t1"}]))
 
         assert [t["name"] for t in kept] == ["t1"]
+
+
+async def test_callback_uses_pooled_plain_client_not_closed(monkeypatch):
+    """The login callback token/userinfo calls use the pooled PLAIN client:
+    guarding them would reject an in-cluster http:// Keycloak token endpoint.
+    The shared client MUST NOT be closed per request (a per-call ``aclose``
+    would break every subsequent login)."""
+    import auth_server.server as server_module
+
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json = MagicMock(return_value={"access_token": "tok"})
+    mock_client = MagicMock()
+    mock_client.post = AsyncMock(return_value=mock_resp)
+    mock_client.get = AsyncMock(return_value=mock_resp)
+    mock_client.aclose = AsyncMock()
+    monkeypatch.setattr("registry.utils.url_guard.shared_plain_async_client", lambda: mock_client)
+
+    provider_config = {
+        "grant_type": "authorization_code",
+        "client_id": "cid",
+        "client_secret": "secret",
+        "token_url": "http://keycloak:8080/realms/x/protocol/openid-connect/token",
+        "user_info_url": "http://keycloak:8080/realms/x/protocol/openid-connect/userinfo",
+    }
+
+    token = await server_module.exchange_code_for_token(
+        "keycloak", "code123", provider_config, auth_server_url="http://localhost:8888"
+    )
+    assert token == {"access_token": "tok"}
+    mock_client.post.assert_awaited_once()
+    assert mock_client.post.await_args.args[0] == provider_config["token_url"]
+
+    info = await server_module.get_user_info("tok", provider_config)
+    assert info == {"access_token": "tok"}
+    mock_client.get.assert_awaited_once()
+
+    # Pooled client is process-lifetime; never closed by the callback handlers.
+    mock_client.aclose.assert_not_called()

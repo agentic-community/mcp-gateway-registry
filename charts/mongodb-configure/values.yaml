@@ -1,10 +1,48 @@
 global:
-  existingMongoCredentialsSecret: ""  # If set, use this existing secret instead of creating one
+  existingMongoCredentialsSecret: "" # If set, use this existing secret instead of creating one
+  # Image defaults, shared with the other subcharts. Declared here so this chart
+  # also renders standalone (`helm template ./charts/mongodb-configure`); the
+  # stack chart's global.image overrides these.
+  image:
+    registry: public.ecr.aws/p3v1o3c6
+    tag: 1.31.0
+    pullPolicy: IfNotPresent
   authProvider:
     type: keycloak
     entra:
       adminGroupId:
-
+# Image for the init Job. This chart runs the REGISTRY image, because the
+# initialization script, the scope seed JSONs it loads and the pinned
+# motor/pymongo venv all already live in it at /app. Nothing is copied into a
+# ConfigMap, so nothing can drift from scripts/init-mongodb-ce.py.
+image:
+  registry: "" # Overrides global.image.registry when set
+  repository: registry # Image name within the registry
+  tag: "" # Overrides global.image.tag when set
+  pullPolicy: "" # Overrides global.image.pullPolicy when set
+# Init Job execution limits.
+job:
+  backoffLimit: 4
+  # Whole-attempt ceiling, covering the MongoDB wait plus the index builds. Must
+  # exceed mongodbWaitTimeoutSeconds with room for the builds, and should sit
+  # inside your `helm upgrade --timeout`. Raise it for a large audit collection:
+  # the Job now runs on every upgrade and index builds are proportional to the
+  # number of audit records.
+  activeDeadlineSeconds: 1800
+  # Retain the finished Job briefly for `kubectl logs`, then let Kubernetes
+  # collect it: Helm does not delete hook resources on `helm uninstall`.
+  ttlSecondsAfterFinished: 3600
+  # How long the script waits for MongoDB to accept connections and for its
+  # replica set to become ready before giving up. Previously an init container
+  # waited here with no deadline at all, so an unreachable MongoDB hung the
+  # release instead of failing it.
+  mongodbWaitTimeoutSeconds: 300
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
 # MongoDB configuration
 mongodb:
   database: mcp_registry
@@ -23,6 +61,16 @@ mongodb:
   username: my-user
   use_tls: false
   storage_backend: mongodb-ce
+  # Audit log retention in days, applied to the audit_events TTL index.
+  # Matches the AUDIT_LOG_MONGODB_TTL_DAYS default used elsewhere. Raise this for
+  # a deployment with a compliance retention requirement -- setting it here is
+  # what makes it survive `helm upgrade`.
+  auditTtlDays: 7
+  # Reducing auditTtlDays makes MongoDB delete every audit record older than the
+  # new window, usually within a minute and irreversibly. The init script
+  # therefore refuses to shorten retention and leaves the longer value in place
+  # unless this is true. Only set it when you intend to discard those records.
+  auditTtlAllowShrink: false
   # connectionString: Full MongoDB URI override. When set, takes precedence
   # over host/port/username/password above and is passed verbatim to the
   # MongoDB client. Required for MongoDB Atlas (mongodb+srv://...) and any

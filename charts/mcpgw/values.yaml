@@ -3,7 +3,7 @@ global:
   image:
     # Container registry (host + optional namespace). Shared default across subcharts.
     registry: public.ecr.aws/p3v1o3c6
-    tag: 1.30.0
+    tag: 1.31.0
     pullPolicy: IfNotPresent
 # Per-service image configuration
 # Any field left empty falls back to the corresponding global.image.* value.
@@ -42,7 +42,6 @@ app:
   # typed and can carry PII, so this stays false outside of debugging. The server
   # logs a startup warning while it is on.
   searchLogQueryText: false
-
   # GitHub private repo auth (SKILL.md fetching)
   githubPat: ""
   githubPatExistingSecret: "" # If set, read GITHUB_PAT from this K8s secret

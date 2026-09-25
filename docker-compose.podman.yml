@@ -69,6 +69,14 @@ services:
       # private IPs (e.g. docker-network hostnames); mirrors docker-compose.yml.
       - SSRF_ALLOWED_HOSTS=${SSRF_ALLOWED_HOSTS:-}
       - SSRF_ALLOWED_CIDRS=${SSRF_ALLOWED_CIDRS:-}
+      # CIMD (Client ID Metadata Document) publisher -- registry-consumed; default off.
+      - CIMD_PUBLISHER_ENABLED=${CIMD_PUBLISHER_ENABLED:-false}
+      - CIMD_CACHE_TTL=${CIMD_CACHE_TTL:-3600}
+      - CIMD_CLIENT_NAME=${CIMD_CLIENT_NAME:-AI Registry Tools}
+      - CIMD_REDIRECT_URIS=${CIMD_REDIRECT_URIS:-}
+      - CIMD_SCOPE=${CIMD_SCOPE:-}
+      - CIMD_LOGO_URI=${CIMD_LOGO_URI:-}
+      - CIMD_CONTACTS=${CIMD_CONTACTS:-}
       # Registry Card Configuration
       - REGISTRY_URL=${REGISTRY_URL:-http://localhost}
       # Request-source trust (audit client IP + OAuth external-URL host allowlist)
@@ -104,6 +112,12 @@ services:
       - EGRESS_OAUTH_TRUSTED_IDP_HOSTS=${EGRESS_OAUTH_TRUSTED_IDP_HOSTS:-}
       - EGRESS_CREDENTIAL_ENCRYPTION_KEY=${EGRESS_CREDENTIAL_ENCRYPTION_KEY:-}
       - EGRESS_CREDENTIAL_ENCRYPTION_REQUIRE_ENCRYPTED=${EGRESS_CREDENTIAL_ENCRYPTION_REQUIRE_ENCRYPTED:-false}
+      # Egress httpx client connection pooling (shared by url_guard). Keep
+      # keepalive_expiry below the shortest upstream/LB idle timeout.
+      - EGRESS_HTTP_POOL_MAX_CONNECTIONS=${EGRESS_HTTP_POOL_MAX_CONNECTIONS:-100}
+      - EGRESS_HTTP_POOL_MAX_KEEPALIVE=${EGRESS_HTTP_POOL_MAX_KEEPALIVE:-20}
+      - EGRESS_HTTP_POOL_KEEPALIVE_EXPIRY_SECONDS=${EGRESS_HTTP_POOL_KEEPALIVE_EXPIRY_SECONDS:-30}
+      - EGRESS_HTTP_POOL_CONNECT_RETRIES=${EGRESS_HTTP_POOL_CONNECT_RETRIES:-1}
       - AUTH_SERVER_NGINX_MARKER_SECRET=${AUTH_SERVER_NGINX_MARKER_SECRET:-}
       - AWS_SECRETS_REGION=${AWS_SECRETS_REGION:-}
       - SECRETS_MANAGER_KMS_KEY_ID=${SECRETS_MANAGER_KMS_KEY_ID:-}
@@ -115,6 +129,10 @@ services:
       - OPENBAO_KV_MOUNT=${OPENBAO_KV_MOUNT:-secret}
       - OPENBAO_AUTH_METHOD=${OPENBAO_AUTH_METHOD:-token}
       - OPENBAO_ROLE=${OPENBAO_ROLE:-}
+      # AppRole credentials for OPENBAO_AUTH_METHOD=approle. Empty defaults keep
+      # the token and kubernetes paths unaffected (issue #1771).
+      - OPENBAO_ROLE_ID=${OPENBAO_ROLE_ID:-}
+      - OPENBAO_SECRET_ID=${OPENBAO_SECRET_ID:-}
       # Static token for OPENBAO_AUTH_METHOD=token; matches the dev OpenBao root
       # token. Required for token auth (kubernetes auth is EKS-only).
       - OPENBAO_TOKEN=${OPENBAO_TOKEN:?Set OPENBAO_TOKEN in .env (a strong random value; do not reuse the old dev-root-token default)}
@@ -174,6 +192,9 @@ services:
       - ENTRA_CLIENT_ID=${ENTRA_CLIENT_ID}
       - ENTRA_CLIENT_SECRET=${ENTRA_CLIENT_SECRET}
       - ENTRA_ENABLED=${ENTRA_ENABLED:-false}
+      # Sovereign-cloud login host for the registry's OWN client_credentials
+      # grant (headless backend discovery/health against obo_exchange servers).
+      - ENTRA_LOGIN_BASE_URL=${ENTRA_LOGIN_BASE_URL:-https://login.microsoftonline.com}
       # PingFederate configuration
       - PINGFEDERATE_BASE_URL=${PINGFEDERATE_BASE_URL:-}
       - PINGFEDERATE_EXTERNAL_URL=${PINGFEDERATE_EXTERNAL_URL:-}
@@ -204,6 +225,7 @@ services:
       - SECURITY_SCAN_ENABLED=${SECURITY_SCAN_ENABLED:-true}
       - SECURITY_SCAN_ON_REGISTRATION=${SECURITY_SCAN_ON_REGISTRATION:-true}
       - SECURITY_BLOCK_UNSAFE_SERVERS=${SECURITY_BLOCK_UNSAFE_SERVERS:-true}
+      - SECURITY_ALLOW_UNSAFE_SERVERS=${SECURITY_ALLOW_UNSAFE_SERVERS:-false}
       - SECURITY_ANALYZERS=${SECURITY_ANALYZERS:-yara}
       - SECURITY_SCAN_TIMEOUT=${SECURITY_SCAN_TIMEOUT:-60}
       - SECURITY_ADD_PENDING_TAG=${SECURITY_ADD_PENDING_TAG:-true}
@@ -466,6 +488,12 @@ services:
       # OBO (same-IdP) token exchange against a self-hosted IdP: allowlist its
       # private-resolving token endpoint. Must match the registry's value.
       - EGRESS_OAUTH_TRUSTED_IDP_HOSTS=${EGRESS_OAUTH_TRUSTED_IDP_HOSTS:-}
+      # Egress httpx client connection pooling (shared by url_guard). Keep
+      # keepalive_expiry below the shortest upstream/LB idle timeout.
+      - EGRESS_HTTP_POOL_MAX_CONNECTIONS=${EGRESS_HTTP_POOL_MAX_CONNECTIONS:-100}
+      - EGRESS_HTTP_POOL_MAX_KEEPALIVE=${EGRESS_HTTP_POOL_MAX_KEEPALIVE:-20}
+      - EGRESS_HTTP_POOL_KEEPALIVE_EXPIRY_SECONDS=${EGRESS_HTTP_POOL_KEEPALIVE_EXPIRY_SECONDS:-30}
+      - EGRESS_HTTP_POOL_CONNECT_RETRIES=${EGRESS_HTTP_POOL_CONNECT_RETRIES:-1}
       - AUTH_SERVER_NGINX_MARKER_SECRET=${AUTH_SERVER_NGINX_MARKER_SECRET:-}
       - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID}
       - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET}
@@ -849,6 +877,16 @@ services:
       - PING_IDENTITY_DEVOPS_KEY=${PING_IDENTITY_DEVOPS_KEY}
       - SERVER_PROFILE_URL=https://github.com/pingidentity/pingidentity-server-profiles.git
       - SERVER_PROFILE_PATH=getting-started/pingfederate
+      # Bootstrap the console administrator from the operator-supplied
+      # PF_ADMIN_PASS instead of the Ping vendor default. This profile
+      # (getting-started) interpolates PING_IDENTITY_PASSWORD straight into
+      # instance/bulk-config/data.json.subst, where baseline routes it through
+      # administrativeAccounts_items_Administrator_password -- different
+      # mechanism, same operator-settable variable. Empty is NOT neutral: both
+      # profiles' env_vars apply ${PING_IDENTITY_PASSWORD:=2FederateM0re}, and
+      # `:=` substitutes on null, so build_and_run.sh rejects an empty
+      # PF_ADMIN_PASS when PINGFEDERATE_ENABLED is true.
+      - PING_IDENTITY_PASSWORD=${PF_ADMIN_PASS:-}
     ports:
       # Loopback-only: PingFederate runtime + admin console stay on the host.
       - "${HOST_BIND_IP:-127.0.0.1}:9031:9031"

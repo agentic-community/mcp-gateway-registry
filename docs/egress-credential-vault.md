@@ -276,6 +276,39 @@ builds keys through `registry/secrets/keys.py`, which applies **one** canonical
 encoding: NFC-normalize, then **base64url (unpadded)**, so each segment contains
 only `[A-Za-z0-9_-]` — never `/`, `|`, `%`, or `=`.
 
+### The key carries the consent `purpose`
+
+Each consent purpose has its **own address space**. A `purpose=egress` consent (a
+user connecting their own account for runtime calls) and a `purpose=discovery`
+consent (an admin designating the identity the registry borrows for its own
+headless health checks and tool discovery — see
+[OAuth 2.1 backend discovery](obo-token-exchange.md)) never resolve to the same
+entry, even for the same principal, provider and server.
+
+`keys.namespaced_prefix` builds the prefix. For `egress` it returns the configured
+prefix **unchanged** — that is deliberate, because every entry written before
+purposes existed is an egress entry, so existing addresses are byte-identical and
+no migration or re-consent is needed. `discovery` nests one segment deeper, inside
+the same configured prefix, so vault policies and IAM scoping that grant the prefix
+keep working untouched:
+
+```
+egress/b2F1dGgy/YWxpY2U/Z2l0aHVi/L2dpdGh1Yi1tY3A                 <- egress:    4 segments
+egress/ZGlzY292ZXJ5/b2F1dGgy/YWxpY2U/Z2l0aHVi/L2dpdGh1Yi1tY3A    <- discovery: 5 segments
+```
+
+Depth alone makes a collision impossible, so the two purposes cannot evict,
+re-scope, or read each other. That is why there is no cross-purpose consent check
+to describe: the same principal can hold their own runtime connection to a server
+**and** be the designated discovery identity for it at the same time, and both
+stand. `get_valid_token` takes `purpose` as a required argument with no default,
+because a default is precisely how a caller would cross the boundary by omission.
+
+One consequence to be aware of: `list_for_user` reads the egress space only, so a
+borrowed discovery identity does **not** appear in the consenting user's Connected
+Accounts. Remove it through the server's discovery config
+(`DELETE /api/servers/{path}/oauth-discovery`), which also revokes the stored token.
+
 ### The canonical `user_id` (OIDC `sub`)
 
 `user_id` is the caller's **OIDC `sub`**, not their display username. The `sub`
@@ -375,7 +408,9 @@ and `AUTH_SERVER_NGINX_MARKER_SECRET`.
 | `OPENBAO_NAMESPACE` | `""` | OpenBao namespace (Enterprise only). |
 | `OPENBAO_KV_MOUNT` | `secret` | OpenBao KV v2 mount point. |
 | `OPENBAO_AUTH_METHOD` | `token` | `token` \| `kubernetes` \| `approle`. |
-| `OPENBAO_ROLE` | `""` | OpenBao role (required for `kubernetes`/`approle` auth). |
+| `OPENBAO_ROLE` | `""` | OpenBao role (required for `kubernetes` auth only; `approle` does not read it). |
+| `OPENBAO_ROLE_ID` | `""` | AppRole role id (required, together with `OPENBAO_SECRET_ID`, when `OPENBAO_AUTH_METHOD=approle`). |
+| `OPENBAO_SECRET_ID` | `""` | AppRole secret id (required, together with `OPENBAO_ROLE_ID`, when `OPENBAO_AUTH_METHOD=approle`). **(secret)** |
 
 See [`unified-parameter-reference.md`](unified-parameter-reference.md) for the
 Docker / Terraform / Helm name mapping of each parameter.

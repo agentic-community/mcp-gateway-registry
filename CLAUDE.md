@@ -1695,6 +1695,50 @@ If you only update one of the two, the unittest suite catches it: a drifting res
 
 Note: only the unittest suite enforces these invariants — `helm lint`, `helm template`, and `kubeconform` do not. If you add a new env var to a deployment but forget to update the reserved list AND nobody writes an extraEnv test for that name, nothing will detect the gap. Treat the reserved list and the deployment template as a matched pair.
 
+## Regenerating `api/openapi.json`
+
+`api/openapi.json` is a **hand-refreshed artifact**. No script generates it and no CI job checks it, so it silently goes stale: when PR #1711 shipped a new endpoint, the committed spec was also still missing audit-endpoint changes from three earlier merged PRs. Refresh it whenever a release adds or changes a route.
+
+Regenerate from a running registry and re-apply the release version:
+
+```bash
+# The container MUST be built from the commit you are documenting (see below).
+curl -s http://localhost/openapi.json > /tmp/live.json
+
+python3 - <<'PY'
+import json, pathlib
+spec = json.load(open("/tmp/live.json"))
+spec["info"]["version"] = "1.31.0"          # the release this lands in
+pathlib.Path("api/openapi.json").write_text(json.dumps(spec, indent=2) + "\n")
+PY
+```
+
+Four things get this wrong, in rough order of how easy they are to miss:
+
+1. **Do not pass `ensure_ascii=False`.** The committed file escapes non-ASCII as `\uXXXX`. Writing literal characters instead rewrites every em-dash in every docstring, turning a 9-line change into 56 insertions and 28 deletions and burying the real diff. `json.dumps` defaults to `ensure_ascii=True`, so just leave it alone. Use `indent=2` and a trailing newline to match.
+
+2. **Set `info.version` by hand.** The live app reports a git-describe development string (`1.30.0-46-gcb189fa7-feat/some-branch`), never a release version. The artifact carries the clean semver of the release it ships in, as every prior refresh did (1.24.7, 1.24.8, 1.31.0).
+
+3. **Build the container from the commit you are documenting.** A spec generated from a stale build documents code that is not on `main`. If the running build is behind, either rebuild or prove the gap cannot matter: confirm no changed file altered a route decorator, handler signature, `response_model` or `status_code`, since those are what FastAPI derives the schema from. A changed handler *body* cannot affect the spec.
+
+4. **Diff semantically, not by eye.** An 824 KB JSON file hides accidental removals. Enumerate what moved before committing:
+
+```bash
+python3 -c "
+import json, subprocess
+old = json.loads(subprocess.run(['git','show','HEAD:api/openapi.json'],capture_output=True,text=True).stdout)
+new = json.load(open('api/openapi.json'))
+op, np = set(old['paths']), set(new['paths'])
+print('paths added:  ', sorted(np-op))
+print('paths removed:', sorted(op-np))
+print('paths changed:', [p for p in sorted(op&np) if old['paths'][p] != new['paths'][p]])
+osc, nsc = old.get('components',{}).get('schemas',{}), new.get('components',{}).get('schemas',{})
+print('schemas added/removed:', sorted(set(nsc)-set(osc)), sorted(set(osc)-set(nsc)))
+"
+```
+
+Expect only the paths your release touched. Anything removed is a regression: it usually means the container was built with a feature flag off or in the wrong `DEPLOYMENT_MODE`, so a whole router did not register.
+
 ## Docker Build and Deployment
 
 When building and pushing Docker containers, create a shell script following this pattern:

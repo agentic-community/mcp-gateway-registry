@@ -7,6 +7,8 @@ import {
   StatusField,
   MetadataField,
   AuthSchemeFields,
+  OAuthClientCredentialsFields,
+  DiscoveryIdentityFields,
   type AuthScheme,
   FIELD,
   LABEL,
@@ -27,9 +29,17 @@ export interface ServerEditForm {
   num_tools: number;
   mcp_endpoint: string;
   metadata: string;
-  auth_scheme: string;
+  auth_scheme: AuthScheme;
   auth_credential: string;
   auth_header_name: string;
+  // Backend OAuth (client_credentials) config, used when auth_scheme === 'oauth'.
+  // The registry acquires a token from these and injects it on health/tool-list.
+  oauth_token_url: string;
+  oauth_client_id: string;
+  oauth_client_secret: string; // write-only; blank on edit keeps the stored one
+  oauth_scopes: string; // comma/space separated
+  oauth_token_auth_style: string; // 'post_body' | 'basic_header' | 'none'
+  oauth_resource: string; // RFC 8707 resource indicator (optional)
   status: 'active' | 'draft' | 'deprecated' | 'beta';
   deployment: 'remote' | 'local';
   local_runtime: LocalRuntimeFormData;
@@ -48,6 +58,21 @@ export interface ServerEditForm {
   egress_custom_resource: string; // RFC 8707 resource indicator (optional)
   // obo_exchange (same-IdP OBO hop 1) field:
   egress_target_audience: string;
+  // Discovery Identity (OAuth 2.1): the registry borrows a connected admin
+  // account for its OWN headless health checks / tool discovery against an
+  // OAuth 2.1 server. An INDEPENDENT flag, orthogonal to auth_scheme (a server
+  // may carry both). Saved via PUT/DELETE /servers/{path}/oauth-discovery.
+  oauth_discovery_enabled: boolean;
+  oauth_discovery_provider: string; // provider key; 'custom' for OAuth 2.1 servers
+  oauth_discovery_client_id: string;
+  oauth_discovery_client_secret: string; // write-only; blank on edit keeps the stored one
+  oauth_discovery_scopes: string; // comma/space separated
+  oauth_discovery_custom_authorize_url: string;
+  oauth_discovery_custom_token_url: string;
+  oauth_discovery_custom_scope_separator: string;
+  // 'post_body' | 'basic_header' | 'none' — 'none' is a public client (PKCE only)
+  oauth_discovery_custom_token_auth_style: string;
+  oauth_discovery_custom_resource: string; // RFC 8707 resource indicator (optional)
   // pat inject header config (admin). Blank = server defaults (Authorization / Bearer).
 }
 
@@ -59,6 +84,8 @@ interface ServerEditModalProps {
   loading: boolean;
   /** Whether the per-user egress credential vault feature is enabled (gates the egress section). */
   egressEnabled: boolean;
+  /** True only in with-gateway deployment mode; egress auth requires a gateway. */
+  withGateway: boolean;
   onSave: () => Promise<void> | void;
   onClose: () => void;
 }
@@ -74,9 +101,38 @@ const ServerEditModal: React.FC<ServerEditModalProps> = ({
   setForm,
   loading,
   egressEnabled,
+  withGateway,
   onSave,
   onClose,
 }) => {
+  // The "Connect account for discovery" flow runs against the SERVER-SIDE saved
+  // oauth-discovery config (the backend reads the stored provider/client, not
+  // this form). So Connect is only safe once the shown config is persisted:
+  // snapshot it at open and disable Connect while there are unsaved discovery
+  // edits — covers a freshly-enabled discovery identity (nothing saved yet, would
+  // 400) and an edited existing config (would silently consent against the stale
+  // saved client). The modal closes on save, so a reopen re-snapshots the saved
+  // state and re-enables Connect.
+  const discoverySnapshot = (f: ServerEditForm): string =>
+    JSON.stringify([
+      f.oauth_discovery_enabled,
+      f.oauth_discovery_provider,
+      f.oauth_discovery_client_id,
+      f.oauth_discovery_client_secret,
+      f.oauth_discovery_scopes,
+      f.oauth_discovery_custom_authorize_url,
+      f.oauth_discovery_custom_token_url,
+      f.oauth_discovery_custom_scope_separator,
+      f.oauth_discovery_custom_token_auth_style,
+      f.oauth_discovery_custom_resource,
+    ]);
+  const [savedDiscoverySnapshot] = React.useState(() => discoverySnapshot(form));
+  const discoveryDirty = discoverySnapshot(form) !== savedDiscoverySnapshot;
+  const discoveryConnectable = !discoveryDirty && !!form.oauth_discovery_provider;
+  // Discovery identity and per-user egress are both gated on the egress feature:
+  // the backend serves a borrowed discovery token only when EGRESS_AUTH_ENABLED,
+  // which requires a gateway, and local (stdio) servers have no HTTP egress.
+  const egressFeatureAvailable = egressEnabled && withGateway && form.deployment !== 'local';
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
       <div className="bg-white dark:bg-gray-800 rounded-lg p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
@@ -198,10 +254,17 @@ const ServerEditModal: React.FC<ServerEditModalProps> = ({
               Local servers handle auth via env vars on the user's machine. */}
           {form.deployment === 'remote' && (
             <AuthSchemeFields
-              scheme={form.auth_scheme as AuthScheme}
+              scheme={form.auth_scheme}
               credential={form.auth_credential}
               headerName={form.auth_header_name}
               editing
+              oboDiscoveryActive={form.egress_auth_mode === 'obo_exchange'}
+              oboTargetAudience={form.egress_target_audience}
+              showDiscoveryToggle={egressFeatureAvailable}
+              discoveryEnabled={form.oauth_discovery_enabled}
+              onDiscoveryEnabledChange={(enabled) =>
+                setForm((prev) => ({ ...prev, oauth_discovery_enabled: enabled }))
+              }
               onSchemeChange={(newScheme) =>
                 setForm((prev) => ({
                   ...prev,
@@ -220,8 +283,91 @@ const ServerEditModal: React.FC<ServerEditModalProps> = ({
             />
           )}
 
+          {/* Backend OAuth 2.0 (client_credentials) config — shown when the scheme
+              is `oauth`. Saved via PUT /servers/{path}/oauth-config. */}
+          {form.deployment === 'remote' && form.auth_scheme === 'oauth' && (
+            <OAuthClientCredentialsFields
+              values={form}
+              onChange={(patch) => setForm((prev) => ({ ...prev, ...patch }))}
+              editing
+            />
+          )}
+          {/* Discovery Identity (OAuth 2.1) — an independent flag, not a scheme.
+              Requires the egress feature (the backend only vends a borrowed
+              discovery token when EGRESS_AUTH_ENABLED). Saved via PUT/DELETE
+              /servers/{path}/oauth-discovery. */}
+          {egressFeatureAvailable && form.oauth_discovery_enabled && (
+            <DiscoveryIdentityFields
+              values={form}
+              onChange={(patch) => setForm((prev) => ({ ...prev, ...patch }))}
+              editing
+              footer={
+                <div>
+                  <button
+                    type="button"
+                    disabled={!discoveryConnectable}
+                    onClick={() => {
+                      if (!discoveryConnectable) return;
+                      window.open(
+                        `${window.location.origin}/oauth2/egress/connect?server=${encodeURIComponent(form.path)}&purpose=discovery`,
+                        '_blank',
+                        'noopener,noreferrer'
+                      );
+                    }}
+                    className={`text-sm ${
+                      discoveryConnectable
+                        ? 'text-purple-600 hover:text-purple-800 dark:text-purple-400'
+                        : 'text-gray-400 cursor-not-allowed dark:text-gray-500'
+                    }`}
+                  >
+                    Connect account for discovery
+                  </button>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                    {discoveryDirty
+                      ? 'Save your changes first — Connect uses the saved configuration.'
+                      : !form.oauth_discovery_provider
+                        ? 'Select a provider and save before connecting.'
+                        : 'One-time consent that vaults your token for this server.'}
+                  </p>
+                </div>
+              }
+            />
+          )}
+          {/* Stranded config. When the egress feature is off (or this became a local
+              server) both the toggle and the fields above are hidden, but a stored
+              designation still exists and the backend now refuses to PUT it. Without
+              this the record is invisible AND unremovable from the UI. Unchecking here
+              clears the flag, and save DELETEs it -- the one action still available. */}
+          {!egressFeatureAvailable && form.oauth_discovery_enabled && (
+            <div className="rounded-md border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 p-3 text-xs text-amber-800 dark:text-amber-300">
+              <p className="font-semibold mb-1">
+                Discovery identity configured, but not usable here
+              </p>
+              <p>
+                This server has an OAuth 2.1 discovery identity designated
+                {form.oauth_discovery_provider
+                  ? ` (${form.oauth_discovery_provider})`
+                  : ''}
+                , but it requires the per-user egress feature
+                {form.deployment === 'local' ? ' and a remote server' : ''}. Health
+                checks and tool discovery will not use it, and the configuration cannot
+                be changed while that is the case.
+              </p>
+              <label className="mt-2 flex items-center gap-2 cursor-pointer font-medium">
+                <input
+                  type="checkbox"
+                  checked={!form.oauth_discovery_enabled}
+                  onChange={() =>
+                    setForm((prev) => ({ ...prev, oauth_discovery_enabled: false }))
+                  }
+                  className="h-4 w-4 rounded border-amber-400"
+                />
+                Remove the discovery identity when I save
+              </label>
+            </div>
+          )}
           {/* Per-user egress credential vault (admin config) */}
-          {egressEnabled && form.deployment !== 'local' && (
+          {egressFeatureAvailable && (
             <div className="border-t border-gray-200 dark:border-gray-700 pt-4 mt-4">
               <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-2">
                 Egress Auth

@@ -5,16 +5,40 @@ import {
   CheckIcon,
 } from '@heroicons/react/24/outline';
 import { AuditEvent } from './AuditLogTable';
+import { CopyButton } from './modals';
 
 interface AuditEventDetailProps {
   event: AuditEvent;
   onClose: () => void;
 }
 
+interface IdentityClaimRow {
+  label: string;
+  value: string;
+  mono: boolean;
+}
+
 const AuditEventDetail: React.FC<AuditEventDetailProps> = ({ event, onClose }) => {
   const [copied, setCopied] = useState(false);
 
   const isMcpEvent = event.log_type === 'mcp_server_access';
+
+  // Durable / IdP identity claims: nested under `identity` on the registry_api
+  // and mcp_access streams, flat on token_mint records (no `identity` block).
+  // A claim the token did not carry arrives as an explicit `null`.
+  const claim = (
+    field: 'principal_name' | 'canonical_id' | 'subject' | 'object_id' | 'tenant_id' | 'app_id',
+  ): string | null | undefined => event.identity?.[field] || event[field];
+
+  // Only the claims the token actually carried; most tokens carry none.
+  const identityClaims = [
+    { label: 'Principal', value: claim('principal_name'), mono: false },
+    { label: 'Canonical ID', value: claim('canonical_id'), mono: true },
+    { label: 'Subject', value: claim('subject'), mono: true },
+    { label: 'Object ID', value: claim('object_id'), mono: true },
+    { label: 'Tenant ID', value: claim('tenant_id'), mono: true },
+    { label: 'App ID', value: claim('app_id'), mono: true },
+  ].filter((c): c is IdentityClaimRow => Boolean(c.value));
 
   const handleCopy = async () => {
     try {
@@ -148,6 +172,47 @@ const AuditEventDetail: React.FC<AuditEventDetailProps> = ({ event, onClose }) =
         </div>
       </div>
 
+      {/* Durable / IdP identity claims (admin-only detail panel; omitted entirely
+          when the token carried none) */}
+      {identityClaims.length > 0 && (
+        <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-900/20">
+          <div className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">
+            Identity Claims
+          </div>
+          {/* These values run 36-73 chars while this panel is one third of the
+              page, so they wrap (break-all) instead of truncating: truncated,
+              `canonical_id` and `object_id` render as the same string and the
+              operator cannot tell them apart. The copy control sits on the label
+              line so the value keeps the full column width, and each value is
+              copyable on its own -- hover-only `title` is dead on touch.
+              The column count tracks the PAGE grid, which drops this panel from
+              full width to a one-third sidebar at `lg`: two columns while the
+              panel is wide, one once it narrows (measured at 1024px: a 36-char
+              GUID needs ~300px and a two-column cell is 127px). */}
+          <dl className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-1 gap-x-4 gap-y-3">
+            {identityClaims.map(({ label, value, mono }) => (
+              <div key={label} className="min-w-0">
+                <dt className="flex items-center justify-between gap-1 text-xs text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">
+                  <span>{label}</span>
+                  <CopyButton
+                    variant="subtle"
+                    label=""
+                    copiedLabel=""
+                    getText={() => value}
+                    title={`Copy ${label}`}
+                  />
+                </dt>
+                <dd
+                  className={`text-sm text-gray-900 dark:text-gray-100 break-all ${mono ? 'font-mono' : ''}`}
+                >
+                  {value}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </div>
+      )}
+
       {/* MCP-specific summary row */}
       {isMcpEvent && (
         <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-700 grid grid-cols-2 md:grid-cols-4 gap-2 bg-blue-50/50 dark:bg-blue-900/10">
@@ -185,7 +250,7 @@ const AuditEventDetail: React.FC<AuditEventDetailProps> = ({ event, onClose }) =
             </div>
           </div>
           <div className="min-w-0 overflow-hidden">
-            <div className="text-xs text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1 truncate" title="Transport">
+            <div className="text-xs text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1 truncate">
               Transport
             </div>
             <div

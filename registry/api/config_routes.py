@@ -154,6 +154,7 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
                     ("entra_group_admin_id", "Admin Group ID", False),
                     ("entra_scope_format", "Scope Format (v1/v2)", False),
                     ("entra_application_id_uri", "Application ID URI", False),
+                    ("entra_login_base_url", "Login Base URL", False),
                 ],
             },
             {
@@ -217,6 +218,7 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             ("security_scan_enabled", "Scan Enabled", False),
             ("security_scan_on_registration", "Scan on Registration", False),
             ("security_block_unsafe_servers", "Block Unsafe", False),
+            ("security_allow_unsafe_servers", "Allow Unsafe, Block Tools", False),
             ("security_analyzers", "Analyzers", False),
             ("security_scan_timeout", "Scan Timeout", False),
             ("security_add_pending_tag", "Add Pending Tag", False),
@@ -446,6 +448,11 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             ("openbao_kv_mount", "OpenBao KV Mount", False),
             ("openbao_auth_method", "OpenBao Auth Method", False),
             ("openbao_role", "OpenBao Role", False),
+            # egress HTTP connection pooling (shared clients; not sensitive)
+            ("egress_http_pool_max_connections", "HTTP Pool Max Connections", False),
+            ("egress_http_pool_max_keepalive", "HTTP Pool Max Keep-Alive", False),
+            ("egress_http_pool_keepalive_expiry_seconds", "HTTP Pool Keep-Alive Expiry (s)", False),
+            ("egress_http_pool_connect_retries", "HTTP Pool Connect Retries", False),
         ],
     },
     "a2a_reverse_proxy": {
@@ -500,6 +507,19 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             ("gateway_generic_stream_max_bytes", "Stream Max Bytes", False),
             ("gateway_generic_stream_read_timeout_seconds", "Stream Read Timeout (seconds)", False),
             ("gateway_egress_selfcheck_enabled", "Egress Self-Check Enabled", False),
+        ],
+    },
+    "cimd": {
+        "title": "CIMD Publisher",
+        "order": 30,
+        "fields": [
+            ("cimd_publisher_enabled", "Enabled", False),
+            ("cimd_cache_ttl", "Cache TTL (s)", False),
+            ("cimd_client_name", "Client Name", False),
+            ("cimd_redirect_uris", "Redirect URIs", False),
+            ("cimd_scope", "Scope", False),
+            ("cimd_logo_uri", "Logo URI", False),
+            ("cimd_contacts", "Contacts", False),
         ],
     },
 }

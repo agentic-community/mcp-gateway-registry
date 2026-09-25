@@ -3,7 +3,7 @@ global:
   image:
     # Container registry (host + optional namespace). Shared default across subcharts.
     registry: public.ecr.aws/p3v1o3c6
-    tag: 1.30.0
+    tag: 1.31.0
     pullPolicy: IfNotPresent
   cloud:
     # AWS region for cloud detection in telemetry. Set this when deploying
@@ -16,6 +16,12 @@ global:
   # deploy via the umbrella.
   ingress:
     scheme: internet-facing
+    inboundCidrs: # optional comma separated list of allowed inbound CIDR ranges
+    # Optional ALB ssl-policy applied to the HTTPS listener. Leave empty to
+    # let the AWS Load Balancer Controller use its own default
+    # (ELBSecurityPolicy-2016-08). Set a modern policy such as
+    # ELBSecurityPolicy-TLS-1-2-Ext-2018-06 when clients require newer TLS.
+    sslPolicy:
     tls: false
     routingMode: subdomain
     paths:
@@ -351,6 +357,16 @@ app:
   # The cloud metadata address (169.254.169.254) is never permitted by either.
   ssrfAllowedHosts: ""
   ssrfAllowedCidrs: ""
+  # CIMD (Client ID Metadata Document) publisher. When enabled, the registry
+  # serves GET /oauth/client-metadata.json describing itself as an OAuth client
+  # for external CIMD-aware IdPs. Default off; non-secret.
+  cimdPublisherEnabled: false
+  cimdCacheTtl: 3600
+  cimdClientName: "AI Registry Tools"
+  cimdRedirectUris: ""
+  cimdScope: ""
+  cimdLogoUri: ""
+  cimdContacts: ""
   # IDE OAuth login (PR #1224). Pre-registered PUBLIC OAuth client_id that IDEs
   # (Cursor, Claude Code, Codex) use to start the gateway login flow. When set,
   # the Connect config advertises it and drops the static gateway token. Empty
@@ -437,6 +453,7 @@ entra:
   tenantId: ""
   scopeFormat: "" # Entra PRM scope form: "v1" (api://<app-id>/<scope>) or "v2" (bare, default). Set "v1" only if your app exposes v1-style api:// scopes (issue #990).
   applicationIdUri: "" # Application ID URI (e.g. api://<app-id>). Used as the v1 scope prefix and accepted as a token audience. Defaults to api://<clientId>.
+  loginBaseUrl: "" # Entra login host for the registry's OWN client_credentials grant (headless backend discovery against obo_exchange servers). Leave empty on standard Entra deployments; set only for sovereign clouds (e.g. https://login.microsoftonline.us) or air-gapped deployments. Mirrors the auth-server's value.
 # IdP group filtering (applies to all identity providers)
 # When set, only groups matching any of these prefixes are shown in IAM > Groups
 # Example: "mcp-,registry-,ai-"
@@ -524,6 +541,12 @@ egressAuth:
   tokenRefreshSkewSeconds: "300"
   refreshWorkerIntervalSeconds: "300"
   stateTtlSeconds: "600"
+  # Egress httpx client connection pooling (shared by url_guard). Keep
+  # httpPoolKeepaliveExpirySeconds below the shortest upstream/LB idle timeout.
+  httpPoolMaxConnections: "100"
+  httpPoolMaxKeepalive: "20"
+  httpPoolKeepaliveExpirySeconds: "30"
+  httpPoolConnectRetries: "1"
   # obo_exchange target_audience allowlist (whitespace-separated). Optional.
   # When set, an obo server may only use a listed audience (authoritative positive
   # control against a confused-deputy that points obo at a shared first-party API).

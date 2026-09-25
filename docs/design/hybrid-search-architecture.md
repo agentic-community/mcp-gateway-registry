@@ -94,7 +94,7 @@ When a search query arrives:
 - Uses HNSW index on DocumentDB (production) or application-level cosine similarity on MongoDB CE
 - Finds conceptually similar content even with different wording
 - Returns results sorted by cosine similarity
-- DocumentDB uses configurable `efSearch` parameter (default 100) for HNSW recall quality
+- DocumentDB uses a configurable `efSearch` parameter (default 1000) for HNSW recall quality
 - Minimum `k=50` ensures small collections are fully covered
 
 **Keyword Search (Lexical)**
@@ -547,21 +547,30 @@ For hybrid (vector + keyword) search, use `POST /api/search/semantic` instead.
 
 ### DocumentDB (Production)
 - Native HNSW vector index with `$search` aggregation pipeline
-- **Per-entity-type vector search**: Runs separate `$search vectorSearch` pipelines for each entity type (mcp_server, a2a_agent, skill, virtual_server) to ensure fair candidate representation. In large registries (1000+ documents), a single global search would be dominated by whichever entity type has the most documents, making agents and skills invisible.
-- Each per-type pipeline retrieves `k_per_type = max(max_results * 2, 30)` candidates, then all candidates are merged and deduplicated before RRF scoring
+- **One global vector search**, then filter and distribute in Python
+- `k = min(max_results * VECTOR_SEARCH_OVERREQUEST, efSearch)` candidates, over-requested because the filters run after the search
 - Keyword query runs separately and merges results (no `$unionWith` support)
 - Text boost calculated in aggregation pipeline using `$regexMatch`
 
 ```
 Query: "flight booking"
-  Pipeline 1: $search vectorSearch (k=30) + $match entity_type=mcp_server  -> top 30 servers
-  Pipeline 2: $search vectorSearch (k=30) + $match entity_type=a2a_agent   -> top 30 agents
-  Pipeline 3: $search vectorSearch (k=30) + $match entity_type=skill       -> top 30 skills
-  Pipeline 4: $search vectorSearch (k=30) + $match entity_type=virtual_server -> top 30 virtual servers
-  Keyword:    collection.find({$or: [name/path/desc/tags/tools regex match]})
+  Vector:  $search vectorSearch (k=200) + $match entity_type $in [types] + $match status
+  Keyword: collection.find({$or: [name/path/desc/tags/tools regex match]})
 
-  All candidates merged -> RRF scoring -> _distribute_results -> normalize -> response
+  Candidates merged -> RRF scoring -> _distribute_results -> normalize -> response
 ```
+
+### Why not one pipeline per entity type
+
+Between June 2026 and issue #1751 this ran a separate pipeline per entity type, intending to stop servers crowding out agents and skills (#1160). It could not work, and the reason is worth recording so nobody rebuilds it.
+
+`$search` selects the nearest `k` documents before `$match` runs. So a pipeline of `$search (k=30)` followed by `$match entity_type=skill` does not return the top 30 skills. It returns whichever of the **global** top 30 happen to be skills. Every per-type pipeline ran the same global search and differed only in what it kept afterwards, so the union across all of them was exactly `k`, never `k` per type. Measured on DocumentDB: four pipelines at `k=30` produced 30 candidates in total.
+
+The loop therefore cost up to five sequential round trips (measured at 59 to 885ms) for the candidate set a single query returns.
+
+It also broke ranking. `_reciprocal_rank_fusion()` treats list position as the vector rank, and the caller passed it the per-type blocks concatenated in loop order. That made entity type outrank similarity, and made the caller's `entity_types` argument order change the results. A single query returns one list in similarity order, which is the input RRF documents.
+
+**Per-type recall needs per-type collections, not per-type queries.** Collection is the only partition DocumentDB offers for vector search: `$search` takes no filter, and vector indexes support no `partial`, `sparse` or `compound` options. Splitting the embeddings collection by entity type would make `k` genuinely per-type. That is not implemented; the trade-off is a reindex and more indexes to maintain.
 
 ### MongoDB CE (Development/Local)
 - No native vector search support (`$vectorSearch` not available)
@@ -661,14 +670,40 @@ When the embedding model becomes available again (e.g., after a restart with cor
 
 ## HNSW Tuning (DocumentDB)
 
-The DocumentDB `$search` pipeline includes two tunable parameters:
+| Parameter | Default | Env var | Description |
+|-----------|---------|---------|-------------|
+| `k` | `min(max_results * 20, efSearch / 2)` | derived | Nearest neighbours the search returns. Over-requested on purpose, see below. |
+| `efSearch` | `1000` | `VECTOR_SEARCH_EF_SEARCH` | HNSW traversal queue size, the equivalent of `numCandidates` in MongoDB Atlas. Higher improves recall and costs latency. Range 1-1000, the DocumentDB ceiling, so a typo fails at startup rather than on every query. |
+| overrequest multiplier | `20` | `VECTOR_SEARCH_OVERREQUEST` | Multiplier on `max_results` that produces `k`. Range 1-1000. |
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `k` | `max(max_results * 3, 50)` | Number of nearest neighbors to retrieve. Minimum 50 ensures small collections are fully covered. |
-| `efSearch` | `100` (configurable via `VECTOR_SEARCH_EF_SEARCH`) | Controls HNSW recall quality. Higher values improve recall at the cost of query latency. Default DocumentDB value is ~40, which can miss documents in small collections. |
+`k` and `efSearch` answer different questions and are set independently. `efSearch` is a quality dial, an absolute ceiling on how hard the traversal works. `k` comes from the caller's `max_results`, scaled.
 
-The `efSearch` setting is configured in `registry/core/config.py` as `vector_search_ef_search`.
+They are coupled by one physical constraint: HNSW cannot return more candidates than its queue holds. `k` is clamped to **half** the queue rather than all of it, because a queue exactly the size of the result set leaves the traversal no room to explore past what it has already committed to returning, which costs recall at the tail of `k`. At the default multiplier the clamp only binds above `max_results=25`.
+
+### Why k over-requests
+
+`$search` selects the nearest `k` documents **before** any `$match` runs, and DocumentDB offers no filter option inside the operator. So the entity-type and status filters run afterwards, and whatever they discard is lost with nothing to refill it. `k` therefore has to cover the expected loss.
+
+MongoDB Atlas calls this the overrequest pattern and recommends `numCandidates` at least 20 times the returned count. The same logic applies here with `efSearch` in that role.
+
+`k` can never usefully exceed `efSearch`, because the traversal queue bounds how many candidates the search can return. Hence the `min()`.
+
+### The limit worth knowing
+
+Recall from post-filtering tracks two things: how much of the corpus `k` retrieves, and how dense the wanted documents are within it. Measured on a 396-document corpus where only 23% of documents were enabled, a narrow `entity_types=["skill"]` query recovered 8 of 8 expected results once `k` exceeded the corpus, and 0 to 5 at `k=30`.
+
+Since `efSearch` caps at 1000, `k` caps at 1000, so coverage falls as a registry grows:
+
+| Corpus | `k=1000` covers | Narrow-query parity with the client-side path |
+|--------|-----------------|-----------------------------------------------|
+| ~400 | exhaustive | exact |
+| ~1300 | 76% | exact |
+| 3000 | 34% | degraded |
+| 10,000+ | under 10% | poor |
+
+The search logs its coverage (`k`, corpus size, percentage, survivor count) on every query, and warns when the survivor count falls below `max_results` while coverage is under 50%. Two levers when that fires: raise `VECTOR_SEARCH_OVERREQUEST`, or reduce the share of disabled and draft assets, which is usually the larger factor.
+
+MongoDB CE and Atlas take the client-side path, which filters inside the `find()` before ranking. These settings are inert there.
 
 ## Lifecycle Status Filtering
 
@@ -748,7 +783,7 @@ When an asset's lifecycle status changes (e.g., from `active` to `deprecated`), 
 1. **Result Distribution**: Global ranking with competitive soft caps limits results to `max_results` (default 10, max 50). The distribution algorithm is O(n) where n is the candidate set size (at most 150 documents).
 2. **RRF is O(n)**: Merging two ranked lists by ID lookup is linear, negligible overhead.
 3. **Index Reuse**: HNSW index parameters (m=16, efConstruction=128) optimized for recall
-4. **efSearch Tuning**: Set to 100 for near-exact recall in typical deployments
+4. **efSearch Tuning**: Defaults to 1000, the DocumentDB maximum, which is near-exact for registries of a few thousand documents
 5. **Embedding Caching**: Lazy-loaded model with singleton pattern
 6. **Keyword Fallback**: Separate query ensures explicit matches are not missed
 7. **Error Caching**: Failed model loads are cached to avoid repeated download/API attempts

@@ -12,6 +12,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import registry.api.egress_auth_routes as routes
+from registry.secrets import keys
 
 
 class _StubRepo:
@@ -236,17 +237,22 @@ class _InMemoryStore(SecretStoreBase):
     def __init__(self):
         self._d = {}
 
-    async def put_token(self, a, u, p, s, t):
-        self._d[(a, u, p, s)] = t
+    async def put_token(self, a, u, p, s, t, *, purpose):
+        self._d[(purpose, a, u, p, s)] = t
 
-    async def get_token(self, a, u, p, s):
-        return self._d.get((a, u, p, s))
+    async def get_token(self, a, u, p, s, *, purpose):
+        return self._d.get((purpose, a, u, p, s))
 
-    async def delete_token(self, a, u, p, s):
-        self._d.pop((a, u, p, s), None)
+    async def delete_token(self, a, u, p, s, *, purpose):
+        self._d.pop((purpose, a, u, p, s), None)
 
     async def list_for_user(self, a, u):
-        return [(p, s, t) for (aa, uu, p, s), t in self._d.items() if aa == a and uu == u]
+        # Egress space only, mirroring the real backends.
+        return [
+            (p, s, t)
+            for (purpose, aa, uu, p, s), t in self._d.items()
+            if aa == a and uu == u and purpose == keys.EGRESS_PURPOSE
+        ]
 
 
 @pytest.fixture
@@ -259,7 +265,7 @@ def make_real_client(monkeypatch):
         monkeypatch.setattr(routes, "verify_mcp_proxy_token", lambda tok: claims)
         monkeypatch.setattr(routes, "get_server_repository", lambda: _StubRepo(server))
         store = _InMemoryStore()
-        store._d[("oauth2", "alice", "github", "/github-mcp")] = StoredToken(
+        store._d[(keys.EGRESS_PURPOSE, "oauth2", "alice", "github", "/github-mcp")] = StoredToken(
             access_token="gho_real",
             client_id="Iv1.x",
             expires_at="2999-01-01T00:00:00+00:00",
@@ -301,3 +307,61 @@ class TestDestinationBindingRoute:
         body = r.json()
         assert body["consent_required"] is True
         assert body["access_token"] is None
+
+
+@pytest.mark.unit
+class TestOboExchangeVendDefense:
+    """The vend path returns the stored obo_exchange DIRECTIVE to the exchange
+    engine. It must re-validate the stored directive (defense in depth) so a
+    directive persisted before the write-path allowlist existed -- or via any
+    other mutation path -- can never be exchanged for a delegated token to a
+    disallowed audience. Fail closed: refuse, never silently pass through."""
+
+    def test_valid_obo_directive_vends(self, make_client):
+        client = make_client(
+            _claims(),
+            _server(
+                egress_auth_mode="obo_exchange",
+                egress_oauth={
+                    "target_audience": "api://outlook-mcp-server",
+                    "scopes": ["api://outlook-mcp-server/.default"],
+                },
+            ),
+        )
+        r = _post(client)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["mode"] == "obo_exchange"
+        assert body["obo_target_audience"] == "api://outlook-mcp-server"
+
+    def test_disallowed_stored_audience_refused(self, make_client):
+        # A directive that predates the write-path floor names a first-party
+        # resource; vending it would exfiltrate a delegated token upstream.
+        client = make_client(
+            _claims(),
+            _server(
+                egress_auth_mode="obo_exchange",
+                egress_oauth={
+                    "target_audience": "https://graph.microsoft.com",
+                    "scopes": [],
+                },
+            ),
+        )
+        r = _post(client)
+        assert r.status_code == 403
+        assert "not allowed" in r.json()["detail"]
+
+    def test_mismatched_stored_scope_refused(self, make_client):
+        client = make_client(
+            _claims(),
+            _server(
+                egress_auth_mode="obo_exchange",
+                egress_oauth={
+                    "target_audience": "api://outlook-mcp-server",
+                    "scopes": ["https://graph.microsoft.com/.default"],
+                },
+            ),
+        )
+        r = _post(client)
+        assert r.status_code == 403
+        assert "not allowed" in r.json()["detail"]

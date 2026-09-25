@@ -96,6 +96,47 @@ done
 
 If any of the above is missing, the review verdict is **REQUEST CHANGES** with a blocker titled "Unified parameter reference not updated".
 
+### Step 2.6: Detect New or Changed API Endpoints (CRITICAL)
+
+`api/openapi.json` is the published API contract, and it is **hand-refreshed**: no script generates it and no CI job checks it. A PR that adds a route therefore passes every gate while leaving the new endpoint invisible to API consumers. This has already happened, more than once in a row, so the spec shipped missing endpoints from several merged PRs at the same time.
+
+**Detection:** does the diff add or change a route decorator?
+
+```bash
+# Matches ANY router object, not just `router`/`app`: real routes are declared on
+# names like `cimd_router`, `wellknown_router`, and a narrower pattern misses them
+# (verified: it missed #1711's `@cimd_router.get(...)` entirely).
+gh pr diff {pr-number} | grep -E '^\+\s*@[A-Za-z_][A-Za-z0-9_]*\.(get|post|put|patch|delete)\('
+```
+
+**If that matches**, check whether the spec was refreshed:
+
+```bash
+gh pr diff {pr-number} --name-only | grep -q '^api/openapi\.json$' \
+  && echo "spec refreshed" || echo "SPEC NOT REFRESHED"
+```
+
+And confirm the new path actually landed in it, rather than the file being touched for an unrelated reason:
+
+```bash
+git show {pr-branch}:api/openapi.json | python3 -c "
+import json, sys
+print(sorted(json.load(sys.stdin)['paths']))
+" | tr ',' '\n' | grep -i '<the new path>'
+```
+
+**Merge-blocking checks:**
+
+- [ ] Every route the diff adds appears in `api/openapi.json`.
+- [ ] Every route the diff removes is gone from it.
+- [ ] `info.version` is a clean release semver, not the app's git-describe development string (`1.30.0-46-g...`).
+- [ ] The diff to `api/openapi.json` is confined to the affected paths. A wholesale reformat usually means it was regenerated with `ensure_ascii=False`, which rewrites every non-ASCII character and hides the real change.
+- [ ] Nothing was removed unexpectedly. Unexplained removals usually mean the container was built with a feature flag off or the wrong `DEPLOYMENT_MODE`, so a whole router never registered.
+
+A route added behind a default-off feature flag still belongs in the spec: FastAPI registers the route regardless, and the flag only changes the response at request time.
+
+If a route was added and the spec was not refreshed, the verdict is **REQUEST CHANGES** with a blocker titled "OpenAPI spec not refreshed for new endpoint". The procedure is in [CLAUDE.md](../../../CLAUDE.md#regenerating-apiopenapijson); refreshing it can also be offered as a follow-up PR when the author would rather not rebuild locally.
+
 ### Step 3: Run Tests and Quality Checks
 
 Before reviewing, run the test suite to verify the PR doesn't break anything:
@@ -176,6 +217,17 @@ Generate the review document using this structure:
 | Linting | {PASS/FAIL} | {summary} |
 | Security Scan | {PASS/FAIL} | {summary} |
 
+### API Spec Check
+
+*Only required when the diff adds or changes a route decorator (see Step 2.6). Mark "Not Applicable" otherwise.*
+
+| Check | Status | Details |
+|-------|--------|---------|
+| Every added route appears in `api/openapi.json` | {PASS/FAIL/N/A} | {the paths} |
+| Every removed route is gone from it | {PASS/FAIL/N/A} | n/a |
+| `info.version` is a release semver, not a dev string | {PASS/FAIL/N/A} | n/a |
+| Spec diff confined to the affected paths | {PASS/FAIL/N/A} | n/a |
+
 ### Configuration Parameter Surface Check
 
 *Only required when the PR touches any parameter-carrying file (see Step 2.5). Mark "Not Applicable" if the detection command returned no matches.*
@@ -255,6 +307,25 @@ After creating the review document, present a summary to the user:
 2. List any blockers that must be addressed
 3. Provide the path to the full review document
 4. Offer to explain any specific findings in detail
+5. **End the response with a clickable link to the PR** (see below)
+
+#### Always end with a clickable PR link
+
+The last line of every review response must be a full markdown link to the PR, so
+the reader can open it without copying a number into a URL bar:
+
+```markdown
+[#1711 — feat: CIMD client metadata document](https://github.com/agentic-community/mcp-gateway-registry/pull/1711)
+```
+
+Rules:
+
+- Use the full `https://github.com/{owner}/{repo}/pull/{number}` URL. A bare
+  `#1711` renders as plain text in the terminal and is not clickable.
+- Include the PR title after the number, so the link says what it points at.
+- This applies to every response about the PR, not just the first one: follow-up
+  answers, "pushed the fixes", and status updates all end with the link.
+- If the response covers more than one PR, link each of them.
 
 ## Review Principles
 

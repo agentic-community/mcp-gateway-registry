@@ -42,6 +42,7 @@ against Graph) and exercising the flow against the `mcp-entra` Helm release.
 - [Runtime sequence](#runtime-sequence)
 - [How `obo_exchange` differs from the 3LO vault](#how-obo_exchange-differs)
 - [Registration contract](#registration-contract)
+- [Backend discovery (health / tool-list)](#backend-discovery-for-obo_exchange-servers-health--tool-list)
 - [The RFC 8707 resource / Entra App ID URI constraint](#resource-constraint)
 - [Environment variables](#environment-variables)
 - [1. Entra app registration](#1-entra-app-registration)
@@ -258,6 +259,202 @@ validates the token it receives against two facts the gateway guarantees: the
 **expected `aud`** (its own app, registered as `target_audience`) and the **shared
 issuer** (the same IdP — already known). If it exchanges the token again for a
 downstream resource, it does so against those same facts.
+
+---
+
+## Backend discovery for `obo_exchange` servers (health / tool-list)
+
+`obo_exchange` sources the **runtime** token per user, per request (above). But the
+registry also runs **headless** health checks and tool discovery against the
+server — with no user present and no ingress JWT — so it cannot perform an OBO
+exchange for those calls (there is no `subject_token`). Discovery therefore
+authenticates as the **gateway itself** using the OAuth 2.0 `client_credentials`
+grant, requesting a token audienced to the server's `target_audience`. This is the
+machine-identity analogue of the per-user exchange.
+
+| | Runtime (`obo_exchange`) | Discovery (this section) |
+|---|---|---|
+| Grant | `jwt-bearer` / RFC 8693 token exchange | `client_credentials` (RFC 6749 §4.4) |
+| Identity | the end user (`sub` preserved) | the gateway app itself (no user) |
+| Where | auth-server `mcp_proxy` hop | registry (`backend_oauth.resolve_obo_discovery_bearer`) |
+| Credential | gateway IdP client creds + user JWT | gateway IdP client creds only |
+| Token claims | `aud`=server app, `sub`=user | `aud`=server app, `roles`=app role(s), **no user/`scp`** |
+
+The discovery token is used **only** for the registry's own health/tool-list calls
+(and security scan). It is never injected on the end-user egress hop — that hop
+continues to use the per-user OBO exchange (the discovery/runtime auth separation
+requested in issue #966).
+
+### Enabling it
+
+**Supported identity providers: Entra only.** The gateway mints this machine token
+against its own IdP, and `AUTH_PROVIDER=entra` is the only value implemented. Every
+other — including the shipped default `cognito`, plus `keycloak`, `okta`, `auth0` and
+`pingfederate` — resolves nothing, and the server reports unhealthy. `keycloak` is
+refused deliberately rather than partially working; see [Keycloak](#keycloak) below.
+Backend discovery for `obo_exchange` servers therefore requires Entra plus the manual
+app registration in the next section, and **nothing in a default deployment reaches
+it**.
+
+No extra **registry** configuration: discovery activates automatically for a server
+when `EGRESS_AUTH_ENABLED=true`, `egress_auth_mode=obo_exchange`, and the server has
+**no explicit `auth_scheme`** (`none`) — an operator's static credential always wins
+over a derived one — reusing the registered `egress_oauth.target_audience`. The
+`target_audience` is re-validated at
+mint time against the **full** registration control, not just part of it — the
+always-on first-party floor (so the machine token can never be minted for Microsoft
+Graph / ARM / Key Vault), the `EGRESS_OBO_ALLOWED_AUDIENCES` allowlist / shape rule,
+**and** the gateway's-own-audience check. That last one matters more here than for
+the runtime grant: Entra rejects a same-app OBO *exchange* at runtime, but it will
+happily issue `api://<gateway-client-id>/.default` to the gateway itself. Sending
+that upstream would hand a third-party MCP server a token audienced to this gateway,
+in the form its own ingress accepts.
+
+Sovereign clouds: set `ENTRA_LOGIN_BASE_URL` (US Gov
+`https://login.microsoftonline.us`, China `https://login.partner.microsoftonline.cn`);
+the gateway's token endpoint is derived from it.
+
+### Entra changes required
+
+A `client_credentials` (app-only) token can carry **only application permissions
+(app roles)**, never delegated scopes. So, in addition to the general app setup in
+[§1](#1-entra-app-registration):
+
+**On the TARGET internal MCP server's app registration** (the resource being
+discovered):
+
+1. **Expose an Application ID URI** — *Expose an API* → set `api://<target-client-id>`
+   (or a custom `api://<name>`). This exact value is the server's `target_audience`.
+2. **Define an App Role for applications** — *App roles* → *Create app role* →
+   **Allowed member types = Applications** (e.g. value `Discovery.Access`). An
+   assignable application app role is what lets `<target>/.default` mint a token
+   for this resource.
+
+**On the GATEWAY app registration** (the registry's existing app —
+`ENTRA_CLIENT_ID`):
+
+3. **Add API permission** — *API permissions* → *Add a permission* → **My APIs** →
+   select the target server app → **Application permissions** → check the app role
+   from step 2.
+4. **Grant admin consent** — click *Grant admin consent for <tenant>*. Application
+   permissions **always** require admin consent; without it the token request fails
+   (`AADSTS65001`).
+5. **Client secret** — reuse the gateway's existing secret (`ENTRA_CLIENT_SECRET`).
+   No new or per-server secret.
+
+**Token behavior.** The registry requests
+`POST {ENTRA_LOGIN_BASE_URL}/{tenant}/oauth2/v2.0/token` with
+`grant_type=client_credentials`, `client_id`/`client_secret` = the gateway app,
+and `scope=api://<target>/.default`. The issued token has `aud=api://<target>`, a
+`roles` claim, **no `scp`**, and its subject is the gateway service principal — no
+user. **The internal MCP server MUST accept app-only tokens** (validate `aud` +
+`roles`, tolerate the absence of a user/`scp`) for at least its discovery
+endpoints (`initialize`, `tools/list`); a server that only accepts delegated
+user tokens will still fail discovery.
+
+### Keycloak
+
+**Refused outright, deliberately.** `_gateway_idp_client` returns nothing for
+`AUTH_PROVIDER=keycloak` regardless of how Keycloak is configured, and logs:
+
+```
+obo discovery unavailable: AUTH_PROVIDER=keycloak is not supported for backend
+discovery. Keycloak binds the token audience with a server-side audience mapper that
+this deployment does not create, so the gateway cannot prove a token is audienced to
+the target. Use AUTH_PROVIDER=entra for obo_exchange discovery.
+```
+
+There is no configuration that enables it. That is a change from "nearly working",
+and the reason is the second of two problems:
+
+1. **`KEYCLOAK_URL` is plain HTTP on every shipped deployment.** The token request
+   carries the gateway's own `client_secret`, so it goes through the credentialed
+   OAuth SSRF profile, which requires HTTPS and refuses private hosts
+   (`http://keycloak:8080` on Compose, the headless Service on Helm). Relaxing that
+   guard is not the fix, because the alternative is posting a client secret in
+   cleartext.
+2. **Keycloak cannot be given a target audience in the request.** It binds audience
+   through a server-side **audience** protocol mapper on the gateway's service-account
+   client, not a request scope, so no `.default` is sent — and neither the charts nor
+   the realm bootstrap create that mapper.
+
+Problem 2 is why the refusal is unconditional rather than gated on HTTPS. Fixing only
+problem 1 used to get past the guard and mint a **real token audienced to whatever
+Keycloak defaults to** — not the server's `target_audience` — which was then sent to a
+third-party MCP server as `Authorization: Bearer`, with nothing downstream re-checking
+`aud`. Failing closed is the only honest state until the mapper is created and the
+audience contract is testable.
+
+Under Keycloak the affected servers record **unhealthy**, per *Failure behavior* below.
+
+### Failure behavior
+
+Fail-closed: if the token cannot be minted (feature off, gateway client
+unconfigured, target audience blocked, or the IdP rejects the request), the
+registry omits the header and the health check records the server **unhealthy** —
+the correct signal. It never falls back to an unauthenticated scan or to the
+runtime OBO path.
+
+
+### Scope and limits of "discovery"
+
+Two things this does **not** mean, both worth stating because the name invites the
+other reading:
+
+- **It is not OAuth metadata discovery.** The registry does not fetch an upstream's
+  RFC 9728 protected-resource metadata or an authorization server's RFC 8414
+  metadata, does not read a `WWW-Authenticate` challenge to locate an AS, and does
+  not perform Dynamic Client Registration (see ADR 0001). "Discovery" here means the
+  registry's *own* discovery calls — health, `tools/list`, security scan — can
+  authenticate to a server that requires OAuth. An operator supplies the authorize
+  and token endpoints; nothing is probed.
+- **It is not available to a registry-only deployment.** A borrowed OAuth 2.1
+  identity lives in the per-user credential vault, so it requires
+  `EGRESS_AUTH_ENABLED`, a configured secret store, and gateway mode. With the egress
+  feature off, a stored designation is inert; the UI says so and both resolvers log
+  which setting is wrong, rather than the server simply going unhealthy with no
+  explanation. Tier 1 (`client_credentials` from the server's own backend-auth config,
+  `auth_scheme: oauth`) has no such requirement and works in any deployment.
+
+The tier numbers below match `with_bearer` in `registry/core/backend_oauth.py`:
+**1** = `client_credentials` from the server's own config (`auth_scheme: oauth`),
+**2** = a borrowed OAuth 2.1 discovery identity from the vault (`auth_scheme: none`
+plus `oauth_discovery.enabled`), **3** = a gateway app-only token for an
+`obo_exchange` server (`auth_scheme: none`).
+
+### Operational notes
+
+- **Runtime Keycloak OBO is not implemented.** `_keycloak_exchange_body` raises
+  `OboUnsupportedIdpError`, so `obo_exchange` is Entra-only end to end — runtime
+  *and* discovery. A Keycloak-backed server cannot use `obo_exchange` at all today,
+  and `_gateway_idp_client` refuses `AUTH_PROVIDER=keycloak` outright for discovery
+  rather than minting a token whose audience it cannot constrain.
+- **Tier 2 reads the vault on every health cycle.** Unlike tiers 1 and 3 it is not
+  cached, so each cycle is a fresh secret-store read plus a possible refresh. On AWS
+  Secrets Manager that is a billed API call per server per cycle, and is subject to
+  throttling — worth accounting for when sizing the health interval against a large
+  number of servers carrying a **discovery designation** (tier 2 applies to
+  `auth_scheme: none` servers, not to `oauth`-scheme ones, which are tier 1 and are
+  cached).
+- **A private-resolving token endpoint is accepted at config time and refused at
+  use.** `PUT /oauth-config` validates `token_url` with the same credentialed profile
+  the request will run under, but with `resolve=False` so config-time validation does
+  not depend on DNS. A host like `https://idp.internal:8443` that *resolves* to a
+  private address therefore passes validation and is then refused on every health
+  cycle, logged as a policy rejection. Use a publicly resolvable HTTPS token
+  endpoint; relaxing the guard is not the fix, since it exists to stop the registry
+  posting a client secret to a private or plaintext host. An internal HTTPS IdP needs
+  an explicit entry in `EGRESS_OAUTH_TRUSTED_IDP_HOSTS` (hosts only, no CIDRs).
+- **`resource` is not the Entra spelling.** Tier 1 sends an RFC 8707 `resource`
+  parameter when one is configured. Entra v2 does not accept it — it expects the
+  target to be named as `scope=<App ID URI>/.default`. Configure scopes rather than
+  `resource` for Entra-protected servers; `resource` is for authorization servers
+  that implement RFC 8707.
+- **Revoking a designation needs the secret store reachable.** `DELETE
+  /oauth-discovery` and server deletion both revoke the vaulted credential, and that
+  path depends on `SECRET_STORE_BACKEND` rather than `EGRESS_AUTH_ENABLED` — so it
+  still works with the egress feature off. If both are cleared, the revoke cannot run
+  and the residue is logged at exception level for manual removal.
 
 ---
 

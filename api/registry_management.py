@@ -23,6 +23,7 @@ Server Management:
 
     # Toggle server status
     uv run python registry_management.py toggle --path /cloudflare-docs
+    uv run python registry_management.py toggle-tool --path /context7 --tool resolve-library-id --enabled false
 
     # Remove server
     uv run python registry_management.py remove --path /cloudflare-docs
@@ -3310,6 +3311,39 @@ def cmd_agent_delete(args: argparse.Namespace) -> int:
 
     except Exception as e:
         logger.error(f"Agent deletion failed: {e}")
+        return 1
+
+
+def cmd_toggle_tool(args: argparse.Namespace) -> int:
+    """
+    Block or unblock a single tool on a server.
+
+    Args:
+        args: Command arguments (path, tool, enabled)
+
+    Returns:
+        Exit code (0 for success, 1 for failure)
+    """
+    try:
+        client = _create_client(args)
+        response = client.toggle_tool(args.path, args.tool, args.enabled)
+
+        state = "enabled" if response.enabled else "blocked"
+        logger.info(f"Tool {state}: {response.tool_name} on {args.path}")
+        print(
+            json.dumps(
+                {
+                    "server_path": args.path,
+                    "tool_name": response.tool_name,
+                    "enabled": response.enabled,
+                },
+                indent=2,
+            )
+        )
+        return 0
+
+    except Exception as e:
+        logger.error(f"Toggle tool failed: {e}")
         return 1
 
 
@@ -6675,6 +6709,22 @@ Examples:
     toggle_parser = subparsers.add_parser("toggle", help="Toggle server status")
     toggle_parser.add_argument("--path", required=True, help="Server path to toggle")
 
+    # Per-tool block toggle. A blocked tool is rejected on tools/call and withheld
+    # from tools/list, semantic search and server.json, while the server stays up.
+    toggle_tool_parser = subparsers.add_parser(
+        "toggle-tool", help="Block or unblock a single tool on a server"
+    )
+    toggle_tool_parser.add_argument("--path", required=True, help="Server path, e.g. /context7")
+    toggle_tool_parser.add_argument(
+        "--tool", required=True, help="Tool name, must exist on that server"
+    )
+    toggle_tool_parser.add_argument(
+        "--enabled",
+        type=lambda v: str(v).lower() in ("true", "1", "yes"),
+        required=True,
+        help="true to unblock the tool, false to block it",
+    )
+
     # Remove command
     remove_parser = subparsers.add_parser("remove", help="Remove a server")
     remove_parser.add_argument("--path", required=True, help="Server path to remove")
@@ -8370,6 +8420,7 @@ Examples:
         "custom-record-list": cmd_custom_record_list,
         "list": cmd_list,
         "toggle": cmd_toggle,
+        "toggle-tool": cmd_toggle_tool,
         "remove": cmd_remove,
         "healthcheck": cmd_healthcheck,
         "config": cmd_config,

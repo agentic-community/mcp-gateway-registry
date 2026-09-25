@@ -1403,6 +1403,134 @@
         ]
       }
     },
+    "/api/toggle-tool/{service_path}": {
+      "post": {
+        "tags": [
+          "Server Management"
+        ],
+        "summary": "Toggle Tool Route",
+        "description": "Block or unblock a single tool on a server (session-authenticated, for the UI).",
+        "operationId": "toggle_tool_route_api_toggle_tool__service_path__post",
+        "parameters": [
+          {
+            "name": "service_path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Service Path"
+            }
+          },
+          {
+            "name": "mcp_gateway_session",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Mcp Gateway Session"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolTogglePayload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/servers/toggle-tool/{service_path}": {
+      "post": {
+        "tags": [
+          "Server Management"
+        ],
+        "summary": "Toggle Tool Api",
+        "description": "Block or unblock a single tool on a server (bearer-token API sibling).\n\nSame behaviour and same authorization as POST /api/toggle-tool/{path}; only\nthe authentication dependency differs, matching how /api/servers/toggle\nrelates to /api/toggle/{path}. Needed because the CLI and registry_client\nauthenticate with a token, which enhanced_auth does not accept.",
+        "operationId": "toggle_tool_api_api_servers_toggle_tool__service_path__post",
+        "parameters": [
+          {
+            "name": "service_path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Service Path"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolTogglePayload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
     "/api/servers/check-duplicates": {
       "post": {
         "tags": [
@@ -2566,6 +2694,250 @@
             }
           }
         },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/servers/{server_path}/oauth-config": {
+      "get": {
+        "tags": [
+          "Server Management"
+        ],
+        "summary": "Get Server Oauth Config",
+        "description": "Return the non-secret backend OAuth (client_credentials) config for a server.",
+        "operationId": "get_server_oauth_config_api_servers__server_path__oauth_config_get",
+        "parameters": [
+          {
+            "name": "server_path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Server Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "Server Management"
+        ],
+        "summary": "Put Server Oauth Config",
+        "description": "Configure REGISTRY-SELF backend OAuth (client_credentials) for a server.\n\nSets ``auth_scheme = \"oauth\"`` and stores ``backend_oauth`` (token_url,\nclient_id, encrypted client_secret, scopes, token_auth_style, resource). The\nregistry uses this token to authenticate its OWN health checks and tool\ndiscovery against an OAuth-backed MCP server. Owner-or-admin only; CSRF\nprotected. ``client_secret`` blank on edit keeps the stored one.",
+        "operationId": "put_server_oauth_config_api_servers__server_path__oauth_config_put",
+        "parameters": [
+          {
+            "name": "server_path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Server Path"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OAuthBackendConfigRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
+    "/api/servers/{server_path}/oauth-discovery": {
+      "get": {
+        "tags": [
+          "Server Management"
+        ],
+        "summary": "Get Server Oauth Discovery",
+        "description": "Return the designated discovery-identity config for a server (non-secret).",
+        "operationId": "get_server_oauth_discovery_api_servers__server_path__oauth_discovery_get",
+        "parameters": [
+          {
+            "name": "server_path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Server Path"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "Server Management"
+        ],
+        "summary": "Put Server Oauth Discovery",
+        "description": "Configure backend-auth OAuth 2.1 discovery on a server and designate the\nCALLER as the borrowed identity.\n\nREQUIRES the egress feature (``EGRESS_AUTH_ENABLED``). Discovery uses its own\nprovider config under ``oauth_discovery.oauth`` rather than ``egress_oauth``,\nbut it borrows from the per-user OAuth VAULT and the consent that fills that\nvault is served by the egress OAuth facade -- which the app only mounts under\nthe same flag. Accepting a designation the deployment can never honour would\njust store config that silently never authenticates, so this fails closed.\n\nStores the server's OWN provider config under ``oauth_discovery.oauth`` and\nrecords the caller's canonical vault principal. The admin then connects once\nvia ``/oauth2/egress/connect?server=<path>&purpose=discovery``; the registry\nborrows that vaulted token for its OWN headless health/discovery calls.\nOwner-or-admin only; CSRF protected. ``client_secret`` blank keeps stored.\nAn existing designation is preserved -- see below.",
+        "operationId": "put_server_oauth_discovery_api_servers__server_path__oauth_discovery_put",
+        "parameters": [
+          {
+            "name": "server_path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Server Path"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OAuthDiscoveryConfigRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "Server Management"
+        ],
+        "summary": "Delete Server Oauth Discovery",
+        "description": "Clear the discovery-identity designation AND revoke the token it vaulted.",
+        "operationId": "delete_server_oauth_discovery_api_servers__server_path__oauth_discovery_delete",
+        "parameters": [
+          {
+            "name": "server_path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Server Path"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -9847,6 +10219,16 @@
               "default": "",
               "title": "Server"
             }
+          },
+          {
+            "name": "purpose",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "egress",
+              "title": "Purpose"
+            }
           }
         ],
         "responses": {
@@ -11130,16 +11512,17 @@
             "schema": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "string",
+                  "maxLength": 256
                 },
                 {
                   "type": "null"
                 }
               ],
-              "description": "Filter statistics to a specific username",
+              "description": "Filter statistics to a specific username: matches the display identity or any stored identity claim (subject/canonical_id/object_id/principal_name)",
               "title": "Username"
             },
-            "description": "Filter statistics to a specific username"
+            "description": "Filter statistics to a specific username: matches the display identity or any stored identity claim (subject/canonical_id/object_id/principal_name)"
           },
           {
             "name": "mcp_gateway_session",
@@ -11325,16 +11708,17 @@
             "schema": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "string",
+                  "maxLength": 256
                 },
                 {
                   "type": "null"
                 }
               ],
-              "description": "Filter by username",
+              "description": "Filter by username: matches the display identity or any stored identity claim (subject/canonical_id/object_id/principal_name)",
               "title": "Username"
             },
-            "description": "Filter by username"
+            "description": "Filter by username: matches the display identity or any stored identity claim (subject/canonical_id/object_id/principal_name)"
           },
           {
             "name": "operation",
@@ -11702,16 +12086,17 @@
             "schema": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "string",
+                  "maxLength": 256
                 },
                 {
                   "type": "null"
                 }
               ],
-              "description": "Filter by username",
+              "description": "Filter by username: matches the display identity or any stored identity claim (subject/canonical_id/object_id/principal_name)",
               "title": "Username"
             },
-            "description": "Filter by username"
+            "description": "Filter by username: matches the display identity or any stored identity claim (subject/canonical_id/object_id/principal_name)"
           },
           {
             "name": "operation",
@@ -14948,6 +15333,31 @@
             }
           }
         }
+      }
+    },
+    "/oauth/client-metadata.json": {
+      "get": {
+        "tags": [
+          "Discovery"
+        ],
+        "summary": "Get Oauth Client Metadata",
+        "description": "Publish this registry's CIMD (Client ID Metadata Document) -- issue #992.\n\nDescribes the registry as an OAuth CLIENT so it can authenticate to external\nCIMD-aware IdPs; the document's URL is the registry's client_id. Public,\nunauthenticated, and cacheable (unlike the no-store discovery documents).\nServed only when cimd_publisher_enabled.",
+        "operationId": "get_oauth_client_metadata_oauth_client_metadata_json_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
       }
     },
     "/api/ard/search": {
@@ -21391,6 +21801,171 @@
         "title": "MissingEmbeddingsResponse",
         "description": "Response for the missing embeddings scan."
       },
+      "OAuthBackendConfigRequest": {
+        "properties": {
+          "token_url": {
+            "type": "string",
+            "title": "Token Url",
+            "description": "OAuth2 token endpoint (public HTTPS)."
+          },
+          "client_id": {
+            "type": "string",
+            "title": "Client Id",
+            "description": "OAuth client_id for the client_credentials grant."
+          },
+          "client_secret": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Secret",
+            "description": "Client secret (write-only). Blank on edit keeps the stored one. Omit for a public client (token_auth_style='none')."
+          },
+          "scopes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Scopes"
+          },
+          "token_auth_style": {
+            "type": "string",
+            "title": "Token Auth Style",
+            "description": "Where the client_secret goes: 'post_body' (default), 'basic_header', or 'none'.",
+            "default": "post_body"
+          },
+          "scope_separator": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope Separator",
+            "description": "Separator joining scopes (default single space)."
+          },
+          "resource": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resource",
+            "description": "RFC 8707 resource indicator (optional)."
+          }
+        },
+        "type": "object",
+        "required": [
+          "token_url",
+          "client_id"
+        ],
+        "title": "OAuthBackendConfigRequest",
+        "description": "Request model for configuring REGISTRY-SELF backend OAuth (client_credentials).\n\nSets ``auth_scheme = \"oauth\"`` and the ``backend_oauth`` config on a server so\nthe registry can authenticate to an OAuth-backed MCP server for health checks\nand tool discovery. ``client_secret`` is write-only: blank on edit keeps the\nstored one."
+      },
+      "OAuthDiscoveryConfigRequest": {
+        "properties": {
+          "provider": {
+            "type": "string",
+            "title": "Provider",
+            "description": "Provider key ('custom' for OAuth 2.1 servers)."
+          },
+          "client_id": {
+            "type": "string",
+            "title": "Client Id",
+            "description": "OAuth client_id.",
+            "default": ""
+          },
+          "client_secret": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Secret",
+            "description": "Client secret (write-only). Blank on edit keeps the stored one. Omit for a custom public client (custom_token_auth_style='none')."
+          },
+          "scopes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Scopes"
+          },
+          "custom_authorize_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Custom Authorize Url"
+          },
+          "custom_token_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Custom Token Url"
+          },
+          "custom_scope_separator": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Custom Scope Separator"
+          },
+          "custom_token_auth_style": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Custom Token Auth Style"
+          },
+          "custom_resource": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Custom Resource"
+          }
+        },
+        "type": "object",
+        "required": [
+          "provider"
+        ],
+        "title": "OAuthDiscoveryConfigRequest",
+        "description": "Request model for configuring backend-auth OAuth 2.1 discovery-identity.\n\nStores the server's own per-user OAuth provider config under\n``oauth_discovery.oauth`` and designates the CALLER as the borrowed identity.\nREQUIRES the egress feature (``EGRESS_AUTH_ENABLED``): the borrowed token lives in\nthe per-user OAuth vault and the consent that fills it is served by the egress\nOAuth facade, so the endpoint rejects the request when it is off.\n``client_secret`` is write-only: blank on edit keeps the stored one. Provider\n``custom`` supplies the authorize/token URLs."
+      },
       "OktaM2MClient": {
         "properties": {
           "client_id": {
@@ -25958,6 +26533,25 @@
           "relevance_score"
         ],
         "title": "ToolSearchResult"
+      },
+      "ToolTogglePayload": {
+        "properties": {
+          "tool_name": {
+            "type": "string",
+            "title": "Tool Name"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          }
+        },
+        "type": "object",
+        "required": [
+          "tool_name",
+          "enabled"
+        ],
+        "title": "ToolTogglePayload",
+        "description": "Body for the per-tool enable/disable toggle."
       },
       "ToolValidationResult": {
         "properties": {

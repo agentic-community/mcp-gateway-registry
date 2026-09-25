@@ -12,6 +12,7 @@ import logging
 import os
 import re
 import subprocess  # nosec B404
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,22 @@ logger = logging.getLogger(__name__)
 # Constants
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 OUTPUT_DIR = PROJECT_ROOT / "security_scans"
+
+# Name of the environment variable carrying the scan credential to the child. Private to
+# this module and the shim below; deliberately NOT one of mcp-scanner's own variables.
+_SCANNER_BEARER_ENV = "MCP_GATEWAY_SCAN_BEARER"  # nosec B105 - env var name, not a secret
+
+# Launched as `python -c <shim>`, so the scan credential never appears in any argv. The
+# shim pops it from the environment and re-attaches mcp-scanner's own flag inside the
+# child, then hands off to the same entry point the console script uses. Popping it also
+# keeps it out of the environment the scanner might pass to anything it spawns.
+_SCANNER_SHIM = (
+    "import os,sys;"
+    "from mcpscanner.cli import cli_entry_point;"
+    f"_t=os.environ.pop({_SCANNER_BEARER_ENV!r},None);"
+    "sys.argv=['mcp-scanner']+sys.argv[1:]+(['--bearer-token',_t] if _t else []);"
+    "sys.exit(cli_entry_point())"
+)
 
 
 def _extract_bearer_token_from_headers(headers: str) -> str | None:
@@ -157,6 +174,7 @@ class SecurityScannerService:
             enabled=settings.security_scan_enabled,
             scan_on_registration=settings.security_scan_on_registration,
             block_unsafe_servers=settings.security_block_unsafe_servers,
+            allow_unsafe_servers=settings.security_allow_unsafe_servers,
             analyzers=settings.security_analyzers,
             scan_timeout_seconds=settings.security_scan_timeout,
             llm_api_key=settings.mcp_scanner_llm_api_key or os.getenv("MCP_SCANNER_LLM_API_KEY"),
@@ -394,9 +412,26 @@ class SecurityScannerService:
         logger.info(f"Running security scan endpoint={redact_url(server_url)}")
         logger.info(f"Using analyzers: {analyzers}")
 
-        # Build command
+        # Build command. The scanner is launched through a tiny in-process shim rather
+        # than its console script, so the credential can be handed over in the child's
+        # ENVIRONMENT instead of its argv.
+        #
+        # `mcp-scanner remote` only accepts a credential as `--bearer-token` / `--header`,
+        # both of which land in the child's argv and are therefore world-readable via
+        # `ps` and /proc/<pid>/cmdline for the life of the scan. That was tolerable when
+        # the only thing passed was an operator's static scan token; it is not once the
+        # resolver can hand over a *delegated human* OAuth token (a borrowed discovery
+        # identity) or the gateway's own app-only token. The shim re-attaches the flag
+        # inside the child, where the value is no longer externally visible.
+        #
+        # The environment is already this subprocess's channel for secrets
+        # (MCP_SCANNER_LLM_API_KEY, below), so this follows the existing convention
+        # rather than inventing one. /proc/<pid>/environ is restricted to the same
+        # uid/root, unlike cmdline, and `ps` never renders it.
         cmd = [
-            "mcp-scanner",
+            sys.executable,
+            "-c",
+            _SCANNER_SHIM,
             "--analyzers",
             analyzers,
             "--raw",  # Use raw format instead of summary
@@ -405,14 +440,12 @@ class SecurityScannerService:
             server_url,
         ]
 
-        # Add headers if provided - parse JSON and extract bearer token
+        env = os.environ.copy()
+        # Parse the resolved auth headers and hand the credential over out-of-band.
         if headers:
             bearer_token = _extract_bearer_token_from_headers(headers)
             if bearer_token:
-                cmd.extend(["--bearer-token", bearer_token])
-
-        # Set environment variable for API key if provided
-        env = os.environ.copy()
+                env[_SCANNER_BEARER_ENV] = bearer_token
         if api_key:
             env["MCP_SCANNER_LLM_API_KEY"] = api_key
 

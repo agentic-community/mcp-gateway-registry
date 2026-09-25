@@ -41,19 +41,19 @@ variable "task_execution_role_arn" {
 variable "registry_image_uri" {
   description = "Container image URI for registry service (defaults to pre-built image from public ECR)"
   type        = string
-  default     = "public.ecr.aws/p3v1o3c6/registry:1.30.0"
+  default     = "public.ecr.aws/p3v1o3c6/registry:1.31.0"
 }
 
 variable "auth_server_image_uri" {
   description = "Container image URI for auth server service (defaults to pre-built image from public ECR)"
   type        = string
-  default     = "public.ecr.aws/p3v1o3c6/auth-server:1.30.0"
+  default     = "public.ecr.aws/p3v1o3c6/auth-server:1.31.0"
 }
 
 variable "mcpgw_image_uri" {
   description = "Container image URI for mcpgw service (defaults to pre-built image from public ECR)"
   type        = string
-  default     = "public.ecr.aws/p3v1o3c6/mcpgw:1.30.0"
+  default     = "public.ecr.aws/p3v1o3c6/mcpgw:1.31.0"
 }
 
 variable "enable_demo_servers" {
@@ -517,6 +517,12 @@ variable "security_block_unsafe_servers" {
   description = "Block (disable) servers that fail security scans"
   type        = bool
   default     = true
+}
+
+variable "security_allow_unsafe_servers" {
+  description = "Keep a server that fails its scan enabled with only its HIGH/CRITICAL tools blocked. Requires security_block_unsafe_servers=true"
+  type        = bool
+  default     = false
 }
 
 variable "security_analyzers" {
@@ -1638,6 +1644,48 @@ variable "ssrf_allowed_cidrs" {
   default     = ""
 }
 
+variable "cimd_publisher_enabled" {
+  description = "Serve the registry's CIMD at GET /oauth/client-metadata.json (describes the registry as an OAuth client for external CIMD-aware IdPs). Default off; 404 when off."
+  type        = bool
+  default     = false
+}
+
+variable "cimd_cache_ttl" {
+  description = "Public Cache-Control max-age (seconds) for the CIMD document."
+  type        = number
+  default     = 3600
+}
+
+variable "cimd_client_name" {
+  description = "Human-readable client_name in the CIMD document."
+  type        = string
+  default     = "AI Registry Tools"
+}
+
+variable "cimd_redirect_uris" {
+  description = "CSV of allowed callback redirect URIs; default {EGRESS_OAUTH_CALLBACK_BASE_URL or REGISTRY_URL}/oauth2/egress/callback."
+  type        = string
+  default     = ""
+}
+
+variable "cimd_scope" {
+  description = "Space-separated OAuth scopes the client requests; default the advertised OIDC scopes."
+  type        = string
+  default     = ""
+}
+
+variable "cimd_logo_uri" {
+  description = "Optional logo URI in the CIMD document; omitted when empty."
+  type        = string
+  default     = ""
+}
+
+variable "cimd_contacts" {
+  description = "CSV of operator contact emails; optional; omitted when empty."
+  type        = string
+  default     = ""
+}
+
 variable "internal_only_deployment" {
   description = "Marks an internal/workshop deployment (telemetry label; issue #1216). Does not change access control."
   type        = bool
@@ -1914,6 +1962,30 @@ variable "egress_state_ttl_seconds" {
   description = "TTL for the AEAD-encrypted egress OAuth state blob."
   type        = number
   default     = 600
+}
+
+variable "egress_http_pool_max_connections" {
+  description = "Max total connections per egress httpx client pool (shared by url_guard)."
+  type        = number
+  default     = 100
+}
+
+variable "egress_http_pool_max_keepalive" {
+  description = "Max idle keepalive connections kept warm per egress httpx client pool."
+  type        = number
+  default     = 20
+}
+
+variable "egress_http_pool_keepalive_expiry_seconds" {
+  description = "Seconds an idle keepalive egress connection survives; keep below the shortest upstream/LB idle timeout."
+  type        = number
+  default     = 30
+}
+
+variable "egress_http_pool_connect_retries" {
+  description = "Connection-establishment retries for egress httpx clients on failure."
+  type        = number
+  default     = 1
 }
 
 variable "egress_obo_allowed_audiences" {

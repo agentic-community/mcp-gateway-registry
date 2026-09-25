@@ -80,13 +80,18 @@ data:
 
         echo "Creating MCP Gateway realm..."
 
-        # Check if realm already exists
-        if realm_exists "$token"; then
-            echo -e "${YELLOW}Realm already exists. Skipping creation...${NC}"
-            return 0
-        fi
-
-        # Create basic realm
+        # Realm settings the chart owns on EVERY run, create and update alike.
+        # Declared before the existence check so the two paths cannot drift.
+        #
+        # sslRequired=none is INTENTIONALLY enforced here rather than being
+        # create-only. This chart's topology talks to Keycloak over plain HTTP on
+        # the in-cluster service address, and Keycloak rejects token and admin
+        # calls with "HTTPS required" when sslRequired is "external" and the caller
+        # is not on a private address -- the EKS pod CIDR (100.64/10) is not
+        # classified as private. So "none" is a functional requirement of this
+        # deployment shape, not a relaxation the operator may opt out of; TLS is
+        # terminated at the ALB in front. The Compose and ECS provisioners
+        # deliberately omit the field so an operator's value survives there.
         local realm_json='{
             "realm": "mcp-gateway",
             "enabled": true,
@@ -95,8 +100,33 @@ data:
             "duplicateEmailsAllowed": false,
             "resetPasswordAllowed": true,
             "editUsernameAllowed": false,
+            "bruteForceProtected": true,
+            "failureFactor": 5,
+            "waitIncrementSeconds": 60,
+            "maxFailureWaitSeconds": 900,
+            "permanentLockout": false,
             "sslRequired": "none"
         }'
+
+        # An existing realm is UPDATED, not skipped. Skipping meant a security
+        # setting added here (e.g. bruteForceProtected) never reached a deployment
+        # whose realm already existed, while the Job still reported success.
+        if realm_exists "$token"; then
+            local update_status update_response
+            update_response=$(curl -sS -w $'\n%{http_code}' \
+                -X PUT "${KEYCLOAK_URL}/admin/realms/${REALM}" \
+                -H "Authorization: Bearer ${token}" \
+                -H "Content-Type: application/json" \
+                -d "$realm_json")
+            update_status="${update_response##*$'\n'}"
+            if [ "$update_status" = "204" ]; then
+                echo -e "${GREEN}Realm already exists; settings updated.${NC}"
+                return 0
+            fi
+            echo -e "${RED}Failed to update existing realm (HTTP ${update_status})${NC}" >&2
+            echo "  response: ${update_response%$'\n'*}" >&2
+            return 1
+        fi
 
         local response=$(curl -s -o /dev/null -w "%{http_code}" \
             -X POST "${KEYCLOAK_URL}/admin/realms" \
@@ -108,16 +138,28 @@ data:
             echo -e "${GREEN}Realm created successfully!${NC}"
             return 0
         elif [ "$response" = "409" ]; then
-            echo -e "${YELLOW}Realm already exists. Continuing...${NC}"
-            return 0
-        else
-            echo -e "${RED}Failed to create realm. HTTP status: ${response}${NC}"
-            echo "Response body:"
-            curl -s -X POST "${KEYCLOAK_URL}/admin/realms" \
+            # Existing realm: PUT the settings rather than skipping, otherwise a
+            # security setting added here (e.g. bruteForceProtected) never reaches
+            # a deployment whose realm already exists while the script reports
+            # success.
+            local update_status update_response
+            update_response=$(curl -sS -w $'\n%{http_code}' \
+                -X PUT "${KEYCLOAK_URL}/admin/realms/${REALM}" \
                 -H "Authorization: Bearer ${token}" \
                 -H "Content-Type: application/json" \
-                -d "$realm_json"
-            echo ""
+                -d "$realm_json")
+            update_status="${update_response##*$'\n'}"
+            if [ "$update_status" = "204" ]; then
+                echo -e "${YELLOW}Realm already exists; settings updated.${NC}"
+                return 0
+            fi
+            echo -e "${RED}Failed to update existing realm (HTTP ${update_status})${NC}" >&2
+            echo "  response: ${update_response%$'\n'*}" >&2
+            return 1
+        else
+            # No second POST here: re-sending the create just to print a body is a
+            # duplicate create attempt that can succeed on a transient failure.
+            echo -e "${RED}Failed to create realm. HTTP status: ${response}${NC}" >&2
             return 1
         fi
     }
@@ -141,10 +183,33 @@ data:
                 -H "Authorization: Bearer ${token}" \
                 -H "Content-Type: application/json" \
                 -d "$client_json")
-            if [ "$status" = "201" ] || [ "$status" = "409" ]; then
+            if [ "$status" = "201" ]; then
                 echo -e "${GREEN}Client ${client_id} created${NC}"
+            elif [ "$status" = "409" ]; then
+                # The client existed after all -- the id lookup above came back
+                # empty (e.g. a create race). Accepting 409 as success here would
+                # skip the PUT and silently drop the representation, which is the
+                # bug this function exists to prevent. Re-resolve and update.
+                existing_id=$(curl -s \
+                    -H "Authorization: Bearer ${token}" \
+                    "${KEYCLOAK_URL}/admin/realms/${REALM}/clients?clientId=${client_id}" \
+                    | grep -o '"id":"[^"]*' | head -1 | cut -d'"' -f4)
+                if [ -z "$existing_id" ]; then
+                    echo -e "${RED}Client ${client_id} reported 409 but could not be resolved${NC}" >&2
+                    return 1
+                fi
+                status=$(curl -s -o /dev/null -w "%{http_code}" \
+                    -X PUT "${KEYCLOAK_URL}/admin/realms/${REALM}/clients/${existing_id}" \
+                    -H "Authorization: Bearer ${token}" \
+                    -H "Content-Type: application/json" \
+                    -d "$client_json")
+                if [ "$status" != "204" ]; then
+                    echo -e "${RED}Failed to update client ${client_id} (HTTP ${status})${NC}" >&2
+                    return 1
+                fi
+                echo -e "${GREEN}Client ${client_id} updated${NC}"
             else
-                echo -e "${RED}Failed to create client ${client_id} (HTTP ${status})${NC}"
+                echo -e "${RED}Failed to create client ${client_id} (HTTP ${status})${NC}" >&2
                 return 1
             fi
         else
@@ -183,7 +248,7 @@ data:
             "webOrigins": [
                 "'${REGISTRY_URL:-http://localhost:7860}'",
                 "http://localhost:7860",
-                "+"
+                "http://localhost:8888"
             ],
             "attributes": {
                 "post.logout.redirect.uris": "'${REGISTRY_URL:-http://localhost:7860}'/*##http://localhost:7860/*##http://localhost:8888/*"
@@ -193,6 +258,7 @@ data:
             "implicitFlowEnabled": false,
             "directAccessGrantsEnabled": true,
             "serviceAccountsEnabled": false,
+            "fullScopeAllowed": false,
             "publicClient": false
         }'
 
@@ -209,6 +275,7 @@ data:
             "implicitFlowEnabled": false,
             "directAccessGrantsEnabled": false,
             "serviceAccountsEnabled": true,
+            "fullScopeAllowed": false,
             "publicClient": false
         }'
 

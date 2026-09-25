@@ -37,7 +37,7 @@ from registry.auth.internal import validate_internal_auth
 from registry.auth.proxied_token import verify_generic_proxy_token, verify_mcp_proxy_token
 from registry.common.log_redaction import redact_url
 from registry.core.config import settings
-from registry.core.schemas import _is_gateway_own_audience
+from registry.core.schemas import _validate_obo_egress_config
 from registry.egress_auth.factory import get_egress_auth_service
 from registry.egress_auth.providers import list_provider_names, resolve_provider
 from registry.egress_auth.schemas import StoredToken
@@ -59,6 +59,7 @@ from registry.repositories.factory import (
     get_skill_repository,
 )
 from registry.schemas.proxy_mixin import resolve_proxy_target
+from registry.secrets import keys
 from registry.secrets.factory import get_secret_store
 from registry.secrets.interfaces import SecretStoreError
 from registry.services.server_service import server_service
@@ -752,6 +753,26 @@ async def vend_egress_token(
     # credentials and the raw ingress JWT); the registry never sees the JWT and
     # holds no per-user token for this mode. Stateless -- no vault lookup.
     if egress_mode == "obo_exchange":
+        # Defense in depth: re-validate the STORED directive before vending it to
+        # the exchange engine. The write path validates on persist, but a directive
+        # written before that enforcement existed (or by any other mutation path)
+        # must never be exchanged for a delegated token to a disallowed audience.
+        # Fail closed: a stored directive that no longer passes the floor is a
+        # refusal, never a silent passthrough.
+        try:
+            _validate_obo_egress_config(
+                egress_oauth.get("target_audience"), egress_oauth.get("scopes")
+            )
+        except ValueError as exc:
+            logger.warning(
+                "egress vend REFUSED: stored obo_exchange directive for %s is not allowlisted: %s",
+                server_path,
+                exc,
+            )
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                detail="obo_exchange target audience is not allowed for this server",
+            ) from exc
         return EgressTokenResponse(
             mode="obo_exchange",
             obo_target_audience=egress_oauth.get("target_audience"),
@@ -766,6 +787,9 @@ async def vend_egress_token(
             server_path=server_path,
             egress_oauth=egress_oauth,
             requested_upstream=requested_upstream,
+            # This is the END-USER runtime hop, so it may only vend an entry a user
+            # consented for egress -- never the identity the registry borrows.
+            purpose=keys.EGRESS_PURPOSE,
         )
     except SecretStoreError as exc:
         # The store already rode out a bounded backoff (transient Vault/OpenBao
@@ -871,6 +895,83 @@ def _require_admin(user_context: dict) -> None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail="admin required")
 
 
+def build_oauth_provider_config(
+    *,
+    provider: str,
+    client_id: str,
+    client_secret: str | None,
+    scopes: list[str],
+    custom_authorize_url: str | None = None,
+    custom_token_url: str | None = None,
+    custom_scope_separator: str | None = None,
+    custom_token_auth_style: str | None = None,
+    custom_resource: str | None = None,
+    prior_secret_encrypted: str | None = None,
+) -> dict:
+    """Validate and build a provider OAuth config (the ``EgressOAuthConfig`` shape)
+    with the client_secret encrypted. Shared by per-user egress (``oauth_user``)
+    and backend-auth discovery so the SSRF/validation stays in one place.
+
+    Raises ``HTTPException(400)`` on invalid input. ``client_secret`` blank keeps
+    ``prior_secret_encrypted`` (edit); a custom public client (token_auth_style
+    'none') carries no secret.
+    """
+    if provider not in list_provider_names():
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail=f"unknown provider; valid: {list_provider_names()}",
+        )
+    eo: dict = {
+        "provider": provider,
+        "client_id": client_id,
+        "scopes": scopes,
+        "custom_authorize_url": custom_authorize_url,
+        "custom_token_url": custom_token_url,
+        "custom_scope_separator": custom_scope_separator,
+        "custom_token_auth_style": custom_token_auth_style,
+        "custom_resource": custom_resource,
+    }
+    if provider == "custom":
+        for field, url, profile in (
+            ("custom_authorize_url", custom_authorize_url, PROXY_PROFILE),
+            ("custom_token_url", custom_token_url, CREDENTIALED_OAUTH_PROFILE),
+        ):
+            try:
+                validate_url(url or "", profile=profile, require_https=True, resolve=False)
+            except UrlValidationError as exc:
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST, detail=f"{field} rejected: {exc}"
+                ) from exc
+        if custom_resource:
+            pr = urlparse(custom_resource)
+            if pr.scheme != "https" or not pr.netloc or pr.fragment:
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST,
+                    detail="custom_resource rejected: must be an absolute https "
+                    "URI without a fragment",
+                )
+    try:
+        resolve_provider(eo)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    is_public_client = provider == "custom" and custom_token_auth_style == "none"  # nosec B105 - auth style enum value, not a credential
+    if is_public_client:
+        if not (client_id or "").strip():
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                detail="client_id required when custom_token_auth_style is 'none'",
+            )
+        eo["client_secret_encrypted"] = None
+    else:
+        if client_secret:
+            eo["client_secret_encrypted"] = encrypt_credential(client_secret)
+        else:
+            eo["client_secret_encrypted"] = prior_secret_encrypted
+        if not eo["client_secret_encrypted"]:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="client_secret required")
+    return eo
+
+
 @router.post("/servers/{server_path:path}/egress-auth")
 async def configure_egress_auth(
     request: Request,
@@ -898,111 +999,33 @@ async def configure_egress_auth(
         server["egress_auth_mode"] = "none"
         server["egress_oauth"] = None
     elif body.egress_auth_mode == "oauth_user":
-        if body.egress_provider not in list_provider_names():
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST,
-                detail=f"unknown provider; valid: {list_provider_names()}",
-            )
-        eo: dict = {
-            "provider": body.egress_provider,
-            "client_id": body.client_id,
-            "scopes": body.scopes,
-            "custom_authorize_url": body.custom_authorize_url,
-            "custom_token_url": body.custom_token_url,
-            "custom_scope_separator": body.custom_scope_separator,
-            "custom_token_auth_style": body.custom_token_auth_style,
-            "custom_resource": body.custom_resource,
-        }
-        # For a 'custom' provider the authorize/token URLs are registrant-supplied.
-        # The browser-only authorize URL gets structural proxy-profile checks;
-        # the credential-bearing token URL uses the dedicated HTTPS-only,
-        # empty-allowlist profile that the guarded fetch uses too. Fail closed at
-        # registration: require https and reject any
-        # literal private/metadata IP or bad scheme via the shared SSRF guard, so
-        # a config that would exfiltrate the secret to an internal target (e.g.
-        # 169.254.169.254) can never be persisted. resolve=False keeps this a
-        # structural check; the rebinding-safe block for hostname targets is the
-        # pinned guarded client at token-exchange time.
-        if body.egress_provider == "custom":
-            for field, url, profile in (
-                ("custom_authorize_url", body.custom_authorize_url, PROXY_PROFILE),
-                (
-                    "custom_token_url",
-                    body.custom_token_url,
-                    CREDENTIALED_OAUTH_PROFILE,
-                ),
-            ):
-                try:
-                    validate_url(
-                        url or "",
-                        profile=profile,
-                        require_https=True,
-                        resolve=False,
-                    )
-                except UrlValidationError as exc:
-                    raise HTTPException(
-                        status.HTTP_400_BAD_REQUEST,
-                        detail=f"{field} rejected: {exc}",
-                    ) from exc
-            # RFC 8707 resource indicator: an absolute https URI identifying the
-            # protected resource. Unlike the URLs above it is NOT a request target
-            # -- it is reflected verbatim into the authorize 302 and the token POST
-            # body -- so it needs a structural https/absolute/no-fragment check
-            # (RFC 8707 requires an absolute URI without a fragment), not the SSRF
-            # guard. Fail closed at registration so a malformed value cannot break
-            # every consent silently later.
-            if body.custom_resource:
-                pr = urlparse(body.custom_resource)
-                if pr.scheme != "https" or not pr.netloc or pr.fragment:
-                    raise HTTPException(
-                        status.HTTP_400_BAD_REQUEST,
-                        detail="custom_resource rejected: must be an absolute https "
-                        "URI without a fragment",
-                    )
-        # Validate provider resolution (custom requires URLs) before persisting.
-        try:
-            resolve_provider(eo)
-        except ValueError as exc:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-        # Public client (RFC 7591 token_endpoint_auth_method=none, e.g. a
-        # DCR-minted MCP client like Datadog's): no secret exists by design.
-        # Require a client_id instead, and DROP any previously stored secret so
-        # a later switch back to a confidential style cannot silently reuse a
-        # stale credential. Only the 'custom' provider can select this style
-        # (every built-in is confidential); PKCE stays mandatory for custom.
-        is_public_client = (
-            body.egress_provider == "custom" and body.custom_token_auth_style == "none"  # nosec B105 - auth style enum value, not a credential
+        eo = build_oauth_provider_config(
+            provider=body.egress_provider,
+            client_id=body.client_id,
+            client_secret=body.client_secret,
+            scopes=body.scopes,
+            custom_authorize_url=body.custom_authorize_url,
+            custom_token_url=body.custom_token_url,
+            custom_scope_separator=body.custom_scope_separator,
+            custom_token_auth_style=body.custom_token_auth_style,
+            custom_resource=body.custom_resource,
+            prior_secret_encrypted=(server.get("egress_oauth") or {}).get(
+                "client_secret_encrypted"
+            ),
         )
-        if is_public_client:
-            if not (body.client_id or "").strip():
-                raise HTTPException(
-                    status.HTTP_400_BAD_REQUEST,
-                    detail="client_id required when custom_token_auth_style is 'none'",
-                )
-            eo["client_secret_encrypted"] = None
-        else:
-            # Encrypt the secret; keep the prior one if the field is omitted on edit.
-            if body.client_secret:
-                eo["client_secret_encrypted"] = encrypt_credential(body.client_secret)
-            else:
-                prior = (server.get("egress_oauth") or {}).get("client_secret_encrypted")
-                eo["client_secret_encrypted"] = prior
-            if not eo["client_secret_encrypted"]:
-                raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="client_secret required")
         server["egress_auth_mode"] = "oauth_user"
         server["egress_oauth"] = eo
     elif body.egress_auth_mode == "obo_exchange":
         target = (body.target_audience or "").strip()
-        if not target:
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST,
-                detail="obo_exchange requires target_audience",
-            )
-        if _is_gateway_own_audience(target):
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST,
-                detail="target_audience must differ from the gateway's own IdP client id",
-            )
+        # Enforce the always-on obo target-audience/scope floor on the live write
+        # path (the ServerInfo model validator is never instantiated in prod, so
+        # this is the only enforcement point). Fail closed: any malformed,
+        # gateway-own, first-party, or scope-mismatched audience is rejected
+        # before it can be persisted and later vended to the exchange engine.
+        try:
+            _validate_obo_egress_config(target, body.scopes)
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
         # Same-IdP exchange: no per-server provider/client_id/secret. Only the
         # target audience and (optional) audience-scoped scopes are stored.
         server["egress_auth_mode"] = "obo_exchange"
@@ -1163,8 +1186,12 @@ async def set_egress_pat(
         expires_at=(now + timedelta(seconds=ttl_seconds)).isoformat(),
         bound_upstreams=bound_upstreams(server),
     )
+    # A PAT is the user's own runtime credential, so it is written to the egress address
+    # space. It cannot land on a discovery entry: those have their own addresses.
     try:
-        await get_secret_store().put_token(auth_method, sub, provider, server_path, token)
+        await get_secret_store().put_token(
+            auth_method, sub, provider, server_path, token, purpose=keys.EGRESS_PURPOSE
+        )
     except SecretStoreError as exc:
         # Fail closed: nothing partially written.
         logger.error("egress pat submit: secret store write failed for %s", server_path)
@@ -1410,7 +1437,6 @@ async def egress_callback(
     """Provider redirect target. No ingress auth -- the signed+encrypted state is
     the authority. Verifies state (TTL + single-use + account-swap), exchanges the
     code, and stores the token. Reached via nginx -> registry (no /validate)."""
-    _feature_enabled_or_404()
     if not code or not state:
         return HTMLResponse("<h3>Connection failed: missing code/state.</h3>", status_code=400)
 
@@ -1426,8 +1452,22 @@ async def egress_callback(
     except InvalidState:
         return HTMLResponse("<h3>Connection failed: invalid state.</h3>", status_code=400)
 
+    # Feature gate applies to BOTH purposes. Discovery borrows a vaulted per-user
+    # token, so EGRESS_AUTH_ENABLED is a hard requirement for it too; exempting it
+    # here previously let a discovery consent write into the egress vault on a
+    # deployment whose vend path was switched off.
+    _feature_enabled_or_404()
+
     server = await server_service.get_server_info(st.server_path, include_credentials=True)
-    if not server or not server.get("egress_oauth"):
+    if not server:
+        return HTMLResponse("<h3>Connection failed: server not configured.</h3>", status_code=400)
+    # Resolve the code-exchange config from the state-bound purpose: discovery
+    # uses the server's own backend-auth oauth config, egress uses egress_oauth.
+    if st.purpose == "discovery":
+        oauth_cfg = (server.get("oauth_discovery") or {}).get("oauth")
+    else:
+        oauth_cfg = server.get("egress_oauth")
+    if not oauth_cfg:
         return HTMLResponse("<h3>Connection failed: server not configured.</h3>", status_code=400)
 
     # Account-swap guard: cross-check the live session principal when present.
@@ -1456,7 +1496,7 @@ async def egress_callback(
         conn = await get_egress_auth_service().handle_callback(
             code=code,
             state_blob=state,
-            egress_oauth=server["egress_oauth"],
+            egress_oauth=oauth_cfg,
             current_user_id=current_user,
             current_auth_method=current_method,
             bound_upstreams=bound_upstreams(server),
@@ -1530,5 +1570,6 @@ async def disconnect(
         user_id=user_context.get("egress_user") or user_context.get("username") or "",
         provider=provider,
         server_path=server_path,
+        purpose=keys.EGRESS_PURPOSE,
     )
     return {"status": "revoked"}

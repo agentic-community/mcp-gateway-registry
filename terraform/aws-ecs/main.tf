@@ -180,6 +180,7 @@ module "mcp_gateway" {
   security_scan_enabled         = var.security_scan_enabled
   security_scan_on_registration = var.security_scan_on_registration
   security_block_unsafe_servers = var.security_block_unsafe_servers
+  security_allow_unsafe_servers = var.security_allow_unsafe_servers
   security_analyzers            = var.security_analyzers
   security_scan_timeout         = var.security_scan_timeout
   security_add_pending_tag      = var.security_add_pending_tag
@@ -377,6 +378,15 @@ module "mcp_gateway" {
   ssrf_allowed_hosts        = var.ssrf_allowed_hosts
   ssrf_allowed_cidrs        = var.ssrf_allowed_cidrs
 
+  # CIMD (Client ID Metadata Document) publisher
+  cimd_publisher_enabled = var.cimd_publisher_enabled
+  cimd_cache_ttl         = var.cimd_cache_ttl
+  cimd_client_name       = var.cimd_client_name
+  cimd_redirect_uris     = var.cimd_redirect_uris
+  cimd_scope             = var.cimd_scope
+  cimd_logo_uri          = var.cimd_logo_uri
+  cimd_contacts          = var.cimd_contacts
+
   # Internal/workshop deployment classification (telemetry labels; issue #1216)
   internal_only_deployment = var.internal_only_deployment
   internal_deployment_type = var.internal_deployment_type
@@ -438,6 +448,10 @@ module "mcp_gateway" {
   egress_oauth_callback_base_url     = var.egress_oauth_callback_base_url
   egress_token_refresh_skew_seconds  = var.egress_token_refresh_skew_seconds
   egress_state_ttl_seconds           = var.egress_state_ttl_seconds
+  egress_http_pool_max_connections          = var.egress_http_pool_max_connections
+  egress_http_pool_max_keepalive            = var.egress_http_pool_max_keepalive
+  egress_http_pool_keepalive_expiry_seconds = var.egress_http_pool_keepalive_expiry_seconds
+  egress_http_pool_connect_retries          = var.egress_http_pool_connect_retries
   egress_obo_allowed_audiences       = var.egress_obo_allowed_audiences
   egress_oauth_trusted_idp_hosts     = var.egress_oauth_trusted_idp_hosts
   egress_registry_internal_url       = var.egress_registry_internal_url

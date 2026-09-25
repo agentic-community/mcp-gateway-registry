@@ -44,6 +44,43 @@ HUMAN_CREDENTIAL_TYPE: str = "session_cookie"
 # Username assigned to unauthenticated traffic
 ANONYMOUS_USERNAME: str = "anonymous"
 
+# Identity fields a username filter searches, split by how they must be matched.
+#
+# An operator investigating an incident often holds only an IdP-side value (an
+# Entra `oid`, an `oid@tid`, a `upn`, or an OIDC `sub` from another system's log),
+# so the filter has to accept any of them alongside the display username.
+#
+# READABLE fields are matched as a case-insensitive SUBSTRING: an operator types
+# "alice" to find alice@example.com, and that is the established behaviour of
+# this filter.
+#
+# OPAQUE fields are matched EXACTLY. These are identifiers that are pasted whole,
+# never typed partially. Exact matching avoids a short substring pulling in
+# unrelated users' records, and it is the only form an index can ever serve: a
+# case-insensitive regex has no usable index bounds, anchored or not.
+#
+# No index on these fields exists yet (only `identity.username` is indexed), so
+# today every form of this filter scans. Adding the indexes will not by itself
+# help either, because this list feeds an `$or` that also contains regex
+# branches -- see `_identity_search_clause`. Keep the equality form regardless:
+# it is what makes an index useful the moment the two are separated.
+#
+# `tenant_id` and `app_id` are in neither set: they identify a tenant or an
+# application rather than a person, so matching them would return every caller
+# from that tenant/app instead of narrowing to one identity.
+IDENTITY_READABLE_SEARCH_FIELDS: tuple[str, ...] = ("principal_name",)
+IDENTITY_OPAQUE_SEARCH_FIELDS: tuple[str, ...] = (
+    "subject",
+    "canonical_id",
+    "object_id",
+)
+
+# Upper bound on the `username` filter. It is `re.escape`d and interpolated into
+# a MongoDB regex (see _identity_search_clause), so it must not be unbounded.
+# 256 is the length auth_server caps every stored claim to
+# (`_MAX_AUDIT_CLAIM_LEN`): a longer filter cannot match a stored value anyway.
+MAX_USERNAME_FILTER_LENGTH: int = 256
+
 # Executive summary cache: this endpoint runs many aggregations per call, so a
 # short TTL cache (keyed by the days window) shields the database from repeated
 # page loads / refreshes. Mirrors the /api/stats caching precedent.
@@ -410,6 +447,82 @@ class ExecutiveSummaryResponse(BaseModel):
     momentum: AdoptionMomentum = Field(default_factory=AdoptionMomentum)
 
 
+def _identity_search_clause(
+    stream: str,
+    username: str,
+    anchored: bool = False,
+) -> list[dict[str, Any]]:
+    """
+    Build the $or clause matching a username filter across identity fields.
+
+    Readable fields (the display username and `principal_name`) match as a
+    case-insensitive regex -- ``anchored`` selects exact-string vs substring, to
+    preserve each caller's pre-existing semantics.
+
+    Opaque identifier fields match by EQUALITY, because a case-insensitive regex
+    cannot use index bounds even when anchored, while an equality predicate can.
+    NOTE: no index on the claim fields exists yet, so today both forms scan; the
+    equality form is what lets an index help once one is added, and it also avoids
+    a short substring pulling in unrelated users' records. Because equality would
+    otherwise silently miss an operator who pasted an IdP identifier in a
+    different case, a lowercase variant is included via ``$in`` when it differs.
+
+    That fold is ONE-DIRECTIONAL: it recovers a value pasted in upper case for
+    identifiers an IdP emits in lower case (Entra ``oid``/``tid``, and therefore
+    ``canonical_id``). It does NOT help a case-SENSITIVE identifier -- an Entra
+    v2 ``sub`` is base64url and routinely mixed-case -- so such a value must be
+    pasted verbatim. Normalizing the stored side instead would corrupt an
+    identifier whose case is significant.
+
+    Adding those indexes alone will NOT speed this clause up: MongoDB serves an
+    ``$or`` by index union only when EVERY branch is indexable, and the two
+    readable branches are case-insensitive regexes that never are. Isolating the
+    equality branches from the regex ones is the prerequisite, not the index.
+
+    The token_mint stream has no nested `identity` block: it stores the raw,
+    human-readable `username` and its identity claims as top-level fields
+    (`username_hash` is deprecated). Every other stream nests them under
+    `identity`. Records predating the claim capture simply won't match on the
+    claim fields.
+
+    The registry_api stream is matched on the display username ALONE. Its records
+    carry the claim fields as explicit nulls and never populate them -- the auth
+    server hands the registry a thin signed assertion rather than raw IdP claims
+    (see docs/audit-logging.md, "Stream coverage"). A claim branch there is a
+    predicate evaluated per document that cannot match, and that stream is the
+    bulk of the collection as well as the UI's default view. Dropping the
+    branches cannot lose a row: neither an equality nor a regex predicate matches
+    null.
+
+    Args:
+        stream: Log stream type (registry_api, mcp_access or token_mint)
+        username: Raw filter value from the caller (escaped here for regex use)
+        anchored: Match readable fields exactly rather than as a substring
+
+    Returns:
+        List of single-field match documents for use as an $or value
+    """
+    escaped = re.escape(username)
+    readable_match: dict[str, Any] = {
+        "$regex": f"^{escaped}$" if anchored else escaped,
+        "$options": "i",
+    }
+    prefix = "" if stream == "token_mint" else "identity."
+    branches: list[dict[str, Any]] = [{f"{prefix}username": readable_match}]
+
+    # See the docstring: registry_api never carries the claim fields.
+    if stream == "registry_api":
+        return branches
+
+    lowered = username.lower()
+    opaque_match: Any = username if lowered == username else {"$in": [username, lowered]}
+    branches.extend(
+        {f"{prefix}{field}": readable_match} for field in IDENTITY_READABLE_SEARCH_FIELDS
+    )
+    branches.extend({f"{prefix}{field}": opaque_match} for field in IDENTITY_OPAQUE_SEARCH_FIELDS)
+    return branches
+
+
 def _build_query(
     stream: str,
     from_time: datetime | None,
@@ -429,7 +542,8 @@ def _build_query(
         stream: Log stream type (registry_api or mcp_access)
         from_time: Start of time range filter
         to_time: End of time range filter
-        username: Filter by username
+        username: Filter by the display identity or any stored identity claim
+            (subject, canonical_id, object_id, principal_name)
         operation: Filter by operation type
         resource_type: Filter by resource type
         resource_id: Filter by resource ID
@@ -456,17 +570,12 @@ def _build_query(
         if to_time:
             query["timestamp"]["$lte"] = to_time
 
-    # Identity filters - use case-insensitive regex for partial matching
+    # Identity filters. Readable identities match as a case-insensitive substring
+    # (an operator types "alice"); opaque identity claims match exactly, so a
+    # caller can also be found by an IdP-side value (sub / oid / oid@tid) pasted
+    # whole -- see _identity_search_clause.
     if username:
-        # Escape special regex characters in the username
-        escaped_username = re.escape(username)
-        if stream == "token_mint":
-            # token_mint now stores the raw, human-readable `username` (email ->
-            # preferred_username -> sub); `username_hash` is deprecated. Match the
-            # raw field; pre-reconciliation records without it simply won't match.
-            query["username"] = {"$regex": escaped_username, "$options": "i"}
-        else:
-            query["identity.username"] = {"$regex": escaped_username, "$options": "i"}
+        query["$or"] = _identity_search_clause(stream, username)
 
     # Action filters - different fields per stream
     if stream == "token_mint":
@@ -584,7 +693,10 @@ async def get_statistics(
     ),
     username: str | None = Query(
         None,
-        description="Filter statistics to a specific username",
+        max_length=MAX_USERNAME_FILTER_LENGTH,
+        description="Filter statistics to a specific username: matches the display "
+        "identity or any stored identity claim (subject/canonical_id/object_id/"
+        "principal_name)",
     ),
 ) -> AuditStatisticsResponse:
     """Get aggregated audit statistics for the dashboard. Requires admin access."""
@@ -608,15 +720,21 @@ async def get_statistics(
     }
 
     if username:
-        escaped_username = re.escape(username)
-        if stream == "token_mint":
-            username_filter = {"$regex": escaped_username, "$options": "i"}
-            base_match["username"] = username_filter
-            prior_match["username"] = username_filter
-        else:
-            username_filter = {"$regex": f"^{escaped_username}$", "$options": "i"}
-            base_match["identity.username"] = username_filter
-            prior_match["identity.username"] = username_filter
+        # token_mint filters readable identities on a partial match (its username
+        # is the raw value written at mint time); the other streams anchor for an
+        # exact match on the display identity picked from the dropdown. Opaque
+        # claims match exactly on both.
+        identity_clause = _identity_search_clause(
+            stream,
+            username,
+            anchored=stream != "token_mint",
+        )
+        # Both windows deliberately SHARE one clause object: nothing mutates a
+        # match after construction, and copying the outer list would imply an
+        # isolation it would not actually provide (the branch dicts inside stay
+        # shared either way).
+        base_match["$or"] = identity_clause
+        prior_match["$or"] = identity_clause
 
     repository = get_audit_repository()
 
@@ -1156,7 +1274,9 @@ async def get_audit_events(
     ),
     username: str | None = Query(
         None,
-        description="Filter by username",
+        max_length=MAX_USERNAME_FILTER_LENGTH,
+        description="Filter by username: matches the display identity or any stored "
+        "identity claim (subject/canonical_id/object_id/principal_name)",
     ),
     operation: str | None = Query(
         None,
@@ -1325,6 +1445,44 @@ def _generate_jsonl(events: list[dict[str, Any]]):
         yield json.dumps(event) + "\n"
 
 
+# Characters that make a spreadsheet treat a CSV cell as a formula. Excel,
+# LibreOffice Calc and Google Sheets all evaluate a cell beginning with one of
+# these when the file is opened, so an exported value can become =HYPERLINK/
+# =WEBSERVICE exfiltration or a DDE prompt in the reader's spreadsheet.
+#
+# This matters here because an audit record stores caller-authored strings: the
+# request `path` is whatever URI a client sent, including one that never routed,
+# so an unauthenticated request to `/=HYPERLINK(...)` is recorded verbatim and
+# later exported into a cell an admin opens. The compliance export is precisely
+# the artifact most likely to be opened in a spreadsheet.
+_CSV_FORMULA_PREFIXES: tuple[str, ...] = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _csv_safe(value: Any) -> Any:
+    """Neutralize a leading spreadsheet-formula character in a CSV cell.
+
+    Prefixes a single quote, the conventional spreadsheet escape, so the cell is
+    read as text. Only values that actually start with a dangerous character are
+    touched, so ordinary values export byte-identical and a negative number
+    keeps its meaning to a CSV parser (a leading "-" is quoted, not stripped).
+
+    The dangerous character is looked for BOTH at position 0 and after leading
+    whitespace: Excel, Calc and Sheets trim a cell before deciding whether it is
+    a formula, so " =HYPERLINK(...)" and "\\n=cmd" are live content too and a
+    plain ``startswith`` misses them. The raw check is kept as well because a
+    value that merely BEGINS with a tab or CR is already treated as dangerous
+    here, and stripping first would silently un-protect it.
+    """
+    if isinstance(value, str) and (
+        value.startswith(_CSV_FORMULA_PREFIXES)
+        # CPython returns `value` itself when nothing is stripped, so the common
+        # (safe) cell costs a comparison, not an allocation.
+        or value.lstrip().startswith(_CSV_FORMULA_PREFIXES)
+    ):
+        return f"'{value}"
+    return value
+
+
 def _generate_csv(events: list[dict[str, Any]]):
     """Generate CSV output from events."""
     if not events:
@@ -1339,6 +1497,12 @@ def _generate_csv(events: list[dict[str, Any]]):
         "request_id",
         "log_type",
         "username",
+        "principal_name",
+        "canonical_id",
+        "subject",
+        "object_id",
+        "tenant_id",
+        "app_id",
         "auth_method",
         "is_admin",
         "method",
@@ -1355,14 +1519,28 @@ def _generate_csv(events: list[dict[str, Any]]):
     writer.writeheader()
 
     for event in events:
+        # registry_api/mcp_access nest the caller under `identity`; token_mint
+        # records carry the same identity fields at the top level. Resolve from
+        # whichever shape the record uses so a compliance export is populated
+        # for every stream.
+        identity = event.get("identity") or event
+
         # Flatten nested structure
         row = {
             "timestamp": event.get("timestamp", ""),
             "request_id": event.get("request_id", ""),
             "log_type": event.get("log_type", ""),
-            "username": event.get("identity", {}).get("username", ""),
-            "auth_method": event.get("identity", {}).get("auth_method", ""),
-            "is_admin": event.get("identity", {}).get("is_admin", False),
+            "username": identity.get("username", ""),
+            # Claim columns are absent for IdPs/tokens that omit them, and the
+            # stored value is None rather than missing, so coalesce to "".
+            "principal_name": identity.get("principal_name") or "",
+            "canonical_id": identity.get("canonical_id") or "",
+            "subject": identity.get("subject") or "",
+            "object_id": identity.get("object_id") or "",
+            "tenant_id": identity.get("tenant_id") or "",
+            "app_id": identity.get("app_id") or "",
+            "auth_method": identity.get("auth_method", ""),
+            "is_admin": identity.get("is_admin", False),
             "method": event.get("request", {}).get("method", ""),
             "path": event.get("request", {}).get("path", ""),
             "status_code": event.get("response", {}).get("status_code", ""),
@@ -1385,7 +1563,7 @@ def _generate_csv(events: list[dict[str, Any]]):
         if isinstance(row["timestamp"], datetime):
             row["timestamp"] = row["timestamp"].isoformat()
 
-        writer.writerow(row)
+        writer.writerow({key: _csv_safe(value) for key, value in row.items()})
 
     yield output.getvalue()
 
@@ -1415,7 +1593,9 @@ async def export_audit_events(
     ),
     username: str | None = Query(
         None,
-        description="Filter by username",
+        max_length=MAX_USERNAME_FILTER_LENGTH,
+        description="Filter by username: matches the display identity or any stored "
+        "identity claim (subject/canonical_id/object_id/principal_name)",
     ),
     operation: str | None = Query(
         None,

@@ -96,8 +96,12 @@ class SecretsManagerStore(SecretStoreBase):
         # not GC'd; awaited by tests).
         self._repair_tasks: set[asyncio.Task] = set()
 
-    def _secret_name(self, auth_method: str, user_id: str) -> str:
-        return f"{self._prefix}/{keys.user_principal(auth_method, user_id)}"
+    def _secret_name(self, auth_method: str, user_id: str, purpose: str) -> str:
+        # Discovery entries live in a SEPARATE document from the principal's own egress
+        # connections, so a discovery write can never touch the user's runtime map and
+        # `list_for_user` (which reads only the egress document) never surfaces the
+        # registry's borrowed credential as one of the user's connections.
+        return f"{keys.namespaced_prefix(self._prefix, purpose)}/{keys.user_principal(auth_method, user_id)}"
 
     @staticmethod
     def _serialize(document: dict) -> str:
@@ -443,9 +447,13 @@ class SecretsManagerStore(SecretStoreBase):
         provider: str,
         server_path: str,
         token: StoredToken,
+        *,
+        purpose: str,
     ) -> None:
-        root_name = self._secret_name(auth_method, user_id)
-        document = self._codec.encode(auth_method, user_id, provider, server_path, token)
+        root_name = self._secret_name(auth_method, user_id, purpose)
+        document = self._codec.encode(
+            auth_method, user_id, provider, server_path, token, purpose=purpose
+        )
         await self._mutate(root_name, keys.map_key(provider, server_path), document)
 
     async def _read_with_retry(self, operation: Callable):
@@ -489,15 +497,19 @@ class SecretsManagerStore(SecretStoreBase):
         user_id: str,
         provider: str,
         server_path: str,
+        *,
+        purpose: str,
     ) -> StoredToken | None:
-        root_name = self._secret_name(auth_method, user_id)
+        root_name = self._secret_name(auth_method, user_id, purpose)
         key = keys.map_key(provider, server_path)
         raw = await self._read_with_retry(lambda: self._get_raw_once(root_name, key))
         if raw is None:
             return None
-        token = self._codec.decode(auth_method, user_id, provider, server_path, raw)
+        token = self._codec.decode(
+            auth_method, user_id, provider, server_path, raw, purpose=purpose
+        )
         if self._codec.needs_migration(raw):
-            self._schedule_repair(auth_method, user_id, provider, server_path, raw, token)
+            self._schedule_repair(auth_method, user_id, provider, server_path, raw, token, purpose)
         return token
 
     def _schedule_repair(
@@ -508,6 +520,7 @@ class SecretsManagerStore(SecretStoreBase):
         server_path: str,
         expected_plaintext: dict,
         token: StoredToken,
+        purpose: str,
     ) -> None:
         """Fire-and-forget a read-repair migration.
 
@@ -516,7 +529,9 @@ class SecretsManagerStore(SecretStoreBase):
         task set retains a reference so it is not garbage-collected.
         """
         task = asyncio.ensure_future(
-            self._migrate(auth_method, user_id, provider, server_path, expected_plaintext, token)
+            self._migrate(
+                auth_method, user_id, provider, server_path, expected_plaintext, token, purpose
+            )
         )
         self._repair_tasks.add(task)
         task.add_done_callback(self._repair_tasks.discard)
@@ -529,6 +544,7 @@ class SecretsManagerStore(SecretStoreBase):
         server_path: str,
         expected_plaintext: dict,
         token: StoredToken,
+        purpose: str,
     ) -> None:
         """Re-encrypt a legacy plaintext entry, compare-and-set under the lease.
 
@@ -539,9 +555,11 @@ class SecretsManagerStore(SecretStoreBase):
         rather than rolling a freshly-refreshed token back to the stale one.
         Best-effort: any failure is logged and retried on the next read.
         """
-        root_name = self._secret_name(auth_method, user_id)
+        root_name = self._secret_name(auth_method, user_id, purpose)
         key = keys.map_key(provider, server_path)
-        encrypted = self._codec.encode(auth_method, user_id, provider, server_path, token)
+        encrypted = self._codec.encode(
+            auth_method, user_id, provider, server_path, token, purpose=purpose
+        )
         try:
             async with self._mutation_guard(root_name) as lease_state:
                 root = await self._call(self._get_document, root_name)
@@ -562,8 +580,10 @@ class SecretsManagerStore(SecretStoreBase):
         user_id: str,
         provider: str,
         server_path: str,
+        *,
+        purpose: str,
     ) -> None:
-        root_name = self._secret_name(auth_method, user_id)
+        root_name = self._secret_name(auth_method, user_id, purpose)
         await self._mutate(root_name, keys.map_key(provider, server_path), None)
 
     async def _list_raw_once(self, root_name: str) -> list[tuple[str, str, dict]]:
@@ -582,12 +602,23 @@ class SecretsManagerStore(SecretStoreBase):
         auth_method: str,
         user_id: str,
     ) -> list[tuple[str, str, StoredToken]]:
-        root_name = self._secret_name(auth_method, user_id)
+        root_name = self._secret_name(auth_method, user_id, keys.EGRESS_PURPOSE)
         rows = await self._read_with_retry(lambda: self._list_raw_once(root_name))
         out: list[tuple[str, str, StoredToken]] = []
         for provider, server_path, raw in rows:
-            token = self._codec.decode(auth_method, user_id, provider, server_path, raw)
+            token = self._codec.decode(
+                auth_method, user_id, provider, server_path, raw, purpose=keys.EGRESS_PURPOSE
+            )
             if self._codec.needs_migration(raw):
-                self._schedule_repair(auth_method, user_id, provider, server_path, raw, token)
+                # list_for_user enumerates the egress space only, so repair there too.
+                self._schedule_repair(
+                    auth_method,
+                    user_id,
+                    provider,
+                    server_path,
+                    raw,
+                    token,
+                    keys.EGRESS_PURPOSE,
+                )
             out.append((provider, server_path, token))
         return out

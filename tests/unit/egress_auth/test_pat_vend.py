@@ -12,6 +12,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import registry.api.egress_auth_routes as routes
+from registry.secrets import keys
 
 
 class _StubRepo:
@@ -195,22 +196,24 @@ from registry.secrets.interfaces import SecretStoreBase  # noqa: E402
 
 class _InMemoryStore(SecretStoreBase):
     def __init__(self) -> None:
-        self._data: dict[tuple[str, str, str, str], StoredToken] = {}
+        self._data: dict[tuple[str, str, str, str, str], StoredToken] = {}
 
-    async def put_token(self, auth_method, user_id, provider, server_path, token):
-        self._data[(auth_method, user_id, provider, server_path)] = token
+    async def put_token(self, auth_method, user_id, provider, server_path, token, *, purpose):
+        self._data[(purpose, auth_method, user_id, provider, server_path)] = token
 
-    async def get_token(self, auth_method, user_id, provider, server_path):
-        return self._data.get((auth_method, user_id, provider, server_path))
+    async def get_token(self, auth_method, user_id, provider, server_path, *, purpose):
+        return self._data.get((purpose, auth_method, user_id, provider, server_path))
 
-    async def delete_token(self, auth_method, user_id, provider, server_path):
-        self._data.pop((auth_method, user_id, provider, server_path), None)
+    async def delete_token(self, auth_method, user_id, provider, server_path, *, purpose):
+        self._data.pop((purpose, auth_method, user_id, provider, server_path), None)
 
     async def list_for_user(self, auth_method, user_id):
+        # Egress space only, mirroring the real backends: the identity the registry
+        # borrowed is not one of the user's own connections.
         return [
             (provider, server_path, token)
-            for (am, uid, provider, server_path), token in self._data.items()
-            if am == auth_method and uid == user_id
+            for (purpose, am, uid, provider, server_path), token in self._data.items()
+            if am == auth_method and uid == user_id and purpose == keys.EGRESS_PURPOSE
         ]
 
 
@@ -243,6 +246,7 @@ class TestGetPatService:
                 expires_at=_future_iso(3600),
                 bound_upstreams=[PAT_UP],
             ),
+            purpose=keys.EGRESS_PURPOSE,
         )
         token = await svc.get_pat("oauth2", "alice", "github", "/github", requested_upstream=PAT_UP)
         assert token == "ghp_x"
@@ -255,6 +259,7 @@ class TestGetPatService:
             "github",
             "/github",
             StoredToken(access_token="ghp_x", expires_at="2000-01-01T00:00:00+00:00"),
+            purpose=keys.EGRESS_PURPOSE,
         )
         assert (
             await svc.get_pat("oauth2", "alice", "github", "/github", requested_upstream=PAT_UP)
@@ -266,7 +271,12 @@ class TestGetPatService:
         # the submit endpoint always stamps one, so a bare entry is anomalous.
         svc = _svc()
         await svc._store.put_token(
-            "oauth2", "alice", "github", "/github", StoredToken(access_token="ghp_x")
+            "oauth2",
+            "alice",
+            "github",
+            "/github",
+            StoredToken(access_token="ghp_x"),
+            purpose=keys.EGRESS_PURPOSE,
         )
         assert (
             await svc.get_pat("oauth2", "alice", "github", "/github", requested_upstream=PAT_UP)
@@ -287,6 +297,7 @@ class TestGetPatService:
             "github",
             "/github",
             StoredToken(access_token="ghp_x", expires_at=_future_iso(3600)),
+            purpose=keys.EGRESS_PURPOSE,
         )
         assert (
             await svc.get_pat(

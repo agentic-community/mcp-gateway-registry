@@ -205,8 +205,24 @@ INITIAL_USER_PASSWORD=testpass123
 ENVEOF
   fi
 
+  # Export the CDK-derived values into the child's environment, not just into a
+  # .env we may not have written. init-keycloak.sh now PUTs an existing client
+  # instead of skipping it, and Keycloak replaces redirectUris/webOrigins
+  # wholesale on that PUT, so on a host that already has a Compose .env the
+  # file's localhost values would be written over this deployment's URLs and
+  # break login with invalid_redirect_uri. The script prefers these exported
+  # values over the file.
   local rc=0
-  (cd "$PROJECT_ROOT" && bash "$init_script") || rc=$?
+  (
+    cd "$PROJECT_ROOT" || exit 1
+    export KEYCLOAK_ADMIN_URL="$KEYCLOAK_URL"
+    export KEYCLOAK_ADMIN="$KC_ADMIN_USER"
+    export KEYCLOAK_ADMIN_PASSWORD="$KC_ADMIN_PASSWORD"
+    export REGISTRY_URL="$REGISTRY_URL"
+    export AUTH_SERVER_EXTERNAL_URL="$REGISTRY_URL"
+    export INITIAL_ADMIN_PASSWORD="$KC_ADMIN_PASSWORD"
+    bash "$init_script"
+  ) || rc=$?
   [ "$cleanup" = true ] && rm -f "$tmp_env"
   [ "$rc" -ne 0 ] && { _log_error "init-keycloak.sh failed"; exit "$rc"; }
   _log_success "Keycloak initialization complete"

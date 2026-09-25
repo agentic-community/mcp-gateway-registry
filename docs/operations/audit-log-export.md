@@ -18,17 +18,18 @@ reporting.
 
 The registry writes one document per request to the
 `audit_events_<documentdb_namespace>` collection (default install:
-`audit_events_default`). Two log streams share the collection,
+`audit_events_default`). Three log streams share the collection,
 distinguished by the `log_type` field:
 
 | `log_type` value | What it captures |
 |---|---|
 | `registry_api_access` | Calls into the registry's REST API (server registration, group management, audit queries themselves, etc.). |
 | `mcp_server_access` | MCP tool invocations through the gateway (which user invoked which tool on which server). |
+| `token_mint` | Tokens the auth server signs, recorded at the signing point on both success and failure. Unlike the other two, this stream stores its fields flat — no nested `identity` / `action` blocks. |
 
-The relevant fields differ slightly between the two streams. See
-[`registry/audit/routes.py:215-275`](../../registry/audit/routes.py#L215-L275)
-for the canonical query construction the registry uses.
+The relevant fields differ between the streams. See `_build_query()` in
+[`registry/audit/routes.py`](../../registry/audit/routes.py) for the canonical
+query construction the registry uses.
 
 A registry-API record looks like this:
 
@@ -43,7 +44,9 @@ A registry-API record looks like this:
     "auth_method": "oauth2",
     "provider": "entra",
     "groups": [...],
-    "is_admin": false
+    "is_admin": false,
+    "credential_type": "session_cookie",
+    "credential_hint": "***"
   },
   "request": {
     "method": "GET",
@@ -64,6 +67,36 @@ A registry-API record looks like this:
 }
 ```
 
+`mcp_server_access` records carry six further identity fields, populated from the
+validated IdP token by the auth server: `principal_name` (the `upn` /
+`preferred_username` claim), `canonical_id` (Entra `oid@tid`, else the `sub`),
+`subject` (OIDC `sub`), `object_id` (Entra `oid`), `tenant_id` (`tid`), and
+`app_id` (`appid` / `azp`). Each is present only when the token carried the claim.
+On `token_mint` records the same six sit at the **top level** — that stream has
+no `identity` block, and its readable identity is the flat `username` field. On
+`registry_api_access` records they are present but always `null` — the model
+declares them, so an export includes the keys, but the registry receives a thin
+signed identity assertion rather than raw IdP claims and never sees
+`upn`/`oid`/`tid`. Filter on `$type: "string"` rather than `$exists` if you want
+only the records that actually carry a claim.
+See [audit-logging.md](../audit-logging.md#notes-and-limitations) for the full
+field reference.
+
+**Personal data in an export.** Exports contain personal data — an audit trail
+exists to attribute actions to people. Which fields a given record carries is
+just its schema; see the field reference linked above rather than assuming a
+fixed set, since the three streams differ (notably, `token_mint` records have no
+`request` block, so no client IP or user agent).
+
+Two points that change what you do rather than what you read: credential values,
+request and response bodies, and tool arguments are never stored; but the full
+query-parameter map **is** stored on `registry_api_access` records, and a value
+is masked only when the parameter *name* looks credential-like — so search text,
+filter values, and identifiers a caller put in a query string survive into an
+export. Review an extract before handing it to anyone, including the data
+subject. What you are obliged to do with it is a controller decision — see
+[Compliance Considerations](../audit-logging.md#compliance-considerations).
+
 ---
 
 ## Two paths: REST API vs. direct MongoDB
@@ -82,8 +115,9 @@ only when the API path can't satisfy the use case.
 
 > **DRAFT — admin-auth bootstrap not exercised in this PR's
 > validation.** The endpoint behavior, query parameters, and CSV/JSONL
-> formats below come from
-> [`registry/audit/routes.py:567-918`](../../registry/audit/routes.py#L567-L918).
+> formats below come from the `GET /api/audit/events` and
+> `GET /api/audit/export` handlers in
+> [`registry/audit/routes.py`](../../registry/audit/routes.py).
 > The exact `Authorization` header form depends on your deployment's
 > auth mode (session cookie vs. M2M token), and full validation of
 > the bootstrap path is left for a follow-up. **Treat the curl
@@ -92,8 +126,9 @@ only when the API path can't satisfy the use case.
 
 ### Procedure
 
-1. Obtain an admin-tier credential. The endpoints under
-   `/api/audit/*` use `require_admin` ([`routes.py:44`](../../registry/audit/routes.py#L44)),
+1. Obtain an admin-tier credential. Every endpoint under
+   `/api/audit/*` depends on `require_admin`
+   ([`registry/audit/routes.py`](../../registry/audit/routes.py)),
    so the credential must produce a `user_context` with
    `is_admin == true`.
 
@@ -111,9 +146,9 @@ only when the API path can't satisfy the use case.
    `events` (array). On 403 Forbidden, the token is not admin.
 
 3. Export filtered events as JSONL or CSV. All filters are optional
-   and can be combined (see
-   [`routes.py:821-885`](../../registry/audit/routes.py#L821-L885)
-   for the full parameter list):
+   and can be combined (see the `GET /api/audit/export` signature in
+   [`registry/audit/routes.py`](../../registry/audit/routes.py) for
+   the full parameter list):
 
    ```bash
    # JSONL export, all events for one user, last 30 days
@@ -129,11 +164,34 @@ only when the API path can't satisfy the use case.
        -o audit-denies.csv
    ```
 
-   Available filters: `stream` (`registry_api` or `mcp_access`),
-   `from` / `to` (ISO 8601), `username` (case-insensitive partial),
-   `operation`, `resource_type`, `resource_id`, `status_min` /
-   `status_max` (HTTP status range), `auth_decision` (`ALLOW`,
-   `DENY`, or `NOT_REQUIRED`), `limit` (1 to 100000).
+   Available filters: `stream` (`registry_api`, `mcp_access`, or
+   `token_mint`), `from` / `to` (ISO 8601), `username` (see the
+   caveat below for what it matches), `operation`, `resource_type`,
+   `resource_id`, `status_min` / `status_max` (HTTP status range),
+   `auth_decision` (`ALLOW`, `DENY`, or `NOT_REQUIRED`), `limit`
+   (1 to 100000).
+
+   A CSV export flattens each record to these columns, in order:
+   `timestamp`, `request_id`, `log_type`, `username`, `principal_name`,
+   `canonical_id`, `subject`, `object_id`, `tenant_id`, `app_id`,
+   `auth_method`, `is_admin`, `method`, `path`, `status_code`,
+   `duration_ms`, `operation`, `resource_type`, `resource_id`,
+   `auth_decision`. The six identity-claim columns are empty for
+   records whose token did not carry the claim, and for the whole
+   `registry_api` stream. For `token_mint` records the identity
+   columns are read from the top level, because that stream has no
+   nested `identity` block. JSONL exports are the raw documents and
+   include every field, nested as stored — which for `token_mint`
+   means flat identity fields, including the deprecated
+   `username_hash`.
+
+   **CSV cells are formula-neutralised.** A cell whose value starts
+   with `=`, `+`, `-`, `@`, a tab, or a carriage return is written
+   with a single quote prefixed (`'=cmd`), the conventional
+   spreadsheet escape, so the spreadsheet reads it as text and not as
+   a formula. This exists because the stored request `path` is
+   caller-authored. Such a cell therefore differs from the stored
+   value by that leading quote; every other cell exports unchanged.
 
 4. Verify the export file:
 
@@ -144,10 +202,23 @@ only when the API path can't satisfy the use case.
 
 ### Caveats
 
-- **The `username` filter does case-insensitive substring matching**
-  ([`routes.py:223-227`](../../registry/audit/routes.py#L223-L227)),
-  not exact equality. `username=alice` will also match
-  `alice@example.com` and `MaliceSamuels@example.com`.
+- **The `username` filter matches different fields in different
+  ways.** The readable fields — the display `username` and
+  `principal_name` — match as a case-insensitive **substring**, so
+  `username=alice` also matches `alice@example.com` and
+  `MaliceSamuels@example.com`. The opaque identifier fields —
+  `subject`, `canonical_id`, `object_id` — match by **equality**, so
+  an operator holding only an Entra `oid`, an `oid@tid`, or an OIDC
+  `sub` can still find the actor, but the value must be pasted
+  **whole**: a partial identifier matches nothing. The case fold on
+  those fields is one-directional (the value as given, plus its
+  lowercase form), so a case-sensitive identifier such as an Entra v2
+  `sub` — base64url, and routinely mixed-case — must be pasted
+  verbatim. Entra `oid` and `tid` values are already lowercase and so
+  are unaffected. `tenant_id` and `app_id` are not searched at all.
+  Because of the substring behaviour on the readable fields, a broad
+  value can still match more people than intended: verify an export's
+  contents before disclosing it.
 - **The export endpoint caps at 100000 events** per call. Larger
   windows must be paginated by `from`/`to` time ranges.
 - **The export streams the response.** Large exports may take time
@@ -254,13 +325,27 @@ A TTL index appears with `expireAfterSeconds` set; documents older
 than that age are removed by MongoDB's TTL monitor (best-effort,
 not real-time).
 
+That index is created only by an initialization script —
+`./scripts/init-documentdb.sh` (which wraps
+`scripts/init-documentdb-indexes.py`) for DocumentDB, or
+`scripts/init-mongodb-ce.py` for MongoDB CE. The application never
+creates it, so an install that skipped that step keeps audit events
+indefinitely. On Kubernetes the `setup-mongodb` Job runs that script
+on every `helm upgrade`, and takes its retention from
+`mongodb-configure.mongodb.auditTtlDays` — so set it there rather
+than on the collection, or an upgrade will reconcile it back. The
+script refuses to *shorten* retention without an explicit opt-in,
+since that would delete existing records. See
+[Data Retention](../audit-logging.md#data-retention).
+
 ---
 
 ## Disabling audit shipping
 
 > **DRAFT — environment-specific.** The registry writes audit events
-> via the in-process audit logger initialized at
-> [`registry/main.py:394-397`](../../registry/main.py#L394-L397).
+> via the in-process audit logger constructed at startup
+> (`AuditLogger` and `add_audit_middleware` in
+> [`registry/main.py`](../../registry/main.py)).
 > The path to disable it varies by deployment surface (env var,
 > Helm values, Terraform variable). Confirm the exact knob for your
 > environment before disabling — and remember that disabling audit
@@ -288,9 +373,14 @@ then address the producer.
 
 ## Code references
 
-- [`registry/audit/routes.py:30`](../../registry/audit/routes.py#L30) — audit router prefix (`/audit`, mounted at `/api`).
-- [`registry/audit/routes.py:44`](../../registry/audit/routes.py#L44) — `require_admin` dependency.
-- [`registry/audit/routes.py:567`](../../registry/audit/routes.py#L567) — `GET /api/audit/events` (paginated query).
-- [`registry/audit/routes.py:821`](../../registry/audit/routes.py#L821) — `GET /api/audit/export` (JSONL/CSV streaming).
-- [`registry/audit/routes.py:215-275`](../../registry/audit/routes.py#L215-L275) — `_build_query()`, the canonical filter-to-Mongo translation.
-- [`registry/repositories/audit_repository.py:151`](../../registry/repositories/audit_repository.py#L151) — `audit_events` base collection name.
+- [`registry/audit/routes.py`](../../registry/audit/routes.py) — the audit router
+  (prefix `/audit`, mounted at `/api`) and, within it:
+    - `GET /api/audit/events` — paginated query.
+    - `GET /api/audit/export` — JSONL/CSV streaming.
+    - `require_admin` — the admin dependency every audit route declares.
+    - `_build_query()` — the canonical filter-to-Mongo translation.
+    - `_identity_search_clause()` — the username/claim filter fan-out.
+    - `_generate_csv()` and `_csv_safe()` — CSV column order and formula
+      neutralisation.
+- [`registry/repositories/audit_repository.py`](../../registry/repositories/audit_repository.py)
+  — `get_collection_name("audit_events")`, the base collection name.

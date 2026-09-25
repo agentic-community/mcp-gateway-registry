@@ -1,0 +1,143 @@
+suite: mongodb init job
+templates:
+  - templates/job.yaml
+tests:
+  # A Kubernetes Job is immutable. Without hook annotations, `helm upgrade` on an
+  # existing install leaves the Completed setup-mongodb Job untouched, so any new
+  # index the init script gained is never created - the database silently keeps
+  # the schema it was first installed with. This is the only mechanism that
+  # applies a schema change to a pre-existing install, so it is asserted here.
+  - it: is a post-install AND post-upgrade hook, recreated each run
+    asserts:
+      - isKind:
+          of: Job
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: post-install,post-upgrade
+      # before-hook-creation deletes the previous Job first; without it the
+      # immutable-Job conflict returns on the second upgrade.
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: before-hook-creation
+
+  # openbao-init is weight 5 and keycloak-configure is 10. Sharing weight 5 with
+  # openbao-init made Helm break the tie alphabetically, so the OpenBao
+  # bootstrap gated this database migration.
+  - it: runs before every other stack hook
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook-weight"]
+          value: "-10"
+
+  # The script used to be duplicated into a ConfigMap, where it drifted from
+  # scripts/init-mongodb-ce.py in six functional ways. Running the registry
+  # image's own copy is what makes drift structurally impossible, so assert
+  # there is no mounted script at all.
+  - it: runs the init script from the image, with nothing mounted
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].command
+          value:
+            - /app/.venv/bin/python
+            - /app/scripts/init-mongodb-ce.py
+      - notExists:
+          path: spec.template.spec.volumes
+      - notExists:
+          path: spec.template.spec.containers[0].volumeMounts
+      # No init container installing unpinned packages from PyPI at runtime.
+      - notExists:
+          path: spec.template.spec.initContainers
+
+  - it: uses the registry image, so the script and its venv are already present
+    asserts:
+      # Assert the REPOSITORY and leave the tag out of it. What this case exists
+      # to prove is that the job runs the registry image, which already carries
+      # the script and its venv, rather than building one at runtime. The tag is
+      # incidental here, and pinning it broke this suite on every release: the
+      # chart default tracks the current version, so the automated
+      # "update image tags to <version>" PR failed its own CI. The override case
+      # below sets a tag explicitly and covers the tag plumbing.
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          # Quoted: the trailing colon is part of the pattern, and an unquoted
+          # scalar ending in ":" is not valid YAML here.
+          pattern: "^public\\.ecr\\.aws/p3v1o3c6/registry:"
+    # A per-chart override still wins over the global default.
+  - it: honours an image override
+    set:
+      image.tag: 9.9.9
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: public.ecr.aws/p3v1o3c6/registry:9.9.9
+
+  # The Job's only environment used to be the MongoDB credential secret, which
+  # carries no TTL key, so the script could only ever see its own 7-day default.
+  # An operator who had raised retention out-of-band had it reset on every
+  # upgrade, and MongoDB then deleted everything older than 7 days.
+  - it: passes the audit retention through, so an upgrade cannot reset it
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AUDIT_LOG_MONGODB_TTL_DAYS
+            value: "7"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AUDIT_LOG_MONGODB_TTL_ALLOW_SHRINK
+            value: "false"
+
+  - it: carries a configured retention instead of the default
+    set:
+      mongodb.auditTtlDays: 90
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AUDIT_LOG_MONGODB_TTL_DAYS
+            value: "90"
+
+  # Without a deadline a stuck Job hangs `helm upgrade --wait` until the release
+  # timeout, and the cause dies with the pod on the next attempt.
+  - it: is bounded in time and cleans itself up
+    asserts:
+      - equal:
+          path: spec.activeDeadlineSeconds
+          value: 1800
+      - equal:
+          path: spec.ttlSecondsAfterFinished
+          value: 3600
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MONGODB_WAIT_TIMEOUT_SECONDS
+            value: "300"
+
+  # The ConfigMap used to template the Entra admin group into a copy of
+  # registry-admins.json, competing with the script's own env branch. The env
+  # var is now the only mechanism.
+  - it: omits the Entra admin group when none is configured
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ENTRA_GROUP_ADMIN_ID
+            value: ""
+            any: true
+
+  - it: passes the Entra admin group when configured
+    set:
+      global.authProvider.entra.adminGroupId: 11111111-2222-3333-4444-555555555555
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ENTRA_GROUP_ADMIN_ID
+            value: 11111111-2222-3333-4444-555555555555
+
+  - it: never restarts a failed pod in place
+    asserts:
+      - equal:
+          path: spec.template.spec.restartPolicy
+          value: Never

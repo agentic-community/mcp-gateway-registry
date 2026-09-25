@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Annotated
 from urllib.parse import urlparse
 
-from pydantic import Field, field_validator
+from pydantic import Field, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from registry.common.secret_key import validate_secret_key
@@ -403,10 +403,35 @@ class Settings(BaseSettings):
     embeddings_model_name: str = "all-MiniLM-L6-v2"
     embeddings_model_dimensions: int = 384  # 384 for default and 1024 for bedrock titan v2
 
-    # HNSW vector search tuning (only used with DocumentDB backend)
-    # Higher efSearch improves recall at the cost of query latency.
-    # Default 40 may miss documents in small collections; 100 gives near-exact recall.
-    vector_search_ef_search: int = 100
+    # HNSW vector search tuning (only used with the DocumentDB backend; MongoDB
+    # CE and Atlas take the client-side path, where these are inert).
+    #
+    # efSearch is the dynamic candidate queue HNSW keeps during traversal, the
+    # equivalent of numCandidates in MongoDB Atlas. It bounds how many documents
+    # the search can return, so k can never usefully exceed it. DocumentDB caps
+    # it at 1000. Raised from 100 to 1000 in issue #1751: the search runs a
+    # single global query now rather than one per entity type, so the whole
+    # traversal budget goes to that one query.
+    # Capped at 1000 so a typo fails at startup rather than on every query:
+    # DocumentDB rejects a larger value at query time.
+    vector_search_ef_search: int = Field(default=1000, ge=1, le=1000)
+
+    # DocumentDB applies $match AFTER the vector search, so k is spent selecting
+    # nearest neighbours before entity_type and status/enabled filtering runs,
+    # and whatever the filters discard is simply lost. Over-request to
+    # compensate; MongoDB Atlas calls this the overrequest pattern and
+    # recommends at least 20x. k = max_results * this, clamped to half of
+    # efSearch (issue #1751).
+    #
+    # Must be at least 1. A zero or negative multiplier would build a pipeline
+    # asking for no candidates.
+    vector_search_overrequest: int = Field(default=20, ge=1, le=1000)
+
+    # Concurrent model.encode() calls allowed process-wide. encode() runs in a
+    # worker thread so it no longer blocks the event loop, but torch also
+    # parallelises inside a single encode, so unbounded threads would make every
+    # concurrent search slower. Small on purpose (issue #1751).
+    embeddings_encode_concurrency: int = Field(default=2, ge=1, le=64)
 
     # Search fusion method: 'rrf' (Reciprocal Rank Fusion, industry standard)
     # or 'legacy' (previous additive formula). RRF avoids score saturation and
@@ -496,6 +521,19 @@ class Settings(BaseSettings):
     # Well-known discovery settings
     enable_wellknown_discovery: bool = True
     wellknown_cache_ttl: int = 300  # 5 minutes
+
+    # CIMD (Client ID Metadata Document) publisher (issue #992). Default OFF.
+    # When enabled, GET /oauth/client-metadata.json returns a public document
+    # describing THIS registry as an OAuth CLIENT; the document's URL is the
+    # client_id the registry presents to external CIMD-aware IdPs. Renaming the
+    # endpoint would change that client_id, so the path is stable.
+    cimd_publisher_enabled: bool = False
+    cimd_cache_ttl: int = 3600  # public max-age for the CIMD document
+    cimd_client_name: str = "AI Registry Tools"
+    cimd_redirect_uris: str = ""  # CSV; default {egress_oauth_callback_base}/oauth2/egress/callback
+    cimd_scope: str = ""  # space-separated; default advertised OIDC scopes
+    cimd_logo_uri: str = ""  # optional; omitted from the document when empty
+    cimd_contacts: str = ""  # CSV operator contact emails; optional
 
     # ARD Catalog Publisher settings (issue #1294)
     # Publishes /.well-known/ai-catalog.json per the Agentic Resource Discovery spec.
@@ -597,6 +635,12 @@ class Settings(BaseSettings):
     security_scan_enabled: bool = True
     security_scan_on_registration: bool = True
     security_block_unsafe_servers: bool = True
+
+    # When true, a server failing its scan stays enabled with its HIGH/CRITICAL
+    # tools individually blocked instead of the whole server being disabled.
+    # Only has effect when security_block_unsafe_servers is true.
+    security_allow_unsafe_servers: bool = False
+
     security_analyzers: str = "yara"  # Comma-separated: yara, llm, or yara,llm
     security_scan_timeout: int = 60  # 1 minute
     security_add_pending_tag: bool = True
@@ -898,6 +942,17 @@ class Settings(BaseSettings):
             "`api://<app-id>` or a custom `api://<uri>`). Used verbatim as the "
             "v1 scope prefix in the PRM and accepted as a token audience. "
             "Defaults to the app's `api://<client-id>` form when unset."
+        ),
+    )
+    entra_login_base_url: str = Field(
+        default="https://login.microsoftonline.com",
+        description=(
+            "Entra ID login base URL for the gateway's OWN token endpoint, used "
+            "by the client_credentials grant that authenticates headless backend "
+            "discovery/health against obo_exchange servers. Override for sovereign "
+            "clouds: US Gov `https://login.microsoftonline.us`, China "
+            "`https://login.partner.microsoftonline.cn`. Mirrors the auth-server's "
+            "ENTRA_LOGIN_BASE_URL."
         ),
     )
 
@@ -1690,6 +1745,55 @@ class Settings(BaseSettings):
         default=600,
         description="Lifetime of the signed+encrypted OAuth consent state.",
     )
+    egress_http_pool_max_connections: int = Field(
+        default=100,
+        ge=1,
+        le=10000,
+        description=(
+            "Max total connections per pooled egress httpx client (shared across "
+            "OBO/3LO/vend/OAuth-callback/MCP-proxy-stream/health). Bounds FD and "
+            "ephemeral-port use under burst."
+        ),
+    )
+    egress_http_pool_max_keepalive: int = Field(
+        default=20,
+        ge=0,
+        le=10000,
+        description=(
+            "Max idle keep-alive connections per pooled egress client. Clamped to "
+            "egress_http_pool_max_connections at startup."
+        ),
+    )
+    egress_http_pool_keepalive_expiry_seconds: float = Field(
+        default=30.0,
+        ge=0,
+        le=600,
+        description=(
+            "Idle keep-alive expiry (seconds) for pooled egress clients. Set below "
+            "the shortest upstream/LB idle timeout to minimize keep-alive resets."
+        ),
+    )
+    egress_http_pool_connect_retries: int = Field(
+        default=1,
+        ge=0,
+        le=5,
+        description=(
+            "httpx transport connect-establishment retries for pooled egress "
+            "clients (covers connect failures; an app-level single retry covers a "
+            "reset on keep-alive reuse)."
+        ),
+    )
+
+    @field_validator("egress_http_pool_max_keepalive")
+    @classmethod
+    def _clamp_egress_pool_keepalive(cls, v: int, info: ValidationInfo) -> int:
+        # max_keepalive must not exceed max_connections; the field is declared
+        # after max_connections, so info.data carries the validated value.
+        max_conn = info.data.get("egress_http_pool_max_connections")
+        if isinstance(max_conn, int) and v > max_conn:
+            return max_conn
+        return v
+
     egress_consent_use_elicitation: bool = Field(
         default=False,
         description=(

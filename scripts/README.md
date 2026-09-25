@@ -130,11 +130,30 @@ The initialization script creates the following collections with indexes:
    - Unique index on `_id` (config ID)
 
 7. **audit_events_{namespace}**
-   - Unique index on `request_id`
+   - Unique compound index on `request_id` + `log_type`. One request writes both
+     an `mcp_server_access` and a `registry_api_access` record, which share a
+     `request_id`; the single-field unique index this replaced rejected the
+     second write and the record was dropped. The migration builds this index
+     before dropping the old one, so uniqueness is never briefly unenforced.
    - Compound index on `identity.username` + `timestamp`
    - Compound index on `action.operation` + `timestamp`
    - Compound index on `action.resource_type` + `timestamp`
-   - TTL index on `timestamp` (default 7 days, configurable via `AUDIT_LOG_MONGODB_TTL_DAYS`)
+   - Index on `mcp_server.name`
+   - Compound index on `log_type` + `resource_type` + `resource_id` +
+     `timestamp` (the `token_mint` stream keeps these at the top level rather
+     than under `action.*`)
+   - 13 identity-claim indexes, each `log_type` + one claim + `timestamp`, with a
+     `partialFilterExpression` pinning it to the single stream whose record shape
+     it serves. `registry_api_access` and `mcp_server_access` nest the claims
+     under `identity`; `token_mint` carries them at the top level along with a
+     flat `username`. The claims are `principal_name`, `subject`, `canonical_id`
+     and `object_id`. Partial rather than sparse: on a compound index `sparse`
+     keeps a document when any indexed field exists, and `log_type` always
+     exists, so it would be inert.
+   - TTL index on `timestamp` (default 7 days, set by
+     `AUDIT_LOG_MONGODB_TTL_DAYS`). Reducing it deletes every record older than
+     the new window, so the script refuses to shorten retention unless
+     `AUDIT_LOG_MONGODB_TTL_ALLOW_SHRINK=true`.
 
 ### Environment Variables
 

@@ -43,6 +43,7 @@ from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from hypothesis import settings as hypothesis_settings
 
 from tests.fixtures.mocks.mock_embeddings import (
     create_mock_litellm_module,
@@ -50,6 +51,30 @@ from tests.fixtures.mocks.mock_embeddings import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# HYPOTHESIS PROFILE
+# =============================================================================
+# Turn off Hypothesis's per-example deadline for the whole suite.
+#
+# The default is 200ms per example, measured as wall clock. Our property tests
+# exercise async route handlers behind AsyncMock, and the FIRST example pays
+# import and event-loop warm-up that the rest do not: one observed run took
+# 518ms on the opening example and 99ms on every later one. Hypothesis reports
+# that as FlakyFailure, so a passing test fails perhaps one run in four with no
+# code change behind it, which trains people to re-run rather than read it.
+#
+# Set here rather than on each test because not one of the 16 existing
+# @settings(...) calls specifies a deadline, so every one of them is exposed and
+# the next one written would be too. A test that names other settings inherits
+# this deadline, since @settings only overrides the attributes it lists.
+#
+# This gives up timing regression detection, which these tests were never a
+# sound place to measure anyway: they assert behaviour under mocks, on shared CI
+# runners, at a 200ms threshold that ordinary scheduling noise crosses.
+hypothesis_settings.register_profile("mcp-gateway", deadline=None)
+hypothesis_settings.load_profile("mcp-gateway")
 
 
 # =============================================================================

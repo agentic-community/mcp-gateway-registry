@@ -609,6 +609,24 @@ module "ecs_service_auth" {
           # private-resolving token endpoint. Mirrors the registry container.
           name  = "EGRESS_OAUTH_TRUSTED_IDP_HOSTS"
           value = var.egress_oauth_trusted_idp_hosts
+        },
+        # Egress httpx client connection pooling (shared by url_guard). Keep the
+        # keepalive expiry below the shortest upstream/LB idle timeout.
+        {
+          name  = "EGRESS_HTTP_POOL_MAX_CONNECTIONS"
+          value = tostring(var.egress_http_pool_max_connections)
+        },
+        {
+          name  = "EGRESS_HTTP_POOL_MAX_KEEPALIVE"
+          value = tostring(var.egress_http_pool_max_keepalive)
+        },
+        {
+          name  = "EGRESS_HTTP_POOL_KEEPALIVE_EXPIRY_SECONDS"
+          value = tostring(var.egress_http_pool_keepalive_expiry_seconds)
+        },
+        {
+          name  = "EGRESS_HTTP_POOL_CONNECT_RETRIES"
+          value = tostring(var.egress_http_pool_connect_retries)
         }
         ],
         # PR #947: MongoDB connection string override (plain-text variant).
@@ -1276,6 +1294,10 @@ module "ecs_service_registry" {
           value = tostring(var.security_block_unsafe_servers)
         },
         {
+          name  = "SECURITY_ALLOW_UNSAFE_SERVERS"
+          value = tostring(var.security_allow_unsafe_servers)
+        },
+        {
           name  = "SECURITY_ANALYZERS"
           value = var.security_analyzers
         },
@@ -1564,6 +1586,35 @@ module "ecs_service_registry" {
         {
           name  = "SSRF_ALLOWED_CIDRS"
           value = var.ssrf_allowed_cidrs
+        },
+        # CIMD (Client ID Metadata Document) publisher (ships disabled by default)
+        {
+          name  = "CIMD_PUBLISHER_ENABLED"
+          value = tostring(var.cimd_publisher_enabled)
+        },
+        {
+          name  = "CIMD_CACHE_TTL"
+          value = tostring(var.cimd_cache_ttl)
+        },
+        {
+          name  = "CIMD_CLIENT_NAME"
+          value = var.cimd_client_name
+        },
+        {
+          name  = "CIMD_REDIRECT_URIS"
+          value = var.cimd_redirect_uris
+        },
+        {
+          name  = "CIMD_SCOPE"
+          value = var.cimd_scope
+        },
+        {
+          name  = "CIMD_LOGO_URI"
+          value = var.cimd_logo_uri
+        },
+        {
+          name  = "CIMD_CONTACTS"
+          value = var.cimd_contacts
         },
         # Gateway generic-proxy feature (ships disabled by default)
         {
@@ -1877,6 +1928,24 @@ module "ecs_service_registry" {
         {
           name  = "EGRESS_STATE_TTL_SECONDS"
           value = tostring(var.egress_state_ttl_seconds)
+        },
+        # Egress httpx client connection pooling (shared by url_guard). Keep the
+        # keepalive expiry below the shortest upstream/LB idle timeout.
+        {
+          name  = "EGRESS_HTTP_POOL_MAX_CONNECTIONS"
+          value = tostring(var.egress_http_pool_max_connections)
+        },
+        {
+          name  = "EGRESS_HTTP_POOL_MAX_KEEPALIVE"
+          value = tostring(var.egress_http_pool_max_keepalive)
+        },
+        {
+          name  = "EGRESS_HTTP_POOL_KEEPALIVE_EXPIRY_SECONDS"
+          value = tostring(var.egress_http_pool_keepalive_expiry_seconds)
+        },
+        {
+          name  = "EGRESS_HTTP_POOL_CONNECT_RETRIES"
+          value = tostring(var.egress_http_pool_connect_retries)
         },
         # obo_exchange target_audience allowlist (whitespace-separated). When set,
         # the authoritative positive control; when empty a shape rule applies

@@ -1106,6 +1106,17 @@ registry_api_token = "m3zT65wREARMVDToKosg_DgNkKqS_434hNxy3sslGPY"
 # ssrf_allowed_hosts = "flight-booking-agent.mcp-gateway-v2.local"
 # ssrf_allowed_cidrs = ""
 
+# CIMD (Client ID Metadata Document) publisher. Serves the registry's own CIMD at
+# GET /oauth/client-metadata.json so external CIMD-aware IdPs can describe the
+# registry as an OAuth client. Disabled by default (404 when off).
+# cimd_publisher_enabled = false
+# cimd_cache_ttl         = 3600
+# cimd_client_name       = "AI Registry Tools"
+# cimd_redirect_uris     = ""
+# cimd_scope             = ""
+# cimd_logo_uri          = ""
+# cimd_contacts          = ""
+
 # Internal/workshop deployment classification (telemetry labels only; issue #1216).
 # Tags a deployment as one of our own internal/workshop installs so it can be
 # distinguished from community installs in telemetry. Does NOT change access control.
@@ -1386,6 +1397,12 @@ aws_registry_federation_enabled = true
 # egress_oauth_callback_base_url     = "https://mcpgateway.example.com"
 # egress_token_refresh_skew_seconds  = 300
 # egress_state_ttl_seconds           = 600
+# Egress httpx client connection pooling (shared by url_guard; registry + auth-server).
+# Keep the keepalive expiry below the shortest upstream/LB idle timeout.
+# egress_http_pool_max_connections          = 100
+# egress_http_pool_max_keepalive            = 20
+# egress_http_pool_keepalive_expiry_seconds = 30
+# egress_http_pool_connect_retries          = 1
 # obo_exchange target_audience allowlist (whitespace-separated). When set, an obo
 # server may only use a listed audience; when empty a shape rule applies (api://
 # App ID URI / bare client-id only, no https host URLs or GUIDs), so shared

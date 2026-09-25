@@ -1,10 +1,16 @@
 """SecretStore abstract base class.
 
-Pluggable secret store for per-user egress tokens, addressed by deterministic
-namespacing on ``(auth_method, user_id, provider, server_path)``. This is the
-single source of truth -- there is no companion app-DB table. Key granularity
-(one-secret-per-principal map vs per-entry KV) is an implementation detail
-hidden behind these methods.
+Pluggable secret store for per-user tokens, addressed by deterministic namespacing on
+``(purpose, auth_method, user_id, provider, server_path)``.
+
+``purpose`` selects a DISJOINT address space: ``egress`` (a user's own runtime
+credential) and ``discovery`` (the identity the registry borrows for its headless
+calls) never share an address, so neither can evict, re-scope or be read as the other.
+``egress`` keeps the pre-purpose layout, so existing entries need no migration.
+
+This is the single source of truth -- there is no companion app-DB table. Key
+granularity (one-secret-per-principal map vs per-entry KV) is an implementation
+detail hidden behind these methods.
 
 Mirrors the ``registry.repositories.interfaces`` ABC style.
 """
@@ -29,6 +35,8 @@ class SecretStoreBase(ABC):
         provider: str,
         server_path: str,
         token: StoredToken,
+        *,
+        purpose: str,
     ) -> None:
         """Store/overwrite the token at the deterministic address.
 
@@ -46,6 +54,8 @@ class SecretStoreBase(ABC):
         user_id: str,
         provider: str,
         server_path: str,
+        *,
+        purpose: str,
     ) -> StoredToken | None:
         """Retrieve the token, or None on miss."""
 
@@ -56,6 +66,8 @@ class SecretStoreBase(ABC):
         user_id: str,
         provider: str,
         server_path: str,
+        *,
+        purpose: str,
     ) -> None:
         """Delete the token (idempotent -- deleting a missing entry is a no-op)."""
 

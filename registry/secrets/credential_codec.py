@@ -131,6 +131,7 @@ class CredentialCodec:
         user_id: str,
         provider: str,
         server_path: str,
+        purpose: str,
     ) -> bytes:
         """Build the AEAD associated data.
 
@@ -141,12 +142,29 @@ class CredentialCodec:
         downgrade/key-confusion guard that is free to add now. Binding the
         address makes a ciphertext copied to another user/provider/server fail
         authentication.
+
+        ``purpose`` is part of that address, so it is bound too -- otherwise the
+        separation between a user's own runtime credential and the identity the registry
+        borrows would be enforced by the storage path ALONE. This codec's threat model
+        explicitly includes a write-capable attacker on the backend (that is what
+        ``require_encrypted`` defends against), and such an attacker could copy a user's
+        egress ciphertext to the discovery address and have the registry borrow the user's
+        own credential for its headless calls. Binding it makes the separation
+        cryptographic: the tag fails in BOTH directions.
+
+        It is appended only for NON-egress purposes, so every ciphertext written before
+        purposes existed -- all of which are egress -- keeps a byte-identical AAD and
+        still authenticates. Same rule as ``keys.namespaced_prefix``, for the same reason:
+        no migration, no re-consent. A discovery ciphertext moved to an egress address is
+        still rejected, because the egress AAD then lacks the segment the tag covers.
         """
-        return _AAD_PREFIX + (
-            f"{version}|{algorithm}|{key_id}|"
+        address = (
             f"{keys.encode_segment(auth_method)}|{keys.encode_segment(user_id)}|"
             f"{keys.encode_segment(provider)}|{keys.encode_segment(server_path)}"
-        ).encode("ascii")
+        )
+        if purpose != keys.EGRESS_PURPOSE:
+            address += f"|{keys.encode_segment(purpose)}"
+        return _AAD_PREFIX + f"{version}|{algorithm}|{key_id}|{address}".encode("ascii")
 
     # -- codec --------------------------------------------------------------- #
 
@@ -157,6 +175,8 @@ class CredentialCodec:
         provider: str,
         server_path: str,
         token: StoredToken,
+        *,
+        purpose: str,
     ) -> dict:
         """Return the dict to persist for ``token`` at the given address.
 
@@ -176,6 +196,7 @@ class CredentialCodec:
             user_id,
             provider,
             server_path,
+            purpose,
         )
         try:
             ciphertext = cipher.encrypt(nonce, plaintext, associated_data=aad)
@@ -197,6 +218,8 @@ class CredentialCodec:
         provider: str,
         server_path: str,
         document: dict,
+        *,
+        purpose: str,
     ) -> StoredToken:
         """Return the :class:`StoredToken` for a persisted ``document``.
 
@@ -242,6 +265,7 @@ class CredentialCodec:
             user_id,
             provider,
             server_path,
+            purpose,
         )
         try:
             plaintext = cipher.decrypt(nonce, ciphertext, associated_data=aad)

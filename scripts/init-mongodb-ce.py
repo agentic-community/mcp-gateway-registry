@@ -15,13 +15,15 @@ import asyncio
 import json
 import logging
 import os
+import re
 import sys
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import ASCENDING, DESCENDING
-from pymongo.errors import OperationFailure, ServerSelectionTimeoutError
+from pymongo.errors import DuplicateKeyError, OperationFailure, ServerSelectionTimeoutError
 
 # Configure logging with basicConfig
 logging.basicConfig(
@@ -40,6 +42,38 @@ COLLECTION_SECURITY_SCANS = "mcp_security_scans"
 COLLECTION_FEDERATION_CONFIG = "mcp_federation_config"
 COLLECTION_AUDIT_EVENTS = "audit_events"
 COLLECTION_SKILLS = "agent_skills"
+
+# Identity claim fields persisted on audit records (issue #1642). Keep in step
+# with registry/audit/models.py::IdentityClaims and with the DocumentDB init
+# (scripts/init-documentdb-indexes.py), which builds the same index set.
+AUDIT_CLAIM_FIELDS = ("principal_name", "subject", "canonical_id", "object_id")
+# Streams whose NESTED claims get an index. `registry_api_access` is deliberately
+# absent even though its records nest the claims the same way: the auth server
+# hands the registry a thin signed assertion rather than raw IdP claims, so those
+# fields are permanent nulls there, and the audit API no longer searches them on
+# that stream (see `_identity_search_clause` in registry/audit/routes.py). It is
+# also the largest stream, so indexing four always-null fields on it was the most
+# expensive way to serve no query. `token_mint` instead carries the same values at
+# the TOP level, plus its readable identity in a flat `username`.
+AUDIT_CLAIM_NESTED_LOG_TYPES = ("mcp_server_access",)
+AUDIT_FLAT_LOG_TYPE = "token_mint"
+# Short stream tokens keep index names well inside Amazon DocumentDB's limit.
+_AUDIT_LOG_TYPE_ABBREV = {
+    "registry_api_access": "api",
+    "mcp_server_access": "mcp",
+    "token_mint": "mint",  # nosec B105 - audit stream name, not a secret
+}
+# Claim indexes created by the first cut of #1642 with auto-generated names, now
+# superseded by the log_type-led partial indexes. Dropped only AFTER the
+# replacements exist, so no query is ever left without an index.
+LEGACY_AUDIT_CLAIM_INDEXES = tuple(
+    [f"identity.{field}_1_timestamp_-1" for field in AUDIT_CLAIM_FIELDS]
+    + [f"{field}_1_timestamp_-1" for field in ("username", *AUDIT_CLAIM_FIELDS)]
+    # registry_api_access claim indexes, built by an earlier cut of this script
+    # before the audit API stopped searching claims on that stream. Dropped on the
+    # next run so a cluster that already has them stops paying for them.
+    + [f"audit_claim_api_{field}_idx" for field in AUDIT_CLAIM_FIELDS]
+)
 
 
 def _get_config_from_env() -> dict:
@@ -73,12 +107,11 @@ def _initialize_replica_set(
     logger.info("Initializing MongoDB replica set...")
 
     try:
-        # Connect without replica set for initialization
-        # Use auth only if username is provided (MongoDB CE runs without auth by default)
-        if username and password:
-            connection_uri = f"mongodb://{username}:{password}@{host}:{port}/?authMechanism=SCRAM-SHA-256&authSource=admin"
-        else:
-            connection_uri = f"mongodb://{host}:{port}/"
+        # Connect without the replica set for initialization. _bootstrap_uri adds
+        # credentials only when a username is configured, because MongoDB CE runs
+        # without authentication by default.
+        connection_uri = _bootstrap_uri(host, port, username, password)
+        if not (username and password):
             logger.info("Connecting without authentication (MongoDB CE no-auth mode)")
 
         client = MongoClient(
@@ -114,6 +147,282 @@ def _initialize_replica_set(
     except Exception as e:
         logger.error(f"Error initializing replica set: {e}")
         raise
+
+
+def _redact_uri(message: object) -> str:
+    """Strip any Mongo URI -- and so any embedded password -- from a message."""
+    return re.sub(r"mongodb(?:\+srv)?://\S*", "<redacted-uri>", str(message))
+
+
+def _bootstrap_uri(host: str, port: int, username: str, password: str) -> str:
+    """Direct URI used for admin commands before the replica set is usable.
+
+    MongoDB CE runs without authentication by default, so credentials are added
+    only when a username is actually configured: authenticating against a
+    no-user MongoDB fails outright.
+    """
+    if username and password:
+        return (
+            f"mongodb://{username}:{password}@{host}:{port}/"
+            "?authMechanism=SCRAM-SHA-256&authSource=admin"
+        )
+    return f"mongodb://{host}:{port}/"
+
+
+def _audit_ttl_days() -> int:
+    """Audit retention in days, from AUDIT_LOG_MONGODB_TTL_DAYS."""
+    raw = os.getenv("AUDIT_LOG_MONGODB_TTL_DAYS", "7").strip() or "7"
+    try:
+        days = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"AUDIT_LOG_MONGODB_TTL_DAYS must be an integer, got {raw!r}") from exc
+    if days < 1:
+        raise ValueError(f"AUDIT_LOG_MONGODB_TTL_DAYS must be >= 1, got {days}")
+    return days
+
+
+def _wait_for_mongodb(config: dict, override: str) -> None:
+    """Block until MongoDB is usable, or raise once the deadline passes.
+
+    This replaces two things that used to sit outside this script: a blind
+    ``time.sleep(10)`` here, and the Helm chart's ``wait.py`` init container,
+    which looped ``while True`` with no deadline and always built a credentialed
+    URI (so it could never connect to a no-auth MongoDB CE).
+
+    Phase 1 waits for the server to answer ``ping``.
+
+    Phase 2, skipped when the caller owns the topology, waits for every replica
+    set member to reach PRIMARY or SECONDARY. If the set is still uninitialized
+    once the server has been reachable for
+    ``MONGODB_REPLICA_SET_INITIATE_GRACE_SECONDS``, this initializes it. The
+    grace period exists so that a managed control plane -- the MongoDB
+    Kubernetes operator -- gets to configure its own members first; racing it
+    would produce a single-member set under the wrong name.
+    """
+    from pymongo import MongoClient
+
+    timeout_s = float(os.getenv("MONGODB_WAIT_TIMEOUT_SECONDS", "300"))
+    grace_s = float(os.getenv("MONGODB_REPLICA_SET_INITIATE_GRACE_SECONDS", "30"))
+    deadline = time.monotonic() + timeout_s
+
+    if override:
+        uri = override
+        target = urlsplit(override).hostname or "(override)"
+    else:
+        uri = _bootstrap_uri(config["host"], config["port"], config["username"], config["password"])
+        target = f"{config['host']}:{config['port']}"
+
+    logger.info(f"Waiting up to {timeout_s:.0f}s for MongoDB at {target} to be ready...")
+    reachable_at: float | None = None
+    initiated = False
+    last_error = "not reachable yet"
+
+    while True:
+        if time.monotonic() >= deadline:
+            raise TimeoutError(
+                f"MongoDB at {target} was not ready within {timeout_s:.0f}s "
+                f"(last state: {last_error}). Raise MONGODB_WAIT_TIMEOUT_SECONDS if the "
+                "cluster is simply slow to start."
+            )
+        client = None
+        try:
+            client = MongoClient(
+                uri,
+                serverSelectionTimeoutMS=5000,
+                connectTimeoutMS=5000,
+                directConnection=not override,
+            )
+            client.admin.command("ping")
+            if reachable_at is None:
+                reachable_at = time.monotonic()
+                logger.info("MongoDB is accepting connections")
+            if override:
+                return
+
+            status = client.admin.command("replSetGetStatus")
+            members = status.get("members", [])
+            ready = [m for m in members if m.get("state") in (1, 2)]
+            if members and len(ready) == len(members):
+                logger.info(f"Replica set ready ({len(ready)}/{len(members)} members)")
+                return
+            last_error = f"replica set members ready {len(ready)}/{len(members)}"
+            logger.info(f"Waiting for replica set: {last_error}")
+        except OperationFailure as exc:
+            uninitialized = exc.code == 94 or "no replset config" in str(exc).lower()
+            if not override and uninitialized:
+                waited = 0.0 if reachable_at is None else time.monotonic() - reachable_at
+                if not initiated and waited >= grace_s:
+                    logger.info(
+                        f"Replica set still uninitialized {waited:.0f}s after MongoDB became "
+                        "reachable; initializing it from here"
+                    )
+                    _initialize_replica_set(
+                        config["host"], config["port"], config["username"], config["password"]
+                    )
+                    initiated = True
+                last_error = "replica set not initialized yet"
+            else:
+                last_error = _redact_uri(exc)
+        except Exception as exc:
+            last_error = _redact_uri(exc)
+        finally:
+            if client is not None:
+                try:
+                    client.close()
+                except Exception as close_exc:
+                    # Closing a probe client is best effort; the retry loop makes
+                    # a fresh one either way. Recorded rather than swallowed.
+                    logger.debug(f"Ignoring MongoDB probe close error: {close_exc}")
+        time.sleep(max(0.5, min(5.0, deadline - time.monotonic())))
+
+
+def _audit_claim_index_name(log_type: str, field: str) -> str:
+    """Explicit, engine-independent name for one identity-claim index.
+
+    Named explicitly so MongoDB CE and Amazon DocumentDB agree: auto-generated
+    names differ between the two, which is what forced an earlier migration to
+    guess at several name variants when dropping an index.
+    """
+    return f"audit_claim_{_AUDIT_LOG_TYPE_ABBREV[log_type]}_{field}_idx"
+
+
+async def _create_audit_claim_indexes(collection, full_name: str) -> None:
+    """Create the identity-claim indexes behind the audit username filter.
+
+    An operator pastes an IdP-side value (upn / sub / oid@tid / oid) and the audit
+    API matches it against every claim the stream stores.
+
+    These indexes do NOT stop the identity filter scanning, and it is worth being
+    precise about that: the filter is one ``$or`` mixing equality branches on the
+    claims with case-insensitive regex branches on the readable fields, and an
+    ``$or`` is served by index union only when EVERY branch is indexable, which a
+    case-insensitive regex never is (measured: adding claim indexes left both the
+    plan and the documents examined unchanged). What ``log_type`` leading every key
+    does buy is a bound on the stream, since every audit query filters on it. A
+    seek straight to a claim value additionally needs the equality branches split
+    out of that ``$or``, which is a change to the query, not to the schema.
+
+    Shape, and why it is this shape:
+
+    * ``log_type`` LEADS every key, because every audit query filters on it
+      (``registry/audit/routes.py`` builds ``{"log_type": ...}`` before adding
+      the identity ``$or``). It also matches the neighbouring
+      ``log_type_resource_type_resource_id_timestamp_idx``. Changing the leading
+      field later would mean rebuilding every one of these on a hot collection.
+    * ``partialFilterExpression`` pins each index to the ONE stream whose record
+      shape it serves. Without it, every index stores an entry for every audit
+      record -- including the ones that carry no claim at all. Measured on a
+      representative 30k-record mix: 2.09 MB across 13 partial indexes versus
+      3.46 MB across 9 unpartitioned ones (-40%), and an insert updates 4-5 claim
+      indexes instead of all 9. That measurement predates dropping the
+      registry_api_access targets, which takes the set from 13 to 9.
+    * ``sparse`` is deliberately NOT used. On a compound index it keeps a
+      document when ANY indexed field exists, and ``log_type`` always exists, so
+      it would be inert here (measured: byte-identical to passing no option).
+    * The filter is a single-stream EQUALITY rather than an ``$in`` because
+      Amazon DocumentDB only uses a partial index when the query predicate
+      matches its filter expression, and audit queries are always scoped to one
+      stream at a time.
+    * Descending timestamp matches how the audit API reads: newest first.
+
+    Falls back to unpartitioned indexes if the engine rejects
+    ``partialFilterExpression`` (Amazon DocumentDB before 5.0, Elastic
+    Clusters), so an old cluster degrades to "larger index" rather than "init
+    job fails".
+    """
+    targets: list[tuple[str, str]] = [
+        (log_type, f"identity.{field}")
+        for log_type in AUDIT_CLAIM_NESTED_LOG_TYPES
+        for field in AUDIT_CLAIM_FIELDS
+    ]
+    targets += [(AUDIT_FLAT_LOG_TYPE, field) for field in ("username", *AUDIT_CLAIM_FIELDS)]
+
+    partial_supported = True
+    for log_type, key in targets:
+        name = _audit_claim_index_name(log_type, key.rsplit(".", 1)[-1])
+        keys = [("log_type", ASCENDING), (key, ASCENDING), ("timestamp", DESCENDING)]
+        if partial_supported:
+            partial = {"log_type": log_type}
+            try:
+                await collection.create_index(keys, name=name, partialFilterExpression=partial)
+                continue
+            except OperationFailure as exc:
+                if exc.code == 85:
+                    # Same name, different options: an earlier run created this
+                    # index unpartitioned (or with another filter). Replace it.
+                    await collection.drop_index(name)
+                    await collection.create_index(keys, name=name, partialFilterExpression=partial)
+                    continue
+                partial_supported = False
+                logger.warning(
+                    f"{full_name}: engine rejected partialFilterExpression "
+                    f"(code {exc.code}); creating unpartitioned identity-claim indexes "
+                    "instead. They are correct, just larger."
+                )
+        await collection.create_index(keys, name=name)
+
+
+async def _existing_ttl_seconds(collection, name: str = "timestamp_ttl") -> int | None:
+    """Current expireAfterSeconds of the audit TTL index, or None if absent."""
+    async for spec in collection.list_indexes():
+        if spec.get("name") == name:
+            value = spec.get("expireAfterSeconds")
+            return int(value) if value is not None else None
+    return None
+
+
+async def _reconcile_audit_ttl(collection, full_name: str, ttl_days: int) -> int:
+    """Point the audit TTL index at ``ttl_days``, refusing to shorten silently.
+
+    Shortening a TTL makes MongoDB's background TTL monitor delete every audit
+    record older than the new window, normally within a minute, irreversibly.
+    That must never happen as a side effect of an upgrade picking up a default:
+    this job now runs on every ``helm upgrade``, and the deployment that most
+    needs a long retention is exactly the one that set it out-of-band.
+
+    So a REDUCTION is refused unless AUDIT_LOG_MONGODB_TTL_ALLOW_SHRINK is set.
+    Refusing leaves the longer retention in place, which costs storage but
+    destroys nothing.
+
+    Returns the retention actually in effect afterwards, which is NOT always the
+    requested value -- callers must log what they got, not what they asked for.
+    """
+    desired = ttl_days * 24 * 60 * 60
+    existing = await _existing_ttl_seconds(collection)
+
+    if existing is None:
+        await collection.create_index(
+            [("timestamp", ASCENDING)], expireAfterSeconds=desired, name="timestamp_ttl"
+        )
+        logger.info(f"Created audit TTL index for {full_name} ({ttl_days} days)")
+        return ttl_days
+
+    if existing == desired:
+        logger.info(f"Audit TTL index for {full_name} already {ttl_days} days")
+        return ttl_days
+
+    allow_shrink = os.getenv("AUDIT_LOG_MONGODB_TTL_ALLOW_SHRINK", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    if desired < existing and not allow_shrink:
+        logger.error(
+            f"{full_name}: REFUSING to shorten audit retention from "
+            f"{existing // 86400} days to {ttl_days} days. MongoDB would delete every "
+            f"audit record older than {ttl_days} days within about a minute, and it "
+            "cannot be undone. The existing retention has been left in place. Set "
+            "AUDIT_LOG_MONGODB_TTL_ALLOW_SHRINK=true to allow this on purpose, or set "
+            "AUDIT_LOG_MONGODB_TTL_DAYS to the retention you actually want."
+        )
+        return existing // 86400
+
+    logger.info(f"{full_name}: changing audit retention {existing // 86400} -> {ttl_days} days")
+    await collection.drop_index("timestamp_ttl")
+    await collection.create_index(
+        [("timestamp", ASCENDING)], expireAfterSeconds=desired, name="timestamp_ttl"
+    )
+    return ttl_days
 
 
 async def _create_standard_indexes(
@@ -168,26 +477,67 @@ async def _create_standard_indexes(
             [("action.resource_type", ASCENDING), ("timestamp", ASCENDING)]
         )
 
+        # Identity lookups behind the audit username filter (issue #1642).
+        # See _create_audit_claim_indexes for the shape and the reasoning.
+        await _create_audit_claim_indexes(collection, full_name)
+
         # Index for MCP server name distinct/filter queries
         await collection.create_index([("mcp_server.name", ASCENDING)])
 
-        # Migration: drop old single-field request_id index if it exists
-        # Try both auto-generated name and explicit name variants
+        # Composite unique index on (request_id, log_type). One request
+        # legitimately writes both an MCPServerAccessRecord and a
+        # RegistryApiAccessRecord, and they share a request_id; the single-field
+        # unique index this supersedes rejected the second write, and the audit
+        # sink logged CRITICAL "AUDIT RECORD DROPPED" for it.
+        #
+        # Order matters: create the replacement BEFORE dropping the old index.
+        # The new index is strictly more permissive, so the collection is never
+        # left without a uniqueness constraint on request_id, and a concurrent
+        # duplicate cannot slip through a gap. Dropping first would open exactly
+        # that window on a live cluster -- and a duplicate landing in it would
+        # then fail this unique build on every subsequent upgrade.
+        try:
+            await collection.create_index(
+                [("request_id", ASCENDING), ("log_type", ASCENDING)],
+                name="request_id_log_type_idx",
+                unique=True,
+            )
+        except DuplicateKeyError:
+            finder = (
+                "db." + full_name + ".aggregate([{$group: {_id: {request_id: "
+                "'$request_id', log_type: '$log_type'}, n: {$sum: 1}}}, "
+                "{$match: {n: {$gt: 1}}}])"
+            )
+            logger.error(
+                f"{full_name}: cannot build the unique (request_id, log_type) index because "
+                "the collection already holds a true duplicate. List the offending pairs "
+                f"with:  {finder}  -- then delete the surplus copies and re-run this job. "
+                "The old index has deliberately NOT been dropped, so uniqueness is still "
+                "enforced meanwhile."
+            )
+            raise
+
+        # Only now retire the superseded single-field index. Tolerates absence: a
+        # fresh install never had it. Both the auto-generated and the explicitly
+        # named variant are tried, because the two storage backends historically
+        # named this index differently.
         for old_index_name in ("request_id_1", "request_id_idx"):
             try:
                 await collection.drop_index(old_index_name)
-                logger.info(f"Dropped old single-field index '{old_index_name}' from {full_name}")
-            except Exception:
-                logger.debug(f"No old index '{old_index_name}' to drop from {full_name}")
+                logger.info(
+                    f"Dropped superseded single-field index '{old_index_name}' from {full_name}"
+                )
+            except OperationFailure:
+                logger.debug(f"No '{old_index_name}' index to drop from {full_name}")
 
-        # Composite unique index on (request_id, log_type)
-        # Allows both MCPServerAccessRecord and RegistryApiAccessRecord
-        # to coexist for the same request_id while preventing true duplicates
-        await collection.create_index(
-            [("request_id", ASCENDING), ("log_type", ASCENDING)],
-            name="request_id_log_type_idx",
-            unique=True,
-        )
+        # Retire the first-cut claim indexes now that their log_type-led partial
+        # replacements exist (created above, so there is never a gap).
+        for legacy_name in LEGACY_AUDIT_CLAIM_INDEXES:
+            try:
+                await collection.drop_index(legacy_name)
+                logger.info(f"Dropped superseded claim index '{legacy_name}' from {full_name}")
+            except OperationFailure:
+                logger.debug(f"No '{legacy_name}' index to drop from {full_name}")
 
         # Compound index for token_mint flat-field queries (resource_type/
         # resource_id at the top level, not nested under action.*). Mirrors the
@@ -203,25 +553,12 @@ async def _create_standard_indexes(
             name="log_type_resource_type_resource_id_timestamp_idx",
         )
 
-        # TTL index for automatic expiration (Requirements 6.3)
-        # This also serves as the timestamp index for sorting
-        # Default 7 days (604800 seconds), configurable via AUDIT_LOG_MONGODB_TTL_DAYS
-        ttl_days = int(os.getenv("AUDIT_LOG_MONGODB_TTL_DAYS", "7"))
-        ttl_seconds = ttl_days * 24 * 60 * 60
-        try:
-            await collection.create_index(
-                [("timestamp", ASCENDING)], expireAfterSeconds=ttl_seconds, name="timestamp_ttl"
-            )
-        except OperationFailure as e:
-            if e.code == 85:  # IndexOptionsConflict
-                logger.info(f"TTL index options changed for {full_name}, recreating index...")
-                await collection.drop_index("timestamp_ttl")
-                await collection.create_index(
-                    [("timestamp", ASCENDING)], expireAfterSeconds=ttl_seconds, name="timestamp_ttl"
-                )
-            else:
-                raise
-        logger.info(f"Created indexes for {full_name} (TTL: {ttl_days} days)")
+        # TTL index for automatic expiration (Requirements 6.3). Doubles as the
+        # timestamp index for sorting. Default 7 days, set by
+        # AUDIT_LOG_MONGODB_TTL_DAYS.
+        ttl_days = _audit_ttl_days()
+        effective_ttl_days = await _reconcile_audit_ttl(collection, full_name, ttl_days)
+        logger.info(f"Created indexes for {full_name} (TTL: {effective_ttl_days} days)")
 
     elif collection_name == COLLECTION_SKILLS:
         # Note: path is stored as _id, so no separate path index needed
@@ -317,8 +654,6 @@ async def _initialize_mongodb_ce() -> None:
     logger.info("MongoDB CE Initialization for MCP Gateway")
     logger.info("=" * 60)
     if override:
-        from urllib.parse import urlsplit
-
         logger.info(
             f"Host: {urlsplit(override).hostname or '(override)'} (connection string override)"
         )
@@ -328,22 +663,20 @@ async def _initialize_mongodb_ce() -> None:
     logger.info(f"Namespace: {config['namespace']}")
     logger.info("")
 
-    # Wait for MongoDB to be ready
-    logger.info("Waiting for MongoDB to be ready...")
-    time.sleep(10)
+    # Wait for MongoDB to be reachable and, unless the caller owns the topology,
+    # for its replica set to be ready -- initializing the set here only if
+    # nothing else has after a grace period. Bounded: raises on timeout rather
+    # than hanging. This supersedes both the blind `time.sleep(10)` that used to
+    # be here and the unbounded `wait.py` init container the Helm chart mounted.
+    _wait_for_mongodb(config, override)
 
     if override:
         # Caller owns the topology (Atlas, externally-managed replica set, etc.).
-        # Skip replSetInitiate — we lack admin rights and the replica set is
+        # Skip replSetInitiate -- we lack admin rights and the replica set is
         # already configured by the provider.
         logger.info("Skipping replica-set initialization (connection string override in use)")
         connection_string = override
     else:
-        # Initialize replica set (synchronous)
-        _initialize_replica_set(
-            config["host"], config["port"], config["username"], config["password"]
-        )
-
         # Connect with motor for async operations
         # Use auth only if username is provided (MongoDB CE runs without auth by default)
         if config["username"] and config["password"]:
@@ -407,8 +740,8 @@ async def _initialize_mongodb_ce() -> None:
             if coll_name == COLLECTION_EMBEDDINGS:
                 logger.info(f"  - {coll_name}_{namespace} (with vector search)")
             elif coll_name == COLLECTION_AUDIT_EVENTS:
-                ttl_days = int(os.getenv("AUDIT_LOG_MONGODB_TTL_DAYS", "7"))
-                logger.info(f"  - {coll_name}_{namespace} (TTL: {ttl_days} days)")
+                ttl_days = _audit_ttl_days()
+                logger.info(f"  - {coll_name}_{namespace} (TTL: {ttl_days} days requested)")
             else:
                 logger.info(f"  - {coll_name}_{namespace}")
         logger.info("")

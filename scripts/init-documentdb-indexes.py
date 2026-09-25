@@ -36,6 +36,7 @@ import os
 from pathlib import Path
 
 from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo.errors import DuplicateKeyError, OperationFailure
 
 # Configure logging with basicConfig
 logging.basicConfig(
@@ -53,6 +54,55 @@ COLLECTION_EMBEDDINGS = "mcp_embeddings_1536"
 COLLECTION_SECURITY_SCANS = "mcp_security_scans"
 COLLECTION_FEDERATION_CONFIG = "mcp_federation_config"
 COLLECTION_AUDIT_EVENTS = "audit_events"
+
+# Identity claim fields persisted on audit records (issue #1642). These, the
+# stream split and the index names are deliberately IDENTICAL to
+# scripts/init-mongodb-ce.py: the two engines previously auto-generated
+# different names for the same logical index, which is what forced an earlier
+# migration to guess at name variants when dropping one.
+AUDIT_CLAIM_FIELDS = ("principal_name", "subject", "canonical_id", "object_id")
+# Streams whose NESTED claims get an index. `registry_api_access` is deliberately
+# absent even though its records nest the claims the same way: the auth server
+# hands the registry a thin signed assertion rather than raw IdP claims, so those
+# fields are permanent nulls there, and the audit API no longer searches them on
+# that stream (see `_identity_search_clause` in registry/audit/routes.py). It is
+# also the largest stream, so indexing four always-null fields on it was the most
+# expensive way to serve no query. `token_mint` instead carries the same values at
+# the TOP level, plus its readable identity in a flat `username`.
+AUDIT_CLAIM_NESTED_LOG_TYPES = ("mcp_server_access",)
+AUDIT_FLAT_LOG_TYPE = "token_mint"
+_AUDIT_LOG_TYPE_ABBREV = {
+    "registry_api_access": "api",
+    "mcp_server_access": "mcp",
+    "token_mint": "mint",  # nosec B105 - audit stream name, not a secret
+}
+# Claim indexes created by the first cut of #1642, superseded by the
+# log_type-led partial indexes. Dropped only after the replacements exist.
+LEGACY_AUDIT_CLAIM_INDEXES = tuple(
+    [f"identity_{field}_timestamp_idx" for field in AUDIT_CLAIM_FIELDS]
+    + [f"{field}_timestamp_idx" for field in ("username", *AUDIT_CLAIM_FIELDS)]
+    # registry_api_access claim indexes, built by an earlier cut of this script
+    # before the audit API stopped searching claims on that stream. Dropped on the
+    # next run so a cluster that already has them stops paying for them.
+    + [f"audit_claim_api_{field}_idx" for field in AUDIT_CLAIM_FIELDS]
+)
+
+
+def _audit_claim_index_name(log_type: str, field: str) -> str:
+    """Explicit index name, identical to the MongoDB CE init script."""
+    return f"audit_claim_{_AUDIT_LOG_TYPE_ABBREV[log_type]}_{field}_idx"
+
+
+def _audit_ttl_days() -> int:
+    """Audit retention in days, from AUDIT_LOG_MONGODB_TTL_DAYS."""
+    raw = os.getenv("AUDIT_LOG_MONGODB_TTL_DAYS", "7").strip() or "7"
+    try:
+        days = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"AUDIT_LOG_MONGODB_TTL_DAYS must be an integer, got {raw!r}") from exc
+    if days < 1:
+        raise ValueError(f"AUDIT_LOG_MONGODB_TTL_DAYS must be >= 1, got {days}")
+    return days
 
 
 async def _get_documentdb_connection_string(
@@ -517,6 +567,129 @@ async def _create_federation_config_indexes(
     logger.info(f"No additional indexes to create for {collection_name} (_id is auto-indexed)")
 
 
+async def _create_audit_claim_indexes(
+    collection,
+    collection_name: str,
+    recreate: bool,
+) -> None:
+    """Create the identity-claim indexes behind the audit username filter.
+
+    The shape and the reasoning are documented once, in
+    ``scripts/init-mongodb-ce.py::_create_audit_claim_indexes``; the two must
+    stay identical, index names included. In short: ``log_type`` leads every key
+    because every audit query filters on it, and a per-stream
+    ``partialFilterExpression`` keeps each index to the one record shape it
+    serves. Amazon DocumentDB supports partial indexes from engine 5.0 and uses
+    one only when the query predicate matches its filter expression, which is
+    why the filter is a single-stream equality rather than an ``$in``.
+    """
+    targets: list[tuple[str, str]] = [
+        (log_type, f"identity.{field}")
+        for log_type in AUDIT_CLAIM_NESTED_LOG_TYPES
+        for field in AUDIT_CLAIM_FIELDS
+    ]
+    targets += [(AUDIT_FLAT_LOG_TYPE, field) for field in ("username", *AUDIT_CLAIM_FIELDS)]
+
+    partial_supported = True
+    for log_type, key in targets:
+        name = _audit_claim_index_name(log_type, key.rsplit(".", 1)[-1])
+        spec = [("log_type", 1), (key, 1), ("timestamp", -1)]
+
+        if recreate:
+            try:
+                await collection.drop_index(name)
+                logger.info(f"Dropped existing index '{name}' from {collection_name}")
+            except OperationFailure as e:
+                logger.debug(f"No existing index '{name}' to drop: {e}")
+
+        if partial_supported:
+            partial = {"log_type": log_type}
+            try:
+                await collection.create_index(spec, name=name, partialFilterExpression=partial)
+                logger.info(f"Created partial index '{name}' on {collection_name}")
+                continue
+            except OperationFailure as e:
+                if e.code == 85:
+                    # Same name, different options: an earlier run created this
+                    # index unpartitioned. Replace it.
+                    await collection.drop_index(name)
+                    await collection.create_index(spec, name=name, partialFilterExpression=partial)
+                    logger.info(f"Replaced '{name}' on {collection_name} with a partial index")
+                    continue
+                partial_supported = False
+                logger.warning(
+                    f"{collection_name}: engine rejected partialFilterExpression (code "
+                    f"{e.code}); creating unpartitioned identity-claim indexes instead. "
+                    "They are correct, just larger. Amazon DocumentDB supports partial "
+                    "indexes from engine 5.0."
+                )
+        try:
+            await collection.create_index(spec, name=name)
+            logger.info(f"Created index '{name}' on {collection_name}")
+        except OperationFailure as e:
+            logger.error(f"Failed to create index '{name}' on {collection_name}: {e}")
+
+    # Retire the first-cut claim indexes now that their replacements exist, so
+    # there is never a moment without an index behind the filter.
+    for legacy_name in LEGACY_AUDIT_CLAIM_INDEXES:
+        try:
+            await collection.drop_index(legacy_name)
+            logger.info(f"Dropped superseded claim index '{legacy_name}' from {collection_name}")
+        except OperationFailure as e:
+            logger.debug(f"No '{legacy_name}' index to drop: {e}")
+
+
+async def _reconcile_audit_ttl(collection, collection_name: str, ttl_days: int) -> int:
+    """Point the audit TTL index at ``ttl_days``, refusing to shorten silently.
+
+    Same contract as ``scripts/init-mongodb-ce.py::_reconcile_audit_ttl``:
+    shrinking a TTL makes the background TTL monitor delete every audit record
+    older than the new window, irreversibly, so a REDUCTION requires
+    AUDIT_LOG_MONGODB_TTL_ALLOW_SHRINK. Returns the retention actually in
+    effect, which is not always the value requested.
+    """
+    name = "timestamp_ttl"
+    desired = ttl_days * 24 * 60 * 60
+    existing: int | None = None
+    async for spec in collection.list_indexes():
+        if spec.get("name") == name:
+            value = spec.get("expireAfterSeconds")
+            existing = int(value) if value is not None else None
+            break
+
+    if existing is None:
+        await collection.create_index([("timestamp", 1)], name=name, expireAfterSeconds=desired)
+        logger.info(f"Created TTL index '{name}' on {collection_name} ({ttl_days} days)")
+        return ttl_days
+
+    if existing == desired:
+        logger.info(f"TTL index '{name}' on {collection_name} already {ttl_days} days")
+        return ttl_days
+
+    allow_shrink = os.getenv("AUDIT_LOG_MONGODB_TTL_ALLOW_SHRINK", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    if desired < existing and not allow_shrink:
+        logger.error(
+            f"{collection_name}: REFUSING to shorten audit retention from "
+            f"{existing // 86400} days to {ttl_days} days. The TTL monitor would delete "
+            f"every audit record older than {ttl_days} days, and it cannot be undone. The "
+            "existing retention has been left in place. Set "
+            "AUDIT_LOG_MONGODB_TTL_ALLOW_SHRINK=true to allow this on purpose, or set "
+            "AUDIT_LOG_MONGODB_TTL_DAYS to the retention you actually want."
+        )
+        return existing // 86400
+
+    logger.info(
+        f"{collection_name}: changing audit retention {existing // 86400} -> {ttl_days} days"
+    )
+    await collection.drop_index(name)
+    await collection.create_index([("timestamp", 1)], name=name, expireAfterSeconds=desired)
+    return ttl_days
+
+
 async def _create_audit_events_indexes(
     collection,
     collection_name: str,
@@ -526,6 +699,9 @@ async def _create_audit_events_indexes(
 
     Indexes support:
     - Query by username + time range
+    - Query by any stored identity claim (principal_name / subject /
+      canonical_id / object_id) + time range, for incident correlation from an
+      IdP-side value
     - Query by operation + time range
     - Query by resource type + time range
     - Composite unique lookup by (request_id, log_type)
@@ -583,26 +759,30 @@ async def _create_audit_events_indexes(
         except Exception as e:
             logger.error(f"Failed to create index '{index_name}' on {collection_name}: {e}")
 
-    # Composite unique index on (request_id, log_type)
-    # Allows both MCPServerAccessRecord and RegistryApiAccessRecord
-    # to coexist for the same request_id while preventing true duplicates
+    # Identity-claim indexes (issue #1642), created before the unique-index
+    # migration below so the filter is never left without an index.
+    await _create_audit_claim_indexes(collection, collection_name, recreate)
+
+    # Composite unique index on (request_id, log_type). One request legitimately
+    # writes both an MCPServerAccessRecord and a RegistryApiAccessRecord, and the
+    # two share a request_id; the single-field unique index this supersedes
+    # rejected the second write, and the audit sink logged CRITICAL
+    # "AUDIT RECORD DROPPED" for it.
     composite_index_name = "request_id_log_type_idx"
     old_index_name = "request_id_idx"
-
-    # Always try to drop the old single-field index (migration from previous versions)
-    try:
-        await collection.drop_index(old_index_name)
-        logger.info(f"Dropped old single-field index '{old_index_name}' from {collection_name}")
-    except Exception as e:
-        logger.debug(f"No old index '{old_index_name}' to drop: {e}")
 
     if recreate:
         try:
             await collection.drop_index(composite_index_name)
             logger.info(f"Dropped existing index '{composite_index_name}' from {collection_name}")
-        except Exception as e:
+        except OperationFailure as e:
             logger.debug(f"No existing index '{composite_index_name}' to drop: {e}")
 
+    # Order matters: build the replacement BEFORE dropping the old index. The new
+    # index is strictly more permissive, so the collection is never left without a
+    # uniqueness constraint on request_id and a concurrent duplicate cannot slip
+    # through a gap. Dropping first would open that window on a live cluster, and
+    # a duplicate landing in it would fail this build on every later run.
     try:
         await collection.create_index(
             [("request_id", 1), ("log_type", 1)],
@@ -610,8 +790,30 @@ async def _create_audit_events_indexes(
             unique=True,
         )
         logger.info(f"Created composite unique index '{composite_index_name}' on {collection_name}")
-    except Exception as e:
-        logger.error(f"Failed to create index '{composite_index_name}' on {collection_name}: {e}")
+    except DuplicateKeyError:
+        finder = (
+            "db." + collection_name + ".aggregate([{$group: {_id: {request_id: "
+            "'$request_id', log_type: '$log_type'}, n: {$sum: 1}}}, "
+            "{$match: {n: {$gt: 1}}}])"
+        )
+        logger.error(
+            f"{collection_name}: cannot build the unique (request_id, log_type) index "
+            "because the collection already holds a true duplicate. List the offending "
+            f"pairs with:  {finder}  -- then delete the surplus copies and re-run. The old "
+            "index has deliberately NOT been dropped, so uniqueness is still enforced "
+            "meanwhile."
+        )
+        raise
+
+    # Only now retire the superseded single-field index. Tolerates absence: a
+    # fresh install never had it.
+    try:
+        await collection.drop_index(old_index_name)
+        logger.info(
+            f"Dropped superseded single-field index '{old_index_name}' from {collection_name}"
+        )
+    except OperationFailure as e:
+        logger.debug(f"No old index '{old_index_name}' to drop: {e}")
 
     # Compound index for token_mint flat-field queries (resource_type/resource_id at
     # the top level, not nested under action.*). Required because the existing
@@ -634,31 +836,26 @@ async def _create_audit_events_indexes(
     except Exception as e:
         logger.error(f"Failed to create index '{token_mint_index_name}' on {collection_name}: {e}")
 
-    # TTL index for automatic expiration
-    # Default 7 days (604800 seconds), configurable via AUDIT_LOG_MONGODB_TTL_DAYS
+    # TTL index for automatic expiration. Default 7 days, set by
+    # AUDIT_LOG_MONGODB_TTL_DAYS. `--recreate` drops it first, which is an
+    # explicit operator action, so the shrink guard below sees no existing index
+    # and simply builds the requested retention.
     ttl_index_name = "timestamp_ttl"
-    ttl_days = int(os.getenv("AUDIT_LOG_MONGODB_TTL_DAYS", "7"))
-    ttl_seconds = ttl_days * 24 * 60 * 60
+    ttl_days = _audit_ttl_days()
 
     if recreate:
         try:
             await collection.drop_index(ttl_index_name)
             logger.info(f"Dropped existing TTL index '{ttl_index_name}' from {collection_name}")
-        except Exception as e:
+        except OperationFailure as e:
             logger.debug(f"No existing TTL index '{ttl_index_name}' to drop: {e}")
 
-    try:
-        await collection.create_index(
-            [("timestamp", 1)],
-            name=ttl_index_name,
-            expireAfterSeconds=ttl_seconds,
+    effective_ttl_days = await _reconcile_audit_ttl(collection, collection_name, ttl_days)
+    if effective_ttl_days != ttl_days:
+        logger.warning(
+            f"{collection_name}: audit retention remains {effective_ttl_days} days, not the "
+            f"requested {ttl_days}"
         )
-        logger.info(
-            f"Created TTL index '{ttl_index_name}' on {collection_name} "
-            f"(expireAfterSeconds={ttl_seconds}, {ttl_days} days)"
-        )
-    except Exception as e:
-        logger.error(f"Failed to create TTL index on {collection_name}: {e}")
 
 
 async def _print_collection_summary(

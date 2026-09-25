@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 
 import registry.api.egress_auth_routes as routes
 from registry.egress_auth.schemas import StoredToken
+from registry.secrets import keys
 from registry.secrets.interfaces import SecretStoreError
 
 ADMIN = {"username": "admin", "is_admin": True, "auth_method": "oauth2", "egress_user": "admin"}
@@ -56,16 +57,16 @@ class _StubStore:
         self.put_calls: list[tuple] = []
         self.delete_calls: list[tuple] = []
 
-    async def put_token(self, auth_method, user_id, provider, server_path, token):
+    async def put_token(self, auth_method, user_id, provider, server_path, token, *, purpose):
         if self._put_error:
             raise self._put_error
-        self.put_calls.append((auth_method, user_id, provider, server_path, token))
+        self.put_calls.append((auth_method, user_id, provider, server_path, token, purpose))
 
-    async def get_token(self, auth_method, user_id, provider, server_path):
+    async def get_token(self, auth_method, user_id, provider, server_path, *, purpose):
         return self._token
 
-    async def delete_token(self, auth_method, user_id, provider, server_path):
-        self.delete_calls.append((auth_method, user_id, provider, server_path))
+    async def delete_token(self, auth_method, user_id, provider, server_path, *, purpose):
+        self.delete_calls.append((auth_method, user_id, provider, server_path, purpose))
 
 
 @pytest.fixture
@@ -125,7 +126,9 @@ class TestSetPat:
         assert "secret" not in body
         # Stored under the verified identity's canonical key.
         assert len(store.put_calls) == 1
-        auth_method, user_id, provider, path, token = store.put_calls[0]
+        auth_method, user_id, provider, path, token, purpose = store.put_calls[0]
+        # A PAT is the user's own runtime credential: egress space, never discovery.
+        assert purpose == keys.EGRESS_PURPOSE
         assert (auth_method, user_id, provider, path) == ("oauth2", "alice", "github", "/github")
         assert token.access_token == "ghp_secret"
         assert token.expires_at
@@ -160,7 +163,7 @@ class TestSetPat:
         )
         assert r.status_code == 200
         assert r.json()["sub"] == "bob"
-        auth_method, user_id, _, _, _ = store.put_calls[0]
+        auth_method, user_id, _, _, _, _ = store.put_calls[0]
         # Stored under the TARGET's (auth_method, sub), not the admin's.
         assert (auth_method, user_id) == ("oauth2", "bob")
 
@@ -183,7 +186,7 @@ class TestSetPat:
             json=_put_body(sub="bob", auth_method="jwt"),
         )
         assert r.status_code == 200
-        auth_method, user_id, _, _, _ = store.put_calls[0]
+        auth_method, user_id, _, _, _, _ = store.put_calls[0]
         assert (auth_method, user_id) == ("jwt", "bob")
 
     def test_admin_on_behalf_non_per_user_auth_method_403(self, client):
