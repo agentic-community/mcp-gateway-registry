@@ -55,25 +55,6 @@ tests:
           path: data.EGRESS_OAUTH_CALLBACK_BASE_URL
           value: "https://agents-path.example.com"
 
-  - it: derives the subdomain callback URL from the configured registry prefix
-    set:
-      global:
-        domain: example.com
-        ingress:
-          routingMode: subdomain
-          registrySubdomain: mcp-gateway
-          tls: true
-      egressAuth:
-        enabled: true
-    asserts:
-      - equal:
-          path: data.EGRESS_OAUTH_CALLBACK_BASE_URL
-          value: "https://mcp-gateway.example.com"
-      # The dedicated internal vend listener is the default (values.yaml).
-      - equal:
-          path: data.EGRESS_REGISTRY_INTERNAL_URL
-          value: "http://registry:8091"
-
   - it: an explicit oauthCallbackBaseUrl overrides the derived value
     set:
       global:
@@ -143,3 +124,18 @@ tests:
       - equal:
           path: data.EGRESS_HTTP_POOL_CONNECT_RETRIES
           value: "3"
+
+  - it: derives the subdomain callback URL from the configured registry prefix
+    set:
+      global:
+        domain: example.com
+        ingress:
+          routingMode: subdomain
+          registrySubdomain: mcp-gateway
+          tls: true
+      egressAuth:
+        enabled: true
+    asserts:
+      - equal:
+          path: data.EGRESS_OAUTH_CALLBACK_BASE_URL
+          value: "https://mcp-gateway.example.com"

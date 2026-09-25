@@ -229,6 +229,17 @@ data:
     # Function to create clients
     create_clients() {
         local token=$1
+        local extra_redirect_uris=""
+        local extra_web_origins=""
+        local extra_logout_uris=""
+
+        IFS=',' read -r -a additional_hostnames <<< "${ADDITIONAL_REGISTRY_HOSTNAMES:-}"
+        for hostname in "${additional_hostnames[@]}"; do
+            [ -n "$hostname" ] || continue
+            extra_redirect_uris+=$(printf '\n                "%s://%s/*",' "${REGISTRY_URL%%://*}" "$hostname")
+            extra_web_origins+=$(printf '\n                "%s://%s",' "${REGISTRY_URL%%://*}" "$hostname")
+            extra_logout_uris+="##${REGISTRY_URL%%://*}://${hostname}/*"
+        done
 
         echo "Creating OAuth2 clients..."
 
@@ -241,16 +252,18 @@ data:
             "redirectUris": [
                 "'${AUTH_SERVER_EXTERNAL_URL:-http://localhost:8888}'/oauth2/callback/keycloak",
                 "'${REGISTRY_URL:-http://localhost:7860}'/*",
+                '${extra_redirect_uris}'
                 "http://localhost:7860/*",
                 "http://localhost:8888/*"
             ],
             "webOrigins": [
                 "'${REGISTRY_URL:-http://localhost:7860}'",
+                '${extra_web_origins}'
                 "http://localhost:7860",
                 "http://localhost:8888"
             ],
             "attributes": {
-                "post.logout.redirect.uris": "'${REGISTRY_URL:-http://localhost:7860}'/*##http://localhost:7860/*##http://localhost:8888/*"
+                "post.logout.redirect.uris": "'${REGISTRY_URL:-http://localhost:7860}'/*'${extra_logout_uris}'##http://localhost:7860/*##http://localhost:8888/*"
             },
             "protocol": "openid-connect",
             "standardFlowEnabled": true,

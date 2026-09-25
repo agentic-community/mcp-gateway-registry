@@ -132,7 +132,7 @@ tests:
   # must equal what Keycloak actually emits, otherwise DCR'd MCP clients
   # 401 on /validate. Browser auth redirects land on /realms/.../auth
   # (handled by the registry nginx /realms/ location).
-  - it: KEYCLOAK_EXTERNAL_URL follows the configured registry subdomain
+  - it: KEYCLOAK_EXTERNAL_URL is bare mcpregistry.<domain> in subdomain mode
     templates:
       - templates/oauth-provider-secret.yaml
     set:
@@ -141,12 +141,11 @@ tests:
         ingress:
           routingMode: subdomain
           tls: true
-          registrySubdomain: mcp-gateway
     asserts:
       - equal:
           path: data.KEYCLOAK_EXTERNAL_URL
-          # base64 of https://mcp-gateway.example.com
-          value: aHR0cHM6Ly9tY3AtZ2F0ZXdheS5leGFtcGxlLmNvbQ==
+          # base64 of https://mcpregistry.example.com
+          value: aHR0cHM6Ly9tY3ByZWdpc3RyeS5leGFtcGxlLmNvbQ==
 
   - it: KEYCLOAK_EXTERNAL_URL is bare <domain> in path mode (no /keycloak, no /registry)
     templates:
@@ -180,7 +179,7 @@ tests:
           # base64 of https://example.com
           value: aHR0cHM6Ly9leGFtcGxlLmNvbQ==
 
-  - it: AUTH_SERVER_EXTERNAL_URL follows the configured registry subdomain
+  - it: AUTH_SERVER_EXTERNAL_URL in subdomain mode is the registry hostname
     templates:
       - charts/auth-server/templates/secret.yaml
     set:
@@ -189,12 +188,11 @@ tests:
         ingress:
           routingMode: subdomain
           tls: true
-          registrySubdomain: mcp-gateway
     asserts:
       - equal:
           path: data.AUTH_SERVER_EXTERNAL_URL
-          # base64 of https://mcp-gateway.example.com
-          value: aHR0cHM6Ly9tY3AtZ2F0ZXdheS5leGFtcGxlLmNvbQ==
+          # base64 of https://mcpregistry.example.com
+          value: aHR0cHM6Ly9tY3ByZWdpc3RyeS5leGFtcGxlLmNvbQ==
 
   - it: registry public URL and gateway server name follow the configured subdomain
     templates:
@@ -273,3 +271,102 @@ tests:
       - equal:
           path: data.ROOT_PATH
           value: ""
+
+  - it: KEYCLOAK_EXTERNAL_URL follows a custom registry subdomain
+    templates:
+      - templates/oauth-provider-secret.yaml
+    set:
+      global:
+        domain: example.com
+        ingress:
+          routingMode: subdomain
+          tls: true
+          registrySubdomain: mcp-gateway
+    asserts:
+      - equal:
+          path: data.KEYCLOAK_EXTERNAL_URL
+          value: aHR0cHM6Ly9tY3AtZ2F0ZXdheS5leGFtcGxlLmNvbQ==
+
+  - it: AUTH_SERVER_EXTERNAL_URL follows a custom registry subdomain
+    templates:
+      - charts/auth-server/templates/secret.yaml
+    set:
+      global:
+        domain: example.com
+        ingress:
+          routingMode: subdomain
+          tls: true
+          registrySubdomain: mcp-gateway
+    asserts:
+      - equal:
+          path: data.AUTH_SERVER_EXTERNAL_URL
+          value: aHR0cHM6Ly9tY3AtZ2F0ZXdheS5leGFtcGxlLmNvbQ==
+
+  - it: propagates additional hostnames to registry host configuration
+    templates:
+      - charts/registry/templates/secret.yaml
+    set:
+      global:
+        domain: example.com
+        ingress:
+          routingMode: subdomain
+          tls: true
+          registrySubdomain: mcp-gateway
+          additionalHostnames:
+            - alias.example.net
+    asserts:
+      - equal:
+          path: data.GATEWAY_ADDITIONAL_SERVER_NAMES
+          value: bWNwLWdhdGV3YXkuZXhhbXBsZS5jb20gYWxpYXMuZXhhbXBsZS5uZXQ=
+      - equal:
+          path: data.TRUSTED_EXTERNAL_HOSTS
+          value: YWxpYXMuZXhhbXBsZS5uZXQ=
+      - equal:
+          path: data.CORS_ALLOWED_ORIGINS
+          value: aHR0cHM6Ly9hbGlhcy5leGFtcGxlLm5ldA==
+
+  - it: propagates additional hostnames to auth-server trusted host configuration
+    templates:
+      - charts/auth-server/templates/secret.yaml
+    set:
+      global:
+        domain: example.com
+        ingress:
+          routingMode: subdomain
+          tls: true
+          additionalHostnames:
+            - alias.example.net
+    asserts:
+      - equal:
+          path: data.TRUSTED_EXTERNAL_HOSTS
+          value: YWxpYXMuZXhhbXBsZS5uZXQ=
+
+  - it: includes additional hostnames in bundled Keycloak configuration inputs
+    templates:
+      - charts/keycloak-configure/templates/secret.yaml
+    set:
+      global:
+        domain: example.com
+        ingress:
+          routingMode: subdomain
+          tls: true
+          additionalHostnames:
+            - alias.example.net
+    asserts:
+      - equal:
+          path: data.ADDITIONAL_REGISTRY_HOSTNAMES
+          value: YWxpYXMuZXhhbXBsZS5uZXQ=
+
+  - it: adds additional hostnames to Keycloak redirect, web-origin, and logout allowlists
+    templates:
+      - charts/keycloak-configure/templates/configmap.yaml
+    asserts:
+      - matchRegex:
+          path: data["script.sh"]
+          pattern: '(?s).*extra_redirect_uris\+=\$\(printf.*'
+      - matchRegex:
+          path: data["script.sh"]
+          pattern: '(?s).*extra_web_origins\+=\$\(printf.*'
+      - matchRegex:
+          path: data["script.sh"]
+          pattern: '(?s).*extra_logout_uris\+=.*'
