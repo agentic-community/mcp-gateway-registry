@@ -77,8 +77,12 @@ def make_client(monkeypatch):
 
 
 def _claims(**over):
+    # Shape of a token minted by the current auth-server: the canonical vault id
+    # travels in ``egress_user``. ``sub`` (the login username) is present but is
+    # NOT a fallback for it -- the vend refuses to cross that namespace.
     base = {
         "sub": "alice",
+        "egress_user": "alice",
         "auth_method": "oauth2",
         "upstream_url": "https://api.githubcopilot.com/mcp",
     }
@@ -153,6 +157,18 @@ class TestPatVend:
         client = make_client(_claims(egress_user="alice-oidc-sub"), _server())
         _post(client)
         assert client._svc.get_pat_kwargs["user_id"] == "alice-oidc-sub"
+
+    def test_missing_egress_user_claim_consents_without_vend(self, make_client):
+        # pat keys the vault on the caller id; the token's username `sub` is a
+        # different namespace, so a token without egress_user is refused.
+        claims = _claims()
+        del claims["egress_user"]
+        client = make_client(claims, _server())
+        r = _post(client)
+        assert r.status_code == 200
+        assert r.json()["consent_required"] is True
+        assert r.json()["access_token"] is None
+        assert not client._svc.get_pat_called
 
     def test_upstream_mismatch_403(self, make_client):
         # A forged upstream not in the registered set -> refuse before vend.

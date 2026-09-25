@@ -327,6 +327,21 @@ class TestPerProviderWiring:
             claims = provider.validate_id_token(token)
         assert claims["email"] == "alice@example.com"
 
+    def test_auth0_extract_user_carries_subject(self):
+        """The id_token sub becomes the session subject the egress vault keys on."""
+        from providers.auth0 import Auth0Provider
+
+        provider = Auth0Provider(
+            domain="example.auth0.com",
+            client_id="auth0-client",
+            client_secret="secret",  # noqa: S106 - test fixture
+        )
+        private_key, jwks = _build_keypair()
+        token = _sign_id_token(private_key, _base_claims(provider.issuer, provider.client_id))
+        with patch.object(provider, "get_jwks", return_value=jwks):
+            user = provider.extract_user_from_tokens({"id_token": token, "access_token": "x"})
+        assert user["subject"] == "user-123"
+
     def test_auth0_extract_user_rejects_forged_token(self):
         """extract_user_from_tokens must propagate verification failure (fail closed)."""
         from providers.auth0 import Auth0Provider

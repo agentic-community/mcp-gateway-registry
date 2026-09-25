@@ -678,9 +678,13 @@ async def vend_egress_token(
     # which /validate stamps identically into the consent-write and vend tokens
     # so one human maps to one bucket across providers (see _canonical_egress_user
     # in auth_server; the browser-consent and bearer-vend paths otherwise diverged
-    # when an IdP omits preferred_username from access tokens, e.g. Entra). Fall
-    # back to ``sub`` for tokens minted before this claim existed.
-    sub = claims.get("egress_user") or claims.get("sub") or ""
+    # when an IdP omits preferred_username from access tokens, e.g. Entra). There
+    # is deliberately NO fallback to ``sub``: the mcp-proxy token's ``sub`` is the
+    # login username, a different identifier namespace from the OIDC sub the
+    # consent path wrote, so falling back would key the vault on a second identity
+    # for the same human (silent miss, 0 tools). A per-user caller without the
+    # claim fails closed and is logged below.
+    sub = claims.get("egress_user") or ""
     auth_method = claims.get("auth_method") or ""
     token_upstream = claims.get("upstream_url") or ""
 
@@ -721,6 +725,21 @@ async def vend_egress_token(
         )
 
     egress_oauth = server["egress_oauth"]
+
+    # A per-user principal with no resolved vault id: refuse rather than guess.
+    # Reachable for tokens minted before the ``egress_user`` claim existed; those
+    # expire within one short token TTL, and the next mint carries the claim, so
+    # this is self-healing. Log it -- the previous cross-namespace fallback made
+    # this failure completely invisible. obo_exchange is exempt: it is stateless,
+    # never reads the vault, and the exchange keys on the raw ingress JWT.
+    if not sub and egress_mode != "obo_exchange":
+        logger.warning(
+            "egress vend: per-user auth_method %r with no egress_user claim for %s "
+            "-> consent (refusing to key the vault on the token's username sub)",
+            auth_method,
+            server_path,
+        )
+        return EgressTokenResponse(consent_required=True)
 
     # pat: vend the stored per-user PAT. This branch runs BEFORE oauth_user so a
     # pat server is never routed through svc.get_valid_token (which resolves an

@@ -2680,6 +2680,14 @@ class TestOAuth2CallbackTokenStorage:
 
         return captured, session_cookie
 
+    def test_login_without_subject_warns(self, caplog):
+        # The mocked map_user_info yields no subject: bearer tokens minted from
+        # this session will be refused at the egress vend, so say so at login.
+        with caplog.at_level("WARNING"):
+            kwargs, _cookie = self._call_oauth2_callback()
+        assert kwargs["subject"] is None
+        assert any("yielded no subject" in rec.getMessage() for rec in caplog.records)
+
     def test_id_token_persisted_in_session_store(self):
         """id_token is always passed to the session store (regression guard
         for SSO logout via id_token_hint). access_token / refresh_token are
@@ -2705,6 +2713,49 @@ class TestOAuth2CallbackTokenStorage:
             f"{self.COOKIE_SIZE_CEILING_BYTES}. The server-side session store "
             "should keep this small."
         )
+
+
+class TestMapUserInfoSubject:
+    """The session subject keys the egress vault; map_user_info must resolve it
+    for userinfo endpoints that are not OIDC and have no ``sub``."""
+
+    _BASE_CONFIG = {
+        "username_claim": "login",
+        "email_claim": "email",
+        "name_claim": "name",
+        "groups_claim": None,
+    }
+
+    def test_defaults_to_sub(self):
+        from auth_server.server import map_user_info
+
+        mapped = map_user_info({"sub": "oidc-sub-1", "login": "alice"}, self._BASE_CONFIG)
+        assert mapped["subject"] == "oidc-sub-1"
+
+    def test_subject_claim_selects_field_and_stringifies(self):
+        # GitHub /user: no "sub"; the stable id is the integer "id".
+        from auth_server.server import map_user_info
+
+        config = {**self._BASE_CONFIG, "subject_claim": "id"}
+        mapped = map_user_info({"id": 583231, "login": "octocat"}, config)
+        assert mapped["subject"] == "583231"
+        assert mapped["username"] == "octocat"
+
+    @pytest.mark.parametrize("user_info", [{"login": "alice"}, {"sub": "", "login": "alice"}])
+    def test_missing_subject_is_none(self, user_info):
+        from auth_server.server import map_user_info
+
+        assert map_user_info(user_info, self._BASE_CONFIG)["subject"] is None
+
+    @pytest.mark.parametrize("provider", ["github", "google"])
+    def test_non_oidc_userinfo_providers_configure_subject_claim(self, provider):
+        from pathlib import Path
+
+        import yaml
+
+        config_path = Path(__file__).parents[3] / "auth_server" / "oauth2_providers.yml"
+        providers = yaml.safe_load(config_path.read_text())["providers"]
+        assert providers[provider]["subject_claim"] == "id"
 
 
 class TestOAuth2CallbackIdTokenVerification:
