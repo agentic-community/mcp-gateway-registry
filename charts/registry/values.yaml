@@ -1,5 +1,13 @@
 # Global configuration
 global:
+  # Secret generation switch shared with the umbrella chart. true (default)
+  # generates unresolved secret values randomly and preserves them across
+  # `helm upgrade` via `lookup`. Set false for ArgoCD and other
+  # `helm template` based tools, which render without cluster access: there the
+  # lookup is always empty, so a generated value would differ on every sync.
+  # With generation off, an unresolved value is a render-time error naming the
+  # value to set.
+  generateSecrets: true
   image:
     # Container registry (host + optional namespace). Shared default across subcharts.
     registry: public.ecr.aws/p3v1o3c6
