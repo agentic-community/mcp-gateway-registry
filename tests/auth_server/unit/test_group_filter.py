@@ -9,6 +9,7 @@ Covers the login-time IdP group filter:
   unmapped.
 """
 
+import logging
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -108,3 +109,119 @@ class TestFilterSessionGroups:
                     username_hash="h",
                 )
         assert result == []
+
+
+class TestGroupNameNormalization:
+    """Group names are compared in canonical form on both sides (issue #1689).
+
+    Keycloak's Group Membership mapper emits full paths (``/mcp-admins``) when
+    *Full group path* is on. Before normalisation such a claim matched nothing
+    and was silently dropped from the session.
+    """
+
+    @pytest.mark.asyncio
+    async def test_full_path_claim_matches_bare_mapping(self):
+        """``/mcp-admins`` in the claim must match ``mcp-admins`` in the mapping."""
+        repo = _make_scope_repo({"mcp-admins", "mcp-techs"})
+        with patch.object(group_filter, "ALLOWED_IDP_GROUPS", []):
+            with patch("registry.repositories.factory.get_scope_repository", return_value=repo):
+                result = await group_filter.filter_session_groups(
+                    ["/mcp-admins", "/unrelated"],
+                    username_hash="h",
+                )
+        assert result == ["mcp-admins"]
+
+    @pytest.mark.asyncio
+    async def test_bare_claim_matches_full_path_mapping(self):
+        """The reverse: a mapping stored with a slash still matches a bare claim."""
+        repo = _make_scope_repo({"/mcp-admins"})
+        with patch.object(group_filter, "ALLOWED_IDP_GROUPS", []):
+            with patch("registry.repositories.factory.get_scope_repository", return_value=repo):
+                result = await group_filter.filter_session_groups(
+                    ["mcp-admins"],
+                    username_hash="h",
+                )
+        assert result == ["mcp-admins"]
+
+    @pytest.mark.asyncio
+    async def test_returned_names_are_canonical(self):
+        """The session stores the canonical form, not the raw claim."""
+        repo = _make_scope_repo({"mcp-admins"})
+        with patch.object(group_filter, "ALLOWED_IDP_GROUPS", []):
+            with patch("registry.repositories.factory.get_scope_repository", return_value=repo):
+                result = await group_filter.filter_session_groups(
+                    [" /mcp-admins/ "],
+                    username_hash="h",
+                )
+        assert result == ["mcp-admins"]
+
+    @pytest.mark.asyncio
+    async def test_allowlist_matches_full_path_claim(self):
+        """Design B entries cannot contain slashes, so the claim is canonicalised."""
+        with patch.object(group_filter, "ALLOWED_IDP_GROUPS", ["keep-a"]):
+            result = await group_filter.filter_session_groups(
+                ["/keep-a", "/drop-x"],
+                username_hash="h",
+            )
+        assert result == ["keep-a"]
+
+    @pytest.mark.asyncio
+    async def test_duplicate_forms_collapse(self):
+        """``/team`` and ``team`` in the same claim are one group."""
+        repo = _make_scope_repo({"team"})
+        with patch.object(group_filter, "ALLOWED_IDP_GROUPS", []):
+            with patch("registry.repositories.factory.get_scope_repository", return_value=repo):
+                result = await group_filter.filter_session_groups(
+                    ["/team", "team"],
+                    username_hash="h",
+                )
+        assert result == ["team"]
+
+
+class TestDroppedGroupsAreLogged:
+    """A dropped group must be named, not just counted (issue #1689).
+
+    ``5 -> 1`` cannot tell an operator which group went missing, and every
+    later log line faithfully reports the reduced set. This is the one place
+    the information still exists.
+    """
+
+    @pytest.mark.asyncio
+    async def test_scope_derived_drop_names_the_groups(self, caplog):
+        repo = _make_scope_repo({"mcp-admins"})
+        with patch.object(group_filter, "ALLOWED_IDP_GROUPS", []):
+            with patch("registry.repositories.factory.get_scope_repository", return_value=repo):
+                with caplog.at_level(logging.WARNING, logger="auth_server.group_filter"):
+                    await group_filter.filter_session_groups(
+                        ["mcp-admins", "/finance-team", "hr-team"],
+                        username_hash="h",
+                    )
+        warnings = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+        assert any("dropped 2 group(s)" in m for m in warnings), warnings
+        assert any("finance-team" in m and "hr-team" in m for m in warnings), warnings
+
+    @pytest.mark.asyncio
+    async def test_allowlist_drop_names_the_groups(self, caplog):
+        with patch.object(group_filter, "ALLOWED_IDP_GROUPS", ["keep-a"]):
+            with caplog.at_level(logging.WARNING, logger="auth_server.group_filter"):
+                await group_filter.filter_session_groups(
+                    ["keep-a", "drop-x"],
+                    username_hash="h",
+                )
+        warnings = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+        assert any("drop-x" in m for m in warnings), warnings
+
+    @pytest.mark.asyncio
+    async def test_nothing_dropped_logs_no_warning(self, caplog):
+        """A clean pass must not cry wolf."""
+        repo = _make_scope_repo({"mcp-admins", "mcp-techs"})
+        with patch.object(group_filter, "ALLOWED_IDP_GROUPS", []):
+            with patch("registry.repositories.factory.get_scope_repository", return_value=repo):
+                with caplog.at_level(logging.INFO, logger="auth_server.group_filter"):
+                    await group_filter.filter_session_groups(
+                        ["mcp-admins", "mcp-techs"],
+                        username_hash="h",
+                    )
+        assert not [r for r in caplog.records if r.levelno == logging.WARNING]
+        infos = [r.message for r in caplog.records if r.levelno == logging.INFO]
+        assert any("2 -> 2" in m for m in infos), infos
