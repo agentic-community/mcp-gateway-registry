@@ -33,6 +33,9 @@ global:
     type: keycloak
     keycloak:
       adminUsername: user
+      # Realm hosting the admin user (its token endpoint authenticates
+      # KEYCLOAK_ADMIN), NOT the realm being administered (realm below).
+      adminRealm: master
       realm: mcp-gateway
 # Per-service image configuration
 # Any field left empty falls back to the corresponding global.image.* value.

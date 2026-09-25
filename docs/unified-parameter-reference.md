@@ -329,6 +329,7 @@ that server's Connect dialog:
 | Admin URL | `KEYCLOAK_ADMIN_URL` | — | — | Used by setup scripts. |
 | Realm | `KEYCLOAK_REALM` | — | `global.authProvider.keycloak.realm` / `auth-server.keycloak.realm` | e.g. `mcp-gateway`. |
 | Admin username | `KEYCLOAK_ADMIN` | `keycloak_admin` | `global.authProvider.keycloak.adminUsername` | — |
+| Admin realm | `KEYCLOAK_ADMIN_REALM` | `keycloak_admin_realm` | `global.authProvider.keycloak.adminRealm` | Realm hosting the admin user; defaults to `master`. Honoured by the registry, all provisioning scripts, and the keycloak-configure Job (`keycloak-configure.keycloak.adminRealm`). |
 | Admin password **(secret)** | `KEYCLOAK_ADMIN_PASSWORD` | `keycloak_admin_password` | (auto-generated, stored in `<release>-keycloak` secret) | — |
 | DB password **(secret)** | `KEYCLOAK_DB_PASSWORD` | `keycloak_database_password` | (auto-generated, stored in `<release>-keycloak-postgresql` secret) | — |
 | DB username | — | `keycloak_database_username` | — | — |

@@ -103,6 +103,7 @@ tab_visible = REGISTRY_MODE enables the feature AND SHOW_*_TAB is true
 | `KEYCLOAK_ADMIN_URL` | Keycloak admin URL (for setup scripts) | `http://localhost:8080` | ✅ |
 | `KEYCLOAK_REALM` | Keycloak realm name | `mcp-gateway` | ✅ |
 | `KEYCLOAK_ADMIN` | Keycloak admin username | `admin` | ✅ |
+| `KEYCLOAK_ADMIN_REALM` | Realm that hosts `KEYCLOAK_ADMIN`, i.e. the realm whose token endpoint authenticates it. Not the realm being administered — leave as `master` unless the admin user lives in another realm | `master` | ❌ (defaults to `master`) |
 | `KEYCLOAK_ADMIN_PASSWORD` | Keycloak admin password | `SecureKeycloakAdmin123!` | ✅ |
 | `KEYCLOAK_DB_PASSWORD` | Keycloak database password | `SecureKeycloakDB123!` | ✅ |
 | `KEYCLOAK_CLIENT_ID` | Keycloak web client ID (see note below) | `mcp-gateway-web` | ✅ |

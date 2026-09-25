@@ -502,6 +502,7 @@ _initialize_keycloak() {
 
     # Export variables for init-keycloak.sh
     export KEYCLOAK_ADMIN_URL
+    export KEYCLOAK_ADMIN_REALM="${KEYCLOAK_ADMIN_REALM:-master}"
     export REGISTRY_URL
     export AUTH_SERVER_EXTERNAL_URL
     export AWS_REGION

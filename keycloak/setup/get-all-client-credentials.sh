@@ -43,8 +43,9 @@ print_info "Retrieving all client credentials from realm: $KEYCLOAK_REALM"
 
 # Get admin access token
 print_info "Getting admin token..."
+KEYCLOAK_ADMIN_REALM="${KEYCLOAK_ADMIN_REALM:-master}"
 TOKEN_RESPONSE=$(curl -s -X POST \
-    "${KEYCLOAK_URL}/realms/master/protocol/openid-connect/token" \
+    "${KEYCLOAK_URL}/realms/${KEYCLOAK_ADMIN_REALM}/protocol/openid-connect/token" \
     -H "Content-Type: application/x-www-form-urlencoded" \
     -d "username=${KEYCLOAK_ADMIN}" \
     -d "password=${KEYCLOAK_ADMIN_PASSWORD}" \
