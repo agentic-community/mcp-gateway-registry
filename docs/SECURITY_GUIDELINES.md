@@ -287,6 +287,25 @@ sanitizer that isn't called) is equivalent to no check.
   return the handler's error shape, do not raise. Query parameters are lower risk
   (they don't traverse the path), but still reject absolute (`/`-leading) and
   `..`-containing values as defense-in-depth.
+- **Never interpolate untrusted data into a shell-embedded interpreter string,
+  a heredoc body, or `eval`; pass it as DATA on stdin/argv/a file.** A shell
+  script that builds `python3 -c "... json.loads('''$config_json''') ..."` or
+  `eval "$cmd"` from registrant/remote-controlled input is a code-execution sink:
+  a value containing `'''`, `$(...)`, backticks, `${IFS}`, or a quote breaks
+  out of the literal and runs as Python or shell — with the whole process
+  environment (`.env`) in reach. This is doubly severe when the input is fetched
+  unauthenticated (e.g. a public registry the import pipeline expands). Fix at the
+  root: pipe the payload to a real script/module entrypoint on **stdin** (or read
+  it from a file) and `json.loads` it there; pass any script-controlled selector
+  as an **argv** value (argv/stdin are data, never re-parsed as code). Replace
+  `eval` with a bash **array** invocation (`cmd=(prog --flag "$value"); "${cmd[@]}"`)
+  so each argument is one token. A quoted heredoc (`<<'PY'`) is safe only because
+  the shell does not expand its body — still read variable data via `sys.argv`/
+  `os.environ`/stdin, not by interpolating into the body. Also validate
+  remote-derived fields at the transformer/source (reject non-http(s) URLs,
+  whitespace, and control characters) and fail closed, so a malformed definition
+  is rejected rather than propagated. Sweep the WHOLE pipeline — every sibling
+  `python3 -c`/`eval` site, not just the reported one.
 
 ## Authorization & ownership
 
