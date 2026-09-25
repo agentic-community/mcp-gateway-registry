@@ -470,6 +470,31 @@ class HealthMonitoringService:
                 return previous_status != new_status
         server_info = await _with_backend_oauth(server_info)
 
+        # Same principle as the gate above, one step later: a designated discovery
+        # identity whose vaulted token is gone is also a misconfiguration the
+        # registry can name with certainty, but only AFTER the resolver has tried.
+        #
+        # Probing anyway is what made this state invisible. The server needs a
+        # credential to answer at all (tier 2 applies only when no static scheme is
+        # set), so the probe fails, the tool fetch returns nothing, and num_tools
+        # KEEPS ITS PREVIOUS VALUE. One deployment sat at "45 tools" for five hours
+        # after the vault lost the token, while the only signal was a log line.
+        # Naming it here puts the cause on the operator's screen instead.
+        # Mirror resolve_discovery_bearer's own precondition exactly. It bows out when
+        # an explicit static scheme exists, because that operator-chosen credential
+        # wins -- so a server with BOTH a designation and a stored bearer resolves no
+        # discovery token and is still perfectly healthy. Gating on the designation
+        # alone would mark those unhealthy and manufacture an outage.
+        if (
+            (server_info.get("oauth_discovery") or {}).get("enabled")
+            and (server_info.get("auth_scheme") or "none") == "none"
+            and not server_info.get(_BACKEND_OAUTH_TOKEN_KEY)
+        ):
+            new_status = "unhealthy: discovery identity designated but not connected"
+            self.server_health_status[service_path] = new_status
+            self.server_last_check_time[service_path] = datetime.now(UTC)
+            return previous_status != new_status
+
         try:
             # Try to reach the service endpoint using transport-aware checking
             is_healthy, status_detail = await self._check_server_endpoint_transport_aware(
