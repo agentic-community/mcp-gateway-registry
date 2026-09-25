@@ -92,6 +92,19 @@ Registry metadata used for federation, discovery, and the header UI.
 | Contact / docs URL | `REGISTRY_CONTACT_URL` | `registry_contact_url` | `registry.registryCard.contactUrl` | Optional link. |
 | Federation registry id | — (set at runtime via API) | `registry_id` | `global.federation.registryId` / `registry.app.registryId` | Unique identifier for this instance in peer federation. |
 
+### Registry Ingress Hostnames (Helm / Kubernetes)
+
+The stack and standalone Registry charts expose these values under `global.ingress`.
+Additional hostnames are aliases for the same registry backend; DNS and TLS
+coverage must be configured separately. The chart propagates aliases to the
+registry/auth-server trusted-host allowlists, registry CORS origins, nginx server
+names, and (when using bundled Keycloak) OAuth redirect and web-origin settings.
+
+| Helm value | Purpose |
+|------------|---------|
+| `global.ingress.registrySubdomain` | Host prefix used in subdomain routing mode. Defaults to `mcpregistry`, preserving `<prefix>.<global.domain>`. Ignored in path routing mode. |
+| `global.ingress.additionalHostnames` | Optional list of full hostnames to add to the Registry Ingress and associated application/auth configuration. Example: `- mcp-registry.example.com`. |
+
 ---
 
 ## Group 2 — Deployment Mode & UI Visibility
