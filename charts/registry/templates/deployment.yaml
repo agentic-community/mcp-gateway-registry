@@ -408,6 +408,10 @@ spec:
             - name: AWS_EC2_METADATA_DISABLED
               value: "true"
             {{- end }}
+            # Scan-failure policy for servers, agents and skills. No `default`
+            # filter, for the same reason as above: false must reach the pod.
+            - name: SECURITY_BLOCK_ON_SCAN_FAILURE
+              value: {{ .Values.app.securityBlockOnScanFailure | toString | quote }}
             # Embeddings IdP auth (issue #1415). Rendered only when authMode is set,
             # so default deployments are unchanged. EMBEDDINGS_IDP_CLIENT_SECRET is
             # sourced from a pre-created Secret (embeddings.idpClientSecretExistingSecret).
