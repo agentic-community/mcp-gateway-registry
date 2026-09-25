@@ -24,6 +24,10 @@ global:
     sslPolicy:
     tls: false
     routingMode: subdomain
+    # Registry hostname prefix used in subdomain mode.
+    registrySubdomain: mcpregistry
+    # Optional full hostnames served by the registry Ingress.
+    additionalHostnames: []
     paths:
       registry: /registry
   # Auth provider used by the registry. Defaults match the umbrella's

@@ -75,6 +75,12 @@ global:
     # - subdomain: mcpregistry.domain.com
     # - path:      domain.com/registry
     routingMode: subdomain
+    # Registry hostname prefix used in subdomain mode. The default preserves
+    # the original chart behavior: mcpregistry.<domain>.
+    registrySubdomain: mcpregistry
+    # Optional additional hostnames served by the same registry Ingress. These
+    # are full hostnames, not prefixes, and use the same backend and paths.
+    additionalHostnames: []
     # Path prefixes used when routingMode: path. Keycloak's browser path
     # (/keycloak) is not configurable here — it's pinned by the registry
     # pod's nginx config and the stack templates that emit

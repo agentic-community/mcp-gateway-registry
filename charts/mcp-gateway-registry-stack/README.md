@@ -202,7 +202,15 @@ global:
   domain: "yourdomain.com"
   ingress:
     routingMode: subdomain
+    registrySubdomain: mcpregistry
+    additionalHostnames: []
 ```
+
+`registrySubdomain` controls the registry hostname prefix used by the Ingress
+and generated public URLs (OAuth callbacks, auth-server, and gateway URLs). It
+defaults to `mcpregistry`, preserving the default `mcpregistry.{domain}` hostname.
+`additionalHostnames` optionally adds full hostnames to the same registry
+Ingress and backend. Each hostname must also have DNS and TLS coverage.
 
 **DNS Requirements:** Configure A/CNAME records for each subdomain pointing to your ingress load balancer.
 
@@ -224,6 +232,7 @@ global:
     routingMode: path
     paths:
       registry: /registry   # Customize as needed (e.g., /api)
+    additionalHostnames: []
 ```
 
 Only the registry service exposes a public ingress. auth-server,
