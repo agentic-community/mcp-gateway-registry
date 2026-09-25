@@ -205,3 +205,22 @@ class TestGetGroupMappingsBulk:
     async def test_error_returns_empty(self, repo, mock_collection):
         mock_collection.find.side_effect = Exception("db error")
         assert await repo.get_group_mappings_bulk(["g-a"]) == []
+
+    async def test_full_path_claim_queries_both_forms(self, repo, mock_collection):
+        """A Keycloak full-path claim must match a mapping stored in either form.
+
+        ``/mcp-admins`` in the claim, ``mcp-admins`` in the document (or the
+        reverse) matched nothing before normalisation (issue #1689). The query
+        carries both forms so no data migration is needed.
+        """
+        mock_collection.find.return_value = _make_cursor([])
+        await repo.get_group_mappings_bulk(["/mcp-admins"])
+        mock_collection.find.assert_called_once_with(
+            {"group_mappings": {"$in": ["/mcp-admins", "mcp-admins"]}}
+        )
+
+    async def test_canonical_claim_queries_single_form(self, repo, mock_collection):
+        """A claim already in canonical form does not bloat the query."""
+        mock_collection.find.return_value = _make_cursor([])
+        await repo.get_group_mappings_bulk(["mcp-admins"])
+        mock_collection.find.assert_called_once_with({"group_mappings": {"$in": ["mcp-admins"]}})

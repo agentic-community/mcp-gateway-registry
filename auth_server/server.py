@@ -121,6 +121,7 @@ from registry.core.config import settings
 # Configure logging using shared module (RotatingFileHandler + optional MongoDB)
 from registry.exceptions import UrlValidationError
 from registry.repositories.factory import get_scope_repository, get_server_repository
+from registry.utils.group_names import normalize_group_name, normalize_group_names
 from registry.utils.logging_setup import setup_logging as _setup_logging
 from registry.utils.request_utils import get_client_ip
 from registry.utils.url_guard import PROXY_PROFILE, guarded_async_client
@@ -1837,9 +1838,13 @@ async def map_groups_to_scopes(groups: list[str]) -> list[str]:
         logger.debug(f"Mapped {len(groups)} groups to scopes: {scopes}")
     except Exception as e:
         logger.error(f"Error querying group mappings from DocumentDB: {e}", exc_info=True)
-        # Fall back to in-memory config if DocumentDB query fails
-        group_mappings = SCOPES_CONFIG.get("group_mappings", {})
-        for group in groups:
+        # Fall back to in-memory config if DocumentDB query fails. Compare on
+        # the canonical group name, as the repository path does (issue #1689).
+        group_mappings = {
+            normalize_group_name(name): mapped
+            for name, mapped in SCOPES_CONFIG.get("group_mappings", {}).items()
+        }
+        for group in normalize_group_names(groups):
             if group in group_mappings:
                 group_scopes = group_mappings[group]
                 scopes.extend(group_scopes)
