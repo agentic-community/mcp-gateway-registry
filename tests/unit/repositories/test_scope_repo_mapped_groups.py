@@ -62,6 +62,18 @@ class TestDocumentDBMappedGroups:
         result = await doc_repo.get_all_mapped_group_names()
         assert result == {"ai_admins", "platform-eng", "all-eng"}
 
+    async def test_includes_canonical_form_of_stored_names(self, doc_repo, mock_collection):
+        """A mapping stored as ``/team`` is returned as both ``/team`` and ``team``.
+
+        The login filter tests membership against this set, so a bare claim
+        must find a mapping that was stored with a slash (issue #1689).
+        """
+        mock_collection.find.return_value = _make_cursor(
+            [{"_id": "s", "group_mappings": ["/team", "plain"]}]
+        )
+        result = await doc_repo.get_all_mapped_group_names()
+        assert result == {"/team", "team", "plain"}
+
     async def test_uses_projection_query(self, doc_repo, mock_collection):
         mock_collection.find.return_value = _make_cursor([])
         await doc_repo.get_all_mapped_group_names()
