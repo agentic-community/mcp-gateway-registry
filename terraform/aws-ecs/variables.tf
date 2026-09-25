@@ -2417,3 +2417,28 @@ variable "gateway_generic_stream_max_bytes" {
     error_message = "gateway_generic_stream_max_bytes must be at least 1024."
   }
 }
+
+# Go /validate fast-path sidecar (issue #1652) - opt-in; see modules/mcp-gateway.
+variable "validate_fast_path_enabled" {
+  description = "Deploy the go-validate fast-path sidecar in the auth-server task and route nginx /validate to it. Default false (unchanged behavior)."
+  type        = bool
+  default     = false
+}
+
+variable "validate_fast_path_image_uri" {
+  description = "Container image URI for the go-validate sidecar."
+  type        = string
+  default     = "public.ecr.aws/p3v1o3c6/go-validate:latest"
+}
+
+variable "validate_fast_path_audience" {
+  description = "Optional override for the go-validate fast-path accepted audiences (comma/space-separated). Empty auto-derives from the Keycloak client ids + \"mcp-gateway\", matching Python. \"account\" is refused (cross-client confused-deputy)."
+  type        = string
+  default     = ""
+}
+
+variable "validate_upstream_url" {
+  description = "nginx /validate upstream for the registry. Empty -> auth-server. Set to http://go-validate:8899 when validate_fast_path_enabled = true."
+  type        = string
+  default     = ""
+}

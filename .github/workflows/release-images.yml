@@ -37,12 +37,18 @@ jobs:
         include:
           - service: auth-server
             dockerfile: docker/Dockerfile.auth
+            context: .
           - service: registry
             dockerfile: docker/Dockerfile.registry
+            context: .
           - service: mcpgw
             dockerfile: docker/Dockerfile.mcp-server
+            context: .
             extra_build_args: |-
               SERVER_DIR=servers/mcpgw
+          - service: go-validate
+            dockerfile: go-validate/Dockerfile
+            context: go-validate
 
     steps:
       - name: Checkout code
@@ -86,7 +92,7 @@ jobs:
         id: push
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
-          context: .
+          context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
           push: true
           platforms: linux/amd64,linux/arm64

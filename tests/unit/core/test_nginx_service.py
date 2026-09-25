@@ -2637,3 +2637,227 @@ async def test_proxy_ssl_placeholder_is_substituted_end_to_end(
         f"{conf_path.name} (pingfederate): {{{{PINGFEDERATE_PROXY_SSL}}}} placeholder was NOT "
         "substituted -- the .replace() wiring in _render_config_impl is broken."
     )
+
+
+# =============================================================================
+# VALIDATE_UPSTREAM_URL PLACEHOLDER SUBSTITUTION (go-validate sidecar, #1652)
+# =============================================================================
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_generate_config_async_validate_upstream_set(
+    nginx_service, sample_servers, mock_health_service, mock_atomic_write
+):
+    """VALIDATE_UPSTREAM_URL routes only /validate to the go-validate sidecar."""
+    template_content = """
+server {
+    proxy_pass http://{{VALIDATE_UPSTREAM_HOST}}:{{VALIDATE_UPSTREAM_PORT}}/validate;
+    proxy_pass http://{{AUTH_SERVER_HOST}}:{{AUTH_SERVER_PORT}}/oauth2/login/keycloak;
+{{LOCATION_BLOCKS}}
+}
+"""
+    with patch.object(nginx_service.nginx_template_path, "exists", return_value=True):
+        with patch("builtins.open", mock_open(read_data=template_content)):
+            with patch("registry.health.service.health_service", mock_health_service):
+                mock_health_service.server_health_status = {}
+                with patch.object(nginx_service, "get_additional_server_names", return_value=""):
+                    with patch.object(nginx_service, "reload_nginx", return_value=True):
+                        env_values = {
+                            "AUTH_PROVIDER": "keycloak",
+                            "KEYCLOAK_URL": "http://keycloak:8080",
+                            "AUTH_SERVER_URL": "http://auth-server:8888",
+                            "VALIDATE_UPSTREAM_URL": "http://go-validate:8899",
+                            "NGINX_DISABLE_API_AUTH_REQUEST": "false",
+                        }
+                        with (
+                            patch(
+                                "os.environ.get",
+                                side_effect=lambda key, default=None: env_values.get(key, default),
+                            ),
+                            patch(
+                                "registry.core.nginx_service._resolve_upstream_host",
+                                return_value="10.0.9.9",
+                            ),
+                        ):
+                            result = await nginx_service.generate_config_async(sample_servers)
+
+                            assert result is True
+                            written = mock_atomic_write.call_args_list[0][0][1]
+                            # /validate goes to the sidecar, as a resolved address...
+                            assert "http://10.0.9.9:8899/validate;" in written
+                            # ...while /oauth2/* still goes to the auth-server.
+                            assert "http://auth-server:8888/oauth2/login/keycloak;" in written
+                            assert "{{VALIDATE_UPSTREAM_HOST}}" not in written
+                            assert "{{VALIDATE_UPSTREAM_PORT}}" not in written
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_generate_config_async_validate_upstream_defaults_to_auth(
+    nginx_service, sample_servers, mock_health_service, mock_atomic_write
+):
+    """When VALIDATE_UPSTREAM_URL is unset, /validate defaults to the auth-server."""
+    template_content = """
+server {
+    proxy_pass http://{{VALIDATE_UPSTREAM_HOST}}:{{VALIDATE_UPSTREAM_PORT}}/validate;
+{{LOCATION_BLOCKS}}
+}
+"""
+    with patch.object(nginx_service.nginx_template_path, "exists", return_value=True):
+        with patch("builtins.open", mock_open(read_data=template_content)):
+            with patch("registry.health.service.health_service", mock_health_service):
+                mock_health_service.server_health_status = {}
+                with patch.object(nginx_service, "get_additional_server_names", return_value=""):
+                    with patch.object(nginx_service, "reload_nginx", return_value=True):
+                        env_values = {
+                            "AUTH_PROVIDER": "keycloak",
+                            "KEYCLOAK_URL": "http://keycloak:8080",
+                            "AUTH_SERVER_URL": "http://auth-server:8888",
+                            "NGINX_DISABLE_API_AUTH_REQUEST": "false",
+                        }
+                        with patch(
+                            "os.environ.get",
+                            side_effect=lambda key, default=None: env_values.get(key, default),
+                        ):
+                            result = await nginx_service.generate_config_async(sample_servers)
+
+                            assert result is True
+                            written = mock_atomic_write.call_args_list[0][0][1]
+                            assert "http://auth-server:8888/validate;" in written
+                            assert "{{VALIDATE_UPSTREAM_HOST}}" not in written
+
+
+@pytest.mark.unit
+def test_shipped_templates_never_name_a_dns_upstream_in_proxy_pass():
+    """No `proxy_pass` in a shipped template may contain a resolvable-at-load hostname.
+
+    Only loopback literals and `{{...}}` placeholders are allowed. A placeholder is
+    fine because nginx_service substitutes a resolved ADDRESS, never a name --
+    Service Connect names cannot be resolved by nginx at all (issue #1652):
+
+    * a literal name is resolved by nginx at config-load time, so a sidecar name
+      that is not answering yet fails `nginx -t`, the candidate config is
+      rejected, and the registry exits;
+    * a variable upstream defers to nginx's `resolver`, which queries a
+      nameserver directly and never sees Service Connect names (they resolved
+      IPv6-only through glibc, while the template sets `ipv6=off`).
+    """
+    import re
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parents[3]
+    templates = [
+        repo / "docker" / "nginx_rev_proxy_http_only.conf",
+        repo / "docker" / "nginx_rev_proxy_http_and_https.conf",
+    ]
+    offender = re.compile(
+        r"^\s*proxy_pass\s+https?://(?!127\.0\.0\.1|localhost|\{\{)([A-Za-z][A-Za-z0-9_.-]*)",
+        re.MULTILINE,
+    )
+    for tpl in templates:
+        hits = offender.findall(tpl.read_text())
+        assert not hits, (
+            f"{tpl.name} names DNS upstream(s) {sorted(set(hits))} in proxy_pass; "
+            "substitute a resolved address instead (see _resolve_upstream_host)"
+        )
+
+
+@pytest.mark.unit
+def test_shipped_templates_use_the_validate_placeholder():
+    """Both templates take the /validate upstream as a substituted address."""
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parents[3]
+    for name in ("nginx_rev_proxy_http_only.conf", "nginx_rev_proxy_http_and_https.conf"):
+        body = (repo / "docker" / name).read_text()
+        assert (
+            "proxy_pass http://{{VALIDATE_UPSTREAM_HOST}}:{{VALIDATE_UPSTREAM_PORT}}/validate;"
+            in body
+        ), name
+        # the variable form must not come back: nginx's resolver cannot see SC names
+        assert "proxy_pass http://$validate_upstream" not in body, name
+
+
+@pytest.mark.unit
+def test_resolve_upstream_host_returns_ipv4_plain_and_ipv6_bracketed():
+    """nginx requires IPv6 literals in brackets; IPv4 must stay bare."""
+    import socket
+    from unittest.mock import patch
+
+    from registry.core.nginx_service import _resolve_upstream_host
+
+    v4 = [(socket.AF_INET, None, None, "", ("10.0.1.2", 0))]
+    with patch("socket.getaddrinfo", return_value=v4):
+        assert _resolve_upstream_host("go-validate") == "10.0.1.2"
+
+    # Service Connect answers IPv6-only, which is what broke the deployment.
+    v6 = [(socket.AF_INET6, None, None, "", ("2600:f0f0::2", 0, 0, 0))]
+    with patch("socket.getaddrinfo", return_value=v6):
+        assert _resolve_upstream_host("go-validate") == "[2600:f0f0::2]"
+
+    # Both present -> prefer IPv4.
+    with patch("socket.getaddrinfo", return_value=v6 + v4):
+        assert _resolve_upstream_host("go-validate") == "10.0.1.2"
+
+
+@pytest.mark.unit
+def test_resolve_upstream_host_returns_none_when_unresolvable():
+    """An unresolvable name must be reported, not guessed at."""
+    from unittest.mock import patch
+
+    from registry.core.nginx_service import _resolve_upstream_host
+
+    with patch("socket.getaddrinfo", side_effect=OSError("Name or service not known")):
+        assert _resolve_upstream_host("nope-does-not-exist") is None
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_validate_upstream_falls_back_when_sidecar_name_unresolvable(
+    nginx_service, sample_servers, mock_health_service, mock_atomic_write
+):
+    """An unresolvable sidecar name must degrade to the auth-server, not break nginx.
+
+    This is the regression that took the registry down on ECS: emitting a name
+    nginx cannot resolve makes `nginx -t` reject the whole config, the registry
+    restores an unrendered template, and the task exits with no healthy targets.
+    A /validate on Python is correct-but-unaccelerated; a rejected config is an
+    outage.
+    """
+    template_content = """
+server {
+    proxy_pass http://{{VALIDATE_UPSTREAM_HOST}}:{{VALIDATE_UPSTREAM_PORT}}/validate;
+{{LOCATION_BLOCKS}}
+}
+"""
+    with patch.object(nginx_service.nginx_template_path, "exists", return_value=True):
+        with patch("builtins.open", mock_open(read_data=template_content)):
+            with patch("registry.health.service.health_service", mock_health_service):
+                mock_health_service.server_health_status = {}
+                with patch.object(nginx_service, "get_additional_server_names", return_value=""):
+                    with patch.object(nginx_service, "reload_nginx", return_value=True):
+                        env_values = {
+                            "AUTH_PROVIDER": "keycloak",
+                            "AUTH_SERVER_URL": "http://auth-server:8888",
+                            "VALIDATE_UPSTREAM_URL": "http://go-validate:8899",
+                            "NGINX_DISABLE_API_AUTH_REQUEST": "false",
+                        }
+                        with (
+                            patch(
+                                "os.environ.get",
+                                side_effect=lambda key, default=None: env_values.get(key, default),
+                            ),
+                            patch(
+                                "registry.core.nginx_service._resolve_upstream_host",
+                                return_value=None,
+                            ),
+                        ):
+                            result = await nginx_service.generate_config_async(sample_servers)
+
+                            assert result is True
+                            written = mock_atomic_write.call_args_list[0][0][1]
+                            # Fell back to the auth-server, and no unresolvable name leaked.
+                            assert "http://auth-server:8888/validate;" in written
+                            assert "go-validate" not in written
+                            assert "{{VALIDATE_UPSTREAM_HOST}}" not in written
