@@ -18,6 +18,7 @@ has to reach the registry container before the setting can take effect.
 """
 
 import importlib
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -237,3 +238,56 @@ def test_keycloak_realm_stays_separate(
 
     assert "KEYCLOAK_REALM" in env
     assert env["KEYCLOAK_REALM"] != env["KEYCLOAK_ADMIN_REALM"]
+
+
+# =============================================================================
+# REPO-WIDE GUARD: NO NEW master-REALM HARDCODES
+# =============================================================================
+
+# Provisioning scripts, charts and terraform used to curl
+# `/realms/master/protocol/openid-connect/token` directly, so setting
+# KEYCLOAK_ADMIN_REALM fixed the registry while every script kept hitting
+# master. Each of them now resolves `${KEYCLOAK_ADMIN_REALM:-master}` at call
+# time instead; this scan keeps the hardcode from coming back.
+
+_SKIP_DIRS = {".claude", "docs"}
+
+_HARDCODE_PATTERNS = ("realms/master", "--realm master")
+
+
+def test_no_master_realm_hardcodes_outside_docs(repo_root: Path) -> None:
+    """No executable surface may pin the admin realm to master.
+
+    Docs are exempt: their snippets illustrate the default deployment, where
+    the admin realm is master. Everything else — scripts, charts, terraform —
+    must resolve KEYCLOAK_ADMIN_REALM so code and deployment cannot drift.
+
+    Only git-tracked files are scanned, so test-run artifacts (coverage
+    reports, __pycache__) cannot trip the guard.
+    """
+    tracked = subprocess.run(
+        ["git", "ls-files"],  # nosec B603 B607 - hardcoded command
+        capture_output=True,
+        text=True,
+        timeout=30,
+        cwd=repo_root,
+        check=True,
+    ).stdout.splitlines()
+
+    offenders: list[str] = []
+    for rel in tracked:
+        path = repo_root / rel
+        if _SKIP_DIRS & set(Path(rel).parts) or rel == str(Path(__file__).relative_to(repo_root)):
+            continue
+        try:
+            text = path.read_text(errors="ignore")
+        except (OSError, UnicodeError):
+            continue
+        for line_no, line in enumerate(text.splitlines(), start=1):
+            if any(pattern in line for pattern in _HARDCODE_PATTERNS):
+                offenders.append(f"{rel}:{line_no}")
+
+    assert not offenders, (
+        "master-realm hardcodes found outside docs/; resolve "
+        "KEYCLOAK_ADMIN_REALM instead:\n" + "\n".join(offenders)
+    )

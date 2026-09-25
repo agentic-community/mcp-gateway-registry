@@ -74,7 +74,7 @@ _wait_for_keycloak() {
 
 _get_admin_token() {
   local token
-  token=$(curl -s -X POST "${KEYCLOAK_URL}/realms/master/protocol/openid-connect/token" \
+  token=$(curl -s -X POST "${KEYCLOAK_URL}/realms/${KEYCLOAK_ADMIN_REALM}/protocol/openid-connect/token" \
     -H "Content-Type: application/x-www-form-urlencoded" \
     -d "username=${KC_ADMIN_USER}" \
     -d "password=${KC_ADMIN_PASSWORD}" \
@@ -133,7 +133,7 @@ _disable_ssl_via_ecs_exec() {
   local task_id="${task_arn##*/}"
 
   local kcadm_cmd="/opt/keycloak/bin/kcadm.sh"
-  local script="$kcadm_cmd config credentials --server http://localhost:8080 --realm master --user ${KC_ADMIN_USER} --password ${KC_ADMIN_PASSWORD} 2>&1 && $kcadm_cmd update realms/master -s sslRequired=EXTERNAL 2>&1 && echo SSL_DISABLED_OK"
+  local script="$kcadm_cmd config credentials --server http://localhost:8080 --realm ${KEYCLOAK_ADMIN_REALM} --user ${KC_ADMIN_USER} --password ${KC_ADMIN_PASSWORD} 2>&1 && $kcadm_cmd update realms/${KEYCLOAK_ADMIN_REALM} -s sslRequired=EXTERNAL 2>&1 && echo SSL_DISABLED_OK"
 
   local output
   output=$(aws ecs execute-command --cluster keycloak --task "$task_id" \
@@ -142,7 +142,7 @@ _disable_ssl_via_ecs_exec() {
     --region "$AWS_REGION" 2>&1) || true
 
   if echo "$output" | grep -q "SSL_DISABLED_OK"; then
-    _log_success "Disabled sslRequired on master realm via ECS Exec"
+    _log_success "Disabled sslRequired on ${KEYCLOAK_ADMIN_REALM} realm via ECS Exec"
     return 0
   fi
 
@@ -153,7 +153,7 @@ _disable_ssl_via_ecs_exec() {
   # blocks external HTTP requests, so we cannot verify via the ALB). The
   # inline echo runs only when grep matches, so absence of VERIFY_DONE means
   # sslRequired has not yet been flipped.
-  local verify_script="/opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm master --user ${KC_ADMIN_USER} --password ${KC_ADMIN_PASSWORD} >/dev/null 2>&1 && /opt/keycloak/bin/kcadm.sh get realms/master 2>/dev/null | grep -q 'sslRequired.*external' && echo VERIFY_DONE"
+  local verify_script="/opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 --realm ${KEYCLOAK_ADMIN_REALM} --user ${KC_ADMIN_USER} --password ${KC_ADMIN_PASSWORD} >/dev/null 2>&1 && /opt/keycloak/bin/kcadm.sh get realms/${KEYCLOAK_ADMIN_REALM} 2>/dev/null | grep -q 'sslRequired.*external' && echo VERIFY_DONE"
 
   local verify_attempt=0
   local max_verify=6
@@ -197,6 +197,7 @@ _init_keycloak() {
 KEYCLOAK_ADMIN_URL=${KEYCLOAK_URL}
 KEYCLOAK_ADMIN=${KC_ADMIN_USER}
 KEYCLOAK_ADMIN_PASSWORD=${KC_ADMIN_PASSWORD}
+KEYCLOAK_ADMIN_REALM=${KEYCLOAK_ADMIN_REALM}
 REGISTRY_URL=${REGISTRY_URL}
 AUTH_SERVER_EXTERNAL_URL=${REGISTRY_URL}
 INITIAL_ADMIN_PASSWORD=${KC_ADMIN_PASSWORD}
@@ -404,6 +405,7 @@ main() {
   # Validate required env vars
   KC_ADMIN_USER="admin"
   KC_ADMIN_PASSWORD="${CDK_KEYCLOAK_ADMIN_PASSWORD:-}"
+  KEYCLOAK_ADMIN_REALM="${KEYCLOAK_ADMIN_REALM:-master}"
 
   if [ -z "$KC_ADMIN_PASSWORD" ]; then
     _log_error "CDK_KEYCLOAK_ADMIN_PASSWORD is not set"

@@ -994,6 +994,10 @@ module "ecs_service_registry" {
           value = "mcp-gateway"
         },
         {
+          name  = "KEYCLOAK_ADMIN_REALM"
+          value = var.keycloak_admin_realm
+        },
+        {
           name  = "KEYCLOAK_CLIENT_ID"
           value = "mcp-gateway-web"
         },

@@ -46,6 +46,9 @@ global:
     type: keycloak
     keycloak:
       adminUsername: &keycloakAdmin "user"
+      # Realm hosting the admin user (its token endpoint authenticates
+      # adminUsername), NOT the realm being administered (realm below).
+      adminRealm: &keycloakAdminRealm "master"
       realm: &keycloakRealm "mcp-gateway"
       # Don't set password here - let Keycloak chart generate it
     entra:
@@ -273,6 +276,7 @@ keycloak-configure:
   keycloak:
     realm: *keycloakRealm
     adminUser: *keycloakAdmin
+    adminRealm: *keycloakAdminRealm
   # MCP Dynamic Client Registration (RFC 7591) realm setup. When true, the
   # post-install/post-upgrade Job applies four changes that together let
   # Claude Code, Claude.ai connectors, and Cursor self-register as OAuth
