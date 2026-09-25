@@ -183,6 +183,15 @@ services:
       - KEYCLOAK_REALM=${KEYCLOAK_REALM:-mcp-gateway}
       - KEYCLOAK_CLIENT_ID=${KEYCLOAK_CLIENT_ID:-mcp-gateway-web}
       - KEYCLOAK_CLIENT_SECRET=${KEYCLOAK_CLIENT_SECRET}
+      # Logto IAM manager (AUTH_PROVIDER=logto): Management API access via an
+      # M2M application holding the "Logto Management API access" role. The
+      # token request needs resource + scope=all (see logto_admin.py). The
+      # LOGTO_MANAGEMENT_M2M_* names are optional overrides; by default the
+      # manager reuses the deployment's existing LOGTO_M2M_* credentials.
+      - LOGTO_URL=${LOGTO_URL:-}
+      - LOGTO_ENDPOINT=${LOGTO_ENDPOINT:-}
+      - LOGTO_M2M_CLIENT_ID=${LOGTO_M2M_CLIENT_ID:-}
+      - LOGTO_M2M_CLIENT_SECRET=${LOGTO_M2M_CLIENT_SECRET:-}
       - KEYCLOAK_ADMIN=${KEYCLOAK_ADMIN:-admin}
       - KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD}
       - KEYCLOAK_M2M_CLIENT_ID=${KEYCLOAK_M2M_CLIENT_ID}
@@ -373,6 +382,8 @@ services:
       # Tool-level access control (Issue #1026)
       - MCP_TOOLS_LIST_FILTER_ENABLED=${MCP_TOOLS_LIST_FILTER_ENABLED:-true}
       - TOOL_FILTER_AUDIT_LOG_LEVEL=${TOOL_FILTER_AUDIT_LOG_LEVEL:-INFO}
+      # MCP proxy chain timeout (auth-server inner hop + nginx read timeout)
+      - MCP_PROXY_TIMEOUT=${MCP_PROXY_TIMEOUT:-30}
       # Custom entity types (admin-defined, schema-driven catalog types)
       - CUSTOM_ENTITY_TYPES_ENABLED=${CUSTOM_ENTITY_TYPES_ENABLED:-false}
       - CUSTOM_TYPE_CACHE_TTL_SECONDS=${CUSTOM_TYPE_CACHE_TTL_SECONDS:-60}
@@ -402,6 +413,14 @@ services:
       - ${HOME}/mcp-gateway/ssl:/etc/ssl:ro
       # Application log files (bind mount to host for Splunk ingestion, Issue #987)
       - /var/log/containers/ai-registry:/var/log/containers/ai-registry
+      # Persist the logto nginx location patch across container recreations
+      # (swap-mcp-registry-idp-to-logto); image-baked template lacks logto blocks
+      - ./docker/nginx_rev_proxy_http_and_https.conf:/app/docker/nginx_rev_proxy_http_and_https.conf:ro
+      # Logto IAM manager patch (fd/logto-iam): the prebuilt image's
+      # iam_manager.py has no logto branch. Mount the fork's files until the
+      # registry image is rebuilt from this repo; then drop these two mounts.
+      - ./registry/utils/iam_manager.py:/app/registry/utils/iam_manager.py:ro
+      - ./registry/utils/logto_admin.py:/app/registry/utils/logto_admin.py:ro
     depends_on:
       auth-server:
         condition: service_started
@@ -421,7 +440,12 @@ services:
 
   # Auth service (separate and scalable) - using pre-built image
   auth-server:
-    image: ${ECR_REGISTRY:-public.ecr.aws/p3v1o3c6}/auth-server:${AUTH_SERVER_VERSION:-latest}
+    # Local build with the logto provider patch (swap-mcp-registry-idp-to-logto);
+    # original: ${ECR_REGISTRY:-public.ecr.aws/p3v1o3c6}/auth-server:${AUTH_SERVER_VERSION:-latest}
+    image: mcp-auth-server:logto
+    networks:
+      - default
+      - tokenvault-idp
     environment:
       - REGISTRY_URL=${REGISTRY_URL}
       # Request-source trust (audit client IP + OAuth external-URL host allowlist)
@@ -494,6 +518,14 @@ services:
       - KEYCLOAK_CLIENT_SECRET=${KEYCLOAK_CLIENT_SECRET}
       - KEYCLOAK_M2M_CLIENT_ID=${KEYCLOAK_M2M_CLIENT_ID:-mcp-gateway-m2m}
       - KEYCLOAK_M2M_CLIENT_SECRET=${KEYCLOAK_M2M_CLIENT_SECRET}
+      - LOGTO_ENABLED=${LOGTO_ENABLED:-false}
+      - LOGTO_URL=${LOGTO_URL:-http://idp-logto:3001}
+      - LOGTO_EXTERNAL_URL=${LOGTO_EXTERNAL_URL:-http://localhost:3001}
+      - LOGTO_CLIENT_ID=${LOGTO_CLIENT_ID}
+      - LOGTO_CLIENT_SECRET=${LOGTO_CLIENT_SECRET}
+      - LOGTO_M2M_CLIENT_ID=${LOGTO_M2M_CLIENT_ID}
+      - LOGTO_M2M_CLIENT_SECRET=${LOGTO_M2M_CLIENT_SECRET}
+      - LOGTO_M2M_RESOURCE=${LOGTO_M2M_RESOURCE}
       # Entra ID configuration
       - ENTRA_TENANT_ID=${ENTRA_TENANT_ID}
       - ENTRA_CLIENT_ID=${ENTRA_CLIENT_ID}
@@ -644,6 +676,7 @@ services:
 
   # Prometheus for metrics collection - using canonical upstream image
   prometheus:
+    profiles: ["observability"]  # trimmed: disk-constrained host
     image: prom/prometheus:${PROMETHEUS_VERSION:-v3.11.3}
     # Operator dashboard: published on loopback only (no auth on Prometheus).
     ports:
@@ -667,6 +700,7 @@ services:
 
   # Grafana for metrics visualization - using canonical upstream image
   grafana:
+    profiles: ["observability"]  # trimmed: disk-constrained host
     image: grafana/grafana:${GRAFANA_VERSION:-12.3.1}
     # Operator dashboard: published on loopback only. Reach it via an SSH
     # tunnel for remote access rather than exposing it to the network.
@@ -908,9 +942,10 @@ services:
       - ./scripts/mcp-servers-unrestricted-read.json:/app/scripts/mcp-servers-unrestricted-read.json:ro
       - ./scripts/mcp-servers-unrestricted-execute.json:/app/scripts/mcp-servers-unrestricted-execute.json:ro
       - ./scripts/federation-service.json:/app/scripts/federation-service.json:ro
+      - ./wheels:/wheels:ro
     command: >
       sh -c "
-      pip install --quiet motor pymongo &&
+      pip install --quiet --no-index --find-links=/wheels motor pymongo &&
       python /app/scripts/init-mongodb-ce.py
       "
     restart: "no"
@@ -924,3 +959,8 @@ volumes:
   mongodb-config:
   mongodb-keyfile:
   pingfederate-data:
+
+networks:
+  tokenvault-idp:
+    external: true
+    name: tokenvault-idp_default

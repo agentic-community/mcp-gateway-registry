@@ -34,6 +34,7 @@ class AuthProvider(ABC):
         accepted_audiences: list[str],
         leeway_seconds: int = 0,
         expected_nonce: str | None = None,
+        algorithms: list[str] | None = None,
     ) -> dict[str, Any]:
         """Cryptographically verify an OIDC id_token against the provider JWKS.
 
@@ -136,7 +137,7 @@ class AuthProvider(ABC):
             claims: dict[str, Any] = jwt.decode(
                 id_token,
                 signing_key,
-                algorithms=["RS256"],
+                algorithms=algorithms or ["RS256"],
                 issuer=token_issuer,
                 audience=accepted_audiences,
                 leeway=leeway_seconds,
