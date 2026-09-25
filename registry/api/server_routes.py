@@ -270,6 +270,22 @@ async def _build_scan_auth_headers(server_info: dict) -> str | None:
     token = resolved.get(backend_oauth.RESOLVED_BEARER_KEY)
     if token:
         return json.dumps({"X-Authorization": f"Bearer {token}"})
+
+    # Say so before the scan runs. A designated identity that resolved nothing means
+    # the scan goes out unauthenticated, the target 401s, and the scanner raises --
+    # surfacing as "Security scan failed ... type=RuntimeError", which names neither
+    # credentials nor this server's configuration. Anyone reading that error starts
+    # from the wrong end. This line puts the cause immediately above it.
+    if (server_info.get("oauth_discovery") or {}).get("enabled") and (
+        server_info.get("auth_scheme") or "none"
+    ) == "none":
+        logger.warning(
+            "security scan for %s will run UNAUTHENTICATED: a discovery identity is "
+            "designated but not connected, so no credential resolved. Expect the scan "
+            "to fail against a server that requires auth; reconnect the identity.",
+            server_info.get("path") or server_info.get("service_path"),
+        )
+
     # No OAuth/discovery token -> fall back to static bearer/api_key (or None).
     return _build_scan_headers_from_credentials(server_info)
 
