@@ -27,14 +27,30 @@ SERVER_PATH = "/unsafe-server"
 def _scan_config(
     allow_unsafe: bool,
     block_unsafe: bool = True,
+    block_on_failure: bool = True,
 ) -> SecurityScanConfig:
-    """A scan config with scanning on, varying only the two flags under test."""
+    """A scan config with scanning on, varying only the flags under test."""
     return SecurityScanConfig(
         enabled=True,
         scan_on_registration=True,
         block_unsafe_servers=block_unsafe,
         allow_unsafe_servers=allow_unsafe,
         add_security_pending_tag=False,
+        block_on_scan_failure=block_on_failure,
+    )
+
+
+def _unrunnable_scan() -> SecurityScanResult:
+    """What the scanner returns when the scan raised: no verdict, no tool_results."""
+    return SecurityScanResult(
+        server_url="https://example.com/mcp",
+        server_path=SERVER_PATH,
+        scan_timestamp="2026-09-21T00:00:00Z",
+        is_safe=False,
+        critical_issues=0,
+        high_severity=0,
+        raw_output={"error": "RuntimeError", "analysis_results": {}, "tool_results": []},
+        scan_failed=True,
     )
 
 
@@ -143,6 +159,26 @@ class TestScanAutoBlockWiring:
         assert out["disabled"] is False
         assert out["reconciled"] is False
 
+    async def test_unrunnable_scan_never_reconciles(self):
+        """A scan with no tool_results must not clear the existing auto-blocks.
+
+        Reconciling it would read "nothing is flagged any more" and drop every
+        scan-sourced block. With block_on_scan_failure on, the server is
+        disabled with its overrides intact.
+        """
+        out = await _run(_scan_config(allow_unsafe=True), _unrunnable_scan(), {})
+
+        assert out["reconciled"] is False
+        assert out["disabled"] is True
+
+    async def test_unrunnable_scan_without_block_on_failure_changes_nothing(self):
+        out = await _run(
+            _scan_config(allow_unsafe=True, block_on_failure=False), _unrunnable_scan(), {}
+        )
+
+        assert out["reconciled"] is False
+        assert out["disabled"] is False
+
 
 class TestRescanAppliesTheBlock:
     """Rescan must reconcile too, or the opt-in only ever protects new servers.
@@ -162,15 +198,18 @@ class TestRescanAppliesTheBlock:
         block_unsafe: bool = True,
         is_safe: bool = False,
         reconcile_returns: dict | None = None,
+        scan: SecurityScanResult | None = None,
+        block_on_failure: bool = True,
     ) -> dict:
         from registry.api.server_routes import rescan_server
 
-        scan = _failed_scan() if not is_safe else _failed_scan()
-        scan.is_safe = is_safe
+        if scan is None:
+            scan = _failed_scan()
+            scan.is_safe = is_safe
 
         scanner = AsyncMock()
         scanner.scan_server = AsyncMock(return_value=scan)
-        scanner.get_scan_config = lambda: _scan_config(allow_unsafe, block_unsafe)
+        scanner.get_scan_config = lambda: _scan_config(allow_unsafe, block_unsafe, block_on_failure)
 
         svc = AsyncMock()
         svc.get_server_info = AsyncMock(
@@ -230,6 +269,20 @@ class TestRescanAppliesTheBlock:
 
         assert out["reconciled"] is True
         assert out["disabled"] is False
+
+    async def test_unrunnable_rescan_never_reconciles(self):
+        """Same as registration: a failed scan keeps the overrides it cannot assess."""
+        out = await self._rescan(allow_unsafe=True, scan=_unrunnable_scan())
+
+        assert out["reconciled"] is False
+        assert out["disabled"] is True
+
+    async def test_unrunnable_rescan_without_block_on_failure_changes_nothing(self):
+        out = await self._rescan(allow_unsafe=True, scan=_unrunnable_scan(), block_on_failure=False)
+
+        assert out["reconciled"] is False
+        assert out["disabled"] is False
+        assert out["response"]["auto_disabled"] is False
 
 
 class TestSafeScanClearsStaleBlocks:
