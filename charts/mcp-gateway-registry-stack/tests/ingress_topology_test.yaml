@@ -207,7 +207,7 @@ tests:
     asserts:
       - equal:
           path: data.REGISTRY_URL
-          value: aHR0cHM6Ly9tY3AtZ2F0ZXdheS5leGFtcGxlLmNvbQ==
+          value: aHR0cHM6Ly9tY3AtZ2F0ZXdheS5leGFtcGxlLmNvbQ== # pragma: allowlist secret
       - equal:
           path: data.GATEWAY_ADDITIONAL_SERVER_NAMES
           value: bWNwLWdhdGV3YXkuZXhhbXBsZS5jb20=
@@ -225,7 +225,7 @@ tests:
     asserts:
       - equal:
           path: data.REGISTRY_EXTERNAL_URL
-          value: aHR0cHM6Ly9tY3AtZ2F0ZXdheS5leGFtcGxlLmNvbQ==
+          value: aHR0cHM6Ly9tY3AtZ2F0ZXdheS5leGFtcGxlLmNvbQ== # pragma: allowlist secret
 
   - it: Keycloak client registry URL follows the configured registry subdomain
     templates:
@@ -240,7 +240,7 @@ tests:
     asserts:
       - equal:
           path: data.REGISTRY_URL
-          value: aHR0cHM6Ly9tY3AtZ2F0ZXdheS5leGFtcGxlLmNvbQ==
+          value: aHR0cHM6Ly9tY3AtZ2F0ZXdheS5leGFtcGxlLmNvbQ== # pragma: allowlist secret
 
   # auth-server FastAPI root_path is always empty — it has no ingress
   # of its own; nginx strips any path prefix before forwarding.
@@ -285,7 +285,7 @@ tests:
     asserts:
       - equal:
           path: data.KEYCLOAK_EXTERNAL_URL
-          value: aHR0cHM6Ly9tY3AtZ2F0ZXdheS5leGFtcGxlLmNvbQ==
+          value: aHR0cHM6Ly9tY3AtZ2F0ZXdheS5leGFtcGxlLmNvbQ== # pragma: allowlist secret
 
   - it: AUTH_SERVER_EXTERNAL_URL follows a custom registry subdomain
     templates:
@@ -300,7 +300,7 @@ tests:
     asserts:
       - equal:
           path: data.AUTH_SERVER_EXTERNAL_URL
-          value: aHR0cHM6Ly9tY3AtZ2F0ZXdheS5leGFtcGxlLmNvbQ==
+          value: aHR0cHM6Ly9tY3AtZ2F0ZXdheS5leGFtcGxlLmNvbQ== # pragma: allowlist secret
 
   - it: propagates additional hostnames to registry host configuration
     templates:
