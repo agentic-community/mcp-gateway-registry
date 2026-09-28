@@ -62,6 +62,16 @@ app:
   appLogLevel: "INFO" # Application log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
   appLogMaxBytes: "52428800" # Max size per log file before rotation (default 50 MB)
   appLogBackupCount: "5" # Number of rotated backup log files to keep
+  # Egress httpx client connection pooling. mcpgw holds ONE process-lifetime
+  # pooled client for every outbound hop (registry API calls + the Keycloak M2M
+  # token POST); see servers/mcpgw/http_pool.py. Keep
+  # httpPoolKeepaliveExpirySeconds below the shortest upstream/LB idle timeout.
+  # Same leaf names as the registry/auth-server charts (there they live under
+  # egressAuth.*); keep the values in sync across all three services.
+  httpPoolMaxConnections: "100"
+  httpPoolMaxKeepalive: "20"
+  httpPoolKeepaliveExpirySeconds: "30"
+  httpPoolConnectRetries: "1"
 # Service configuration
 service:
   type: ClusterIP

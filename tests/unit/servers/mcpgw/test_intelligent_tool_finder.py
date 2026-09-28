@@ -66,23 +66,31 @@ def _make_server_with_tools(n_tools, server_name="test-server", path="/test"):
 
 
 async def _call_with_mocked_registry(tool_func, mock_response, capture=None, **kwargs):
-    """Call a registry search tool with mocked HTTP client and token."""
+    """Call a registry search tool with a mocked pooled client and token.
+
+    The search tools now POST through the process-lifetime pooled client
+    (``servers/mcpgw/http_pool.py``), so the seam is ``shared_async_client`` plus
+    ``client.request("POST", url, ...)``.
+    """
     captured_kwargs = {}
 
-    async def mock_post(url, **post_kwargs):
-        captured_kwargs.update(post_kwargs)
+    async def mock_request(method, url, **request_kwargs):
+        captured_kwargs.update(request_kwargs)
+        captured_kwargs["_method"] = method
+        captured_kwargs["_url"] = url
         return mock_response
 
     mock_client = AsyncMock()
-    mock_client.post = mock_post
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.request = mock_request
 
     with (
-        patch("servers.mcpgw.server.httpx.AsyncClient", return_value=mock_client),
+        patch("servers.mcpgw.server.shared_async_client", return_value=mock_client),
         patch("servers.mcpgw.server._extract_bearer_token", return_value="test-token"),
     ):
         result = await tool_func(**kwargs)
+
+    # The pooled client is shared process-wide; a request path must never close it.
+    mock_client.aclose.assert_not_awaited()
 
     if capture is not None:
         capture.update(captured_kwargs)

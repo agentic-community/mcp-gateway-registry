@@ -570,6 +570,16 @@ mcpgw:
     # mcpgw only consumes a subset (no MongoDB writer); extra keys merged in
     # by the anchor are ignored by charts/mcpgw/templates/configmap-app-log.yaml.
     !!merge <<: *appLogConfig
+    # Egress HTTP connection pooling (operational tuning). mcpgw holds ONE
+    # process-lifetime pooled httpx client for every outbound hop — the
+    # registry API calls and the Keycloak M2M token POST. Unlike the registry
+    # and auth-server (where these ride under egressAuth.*), mcpgw has no
+    # egress credential vault, so they live under app.* and are always applied.
+    # These MUST match registry.egressAuth and auth-server.egressAuth.
+    httpPoolMaxConnections: "100" # Max total egress connections in the pool
+    httpPoolMaxKeepalive: "20" # Max idle keep-alive connections retained
+    httpPoolKeepaliveExpirySeconds: "30" # Idle keep-alive lifetime (s); below LB idle timeout
+    httpPoolConnectRetries: "1" # Transport-level connect retries
   nodeSelector: {}
   # Extra env vars / envFrom sources appended to the mcpgw container.
   # See charts/mcpgw/values.yaml for validation rules, reserved names,

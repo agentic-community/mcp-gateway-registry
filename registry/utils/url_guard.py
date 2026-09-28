@@ -1237,9 +1237,9 @@ def shared_guarded_async_client(
                     guard_profile=profile,
                     verify=verify,
                     retries=_get_settings().egress_http_pool_connect_retries,
+                    limits=_pool_limits(),
                 ),
                 timeout=_DEFAULT_TIMEOUT_SECONDS,
-                limits=_pool_limits(),
             )
         )
         _shared_guarded_clients[key] = client
@@ -1261,9 +1261,9 @@ def shared_plain_async_client() -> httpx.AsyncClient:
             httpx.AsyncClient(
                 transport=httpx.AsyncHTTPTransport(
                     retries=_get_settings().egress_http_pool_connect_retries,
+                    limits=_pool_limits(),
                 ),
                 timeout=_DEFAULT_TIMEOUT_SECONDS,
-                limits=_pool_limits(),
             )
         )
     return _shared_plain_client

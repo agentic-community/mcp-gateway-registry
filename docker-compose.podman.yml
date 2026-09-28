@@ -681,6 +681,13 @@ services:
       - OTEL_METRIC_EXPORT_INTERVAL_MS=${OTEL_METRIC_EXPORT_INTERVAL_MS:-15000}
       - OTEL_EXPORTER_PROMETHEUS_HOST=${OTEL_EXPORTER_PROMETHEUS_HOST:-0.0.0.0}
       - OTEL_EXPORTER_PROMETHEUS_PORT=${OTEL_EXPORTER_PROMETHEUS_PORT:-9464}
+      # Egress httpx client connection pooling (mcpgw registry API + Keycloak
+      # M2M hops). Keep keepalive_expiry below the shortest upstream/LB idle
+      # timeout. Set identically to the registry/auth-server values.
+      - EGRESS_HTTP_POOL_MAX_CONNECTIONS=${EGRESS_HTTP_POOL_MAX_CONNECTIONS:-100}
+      - EGRESS_HTTP_POOL_MAX_KEEPALIVE=${EGRESS_HTTP_POOL_MAX_KEEPALIVE:-20}
+      - EGRESS_HTTP_POOL_KEEPALIVE_EXPIRY_SECONDS=${EGRESS_HTTP_POOL_KEEPALIVE_EXPIRY_SECONDS:-30}
+      - EGRESS_HTTP_POOL_CONNECT_RETRIES=${EGRESS_HTTP_POOL_CONNECT_RETRIES:-1}
     env_file:
       - path: ${MCP_EXTRA_ENV_DIR:-./extra_env}/mcpgw.env
         required: false

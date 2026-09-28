@@ -2601,6 +2601,24 @@ module "ecs_service_mcpgw" {
           # the registry reads, so both containers agree. Issue #1752.
           name  = "SEARCH_LOG_QUERY_TEXT"
           value = tostring(var.search_log_query_text)
+        },
+        # Egress httpx client connection pooling (mcpgw registry API + Keycloak
+        # M2M hops). Keep the keepalive expiry below the shortest upstream/LB idle timeout.
+        {
+          name  = "EGRESS_HTTP_POOL_MAX_CONNECTIONS"
+          value = tostring(var.egress_http_pool_max_connections)
+        },
+        {
+          name  = "EGRESS_HTTP_POOL_MAX_KEEPALIVE"
+          value = tostring(var.egress_http_pool_max_keepalive)
+        },
+        {
+          name  = "EGRESS_HTTP_POOL_KEEPALIVE_EXPIRY_SECONDS"
+          value = tostring(var.egress_http_pool_keepalive_expiry_seconds)
+        },
+        {
+          name  = "EGRESS_HTTP_POOL_CONNECT_RETRIES"
+          value = tostring(var.egress_http_pool_connect_retries)
         }
         ],
         # Extra environment variables from user (Issue #1000)

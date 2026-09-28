@@ -9,17 +9,31 @@ Supports two auth modes:
   - Legacy bearer token: pass a Keycloak JWT via Authorization header directly.
 """
 
+import asyncio
+import contextlib
 import logging
 import os
 import re
 import time
+from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
 from fastmcp import Context, FastMCP
+from http_pool import (
+    DEFAULT_KEYCLOAK_INTERNAL_URL,
+    DEFAULT_REGISTRY_BASE_URL,
+    aclose_shared_client,
+    request_with_reconnect,
+    shared_async_client,
+)
 from logging_setup import setup_mcpgw_logging
 from models import AgentInfo, RegistryStats, ServerInfo, SkillInfo, ToolSearchResult
-from observability_bootstrap import init_meter_provider_if_needed, track_tool
+from observability_bootstrap import (
+    init_meter_provider_if_needed,
+    record_egress_conn_reset,
+    track_tool,
+)
 from starlette.responses import JSONResponse
 
 # Issue #1122: start the OTel Prometheus exporter listener so the in-cluster
@@ -36,7 +50,9 @@ logger.info(
     os.getenv("APP_LOG_LEVEL", "INFO"),
 )
 
-REGISTRY_URL = os.getenv("REGISTRY_BASE_URL", "http://localhost")
+# Defaults come from http_pool so the guard's destination allowlist admits exactly the
+# hosts these URLs are built from (see http_pool._allowed_destinations).
+REGISTRY_URL = os.getenv("REGISTRY_BASE_URL", DEFAULT_REGISTRY_BASE_URL)
 REGISTRY_EXTERNAL_URL = os.getenv("REGISTRY_EXTERNAL_URL", "")
 
 # Host allowlist for FastMCP's DNS-rebinding protection (streamable-http).
@@ -91,7 +107,7 @@ if REGISTRY_EXTERNAL_URL:
 # ---------------------------------------------------------------------------
 OIDC_ENABLED = os.getenv("OIDC_ENABLED", "").lower() in ("true", "1", "yes")
 
-KEYCLOAK_INTERNAL_URL = os.getenv("KEYCLOAK_INTERNAL_URL", "http://keycloak:8080")
+KEYCLOAK_INTERNAL_URL = os.getenv("KEYCLOAK_INTERNAL_URL", DEFAULT_KEYCLOAK_INTERNAL_URL)
 KEYCLOAK_EXTERNAL_URL = os.getenv("KEYCLOAK_EXTERNAL_URL", "http://localhost:18080")
 KEYCLOAK_REALM = os.getenv("KEYCLOAK_REALM", "mcp-gateway")
 OIDC_CLIENT_ID = os.getenv("OIDC_CLIENT_ID", "mcp-gateway-web")
@@ -117,6 +133,17 @@ if SEARCH_LOG_QUERY_TEXT:
     )
 
 
+# Site labels for mcpgw_registry_egress_conn_reset_total -- one per pooled
+# destination, so a rising count identifies WHICH upstream is closing keep-alives
+# below EGRESS_HTTP_POOL_KEEPALIVE_EXPIRY_SECONDS.
+def _registry_conn_reset() -> None:
+    record_egress_conn_reset("mcpgw_registry")
+
+
+def _m2m_token_conn_reset() -> None:
+    record_egress_conn_reset("mcpgw_m2m_token")
+
+
 class _M2MTokenManager:
     """Fetches and caches a Keycloak M2M token via client_credentials grant."""
 
@@ -126,19 +153,38 @@ class _M2MTokenManager:
         self._client_secret = client_secret
         self._token: str | None = None
         self._expires_at: float = 0
+        # Serializes refreshes: without it, N concurrent tool calls on a cold or
+        # just-expired cache each mint their own token (N token POSTs, N issuance
+        # events in Keycloak's audit log, N-1 of them immediately orphaned).
+        self._refresh_lock = asyncio.Lock()
+
+    def _fresh_enough(self) -> bool:
+        return bool(self._token) and time.monotonic() < self._expires_at - 60
 
     async def get_token(self) -> str:
-        if self._token and time.monotonic() < self._expires_at - 60:
-            return self._token
+        if self._fresh_enough():
+            return self._token  # type: ignore[return-value]
 
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.post(
+        async with self._refresh_lock:
+            # Re-check: a concurrent caller may have refreshed while we waited.
+            if self._fresh_enough():
+                return self._token  # type: ignore[return-value]
+
+            # Pooled client, per-request timeout. The client_credentials grant is not
+            # single-use (unlike an authorization_code / refresh_token grant, which is
+            # why the registry's 3LO refresh is deliberately never re-POSTed), so a
+            # dead keep-alive is safe to re-POST: the worst case is one extra token.
+            resp = await request_with_reconnect(
+                shared_async_client(),
+                "POST",
                 self._token_url,
                 data={
                     "grant_type": "client_credentials",
                     "client_id": self._client_id,
                     "client_secret": self._client_secret,
                 },
+                timeout=15.0,
+                on_reset=_m2m_token_conn_reset,
             )
             resp.raise_for_status()
             data = resp.json()
@@ -170,9 +216,26 @@ if OIDC_ENABLED:
         upstream_revocation_endpoint=f"{KEYCLOAK_INTERNAL_URL}{_realm_path}/revoke",
         upstream_client_id=OIDC_CLIENT_ID,
         upstream_client_secret=OIDC_CLIENT_SECRET,
+        # JWKS fetch rides the pooled, SSRF-guarded client: `http_client` is a public
+        # JWTVerifier parameter and fastmcp wraps an injected client in
+        # contextlib.nullcontext, so it never closes our shared pool. (Do NOT also
+        # pass ssrf_safe=True -- fastmcp rejects that pairing.)
+        #
+        # This is the one place that captures the client OBJECT at import instead of
+        # re-calling shared_async_client() per use, so it opts out of the accessor's
+        # rebuild-if-closed self-heal: after an aclose_shared_client() the tools get a
+        # fresh pool and this verifier would keep the closed one. Only lifespan
+        # shutdown closes the pool, so that is unreachable in a running process -- but
+        # any future code path that closes the pool mid-life must re-inject here.
+        #
+        # The other Keycloak hops OAuthProxy makes (/token x3, /revoke) have no
+        # injection point in fastmcp 3.4.7 and stay unpooled and unguarded; they fire
+        # per login/refresh, never per tool call, and their URLs are operator env
+        # config.
         token_verifier=JWTVerifier(
             jwks_uri=f"{KEYCLOAK_INTERNAL_URL}{_realm_path}/certs",
             issuer=f"{KEYCLOAK_EXTERNAL_URL}/realms/{KEYCLOAK_REALM}",
+            http_client=shared_async_client(),
         ),
         base_url=MCPGW_BASE_URL,
         allowed_client_redirect_uris=[
@@ -189,6 +252,25 @@ if OIDC_ENABLED:
 else:
     logger.info("OAuth disabled – using bearer-token passthrough with M2M for registry calls")
 
+
+@contextlib.asynccontextmanager
+async def _lifespan(_server: FastMCP) -> AsyncIterator[dict[str, Any]]:
+    """Close the pooled egress client on shutdown.
+
+    fastmcp enters this for both stdio and streamable-http (including
+    ``stateless_http=True``). The teardown half runs on stdio exit and SIGINT; under
+    SIGTERM (``docker stop`` / ECS / K8s) fastmcp 3.4.7 never reaches it, because
+    uvicorn re-raises the captured signal with the default handlers already restored
+    once ``server.serve()`` returns. That is benign for an HTTP pool -- nothing is
+    buffered and the kernel reclaims the sockets -- so this is hygiene for the
+    stdio / SIGINT / in-memory-test paths, not a correctness dependency.
+    """
+    try:
+        yield {}
+    finally:
+        await aclose_shared_client()
+
+
 mcp = FastMCP(
     "AI Registry",
     instructions=(
@@ -204,6 +286,7 @@ mcp = FastMCP(
         "For skills, use get_skill_content to retrieve the full instructions."
     ),
     auth=_auth_provider,
+    lifespan=_lifespan,
 )
 
 
@@ -437,12 +520,17 @@ async def list_services(ctx: Context | None = None) -> dict[str, Any]:
     try:
         headers = await _get_registry_headers(ctx)
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(
-                f"{REGISTRY_URL}/api/servers", headers=headers, params={"limit": 2000}
-            )
-            response.raise_for_status()
-            data = response.json()
+        response = await request_with_reconnect(
+            shared_async_client(),
+            "GET",
+            f"{REGISTRY_URL}/api/servers",
+            headers=headers,
+            params={"limit": 2000},
+            timeout=30.0,
+            on_reset=_registry_conn_reset,
+        )
+        response.raise_for_status()
+        data = response.json()
 
         if isinstance(data, dict) and "servers" in data:
             servers = data["servers"]
@@ -510,12 +598,17 @@ async def list_agents(ctx: Context | None = None) -> dict[str, Any]:
     try:
         headers = await _get_registry_headers(ctx)
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(
-                f"{REGISTRY_URL}/api/agents", headers=headers, params={"limit": 2000}
-            )
-            response.raise_for_status()
-            data = response.json()
+        response = await request_with_reconnect(
+            shared_async_client(),
+            "GET",
+            f"{REGISTRY_URL}/api/agents",
+            headers=headers,
+            params={"limit": 2000},
+            timeout=30.0,
+            on_reset=_registry_conn_reset,
+        )
+        response.raise_for_status()
+        data = response.json()
 
         agents = data.get("agents", []) if isinstance(data, dict) else data
         agent_list = [AgentInfo(**a).model_dump() for a in agents]
@@ -571,12 +664,17 @@ async def list_skills(ctx: Context | None = None) -> dict[str, Any]:
     try:
         headers = await _get_registry_headers(ctx)
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(
-                f"{REGISTRY_URL}/api/skills", headers=headers, params={"limit": 2000}
-            )
-            response.raise_for_status()
-            data = response.json()
+        response = await request_with_reconnect(
+            shared_async_client(),
+            "GET",
+            f"{REGISTRY_URL}/api/skills",
+            headers=headers,
+            params={"limit": 2000},
+            timeout=30.0,
+            on_reset=_registry_conn_reset,
+        )
+        response.raise_for_status()
+        data = response.json()
 
         skills = data.get("skills", []) if isinstance(data, dict) else data
         skill_list = [SkillInfo(**s).model_dump() for s in skills]
@@ -677,10 +775,17 @@ async def get_skill_content(
         if resource_path:
             params["resource"] = resource_path
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(url, headers=headers, params=params)
-            response.raise_for_status()
-            data = response.json()
+        response = await request_with_reconnect(
+            shared_async_client(),
+            "GET",
+            url,
+            headers=headers,
+            params=params,
+            timeout=30.0,
+            on_reset=_registry_conn_reset,
+        )
+        response.raise_for_status()
+        data = response.json()
 
         result: dict[str, Any] = {
             "skill_name": skill_name,
@@ -761,24 +866,27 @@ async def search_registry(
         max_results = _validate_top_n(max_results)
         headers = await _get_registry_headers(ctx)
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                f"{REGISTRY_URL}/api/search/semantic",
-                headers=headers,
-                json={
-                    "query": query,
-                    "entity_types": [
-                        "mcp_server",
-                        "tool",
-                        "a2a_agent",
-                        "skill",
-                        "virtual_server",
-                    ],
-                    "max_results": max_results,
-                },
-            )
-            response.raise_for_status()
-            data = response.json()
+        response = await request_with_reconnect(
+            shared_async_client(),
+            "POST",
+            f"{REGISTRY_URL}/api/search/semantic",
+            headers=headers,
+            json={
+                "query": query,
+                "entity_types": [
+                    "mcp_server",
+                    "tool",
+                    "a2a_agent",
+                    "skill",
+                    "virtual_server",
+                ],
+                "max_results": max_results,
+            },
+            timeout=30.0,
+            on_reset=_registry_conn_reset,
+        )
+        response.raise_for_status()
+        data = response.json()
 
         servers = data.get("servers", []) if isinstance(data, dict) else []
         tools = data.get("tools", []) if isinstance(data, dict) else []
@@ -924,22 +1032,25 @@ async def intelligent_tool_finder(
         top_n = _validate_top_n(top_n)
         headers = await _get_registry_headers(ctx)
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                f"{REGISTRY_URL}/api/search/semantic",
-                headers=headers,
-                json={
-                    "query": query,
-                    # No virtual_server here: this tool reads only servers[], so asking
-                    # for virtual servers would spend max_results slots on results it
-                    # discards. It is deprecated for removal in v1.26.0, so it gets the
-                    # narrower request rather than the search_registry treatment (#1752).
-                    "entity_types": ["mcp_server", "tool", "a2a_agent", "skill"],
-                    "max_results": top_n,
-                },
-            )
-            response.raise_for_status()
-            data = response.json()
+        response = await request_with_reconnect(
+            shared_async_client(),
+            "POST",
+            f"{REGISTRY_URL}/api/search/semantic",
+            headers=headers,
+            json={
+                "query": query,
+                # No virtual_server here: this tool reads only servers[], so asking
+                # for virtual servers would spend max_results slots on results it
+                # discards. It is deprecated for removal in v1.26.0, so it gets the
+                # narrower request rather than the search_registry treatment (#1752).
+                "entity_types": ["mcp_server", "tool", "a2a_agent", "skill"],
+                "max_results": top_n,
+            },
+            timeout=30.0,
+            on_reset=_registry_conn_reset,
+        )
+        response.raise_for_status()
+        data = response.json()
 
         # Extract servers array from response
         servers = data.get("servers", []) if isinstance(data, dict) else []
@@ -1033,10 +1144,16 @@ async def healthcheck(ctx: Context | None = None) -> dict[str, Any]:
     try:
         headers = await _get_registry_headers(ctx)
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(f"{REGISTRY_URL}/api/servers/health", headers=headers)
-            response.raise_for_status()
-            data = response.json()
+        response = await request_with_reconnect(
+            shared_async_client(),
+            "GET",
+            f"{REGISTRY_URL}/api/servers/health",
+            headers=headers,
+            timeout=30.0,
+            on_reset=_registry_conn_reset,
+        )
+        response.raise_for_status()
+        data = response.json()
 
         stats = RegistryStats(**data)
         return {**stats.model_dump(), "status": "success"}

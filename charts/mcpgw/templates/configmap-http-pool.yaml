@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mcpgw-http-pool-config
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    app.kubernetes.io/name: {{ .Values.app.name }}
+    app.kubernetes.io/component: {{ .Values.app.name }}
+data:
+  # Egress httpx client connection pooling for the single process-lifetime
+  # pooled client in servers/mcpgw/http_pool.py, which serves every mcpgw
+  # outbound hop: the registry API calls (servers/agents/skills, semantic
+  # search, health) and the Keycloak M2M client_credentials token POST.
+  # Unlike registry/auth-server (where these keys ride along in
+  # registry-egress-config / auth-server-egress-config, gated on
+  # egressAuth.enabled), mcpgw pooling is not part of the egress credential
+  # vault, so this ConfigMap is always rendered — the knobs must be reachable
+  # on a default install.
+  #
+  # Keep these values matching the registry/auth-server egressAuth.httpPool*
+  # values, and keep EGRESS_HTTP_POOL_KEEPALIVE_EXPIRY_SECONDS below the
+  # shortest upstream/LB idle timeout.
+  EGRESS_HTTP_POOL_MAX_CONNECTIONS: {{ include "mcpgw.valueOrDefault" (list .Values.app.httpPoolMaxConnections "100") | quote }}
+  EGRESS_HTTP_POOL_MAX_KEEPALIVE: {{ include "mcpgw.valueOrDefault" (list .Values.app.httpPoolMaxKeepalive "20") | quote }}
+  EGRESS_HTTP_POOL_KEEPALIVE_EXPIRY_SECONDS: {{ include "mcpgw.valueOrDefault" (list .Values.app.httpPoolKeepaliveExpirySeconds "30") | quote }}
+  EGRESS_HTTP_POOL_CONNECT_RETRIES: {{ include "mcpgw.valueOrDefault" (list .Values.app.httpPoolConnectRetries "1") | quote }}

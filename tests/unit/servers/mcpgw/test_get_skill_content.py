@@ -51,13 +51,18 @@ def _make_mock_response(payload=None, status_code=200):
 
 
 async def _call_get_skill_content(skill_name, resource_path=None, capture=None):
-    """Call get_skill_content with a mocked HTTP client and registry headers.
+    """Call get_skill_content with a mocked pooled client and registry headers.
+
+    The tool now issues its request through the process-lifetime pooled client
+    (``servers/mcpgw/http_pool.py``), so the seam is ``shared_async_client`` plus
+    ``client.request(method, url, ...)`` rather than a per-call
+    ``httpx.AsyncClient`` context manager.
 
     Args:
         skill_name: Value passed to the tool.
         resource_path: Optional resource_path value.
-        capture: If provided, a dict populated with the captured .get() args
-                 (keys "url" and "params") whenever the client is invoked.
+        capture: If provided, a dict populated with the captured request args
+                 (keys "method", "url" and "params") whenever the client is invoked.
 
     Returns:
         The result dict from get_skill_content.
@@ -68,20 +73,19 @@ async def _call_get_skill_content(skill_name, resource_path=None, capture=None):
 
     called = {"count": 0}
 
-    async def mock_get(url, **get_kwargs):
+    async def mock_request(method, url, **request_kwargs):
         called["count"] += 1
         if capture is not None:
+            capture["method"] = method
             capture["url"] = url
-            capture["params"] = get_kwargs.get("params")
+            capture["params"] = request_kwargs.get("params")
         return mock_response
 
     mock_client = AsyncMock()
-    mock_client.get = mock_get
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.request = mock_request
 
     with (
-        patch.object(mcpgw_server.httpx, "AsyncClient", return_value=mock_client),
+        patch.object(mcpgw_server, "shared_async_client", return_value=mock_client),
         patch.object(
             mcpgw_server,
             "_get_registry_headers",
@@ -90,6 +94,9 @@ async def _call_get_skill_content(skill_name, resource_path=None, capture=None):
     ):
         result = await mcpgw_server.get_skill_content(skill_name, resource_path=resource_path)
 
+    # A pooled client must never be closed by a request path -- that would tear the
+    # pool down for every other concurrent caller.
+    mock_client.aclose.assert_not_awaited()
     result["_http_call_count"] = called["count"]
     return result
 

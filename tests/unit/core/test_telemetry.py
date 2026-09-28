@@ -354,49 +354,56 @@ class TestInstanceID:
     """Tests for instance ID management."""
 
     @pytest.mark.asyncio
-    async def test_instance_id_persistence_file_based(self, tmp_path, monkeypatch):
-        """Test instance ID is stable across calls with file-based storage."""
-        with patch("registry.core.telemetry.settings") as mock_settings:
-            mock_settings.storage_backend = "mongodb-ce"
+    async def test_instance_id_file_fallback_is_stable(self, tmp_path):
+        """With MongoDB unreachable, the file fallback returns the same ID every call."""
+        with (
+            patch("registry.core.telemetry.settings") as mock_settings,
+            patch(
+                "registry.repositories.documentdb.client.get_documentdb_client",
+                side_effect=ConnectionError("mongodb unreachable"),
+            ),
+        ):
             mock_settings.data_dir = tmp_path
 
-            # First call creates new ID
             id1 = await _get_or_create_instance_id()
-            assert id1
-
-            # Second call returns same ID
             id2 = await _get_or_create_instance_id()
+
+            assert id1
             assert id1 == id2
 
     @pytest.mark.asyncio
-    async def test_instance_id_file_creation(self, tmp_path):
-        """Test instance ID file is created correctly."""
-        with patch("registry.core.telemetry.settings") as mock_settings:
-            mock_settings.storage_backend = "mongodb-ce"
+    async def test_instance_id_file_fallback_writes_the_id(self, tmp_path):
+        """With MongoDB unreachable, the generated ID is persisted to {data_dir}/.telemetry_id."""
+        with (
+            patch("registry.core.telemetry.settings") as mock_settings,
+            patch(
+                "registry.repositories.documentdb.client.get_documentdb_client",
+                side_effect=ConnectionError("mongodb unreachable"),
+            ),
+        ):
             mock_settings.data_dir = tmp_path
 
             instance_id = await _get_or_create_instance_id()
 
-            # Check file exists
             telemetry_file = tmp_path / ".telemetry_id"
-            assert telemetry_file.exists()
-
-            # Check file content
-            file_content = telemetry_file.read_text().strip()
-            assert file_content == instance_id
+            assert telemetry_file.read_text().strip() == instance_id
 
 
 class TestLockAcquisition:
     """Tests for distributed lock mechanism."""
 
     @pytest.mark.asyncio
-    async def test_acquire_lock_file_based_always_succeeds(self):
-        """Test lock always succeeds for file-based storage."""
+    async def test_acquire_lock_fails_open_when_store_unreachable(self):
+        """A lock-store failure must not block telemetry: the lock fails open."""
         with patch("registry.core.telemetry.settings") as mock_settings:
             mock_settings.storage_backend = "mongodb-ce"
 
-            result = await _acquire_telemetry_lock("startup", 60)
-            assert result is True
+            with patch(
+                "registry.repositories.documentdb.client.get_documentdb_client",
+                side_effect=ConnectionError("mongodb unreachable"),
+            ):
+                result = await _acquire_telemetry_lock("startup", 60)
+                assert result is True
 
     @pytest.mark.asyncio
     async def test_acquire_lock_mongodb_success(self):
