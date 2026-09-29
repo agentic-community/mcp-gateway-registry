@@ -111,7 +111,9 @@ class LogtoAdminClient:
         self._token = payload.get("access_token")
         if not self._token:
             raise LogtoAdminError("Logto token endpoint returned no access_token")
-        self._token_expires_at = now + max(payload.get("expires_in", 3600) - _TOKEN_EXPIRY_MARGIN_SECS, 30)
+        self._token_expires_at = now + max(
+            payload.get("expires_in", 3600) - _TOKEN_EXPIRY_MARGIN_SECS, 30
+        )
         return self._token
 
     async def request(

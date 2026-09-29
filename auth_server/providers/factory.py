@@ -494,9 +494,7 @@ def _create_logto_provider() -> LogtoProvider:
             "Please set these environment variables."
         )
 
-    logger.info(
-        f"Initializing Logto provider at {logto_url} (external: {logto_external_url})"
-    )
+    logger.info(f"Initializing Logto provider at {logto_url} (external: {logto_external_url})")
     return LogtoProvider(
         logto_url=logto_url,
         client_id=client_id,

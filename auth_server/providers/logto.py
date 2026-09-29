@@ -169,9 +169,7 @@ class LogtoProvider(AuthProvider):
             if claims is None:
                 raise last_error or ValueError("Token validation failed with all valid issuers")
 
-            logger.debug(
-                f"Token validation successful for subject: {claims.get('sub', 'unknown')}"
-            )
+            logger.debug(f"Token validation successful for subject: {claims.get('sub', 'unknown')}")
 
             # Logto exposes role names in the `roles` claim (also in userinfo).
             roles = claims.get("roles", [])

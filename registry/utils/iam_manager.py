@@ -928,7 +928,9 @@ class LogtoIAMManager:
 
     async def create_group(self, group_name: str, description: str = "") -> dict[str, Any]:
         """Create a group (Logto role)."""
-        role = await self._client.post("/api/roles", {"name": group_name, "description": description})
+        role = await self._client.post(
+            "/api/roles", {"name": group_name, "description": description}
+        )
         return self._role_to_group(role)
 
     async def delete_group(self, group_name: str) -> bool:
@@ -1029,7 +1031,9 @@ class LogtoIAMManager:
         await self._assign_user_roles(user["id"], add_ids)
 
         for name in set(current_by_name) - desired:
-            await self._client.delete(f"/api/users/{user['id']}/roles/{current_by_name[name]['id']}")
+            await self._client.delete(
+                f"/api/users/{user['id']}/roles/{current_by_name[name]['id']}"
+            )
 
         return {"username": username, "groups": sorted(desired)}
 
