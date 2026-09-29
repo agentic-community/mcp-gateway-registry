@@ -33,6 +33,29 @@ global:
   existingSharedSecret: "" # If set, skip creating shared-secret and use this name instead
   existingOauthProviderSecret: "" # If set, skip creating oauth-provider-secret and use this name instead
   existingMongoCredentialsSecret: "" # If set, use this name instead of mongo-credentials in deployments
+  existingKeycloakClientSecret: "" # If set, skip creating keycloak-client-secret and use this name instead. Required under ArgoCD/GitOps unless the client secrets below are set explicitly — see charts/mcp-gateway-registry-stack/README.md.
+  # Secret generation switch.
+  #
+  # true (default): values the chart cannot resolve are generated randomly on
+  # first install and preserved across `helm upgrade` via `lookup`.
+  #
+  # false: REQUIRED for ArgoCD and any other `helm template` based tool. Those
+  # render without cluster access, so `lookup` always returns empty and a
+  # generated value would differ on every sync — replacing secrets under
+  # running pods, rotating the MongoDB user's credential, and re-randomizing
+  # the Keycloak PostgreSQL password against a retained PVC. With generation
+  # off, an unresolved value is a render-time error naming the value to set.
+  #
+  # Values to supply when set to false (or point the existing* keys above at
+  # Secrets that already hold them):
+  #   global.secretKey
+  #   global.authProvider.keycloak.clientSecret / .m2mClientSecret
+  #   keycloak.auth.adminPassword
+  #   keycloak.postgresql.auth.password / .postgresPassword
+  #   mongodb.password
+  #   global.federation.staticToken / .encryptionKey  (federation only)
+  #   registry.egressAuth.markerSecret
+  generateSecrets: true
   # Federation configuration - shared between registry and auth-server
   federation:
     staticTokenAuthEnabled: false # If not provided, defaults to false
@@ -48,6 +71,15 @@ global:
       adminUsername: &keycloakAdmin "user"
       realm: &keycloakRealm "mcp-gateway"
       # Don't set password here - let Keycloak chart generate it
+      # OIDC client secrets for the realm's mcp-gateway-web / mcp-gateway-m2m
+      # clients. Left empty, the chart generates them on first install,
+      # preserves them across `helm upgrade`, and the setup-keycloak Job
+      # publishes them to Keycloak. Set them explicitly when the rendered
+      # value must be deterministic (ArgoCD renders with `helm template`, so
+      # the chart cannot read the previous value back out of the cluster) or
+      # when pointing at an externally managed Keycloak.
+      clientSecret: ""
+      m2mClientSecret: ""
     entra:
       adminGroupId: # UUID of Entra admin group
   # Common ingress settings. Only the registry exposes a public ingress.
@@ -207,9 +239,23 @@ keycloak:
   auth:
     adminUser: *keycloakAdmin
     existingSecret: '{{ .Release.Name }}-keycloak'
+    # Keycloak admin password. Empty generates one on first install and
+    # preserves it across upgrades (see global.generateSecrets). Rendered into
+    # the Secret named by existingSecret above, which is what the bundled
+    # Bitnami chart reads. Keycloak bootstraps its admin user once, so setting
+    # this on an existing install does not change the password in the realm.
+    adminPassword: ""
   postgresql:
     auth:
       existingSecret: '{{ .Release.Name }}-keycloak-postgresql'
+      # Keycloak's PostgreSQL credentials. Empty generates them on first
+      # install and preserves them across upgrades (see
+      # global.generateSecrets). Set them at FIRST install only: PostgreSQL
+      # initializes its roles from these values once, and changing them later
+      # while the PVC is retained causes the bn_keycloak authentication
+      # failure.
+      password: ""
+      postgresPassword: ""
     image:
       registry: docker.io
       repository: bitnamilegacy/postgresql

@@ -54,15 +54,16 @@ tests:
           path: spec.rules[0].http.paths
           count: 1
 
-  # keycloak-configure Job runs on every helm install/upgrade so the
-  # realm's client redirect URIs stay in sync with the computed URLs.
+  # keycloak-configure Job runs on every helm install/upgrade/rollback so the
+  # realm's client redirect URIs stay in sync with the computed URLs, and so a
+  # rollback re-points the realm at the client secrets it restored.
   - it: keycloak-configure Job has helm hook annotations
     templates:
       - charts/keycloak-configure/templates/job.yaml
     asserts:
       - equal:
           path: metadata.annotations["helm.sh/hook"]
-          value: post-install,post-upgrade
+          value: post-install,post-upgrade,post-rollback
       - equal:
           path: metadata.annotations["helm.sh/hook-delete-policy"]
           value: before-hook-creation

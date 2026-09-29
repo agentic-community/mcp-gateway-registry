@@ -238,6 +238,7 @@ data:
             "name": "MCP Gateway Web Client",
             "enabled": true,
             "clientAuthenticatorType": "client-secret",
+            "secret": "'"${KEYCLOAK_CLIENT_SECRET}"'",
             "redirectUris": [
                 "'${AUTH_SERVER_EXTERNAL_URL:-http://localhost:8888}'/oauth2/callback/keycloak",
                 "'${REGISTRY_URL:-http://localhost:7860}'/*",
@@ -269,6 +270,7 @@ data:
             "name": "MCP Gateway M2M Client",
             "enabled": true,
             "clientAuthenticatorType": "client-secret",
+            "secret": "'"${KEYCLOAK_M2M_CLIENT_SECRET}"'",
             "protocol": "openid-connect",
             "standardFlowEnabled": false,
             "implicitFlowEnabled": false,
@@ -624,61 +626,61 @@ data:
         echo -e "${GREEN}Users created and assigned to groups successfully!${NC}"
     }
 
-    # Function to create client secrets
-    setup_client_secrets() {
+    # Verify the realm's stored client secrets match the chart-rendered ones.
+    #
+    # create_clients already PUT the desired "secret" into both client
+    # representations. This is the read-back check: registry and auth-server
+    # hold the chart's values in their env, so a mismatch here means every
+    # OIDC flow would fail with invalid_client. Fail the Job loudly instead of
+    # leaving silently broken auth behind.
+    #
+    # This function no longer writes keycloak-client-secret. The chart renders
+    # it in the Sync/install phase because the app pods mount it with
+    # envFrom and cannot start without it.
+    verify_client_secrets() {
         local token=$1
 
-        echo "Setting up client secrets..."
+        echo "Verifying client secrets match the chart-provided values..."
 
-        # Get web client ID
-        local web_client_id=$(curl -s -H "Authorization: Bearer ${token}" \
-            "${KEYCLOAK_URL}/admin/realms/${REALM}/clients?clientId=mcp-gateway-web" | \
-            jq -r '.[0].id')
+        local failed=0
+        local pair
+        for pair in "mcp-gateway-web:${KEYCLOAK_CLIENT_SECRET}" "mcp-gateway-m2m:${KEYCLOAK_M2M_CLIENT_SECRET}"; do # pragma: allowlist secret
+            local client_id="${pair%%:*}"
+            local expected="${pair#*:}"
 
-        # Generate secret for web client
-        curl -s -X POST "${KEYCLOAK_URL}/admin/realms/${REALM}/clients/${web_client_id}/client-secret" \
-            -H "Authorization: Bearer ${token}" \
-            -H "Content-Type: application/json" > /dev/null
+            local uuid=$(curl -s -H "Authorization: Bearer ${token}" \
+                "${KEYCLOAK_URL}/admin/realms/${REALM}/clients?clientId=${client_id}" | \
+                jq -r '.[0].id // empty')
+            if [ -z "$uuid" ]; then
+                echo -e "${RED}Could not resolve client ${client_id}${NC}" >&2
+                failed=1
+                continue
+            fi
 
-        local web_secret_response=$(curl -s "${KEYCLOAK_URL}/admin/realms/${REALM}/clients/${web_client_id}/client-secret" \
-            -H "Authorization: Bearer ${token}")
-        web_secret=$(echo "$web_secret_response" | jq -r '.value // empty')
+            local actual=$(curl -s -H "Authorization: Bearer ${token}" \
+                "${KEYCLOAK_URL}/admin/realms/${REALM}/clients/${uuid}/client-secret" | \
+                jq -r '.value // empty')
+            if [ "$actual" = "$expected" ]; then
+                echo -e "${GREEN}${client_id} secret matches keycloak-client-secret${NC}"
+            else
+                echo -e "${RED}${client_id} secret in Keycloak does not match keycloak-client-secret.${NC}" >&2
+                echo "Keycloak rejected or ignored the secret in the client representation." >&2
+                failed=1
+            fi
+        done
 
-        # Get M2M client ID
-        local m2m_client_id=$(curl -s -H "Authorization: Bearer ${token}" \
-            "${KEYCLOAK_URL}/admin/realms/${REALM}/clients?clientId=mcp-gateway-m2m" | \
-            jq -r '.[0].id')
+        if [ "$failed" -ne 0 ]; then
+            echo -e "${RED}Client secret verification failed — registry/auth-server would get invalid_client on every login.${NC}" >&2
+            return 1
+        fi
 
-        # Generate secret for M2M client
-        curl -s -X POST "${KEYCLOAK_URL}/admin/realms/${REALM}/clients/${m2m_client_id}/client-secret" \
-            -H "Authorization: Bearer ${token}" \
-            -H "Content-Type: application/json" > /dev/null
-
-        local m2m_secret_response=$(curl -s "${KEYCLOAK_URL}/admin/realms/${REALM}/clients/${m2m_client_id}/client-secret" \
-            -H "Authorization: Bearer ${token}")
-        m2m_secret=$(echo "$m2m_secret_response" | jq -r '.value // empty')
-
-        echo -e "${GREEN}Client secrets generated!${NC}"
         echo ""
         echo "=============================================="
-        echo -e "${YELLOW}Client credentials have been created.${NC}"
-        echo "=============================================="
-        echo ""
         echo -e "${GREEN}To retrieve all client credentials, run:${NC}"
         echo "  ./keycloak/setup/get-all-client-credentials.sh"
         echo ""
         echo "This will save all credentials to .oauth-tokens/"
         echo "=============================================="
-
-        # Use --dry-run=client | apply so this is idempotent on helm upgrades
-        # (this Job runs as a post-install + post-upgrade hook; kubectl create
-        # by itself fails with AlreadyExists on re-run).
-        kubectl create secret generic keycloak-client-secret \
-          --from-literal=KEYCLOAK_CLIENT_ID=mcp-gateway-web \
-          --from-literal=KEYCLOAK_CLIENT_SECRET=$web_secret \
-          --from-literal=KEYCLOAK_M2M_CLIENT_ID=mcp-gateway-m2m \
-          --from-literal=KEYCLOAK_M2M_CLIENT_SECRET=$m2m_secret \
-          --dry-run=client -o yaml | kubectl apply -f -
     }
 
     # Function to setup groups mapper for OAuth2 clients
@@ -1072,6 +1074,13 @@ data:
             exit 1
         fi
 
+        if [ -z "$KEYCLOAK_CLIENT_SECRET" ] || [ -z "$KEYCLOAK_M2M_CLIENT_SECRET" ]; then
+            echo -e "${RED}Error: KEYCLOAK_CLIENT_SECRET / KEYCLOAK_M2M_CLIENT_SECRET are not set${NC}"
+            echo "They are supplied by the keycloak-client-secret Secret rendered by the chart."
+            echo "Check global.existingKeycloakClientSecret and that the Secret holds both keys."
+            exit 1
+        fi
+
         # Wait for Keycloak to be ready
         wait_for_keycloak
 
@@ -1094,7 +1103,7 @@ data:
             create_groups "$TOKEN"
             create_users "$TOKEN"
             create_service_account_user "$TOKEN"
-            setup_client_secrets "$TOKEN"
+            verify_client_secrets "$TOKEN"
             setup_groups_mapper "$TOKEN"
             setup_m2m_scopes "$TOKEN"
 
