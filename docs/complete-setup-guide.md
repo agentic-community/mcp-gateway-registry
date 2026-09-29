@@ -315,6 +315,7 @@ The steps above cover the minimum to boot a local Keycloak stack. This subsectio
 | `AUDIT_LOG_REQUIRE_DURABLE=true` | Keep it on: guarantees a durable, queryable audit trail. | Default `true`; the registry refuses to start if audit logging is on with no durable sink. Only set `false` in dev. |
 | `SECURITY_SCAN_ENABLED` / `SECURITY_BLOCK_UNSAFE_SERVERS` | Scan and block unsafe MCP servers / A2A agents at registration. | Code default `true`, but **Terraform defaults these to `false`** — enable them for a hardened deploy. |
 | `SECURITY_ALLOW_UNSAFE_SERVERS` | Keep a failing server enabled with only its HIGH/CRITICAL tools blocked, instead of disabling the whole server. Needs `SECURITY_BLOCK_UNSAFE_SERVERS=true`. | Default `false`: a failing server is disabled outright. |
+| `SECURITY_BLOCK_ON_SCAN_FAILURE` | Set `false` when endpoints cannot be scanned anonymously (per-user egress OAuth, say), since those fail their scan on every registration. Applies to servers, agents and skills. | Default `true`: a scan that could not complete disables the asset, even though it found nothing. The asset is tagged `security-pending` either way. |
 | `FEDERATION_ENCRYPTION_KEY` | Required on an importing registry to store peer federation tokens at rest. | Peer tokens cannot be stored. |
 | `ingress_cidr_blocks` (Terraform) | Restrict ALB ingress to your CIDR(s). | Defaults to `0.0.0.0/0` (open to the world). |
 

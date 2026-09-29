@@ -242,6 +242,29 @@ WARNING: Server failed security scan - Review required before use
 
 This workflow ensures that vulnerable servers never become accessible to AI agents without explicit administrator review and remediation.
 
+## When the Scan Could Not Run at All
+
+The section above is about a scan that *found* something. A scan can also fail to produce a verdict: the endpoint refused the connection, the session timed out, the SKILL.md would not download. The scanner reports that as `scan_failed=true`, with `is_safe=false` and all four severity counts at zero, so on the numbers it looks identical to a clean pass that happened to be unsafe.
+
+`SECURITY_BLOCK_ON_SCAN_FAILURE` decides what to do with that. It applies to servers, agents and skills alike.
+
+```bash
+# Default. A scan that could not complete disables the asset, as in earlier
+# releases.
+SECURITY_BLOCK_ON_SCAN_FAILURE=true
+
+# The asset stays enabled. It is still tagged security-pending either way.
+SECURITY_BLOCK_ON_SCAN_FAILURE=false
+```
+
+The default is `true`, so behaviour is unchanged from earlier releases until you opt out.
+
+**When to set it to `false`.** Some endpoints can never produce a conclusive scan. An MCP server behind per-user egress OAuth has no credential to offer the scanner at registration, so its scan fails every time. Because registration re-runs the scan, any edit to such a server's definition disables it, and a disabled server drops out of the generated nginx config, so calls to it stop being routed at all rather than failing with a clear error. If that describes your deployment, set this to `false`.
+
+**What you give up.** An asset the scanner never assessed stays enabled and serving. You are relying on the `security-pending` tag to tell you about it, which is why that tag is applied on both paths and independently of whether blocking is on. It shows on the asset card's shield icon, in `GET /api/servers`, and in the `/security-scan` endpoints, which all return `scan_failed` so you can tell "could not reach this" apart from "found something here".
+
+Turning this off does not relax anything about assets the scanner *did* reach a verdict on. `SECURITY_BLOCK_UNSAFE_SERVERS` and its agent and skill equivalents still govern those.
+
 ## Per-Tool Blocking: Keeping a Server Up With Only Its Unsafe Tools Blocked
 
 The default above is all-or-nothing. A server with twelve safe tools and one tool flagged CRITICAL is switched off entirely, and operators lose the eleven working tools to quarantine one. An AWS documentation server is a real example: a scan flagged 2 of its 6 tools for prompt injection, so the all-or-nothing response costs you the 4 clean tools as well, including `aws___list_regions` and `aws___read_documentation`.
@@ -613,6 +636,8 @@ If the security scan detects critical or high severity vulnerabilities:
 
 Administrators must review the security scan results and remediate any issues before manually enabling the agent.
 
+A scan that could not run at all is a separate case, governed by `SECURITY_BLOCK_ON_SCAN_FAILURE`. See [When the Scan Could Not Run at All](#when-the-scan-could-not-run-at-all); the setting is shared across servers, agents and skills.
+
 ## Agent Skills Security Scanning
 
 The registry provides comprehensive security scanning for Agent Skills (SKILL.md files) using the [Cisco AI Defense Skill Scanner](https://github.com/cisco-ai-defense/cisco-ai-skill-scanner). This ensures that skills registered in the system are safe and do not contain malicious instructions, prompt injection attempts, or other security threats before being made available to AI coding assistants.
@@ -790,6 +815,8 @@ If the security scan detects critical or high severity vulnerabilities:
 5. **Detailed Report Available** - Click the shield icon to view detailed findings
 
 Administrators must review the security scan results and remediate any issues before manually enabling the skill.
+
+A scan that could not run at all is a separate case, governed by `SECURITY_BLOCK_ON_SCAN_FAILURE`. See [When the Scan Could Not Run at All](#when-the-scan-could-not-run-at-all); the setting is shared across servers, agents and skills.
 
 ## Periodic Registry Scans
 
