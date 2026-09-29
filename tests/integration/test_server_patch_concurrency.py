@@ -43,6 +43,11 @@ def _card() -> dict:
     }
 
 
+def _path(label: str, *, trailing_slash: bool = False) -> str:
+    """Unique _id per run: concurrent CI jobs share one MongoDB."""
+    return f"/{label}-{uuid.uuid4().hex[:8]}{'/' if trailing_slash else ''}"
+
+
 @pytest.fixture
 async def repo():
     """Repository backed by a real collection; cleans up cards it created."""
@@ -64,17 +69,18 @@ class TestSlashVariantWrite:
     async def test_update_resolves_slash_variant_id(self, repo):
         """A card stored under '/x/' must be writable as '/x'."""
         col = await repo._get_collection()
-        card = _card()
-        await col.insert_one({"_id": "/legacy-variant/", **card})
-        repo._created.append("/legacy-variant/")
+        stored_id = _path("legacy-variant", trailing_slash=True)
+        await col.insert_one({"_id": stored_id, **_card()})
+        repo._created.append(stored_id)
+        requested = stored_id.rstrip("/")
 
-        existing = await repo.get("/legacy-variant")
+        existing = await repo.get(requested)
         assert existing is not None
 
         merged = {**existing, "description": "patched"}
-        assert await repo.update("/legacy-variant", merged, updated_fields=["description"])
+        assert await repo.update(requested, merged, updated_fields=["description"])
 
-        doc = await col.find_one({"_id": "/legacy-variant/"})
+        doc = await col.find_one({"_id": stored_id})
         assert doc["description"] == "patched"
 
 
@@ -83,19 +89,20 @@ class TestFieldScopedWrite:
         """A PATCH must not overwrite fields another writer owns."""
         col = await repo._get_collection()
         card = _card()
-        await col.insert_one({"_id": "/racy-scope", **card})
-        repo._created.append("/racy-scope")
+        path = _path("racy-scope")
+        await col.insert_one({"_id": path, **card})
+        repo._created.append(path)
 
-        stale_read = await repo.get("/racy-scope")
+        stale_read = await repo.get(path)
         await col.update_one(
-            {"_id": "/racy-scope"},
+            {"_id": path},
             {"$set": {"auth_credential_encrypted": "ENC::rotated"}},
         )
 
         merged = {**stale_read, "description": "patched"}
-        assert await repo.update("/racy-scope", merged, updated_fields=["description"])
+        assert await repo.update(path, merged, updated_fields=["description"])
 
-        doc = await col.find_one({"_id": "/racy-scope"})
+        doc = await col.find_one({"_id": path})
         assert doc["description"] == "patched"
         assert doc["auth_credential_encrypted"] == "ENC::rotated"
         assert doc["egress_oauth"] == card["egress_oauth"]
@@ -104,15 +111,16 @@ class TestFieldScopedWrite:
     async def test_repeated_identical_patch_is_harmless(self, repo):
         col = await repo._get_collection()
         card = _card()
-        await col.insert_one({"_id": "/idem-scope", **card})
-        repo._created.append("/idem-scope")
+        path = _path("idem-scope")
+        await col.insert_one({"_id": path, **card})
+        repo._created.append(path)
 
         for _ in range(2):
-            existing = await repo.get("/idem-scope")
+            existing = await repo.get(path)
             merged = {**existing, "description": "same"}
-            assert await repo.update("/idem-scope", merged, updated_fields=["description"])
+            assert await repo.update(path, merged, updated_fields=["description"])
 
-        doc = await col.find_one({"_id": "/idem-scope"})
+        doc = await col.find_one({"_id": path})
         assert doc["description"] == "same"
         assert doc["num_tools"] == card["num_tools"]
 
@@ -121,13 +129,14 @@ class TestRevisionGuardedWrite:
     async def test_stale_revision_fails_atomically(self, repo):
         col = await repo._get_collection()
         card = _card()
-        await col.insert_one({"_id": "/cas-race", **card})
-        repo._created.append("/cas-race")
+        path = _path("cas-race")
+        await col.insert_one({"_id": path, **card})
+        repo._created.append(path)
 
-        existing = await repo.get("/cas-race")
+        existing = await repo.get(path)
         # Another writer lands between our read and our write.
         await col.update_one(
-            {"_id": "/cas-race"},
+            {"_id": path},
             {
                 "$set": {
                     "auth_credential_encrypted": "ENC::theirs",
@@ -138,61 +147,63 @@ class TestRevisionGuardedWrite:
 
         merged = {**existing, "description": "must not land"}
         result = await repo.update(
-            "/cas-race",
+            path,
             merged,
             updated_fields=["description"],
             expected_updated_at=existing["updated_at"],
         )
         assert result is False
 
-        doc = await col.find_one({"_id": "/cas-race"})
+        doc = await col.find_one({"_id": path})
         assert doc["description"] == "initial"
         assert doc["auth_credential_encrypted"] == "ENC::theirs"
 
     async def test_fresh_revision_writes(self, repo):
         col = await repo._get_collection()
         card = _card()
-        await col.insert_one({"_id": "/cas-race-2", **card})
-        repo._created.append("/cas-race-2")
+        path = _path("cas-fresh")
+        await col.insert_one({"_id": path, **card})
+        repo._created.append(path)
 
-        existing = await repo.get("/cas-race-2")
+        existing = await repo.get(path)
         merged = {**existing, "description": "landed"}
         assert await repo.update(
-            "/cas-race-2",
+            path,
             merged,
             updated_fields=["description"],
             expected_updated_at=existing["updated_at"],
         )
-        doc = await col.find_one({"_id": "/cas-race-2"})
+        doc = await col.find_one({"_id": path})
         assert doc["description"] == "landed"
 
     async def test_stale_revision_does_not_retarget_to_variant_card(self, repo):
         """A lost race must fail even when a different card sits at the variant _id."""
         col = await repo._get_collection()
         card = _card()
-        await col.insert_one({"_id": "/cas-variant-race", **card})
-        variant_card = {**_card(), "server_name": "variant occupant"}
-        await col.insert_one({"_id": "/cas-variant-race/", **variant_card})
-        repo._created.extend(["/cas-variant-race", "/cas-variant-race/"])
+        path = _path("cas-variant-race")
+        variant_path = path + "/"
+        await col.insert_one({"_id": path, **card})
+        await col.insert_one({"_id": variant_path, **_card(), "server_name": "variant occupant"})
+        repo._created.extend([path, variant_path])
 
-        existing = await repo.get("/cas-variant-race")
+        existing = await repo.get(path)
         # Another writer lands on the exact card between our read and write.
         await col.update_one(
-            {"_id": "/cas-variant-race"},
+            {"_id": path},
             {"$set": {"updated_at": "2030-01-01T00:00:00"}},
         )
 
         merged = {**existing, "description": "must not land"}
         result = await repo.update(
-            "/cas-variant-race",
+            path,
             merged,
             updated_fields=["description"],
             expected_updated_at=existing["updated_at"],
         )
         assert result is False
 
-        doc = await col.find_one({"_id": "/cas-variant-race"})
+        doc = await col.find_one({"_id": path})
         assert doc["description"] == "initial"
-        variant = await col.find_one({"_id": "/cas-variant-race/"})
+        variant = await col.find_one({"_id": variant_path})
         assert variant["description"] == "initial"
         assert variant["server_name"] == "variant occupant"

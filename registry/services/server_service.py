@@ -256,6 +256,15 @@ class ServerService:
                 SSRF/scheme validation. Validation only runs when the update
                 payload actually carries a proxy_pass_url, so health-status and
                 tool-list updates are unaffected.
+
+        Note:
+            Every branch below that writes into ``server_info`` MUST also extend
+            ``updated_fields`` when it is not None. A field-scoped write persists
+            only the named fields, so an unnamed mutation is silently discarded
+            -- which is how a re-pinned proxy target once kept its stale IPs and
+            a repointed server once kept the previous host's credential. Prefer a
+            helper that returns the names it wrote (see
+            ``clear_upstream_headers_on_repoint``) over restating them here.
         """
         # Validate the merged target state whenever a target-bearing field is
         # edited. This prevents an existing built-in registration from lending
