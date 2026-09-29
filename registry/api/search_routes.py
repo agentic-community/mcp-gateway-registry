@@ -94,12 +94,34 @@ def _virtual_server_field(
     return default if value is None else value
 
 
+def _gateway_endpoint_url(
+    base_url: str,
+    path: str,
+    append_mcp_path: bool | None,
+) -> str:
+    """Build the public gateway URL a client connects to for a server.
+
+    The ``/mcp`` transport suffix follows the server's ``append_mcp_path`` the
+    same way the nginx location, the per-server PRM resource and the UI's
+    Connect URL do: appended unless the flag is explicitly ``False``.
+    Root-endpoint servers set it ``False``, and appending the suffix to theirs
+    yields a URL that does not serve MCP.
+    """
+    clean_path = path.rstrip("/")
+    if not clean_path.startswith("/"):
+        clean_path = f"/{clean_path}"
+    if append_mcp_path is False:
+        return f"{base_url}{clean_path}"
+    return f"{base_url}{clean_path}/mcp"
+
+
 def _compute_endpoint_url(
     path: str,
     proxy_pass_url: str | None,
     mcp_endpoint: str | None,
     base_url: str | None,
     redact_backend_urls: bool = False,
+    append_mcp_path: bool | None = None,
 ) -> str | None:
     """Compute the endpoint URL for an MCP server.
 
@@ -120,6 +142,8 @@ def _compute_endpoint_url(
             ``should_redact_backend_urls(user_context)`` here. This is only True
             in with-gateway mode (registry-only never redacts), so skipping the
             override and the proxy fallback loses nothing the caller may see.
+        append_mcp_path: The server's ``append_mcp_path``. Only the constructed
+            gateway URL uses it; see ``_gateway_endpoint_url``.
 
     Returns:
         The computed endpoint URL, or None if not determinable.
@@ -130,10 +154,7 @@ def _compute_endpoint_url(
         # addresses and must not leak via the derived endpoint_url. Fail closed
         # to None if the gateway base URL is unavailable.
         if base_url:
-            clean_path = path.rstrip("/")
-            if not clean_path.startswith("/"):
-                clean_path = f"/{clean_path}"
-            return f"{base_url}{clean_path}/mcp"
+            return _gateway_endpoint_url(base_url, path, append_mcp_path)
         return None
 
     # Priority 1: Explicit mcp_endpoint override
@@ -146,10 +167,7 @@ def _compute_endpoint_url(
 
     # Priority 3: Construct gateway URL
     if base_url:
-        clean_path = path.rstrip("/")
-        if not clean_path.startswith("/"):
-            clean_path = f"/{clean_path}"
-        return f"{base_url}{clean_path}/mcp"
+        return _gateway_endpoint_url(base_url, path, append_mcp_path)
 
     # Fallback: return proxy_pass_url if nothing else works
     return proxy_pass_url
@@ -771,16 +789,18 @@ async def semantic_search(
         server_path = server.get("path", "")
         server_proxy_url = server.get("proxy_pass_url")
         server_mcp_endpoint = server.get("mcp_endpoint")
+        # The search index does not carry append_mcp_path; the server record does.
+        server_full_info = await server_service.get_server_info(server_path)
         endpoint_url = _compute_endpoint_url(
             path=server_path,
             proxy_pass_url=server_proxy_url,
             mcp_endpoint=server_mcp_endpoint,
             base_url=base_url,
             redact_backend_urls=redact_backend,
+            append_mcp_path=(server_full_info or {}).get("append_mcp_path"),
         )
 
         # Look up ANS metadata from server info for trust verification
-        server_full_info = await server_service.get_server_info(server_path)
         server_ans_meta = server_full_info.get("ans_metadata") if server_full_info else None
         server_trust = _compute_trust_verified(server_ans_meta)
 
@@ -863,6 +883,7 @@ async def semantic_search(
     # One entry per server path, so a flat result set spanning many servers does
     # not issue a block lookup per row.
     blocked_cache: dict[str, set[str]] = {}
+    append_mcp_cache: dict[str, bool | None] = {}
     for tool in raw_results.get("tools", []):
         server_path = tool.get("server_path", "")
         server_name = tool.get("server_name", "")
@@ -889,12 +910,16 @@ async def semantic_search(
         tool_endpoint_url = server_endpoint_map.get(server_path)
         if tool_endpoint_url is None:
             # Server not in filtered results, compute endpoint_url
+            if server_path not in append_mcp_cache:
+                tool_server_info = await server_service.get_server_info(server_path)
+                append_mcp_cache[server_path] = (tool_server_info or {}).get("append_mcp_path")
             tool_endpoint_url = _compute_endpoint_url(
                 path=server_path,
                 proxy_pass_url=None,  # We don't have this info for tools
                 mcp_endpoint=None,
                 base_url=base_url,
                 redact_backend_urls=redact_backend,
+                append_mcp_path=append_mcp_cache[server_path],
             )
 
         filtered_tools.append(
