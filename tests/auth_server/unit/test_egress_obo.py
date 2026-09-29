@@ -79,7 +79,7 @@ class TestEntraExchangeBody:
         cap: dict = {}
         _patch_post(monkeypatch, _FakeResponse(200, {"access_token": "obo-tok"}), cap)
 
-        token = await obo_exchange(
+        token, _ = await obo_exchange(
             _FakeEntraProvider(),
             subject_token="ingress-jwt",
             target_audience="api://outlook-mcp-server",
@@ -229,7 +229,7 @@ class TestSsrfGuard:
             "AsyncClient",
             MagicMock(side_effect=AssertionError("must use guarded client")),
         )
-        token = await obo_exchange(
+        token, _ = await obo_exchange(
             _FakeEntraProvider(), subject_token="j", target_audience="api://srv"
         )
         assert token == "ok"
@@ -246,7 +246,7 @@ class TestSsrfGuard:
             return client
 
         monkeypatch.setattr("registry.utils.url_guard.shared_guarded_async_client", strict_shared)
-        token = await obo_exchange(
+        token, _ = await obo_exchange(
             _FakeEntraProvider(), subject_token="j", target_audience="api://srv"
         )
         assert token == "ok"
@@ -263,6 +263,34 @@ class TestSsrfGuard:
         with pytest.raises(OboExchangeError, match="security policy"):
             await obo_exchange(provider, subject_token="assertion", target_audience="api://srv")
         client.assert_not_called()
+
+
+@pytest.mark.unit
+class TestOboExchangeExpiresIn:
+    """obo_exchange returns the IdP's expires_in so the OBO
+    cache can bound reuse; a missing/opaque value coerces to None (fail-closed)."""
+
+    @pytest.mark.asyncio
+    async def test_returns_parsed_expires_in(self, monkeypatch):
+        cap: dict = {}
+        _patch_post(monkeypatch, _FakeResponse(200, {"access_token": "t", "expires_in": 3600}), cap)
+        token, expires_in = await obo_exchange(
+            _FakeEntraProvider(), subject_token="j", target_audience="api://srv"
+        )
+        assert token == "t"
+        assert expires_in == 3600
+
+    @pytest.mark.asyncio
+    async def test_opaque_expires_in_is_none(self, monkeypatch):
+        cap: dict = {}
+        _patch_post(
+            monkeypatch, _FakeResponse(200, {"access_token": "t", "expires_in": "soon"}), cap
+        )
+        token, expires_in = await obo_exchange(
+            _FakeEntraProvider(), subject_token="j", target_audience="api://srv"
+        )
+        assert token == "t"
+        assert expires_in is None
 
 
 class TestOboFailureReason:

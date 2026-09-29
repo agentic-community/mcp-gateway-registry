@@ -46,6 +46,21 @@ being deployed by this stack.
        system:auth-delegator via "<fullname>-server-binding"). Its long-lived
        token is used as the kubernetes-auth token_reviewer_jwt. */ -}}
 {{- $openbaoSa := include "mcp-gateway-registry-stack.openbaoName" . }}
+{{- /* Auth-server OBO exchanged-token cache: when enabled, the
+       auth-server becomes a SecretStore client for its OWN reserved "obo-cache"
+       namespace only. We bind its ServiceAccount to a SEPARATE, SCOPED OpenBao
+       role+policy -- never the registry's broad mcp-egress policy. */ -}}
+{{- $authServerValues := (index .Values "auth-server") | default dict }}
+{{- $authEgress := $authServerValues.egressAuth | default dict }}
+{{- $oboCacheEnabled := eq ($authEgress.oboCacheEnabled | default "false" | toString) "true" }}
+{{- $authServerSa := "auth-server" }}
+{{- if and $authServerValues.serviceAccount $authServerValues.serviceAccount.name }}
+  {{- $authServerSa = $authServerValues.serviceAccount.name }}
+{{- end }}
+{{- $oboRole := "auth-server-obo-cache" }}
+{{- if $authEgress.openbao }}
+  {{- $oboRole = $authEgress.openbao.role | default "auth-server-obo-cache" }}
+{{- end }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -147,6 +162,12 @@ spec:
               value: {{ $openbaoSa | quote }}
             - name: REVIEWER_SECRET
               value: "openbao-reviewer-token"
+            - name: OBO_CACHE_ENABLED
+              value: {{ $oboCacheEnabled | toString | quote }}
+            - name: AUTH_SERVER_SA
+              value: {{ $authServerSa | quote }}
+            - name: OBO_ROLE
+              value: {{ $oboRole | quote }}
           command:
             - /bin/bash
             - -c
@@ -261,6 +282,21 @@ spec:
               bao_api POST "auth/kubernetes/role/$ROLE" \
                 "$(jq -nc --arg sa "$REGISTRY_SA" --arg ns "$NAMESPACE" \
                   '{bound_service_account_names:$sa,bound_service_account_namespaces:$ns,policies:"mcp-egress",ttl:"1h"}')" >/dev/null
+
+              # --- 4. auth-server OBO cache: scoped policy + role ----
+              # Bind the auth-server SA to a policy limited to the reserved
+              # "obo-cache" namespace (enc("obo-cache")=b2JvLWNhY2hl), NOT the broad
+              # mcp-egress policy. No delete capability: the cache never deletes.
+              if [ "$OBO_CACHE_ENABLED" = "true" ]; then
+                echo "writing scoped policy mcp-obo-cache..."
+                OBO_POLICY="path \"$KV_MOUNT/data/$EGRESS_PREFIX/b2JvLWNhY2hl/*\" { capabilities = [\"create\",\"read\",\"update\"] }
+                path \"$KV_MOUNT/metadata/$EGRESS_PREFIX/b2JvLWNhY2hl/*\" { capabilities = [\"read\",\"list\"] }"
+                bao_api PUT sys/policies/acl/mcp-obo-cache "$(jq -nc --arg p "$OBO_POLICY" '{policy:$p}')" >/dev/null
+                echo "creating role $OBO_ROLE (sa=$AUTH_SERVER_SA ns=$NAMESPACE)..."
+                bao_api POST "auth/kubernetes/role/$OBO_ROLE" \
+                  "$(jq -nc --arg sa "$AUTH_SERVER_SA" --arg ns "$NAMESPACE" \
+                    '{bound_service_account_names:$sa,bound_service_account_namespaces:$ns,policies:"mcp-obo-cache",ttl:"1h"}')" >/dev/null
+              fi
 
               echo "DONE"
 {{- end }}

@@ -111,6 +111,53 @@ resource "aws_iam_policy" "ecs_egress_vault_access" {
   tags = local.common_tags
 }
 
+# The auth-server OBO exchanged-token cache is a SecretStore client
+# ONLY for its reserved "obo-cache" auth_method namespace. This grant is scoped to
+# that namespace's secret path (auth_method "obo-cache" -> base64url segment
+# "b2JvLWNhY2hl"), so the auth-server can read/write its own cache entries but
+# NEVER any user's PAT/3LO secrets under the same egress prefix. Created only when
+# the cache is enabled on the secrets-manager backend.
+resource "aws_iam_policy" "ecs_auth_server_obo_cache_vault_access" {
+  count       = var.egress_auth_enabled && var.egress_obo_cache_enabled && var.egress_secret_store_backend == "secrets-manager" ? 1 : 0
+  name_prefix = "${local.name_prefix}-obo-cache-vault-"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = concat(
+      [
+        {
+          Effect = "Allow"
+          Action = [
+            "secretsmanager:CreateSecret",
+            "secretsmanager:GetSecretValue",
+            "secretsmanager:PutSecretValue",
+            "secretsmanager:DescribeSecret",
+            "secretsmanager:ListSecretVersionIds"
+          ]
+          # Scoped to the reserved OBO-cache namespace ONLY:
+          # "<prefix>/<enc('obo-cache')>/*" where enc = base64url(NFC(...)) unpadded.
+          # SM appends a random 6-char suffix, so /* covers "<...>/*-??????". No
+          # DeleteSecret: the cache never deletes (near-expiry is a plain miss).
+          Resource = "arn:aws:secretsmanager:*:*:secret:${var.egress_secrets_manager_path_prefix}/b2JvLWNhY2hl/*"
+        }
+      ],
+      # KMS only when a customer-managed CMK is configured.
+      var.egress_secrets_manager_kms_key_id != "" ? [
+        {
+          Effect = "Allow"
+          Action = [
+            "kms:Decrypt",
+            "kms:GenerateDataKey"
+          ]
+          Resource = [var.egress_secrets_manager_kms_key_id]
+        }
+      ] : []
+    )
+  })
+
+  tags = local.common_tags
+}
+
 # IAM policy for ECS Exec - task execution role
 resource "aws_iam_policy" "ecs_exec_task_execution" {
   name_prefix = "${local.name_prefix}-ecs-exec-task-exec-"

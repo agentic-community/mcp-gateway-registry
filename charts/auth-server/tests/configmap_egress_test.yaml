@@ -128,3 +128,24 @@ tests:
       - equal:
           path: data.EGRESS_HTTP_POOL_CONNECT_RETRIES
           value: "3"
+
+  - it: renders the secret-store backend only when the OBO cache is enabled
+    set:
+      egressAuth:
+        enabled: true
+        oboCacheEnabled: "true"
+        secretStoreBackend: openbao # pragma: allowlist secret
+        openbao:
+          role: auth-server
+    asserts:
+      - equal:
+          path: data.EGRESS_OBO_CACHE_ENABLED
+          value: "true"
+      - equal:
+          path: data.SECRET_STORE_BACKEND
+          value: "openbao"
+      - exists:
+          path: data.OPENBAO_ADDR
+      - equal:
+          path: data.OPENBAO_ROLE
+          value: "auth-server"
