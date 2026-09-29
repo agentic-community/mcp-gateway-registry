@@ -604,6 +604,7 @@ Comprehensive scans of all enabled servers on a schedule:
 **Automated Response:**
 - Critical/High severity: Server/agent/skill automatically disabled
 - Per-tool alternative: with `SECURITY_ALLOW_UNSAFE_SERVERS=true` an MCP server stays enabled and only its CRITICAL/HIGH tools are blocked, rejected on `tools/call` and withheld from `tools/list`, semantic search and `server.json`. A finding that blames no individual tool still disables the whole server
+- Scan that could not run: a scan that raised reports no findings at all, and `SECURITY_BLOCK_ON_SCAN_FAILURE` decides whether that disables the asset. Default `true`, so it does. Set it to `false` for endpoints that cannot be scanned anonymously, which fail on every registration; the asset then stays enabled and you rely on the `security-pending` tag. Applies to servers, agents and skills
 - Security-pending tag applied for admin review
 - Detailed JSON report saved to `security_scans/` directory
 - UI indicators (shield icons) show security status
