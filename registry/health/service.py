@@ -28,6 +28,38 @@ from ..utils.url_guard import (
 logger = logging.getLogger(__name__)
 
 
+# One name, one predicate, used by BOTH health paths. The periodic loop
+# (_check_single_service) and the on-demand refresh (perform_immediate_health_check)
+# each resolve credentials and set status independently, so a check written into only
+# one of them is a check the UI can miss: the loop said unhealthy while a refresh
+# still reported "Healthy, 45 tools".
+DISCOVERY_IDENTITY_UNCONNECTED = "unhealthy: discovery identity designated but not connected"
+
+
+def _discovery_identity_unconnected(server_info: dict) -> bool:
+    """Whether a designated discovery identity resolved no credential.
+
+    Call AFTER the resolver has run: "designated but not connected" is only knowable
+    once with_bearer has tried and stashed nothing.
+
+    Naming this state beats probing it. The server needs a credential to answer at
+    all, so the probe fails, the tool fetch returns nothing, and ``num_tools`` KEEPS
+    ITS PREVIOUS VALUE -- one deployment read "active, 45 tools" for five hours after
+    the vault lost the token, with the only evidence in a log line.
+
+    Mirrors ``resolve_discovery_bearer``'s own precondition, ``auth_scheme == "none"``
+    included. That resolver deliberately bows out when an explicit static scheme
+    exists, because the operator-chosen credential wins, so a server holding BOTH a
+    designation and a stored bearer resolves no discovery token and is perfectly
+    healthy. Gating on the designation alone would mark every one of those unhealthy.
+    """
+    return bool(
+        (server_info.get("oauth_discovery") or {}).get("enabled")
+        and (server_info.get("auth_scheme") or "none") == "none"
+        and not server_info.get(_BACKEND_OAUTH_TOKEN_KEY)
+    )
+
+
 class HighPerformanceWebSocketManager:
     """High-performance WebSocket manager for 400-1000+ concurrent connections."""
 
@@ -469,6 +501,12 @@ class HealthMonitoringService:
                 self.server_last_check_time[service_path] = datetime.now(UTC)
                 return previous_status != new_status
         server_info = await _with_backend_oauth(server_info)
+
+        if _discovery_identity_unconnected(server_info):
+            new_status = DISCOVERY_IDENTITY_UNCONNECTED
+            self.server_health_status[service_path] = new_status
+            self.server_last_check_time[service_path] = datetime.now(UTC)
+            return previous_status != new_status
 
         try:
             # Try to reach the service endpoint using transport-aware checking
@@ -1369,6 +1407,13 @@ class HealthMonitoringService:
         # Record check time
         last_checked_time = datetime.now(UTC)
         self.server_last_check_time[service_path] = last_checked_time
+
+        # Same gate as the periodic loop. This is the path the UI's refresh calls, so
+        # omitting it here left the card reporting "Healthy, 45 tools" while the loop
+        # had already recorded the server as unhealthy -- the operator sees this one.
+        if _discovery_identity_unconnected(server_info):
+            self.server_health_status[service_path] = DISCOVERY_IDENTITY_UNCONNECTED
+            return DISCOVERY_IDENTITY_UNCONNECTED, last_checked_time
 
         if not proxy_pass_url:
             current_status = "error: missing proxy URL"

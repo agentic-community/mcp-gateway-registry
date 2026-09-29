@@ -46,6 +46,34 @@ _SCANNER_SHIM = (
 )
 
 
+def _scan_failure_message(exc: BaseException, headers: str | None) -> str:
+    """Build the failure string the UI's scan modal shows.
+
+    This is the one place an operator reads about a failed scan, so it has to carry
+    something they can act on. "security scan failed (RuntimeError)" names a Python
+    exception and nothing else, which is what sent one investigation through DNS,
+    TLS and firewall rules before the real cause turned up in a log line.
+
+    When the scan carried no credential, say so. Against a server that requires
+    authentication that IS the whole explanation, and it is the common cause here: a
+    discovery identity designated but never connected, or one whose vaulted token is
+    gone (OpenBao in dev mode discards tokens on restart).
+
+    ``headers`` is the resolved auth header the caller built, so empty means the scan
+    went out unauthenticated. Shared by both failure paths -- the specific exception
+    list and the catch-all -- because a message written into only one of them is a
+    message half the failures will not carry.
+    """
+    message = f"security scan failed ({type(exc).__name__})"
+    if not headers:
+        message += (
+            " - the scan ran without a credential. A server that requires "
+            "authentication will refuse it. Check this server's scan/discovery "
+            "credential, then rescan."
+        )
+    return message
+
+
 def _extract_bearer_token_from_headers(headers: str) -> str | None:
     """
     Extract bearer token from headers JSON string.
@@ -321,9 +349,10 @@ class SecurityScannerService:
             RuntimeError,
             UrlValidationError,
         ) as exc:
-            failure = f"security scan failed ({type(exc).__name__})"
+            failure = _scan_failure_message(exc, headers)
             logger.error(
-                f"Security scan failed endpoint={safe_server_url} type={type(exc).__name__}",
+                f"Security scan failed endpoint={safe_server_url} type={type(exc).__name__} "
+                f"authenticated={bool(headers)}",
             )
 
             raw_output = {
@@ -352,9 +381,10 @@ class SecurityScannerService:
             await self._scan_repo.create(result.model_dump())
             return result
         except Exception as exc:
-            failure = f"security scan failed ({type(exc).__name__})"
+            failure = _scan_failure_message(exc, headers)
             logger.error(
-                f"Unexpected security scan failure endpoint={safe_server_url} type={type(exc).__name__}",
+                f"Unexpected security scan failure endpoint={safe_server_url} "
+                f"type={type(exc).__name__} authenticated={bool(headers)}",
             )
             raw_output = {
                 "error": failure,

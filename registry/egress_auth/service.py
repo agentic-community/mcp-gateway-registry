@@ -265,8 +265,25 @@ class EgressAuthService:
         egress_oauth: dict,
         purpose: str = "egress",
     ) -> str:
-        """Build the provider authorize URL with an AEAD-encrypted, single-use state."""
+        """Build the provider authorize URL with an AEAD-encrypted, single-use state.
+
+        Raises:
+            EgressAuthError: the client secret is missing or undecryptable.
+        """
         cfg = resolve_provider(egress_oauth)
+
+        # Fail here rather than at the callback. The secret is only READ during the
+        # code exchange, so a server missing it used to send the user out to the
+        # provider, through consent, and back to a generic failure page with the
+        # cause recorded only in the registry log. Everything this needs is already
+        # known before the redirect, so check it now: the operator sees a
+        # configuration error instead of a round trip that cannot succeed.
+        #
+        # Same call the exchange makes, so the two cannot disagree about what
+        # counts as configured, and a public client (auth style NONE) still
+        # returns None here without raising.
+        self._client_secret(cfg, egress_oauth)
+
         verifier = oauth_engine.generate_pkce_verifier() if cfg.use_pkce else None
         challenge = oauth_engine.pkce_challenge_s256(verifier) if verifier else None
         state = OAuthState(

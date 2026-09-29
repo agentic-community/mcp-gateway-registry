@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -57,6 +58,12 @@ _MIN_FRESHNESS_MARGIN_SECONDS = 5
 # clouds override via ``settings.entra_login_base_url`` (mirrors the auth-server).
 _DEFAULT_ENTRA_LOGIN_BASE_URL = "https://login.microsoftonline.com"
 
+# Rate limit for the "designated but not connected" warning, per server path. The
+# health loop revisits every ~38s and the state persists until a human acts, so an
+# unbounded warning is pure noise after the first line.
+_UNCONNECTED_WARN_INTERVAL_SECONDS = 900
+_unconnected_warned_at: dict[str, float] = {}
+
 
 @dataclass
 class _CacheEntry:
@@ -75,6 +82,35 @@ _locks_guard = asyncio.Lock()
 
 def _server_path(server_info: dict) -> str | None:
     return server_info.get("service_path") or server_info.get("path")
+
+
+def _warn_discovery_unconnected(server_path: str | None) -> None:
+    """Warn that a designated discovery identity has no vaulted token, at most
+    once per server per :data:`_UNCONNECTED_WARN_INTERVAL_SECONDS`.
+
+    WARNING rather than INFO because nothing here self-heals. The designation is
+    durable and the token is gone, so every health cycle takes this branch until
+    a human reconnects. It is a degraded state needing action, not routine
+    information, and at INFO it sits below the level anyone watches.
+
+    Rate-limited because the health loop runs every ~38s: one incident produced
+    472 identical lines in five hours, which trains readers to ignore the channel
+    rather than telling them anything the first line did not. The first
+    occurrence still logs immediately, so the cause is present from the start.
+    """
+    now = time.monotonic()
+    last = _unconnected_warned_at.get(server_path or "")
+    if last is not None and (now - last) < _UNCONNECTED_WARN_INTERVAL_SECONDS:
+        return
+    _unconnected_warned_at[server_path or ""] = now
+    logger.warning(
+        "oauth discovery: no valid vaulted token for path=%s. A discovery identity "
+        "is designated but not connected (never consented, revoked, or the vault "
+        "lost it -- OpenBao in dev mode discards tokens on restart). Headless "
+        "discovery, health checks and security scans for this server run WITHOUT a "
+        "credential until someone reconnects it.",
+        server_path,
+    )
 
 
 def _fingerprint(bo: dict, client_secret_encrypted: str | None, upstream: str) -> str:
@@ -337,11 +373,7 @@ async def resolve_discovery_bearer(server_info: dict) -> str | None:
         )
         return None
     if not token:
-        logger.info(
-            "oauth discovery: no valid vaulted token for path=%s (identity not "
-            "connected or refresh failed)",
-            server_path,
-        )
+        _warn_discovery_unconnected(server_path)
     return token
 
 

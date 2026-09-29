@@ -36,7 +36,7 @@ from registry.auth.dependencies import nginx_proxied_auth
 from registry.core.config import settings
 from registry.egress_auth import as_facade
 from registry.egress_auth.factory import get_egress_auth_service
-from registry.egress_auth.service import is_per_user_auth_method
+from registry.egress_auth.service import EgressAuthError, is_per_user_auth_method
 from registry.services.server_service import server_service
 
 logger = logging.getLogger(__name__)
@@ -253,15 +253,33 @@ async def egress_connect(
     # Provider consent leg, via the existing web Connected-Accounts path: the
     # callback stores the token + shows the close-tab page. No client-side code
     # exchange -- the client just retries the original tool call.
-    provider_authorize_url = get_egress_auth_service().build_consent_url(
-        auth_method=auth_method,
-        user_id=egress_user_id,
-        client_id_audit=user_context.get("client_id") or "",
-        session_id=user_context.get("session_id") or "",
-        server_path=server_path,
-        egress_oauth=oauth_cfg,
-        purpose=purpose,
-    )
+    try:
+        provider_authorize_url = get_egress_auth_service().build_consent_url(
+            auth_method=auth_method,
+            user_id=egress_user_id,
+            client_id_audit=user_context.get("client_id") or "",
+            session_id=user_context.get("session_id") or "",
+            server_path=server_path,
+            egress_oauth=oauth_cfg,
+            purpose=purpose,
+        )
+    except EgressAuthError as exc:
+        # build_consent_url validates the client secret before redirecting, so a
+        # server missing it fails here rather than sending the user to the provider
+        # and back to a generic callback failure. The exception text can embed
+        # SECRET_KEY hints, so log the type and return a fixed description.
+        logger.warning("egress connect refused: server=%s type=%s", server_path, type(exc).__name__)
+        return JSONResponse(
+            {
+                "error": "invalid_request",
+                "error_description": (
+                    "this server's egress OAuth configuration is incomplete: the "
+                    "client secret is missing or unreadable. Set it on the server's "
+                    "egress auth config before connecting."
+                ),
+            },
+            status_code=400,
+        )
     logger.info(
         "egress connect: user=%s server=%s -> provider consent",
         egress_user_id,
