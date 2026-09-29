@@ -104,7 +104,8 @@ class DocumentDBServerRepository(ServerRepositoryBase):
     ) -> dict[str, Any] | None:
         """Get server by path.
 
-        Normalizes paths to match both with and without trailing slashes.
+        Matches either trailing-slash form of the stored ``_id``, the caller's
+        spelling first.
         """
         logger.debug(
             f"DocumentDB READ: Getting server with path='{path}' from collection '{self._collection_name}'"
@@ -112,17 +113,13 @@ class DocumentDBServerRepository(ServerRepositoryBase):
         collection = await self._get_collection()
 
         try:
-            server_info = await collection.find_one({"_id": path})
-
-            # If not found, try alternate path (with/without trailing slash)
-            if not server_info:
-                if path.endswith("/"):
-                    alternate_path = path.rstrip("/")
-                else:
-                    alternate_path = path + "/"
-
-                logger.debug(f"DocumentDB READ: Trying alternate path '{alternate_path}'")
-                server_info = await collection.find_one({"_id": alternate_path})
+            server_info = None
+            for index, candidate in enumerate(self._path_variants(path)):
+                if index:
+                    logger.debug(f"DocumentDB READ: Trying alternate path '{candidate}'")
+                server_info = await collection.find_one({"_id": candidate})
+                if server_info:
+                    break
 
             if server_info:
                 server_info["path"] = server_info.pop("_id")
@@ -485,18 +482,17 @@ class DocumentDBServerRepository(ServerRepositoryBase):
                     return {"_id": id_value}
                 return {"_id": id_value, "updated_at": expected_updated_at}
 
-            result = await collection.update_one(_filter_for(path), update_spec)
-            if result.matched_count == 0:
-                alternate_path = path.rstrip("/") if path.endswith("/") else path + "/"
-                if alternate_path != path:
-                    if expected_updated_at is not None and await collection.find_one(
-                        {"_id": path}, {"_id": 1}
-                    ):
-                        # The exact card exists with a moved revision: a lost
-                        # race, never a variant miss.
-                        logger.info(f"Server at '{path}' revision mismatch; concurrent update won")
-                        return False
-                    result = await collection.update_one(_filter_for(alternate_path), update_spec)
+            primary, *alternates = self._path_variants(path)
+            result = await collection.update_one(_filter_for(primary), update_spec)
+            if result.matched_count == 0 and alternates:
+                if expected_updated_at is not None and await collection.find_one(
+                    {"_id": primary}, {"_id": 1}
+                ):
+                    # The card exists with a moved revision: a lost race, never a
+                    # variant miss. Writing another _id would retarget the write.
+                    logger.info(f"Server at '{path}' revision mismatch; concurrent update won")
+                    return False
+                result = await collection.update_one(_filter_for(alternates[0]), update_spec)
 
             if result.matched_count == 0:
                 if expected_updated_at is not None:
@@ -744,15 +740,24 @@ class DocumentDBServerRepository(ServerRepositoryBase):
 
     @staticmethod
     def _path_variants(path: str) -> list[str]:
-        """Both trailing-slash forms of a server path.
+        """Both trailing-slash forms of a server path, the caller's form first.
 
         Server ``_id``s are stored inconsistently (e.g. ``/airegistry-tools/``),
         and callers may pass a bare name. Matching both forms in one query is
         equivalent to the alternate-path fallback in ``get``, without the
         second round trip.
+
+        The caller's own spelling sorts first so a sequential resolver (``get``,
+        ``update``) probes the most likely ``_id`` before its variant and wins
+        deterministically when both documents exist; an ``$in`` filter ignores
+        the order.
         """
         stem = "/" + path.strip("/")
-        return [stem, stem + "/"]
+        variants = [stem, stem + "/"]
+        if path in variants:
+            variants.remove(path)
+            variants.insert(0, path)
+        return variants
 
     async def get_tool_overrides(self, path: str) -> dict[str, Any]:
         """Get the raw tool_overrides map for a server ({} when unset)."""
