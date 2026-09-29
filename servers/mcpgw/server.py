@@ -82,6 +82,10 @@ _SKILL_NAME_PATTERN = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*\Z")
 # stays compact and low-token for eval/agent-dev callers.
 MAX_WITHHELD_ITEMS: int = 5
 
+# Page size the catalog listing tools request. The registry caps limit at 2000,
+# so this asks for everything in one call rather than paginating.
+LIST_PAGE_LIMIT: int = 2000
+
 logger.info(f"Registry URL: {REGISTRY_URL}")
 if REGISTRY_EXTERNAL_URL:
     logger.info(f"Registry External URL: {REGISTRY_EXTERNAL_URL}")
@@ -296,6 +300,27 @@ def _validate_query(query: str) -> str:
     return query.strip()
 
 
+def _list_params(
+    metadata_fields: str | None = None,
+) -> dict[str, Any]:
+    """Build the query parameters for a catalog listing call.
+
+    metadata_fields is omitted when empty rather than forwarded. An empty string
+    is not a projection request, and sending one would reach the registry's
+    projection validator and come back as a 422, failing the whole listing.
+
+    Args:
+        metadata_fields: Comma-separated metadata paths, or None for no projection.
+
+    Returns:
+        Query parameter dict for httpx.
+    """
+    params: dict[str, Any] = {"limit": LIST_PAGE_LIMIT}
+    if metadata_fields:
+        params["metadata_fields"] = metadata_fields
+    return params
+
+
 def _dedupe_candidates(
     candidates: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -421,7 +446,10 @@ async def _get_registry_headers(ctx: Context | None) -> dict[str, str]:
 
 @mcp.tool()
 @track_tool()
-async def list_services(ctx: Context | None = None) -> dict[str, Any]:
+async def list_services(
+    metadata_fields: str | None = None,
+    ctx: Context | None = None,
+) -> dict[str, Any]:
     """
     List all MCP servers registered in the registry. Use search_registry
     instead if you know what capability you need (faster, ranked results).
@@ -429,17 +457,28 @@ async def list_services(ctx: Context | None = None) -> dict[str, Any]:
     Each server entry includes its endpoint URL, tools, and connection details.
     Use this for browsing the full catalog or when you need an unfiltered list.
 
+    Args:
+        metadata_fields: Comma-separated metadata keys to keep on each server,
+            in dot-notation for nested keys (e.g. "owner_team,config.region").
+            Servers carry whatever metadata their registrant attached, which can
+            be large, so narrow it to the keys you need when you only need a few.
+            Omit to get every key. Each key must be a single word of letters,
+            digits, "_" or "-"; a key containing a space or other punctuation is
+            rejected and fails the whole call.
+
     Returns:
         Dictionary containing services, total_count, enabled_count, and status
     """
-    logger.info("list_services called")
+    logger.info(f"list_services called: metadata_fields={metadata_fields!r}")
 
     try:
         headers = await _get_registry_headers(ctx)
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.get(
-                f"{REGISTRY_URL}/api/servers", headers=headers, params={"limit": 2000}
+                f"{REGISTRY_URL}/api/servers",
+                headers=headers,
+                params=_list_params(metadata_fields),
             )
             response.raise_for_status()
             data = response.json()
@@ -494,7 +533,10 @@ async def list_services(ctx: Context | None = None) -> dict[str, Any]:
 
 @mcp.tool()
 @track_tool()
-async def list_agents(ctx: Context | None = None) -> dict[str, Any]:
+async def list_agents(
+    metadata_fields: str | None = None,
+    ctx: Context | None = None,
+) -> dict[str, Any]:
     """
     List all agents registered in the registry. Use search_registry
     instead if you know what task you need an agent for (faster, ranked).
@@ -502,23 +544,41 @@ async def list_agents(ctx: Context | None = None) -> dict[str, Any]:
     Agents are autonomous services you can delegate tasks to. Each entry
     includes the agent's URL, capabilities, and skills.
 
+    Args:
+        metadata_fields: Comma-separated metadata keys to keep on each agent,
+            in dot-notation for nested keys (e.g. "owner_team,config.region").
+            Agents carry whatever metadata their registrant attached, which can
+            be large, so narrow it to the keys you need when you only need a few.
+            Omit to get every key. Each key must be a single word of letters,
+            digits, "_" or "-"; a key containing a space or other punctuation is
+            rejected and fails the whole call.
+
     Returns:
         Dictionary containing agents, total_count, and status
     """
-    logger.info("list_agents called")
+    logger.info(f"list_agents called: metadata_fields={metadata_fields!r}")
 
     try:
         headers = await _get_registry_headers(ctx)
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.get(
-                f"{REGISTRY_URL}/api/agents", headers=headers, params={"limit": 2000}
+                f"{REGISTRY_URL}/api/agents",
+                headers=headers,
+                params=_list_params(metadata_fields),
             )
             response.raise_for_status()
             data = response.json()
 
         agents = data.get("agents", []) if isinstance(data, dict) else data
-        agent_list = [AgentInfo(**a).model_dump() for a in agents]
+        # Per-record isolation, matching list_services: one unparseable record
+        # must not empty the whole catalog for the caller.
+        agent_list = []
+        for a in agents:
+            try:
+                agent_list.append(AgentInfo(**a).model_dump())
+            except Exception as e:
+                logger.warning(f"Failed to parse agent {a.get('path', 'unknown')}: {e}")
 
         return {
             "agents": agent_list,
@@ -572,14 +632,27 @@ async def list_skills(ctx: Context | None = None) -> dict[str, Any]:
         headers = await _get_registry_headers(ctx)
 
         async with httpx.AsyncClient(timeout=30.0) as client:
+            # No metadata_fields argument on this tool yet, unlike list_services
+            # and list_agents. GET /api/skills accepts the parameter but ignores
+            # it for nearly every caller (its projection sits inside a fast path
+            # that needs an admin passing include_disabled=true), so exposing the
+            # argument here would document a narrowing that does not happen. Add
+            # it once issue #1809 lands.
             response = await client.get(
-                f"{REGISTRY_URL}/api/skills", headers=headers, params={"limit": 2000}
+                f"{REGISTRY_URL}/api/skills", headers=headers, params=_list_params()
             )
             response.raise_for_status()
             data = response.json()
 
         skills = data.get("skills", []) if isinstance(data, dict) else data
-        skill_list = [SkillInfo(**s).model_dump() for s in skills]
+        # Per-record isolation, matching list_services: one unparseable record
+        # must not empty the whole catalog for the caller.
+        skill_list = []
+        for s in skills:
+            try:
+                skill_list.append(SkillInfo(**s).model_dump())
+            except Exception as e:
+                logger.warning(f"Failed to parse skill {s.get('path', 'unknown')}: {e}")
 
         return {
             "skills": skill_list,
@@ -730,8 +803,11 @@ async def search_registry(
     - Agents: autonomous agents with a URL you can delegate tasks to
     - Skills: workflow instructions (use get_skill_content to fetch the full markdown)
     - Custom: records of a catalog type the registry administrator defined, each
-      naming its type in entity_type; these are catalogued assets rather than
-      endpoints, so use path to look the record up in the registry
+      naming its type in entity_type. These are catalogued assets rather than
+      endpoints, and there is no tool to fetch one: the search result below is
+      the whole picture available here, carrying name, description, tags, owner
+      and visibility. The path identifies the record for a caller that can reach
+      the registry's HTTP API directly.
 
     When a useful MCP server is found, use the endpoint_url to add it to
     the AI assistant's MCP configuration so its tools become available.
@@ -753,9 +829,15 @@ async def search_registry(
             in dot-notation for nested keys (e.g. "owner_team,config.region").
             Registrants can attach arbitrary metadata to an asset, and search
             omits all of it unless you name what you want. Ask for it when the
-            question is about an asset rather than about finding one — who owns
-            it, where it came from, how it is configured. Unknown keys are
-            skipped rather than erroring, so it is safe to ask speculatively.
+            question is about an asset rather than about finding one: who owns
+            it, where it came from, how it is configured.
+            Each key must be a single word of letters, digits, "_" or "-", with
+            "." separating levels of nesting. A key you guessed that no asset
+            happens to carry is simply absent from the results, so guessing a
+            NAME is safe. A malformed key is not: a key containing a space or
+            other punctuation, more than 20 keys, or nesting deeper than 5 levels
+            is rejected and fails the whole call, losing the search results too.
+            When in doubt, search without this argument first.
 
     Returns:
         Dictionary with servers, tools, agents, skills, virtual_servers, custom
@@ -875,6 +957,17 @@ async def search_registry(
         # is counted once. Then split into what the caller saw vs what the limit
         # held back.
         candidate_results = _dedupe_candidates(candidate_results)
+        # Rank before splitting. The loops above append by category (tools, then
+        # agents, then skills, then custom records), so slicing an unsorted list
+        # would make the split report category order rather than relevance: the
+        # last category appended would always be the first called withheld, no
+        # matter how well it scored. top_withheld is documented as the
+        # highest-scoring near misses, so it has to be ordered by score.
+        # Scores can be None, which sorts as 0 (least relevant).
+        candidate_results.sort(
+            key=lambda candidate: candidate.get("similarity_score") or 0,
+            reverse=True,
+        )
         exposed_results = candidate_results[:max_results]
         withheld_results = candidate_results[max_results:]
 

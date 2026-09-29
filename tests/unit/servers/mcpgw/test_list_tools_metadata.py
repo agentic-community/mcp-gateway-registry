@@ -45,14 +45,24 @@ from servers.mcpgw.server import (  # noqa: E402
 OWNERSHIP = {"owner_person": "someone@example.com", "owner_team": "platform"}
 
 
-async def _call_with_mocked_get(tool_func, payload):
-    """Call a listing tool with the registry GET returning `payload`."""
+async def _call_with_mocked_get(tool_func, payload, capture=None, **tool_kwargs):
+    """Call a listing tool with the registry GET returning `payload`.
+
+    Args:
+        tool_func: The listing tool to call.
+        payload: JSON body the mocked registry GET returns.
+        capture: If provided, a dict populated with the GET kwargs (so a test can
+            assert on the query params the tool sent).
+        tool_kwargs: Forwarded to the tool itself.
+    """
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.raise_for_status = MagicMock()
     mock_response.json.return_value = payload
 
     async def mock_get(url, **kwargs):
+        if capture is not None:
+            capture.update(kwargs)
         return mock_response
 
     mock_client = AsyncMock()
@@ -64,7 +74,7 @@ async def _call_with_mocked_get(tool_func, payload):
         patch("servers.mcpgw.server.httpx.AsyncClient", return_value=mock_client),
         patch("servers.mcpgw.server._extract_bearer_token", return_value="test-token"),
     ):
-        return await tool_func()
+        return await tool_func(**tool_kwargs)
 
 
 @pytest.mark.asyncio
@@ -130,3 +140,115 @@ async def test_records_without_metadata_stay_valid():
 
     assert result["status"] == "success"
     assert result["services"][0]["metadata"] is None
+
+
+# ---------------------------------------------------------------------------
+# The listing tools can narrow the metadata they pull back
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_services_omits_metadata_fields_by_default():
+    """Full metadata stays the default, so an unasked call must send no filter."""
+    capture = {}
+
+    await _call_with_mocked_get(list_services, {"servers": []}, capture=capture)
+
+    assert "metadata_fields" not in capture["params"]
+    assert capture["params"]["limit"] == 2000
+
+
+@pytest.mark.asyncio
+async def test_list_services_forwards_metadata_fields():
+    """Server metadata is unbounded, so a caller must be able to narrow it."""
+    capture = {}
+
+    await _call_with_mocked_get(
+        list_services,
+        {"servers": []},
+        capture=capture,
+        metadata_fields="owner_team,config.region",
+    )
+
+    assert capture["params"]["metadata_fields"] == "owner_team,config.region"
+
+
+@pytest.mark.asyncio
+async def test_list_agents_forwards_metadata_fields():
+    capture = {}
+
+    await _call_with_mocked_get(
+        list_agents,
+        {"agents": []},
+        capture=capture,
+        metadata_fields="owner_team",
+    )
+
+    assert capture["params"]["metadata_fields"] == "owner_team"
+
+
+@pytest.mark.asyncio
+async def test_empty_metadata_fields_is_treated_as_unasked():
+    """An empty string is not a projection request; sending one would be a 422."""
+    capture = {}
+
+    await _call_with_mocked_get(
+        list_services,
+        {"servers": []},
+        capture=capture,
+        metadata_fields="",
+    )
+
+    assert "metadata_fields" not in capture["params"]
+
+
+@pytest.mark.asyncio
+async def test_list_skills_sends_no_metadata_fields():
+    """list_skills deliberately has no such argument yet (see issue #1809).
+
+    GET /api/skills accepts metadata_fields but ignores it for nearly every
+    caller, so exposing the argument on this tool would document a narrowing
+    that does not happen. Pin the omission so it is a decision, not a gap.
+    """
+    capture = {}
+
+    await _call_with_mocked_get(list_skills, {"skills": []}, capture=capture)
+
+    assert "metadata_fields" not in capture["params"]
+
+
+# ---------------------------------------------------------------------------
+# One unparseable record must not empty the whole catalog
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_agents_skips_an_unparseable_record():
+    """A bad row is dropped with a warning; the good rows still come back."""
+    payload = {
+        "agents": [
+            {"name": "good", "description": "fine", "metadata": OWNERSHIP},
+            {"name": "bad", "metadata": ["not", "a", "dict"]},
+        ]
+    }
+
+    result = await _call_with_mocked_get(list_agents, payload)
+
+    assert result["status"] == "success"
+    assert [a["name"] for a in result["agents"]] == ["good"]
+    assert result["total_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_list_skills_skips_an_unparseable_record():
+    payload = {
+        "skills": [
+            {"path": "/skills/good", "name": "good", "description": "fine"},
+            {"path": "/skills/bad", "name": "bad", "metadata": "not-a-dict"},
+        ]
+    }
+
+    result = await _call_with_mocked_get(list_skills, payload)
+
+    assert result["status"] == "success"
+    assert [s["name"] for s in result["skills"]] == ["good"]

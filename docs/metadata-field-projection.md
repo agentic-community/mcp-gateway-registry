@@ -26,10 +26,15 @@ The gateway's own MCP tools sit on top of these endpoints, so the same rules app
 
 | Tool | Metadata behavior |
 |------|-------------------|
-| `list_services` / `list_agents` / `list_skills` | Return the `metadata` object in full, because the underlying list endpoints do |
+| `list_services` / `list_agents` | Return the `metadata` object in full; accept an optional `metadata_fields` to narrow it |
+| `list_skills` | Returns the `metadata` object in full. No `metadata_fields` argument: `GET /api/skills` accepts the parameter but does not apply it for most callers ([#1809](https://github.com/agentic-community/mcp-gateway-registry/issues/1809)), so the tool does not offer a narrowing it cannot deliver |
 | `search_registry` | Accepts a `metadata_fields` argument and forwards it; without it, results carry no metadata |
 
-The asymmetry is the search endpoint's, not the tools': listing returns metadata unless you narrow it, while search returns none unless you ask. An agent that needs to know who owns an asset, or where it came from, has to name those keys when searching — `search_registry(query="billing", metadata_fields="owner_team")`.
+The default asymmetry is the search endpoint's, not the tools': listing returns metadata unless you narrow it, while search returns none unless you ask. An agent that needs to know who owns an asset, or where it came from, has to name those keys when searching: `search_registry(query="billing", metadata_fields="owner_team")`.
+
+Narrowing is worth reaching for on the listing tools even though they default to everything. A listing tool pulls up to 2000 records in one call, an MCP tool result lands directly in a model's context window, and metadata is free-form and unbounded: a server imported from the upstream MCP registry carries its entire upstream spec under `metadata.mcp_registry_spec`. `list_services(metadata_fields="owner_team")` keeps a catalog listing compact when ownership is all you needed.
+
+Key syntax is the same everywhere, and the tools inherit the endpoints' validation. Each key is a single word of letters, digits, `_` or `-`, with `.` separating levels of nesting, up to 20 keys and 5 levels deep. A key no asset happens to carry is simply absent from the response, so guessing a name is harmless. A malformed key is not: it is rejected with a 422, which fails the whole call.
 
 ## Examples
 

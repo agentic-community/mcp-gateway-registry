@@ -909,3 +909,91 @@ async def test_empty_metadata_fields_is_treated_as_unasked():
     await _call_search_registry(mock_resp, query="anything", metadata_fields="", capture=capture)
 
     assert "metadata_fields" not in capture["json"]
+
+
+# ---------------------------------------------------------------------------
+# The discovery receipt ranks candidates by score, not by category order
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_receipt_ranks_candidates_by_score_not_category_order():
+    """A high-scoring custom record must be exposed ahead of a weaker tool.
+
+    Candidates are appended one category at a time (tools, then agents, then
+    skills, then custom records), so an unsorted slice would report category
+    order: whatever was appended last would always be the first called withheld
+    however well it scored. The receipt documents top_withheld as the
+    highest-scoring near misses, so the split has to be ranked.
+    """
+    server = {
+        "server_name": "weak-server",
+        "path": "/weak",
+        "matching_tools": [
+            {"tool_name": "weak_tool", "description": "barely related", "relevance_score": 0.10},
+        ],
+    }
+    mock_resp = _make_mock_response()
+    mock_resp.json.return_value = {
+        "servers": [server],
+        "tools": [],
+        "agents": [],
+        "skills": [],
+        "virtual_servers": [],
+        "custom": [
+            _make_custom_record(name="strong-record", path="/gem/strong", relevance_score=0.95),
+        ],
+    }
+
+    result = await _call_search_registry(
+        mock_resp,
+        query="anything",
+        max_results=1,
+        include_discovery_receipt=True,
+    )
+
+    receipt = result["discovery_receipt"]
+    assert receipt["exposed_results"] == [
+        {
+            "asset_type": "prompt_template",
+            "service_path": "/gem/strong",
+            "name": "strong-record",
+            "similarity_score": 0.95,
+        },
+    ]
+    assert receipt["withheld"]["top_withheld"] == [
+        {
+            "asset_type": "tool",
+            "service_path": "/weak",
+            "name": "weak_tool",
+            "similarity_score": 0.10,
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_receipt_ranking_tolerates_a_missing_score():
+    """A candidate with no score sorts last rather than raising on None."""
+    mock_resp = _make_mock_response()
+    mock_resp.json.return_value = {
+        "servers": [],
+        "tools": [],
+        "agents": [],
+        "skills": [],
+        "virtual_servers": [],
+        "custom": [
+            _make_custom_record(name="scored", path="/gem/scored", relevance_score=0.5),
+            _make_custom_record(name="unscored", path="/gem/unscored", relevance_score=None),
+        ],
+    }
+
+    result = await _call_search_registry(
+        mock_resp,
+        query="anything",
+        max_results=1,
+        include_discovery_receipt=True,
+    )
+
+    receipt = result["discovery_receipt"]
+    assert receipt["exposed_results"][0]["name"] == "scored"
+    assert receipt["withheld"]["top_withheld"][0]["name"] == "unscored"
