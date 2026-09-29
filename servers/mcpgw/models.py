@@ -4,6 +4,8 @@ These models define the data structures returned by the registry API
 and used by the MCP tools.
 """
 
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 
@@ -20,7 +22,7 @@ class ServerInfo(BaseModel):
     enabled: bool = Field(..., alias="is_enabled", description="Whether the server is enabled")
     tags: list[str] = Field(default_factory=list, description="Server tags")
     tool_count: int | None = Field(None, alias="num_tools", description="Number of tools provided")
-    metadata: dict | None = Field(
+    metadata: dict[str, Any] | None = Field(
         None,
         description=(
             "Free-form metadata the registrant attached to the server, e.g. ownership "
@@ -37,7 +39,7 @@ class AgentInfo(BaseModel):
     description: str | None = Field(None, description="Agent description")
     tags: list[str] = Field(default_factory=list, description="Agent tags")
     created_at: str | None = Field(None, description="Creation timestamp")
-    metadata: dict | None = Field(
+    metadata: dict[str, Any] | None = Field(
         None, description="Free-form metadata the registrant attached to the agent"
     )
 
@@ -53,7 +55,7 @@ class SkillInfo(BaseModel):
     tags: list[str] = Field(default_factory=list, description="Skill tags")
     target_agents: list[str] = Field(default_factory=list, description="Target agent platforms")
     created_at: str | None = Field(None, description="Creation timestamp")
-    metadata: dict | None = Field(
+    metadata: dict[str, Any] | None = Field(
         None,
         description=(
             "Skill metadata: author, version, and any free-form keys under extra, "
