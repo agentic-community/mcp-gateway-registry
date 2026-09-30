@@ -296,7 +296,7 @@ class TestLogtoTokenValidation:
         assert result["scopes"] == ["read", "write"]
 
     def test_validate_token_self_signed_expired(self):
-        """An expired self-signed token raises ValueError."""
+        """An expired self-signed token reports its expiry, not a JWKS error."""
         provider = make_provider()
         secret = "test-secret-key-for-logto-provider-tests"
 
@@ -314,12 +314,12 @@ class TestLogtoTokenValidation:
             algorithm="HS256",
         )
 
-        # The expired signature is checked inside the self-signed path; the
-        # outer pre-check in validate_token swallows its error, so test the
-        # validation routine directly.
+        # Through the public path: the self-signed pre-check must let the
+        # expiry error propagate instead of falling through to the JWKS path
+        # (which would surface a misleading "Cannot retrieve JWKS").
         with patch("auth_server.providers.logto.SECRET_KEY", secret):
-            with pytest.raises(ValueError, match="Token has expired"):
-                provider._validate_self_signed_token(token)
+            with pytest.raises(ValueError, match="^Token has expired$"):
+                provider.validate_token(token)
 
     def test_validate_self_signed_missing_secret_key(self):
         """Without SECRET_KEY the self-signed path fails closed."""

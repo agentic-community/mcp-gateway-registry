@@ -104,14 +104,19 @@ class LogtoProvider(AuthProvider):
         try:
             logger.debug("Validating Logto JWT token")
 
-            # First check if this is a self-signed token from our auth server
+            # First check if this is a self-signed token from our auth server.
+            # A decode failure or issuer mismatch only means "not self-signed"
+            # (fall through to the IdP path); a self-signed token that then
+            # FAILS validation must propagate, not fall through to JWKS.
             try:
                 unverified_claims = jwt.decode(token, options={"verify_signature": False})
-                if unverified_claims.get("iss") == JWT_ISSUER:
-                    logger.debug("Token appears to be self-signed, validating...")
-                    return self._validate_self_signed_token(token)
             except Exception as e:
                 logger.debug(f"Not a self-signed token: {e}")
+                unverified_claims = None
+
+            if unverified_claims and unverified_claims.get("iss") == JWT_ISSUER:
+                logger.debug("Token appears to be self-signed, validating...")
+                return self._validate_self_signed_token(token)
 
             # Get JWKS for validation
             jwks = self.get_jwks()
@@ -194,6 +199,10 @@ class LogtoProvider(AuthProvider):
         except jwt.InvalidTokenError as e:
             logger.warning(f"Token validation failed: Invalid token - {e}")
             raise ValueError(f"Invalid token: {e}")
+        except ValueError:
+            # Already-shaped errors from the self-signed path (expiry, bad
+            # token_use, missing SECRET_KEY) carry their own message.
+            raise
         except Exception as e:
             logger.error(f"Logto token validation error: {e}")
             raise ValueError(f"Token validation failed: {e}")
