@@ -1360,6 +1360,26 @@ class TestEndpointUrlAppendMcpPath:
 
         assert url == "https://backend.example.com/custom"
 
+    @pytest.mark.parametrize(
+        ("append_mcp_path", "expected"),
+        [
+            (None, "https://gw.example.com/aws-knowledge/mcp"),
+            (False, "https://gw.example.com/aws-knowledge"),
+        ],
+    )
+    def test_path_without_leading_slash(self, append_mcp_path, expected):
+        """A path stored without its leading slash still yields a well-formed URL."""
+        with self._with_gateway():
+            url = _compute_endpoint_url(
+                path="aws-knowledge",
+                proxy_pass_url=None,
+                mcp_endpoint=None,
+                base_url=self.BASE,
+                append_mcp_path=append_mcp_path,
+            )
+
+        assert url == expected
+
     @pytest.fixture
     def root_endpoint_server_info(self):
         """get_server_info for a server registered with append_mcp_path=False."""
@@ -1367,11 +1387,12 @@ class TestEndpointUrlAppendMcpPath:
         async def get_server_info(path: str):
             return {"path": path, "server_name": "currenttime", "append_mcp_path": False}
 
+        mock = AsyncMock(side_effect=get_server_info)
         with patch(
             "registry.services.server_service.server_service.get_server_info",
-            new=AsyncMock(side_effect=get_server_info),
+            new=mock,
         ):
-            yield
+            yield mock
 
     @pytest.fixture
     def gateway_request(self, mock_http_request):
@@ -1442,6 +1463,50 @@ class TestEndpointUrlAppendMcpPath:
             )
 
         assert response.tools[0].endpoint_url == "https://gw.example.com/servers/currenttime"
+
+    @pytest.mark.asyncio
+    async def test_tool_results_share_one_lookup_per_server(
+        self, gateway_request, mock_search_repo, regular_user_context, root_endpoint_server_info
+    ):
+        """Several tool hits from one absent server look its flag up once."""
+        mock_search_repo.search = AsyncMock(
+            return_value={
+                "servers": [],
+                "tools": [
+                    {
+                        "server_path": "/servers/currenttime",
+                        "server_name": "currenttime",
+                        "tool_name": tool_name,
+                        "description": "Get time",
+                        "relevance_score": 0.9,
+                    }
+                    for tool_name in ("get_time", "get_timezone")
+                ],
+                "agents": [],
+            }
+        )
+
+        # The access check does its own server lookup per tool; stub it so the
+        # count below is the endpoint lookup alone.
+        with (
+            self._with_gateway(),
+            patch(
+                "registry.api.search_routes._user_can_access_server",
+                new=AsyncMock(return_value=True),
+            ),
+        ):
+            response = await semantic_search(
+                gateway_request,
+                SemanticSearchRequest(query="time"),
+                regular_user_context,
+                mock_search_repo,
+            )
+
+        assert [tool.endpoint_url for tool in response.tools] == [
+            "https://gw.example.com/servers/currenttime",
+            "https://gw.example.com/servers/currenttime",
+        ]
+        root_endpoint_server_info.assert_awaited_once_with("/servers/currenttime")
 
 
 # =============================================================================
