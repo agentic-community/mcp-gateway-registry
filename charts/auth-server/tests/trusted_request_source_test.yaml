@@ -84,3 +84,18 @@ tests:
           path: data.TRUSTED_EXTERNAL_HOSTS
           value: "auth.example.com"
           decodeBase64: true
+
+  - it: rejects additional hostnames outside the effective cookie domain
+    set:
+      app:
+        secretKey: "test-key-not-for-prod"  # pragma: allowlist secret
+      egressAuth:
+        markerSecret: "test-marker-not-for-prod"  # pragma: allowlist secret
+      global:
+        domain: example.com
+        ingress:
+          additionalHostnames:
+            - alias.example.net
+    asserts:
+      - failedTemplate:
+          errorPattern: "outside the effective session cookie domain"

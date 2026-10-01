@@ -25,6 +25,50 @@ tests:
       - failedTemplate:
           errorPattern: "egressAuth.markerSecret is required for standalone deployment"
 
+  - it: rejects additional hostnames outside the effective cookie domain
+    set:
+      app:
+        secretKey: "test-key-not-for-prod"
+      egressAuth:
+        markerSecret: "test-marker-not-for-prod"
+      global:
+        domain: example.com
+        ingress:
+          additionalHostnames:
+            - alias.example.net
+    asserts:
+      - failedTemplate:
+          errorPattern: "outside the effective session cookie domain"
+
+  - it: rejects URL-shaped additional hostnames
+    set:
+      app:
+        secretKey: "test-key-not-for-prod"
+      egressAuth:
+        markerSecret: "test-marker-not-for-prod"
+      global:
+        domain: example.com
+        ingress:
+          additionalHostnames:
+            - https://alias.example.com
+    asserts:
+      - failedTemplate:
+          errorPattern: "not a bare lowercase DNS hostname"
+
+  - it: requires additional hostnames to be a list
+    set:
+      app:
+        secretKey: "test-key-not-for-prod"
+      egressAuth:
+        markerSecret: "test-marker-not-for-prod"
+      global:
+        domain: example.com
+        ingress:
+          additionalHostnames: alias.example.com
+    asserts:
+      - failedTemplate:
+          errorPattern: "global.ingress.additionalHostnames must be a list"
+
   - it: renders cleanly when app.secretKey and markerSecret are supplied
     set:
       app:

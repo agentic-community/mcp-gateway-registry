@@ -79,7 +79,8 @@ global:
     # the original chart behavior: mcpregistry.<domain>.
     registrySubdomain: mcpregistry
     # Optional additional hostnames served by the same registry Ingress. These
-    # are full hostnames, not prefixes, and use the same backend and paths.
+    # are bare lowercase DNS hostnames under the effective session-cookie domain
+    # (default: .<global.domain>) so browser login can share its cookie.
     additionalHostnames: []
     # Path prefixes used when routingMode: path. Keycloak's browser path
     # (/keycloak) is not configurable here — it's pinned by the registry
