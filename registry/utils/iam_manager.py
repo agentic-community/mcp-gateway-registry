@@ -883,6 +883,18 @@ class LogtoIAMManager:
         roles = await self._client.get_paged("/api/roles")
         return next((r for r in roles if r.get("name") == role_name), None)
 
+    async def _resolve_role_id(self, group_name: str) -> str:
+        """Resolve a group name to its Logto role id, raising when it does not exist.
+
+        Mirrors keycloak_manager's grant behaviour: a grant referencing a
+        missing group is an admin mistake and must fail the request instead of
+        being skipped while the response reports the group as granted.
+        """
+        role = await self._find_role(group_name)
+        if role is None:
+            raise self._not_found(f"Logto role '{group_name}'")
+        return str(role["id"])
+
     async def _find_user(self, username: str) -> dict[str, Any] | None:
         users = await self._client.get_paged(
             "/api/users", params={"search": username}, max_items=200
@@ -989,16 +1001,7 @@ class LogtoIAMManager:
             payload["password"] = password
         user = await self._client.post("/api/users", payload)
         if groups:
-            role_ids = []
-            for group_name in groups:
-                role = await self._find_role(group_name)
-                if role is None:
-                    logger.warning(
-                        "create_human_user: group '%s' has no Logto role; skipping assignment",
-                        group_name,
-                    )
-                    continue
-                role_ids.append(role["id"])
+            role_ids = [await self._resolve_role_id(group_name) for group_name in groups]
             await self._assign_user_roles(user["id"], role_ids)
         return self._user_summary(user, groups)
 
@@ -1019,15 +1022,9 @@ class LogtoIAMManager:
         current_by_name = {r.get("name"): r for r in current}
         desired = set(groups)
 
-        add_ids = []
-        for group_name in desired - set(current_by_name):
-            role = await self._find_role(group_name)
-            if role is None:
-                logger.warning(
-                    "update_user_groups: group '%s' has no Logto role; skipping", group_name
-                )
-                continue
-            add_ids.append(role["id"])
+        add_ids = [
+            await self._resolve_role_id(group_name) for group_name in desired - set(current_by_name)
+        ]
         await self._assign_user_roles(user["id"], add_ids)
 
         for name in set(current_by_name) - desired:
@@ -1055,15 +1052,7 @@ class LogtoIAMManager:
                 "type": "machine-to-machine",
             },
         )
-        role_ids = []
-        for group_name in groups:
-            role = await self._find_role(group_name)
-            if role is None:
-                logger.warning(
-                    "create_service_account: group '%s' has no Logto role; skipping", group_name
-                )
-                continue
-            role_ids.append(role["id"])
+        role_ids = [await self._resolve_role_id(group_name) for group_name in groups]
         if role_ids:
             await self._client.post(f"/api/applications/{app['id']}/roles", {"roleIds": role_ids})
         return {

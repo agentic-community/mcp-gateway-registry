@@ -180,3 +180,43 @@ async def test_create_service_account_creates_m2m_app_and_assigns_roles(manager,
     ]
     assert stub.method("POST", "/api/applications/app1/roles") == [{"roleIds": ["r1"]}]
     assert result["client_id"] == "app1" and result["secret"] == "s3cr3t"
+
+
+# A grant referencing a missing group must fail the request the way the
+# Keycloak manager does — not warn, skip, and echo the group back as granted.
+
+
+@pytest.mark.asyncio
+async def test_create_human_user_missing_role_raises(manager, stub):
+    stub.responses[("POST", "/api/users")] = {
+        "id": "u1",
+        "username": "alice",
+        "primaryEmail": "a@x.co",
+    }
+    stub.paged["/api/roles"] = []
+    with pytest.raises(LogtoAdminError, match=r"Logto role 'legal' not found.*HTTP 404"):
+        await manager.create_human_user("alice", "a@x.co", "A", "L", ["legal"])
+    assert not stub.method("POST", "/api/users/u1/roles")
+
+
+@pytest.mark.asyncio
+async def test_update_user_groups_missing_role_raises(manager, stub):
+    stub.paged["/api/users"] = [{"id": "u1", "username": "alice", "primaryEmail": "a@x.co"}]
+    stub.paged["/api/users/u1/roles"] = []
+    stub.paged["/api/roles"] = []
+    with pytest.raises(LogtoAdminError, match="HTTP 404"):
+        await manager.update_user_groups("alice", ["nope"])
+    assert not stub.method("POST", "/api/users/u1/roles")
+
+
+@pytest.mark.asyncio
+async def test_create_service_account_missing_role_raises(manager, stub):
+    stub.responses[("POST", "/api/applications")] = {
+        "id": "app1",
+        "secret": "s3cr3t",
+        "type": "machine-to-machine",
+    }
+    stub.paged["/api/roles"] = []
+    with pytest.raises(LogtoAdminError, match="HTTP 404"):
+        await manager.create_service_account("ci-bot", ["nope"], "")
+    assert not stub.method("POST", "/api/applications/app1/roles")

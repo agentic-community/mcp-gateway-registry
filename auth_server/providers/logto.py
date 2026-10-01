@@ -51,10 +51,10 @@ class LogtoProvider(AuthProvider):
         logto_url: str,
         client_id: str,
         client_secret: str,
+        m2m_client_id: str,
+        m2m_client_secret: str,
+        m2m_resource: str,
         logto_external_url: str | None = None,
-        m2m_client_id: str | None = None,
-        m2m_client_secret: str | None = None,
-        m2m_resource: str | None = None,
     ):
         """Initialize Logto provider.
 
@@ -63,19 +63,24 @@ class LogtoProvider(AuthProvider):
                 communication (e.g. ``http://idp-logto:3001``).
             client_id: OAuth2 client ID of the gateway's web application.
             client_secret: OAuth2 client secret of the web application.
-            logto_external_url: External URL for browser redirects
-                (e.g. ``https://auth.example.com``); defaults to logto_url.
-            m2m_client_id: Optional M2M application client ID.
-            m2m_client_secret: Optional M2M application client secret.
+            m2m_client_id: Client ID of the dedicated M2M application.
+            m2m_client_secret: Client secret of the dedicated M2M application.
             m2m_resource: API resource indicator required by Logto on
                 client_credentials requests (the resulting token ``aud``).
+            logto_external_url: External URL for browser redirects
+                (e.g. ``https://auth.example.com``); defaults to logto_url.
+
+        The M2M application is a separate credential from the browser-facing
+        web application on purpose: it must never default to the web secret,
+        so an under-configured deployment refuses to start instead of using a
+        credential with a much wider blast radius.
         """
         self.logto_url = logto_url.rstrip("/")
         self.logto_external_url = (logto_external_url or logto_url).rstrip("/")
         self.client_id = client_id
         self.client_secret = client_secret
-        self.m2m_client_id = m2m_client_id or client_id
-        self.m2m_client_secret = m2m_client_secret or client_secret
+        self.m2m_client_id = m2m_client_id
+        self.m2m_client_secret = m2m_client_secret
         self.m2m_resource = m2m_resource
 
         # Cache for JWKS and configuration

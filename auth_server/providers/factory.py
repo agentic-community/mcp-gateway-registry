@@ -475,7 +475,8 @@ def _create_logto_provider() -> LogtoProvider:
     client_id = os.environ.get("LOGTO_CLIENT_ID")
     client_secret = os.environ.get("LOGTO_CLIENT_SECRET")
 
-    # Optional M2M configuration
+    # Required M2M configuration: a dedicated M2M application, never the web
+    # application's credentials.
     m2m_client_id = os.environ.get("LOGTO_M2M_CLIENT_ID")
     m2m_client_secret = os.environ.get("LOGTO_M2M_CLIENT_SECRET")
     m2m_resource = os.environ.get("LOGTO_M2M_RESOURCE")
@@ -487,6 +488,12 @@ def _create_logto_provider() -> LogtoProvider:
         missing_vars.append("LOGTO_CLIENT_ID")
     if not client_secret:
         missing_vars.append("LOGTO_CLIENT_SECRET")
+    if not m2m_client_id:
+        missing_vars.append("LOGTO_M2M_CLIENT_ID")
+    if not m2m_client_secret:
+        missing_vars.append("LOGTO_M2M_CLIENT_SECRET")
+    if not m2m_resource:
+        missing_vars.append("LOGTO_M2M_RESOURCE")
 
     if missing_vars:
         raise ValueError(

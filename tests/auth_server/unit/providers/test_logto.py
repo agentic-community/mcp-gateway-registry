@@ -18,6 +18,9 @@ def make_provider(**overrides) -> LogtoProvider:
         "logto_url": INTERNAL_URL,
         "client_id": "web-client",
         "client_secret": "web-secret",
+        "m2m_client_id": "m2m-client",
+        "m2m_client_secret": "m2m-secret",
+        "m2m_resource": "https://api.example.com",
         "logto_external_url": EXTERNAL_URL,
     }
     kwargs.update(overrides)
@@ -60,6 +63,9 @@ class TestLogtoProviderInit:
             logto_url="http://idp-logto:3001/",
             client_id="cid",
             client_secret="cs",
+            m2m_client_id="m2m-cid",
+            m2m_client_secret="m2m-cs",
+            m2m_resource="https://api.example.com",
         )
         assert provider.logto_url == "http://idp-logto:3001"
 
@@ -69,16 +75,20 @@ class TestLogtoProviderInit:
             logto_url=INTERNAL_URL,
             client_id="cid",
             client_secret="cs",
+            m2m_client_id="m2m-cid",
+            m2m_client_secret="m2m-cs",
+            m2m_resource="https://api.example.com",
         )
         assert provider.logto_external_url == INTERNAL_URL
         assert provider.auth_url == f"{INTERNAL_URL}/oidc/auth"
 
-    def test_provider_initialization_m2m_defaults(self):
-        """M2M credentials default to the web application's credentials."""
+    def test_provider_initialization_keeps_dedicated_m2m_credentials(self):
+        """M2M credentials are the ones passed in — no web-secret substitution."""
         provider = make_provider()
-        assert provider.m2m_client_id == "web-client"
-        assert provider.m2m_client_secret == "web-secret"
-        assert provider.m2m_resource is None
+        assert provider.m2m_client_id == "m2m-client"
+        assert provider.m2m_client_secret == "m2m-secret"
+        assert provider.m2m_resource == "https://api.example.com"
+        assert provider.m2m_client_id != provider.client_id
 
 
 # =============================================================================
@@ -544,7 +554,7 @@ class TestLogtoDiscoveryMetadata:
         config = {"issuer": f"{INTERNAL_URL}/oidc"}
         mock_get.return_value = mock_json_response(config)
 
-        provider = LogtoProvider(logto_url=INTERNAL_URL, client_id="cid", client_secret="cs")
+        provider = make_provider(logto_external_url=INTERNAL_URL)
         assert provider.authorization_server_metadata() == config
 
     @patch("auth_server.providers.logto.requests.get")
@@ -629,6 +639,9 @@ class TestLogtoFactoryIntegration:
         monkeypatch.setenv("LOGTO_URL", "http://idp-logto:3001")
         monkeypatch.setenv("LOGTO_CLIENT_ID", "test-cid")
         monkeypatch.setenv("LOGTO_CLIENT_SECRET", "test-cs")
+        monkeypatch.setenv("LOGTO_M2M_CLIENT_ID", "test-m2m-cid")
+        monkeypatch.setenv("LOGTO_M2M_CLIENT_SECRET", "test-m2m-cs")
+        monkeypatch.setenv("LOGTO_M2M_RESOURCE", "https://api.example.com")
 
         import importlib
 
@@ -639,3 +652,22 @@ class TestLogtoFactoryIntegration:
         provider = factory_module.get_auth_provider("logto")
         assert isinstance(provider, LogtoProvider)
         assert provider.logto_url == "http://idp-logto:3001"
+        assert provider.m2m_client_id == "test-m2m-cid"
+
+    def test_factory_requires_explicit_m2m_credentials(self, monkeypatch):
+        """A deployment without M2M config refuses to start — no web-secret fallback."""
+        monkeypatch.setenv("LOGTO_URL", "http://idp-logto:3001")
+        monkeypatch.setenv("LOGTO_CLIENT_ID", "test-cid")
+        monkeypatch.setenv("LOGTO_CLIENT_SECRET", "test-cs")
+        monkeypatch.delenv("LOGTO_M2M_CLIENT_ID", raising=False)
+        monkeypatch.delenv("LOGTO_M2M_CLIENT_SECRET", raising=False)
+        monkeypatch.delenv("LOGTO_M2M_RESOURCE", raising=False)
+
+        import importlib
+
+        import auth_server.providers.factory as factory_module
+
+        importlib.reload(factory_module)
+
+        with pytest.raises(ValueError, match="LOGTO_M2M_CLIENT_ID.*LOGTO_M2M_CLIENT_SECRET"):
+            factory_module.get_auth_provider("logto")

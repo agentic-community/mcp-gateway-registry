@@ -27,15 +27,14 @@ LOGTO_ENDPOINT: str = (
     or os.environ.get("LOGTO_EXTERNAL_URL")
     or "http://logto:3001"
 ).rstrip("/")
-# Dedicated management-client names win; fall back to the deployment's existing
-# M2M application credentials (LOGTO_M2M_*) — the same application carries the
-# "Logto Management API access" role, so no extra secret needs to exist.
-LOGTO_MANAGEMENT_M2M_CLIENT_ID: str = os.environ.get(
-    "LOGTO_MANAGEMENT_M2M_CLIENT_ID"
-) or os.environ.get("LOGTO_M2M_CLIENT_ID", "")
-LOGTO_MANAGEMENT_M2M_CLIENT_SECRET: str = os.environ.get(
-    "LOGTO_MANAGEMENT_M2M_CLIENT_SECRET"
-) or os.environ.get("LOGTO_M2M_CLIENT_SECRET", "")
+# Management-client credentials are their own dedicated M2M application. They
+# deliberately do NOT fall back to LOGTO_M2M_* (or the web application's
+# credentials): the management client creates users, mints service-account
+# secrets and assigns roles, and silently substituting a credential with a
+# much wider blast radius would hide an under-configured deployment instead
+# of refusing it. Missing credentials fail closed in LogtoAdminClient.
+LOGTO_MANAGEMENT_M2M_CLIENT_ID: str = os.environ.get("LOGTO_MANAGEMENT_M2M_CLIENT_ID", "")
+LOGTO_MANAGEMENT_M2M_CLIENT_SECRET: str = os.environ.get("LOGTO_MANAGEMENT_M2M_CLIENT_SECRET", "")
 # Resource indicator of the Management API. Self-hosted default tenant ships
 # the fixed identifier below; override only for custom tenant setups.
 LOGTO_MANAGEMENT_RESOURCE: str = os.environ.get(
