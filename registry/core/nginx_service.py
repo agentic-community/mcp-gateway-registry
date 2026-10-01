@@ -15,7 +15,9 @@ import httpx
 
 from registry.common.log_redaction import redact_url
 from registry.constants import REGISTRY_CONSTANTS, DeploymentType, HealthStatus
+from registry.exceptions import UrlValidationError
 from registry.schemas.proxy_mixin import _assert_egress_allowed, build_proxy_client_path
+from registry.utils.url_guard import validate_proxy_pass_url, validate_server_path
 
 from .config import settings
 from .endpoint_utils import get_endpoint_url_from_server_info
@@ -1215,12 +1217,11 @@ class NginxConfigService:
                 f"{keycloak_scheme}://{keycloak_host}:{keycloak_port}"
             )
 
-            # Generate version map for multi-version servers
-            # In registry-only mode, skip version map generation (use empty string)
-            if settings.nginx_updates_enabled:
-                version_map = await self._generate_version_map(servers)
-            else:
-                version_map = ""
+            # Declare the map even when no server has versions; virtual auth
+            # locations refer to $versioned_backend in every generated block.
+            version_map = await self._generate_version_map(
+                servers if settings.nginx_updates_enabled else {}
+            )
 
             # Replace placeholders in template
             config_content = template_content.replace("{{VERSION_MAP}}", version_map)
@@ -1577,6 +1578,7 @@ class NginxConfigService:
                     {
                         "version": current_version,
                         "proxy_pass_url": current_proxy_url,
+                        "mcp_endpoint": server_info.get("mcp_endpoint"),
                         "is_default": True,
                     }
                 )
@@ -1589,6 +1591,7 @@ class NginxConfigService:
                         {
                             "version": version_info.get("version", "unknown"),
                             "proxy_pass_url": version_info.get("proxy_pass_url", ""),
+                            "mcp_endpoint": version_info.get("mcp_endpoint"),
                             "is_default": False,
                         }
                     )
@@ -1604,40 +1607,60 @@ class NginxConfigService:
                 logger.warning(f"No default backend found for {path}, skipping version map")
                 continue
 
-            # Escape path for nginx regex
-            # Handle paths like /context7, /currenttime/, /ai.smithery-xxx
-            escaped_path = re.escape(path.rstrip("/"))
+            # Handle paths like /context7 and /peer/remote on both direct and
+            # internal virtual auth locations.
 
-            # Defense-in-depth: escape backend URLs before interpolating them
-            # into the quoted nginx map values (belt-and-suspenders with the
-            # registration-time metacharacter rejection).
+            # Direct routes preserve their existing version map; virtual auth
+            # locations use the selected version's resolved MCP endpoint path
+            # (which can be custom or nested) on the same registered host.
+            direct_route = re.escape(path.rstrip("/"))
+            virtual_route = re.escape(f"/_vs_auth{self._sanitize_path_for_location(path)}")
             safe_default_backend = self._sanitize_for_nginx_set(default_backend)
-
-            # Add map entries for this server
-            # Entry for no header (empty string after colon)
-            map_entries.append(
-                f'    "~^{escaped_path}(/.*)?:$"            "{safe_default_backend}";'
-            )
-            # Entry for explicit "latest"
-            map_entries.append(
-                f'    "~^{escaped_path}(/.*)?:latest$"      "{safe_default_backend}";'
+            default_endpoint = get_endpoint_url_from_server_info(server_info)
+            default_endpoint_path = urlparse(default_endpoint).path.rstrip("/")
+            default_parsed = urlparse(default_backend)
+            virtual_default = self._sanitize_for_nginx_set(
+                f"{default_parsed.scheme}://{default_parsed.netloc}{default_endpoint_path}"
             )
 
-            # Entry for each version
-            for v in versions:
-                version_str = v.get("version", "")
-                backend_url = v.get("proxy_pass_url", "")
-                if version_str and backend_url:
+            for escaped_route, default_url in (
+                (direct_route, safe_default_backend),
+                (virtual_route, virtual_default),
+            ):
+                map_entries.append(f'    "~^{escaped_route}(/.*)?:$" "{default_url}";')
+                map_entries.append(f'    "~^{escaped_route}(/.*)?:latest$" "{default_url}";')
+                for v in versions:
+                    version_str = v.get("version", "")
+                    backend_url = v.get("proxy_pass_url", "")
+                    if not version_str or not backend_url:
+                        continue
+                    if escaped_route == virtual_route:
+                        try:
+                            validate_proxy_pass_url(backend_url, server_path=path)
+                            endpoint_override = v.get("mcp_endpoint")
+                            if endpoint_override:
+                                validate_proxy_pass_url(endpoint_override, server_path=path)
+                        except UrlValidationError:
+                            logger.warning("Skipping unsafe virtual version for %s", path)
+                            continue
+                    if escaped_route == virtual_route:
+                        endpoint = get_endpoint_url_from_server_info(
+                            {"proxy_pass_url": backend_url, "mcp_endpoint": v.get("mcp_endpoint")}
+                        )
+                        parsed_version = urlparse(backend_url)
+                        backend_url = (
+                            f"{parsed_version.scheme}://{parsed_version.netloc}"
+                            f"{urlparse(endpoint).path.rstrip('/')}"
+                        )
                     safe_backend_url = self._sanitize_for_nginx_set(backend_url)
                     map_entries.append(
-                        f'    "~^{escaped_path}(/.*)?:{re.escape(version_str)}$"  "{safe_backend_url}";'
+                        f'    "~^{escaped_route}(/.*)?:{re.escape(version_str)}$" "{safe_backend_url}";'
                     )
 
             logger.info(f"Generated version map entries for {path} with {len(versions)} versions")
 
-        if not map_entries:
-            return ""  # No multi-version servers configured
-
+        # The virtual authorization blocks reference $versioned_backend even
+        # when no server has multiple versions; declare the map unconditionally.
         return f"""# Version routing map (auto-generated)
 # Routes requests based on X-MCP-Server-Version header
 map "$uri:$http_x_mcp_server_version" $versioned_backend {{
@@ -2124,6 +2147,11 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
 
             location_blocks = []
             for backend_path in sorted(backend_paths):
+                try:
+                    validate_server_path(backend_path)
+                except UrlValidationError:
+                    logger.warning("Skipping invalid virtual backend path %r", backend_path)
+                    continue
                 sanitized = self._sanitize_path_for_location(backend_path)
                 server_info = await server_repo.get(backend_path)
 
@@ -2138,6 +2166,16 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
                     logger.warning(f"No proxy_pass_url for backend server: {backend_path}")
                     continue
 
+                # Reject legacy malformed backend URLs before interpolating
+                # them into a signed upstream claim or a proxy_pass directive.
+                try:
+                    validate_proxy_pass_url(proxy_pass_url, server_path=backend_path)
+                    endpoint_override = server_info.get("mcp_endpoint")
+                    if endpoint_override:
+                        validate_proxy_pass_url(endpoint_override, server_path=backend_path)
+                except UrlValidationError:
+                    logger.warning("Skipping unsafe virtual backend URL for %s", backend_path)
+                    continue
                 # Determine upstream host from proxy_pass_url
                 parsed_url = urlparse(proxy_pass_url)
                 upstream_host = parsed_url.netloc
@@ -2153,6 +2191,79 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
                 # Use regular internal location (not named @) so proxy_pass
                 # can include a URI path for the MCP endpoint
                 location_path = f"/_vs_backend{sanitized}"
+                # ngx.location.capture does not run auth_request on the captured
+                # location. Lua explicitly captures this sibling first, passing
+                # the rewritten JSON-RPC body in X-Body and using its signed
+                # response token for the backend hop.
+                auth_location = f"/_vs_auth{sanitized}"
+                safe_backend_path = self._sanitize_for_nginx_set(backend_path.rstrip("/"))
+                auth_server_target = settings.auth_server_url.rstrip("/")
+                safe_auth_url = f"{auth_server_target}/validate"
+                safe_proxy_target = f"{auth_server_target}/mcp-proxy/{backend_path.strip('/')}/"
+                egress_mode = server_info.get("egress_auth_mode", "none")
+                if egress_mode not in ("none", "pat", "oauth_user", "obo_exchange"):
+                    logger.warning("Invalid egress auth mode for virtual backend %s", backend_path)
+                    continue
+
+                # Bind the same selected URL into both the signed token and the
+                # actual outbound destination. The optional version map uses this
+                # internal auth URI as well as the direct server URI.
+                safe_backend_url = self._sanitize_for_nginx_set(mcp_proxy_url)
+                auth_block = f"""
+    location = {auth_location} {{
+        internal;
+        set $backend_url "{safe_backend_url}";
+        if ($versioned_backend != "") {{
+            set $backend_url $versioned_backend;
+        }}
+        proxy_pass {safe_auth_url};
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Original-URL $scheme://$host{{{{ROOT_PATH}}}}{safe_backend_path}/mcp;
+        proxy_set_header X-Original-URI {{{{ROOT_PATH}}}}{safe_backend_path}/mcp;
+        proxy_set_header X-Original-Method POST;
+        proxy_set_header X-Resolved-Upstream $backend_url;
+        proxy_set_header X-Validate-Source-Secret "{self._sanitize_for_nginx_set(settings.auth_server_nginx_marker_secret)}";
+        proxy_set_header X-Body $http_x_body;
+        proxy_set_header X-Body-Uninspectable $http_x_body_uninspectable;
+        proxy_set_header X-Registry-Api-Auth "";
+        proxy_set_header X-Resolved-Generic-Upstream "";
+        proxy_set_header X-Generic-Proxy-Kind "";
+        proxy_set_header X-Entity-Path "";
+        proxy_set_header X-Generic-Streaming "";
+        proxy_set_header X-Generic-Has-Upstream-Auth "";
+        proxy_set_header X-Internal-Token-Generic "";
+        proxy_set_header X-Internal-Token-Registry "";
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Authorization $http_x_authorization;
+        proxy_set_header X-Internal-Token "";
+        proxy_pass_request_headers on;
+    }}"""
+                location_blocks.append(auth_block)
+
+                if egress_mode != "none":
+                    mcp_proxy_read_timeout = _resolve_mcp_proxy_read_timeout_seconds()
+                    block = f"""
+    location = {location_path} {{
+        internal;
+        # The signed upstream claim is already the exact resolved MCP endpoint.
+        # Do not append /mcp to custom or nested transport paths a second time.
+        proxy_pass {safe_proxy_target};
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Internal-Token $http_x_internal_token;
+        proxy_set_header X-Upstream-Url "";
+        proxy_set_header X-User $http_x_user;
+        proxy_set_header X-Username $http_x_username;
+        proxy_set_header Accept "application/json, text/event-stream";
+        proxy_set_header Content-Type $content_type;
+        proxy_read_timeout {mcp_proxy_read_timeout}s;
+        proxy_send_timeout {mcp_proxy_read_timeout}s;
+        proxy_buffering off;
+    }}"""
+                    location_blocks.append(block)
+                    continue
 
                 # Decide how to emit proxy_pass based on whether the backend host
                 # is safe to resolve at config-load time.
@@ -2199,7 +2310,7 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
                     )
 
                 block = f"""
-    location {location_path} {{
+    location = {location_path} {{
         internal;
         {proxy_directive}
         proxy_http_version 1.1;
@@ -2217,6 +2328,12 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
         # forwarding the caller's credential.
         proxy_set_header Authorization "";
         proxy_set_header Cookie "";
+        proxy_set_header X-Authorization "";
+        proxy_set_header X-Internal-Token "";
+        proxy_set_header X-Internal-Token-Generic "";
+        proxy_set_header X-Internal-Token-Registry "";
+        proxy_set_header X-Body "";
+        proxy_set_header X-Body-Uninspectable "";
         # Forward the validated caller identity so backends can attribute
         # write operations to the authenticated user.  These are set as
         # request headers by virtual_router.lua (ngx.req.set_header) before
@@ -2300,6 +2417,9 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
                             "inputSchema": input_schema,
                             "backend_location": backend_location,
                             "backend_version": tm.backend_version,
+                            "egress_auth_mode": server_info.get("egress_auth_mode", "none")
+                            if server_info
+                            else "none",
                             "required_scopes": required_scopes,
                         }
                     )

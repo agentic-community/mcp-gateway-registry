@@ -98,7 +98,7 @@ class DocumentDBBackendSessionRepository(BackendSessionRepositoryBase):
         client_session_id: str,
         backend_key: str,
         user_id: str | None = None,
-    ) -> str | None:
+    ) -> tuple[str | None, bool] | None:
         """Get backend session ID and atomically bump last_used_at.
 
         Uses find_one_and_update so the TTL is refreshed on every access,
@@ -118,8 +118,8 @@ class DocumentDBBackendSessionRepository(BackendSessionRepositoryBase):
                 When None, ownership is not enforced (legacy behavior).
 
         Returns:
-            Backend session ID if found (and owned by ``user_id`` when given),
-            None otherwise
+            (session ID, false) for stateful, (None, true) for stateless,
+            or None when not found or owned by a different user.
         """
         collection = await self._get_collection()
         doc_id = _make_backend_session_id(client_session_id, backend_key)
@@ -138,16 +138,22 @@ class DocumentDBBackendSessionRepository(BackendSessionRepositoryBase):
         )
 
         if result:
-            return result.get("backend_session_id")
+            session_id = result.get("backend_session_id")
+            stateless = result.get("stateless", False)
+            if (stateless is True and session_id is None) or (
+                stateless is False and isinstance(session_id, str) and session_id
+            ):
+                return session_id, stateless
         return None
 
     async def store_backend_session(
         self,
         client_session_id: str,
         backend_key: str,
-        backend_session_id: str,
+        backend_session_id: str | None,
         user_id: str,
         virtual_server_path: str,
+        stateless: bool = False,
     ) -> None:
         """Store or update a backend session (upsert).
 
@@ -157,7 +163,10 @@ class DocumentDBBackendSessionRepository(BackendSessionRepositoryBase):
             backend_session_id: Session ID from the backend MCP server
             user_id: User identity for audit
             virtual_server_path: Virtual server path
+            stateless: Whether initialize succeeded without a session ID
         """
+        if stateless != (backend_session_id is None) or backend_session_id == "":
+            raise ValueError("Invalid backend initialization state")
         collection = await self._get_collection()
         doc_id = _make_backend_session_id(client_session_id, backend_key)
         now = datetime.now(UTC)
@@ -167,6 +176,7 @@ class DocumentDBBackendSessionRepository(BackendSessionRepositoryBase):
             "client_session_id": client_session_id,
             "backend_key": backend_key,
             "backend_session_id": backend_session_id,
+            "stateless": stateless,
             "user_id": user_id,
             "virtual_server_path": virtual_server_path,
             "created_at": now,
@@ -186,7 +196,7 @@ class DocumentDBBackendSessionRepository(BackendSessionRepositoryBase):
                 doc,
                 upsert=True,
             )
-            logger.debug(f"Stored backend session: {doc_id} -> {backend_session_id}")
+            logger.debug("Stored backend initialization state for %s", doc_id)
         except DuplicateKeyError:
             logger.warning(
                 f"Refused to store backend session {doc_id} for user={user_id}: "

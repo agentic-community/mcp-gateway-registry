@@ -358,6 +358,103 @@ class TestGenerateVirtualBackendLocations:
 
         assert result == ""
 
+    @pytest.mark.asyncio
+    async def test_egress_backend_uses_separate_backend_bound_auth_and_proxy(
+        self, mock_server_repository
+    ):
+        """Distinct registered backends must authorize and vend separately."""
+        vs = _make_vs_config(
+            tool_mappings=[
+                ToolMapping(tool_name="issues", backend_server_path="/jira"),
+                ToolMapping(tool_name="pages", backend_server_path="/confluence"),
+            ]
+        )
+        mock_server_repository.get.side_effect = lambda path: {
+            "proxy_pass_url": f"https://{path.strip('/')}.example.com/mcp",
+            "egress_auth_mode": "pat",
+            "egress_oauth": {"provider": "atlassian"},
+        }
+
+        from registry.core.nginx_service import NginxConfigService
+
+        result = await NginxConfigService()._generate_virtual_backend_locations([vs])
+
+        for path in ("jira", "confluence"):
+            assert f"location = /_vs_auth_{path}" in result
+            assert f"location = /_vs_backend_{path}" in result
+            assert f"/mcp-proxy/{path}/" in result
+            assert f"/{path}/mcp;" in result
+            assert f"https://{path}.example.com/mcp" in result
+        assert result.count("proxy_set_header X-Internal-Token $http_x_internal_token;") == 2
+
+    @pytest.mark.asyncio
+    async def test_backend_auth_uses_configured_nginx_marker(self, mock_server_repository):
+        """The generated /validate hop must use the secret that enables token minting."""
+        from registry.core.nginx_service import NginxConfigService, settings
+
+        mock_server_repository.get.return_value = {
+            "proxy_pass_url": "https://github.example.com/mcp",
+            "egress_auth_mode": "pat",
+        }
+        with patch.object(settings, "auth_server_nginx_marker_secret", "example-marker-for-test"):
+            result = await NginxConfigService()._generate_virtual_backend_locations(
+                [_make_vs_config()]
+            )
+
+        assert 'X-Validate-Source-Secret "example-marker-for-test";' in result
+        assert "{{NGINX_MARKER_SECRET}}" not in result
+
+    @pytest.mark.asyncio
+    async def test_pinned_version_uses_its_registered_endpoint(self, mock_server_repository):
+        """A signed virtual backend claim uses the selected version's own endpoint."""
+        from registry.core.nginx_service import NginxConfigService
+
+        service = NginxConfigService()
+        servers = {
+            "/jira": {
+                "proxy_pass_url": "https://active.example.com/mcp",
+                "version": "v2",
+                "other_version_ids": ["/jira:v1"],
+            }
+        }
+        version_info = {
+            "proxy_pass_url": "https://legacy.example.com/api",
+            "mcp_endpoint": "https://legacy.example.com/api/custom/mcp",
+            "version": "v1",
+        }
+        with patch(
+            "registry.services.server_service.server_service.get_server_info",
+            return_value=version_info,
+        ):
+            result = await service._generate_version_map(servers)
+
+        assert '"~^/_vs_auth_jira(/.*)?:v1$" "https://legacy.example.com/api/custom/mcp";' in result
+        assert '"~^/jira(/.*)?:v1$" "https://legacy.example.com/api";' in result
+
+    @pytest.mark.asyncio
+    async def test_plain_backend_clears_all_gateway_credentials(self, mock_server_repository):
+        """Plain backend still proxies directly, never receiving internal tokens."""
+        mock_server_repository.get.return_value = {
+            "proxy_pass_url": "https://backend.example.com/mcp",
+            "egress_auth_mode": "none",
+        }
+
+        from registry.core.nginx_service import NginxConfigService
+
+        result = await NginxConfigService()._generate_virtual_backend_locations([_make_vs_config()])
+
+        assert "proxy_pass https://backend.example.com/mcp;" in result
+        assert "/mcp-proxy/github/" not in result
+        for name in (
+            "Authorization",
+            "X-Authorization",
+            "Cookie",
+            "X-Internal-Token",
+            "X-Internal-Token-Generic",
+            "X-Internal-Token-Registry",
+        ):
+            assert f'proxy_set_header {name} "";' in result
+
 
 class TestWriteVirtualServerMappings:
     """Tests for _write_virtual_server_mappings.
@@ -443,6 +540,32 @@ class TestWriteVirtualServerMappings:
         assert len(written_data["tools"]) == 1
         assert written_data["tools"][0]["name"] == "gh-search"
         assert written_data["tools"][0]["original_name"] == "search"
+
+    @pytest.mark.asyncio
+    async def test_mapping_marks_credentialed_backend_for_user_specific_discovery(
+        self, mock_server_repository
+    ):
+        """Lua must not reuse another user's vaulted-backend tools list."""
+        vs = _make_vs_config()
+        mock_server_repository.get.return_value = {
+            "proxy_pass_url": "https://github.example.com/mcp",
+            "egress_auth_mode": "oauth_user",
+        }
+        written_data = {}
+
+        with (
+            patch("registry.core.nginx_service.Path") as mock_path_cls,
+            patch(
+                "json.dump", side_effect=lambda data, *_args, **_kwargs: written_data.update(data)
+            ),
+            patch("builtins.open", mock_open()),
+        ):
+            mock_path_cls.return_value.__truediv__.return_value = MagicMock()
+            from registry.core.nginx_service import NginxConfigService
+
+            await NginxConfigService()._write_virtual_server_mappings([vs])
+
+        assert written_data["tools"][0]["egress_auth_mode"] == "oauth_user"
 
     @pytest.mark.asyncio
     async def test_mapping_includes_scope_overrides(self, mock_server_repository):
