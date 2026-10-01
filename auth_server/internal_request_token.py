@@ -17,6 +17,8 @@ import time
 import jwt as pyjwt
 from fastapi import HTTPException, Request, status
 
+from registry.auth.resource_binding import MCP_TRANSPORT_SEGMENTS
+
 logger = logging.getLogger(__name__)
 
 # Reuse the existing internal issuer (matches registry/auth/internal.py).
@@ -185,10 +187,9 @@ def mint_mcp_proxy_token(
 ) -> str:
     """Mint the per-request /mcp-proxy token in /validate's 200 path.
 
-    ``upstream_url`` is the resolved upstream **before** mcp_proxy's sub-path
-    append; mcp_proxy applies the append itself so the bound claim and /validate's
-    view agree exactly. ``server`` is the first path segment, used as a
-    path-traversal guard by the verifier.
+    ``upstream_url`` is the resolved upstream before the MCP proxy appends a
+    transport path. ``server`` is the registered server path without a trailing
+    MCP transport segment; a nested/federated backend keeps its full path.
 
     ``auth_method`` is the CANONICAL egress principal method (see
     ``EgressAuthService.canonical_auth_method``): the per-user egress vault keys
@@ -218,8 +219,11 @@ def mint_mcp_proxy_token(
     the verified ``sub`` principal. Chosen over deleting the guard, which would
     sign ``"audit_identity": null`` on those paths.
     """
+    server_parts = [part for part in server_name.strip("/").split("/") if part]
+    if len(server_parts) > 1 and server_parts[-1] in MCP_TRANSPORT_SEGMENTS:
+        server_parts.pop()
     extra_claims: dict = {
-        "server": server_name.split("/", 1)[0] if server_name else "",
+        "server": "/".join(server_parts),
         "upstream_url": upstream_url,
         "auth_method": auth_method,
         "egress_user": egress_user or "",
@@ -387,8 +391,17 @@ async def verify_mcp_proxy_token(request: Request) -> None:
             status.HTTP_401_UNAUTHORIZED, detail="Internal proxy token missing upstream"
         )
 
-    # Path-traversal guard: the bound server must match the route's first segment.
-    path_server = (request.path_params.get("server_name") or "").split("/", 1)[0]
+    # Bind the full registered server path, including nested/federated paths.
+    # The transport tail is not a resource identity; a sibling beneath the
+    # same first segment cannot reuse this token for a different backend.
+    path_parts = [
+        part
+        for part in (request.path_params.get("server_name") or "").strip("/").split("/")
+        if part
+    ]
+    if len(path_parts) > 1 and path_parts[-1] in MCP_TRANSPORT_SEGMENTS:
+        path_parts.pop()
+    path_server = "/".join(path_parts)
     if claims.get("server") != path_server:
         logger.warning(
             f"mcp_proxy: server claim/path mismatch (claim={claims.get('server')!r} path={path_server!r})"

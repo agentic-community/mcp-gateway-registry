@@ -7551,14 +7551,12 @@ def _strip_generic_internal_headers(headers: dict[str, str]) -> dict[str, str]:
 
 async def _vend_egress_token(
     internal_proxy_token: str,
-    server_first_segment: str,
+    registered_server: str,
 ) -> dict | None:
-    """Call the registry's internal egress-token vend endpoint.
+    """Vend for the registered server path bound by the verified proxy token.
 
-    Forwards the verified X-Internal-Token; the registry re-verifies it,
-    re-derives sub/auth_method from the signed claims, runs the allowlist
-    and upstream cross-check, and vends. Returns the JSON response dict on a
-    clean answer (a hit, or a 200 ``consent_required`` miss).
+    The registry re-verifies the token and checks its bound upstream against
+    this server's registered destinations before returning a credential.
 
     Raises ``EgressVendUnavailable`` on a *transient* failure (registry
     unreachable/timeout, or a 5xx after the registry exhausted its own Vault
@@ -7594,7 +7592,7 @@ async def _vend_egress_token(
         resp = await post_with_reconnect(
             client,
             f"{base}/_egress_internal/egress-token",
-            json={"server_path": server_first_segment},
+            json={"server_path": registered_server},
             headers={
                 "Authorization": f"Bearer {service_token}",
                 "X-Internal-Token": internal_proxy_token,
@@ -8252,23 +8250,15 @@ async def mcp_proxy(
     upstream_url = claims["upstream_url"]
     user_scopes: list[str] = list(claims.get("scopes") or [])
 
-    # Append the MCP sub-path from the request. server_name captures the full
-    # path after /mcp-proxy/ (e.g. "airegistry-tools/mcp"). The first segment
-    # is the registered server name; everything after is the sub-path that must
-    # be appended to the upstream URL so the backend receives the correct route.
-    # Skip if the upstream URL already ends with the sub-path (e.g. proxy_pass_url
-    # is https://docs.mcp.cloudflare.com/mcp and sub_path is also /mcp).
-    #
-    # SECURITY: do NOT move this sub-path append into nginx. The X-Internal-Token
-    # binds the PRE-append upstream_url (the $backend_url /validate saw). Keeping
-    # the append here means the bound claim equals the upstream BASE and the
-    # outbound URL is base + sub_path on that same bound host -- the destination
-    # host is cryptographically pinned and the sub-path is confined to it. Moving
-    # the append to nginx would diverge the signed base from what /validate saw
-    # and 401 every request.
-    if "/" in server_name:
-        sub_path = server_name.split("/", 1)[1].lstrip("/")
-        if sub_path and not upstream_url.rstrip("/").endswith("/" + sub_path):
+    # The direct-server location forwards a base URL and can include a
+    # transport suffix in its proxy route. The virtual backend location signs
+    # the exact resolved endpoint and ends its internal route at the registered
+    # server path. Append only a recognized transport suffix; never treat the
+    # nested registered path (peer/server) as an upstream path suffix.
+    route_parts = [part for part in server_name.strip("/").split("/") if part]
+    if len(route_parts) > 1 and route_parts[-1] in MCP_TRANSPORT_ENDPOINTS:
+        sub_path = route_parts[-1]
+        if not upstream_url.rstrip("/").endswith("/" + sub_path):
             upstream_url = upstream_url.rstrip("/") + "/" + sub_path
 
     # Read the incoming body once; we forward it to the upstream.
@@ -8345,9 +8335,9 @@ async def mcp_proxy(
     if settings.egress_auth_enabled:
         internal_proxy_token = request.headers.get("X-Internal-Token", "")
         if internal_proxy_token:
-            server_first_segment = (server_name or "").split("/", 1)[0]
+            registered_server = _registered_server_from_proxy_path(server_name)
             try:
-                vend = await _vend_egress_token(internal_proxy_token, server_first_segment)
+                vend = await _vend_egress_token(internal_proxy_token, registered_server)
             except EgressVendUnavailable as exc:
                 # Transient vend failure: fail closed with a retryable signal
                 # rather than forwarding tokenless (-> silent upstream 401) or
@@ -8476,7 +8466,7 @@ async def mcp_proxy(
                         internal_caller="mcp-proxy",
                         token_kind=TokenKind.USER.value,
                         resource_type="server",
-                        resource_id=server_first_segment,
+                        resource_id=registered_server,
                         token_path="obo_exchange",  # nosec B106 - audit metadata label, not a credential
                         requested_scopes=list(obo_scopes),
                         expires_in_seconds=None,
@@ -8495,7 +8485,7 @@ async def mcp_proxy(
                     internal_caller="mcp-proxy",
                     token_kind=TokenKind.USER.value,
                     resource_type="server",
-                    resource_id=server_first_segment,
+                    resource_id=registered_server,
                     token_path="obo_exchange",  # nosec B106 - audit metadata label, not a credential
                     requested_scopes=list(obo_scopes),
                     expires_in_seconds=None,
