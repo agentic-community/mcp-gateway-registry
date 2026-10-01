@@ -2,7 +2,7 @@
 {{- $routingMode := .Values.global.ingress.routingMode | default "subdomain" }}
 {{- $domain := .Values.global.domain | default .Values.ingress.hostname }}
 {{- $registrySubdomain := .Values.global.ingress.registrySubdomain | default "mcpregistry" }}
-{{- $additionalHostnames := .Values.global.ingress.additionalHostnames | default (list) }}
+{{- $additionalHostnames := fromYamlArray (include "registry.additionalHostnames" .) }}
 {{- $globalPaths := .Values.global.ingress.paths | default dict }}
 {{- $pathPrefix := (get $globalPaths "registry") | default .Values.ingress.path | default "/registry" }}
 {{- /*

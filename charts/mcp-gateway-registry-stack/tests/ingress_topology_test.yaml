@@ -313,17 +313,17 @@ tests:
           tls: true
           registrySubdomain: mcp-gateway
           additionalHostnames:
-            - alias.example.net
+            - alias.example.com
     asserts:
       - equal:
           path: data.GATEWAY_ADDITIONAL_SERVER_NAMES
-          value: bWNwLWdhdGV3YXkuZXhhbXBsZS5jb20gYWxpYXMuZXhhbXBsZS5uZXQ=
+          value: bWNwLWdhdGV3YXkuZXhhbXBsZS5jb20gYWxpYXMuZXhhbXBsZS5jb20=
       - equal:
           path: data.TRUSTED_EXTERNAL_HOSTS
-          value: YWxpYXMuZXhhbXBsZS5uZXQ=
+          value: YWxpYXMuZXhhbXBsZS5jb20=
       - equal:
           path: data.CORS_ALLOWED_ORIGINS
-          value: aHR0cHM6Ly9hbGlhcy5leGFtcGxlLm5ldA==
+          value: aHR0cHM6Ly9hbGlhcy5leGFtcGxlLmNvbQ==
 
   - it: propagates additional hostnames to auth-server trusted host configuration
     templates:
@@ -335,11 +335,11 @@ tests:
           routingMode: subdomain
           tls: true
           additionalHostnames:
-            - alias.example.net
+            - alias.example.com
     asserts:
       - equal:
           path: data.TRUSTED_EXTERNAL_HOSTS
-          value: YWxpYXMuZXhhbXBsZS5uZXQ=
+          value: YWxpYXMuZXhhbXBsZS5jb20=
 
   - it: includes additional hostnames in bundled Keycloak configuration inputs
     templates:
@@ -351,11 +351,11 @@ tests:
           routingMode: subdomain
           tls: true
           additionalHostnames:
-            - alias.example.net
+            - alias.example.com
     asserts:
       - equal:
           path: data.ADDITIONAL_REGISTRY_HOSTNAMES
-          value: YWxpYXMuZXhhbXBsZS5uZXQ=
+          value: YWxpYXMuZXhhbXBsZS5jb20=
 
   - it: adds additional hostnames to Keycloak redirect, web-origin, and logout allowlists
     templates:

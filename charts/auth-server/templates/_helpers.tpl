@@ -60,6 +60,33 @@ Provides a stable identity to attach roles to (RBAC, IRSA, etc.).
 {{- end -}}
 
 {{/*
+Validate additional registry hostnames and ensure browser session cookies can
+be shared with them. The auth-server and registry emit their own cookie-domain
+settings, so validate against the auth-server chart's effective setting here.
+*/}}
+{{- define "auth-server.additionalHostnames" -}}
+{{- $raw := .Values.global.ingress.additionalHostnames | default (list) -}}
+{{- if not (kindIs "slice" $raw) -}}
+  {{- fail (printf "global.ingress.additionalHostnames must be a list, got %s %q (with --set use: 'global.ingress.additionalHostnames={a.example.com}')" (kindOf $raw) (toString $raw)) -}}
+{{- end -}}
+{{- $domain := .Values.global.domain | default "localhost" -}}
+{{- $cookieDomain := .Values.app.sessionCookieDomain | default (printf ".%s" $domain) -}}
+{{- $apex := trimPrefix "." $cookieDomain | lower -}}
+{{- $hosts := list -}}
+{{- range $i, $hostname := $raw -}}
+  {{- $hostname = toString $hostname -}}
+  {{- if or (gt (len $hostname) 253) (not (regexMatch "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$" $hostname)) -}}
+    {{- fail (printf "global.ingress.additionalHostnames[%d]: %q is not a bare lowercase DNS hostname (no scheme, port, path, wildcard, or hostname over 253 characters)" $i $hostname) -}}
+  {{- end -}}
+  {{- if not (or (eq $hostname $apex) (hasSuffix (printf ".%s" $apex) $hostname)) -}}
+    {{- fail (printf "global.ingress.additionalHostnames[%d]: %q is outside the effective session cookie domain %q; browser login cannot complete on it. Keep the hostname under that cookie domain, or set registry.app.sessionCookieDomain and auth-server.app.sessionCookieDomain to the same parent domain covering every hostname." $i $hostname $cookieDomain) -}}
+  {{- end -}}
+  {{- $hosts = append $hosts $hostname -}}
+{{- end -}}
+{{- toYaml $hosts -}}
+{{- end -}}
+
+{{/*
 Validate .Values.extraEnv for the auth-server chart.
 
 Fails helm template render if any entry:

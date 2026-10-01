@@ -211,6 +211,12 @@ and generated public URLs (OAuth callbacks, auth-server, and gateway URLs). It
 defaults to `mcpregistry`, preserving the default `mcpregistry.{domain}` hostname.
 `additionalHostnames` optionally adds full hostnames to the same registry
 Ingress and backend. Each hostname must also have DNS and TLS coverage.
+Each alias must be within the effective session-cookie domain (by default,
+`.<global.domain>`), or browser login cannot complete on that alias. If using a
+custom cookie domain, configure the same parent domain in both
+`registry.app.sessionCookieDomain` and `auth-server.app.sessionCookieDomain`.
+Unrelated domains cannot share a browser cookie; supporting those requires a
+host-only/per-host session design rather than a broader cookie domain.
 
 **DNS Requirements:** Configure A/CNAME records for each subdomain pointing to your ingress load balancer.
 
