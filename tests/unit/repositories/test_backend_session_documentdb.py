@@ -132,7 +132,7 @@ class TestGetBackendSessionOwnership:
 
         result = await repo.get_backend_session("vs-abc", "/_vs_backend_x_", user_id="alice")
 
-        assert result == "be-1"
+        assert result == ("be-1", False)
         query = collection.find_one_and_update.call_args[0][0]
         assert query["_id"] == "vs-abc:/_vs_backend_x_"
         assert query["user_id"] == "alice"
@@ -156,9 +156,24 @@ class TestGetBackendSessionOwnership:
 
         result = await repo.get_backend_session("vs-abc", "/_vs_backend_x_")
 
-        assert result == "be-1"
+        assert result == ("be-1", False)
         query = collection.find_one_and_update.call_args[0][0]
         assert "user_id" not in query
+
+    async def test_stateless_result_is_not_a_cache_miss(self, repo, collection):
+        """Owner-scoped lookup distinguishes initialized stateless from missing."""
+        collection.find_one_and_update.return_value = {
+            "backend_session_id": None,
+            "stateless": True,
+        }
+        result = await repo.get_backend_session("vs-abc", "/_vs_backend_x_", user_id="alice")
+        assert result == (None, True)
+
+    async def test_malformed_stateless_document_is_treated_as_missing(self, repo, collection):
+        """A missing ID alone never establishes successful stateless state."""
+        collection.find_one_and_update.return_value = {"backend_session_id": None}
+        result = await repo.get_backend_session("vs-abc", "/_vs_backend_x_", user_id="alice")
+        assert result is None
 
 
 @pytest.mark.unit
@@ -178,6 +193,19 @@ class TestStoreBackendSessionOwnership:
         filt = collection.replace_one.call_args[0][0]
         assert filt["_id"] == "vs-abc:/_vs_backend_x_"
         assert filt["user_id"] == "alice"
+
+    async def test_stateless_upsert_persists_explicit_marker(self, repo, collection):
+        """Persist an owner-bound sessionless state for subsequent requests."""
+        await repo.store_backend_session(
+            client_session_id="vs-abc",
+            backend_key="/_vs_backend_x_",
+            backend_session_id=None,
+            user_id="alice",
+            virtual_server_path="/virtual/a",
+            stateless=True,
+        )
+        doc = collection.replace_one.call_args[0][1]
+        assert doc["stateless"] is True and doc["backend_session_id"] is None
 
     async def test_owner_collision_is_refused_not_raised(self, repo, collection):
         """A duplicate-key from a differently-owned _id is swallowed, not propagated.

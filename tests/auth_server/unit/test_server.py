@@ -4262,6 +4262,50 @@ class TestMcpProxyEndpointHeaderPassthrough:
         assert response.headers.get("www-authenticate", "").startswith("Bearer")
         assert response.headers.get("retry-after") == "15"
 
+    def test_nested_backend_vend_uses_full_registered_path(self):
+        """A virtual backend under a peer path must not vend for the peer root."""
+        import auth_server.server as server_module
+
+        upstream_resp = _build_mock_upstream_response(
+            status_code=200,
+            headers={"content-type": "application/json"},
+            body=b'{"jsonrpc":"2.0","id":1,"result":{}}',
+        )
+        vend_paths = []
+
+        async def vend(_token, registered_server):
+            vend_paths.append(registered_server)
+            return {"access_token": "backend-token"}
+
+        with (
+            patch.object(server_module.settings, "egress_auth_enabled", True),
+            patch.object(server_module, "_vend_egress_token", vend),
+            patch.object(server_module, "_read_mcp_filter_enabled", return_value=False),
+            _patch_scope_repo_allow_all(),
+            _patch_httpx_async_client(upstream_resp),
+        ):
+            response = TestClient(server_module.app).post(
+                "/mcp-proxy/peer-lob/jira/",
+                json={"jsonrpc": "2.0", "id": 1, "method": "initialize"},
+                headers=_mcp_proxy_token_headers(server_name="peer-lob/jira"),
+            )
+
+        assert response.status_code == 200
+        assert vend_paths == ["peer-lob/jira"]
+
+    def test_internal_token_for_peer_cannot_proxy_sibling_backend(self):
+        """A peer's sibling backend must not share a signed proxy credential."""
+        import auth_server.server as server_module
+
+        with patch.object(server_module.settings, "egress_auth_enabled", True):
+            response = TestClient(server_module.app).post(
+                "/mcp-proxy/peer-lob/confluence/",
+                json={"jsonrpc": "2.0", "id": 1, "method": "initialize"},
+                headers=_mcp_proxy_token_headers(server_name="peer-lob/jira"),
+            )
+
+        assert response.status_code == 401
+
 
 # =============================================================================
 # OBO EXCHANGE EGRESS MODE TESTS (Phase 3)

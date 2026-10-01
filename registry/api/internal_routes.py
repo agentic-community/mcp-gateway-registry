@@ -137,7 +137,7 @@ async def get_backend_session(
     """Look up a backend session by compound key, bound to the caller.
 
     The session_key is '<client_session_id>:<backend_key>'.
-    Returns the backend_session_id if found, 404 otherwise.
+    Returns an initialized stateless state or backend session ID, 404 otherwise.
     Also bumps last_used_at atomically.
 
     The Lua router passes the authenticated user via the ``user_id`` query
@@ -159,16 +159,17 @@ async def get_backend_session(
 
     client_session_id, backend_key = parts
 
-    backend_session_id = await repo.get_backend_session(
+    backend_session = await repo.get_backend_session(
         client_session_id=client_session_id,
         backend_key=backend_key,
         user_id=user_id,
     )
 
-    if backend_session_id is None:
+    if backend_session is None:
         raise HTTPException(status_code=404, detail="Backend session not found")
 
-    return GetBackendSessionResponse(backend_session_id=backend_session_id)
+    backend_session_id, stateless = backend_session
+    return GetBackendSessionResponse(backend_session_id=backend_session_id, stateless=stateless)
 
 
 @router.put(
@@ -196,12 +197,16 @@ async def store_backend_session(
 
     client_session_id, backend_key = parts
 
+    if request.client_session_id != client_session_id:
+        raise HTTPException(status_code=400, detail="Client session ID does not match session key")
+
     await repo.store_backend_session(
         client_session_id=client_session_id,
         backend_key=backend_key,
         backend_session_id=request.backend_session_id,
         user_id=request.user_id,
         virtual_server_path=request.virtual_server_path,
+        stateless=request.stateless,
     )
 
     return {"status": "stored"}

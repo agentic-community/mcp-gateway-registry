@@ -116,7 +116,7 @@ class TestOwnershipParamRequired:
 
         repo = AsyncMock()
         repo.validate_client_session = AsyncMock(return_value=True)
-        repo.get_backend_session = AsyncMock(return_value="be-1")
+        repo.get_backend_session = AsyncMock(return_value=("be-1", False))
         repo.delete_backend_session = AsyncMock(return_value=None)
         monkeypatch.setattr(internal_routes, "get_backend_session_repository", lambda: repo)
         return repo

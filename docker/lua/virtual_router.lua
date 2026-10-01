@@ -54,6 +54,8 @@ local session_cache = ngx.shared.virtual_server_map
 local MAPPING_CACHE_TTL = 10
 local SESSION_CACHE_TTL = 30
 local ENRICHED_CACHE_TTL = 60
+local STATELESS_CACHE_VALUE = "1"
+
 
 -- Supported MCP protocol versions (newest first for negotiation)
 local SUPPORTED_PROTOCOL_VERSIONS = {
@@ -258,7 +260,33 @@ local function _has_scopes(user_scopes_str, required_scopes)
 end
 
 
--- Initialize a backend MCP server and extract its session ID
+-- The backend subrequest bypasses nginx auth_request, so explicitly validate
+-- the exact rewritten JSON-RPC request at a dedicated backend-bound location.
+-- The validated internal token is required even for plain backends; their
+-- proxy location must clear it before forwarding upstream.
+local function _authorize_backend(backend_location, request_body)
+    local auth_location, substitutions = backend_location:gsub("^/_vs_backend_", "/_vs_auth_", 1)
+    if substitutions ~= 1 then
+        return false
+    end
+    ngx.req.set_header("X-Body", request_body)
+    ngx.req.clear_header("X-Body-Uninspectable")
+    ngx.req.clear_header("X-Internal-Token")
+    local res = ngx.location.capture(auth_location, {
+        method = ngx.HTTP_GET,
+    })
+    local token = res and res.header and
+        (res.header["X-Internal-Token"] or res.header["x-internal-token"])
+    if not res or res.status ~= 200 or type(token) ~= "string" or token == "" then
+        ngx.log(ngx.WARN, "Backend authorization denied for ", backend_location,
+            " status=", res and res.status or "nil")
+        return false
+    end
+    ngx.req.set_header("X-Internal-Token", token)
+    return true
+end
+
+-- Initialize a backend and return its session ID (nil for stateless) and success.
 local function _initialize_backend(backend_location)
     local init_body = cjson.encode({
         jsonrpc = "2.0",
@@ -274,113 +302,138 @@ local function _initialize_backend(backend_location)
         },
     })
 
-    -- Clear the client's Mcp-Session-Id so the backend sees a fresh
-    -- initialize request instead of trying to resume a vs-* session.
     ngx.req.set_header("Mcp-Session-Id", "")
-    -- MCP spec requires Accept header listing both content types
     ngx.req.set_header("Accept", "application/json, text/event-stream")
 
+    if not _authorize_backend(backend_location, init_body) then
+        return nil, false, true
+    end
     local res = ngx.location.capture(backend_location, {
         method = ngx.HTTP_POST,
         body = init_body,
     })
 
-    if not res or res.status ~= 200 then
+    if not res or res.status ~= 200 or res.truncated then
         ngx.log(ngx.ERR, "Backend initialize failed for ", backend_location,
             " status=", res and res.status or "nil")
-        return nil
+        return nil, false
     end
 
-    -- Extract Mcp-Session-Id from backend response headers
-    local backend_session_id = nil
-    if res.header then
-        backend_session_id = res.header["Mcp-Session-Id"] or res.header["mcp-session-id"]
+    -- HTTP 200 can still carry a JSON-RPC error (including an OAuth consent
+    -- failure); only a genuine initialize result establishes stateless state.
+    local json_body = _parse_sse_body(res.body)
+    local ok, data = pcall(cjson.decode, json_body or "")
+    if not ok or type(data) ~= "table" or type(data.result) ~= "table" then
+        ngx.log(ngx.ERR, "Backend initialize returned no result for ", backend_location)
+        return nil, false
     end
 
-    return backend_session_id
+    local session_id = res.header and
+        (res.header["Mcp-Session-Id"] or res.header["mcp-session-id"])
+    if session_id == "" then
+        session_id = nil
+    end
+    return session_id, true
 end
 
 
--- Get or create a backend session for a given client session + backend location.
--- Two-tier cache: L1 shared dict (30s) -> L2 MongoDB -> initialize backend
--- client_session_id is always a gate-validated ^vs-[0-9a-f]+$ id here (route()
--- allowlists it before any method that reaches this function), and
--- backend_location comes from the trusted mapping file -- so session_key has no
--- attacker-injectable query/path metacharacters.
-local function _get_backend_session(client_session_id, backend_location, server_id)
+-- Resolve backend state from L1, L2, or initialize. Returns (session ID, success);
+-- a successful stateless initialize returns (nil, true), not a fake session ID.
+-- The client session was already validated against the authenticated owner.
+local function _get_backend_session(client_session_id, backend_location, server_id, backend_version)
+    local version = type(backend_version) == "string" and backend_version or ""
     local session_key = client_session_id .. ":" .. backend_location
-    local cache_key = "bsess:" .. session_key
-
-    -- L1: shared dict fast path
+        .. (version ~= "" and (":" .. #version .. ":" .. version) or "")
+    local owner = _auth_user_id()
+    if not owner then
+        return nil, false
+    end
+    local owner_key = ":" .. #owner .. ":" .. owner
+    local cache_key = "bsess:" .. session_key .. owner_key
+    local stateless_key = "bsess_stateless:" .. session_key .. owner_key
     local session_id = session_cache:get(cache_key)
     if session_id then
-        return session_id
+        return session_id, true
     end
-
-    -- L2: MongoDB via internal FastAPI API, bound to the authenticated owner
-    -- so a backend session belonging to a different user is never returned
-    -- (defense in depth behind the client-session gate). Escape the session-id
-    -- segment as well -- a no-op for valid vs-<hex> ids, but it keeps the
-    -- subrequest URI safe regardless of how the key was built.
-    local owner = _auth_user_id()
-    local owner_qs = owner and ("?user_id=" .. ngx.escape_uri(owner)) or ""
+    if session_cache:get(stateless_key) == STATELESS_CACHE_VALUE then
+        return nil, true
+    end
     local backend_path = ngx.escape_uri(client_session_id) .. ":" .. backend_location
+        .. (version ~= "" and (":" .. #version .. ":" .. ngx.escape_uri(version)) or "")
     local res = ngx.location.capture(
-        "/_internal/sessions/backend/" .. backend_path .. owner_qs, {
+        "/_internal/sessions/backend/" .. backend_path .. "?user_id=" .. ngx.escape_uri(owner), {
             method = ngx.HTTP_GET,
         })
     if res and res.status == 200 then
         local ok, data = pcall(cjson.decode, res.body)
-        if ok and data.backend_session_id then
-            -- Populate L1 cache
-            session_cache:set(cache_key, data.backend_session_id, SESSION_CACHE_TTL)
-            return data.backend_session_id
+        if ok and type(data) == "table" then
+            if data.stateless == true and data.backend_session_id == cjson.null then
+                session_cache:set(stateless_key, STATELESS_CACHE_VALUE, SESSION_CACHE_TTL)
+                return nil, true
+            end
+            if data.stateless == false and type(data.backend_session_id) == "string"
+                and data.backend_session_id ~= "" then
+                session_cache:set(cache_key, data.backend_session_id, SESSION_CACHE_TTL)
+                return data.backend_session_id, true
+            end
         end
+        return nil, false
+    end
+    if not res or res.status ~= 404 then
+        return nil, false
     end
 
-    -- L2 miss: initialize the backend to get a session
     ngx.log(ngx.INFO, "Initializing backend session for ", session_key)
-    session_id = _initialize_backend(backend_location)
-
-    if session_id then
-        -- Store in L2 (MongoDB). Store the resolved owner ("anonymous" only as
-        -- a last-resort audit label; the gate rejects identity-less requests
-        -- before any backend session is created).
-        local user_id = owner or "anonymous"
-        local store_body = cjson.encode({
-            backend_session_id = session_id,
-            client_session_id = client_session_id,
-            user_id = user_id,
-            virtual_server_path = "/virtual/" .. server_id,
-        })
-        ngx.location.capture("/_internal/sessions/backend/" .. backend_path, {
-            method = ngx.HTTP_PUT,
-            body = store_body,
-        })
-        -- Populate L1 cache
-        session_cache:set(cache_key, session_id, SESSION_CACHE_TTL)
+    local initialized, denied
+    session_id, initialized, denied = _initialize_backend(backend_location)
+    if not initialized then
+        return nil, false, denied
     end
 
-    return session_id
+    local store_body = cjson.encode({
+        backend_session_id = session_id or cjson.null,
+        stateless = session_id == nil,
+        client_session_id = client_session_id,
+        user_id = owner,
+        virtual_server_path = "/virtual/" .. server_id,
+    })
+    local stored = ngx.location.capture("/_internal/sessions/backend/" .. backend_path, {
+        method = ngx.HTTP_PUT,
+        body = store_body,
+    })
+    if not stored or stored.status ~= 200 then
+        ngx.log(ngx.ERR, "Failed to persist backend session for ", backend_location)
+        return nil, false
+    end
+    if session_id then
+        session_cache:set(cache_key, session_id, SESSION_CACHE_TTL)
+    else
+        session_cache:set(stateless_key, STATELESS_CACHE_VALUE, SESSION_CACHE_TTL)
+    end
+    return session_id, true
 end
 
 
 -- Invalidate a backend session from both L1 and L2 caches
-local function _invalidate_backend_session(client_session_id, backend_location)
+local function _invalidate_backend_session(client_session_id, backend_location, backend_version)
+    local version = type(backend_version) == "string" and backend_version or ""
     local session_key = client_session_id .. ":" .. backend_location
-    local cache_key = "bsess:" .. session_key
-
-    -- Remove from L1 (uses the raw key, matching how _get_backend_session
-    -- populated the shared dict)
-    session_cache:delete(cache_key)
+        .. (version ~= "" and (":" .. #version .. ":" .. version) or "")
+    local owner = _auth_user_id()
+    if not owner then
+        return
+    end
+    local owner_key = ":" .. #owner .. ":" .. owner
+    session_cache:delete("bsess:" .. session_key .. owner_key)
+    session_cache:delete("bsess_stateless:" .. session_key .. owner_key)
 
     -- Remove from L2, scoped to the authenticated owner (symmetric with the GET
     -- lookup). Escape the session-id segment in the subrequest URI for the same
     -- defense-in-depth reason as the GET/PUT paths (a no-op for valid vs-<hex>
     -- ids, which is all that reaches here past the route() allowlist).
     local backend_path = ngx.escape_uri(client_session_id) .. ":" .. backend_location
-    local owner = _auth_user_id()
-    local owner_qs = owner and ("?user_id=" .. ngx.escape_uri(owner)) or ""
+        .. (version ~= "" and (":" .. #version .. ":" .. ngx.escape_uri(version)) or "")
+    local owner_qs = "?user_id=" .. ngx.escape_uri(owner)
     ngx.location.capture("/_internal/sessions/backend/" .. backend_path .. owner_qs, {
         method = ngx.HTTP_DELETE,
     })
@@ -425,9 +478,8 @@ local function _append_mapping_tools_for_backend(enriched_tools, mapping, backen
 end
 
 
--- Fetch tools/list from a single backend via ngx.location.capture.
--- Returns the tools array and true on success, or an empty table and false on failure.
--- On stale session error (status >= 400), invalidates and retries once.
+-- Fetch tools/list from a backend, distinguishing authorization denial from
+-- transient failure. A successful empty list is valid but not cacheable.
 local function _fetch_backend_tools_list(backend_location, client_session_id, server_id)
     local req_body = cjson.encode({
         jsonrpc = "2.0",
@@ -435,11 +487,19 @@ local function _fetch_backend_tools_list(backend_location, client_session_id, se
         method = "tools/list",
         params = {},
     })
+    ngx.req.clear_header("X-MCP-Server-Version")
+    if not _authorize_backend(backend_location, req_body) then
+        return {}, false, true
+    end
 
-    -- Get backend session
     local backend_session_id = nil
     if client_session_id then
-        backend_session_id = _get_backend_session(client_session_id, backend_location, server_id)
+        local initialized, denied
+        backend_session_id, initialized, denied = _get_backend_session(
+            client_session_id, backend_location, server_id)
+        if not initialized then
+            return {}, false, denied
+        end
     end
 
     if backend_session_id then
@@ -448,21 +508,29 @@ local function _fetch_backend_tools_list(backend_location, client_session_id, se
         ngx.req.set_header("Mcp-Session-Id", "")
     end
 
+    if not _authorize_backend(backend_location, req_body) then
+        return {}, false, true
+    end
+
     local res = ngx.location.capture(backend_location, {
         method = ngx.HTTP_POST,
         body = req_body,
     })
 
     -- Stale session retry
-    if res and res.status >= 400 and client_session_id and backend_session_id then
+    if res and (res.status == 400 or res.status == 404 or res.status == 410)
+        and client_session_id and backend_session_id then
         ngx.log(ngx.WARN, "Backend tools/list returned ", res.status,
             " for ", backend_location, " -- retrying with fresh session")
         _invalidate_backend_session(client_session_id, backend_location)
-        local new_session_id = _get_backend_session(client_session_id, backend_location, server_id)
-        if new_session_id then
-            ngx.req.set_header("Mcp-Session-Id", new_session_id)
-        else
-            ngx.req.set_header("Mcp-Session-Id", "")
+        local new_session_id, initialized, denied = _get_backend_session(
+            client_session_id, backend_location, server_id)
+        if not initialized then
+            return {}, false, denied
+        end
+        ngx.req.set_header("Mcp-Session-Id", new_session_id or "")
+        if not _authorize_backend(backend_location, req_body) then
+            return {}, false, true
         end
         res = ngx.location.capture(backend_location, {
             method = ngx.HTTP_POST,
@@ -473,7 +541,7 @@ local function _fetch_backend_tools_list(backend_location, client_session_id, se
     if not res or res.status ~= 200 then
         ngx.log(ngx.ERR, "Failed to fetch tools/list from ", backend_location,
             " status=", res and res.status or "nil")
-        return {}, false
+        return {}, false, res and (res.status == 401 or res.status == 403)
     end
 
     if res.truncated then
@@ -494,18 +562,27 @@ local function _fetch_backend_tools_list(backend_location, client_session_id, se
         return {}, false
     end
 
-    if data.result and type(data.result.tools) == "table" then
+    if type(data) == "table" and type(data.result) == "table"
+        and type(data.result.tools) == "table" and not data.error then
         return data.result.tools, true
     end
 
     ngx.log(ngx.ERR, "Missing tools array in tools/list response from ", backend_location)
-    return {}, false
+    return {}, false, type(data) == "table" and data.error ~= nil
 end
 
 
 -- Handle tools/list method - proxy to backends for full metadata, with cache
 local function _handle_tools_list(request_id, mapping, user_scopes_str, client_session_id, server_id)
-    -- Enforce server-level required_scopes before processing
+    -- Egress discovery depends on individual credentials and must be fresh.
+    local egress_locations = {}
+    for _, tool in ipairs(mapping.tools or {}) do
+        if tool.egress_auth_mode and tool.egress_auth_mode ~= "none" then
+            egress_locations[tool.backend_location] = true
+        end
+    end
+    local has_egress_backend = next(egress_locations) ~= nil
+
     if not _has_scopes(user_scopes_str, mapping.required_scopes) then
         return _jsonrpc_error(request_id, -32603, "Access denied: missing required server scopes")
     end
@@ -518,26 +595,49 @@ local function _handle_tools_list(request_id, mapping, user_scopes_str, client_s
         end
     end
 
-    -- L1 cache check: enriched tools for this server
-    local enriched_tools = nil
+    -- Backend discovery can depend on user-specific egress credentials. Only
+    -- a validated principal may read/write this cache; scope filtering remains
+    -- request-local, and every cache hit reauthorizes each backing server.
+    local user_id = _auth_user_id()
+    if not user_id then
+        return _jsonrpc_error(request_id, -32603, "Authenticated user identity required")
+    end
+    local backend_locations = _collect_backend_locations(mapping)
     local enriched_cache_key = "tools_enriched:" .. (server_id or "unknown")
-    local cached_enriched = session_cache:get(enriched_cache_key)
+        .. ":" .. #user_id .. ":" .. user_id
+    local enriched_tools = nil
+    local cached_enriched = not has_egress_backend and session_cache:get(enriched_cache_key)
     if cached_enriched then
+        local req_body = cjson.encode({
+            jsonrpc = "2.0", id = "tl-" .. (ngx.var.request_id or "0"),
+            method = "tools/list", params = {},
+        })
+        ngx.req.clear_header("X-MCP-Server-Version")
+        for _, backend_loc in ipairs(backend_locations) do
+            if not _authorize_backend(backend_loc, req_body) then
+                return _jsonrpc_error(request_id, -32603, "Backend access denied")
+            end
+        end
         local ok, cached = pcall(cjson.decode, cached_enriched)
-        if ok then
+        if ok and type(cached) == "table" then
             enriched_tools = cached
         end
     end
 
-    -- On cache miss, fetch from backends
     if not enriched_tools then
         enriched_tools = {}
-        local backend_locations = _collect_backend_locations(mapping)
         local all_fetches_ok = true
 
         for _, backend_loc in ipairs(backend_locations) do
-            local backend_tools, backend_ok = _fetch_backend_tools_list(
+            local backend_tools, backend_ok, access_denied = _fetch_backend_tools_list(
                 backend_loc, client_session_id, server_id)
+            if access_denied then
+                return _jsonrpc_error(request_id, -32603, "Backend access denied")
+            end
+            if backend_ok and #backend_tools == 0 then
+                -- Consent may change within the TTL; never freeze an empty list.
+                all_fetches_ok = false
+            end
             if backend_ok then
                 for _, bt in ipairs(backend_tools) do
                     local mapping_entry = allowed_tools[bt.name]
@@ -559,6 +659,9 @@ local function _handle_tools_list(request_id, mapping, user_scopes_str, client_s
                 end
             else
                 all_fetches_ok = false
+                if egress_locations[backend_loc] then
+                    return _jsonrpc_error(request_id, -32603, "Backend discovery unavailable")
+                end
                 ngx.log(ngx.WARN, "Backend tools/list fetch failed for ", backend_loc,
                     " -- falling back to mapping file metadata for this backend")
                 _append_mapping_tools_for_backend(enriched_tools, mapping, backend_loc)
@@ -567,7 +670,7 @@ local function _handle_tools_list(request_id, mapping, user_scopes_str, client_s
 
         -- Cache only fully discovered results. A fallback response remains complete,
         -- but the next request should retry failed backends instead of serving it for 60s.
-        if all_fetches_ok then
+        if all_fetches_ok and not has_egress_backend then
             local ok_enc, encoded = pcall(cjson.encode, enriched_tools)
             if ok_enc then
                 session_cache:set(enriched_cache_key, encoded, ENRICHED_CACHE_TTL)
@@ -591,29 +694,16 @@ local function _handle_tools_list(request_id, mapping, user_scopes_str, client_s
 end
 
 
--- Generic helper to proxy list methods (resources/list, prompts/list) to all backends.
--- Aggregates results from all backends into a single array.
--- Caches with key "{method}:{server_id}", 60s TTL.
--- Returns the aggregated array and a lookup map (item_key_value -> backend_location).
+-- Aggregate resource/prompt lists without a cross-user cache: backend content
+-- and access can depend on the current user's egress credentials.
+-- Returns nil on authorization/initialize failure.
 local function _proxy_list_to_backends(method_name, result_key, mapping, client_session_id, server_id)
-    -- Cache check
-    local cache_key = method_name .. ":" .. (server_id or "unknown")
-    local cached = session_cache:get(cache_key)
-    if cached then
-        local ok, data = pcall(cjson.decode, cached)
-        if ok then
-            -- Ensure decoded items is always a JSON array (empty table from cache loses metatable)
-            if data.items and #data.items == 0 then
-                data.items = setmetatable({}, empty_array_mt)
-            end
-            return data.items, data.lookup
-        end
-    end
-
     local aggregated = setmetatable({}, empty_array_mt)
     local lookup = {}
     local backend_locations = _collect_backend_locations(mapping)
 
+
+    ngx.req.clear_header("X-MCP-Server-Version")
     for _, backend_loc in ipairs(backend_locations) do
         local req_body = cjson.encode({
             jsonrpc = "2.0",
@@ -621,11 +711,18 @@ local function _proxy_list_to_backends(method_name, result_key, mapping, client_
             method = method_name,
             params = {},
         })
+        if not _authorize_backend(backend_loc, req_body) then
+            return nil
+        end
 
-        -- Get backend session
         local backend_session_id = nil
         if client_session_id then
-            backend_session_id = _get_backend_session(client_session_id, backend_loc, server_id)
+            local initialized
+            backend_session_id, initialized = _get_backend_session(
+                client_session_id, backend_loc, server_id)
+            if not initialized then
+                return nil
+            end
         end
 
         if backend_session_id then
@@ -634,21 +731,29 @@ local function _proxy_list_to_backends(method_name, result_key, mapping, client_
             ngx.req.set_header("Mcp-Session-Id", "")
         end
 
+        if not _authorize_backend(backend_loc, req_body) then
+            return nil
+        end
+
         local res = ngx.location.capture(backend_loc, {
             method = ngx.HTTP_POST,
             body = req_body,
         })
 
         -- Stale session retry
-        if res and res.status >= 400 and client_session_id and backend_session_id then
+        if res and (res.status == 400 or res.status == 404 or res.status == 410)
+            and client_session_id and backend_session_id then
             ngx.log(ngx.WARN, "Backend ", method_name, " returned ", res.status,
                 " for ", backend_loc, " -- retrying with fresh session")
             _invalidate_backend_session(client_session_id, backend_loc)
-            local new_session_id = _get_backend_session(client_session_id, backend_loc, server_id)
-            if new_session_id then
-                ngx.req.set_header("Mcp-Session-Id", new_session_id)
-            else
-                ngx.req.set_header("Mcp-Session-Id", "")
+            local new_session_id, initialized = _get_backend_session(
+                client_session_id, backend_loc, server_id)
+            if not initialized then
+                return nil
+            end
+            ngx.req.set_header("Mcp-Session-Id", new_session_id or "")
+            if not _authorize_backend(backend_loc, req_body) then
+                return nil
             end
             res = ngx.location.capture(backend_loc, {
                 method = ngx.HTTP_POST,
@@ -656,35 +761,23 @@ local function _proxy_list_to_backends(method_name, result_key, mapping, client_
             })
         end
 
-        if res and res.status == 200 then
+        if not res or res.status == 401 or res.status == 403 then
+            return nil
+        end
+        if res.status == 200 and not res.truncated then
             local json_body = _parse_sse_body(res.body)
             local ok, data = pcall(cjson.decode, json_body or "")
-            if ok and data.result and data.result[result_key] then
+            if ok and type(data) == "table" and type(data.result) == "table"
+                and type(data.result[result_key]) == "table" and not data.error then
                 for _, item in ipairs(data.result[result_key]) do
                     aggregated[#aggregated + 1] = item
-                    -- Build lookup: for resources, key on "uri"; for prompts, key on "name"
-                    local lookup_key = nil
-                    if result_key == "resources" and item.uri then
-                        lookup_key = item.uri
-                    elseif result_key == "prompts" and item.name then
-                        lookup_key = item.name
-                    end
+                    local lookup_key = result_key == "resources" and item.uri or item.name
                     if lookup_key then
                         lookup[lookup_key] = backend_loc
                     end
                 end
             end
-        else
-            ngx.log(ngx.WARN, "Backend ", method_name, " failed for ", backend_loc,
-                " status=", res and res.status or "nil")
         end
-    end
-
-    -- Cache aggregated results and lookup map
-    local cache_data = { items = aggregated, lookup = lookup }
-    local ok_enc, encoded = pcall(cjson.encode, cache_data)
-    if ok_enc then
-        session_cache:set(cache_key, encoded, ENRICHED_CACHE_TTL)
     end
 
     return aggregated, lookup
@@ -703,15 +796,29 @@ local function _proxy_to_backend(request_id, method_name, proxied_params,
         params = proxied_params,
     })
 
-    -- Get or create backend session
-    local backend_session_id = nil
-    if client_session_id then
-        backend_session_id = _get_backend_session(client_session_id, backend_location, server_id)
+    -- Select the mapped backend version before both initialize and call.
+    if type(backend_version) == "string" and backend_version ~= "" then
+        ngx.req.set_header("X-MCP-Server-Version", backend_version)
+    else
+        ngx.req.clear_header("X-MCP-Server-Version")
+    end
+    if not _authorize_backend(backend_location, proxied_body) then
+        ngx.status = 403
+        ngx.say(_jsonrpc_error(request_id, -32603, "Backend access denied"))
+        return
     end
 
-    -- Set version header if pinned
-    if backend_version then
-        ngx.req.set_header("X-MCP-Server-Version", backend_version)
+    local backend_session_id = nil
+    if client_session_id then
+        local initialized, denied
+        backend_session_id, initialized, denied = _get_backend_session(
+            client_session_id, backend_location, server_id, backend_version)
+        if not initialized then
+            ngx.status = denied and 403 or 502
+            ngx.say(_jsonrpc_error(request_id, -32603,
+                denied and "Backend access denied" or "Backend initialize failed"))
+            return
+        end
     end
 
     -- Set the backend session header for the subrequest proxy
@@ -719,6 +826,12 @@ local function _proxy_to_backend(request_id, method_name, proxied_params,
         ngx.req.set_header("Mcp-Session-Id", backend_session_id)
     else
         ngx.req.set_header("Mcp-Session-Id", "")
+    end
+
+    if not _authorize_backend(backend_location, proxied_body) then
+        ngx.status = 403
+        ngx.say(_jsonrpc_error(request_id, -32603, "Backend access denied"))
+        return
     end
 
     local res = ngx.location.capture(backend_location, {
@@ -733,21 +846,30 @@ local function _proxy_to_backend(request_id, method_name, proxied_params,
         return
     end
 
-    -- Stale session retry: if backend returns an error that looks like a session issue,
-    -- invalidate the session and retry once
-    if res.status >= 400 and client_session_id and backend_session_id then
-        ngx.log(ngx.WARN, "Backend returned ", res.status, " for ", label or method_name,
-            " session=", backend_session_id, " -- retrying with fresh session")
+    -- Only session-related statuses trigger a stale stateful session retry;
+    -- auth errors must never cause a second initialize or credential vend.
+    if (res.status == 400 or res.status == 404 or res.status == 410)
+        and client_session_id and backend_session_id then
+        ngx.log(ngx.WARN, "Backend session rejected for ", label or method_name,
+            " -- retrying with fresh session")
 
         -- Invalidate stale session
-        _invalidate_backend_session(client_session_id, backend_location)
+        _invalidate_backend_session(client_session_id, backend_location, backend_version)
 
         -- Get a fresh session (will re-initialize the backend)
-        local new_session_id = _get_backend_session(client_session_id, backend_location, server_id)
-        if new_session_id then
-            ngx.req.set_header("Mcp-Session-Id", new_session_id)
-        else
-            ngx.req.set_header("Mcp-Session-Id", "")
+        local new_session_id, initialized, denied = _get_backend_session(
+            client_session_id, backend_location, server_id, backend_version)
+        if not initialized then
+            ngx.status = denied and 403 or 502
+            ngx.say(_jsonrpc_error(request_id, -32603,
+                denied and "Backend access denied" or "Backend initialize failed"))
+            return
+        end
+        ngx.req.set_header("Mcp-Session-Id", new_session_id or "")
+        if not _authorize_backend(backend_location, proxied_body) then
+            ngx.status = 403
+            ngx.say(_jsonrpc_error(request_id, -32603, "Backend access denied"))
+            return
         end
 
         -- Retry the request
@@ -927,18 +1049,20 @@ local function _handle_tools_call(request_id, mapping, params, user_scopes_str, 
     end
 
     -- Enforce per-tool scopes
-    if mapping.tools then
-        for _, tool_entry in ipairs(mapping.tools) do
-            if tool_entry.name == tool_name then
-                if not _has_scopes(user_scopes_str, tool_entry.required_scopes) then
-                    ngx.status = 200
-                    ngx.say(_jsonrpc_error(request_id, -32603,
-                        "Access denied: missing required scopes for tool: " .. tool_name))
-                    return
-                end
-                break
-            end
+    -- A backend map entry is not a scope grant: require its matching virtual
+    -- tool entry, then check the alias's own required scopes.
+    local mapped_tool = nil
+    for _, tool_entry in ipairs(mapping.tools or {}) do
+        if tool_entry.name == tool_name then
+            mapped_tool = tool_entry
+            break
         end
+    end
+    if not mapped_tool or not _has_scopes(user_scopes_str, mapped_tool.required_scopes) then
+        ngx.status = 200
+        ngx.say(_jsonrpc_error(request_id, -32603,
+            "Access denied: missing required scopes for tool: " .. tool_name))
+        return
     end
 
     -- Rewrite tool name to original if aliased
@@ -978,9 +1102,14 @@ local function _handle_resources_read(request_id, params, mapping, client_sessio
         return
     end
 
-    -- Look up which backend owns this resource from cached resources/list
+    -- Resolve resource ownership from the current user's backend discovery.
     local _, lookup = _proxy_list_to_backends("resources/list", "resources",
         mapping, client_session_id, server_id)
+    if not lookup then
+        ngx.status = 403
+        ngx.say(_jsonrpc_error(request_id, -32603, "Backend access denied"))
+        return
+    end
 
     local backend_loc = lookup and lookup[uri]
     if not backend_loc then
@@ -1006,9 +1135,14 @@ local function _handle_prompts_get(request_id, params, mapping, client_session_i
         return
     end
 
-    -- Look up which backend owns this prompt from cached prompts/list
+    -- Resolve prompt ownership from the current user's backend discovery.
     local _, lookup = _proxy_list_to_backends("prompts/list", "prompts",
         mapping, client_session_id, server_id)
+    if not lookup then
+        ngx.status = 403
+        ngx.say(_jsonrpc_error(request_id, -32603, "Backend access denied"))
+        return
+    end
 
     local backend_loc = lookup and lookup[name]
     if not backend_loc then
@@ -1031,6 +1165,9 @@ function _M.route()
     -- listing both application/json and text/event-stream. Set this on the request so
     -- all ngx.location.capture subrequests to backends inherit it.
     ngx.req.set_header("Accept", "application/json, text/event-stream")
+    -- A client-supplied internal token must never enter the backend hop; only
+    -- the backend-bound /validate response may mint one.
+    ngx.req.clear_header("X-Internal-Token")
 
     -- Forward the validated caller identity to backend subrequests (fail-closed:
     -- always the gateway-validated value or cleared, never a client-supplied one).
@@ -1227,6 +1364,11 @@ function _M.route()
         end
         local resources = _proxy_list_to_backends("resources/list", "resources",
             mapping, client_session_id, server_id)
+        if not resources then
+            ngx.status = 403
+            ngx.say(_jsonrpc_error(request_id, -32603, "Backend access denied"))
+            return
+        end
         ngx.status = 200
         ngx.say(_jsonrpc_result(request_id, { resources = _as_json_array(resources) }))
 
@@ -1248,6 +1390,11 @@ function _M.route()
         end
         local prompts = _proxy_list_to_backends("prompts/list", "prompts",
             mapping, client_session_id, server_id)
+        if not prompts then
+            ngx.status = 403
+            ngx.say(_jsonrpc_error(request_id, -32603, "Backend access denied"))
+            return
+        end
         ngx.status = 200
         ngx.say(_jsonrpc_result(request_id, { prompts = _as_json_array(prompts) }))
 
@@ -1273,6 +1420,9 @@ if _G._VR_TEST then
     _M._fetch_backend_tools_list = _fetch_backend_tools_list
     _M._append_mapping_tools_for_backend = _append_mapping_tools_for_backend
     _M._handle_tools_list = _handle_tools_list
+    _M._handle_tools_call = _handle_tools_call
+    _M._get_backend_session = _get_backend_session
+    _M._proxy_to_backend = _proxy_to_backend
     _M._forward_identity_headers = _forward_identity_headers
     return _M
 end

@@ -84,6 +84,18 @@ class TestBackendSessionDocument:
                 virtual_server_path="/virtual/my-server",
             )
 
+    def test_stateless_document_roundtrip(self):
+        """A successful stateless initialize persists without a fake session ID."""
+        doc = BackendSessionDocument(
+            client_session_id="vs-abc123",
+            backend_key="/_vs_backend_weather_",
+            stateless=True,
+            user_id="alice",
+            virtual_server_path="/virtual/a",
+        )
+        restored = BackendSessionDocument.model_validate(doc.model_dump(mode="json"))
+        assert restored.stateless is True and restored.backend_session_id is None
+
     def test_serialization_roundtrip(self):
         """Test JSON serialization and deserialization."""
         doc = BackendSessionDocument(
@@ -188,6 +200,15 @@ class TestStoreSessionRequest:
                 user_id="admin",
             )
 
+    def test_stateless_requires_explicit_state(self):
+        """Missing ID is not interpreted as a successful stateless initialize."""
+        with pytest.raises(ValidationError):
+            StoreSessionRequest(client_session_id="vs-abc123", user_id="alice")
+        request = StoreSessionRequest(
+            client_session_id="vs-abc123", user_id="alice", stateless=True
+        )
+        assert request.backend_session_id is None
+
 
 class TestCreateClientSessionRequest:
     """Tests for CreateClientSessionRequest model."""
@@ -243,6 +264,11 @@ class TestGetBackendSessionResponse:
         with pytest.raises(ValidationError):
             GetBackendSessionResponse()
 
+    def test_explicit_stateless_lookup(self):
+        """An explicit sessionless state is distinguishable from a missing document."""
+        response = GetBackendSessionResponse(stateless=True)
+        assert response.stateless is True and response.backend_session_id is None
+
 
 class TestBackendSessionInternalAPI:
     """Tests for internal API routes using mock repository."""
@@ -253,7 +279,7 @@ class TestBackendSessionInternalAPI:
         mock = AsyncMock()
         mock.create_client_session = AsyncMock()
         mock.validate_client_session = AsyncMock(return_value=True)
-        mock.get_backend_session = AsyncMock(return_value="backend-sess-xyz")
+        mock.get_backend_session = AsyncMock(return_value=("backend-sess-xyz", False))
         mock.store_backend_session = AsyncMock()
         mock.delete_backend_session = AsyncMock()
         return mock
@@ -360,7 +386,7 @@ class TestBackendSessionInternalAPI:
     @pytest.mark.asyncio
     async def test_get_backend_session_found(self, mock_repo):
         """Test get returns backend session ID."""
-        mock_repo.get_backend_session.return_value = "backend-sess-xyz"
+        mock_repo.get_backend_session.return_value = ("backend-sess-xyz", False)
 
         with patch(
             "registry.api.internal_routes.get_backend_session_repository",
@@ -379,7 +405,7 @@ class TestBackendSessionInternalAPI:
         a single missed client-session gate cannot leak another user's live
         backend session ID.
         """
-        mock_repo.get_backend_session.return_value = "backend-sess-xyz"
+        mock_repo.get_backend_session.return_value = ("backend-sess-xyz", False)
 
         with patch(
             "registry.api.internal_routes.get_backend_session_repository",
@@ -411,6 +437,19 @@ class TestBackendSessionInternalAPI:
             with pytest.raises(HTTPException) as exc_info:
                 await get_backend_session("vs-abc123:/_vs_backend_weather_", user_id="admin")
             assert exc_info.value.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_get_stateless_backend_session(self, mock_repo):
+        """A successful sessionless initialize survives an L1 cache miss."""
+        mock_repo.get_backend_session.return_value = (None, True)
+        with patch(
+            "registry.api.internal_routes.get_backend_session_repository",
+            return_value=mock_repo,
+        ):
+            from registry.api.internal_routes import get_backend_session
+
+            result = await get_backend_session("vs-abc123:/_vs_backend_weather_", user_id="alice")
+        assert result.stateless is True and result.backend_session_id is None
 
     @pytest.mark.asyncio
     async def test_get_backend_session_invalid_key(self, mock_repo):
@@ -453,7 +492,53 @@ class TestBackendSessionInternalAPI:
                 backend_session_id="backend-sess-xyz",
                 user_id="admin",
                 virtual_server_path="/virtual/my-server",
+                stateless=False,
             )
+
+    @pytest.mark.asyncio
+    async def test_store_stateless_backend_session(self, mock_repo):
+        """Persist stateless initialize as an explicit state, not an empty ID."""
+        with patch(
+            "registry.api.internal_routes.get_backend_session_repository",
+            return_value=mock_repo,
+        ):
+            from registry.api.internal_routes import store_backend_session
+
+            request = StoreSessionRequest(
+                client_session_id="vs-abc123",
+                user_id="alice",
+                stateless=True,
+            )
+            await store_backend_session("vs-abc123:/_vs_backend_weather_", request)
+        mock_repo.store_backend_session.assert_awaited_once_with(
+            client_session_id="vs-abc123",
+            backend_key="/_vs_backend_weather_",
+            backend_session_id=None,
+            user_id="alice",
+            virtual_server_path="",
+            stateless=True,
+        )
+
+    @pytest.mark.asyncio
+    async def test_store_rejects_mismatched_client_session_id(self, mock_repo):
+        """A store cannot write a different client session than its path identifies."""
+        with patch(
+            "registry.api.internal_routes.get_backend_session_repository",
+            return_value=mock_repo,
+        ):
+            from fastapi import HTTPException
+
+            from registry.api.internal_routes import store_backend_session
+
+            request = StoreSessionRequest(
+                client_session_id="vs-other",
+                user_id="alice",
+                stateless=True,
+            )
+            with pytest.raises(HTTPException) as error:
+                await store_backend_session("vs-abc123:/_vs_backend_weather_", request)
+        assert error.value.status_code == 400
+        mock_repo.store_backend_session.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_delete_backend_session(self, mock_repo):

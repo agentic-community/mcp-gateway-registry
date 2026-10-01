@@ -165,6 +165,12 @@ What each hop guarantees:
 - **`/internal/egress-token`** (registry) is guarded by internal auth, re-checks the server is `egress_auth_mode == oauth_user`, and returns the access token only (never the refresh token). Lazy refresh + cross-replica single-flight happen here.
 - **Injection** happens last in `mcp_proxy`: the user's own gateway credentials/identity headers are stripped and replaced with `Authorization: Bearer <vaulted third-party token>`. The token never transits the coding assistant.
 
+### Virtual MCP server backends
+
+Virtual aggregation keeps the same per-user, per-registered-server vault key. The client first passes the virtual server's ingress authorization. Lua resolves an alias to its backend path and original tool name, then explicitly checks that the same caller has that backing server's method/tool grant. Only a successful backing check yields a signed, backend/upstream-bound `X-Internal-Token`; Lua then sends the rewritten request to that backend's internal `/mcp-proxy/<backend-path>/` hop. The vend uses the resolved backing path (for example `/mcp-jira`, not `/virtual/work-tools`) and the verified user's vault identity, so two backing servers cannot swap credentials. A virtual-only grant or an unconnected PAT/OAuth account cannot produce a credentialed upstream call.
+
+The caller's gateway `Authorization`, `X-Authorization`, cookie, and internal hop token never reach the third-party backend. Auth-server removes ingress headers and injects only the backend's own vaulted credential. Plain backends retain their direct virtual dispatch path with the same gateway-credential stripping, and both backing types require the extra grant. A successful stateless backend `initialize` is remembered without inventing an `Mcp-Session-Id`, while egress-backed `tools/list` is fetched per request so user-specific consent and discovery are not served from a shared cache.
+
 ---
 
 ## Why this is simple and safe

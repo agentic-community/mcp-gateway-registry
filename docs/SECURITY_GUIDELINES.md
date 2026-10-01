@@ -355,6 +355,11 @@ sanitizer that isn't called) is equivalent to no check.
 - **`getattr(a_dict, "key", None)` always returns None** (dicts don't expose keys
   as attributes) — the guard becomes dead code that never denies. Use
   `dict.get("key")`; watch for dict-vs-Pydantic-model confusion.
+- **Normalize JSON `null` after Lua-cjson decoding before trusting a mapping field's type.** `cjson.null` is a truthy
+  userdata value, not Lua `nil`; `value or ""` does not clear it. A nullable backend version flowing into a version
+  selector or session key can crash on `#value` or be forwarded as an invalid header. Check `type(value) == "string"`
+  and require a non-empty value for a pinned version; otherwise use the unpinned path. Test the real JSON file
+  round-trip (`cjson.decode`), not a handwritten Lua table with `nil`.
 - **No substring matching for privilege decisions** (`"unrestricted" in scope`
   accepted access scopes as admin). Match exact, centralized constants.
 - **Reserve the wildcard/sentinel names at every write that turns user input
@@ -761,6 +766,13 @@ sanitizer that isn't called) is equivalent to no check.
   the real client IP still arrives via `X-Real-IP`, and scheme/HTTPS detection
   reads the `X-Forwarded-Proto` header directly (not uvicorn's scheme rewrite), so
   OAuth redirect construction is unaffected.
+- **Generated internal auth locations must render their marker secret at the final interpolation site.** A template
+  placeholder replacement performed before dynamic location blocks are appended does not expand placeholders inside
+  those later blocks. If an internal `/validate` hop sends the literal marker instead of the configured
+  `AUTH_SERVER_NGINX_MARKER_SECRET`, auth-server correctly refuses to mint a backend-bound token and every virtual
+  backend call fails after ingress authentication. Render the validated config value when constructing the dynamic
+  block, and verify the fully rendered nginx config contains no marker placeholder in any `/validate` caller. Do not
+  disable the marker check to make routing work.
 - **An nginx `auth_request` subrequest does NOT inherit the parent location's
   `proxy_set_header` directives.** Headers the outer location sets for its own
   `proxy_pass` (e.g. `X-Real-IP $remote_addr`, a sanitized `X-Forwarded-For`) are

@@ -693,10 +693,9 @@ async def vend_egress_token(
         logger.info("egress vend: non-per-user auth_method %r -> consent", auth_method)
         return EgressTokenResponse(consent_required=True)
 
-    # Normalize the server path: mcp_proxy passes the first path segment without a
-    # leading slash ("github"), but server entries, the vault key, and the consent
-    # state all use the slash-prefixed path ("/github"). Without this, the lookup
-    # misses and consent loops forever. Use the canonical form everywhere below.
+    # The proxy passes the registered backend's full path without a leading
+    # slash (e.g. "peer/jira"). Preserve every segment so the vault key and
+    # upstream allowlist belong to that backend, never its peer prefix.
     server_path = body.server_path if body.server_path.startswith("/") else "/" + body.server_path
 
     server = await get_server_repository().get(server_path)

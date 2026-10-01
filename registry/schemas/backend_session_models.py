@@ -8,7 +8,7 @@ backend's MCP session ID, enabling session isolation and persistence.
 
 from datetime import UTC, datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 def _utc_now() -> datetime:
@@ -17,7 +17,7 @@ def _utc_now() -> datetime:
 
 
 class BackendSessionDocument(BaseModel):
-    """MongoDB document for a backend MCP session.
+    """MongoDB document for a backend MCP session or stateless initialization.
 
     Stored with _id = '<client_session_id>:<backend_key>' for fast lookups.
     TTL index on last_used_at auto-expires idle sessions.
@@ -31,10 +31,11 @@ class BackendSessionDocument(BaseModel):
         ...,
         description="Backend location key (e.g., '/_vs_backend_weather_')",
     )
-    backend_session_id: str = Field(
-        ...,
-        description="Session ID returned by the backend MCP server",
+    backend_session_id: str | None = Field(
+        default=None,
+        description="Session ID returned by a stateful backend; null for a stateless backend",
     )
+    stateless: bool = Field(default=False, description="Successful sessionless initialize")
     user_id: str = Field(
         ...,
         description="User identity from auth context (for audit)",
@@ -51,6 +52,14 @@ class BackendSessionDocument(BaseModel):
         default_factory=_utc_now,
         description="Last time this session was accessed (drives TTL expiry)",
     )
+
+    @model_validator(mode="after")
+    def _validate_state(self) -> "BackendSessionDocument":
+        if self.stateless != (self.backend_session_id is None):
+            raise ValueError("A stateless backend must not have a backend session ID")
+        if self.backend_session_id == "":
+            raise ValueError("A backend session ID cannot be empty")
+        return self
 
 
 class ClientSessionDocument(BaseModel):
@@ -83,28 +92,27 @@ class ClientSessionDocument(BaseModel):
 
 
 class StoreSessionRequest(BaseModel):
-    """Request body for storing a backend session via internal API."""
+    """Request body for storing an initialized backend session via internal API."""
 
-    backend_session_id: str = Field(
-        ...,
-        description="Session ID from the backend MCP server",
+    backend_session_id: str | None = Field(
+        default=None,
+        description="Session ID from a stateful backend; null for a stateless backend",
     )
-    client_session_id: str = Field(
-        ...,
-        description="Client-facing session ID",
-    )
+    stateless: bool = Field(default=False, description="Successful sessionless initialize")
+    client_session_id: str = Field(..., description="Client-facing session ID")
     user_id: str = Field(
         ...,
-        description=(
-            "User identity from auth context (required). A session must have a "
-            "concrete owner; defaulting this would silently store a wrong-owner "
-            "document if a caller omitted it."
-        ),
+        description="User identity from auth context (required)",
     )
-    virtual_server_path: str = Field(
-        default="",
-        description="Virtual server path",
-    )
+    virtual_server_path: str = Field(default="", description="Virtual server path")
+
+    @model_validator(mode="after")
+    def _validate_state(self) -> "StoreSessionRequest":
+        if self.stateless != (self.backend_session_id is None):
+            raise ValueError("A stateless backend must not have a backend session ID")
+        if self.backend_session_id == "":
+            raise ValueError("A backend session ID cannot be empty")
+        return self
 
 
 class CreateClientSessionRequest(BaseModel):
@@ -133,9 +141,15 @@ class CreateClientSessionResponse(BaseModel):
 
 
 class GetBackendSessionResponse(BaseModel):
-    """Response body for backend session lookup."""
+    """Response body for an initialized backend session lookup."""
 
-    backend_session_id: str = Field(
-        ...,
-        description="Backend MCP session ID",
-    )
+    backend_session_id: str | None = Field(default=None, description="Stateful backend session ID")
+    stateless: bool = Field(default=False, description="Successful sessionless initialize")
+
+    @model_validator(mode="after")
+    def _validate_state(self) -> "GetBackendSessionResponse":
+        if self.stateless != (self.backend_session_id is None):
+            raise ValueError("A stateless backend must not have a backend session ID")
+        if self.backend_session_id == "":
+            raise ValueError("A backend session ID cannot be empty")
+        return self
