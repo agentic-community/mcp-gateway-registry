@@ -172,9 +172,12 @@ repos:
       # To make this blocking later, clean the worst offenders first
       # (docs/unified-parameter-reference.md, docs/SECURITY_GUIDELINES.md) and
       # then add --strict here.
+      # Runs under the system python, not `uv run`: uv is not on PATH in the
+      # pre-commit CI runner, and this script imports only argparse, re and sys,
+      # so it needs no project environment. Matches the python-syntax hook below.
       - id: prose-scan
         name: Scan prose for LLM tells (advisory)
-        entry: uv run python scripts/prose-scan.py
+        entry: python scripts/prose-scan.py
         language: system
         types: [markdown]
         # The writing skill is excluded because it quotes every phrase it bans,

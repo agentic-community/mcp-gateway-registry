@@ -68,8 +68,7 @@ TELLS: dict[str, str] = {
 }
 
 _COMPILED: dict[str, re.Pattern[str]] = {
-    name: re.compile(pattern, re.IGNORECASE | re.MULTILINE)
-    for name, pattern in TELLS.items()
+    name: re.compile(pattern, re.IGNORECASE | re.MULTILINE) for name, pattern in TELLS.items()
 }
 
 
