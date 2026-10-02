@@ -69,6 +69,8 @@ _G.ngx = {
         set_header = function(k, v) _G.ngx.req._headers[k] = v end,
         clear_header = function(k) _G.ngx.req._headers[k] = nil end,
         get_headers = function() return _G.ngx.req._headers end,
+        read_body = function() end,
+        get_body_data = function() return _G.ngx.req._body end,
     },
     log = function() end,
     ERR = 4,
@@ -80,7 +82,7 @@ _G.ngx = {
     escape_uri = function(v) return v end,
     var = { request_id = "0", auth_user = "alice" },
     status = 200,
-    say = function() end,
+    say = function(body) _G.ngx._last_body = body end,
     exit = function() end,
     print = function(body) _G.ngx._last_body = body end,
     header = {},
@@ -667,6 +669,240 @@ do
     local response = cjson.decode(M._handle_tools_list(1, mapping, "", nil, "blocked"))
     check(response.error ~= nil and upstream == 0,
         "cached tools are denied when backing grant is revoked")
+    capture_handler = nil
+end
+
+-- ---------------------------------------------------------------------------
+print("test: synthetic initialize cannot poison PAT backend session or mixed discovery")
+do
+    ngx.var.auth_user = "alice"
+    local consent = false
+    local initializes, puts, pat_puts, lists, calls = 0, 0, 0, 0, 0
+    local mapping = { tools = {
+        { name = "personal", original_name = "pat_tool",
+          backend_location = "/_vs_backend_pat", egress_auth_mode = "pat" },
+        { name = "healthy", original_name = "public_tool",
+          backend_location = "/_vs_backend_healthy" },
+    } }
+    capture_handler = function(loc, opts)
+        if loc:find("/_internal/sessions/backend/", 1, true) == 1 then
+            if opts.method == ngx.HTTP_GET then return { status = 404 } end
+            if opts.method == ngx.HTTP_PUT then
+                puts = puts + 1
+                if loc:find(":/_vs_backend_pat", 1, true) then
+                    pat_puts = pat_puts + 1
+                    check(cjson.decode(opts.body).backend_session_id == "real-session",
+                        "only a genuine PAT stateful initialize is persisted")
+                else
+                    check(cjson.decode(opts.body).stateless == true,
+                        "healthy backend persists its genuine stateless initialize")
+                end
+                return { status = 200 }
+            end
+        end
+        if loc == "/_vs_auth_pat" or loc == "/_vs_auth_healthy" then
+            return { status = 200, header = { ["X-Internal-Token"] = "signed" } }
+        end
+        if loc == "/_vs_backend_pat" then
+            local method = cjson.decode(opts.body).method
+            if method == "initialize" then
+                initializes = initializes + 1
+                if not consent then
+                    return { status = 200,
+                        header = { ["X-MCP-Backend-Initialized"] = "0",
+                            ["Mcp-Session-Id"] = "synthetic-not-backend" },
+                        body = '{"jsonrpc":"2.0","result":{"capabilities":{}}}' }
+                end
+                return { status = 200, header = { ["Mcp-Session-Id"] = "real-session" },
+                    body = '{"jsonrpc":"2.0","result":{"capabilities":{}}}' }
+            end
+            if method == "tools/list" then
+                lists = lists + 1
+                check(ngx.req._headers["Mcp-Session-Id"] == (consent and "real-session" or ""),
+                    "PAT list uses only a real backend session")
+                return { status = 200, body = consent
+                    and '{"jsonrpc":"2.0","result":{"tools":[{"name":"pat_tool"}]}}'
+                    or '{"jsonrpc":"2.0","result":{"tools":[]}}' }
+            end
+            calls = calls + 1
+            return { status = 200, body = '{"jsonrpc":"2.0","result":{}}' }
+        end
+        if loc == "/_vs_backend_healthy" then
+            if cjson.decode(opts.body).method == "initialize" then
+                return { status = 200, body = '{"jsonrpc":"2.0","result":{}}' }
+            end
+            return { status = 200, body = '{"jsonrpc":"2.0","result":{"tools":[{"name":"public_tool"}]}}' }
+        end
+    end
+    for i = 1, 2 do
+        local response = cjson.decode(M._handle_tools_list(i, mapping, "", "vs-consent", "consent"))
+        check(response.result and #response.result.tools == 1
+            and response.result.tools[1].name == "healthy",
+            "pre-consent PAT empty list leaves healthy virtual tools discoverable")
+    end
+    check(initializes == 2 and lists == 2 and puts == 1 and pat_puts == 0
+        and dict:get("bsess_stateless:vs-consent:/_vs_backend_pat:5:alice") == nil,
+        "pre-consent PAT initializes again and never persists stateless state")
+    check(dict:get("bsess:vs-consent:/_vs_backend_pat:5:alice") == nil,
+        "synthetic initialize never caches a backend session ID")
+    check(dict:get("tools_enriched:consent:5:alice") == nil,
+        "mixed discovery with pre-consent empty tools is not cached")
+    local pat_only = { tools = { mapping.tools[1] } }
+    local empty = cjson.decode(M._handle_tools_list(3, pat_only, "", "vs-consent", "pat_only"))
+    check(empty.result and #empty.result.tools == 0,
+        "PAT-only pre-consent tools/list returns empty instead of grant error")
+    check(dict:get("tools_enriched:pat_only:5:alice") == nil,
+        "empty pre-consent PAT discovery is never cached")
+    ngx.status = 200
+    M._proxy_to_backend(3, "tools/call", { name = "pat_tool" },
+        "/_vs_backend_pat", "vs-consent", "consent")
+    check(ngx.status == 502 and calls == 0, "call before consent retries initialize but cannot dispatch")
+    consent = true
+    local response = cjson.decode(M._handle_tools_list(4, mapping, "", "vs-consent", "consent"))
+    local names = {}
+    for _, tool in ipairs(response.result.tools) do names[tool.name] = true end
+    check(names.personal and names.healthy and puts == 2 and pat_puts == 1,
+        "consent permits stateful initialize and both tools appear immediately")
+    M._proxy_to_backend(5, "tools/call", { name = "pat_tool" },
+        "/_vs_backend_pat", "vs-consent", "consent")
+    check(calls == 1 and initializes == 5 and lists == 4,
+        "call after consent reuses genuine backend session")
+    capture_handler = nil
+end
+
+-- ---------------------------------------------------------------------------
+print("test: plain JSON-RPC error falls back to mapping, HTTP denial never does")
+do
+    ngx.var.auth_user = "alice"
+    local mapping = { tools = { { name = "mapped", original_name = "actual",
+        backend_location = "/_vs_backend_rpc_error", inputSchema = { type = "object" } } } }
+    capture_responses["/_vs_backend_rpc_error"] = { status = 200,
+        body = '{"jsonrpc":"2.0","error":{"code":-32000,"message":"offline"}}' }
+    local response = cjson.decode(M._handle_tools_list(1, mapping, "", nil, "rpc_error"))
+    check(response.result and response.result.tools[1].name == "mapped",
+        "plain backend JSON-RPC failure retains mapping metadata")
+    check(dict:get("tools_enriched:rpc_error:5:alice") == nil,
+        "JSON-RPC error fallback is never cached")
+    capture_responses["/_vs_backend_rpc_error"] = { status = 403, body = "" }
+    response = cjson.decode(M._handle_tools_list(2, mapping, "", nil, "rpc_error"))
+    check(response.error and response.error.message == "Backend access denied",
+        "HTTP 403 remains denial, not mapping fallback")
+end
+
+-- ---------------------------------------------------------------------------
+print("test: resource and prompt discovery separates backend outage from grant denial")
+do
+    local mapping = { tools = { { name = "mapped", backend_location = "/_vs_backend_discovery" } } }
+    local session_id = "vs-cafe"
+    local session_key = "csess_valid:alice:/virtual/discovery:" .. session_id
+    local backend_key = "bsess:" .. session_id .. ":/_vs_backend_discovery:5:alice"
+    dict:set("mapping:discovery", cjson.encode(mapping))
+    dict:set(session_key, "1")
+    ngx.var.virtual_server_id = "discovery"
+    ngx.var.http_mcp_session_id = session_id
+    ngx.var.request_method = "POST"
+    ngx.var.auth_user = "alice"
+    for _, entry in ipairs({
+        { list = "resources/list", get = "resources/read", params = { uri = "file://doc" } },
+        { list = "prompts/list", get = "prompts/get", params = { name = "draft" } },
+    }) do
+        for _, method in ipairs({ entry.list, entry.get }) do
+            ngx.req._body = cjson.encode({ jsonrpc = "2.0", id = 1, method = method,
+                params = entry.params })
+            -- The L2 backend session store is unavailable, but no grant was denied.
+            dict:delete(backend_key)
+            capture_handler = function(loc)
+                if loc == "/_vs_auth_discovery" then
+                    return { status = 200, header = { ["X-Internal-Token"] = "signed" } }
+                end
+                if loc:find("/_internal/sessions/backend/", 1, true) == 1 then
+                    return { status = 503 }
+                end
+            end
+            M.route()
+            check(ngx.status == 502 and cjson.decode(ngx._last_body).error.message
+                == "Backend discovery failed", method .. " returns backend error for session outage")
+
+            -- Once L2 reports a miss, initialize can fail independently.
+            capture_handler = function(loc, opts)
+                if loc == "/_vs_auth_discovery" then
+                    return { status = 200, header = { ["X-Internal-Token"] = "signed" } }
+                end
+                if loc:find("/_internal/sessions/backend/", 1, true) == 1
+                    and opts.method == ngx.HTTP_GET then return { status = 404 } end
+                if loc == "/_vs_backend_discovery" then return { status = 503 } end
+            end
+            M.route()
+            check(ngx.status == 502, method .. " reports backend initialize outage")
+            capture_handler = function(loc, opts)
+                if loc == "/_vs_auth_discovery" then
+                    return { status = cjson.decode(ngx.req._headers["X-Body"]).method
+                        == "initialize" and 403 or 200,
+                        header = { ["X-Internal-Token"] = "signed" } }
+                end
+                if loc:find("/_internal/sessions/backend/", 1, true) == 1
+                    and opts.method == ngx.HTTP_GET then return { status = 404 } end
+            end
+            M.route()
+            check(ngx.status == 403, method .. " preserves denied backend initialize grant")
+
+            capture_handler = function(loc)
+                if loc == "/_vs_auth_discovery" then return { status = 403 } end
+            end
+            M.route()
+            check(ngx.status == 403 and cjson.decode(ngx._last_body).error.message
+                == "Backend access denied", method .. " keeps genuine grant denial")
+
+            -- A healthy session can still reach a broken or denying backend.
+            dict:set(backend_key, "active-session")
+            capture_handler = function(loc)
+                if loc == "/_vs_auth_discovery" then
+                    return { status = 200, header = { ["X-Internal-Token"] = "signed" } }
+                end
+                if loc == "/_vs_backend_discovery" then return { status = 503 } end
+            end
+            M.route()
+            check(ngx.status == 502, method .. " treats backend HTTP 503 as outage")
+            capture_handler = function(loc)
+                if loc == "/_vs_auth_discovery" then
+                    return { status = 200, header = { ["X-Internal-Token"] = "signed" } }
+                end
+                if loc == "/_vs_backend_discovery" then return { status = 403 } end
+            end
+            M.route()
+            check(ngx.status == 403, method .. " treats backend HTTP 403 as denial")
+
+            -- A rejected stateful session retries initialize; classify its result.
+            for _, rejected in ipairs({
+                { status = 503, expected = 502 },
+                { status = 403, expected = 403 },
+            }) do
+                dict:set(backend_key, "stale-session")
+                local init_attempts, list_attempts = 0, 0
+                capture_handler = function(loc, opts)
+                    if loc == "/_vs_auth_discovery" then
+                        return { status = 200, header = { ["X-Internal-Token"] = "signed" } }
+                    end
+                    if loc:find("/_internal/sessions/backend/", 1, true) == 1 then
+                        if opts.method == ngx.HTTP_GET then return { status = 404 } end
+                        return { status = 200 }
+                    end
+                    if loc == "/_vs_backend_discovery" then
+                        if cjson.decode(opts.body).method == "initialize" then
+                            init_attempts = init_attempts + 1
+                            return { status = rejected.status }
+                        end
+                        list_attempts = list_attempts + 1
+                        return { status = 404 }
+                    end
+                end
+                M.route()
+                check(ngx.status == rejected.expected and init_attempts == 1
+                    and list_attempts == 1,
+                    method .. " classifies stale-session reinitialize " .. rejected.status)
+            end
+        end
+    end
     capture_handler = nil
 end
 

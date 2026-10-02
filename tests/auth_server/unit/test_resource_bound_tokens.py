@@ -414,6 +414,103 @@ class TestValidateEdgeEnforcement:
             )
         assert response.status_code == 403, response.text
 
+    @pytest.mark.parametrize(
+        ("parent", "backend", "grant", "marker", "expected"),
+        [
+            ("/virtual/test1/mcp", "/github/mcp", True, "verified-marker-for-test", 200),
+            ("/virtual/other/mcp", "/github/mcp", True, "verified-marker-for-test", 403),
+            ("/virtual/test1/mcp", "/github/mcp", False, "verified-marker-for-test", 403),
+            ("/api/admin/config", "/github/mcp", True, "verified-marker-for-test", 403),
+            ("/virtual/test1/mcp", "/github/mcp", True, "", 403),
+            ("/virtual/test1/mcp", "/github/mcp", True, "wrong-marker", 403),
+            ("", "/github/mcp", True, "verified-marker-for-test", 403),
+            ("/virtual/test1/mcp", "/other/mcp", True, "verified-marker-for-test", 403),
+        ],
+    )
+    def test_virtual_bound_token_backend_requires_parent_binding_and_backend_grant(
+        self, auth_env_vars, parent, backend, grant, marker, expected
+    ):
+        """The internal backing check cannot widen a virtual-bound token."""
+        from unittest.mock import AsyncMock
+
+        client, secret, module = self._client_and_secret(auth_env_vars)
+        token = _mint_self_signed(
+            secret,
+            token_kind="resource",
+            resource_type="virtual_server",
+            resource_id="virtual/test1",
+            scope="virtual-only backend-only",
+        )
+        repo = AsyncMock()
+        repo.get_server_scopes.side_effect = (
+            lambda scope: [
+                {"server": "virtual/test1", "methods": ["tools/list"], "tools": ["get_me"]}
+            ]
+            if scope == "virtual-only"
+            else [{"server": "github", "methods": ["tools/list"], "tools": ["get_me"]}]
+            if grant
+            else []
+        )
+        with (
+            patch("auth_server.server.get_scope_repository", return_value=repo),
+            patch("auth_server.server.get_auth_provider", return_value=self._make_provider(module)),
+            patch.object(
+                module.settings, "auth_server_nginx_marker_secret", "verified-marker-for-test"
+            ),
+        ):
+            response = client.get(
+                "/validate",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "X-Original-URL": "https://example.com" + backend,
+                    "X-Body": '{"jsonrpc":"2.0","id":1,"method":"tools/list"}',
+                    "X-Virtual-Original-URL": "https://example.com" + parent,
+                    "X-Resolved-Upstream": "https://api.githubcopilot.com/mcp",
+                    "X-Validate-Source-Secret": marker,
+                },
+            )
+        assert response.status_code == expected
+
+    @pytest.mark.parametrize(("tool", "expected"), [("get_me", 200), ("delete_repo", 403)])
+    def test_virtual_bound_token_checks_rewritten_backend_tool(self, auth_env_vars, tool, expected):
+        """Virtual binding cannot authorize an ungranted backing tool."""
+        from unittest.mock import AsyncMock
+
+        client, secret, module = self._client_and_secret(auth_env_vars)
+        token = _mint_self_signed(
+            secret,
+            token_kind="resource",
+            resource_type="virtual_server",
+            resource_id="virtual/test1",
+            scope="backend-only",
+        )
+        repo = AsyncMock()
+        repo.get_server_scopes.return_value = [
+            {"server": "github", "methods": ["tools/call"], "tools": ["get_me"]}
+        ]
+        with (
+            patch("auth_server.server.get_scope_repository", return_value=repo),
+            patch("auth_server.server.get_auth_provider", return_value=self._make_provider(module)),
+            patch.object(
+                module.settings, "auth_server_nginx_marker_secret", "verified-marker-for-test"
+            ),
+            patch(
+                "auth_server.server._get_blocked_tools", new_callable=AsyncMock, return_value=set()
+            ),
+        ):
+            response = client.get(
+                "/validate",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "X-Original-URL": "https://example.com/github/mcp",
+                    "X-Body": f'{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"{tool}"}}}}',
+                    "X-Virtual-Original-URL": "https://example.com/virtual/test1/mcp",
+                    "X-Resolved-Upstream": "https://api.githubcopilot.com/mcp",
+                    "X-Validate-Source-Secret": "verified-marker-for-test",
+                },
+            )
+        assert response.status_code == expected
+
     def test_resource_token_on_tokens_generate_blocked(
         self, auth_env_vars, mock_scope_repository_with_data
     ):

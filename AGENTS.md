@@ -337,6 +337,11 @@ working in those areas.
   family; `dict.get("k")` not `getattr(dict, "k")`; no substring matching for
   privilege decisions; verify externally-supplied JWTs (sig/iss/aud/exp) before
   trusting claims; attach shared/global credentials only on explicit admin opt-in.
+- **Virtual backend grants:** internal subrequests that rewrite the backing URL
+  must preserve any resource-bound token's virtual URI in a trusted nginx-only
+  header (clear client copies on normal routes), require the nginx marker and
+  resolved upstream, and check the rewritten backing method/tool grant separately.
+  Never grant direct backing access from virtual binding alone.
 - **Never log** secrets, tokens, PII, or full credential/claim payloads. Redact
   (including setup/debug scripts in verbose mode).
 - **OAuth/OIDC:** bind the code flow to the login with a per-login `nonce` (checked

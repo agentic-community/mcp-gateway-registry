@@ -3687,6 +3687,7 @@ async def validate_request(request: Request):
     try:
         # Extract headers
         original_url = request.headers.get("X-Original-URL")
+        virtual_original_url = request.headers.get("X-Virtual-Original-URL") or ""
         x_authorization = request.headers.get("X-Authorization")
         raw_authorization = request.headers.get("Authorization")
 
@@ -4670,6 +4671,32 @@ async def validate_request(request: Request):
                 logger.info(f"Resource-bound token on introspection endpoint: {request_path}")
             else:
                 classified = classify_request_url(request_path, root_path=REGISTRY_ROOT_PATH)
+                # Only the generated internal /_vs_auth_* location can forward
+                # this header: normal nginx /validate blocks clear it. Scope
+                # authorization above still checks the REAL backend URL/body.
+                # A virtual-bound resource token may reuse its verified ingress
+                # identity at that backend hop, but only for its own parent URI.
+                if virtual_original_url:
+                    parent_path = urlparse(virtual_original_url).path
+                    parent = classify_request_url(parent_path, root_path=REGISTRY_ROOT_PATH)
+                    marker = settings.auth_server_nginx_marker_secret
+                    if (
+                        not marker
+                        or not secrets.compare_digest(
+                            request.headers.get("X-Validate-Source-Secret", ""), marker
+                        )
+                        or not request.headers.get("X-Resolved-Upstream")
+                        or parent is None
+                        or parent[0] != ResourceType.VIRTUAL_SERVER
+                        or classified is None
+                        or classified[0] != ResourceType.SERVER
+                    ):
+                        raise HTTPException(
+                            status_code=403,
+                            detail="Virtual backend binding could not be validated",
+                            headers={"Connection": "close"},
+                        )
+                    classified = parent
                 if classified is None:
                     logger.warning(
                         f"Resource token for "
@@ -7849,6 +7876,16 @@ def _pat_missing_response(
     JSON-RPC result with ``isError=true`` (works on every MCP client, no -32042
     URL elicitation) whose text tells the human where to submit a PAT.
     """
+    if incoming_method == "tools/list":
+        # MCP discovery must remain valid even before a PAT is submitted. A
+        # virtual server can still aggregate its other connected backends.
+        return JSONResponse(
+            status_code=200,
+            content={"jsonrpc": "2.0", "id": req_id, "result": {"tools": []}},
+        )
+    if incoming_method == "initialize":
+        return _local_initialize_response(req_id, {"params": {}})
+
     logger.info(
         "mcp_proxy: pat server=%s method=%s has no usable PAT; returning terminal "
         "isError=true tool result (submit via Connected Accounts)",
@@ -7931,6 +7968,7 @@ def _local_initialize_response(
     return JSONResponse(
         status_code=200,
         content={"jsonrpc": "2.0", "id": req_id, "result": result},
+        headers={"X-MCP-Backend-Initialized": "0"},
     )
 
 

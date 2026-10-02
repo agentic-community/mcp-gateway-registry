@@ -4120,6 +4120,7 @@ class TestMcpProxyEndpointHeaderPassthrough:
         assert result["protocolVersion"] == "2025-11-25"
         assert "capabilities" in result
         assert result["serverInfo"]["name"] == "mcp-gateway-registry"
+        assert response.headers.get("x-mcp-backend-initialized") == "0"
 
     def test_egress_consent_acks_notifications_locally(self):
         """notifications/* carry no result; for a tokenless egress server the
@@ -5079,6 +5080,29 @@ class TestMcpProxyPatMode:
         assert "Connected Accounts" in text
         # No connect/authorize URL is offered (pat is not interactive).
         assert "http" not in text.lower()
+
+    def test_pat_missing_initialize_is_not_a_backend_session(self):
+        """Pre-PAT handshake must never persist a synthetic backend session."""
+        import json as _json
+
+        import auth_server.server as server_module
+
+        resp = server_module._pat_missing_response("github", "initialize", 7)
+
+        assert resp.status_code == 200
+        assert _json.loads(resp.body)["result"]["capabilities"] == {"tools": {}}
+        assert resp.headers["x-mcp-backend-initialized"] == "0"
+
+    def test_pat_missing_tools_list_keeps_other_backends_discoverable(self):
+        """A missing PAT is not a malformed tools/list response."""
+        import json as _json
+
+        import auth_server.server as server_module
+
+        resp = server_module._pat_missing_response("github", "tools/list", 9)
+
+        assert resp.status_code == 200
+        assert _json.loads(resp.body)["result"] == {"tools": []}
 
     def test_pat_hit_injects_and_strips_ingress_creds(self):
         import auth_server.server as server_module
