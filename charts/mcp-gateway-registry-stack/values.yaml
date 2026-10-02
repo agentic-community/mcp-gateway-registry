@@ -314,6 +314,24 @@ mongodb-configure:
 # Registry service configuration
 registry:
   app:
+    # Forward-proxy egress for the SSRF-guarded clients (issue #1832). OFF by
+    # default. Only needed where the pods have NO direct internet egress and all
+    # outbound traffic must traverse a corporate forward proxy.
+    #
+    # Set this on BOTH registry and auth-server: the registry runs the health probe
+    # and tool discovery, the auth-server runs the egress-credential-injected tool
+    # call and the OBO token exchange. Enabling it on one of them fixes half the
+    # paths and produces a confusing partial failure.
+    #
+    # The proxy itself is named through the standard HTTP_PROXY / HTTPS_PROXY /
+    # NO_PROXY variables, set via the `extraEnv` list in each service's section
+    # below. They are deliberately not chart-managed, so they are settable.
+    #
+    # Enabling this relaxes DNS-rebinding protection for targets that resolve
+    # exclusively to public addresses; internal targets keep their IP pin with no
+    # extra configuration. See docs/forward-proxy-egress.md before turning it on.
+      # egressForwardProxyEnabled: false
+
     replicas: 2 # set to > 1 replica for high availability
     # Session cookie Domain attribute. Leave empty to default to
     # ".<global.domain>" (cookie valid across all subdomains of the
@@ -557,6 +575,16 @@ registry:
     enabled: true
     ingressClassName: alb
   nodeSelector: {}
+  # PEM CA bundle mounted into the pod, trusted IN ADDITION to the default roots.
+  # Needed only when the forward proxy terminates TLS and re-signs with an
+  # internal CA. Create the ConfigMap or Secret yourself; the chart derives
+  # EGRESS_FORWARD_PROXY_CA_BUNDLE from mountPath and key.
+  # caBundle:
+  #   enabled: true
+  #   existingConfigMap: corporate-ca   # or existingSecret
+  #   key: ca-bundle.pem
+  #   mountPath: /etc/ssl/mcp-gateway
+
   # Extra env vars / envFrom sources appended to the registry container.
   # See charts/registry/values.yaml for validation rules, reserved names,
   # and footgun warnings. These values are forwarded to the registry
@@ -587,6 +615,24 @@ mcpgw:
 # Auth server configuration
 auth-server:
   app:
+    # Forward-proxy egress for the SSRF-guarded clients (issue #1832). OFF by
+    # default. Only needed where the pods have NO direct internet egress and all
+    # outbound traffic must traverse a corporate forward proxy.
+    #
+    # Set this on BOTH registry and auth-server: the registry runs the health probe
+    # and tool discovery, the auth-server runs the egress-credential-injected tool
+    # call and the OBO token exchange. Enabling it on one of them fixes half the
+    # paths and produces a confusing partial failure.
+    #
+    # The proxy itself is named through the standard HTTP_PROXY / HTTPS_PROXY /
+    # NO_PROXY variables, set via the `extraEnv` list in each service's section
+    # below. They are deliberately not chart-managed, so they are settable.
+    #
+    # Enabling this relaxes DNS-rebinding protection for targets that resolve
+    # exclusively to public addresses; internal targets keep their IP pin with no
+    # extra configuration. See docs/forward-proxy-egress.md before turning it on.
+      # egressForwardProxyEnabled: false
+
     replicas: 2 # set to > 1 replica for high availability
     # Session cookie Domain attribute. See registry.app.sessionCookieDomain
     # above for guidance — keep these two in sync.
@@ -696,6 +742,16 @@ auth-server:
   # Default: "pingfederate"
   idpUserGroupFallbackEnabledProviders: "pingfederate"
   nodeSelector: {}
+  # PEM CA bundle mounted into the pod, trusted IN ADDITION to the default roots.
+  # Needed only when the forward proxy terminates TLS and re-signs with an
+  # internal CA. Create the ConfigMap or Secret yourself; the chart derives
+  # EGRESS_FORWARD_PROXY_CA_BUNDLE from mountPath and key.
+  # caBundle:
+  #   enabled: true
+  #   existingConfigMap: corporate-ca   # or existingSecret
+  #   key: ca-bundle.pem
+  #   mountPath: /etc/ssl/mcp-gateway
+
   # Extra env vars / envFrom sources appended to the auth-server container.
   # See charts/auth-server/values.yaml for validation rules, reserved names,
   # and footgun warnings. These values are forwarded to the auth-server

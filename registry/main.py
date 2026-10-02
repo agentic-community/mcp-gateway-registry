@@ -495,6 +495,15 @@ async def lifespan(app: FastAPI):
     # Log warnings for ineffective SHOW_*_TAB overrides
     log_tab_visibility_warnings(settings)
 
+    # Resolve forward-proxy egress configuration now (issue #1832), so a bad
+    # EGRESS_FORWARD_PROXY_CA_BUNDLE path fails the process here rather than
+    # surfacing as a certificate error on the first proxied request, hours later.
+    # Also emits the one INFO line that makes "is the proxy flag actually on in
+    # this pod" answerable from the logs alone.
+    from registry.utils.url_guard import validate_forward_proxy_config
+
+    validate_forward_proxy_config()
+
     # Initialize Prometheus metrics
     _initialize_deployment_metrics()
 

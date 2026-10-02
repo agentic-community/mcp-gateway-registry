@@ -1120,6 +1120,45 @@ registry_api_token = "m3zT65wREARMVDToKosg_DgNkKqS_434hNxy3sslGPY"
 # ssrf_allowed_hosts = "flight-booking-agent.mcp-gateway-v2.local"
 # ssrf_allowed_cidrs = ""
 
+# -----------------------------------------------------------------------------
+# Forward-proxy egress. See docs/forward-proxy-egress.md.
+# -----------------------------------------------------------------------------
+# Only needed where the tasks have NO direct internet egress (no NAT gateway, no
+# internet route) and all outbound traffic must traverse a corporate forward
+# proxy. Leave unset otherwise.
+#
+# When true, the SSRF-guarded clients send a target through the proxy ONLY when
+# every address it resolves to is on the public internet; an internal target
+# stays direct and IP-pinned. Resolution and classification still run before any
+# CONNECT, and metadata / credential endpoints stay hard-denied, but a proxied
+# request is dialed by hostname rather than a pinned IP, so DNS-rebinding
+# protection is relaxed for public destinations. That is why it is opt-in.
+#
+# Applied to BOTH the registry and auth-server task definitions: the registry
+# runs the health probe and tool discovery, the auth-server runs the
+# egress-credential-injected tool call and the OBO token exchange.
+# egress_forward_proxy_enabled = false
+
+# HTTP_PROXY / HTTPS_PROXY / NO_PROXY are standard environment variables, passed
+# through the existing *_extra_env lists rather than through dedicated variables:
+# registry_extra_env = [
+#   { name = "HTTPS_PROXY", value = "http://corp-proxy.internal:3128" },
+#   { name = "HTTP_PROXY", value = "http://corp-proxy.internal:3128" },
+#   { name = "NO_PROXY", value = "localhost,127.0.0.1,mcp-gateway-v2.local" },
+# ]
+# auth_server_extra_env = [ ... the same three ... ]
+
+# PEM CA bundle trusted IN ADDITION to the default roots, for a proxy that
+# terminates TLS and re-signs with an internal CA. ECS needs no new mounting
+# mechanism: bake the bundle into the image or mount it from the EFS volume the
+# stack already provisions. This variable only names the path, which must exist
+# inside the container. A missing or malformed file fails the task at startup.
+# egress_forward_proxy_ca_bundle = "/etc/ssl/mcp-gateway/ca-bundle.pem"
+
+# When enabling the proxy, raise health_check_timeout_seconds as well: it is a
+# flat timeout whose connect bucket must cover the TCP connection to the proxy,
+# the CONNECT round trip and the TLS handshake.
+
 # CIMD (Client ID Metadata Document) publisher. Serves the registry's own CIMD at
 # GET /oauth/client-metadata.json so external CIMD-aware IdPs can describe the
 # registry as an OAuth client. Disabled by default (404 when off).
