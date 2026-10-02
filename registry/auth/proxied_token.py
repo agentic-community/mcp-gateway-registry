@@ -29,6 +29,8 @@ import os
 import jwt as pyjwt
 from fastapi import HTTPException, status
 
+from registry.auth.resource_binding import mcp_proxy_route_binding
+
 logger = logging.getLogger(__name__)
 
 # Must match auth_server/internal_request_token.py.
@@ -201,6 +203,16 @@ def verify_mcp_proxy_token(token: str) -> dict:
     # cannot run the upstream cross-check; fail closed.
     if not claims.get("upstream_url"):
         logger.warning("mcp-proxy token missing upstream binding")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid internal token",
+        )
+    if (
+        not isinstance(claims.get("server"), str)
+        or not claims["server"]
+        or mcp_proxy_route_binding(claims) is None
+    ):
+        logger.warning("mcp-proxy token missing registered version binding")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid internal token",

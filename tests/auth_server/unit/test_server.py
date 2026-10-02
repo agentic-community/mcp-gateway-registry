@@ -3710,6 +3710,7 @@ def _mcp_proxy_token_headers(
     upstream_url: str = "https://upstream.example/mcp",
     scopes: list[str] | None = None,
     audit_identity: dict | None = None,
+    virtual_backend: bool = False,
 ) -> dict:
     """Build the X-Internal-Token nginx would forward to /mcp-proxy.
 
@@ -3731,8 +3732,13 @@ def _mcp_proxy_token_headers(
         server_name=server_name,
         upstream_url=upstream_url,
         audit_identity=audit_identity,
+        virtual_backend=virtual_backend,
     )
-    return {"X-Internal-Token": token}
+    return {
+        "X-Internal-Token": token,
+        "X-Registered-Server-Path": "/" + server_name.strip("/"),
+        "X-Registered-Route-Mode": "virtual" if virtual_backend else "direct",
+    }
 
 
 def _forged_ingress_jwt(sub: str = "test-user", **claims: str) -> str:
@@ -4293,6 +4299,39 @@ class TestMcpProxyEndpointHeaderPassthrough:
 
         assert response.status_code == 200
         assert vend_paths == ["peer-lob/jira"]
+
+    def test_nested_transport_named_server_vends_its_own_credential(self):
+        import auth_server.server as server_module
+
+        seen: list[str] = []
+
+        async def vend(_token, registered_server):
+            seen.append(registered_server)
+            return {"access_token": "nested-credential"}
+
+        upstream = _build_mock_upstream_response(
+            status_code=200,
+            headers={"content-type": "application/json"},
+            body=b'{"jsonrpc":"2.0","id":1,"result":{}}',
+        )
+        with (
+            patch.object(server_module.settings, "egress_auth_enabled", True),
+            patch.object(server_module, "_vend_egress_token", vend),
+            patch.object(server_module, "_read_mcp_filter_enabled", return_value=False),
+            _patch_scope_repo_allow_all(),
+            _patch_httpx_async_client(upstream),
+        ):
+            response = TestClient(server_module.app).post(
+                "/mcp-proxy/peer/mcp/",
+                json={"jsonrpc": "2.0", "id": 1, "method": "initialize"},
+                headers=_mcp_proxy_token_headers(
+                    server_name="peer/mcp",
+                    upstream_url="https://backend.example/peer/mcp",
+                    virtual_backend=True,
+                ),
+            )
+        assert response.status_code == 200
+        assert seen == ["peer/mcp"]
 
     def test_internal_token_for_peer_cannot_proxy_sibling_backend(self):
         """A peer's sibling backend must not share a signed proxy credential."""
@@ -5063,6 +5102,27 @@ class TestMcpProxyPatMode:
     and is answered by the terminal _pat_missing_response.
     """
 
+    @pytest.mark.parametrize(
+        "method,result_key",
+        [
+            ("tools/list", "tools"),
+            ("resources/list", "resources"),
+            ("resources/templates/list", "resourceTemplates"),
+            ("prompts/list", "prompts"),
+        ],
+    )
+    def test_pat_missing_list_is_empty_and_marked_consent_required(self, method, result_key):
+        """Every discovery list answers an empty list an aggregator can tell
+        apart from a backend that genuinely has nothing."""
+        import json as _json
+
+        import auth_server.server as server_module
+
+        resp = server_module._pat_missing_response("github", method, 3)
+        assert resp.status_code == 200
+        assert _json.loads(resp.body)["result"] == {result_key: []}
+        assert resp.headers[server_module.EGRESS_CONSENT_REQUIRED_HEADER] == "pat"
+
     def test_pat_missing_response_shape(self):
         import auth_server.server as server_module
 
@@ -5076,7 +5136,6 @@ class TestMcpProxyPatMode:
         assert "error" not in body
         assert body["result"]["isError"] is True
         text = body["result"]["content"][0]["text"]
-        assert "No PAT configured" in text
         assert "Connected Accounts" in text
         # No connect/authorize URL is offered (pat is not interactive).
         assert "http" not in text.lower()
@@ -5217,7 +5276,6 @@ class TestMcpProxyPatMode:
         body = response.json()
         assert body["id"] == 9
         assert body["result"]["isError"] is True
-        assert "No PAT configured" in body["result"]["content"][0]["text"]
         # Nothing was forwarded upstream (terminal miss).
         assert "headers" not in captured
 
@@ -5348,53 +5406,6 @@ class TestTokenLifetimeEnforcement:
 # =============================================================================
 
 
-class TestRegisteredServerFromProxyPath:
-    """Tests for _registered_server_from_proxy_path scope-key derivation.
-
-    The scope key must match what /validate authorizes against so both hops
-    check the identical server. Only a trailing MCP transport segment is
-    stripped; federated "peer/server" keys are preserved.
-    """
-
-    def test_local_server_no_transport(self):
-        """A bare server name is returned unchanged."""
-        from auth_server.server import _registered_server_from_proxy_path
-
-        assert _registered_server_from_proxy_path("currenttime") == "currenttime"
-
-    def test_local_server_strips_trailing_transport(self):
-        """A trailing mcp/sse/messages segment is stripped."""
-        from auth_server.server import _registered_server_from_proxy_path
-
-        assert _registered_server_from_proxy_path("currenttime/mcp") == "currenttime"
-        assert _registered_server_from_proxy_path("currenttime/sse") == "currenttime"
-        assert _registered_server_from_proxy_path("currenttime/messages") == "currenttime"
-
-    def test_federated_peer_server_preserved(self):
-        """A federated peer/server key is preserved (not truncated to peer)."""
-        from auth_server.server import _registered_server_from_proxy_path
-
-        assert (
-            _registered_server_from_proxy_path("peer-registry-lob-1/cloudflare-docs")
-            == "peer-registry-lob-1/cloudflare-docs"
-        )
-
-    def test_federated_peer_server_strips_trailing_transport(self):
-        """peer/server/mcp -> peer/server (only the transport tail is stripped)."""
-        from auth_server.server import _registered_server_from_proxy_path
-
-        assert (
-            _registered_server_from_proxy_path("peer-registry-lob-1/cloudflare-docs/mcp")
-            == "peer-registry-lob-1/cloudflare-docs"
-        )
-
-    def test_leading_and_trailing_slashes_ignored(self):
-        """Surrounding slashes do not change the derived key."""
-        from auth_server.server import _registered_server_from_proxy_path
-
-        assert _registered_server_from_proxy_path("/currenttime/mcp/") == "currenttime"
-
-
 class TestAuthorizeForwardedMcpBody:
     """Tests for _authorize_forwarded_mcp_body (TM-15 forwarded-body re-auth).
 
@@ -5434,7 +5445,7 @@ class TestAuthorizeForwardedMcpBody:
         ):
             with pytest.raises(HTTPException) as exc_info:
                 await _authorize_forwarded_mcp_body(
-                    "test-server/mcp",
+                    "test-server",
                     self._body("tools/call", tool="danger-tool"),
                     ["read:servers"],
                 )
@@ -5451,7 +5462,7 @@ class TestAuthorizeForwardedMcpBody:
         ):
             # write:servers allows tools/call with wildcard tools on test-server.
             await _authorize_forwarded_mcp_body(
-                "test-server/mcp",
+                "test-server",
                 self._body("tools/call", tool="any-tool"),
                 ["write:servers"],
             )
@@ -5466,7 +5477,7 @@ class TestAuthorizeForwardedMcpBody:
             return_value=mock_scope_repository_with_data,
         ):
             await _authorize_forwarded_mcp_body(
-                "test-server/mcp",
+                "test-server",
                 self._body("initialize"),
                 ["read:servers"],
             )
@@ -5481,7 +5492,7 @@ class TestAuthorizeForwardedMcpBody:
             return_value=mock_scope_repository_with_data,
         ):
             # Allowed for a scope that grants initialize on the server ...
-            await _authorize_forwarded_mcp_body("test-server/mcp", b"", ["read:servers"])
+            await _authorize_forwarded_mcp_body("test-server", b"", ["read:servers"])
 
     @pytest.mark.asyncio
     async def test_empty_body_denied_without_matching_scope(self, mock_scope_repository_with_data):
@@ -5495,7 +5506,7 @@ class TestAuthorizeForwardedMcpBody:
             return_value=mock_scope_repository_with_data,
         ):
             with pytest.raises(HTTPException) as exc_info:
-                await _authorize_forwarded_mcp_body("other-server/mcp", b"", ["read:servers"])
+                await _authorize_forwarded_mcp_body("other-server", b"", ["read:servers"])
         assert exc_info.value.status_code == 403
 
     @pytest.mark.asyncio
@@ -5511,7 +5522,7 @@ class TestAuthorizeForwardedMcpBody:
         ):
             with pytest.raises(HTTPException) as exc_info:
                 await _authorize_forwarded_mcp_body(
-                    "test-server/mcp",
+                    "test-server",
                     b"\xff\xfe not json at all {",
                     ["write:servers"],
                 )
@@ -5530,7 +5541,7 @@ class TestAuthorizeForwardedMcpBody:
         ):
             with pytest.raises(HTTPException) as exc_info:
                 await _authorize_forwarded_mcp_body(
-                    "test-server/mcp",
+                    "test-server",
                     b'["tools/call", "danger"]',
                     ["write:servers"],
                 )
@@ -5548,7 +5559,7 @@ class TestAuthorizeForwardedMcpBody:
             return_value=mock_scope_repository_with_data,
         ):
             with pytest.raises(HTTPException) as exc_info:
-                await _authorize_forwarded_mcp_body("test-server/mcp", self._body("initialize"), [])
+                await _authorize_forwarded_mcp_body("test-server", self._body("initialize"), [])
         assert exc_info.value.status_code == 403
 
     @pytest.mark.asyncio
@@ -5566,7 +5577,7 @@ class TestAuthorizeForwardedMcpBody:
         ):
             with pytest.raises(HTTPException) as exc_info:
                 await _authorize_forwarded_mcp_body(
-                    "test-server/mcp",
+                    "test-server",
                     self._body("tools/call"),
                     ["read:servers"],
                 )
@@ -6806,11 +6817,9 @@ def _patch_scope_repo(rules_by_scope: dict[str, list[dict]]):
 class TestToolsListFilterScopeKey:
     """The tools/list filter must get the registered name, not the proxy path.
 
-    The access check earlier in the same request strips the transport suffix via
-    _registered_server_from_proxy_path, but the filter call site did not. A scope
-    document keyed on the registered name then matched nothing, so every tool was
-    removed and the client got a valid JSON-RPC response with an empty tools
-    array: no error, connector looks healthy, server listed with no tools.
+    The signed token supplies the registered path, regardless of whether the
+    proxy route carries a transport suffix. Filtering under the proxy route
+    instead of that path silently returns an empty tools array.
     """
 
     @pytest.mark.parametrize(
@@ -7049,3 +7058,212 @@ async def test_callback_uses_pooled_plain_client_not_closed(monkeypatch):
 
     # Pooled client is process-lifetime; never closed by the callback handlers.
     mock_client.aclose.assert_not_called()
+
+
+@pytest.mark.unit
+class TestRegisteredProxyUrlMatches:
+    """The registered-path binding mirrors the nginx location that selected it.
+
+    A generated direct location is the prefix ``<root>/<registered>/``, so every
+    URL nginx routes there must bind; anything outside it must not.
+    """
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://gw.example/jira/mcp",
+            "https://gw.example/jira/mcp/",
+            "https://gw.example/jira/sse",
+            "https://gw.example/jira/messages/?session_id=abc",
+            "https://gw.example/jira/",
+            # nginx routes on the normalized $uri, so these reach /jira/ too.
+            "https://gw.example//jira/mcp",
+            "https://gw.example/%6Aira/mcp",
+            "https://gw.example/other/../jira/mcp",
+        ],
+    )
+    def test_urls_routed_by_the_direct_location_bind(self, url, monkeypatch):
+        import auth_server.server as server_module
+
+        monkeypatch.setattr(server_module, "REGISTRY_ROOT_PATH", "")
+        assert server_module._registered_proxy_url_matches(url, "/jira", "direct")
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://gw.example/jira",
+            "https://gw.example/jiraX/mcp",
+            "https://gw.example/other/mcp",
+            "https://gw.example/jira/../other/mcp",
+            "https://gw.example/jira/%2e%2e/other/mcp",
+        ],
+    )
+    def test_urls_outside_the_direct_location_do_not_bind(self, url, monkeypatch):
+        import auth_server.server as server_module
+
+        monkeypatch.setattr(server_module, "REGISTRY_ROOT_PATH", "")
+        assert not server_module._registered_proxy_url_matches(url, "/jira", "direct")
+
+    def test_nested_registration_binds_only_its_own_subtree(self, monkeypatch):
+        import auth_server.server as server_module
+
+        monkeypatch.setattr(server_module, "REGISTRY_ROOT_PATH", "")
+        url = "https://gw.example/peer/mcp/mcp"
+        assert server_module._registered_proxy_url_matches(url, "/peer/mcp", "direct")
+        assert not server_module._registered_proxy_url_matches(
+            "https://gw.example/peer/other/mcp", "/peer/mcp", "direct"
+        )
+
+    def test_virtual_backend_binds_only_its_forced_endpoint(self, monkeypatch):
+        import auth_server.server as server_module
+
+        monkeypatch.setattr(server_module, "REGISTRY_ROOT_PATH", "")
+        assert server_module._registered_proxy_url_matches(
+            "https://gw.example/jira/mcp", "/jira", "virtual"
+        )
+        assert not server_module._registered_proxy_url_matches(
+            "https://gw.example/jira/mcp/", "/jira", "virtual"
+        )
+
+
+def _patch_scope_repo_exact(server: str):
+    """Scope repository granting scope ``exact:access`` on ``server`` only (case-sensitive)."""
+    repo = AsyncMock()
+
+    async def _get_server_scopes(scope_name: str):
+        if scope_name == "exact:access":
+            return [{"server": server, "methods": ["*"], "tools": ["*"]}]
+        return []
+
+    async def _get_server_scopes_bulk(scope_names: list[str]):
+        return {s: await _get_server_scopes(s) for s in scope_names if await _get_server_scopes(s)}
+
+    repo.get_server_scopes.side_effect = _get_server_scopes
+    repo.get_server_scopes_bulk.side_effect = _get_server_scopes_bulk
+    return patch("auth_server.server.get_scope_repository", return_value=repo)
+
+
+@pytest.mark.unit
+class TestMcpProxyMixedCaseServer:
+    """mcp_proxy re-authorizes the forwarded body against the SAME server name
+    /validate authorized. Scope matching is case-sensitive, so case-folding the
+    signed claim denies every non-wildcard user of a mixed-case registration."""
+
+    def test_mixed_case_registration_is_authorized_with_its_exact_scope(self):
+        import auth_server.server as server_module
+
+        patch_cm, captured = _capture_upstream_headers()
+        with (
+            _patch_scope_repo_exact("MyServer"),
+            patch.object(server_module.settings, "egress_auth_enabled", False),
+            patch_cm,
+        ):
+            client = TestClient(server_module.app)
+            response = client.post(
+                "/mcp-proxy/MyServer/mcp",
+                json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+                headers=_mcp_proxy_token_headers(server_name="MyServer", scopes=["exact:access"]),
+            )
+
+        assert response.status_code == 200, response.text
+        assert "url" in captured
+
+
+@pytest.mark.unit
+class TestPreConsentLocalResponse:
+    """Methods that never need the upstream are answered the same way for PAT
+    and OAuth while consent is pending."""
+
+    @pytest.mark.parametrize("mode", ["pat", "oauth"])
+    def test_notification_is_acknowledged_without_a_body(self, mode):
+        import auth_server.server as server_module
+
+        resp = server_module._pre_consent_local_response(
+            "notifications/initialized", None, {"method": "notifications/initialized"}, mode
+        )
+        assert resp.status_code == 202
+        assert resp.body == b""
+
+    def test_pat_ping_returns_an_empty_result(self):
+        import json as _json
+
+        import auth_server.server as server_module
+
+        resp = server_module._pat_missing_response("github", "ping", 4, {"method": "ping"})
+        assert _json.loads(resp.body) == {"jsonrpc": "2.0", "id": 4, "result": {}}
+
+    def test_pat_initialize_echoes_the_requested_protocol_version(self):
+        import json as _json
+
+        import auth_server.server as server_module
+
+        payload = {"method": "initialize", "params": {"protocolVersion": "2025-06-18"}}
+        resp = server_module._pat_missing_response("github", "initialize", 5, payload)
+        assert _json.loads(resp.body)["result"]["protocolVersion"] == "2025-06-18"
+
+
+@pytest.mark.unit
+class TestMcpProxyRouteMismatch:
+    """auth-server and nginx roll independently; both pre-upgrade shapes are
+    direct routes and remain accepted, everything else stays fail-closed."""
+
+    @staticmethod
+    def _mismatch(claims, path, mode=None, header=None):
+        from auth_server.internal_request_token import _mcp_proxy_route_mismatch
+
+        return _mcp_proxy_route_mismatch(claims, path, mode, header)
+
+    def test_token_from_an_older_auth_server_is_a_direct_route(self):
+        legacy = {"server": "jira"}
+        assert self._mismatch(legacy, "jira/mcp", "direct", "/jira") is None
+        assert self._mismatch(legacy, "jira/mcp") is None
+        assert self._mismatch(legacy, "jira/mcp", "virtual", "/jira") is not None
+
+    def test_hop_from_an_older_nginx_is_a_direct_route(self):
+        current = {"server": "jira", "version_id": "", "virtual_backend": False}
+        assert self._mismatch(current, "jira/messages") is None
+        virtual = {"server": "jira", "version_id": "", "virtual_backend": True}
+        assert self._mismatch(virtual, "jira") is not None
+
+    def test_malformed_or_partial_binding_is_refused(self):
+        assert self._mismatch({"server": "jira", "version_id": ""}, "jira/mcp") is not None
+        invalid = {"server": "jira", "version_id": "__invalid_version__", "virtual_backend": True}
+        assert self._mismatch(invalid, "jira", "virtual", "/jira") is not None
+
+    def test_other_servers_path_is_refused(self):
+        current = {"server": "jira", "version_id": "", "virtual_backend": False}
+        assert self._mismatch(current, "other/mcp", "direct", "/jira") is not None
+        assert self._mismatch(current, "jira/mcp", "direct", "/other") is not None
+
+
+@pytest.mark.unit
+class TestMcpProxyTransportSubPath:
+    """The direct transport sub-path is appended to the signed upstream base
+    exactly as the client sent it; SSE servers mount ``/messages/``."""
+
+    @pytest.mark.parametrize(
+        "path,expected",
+        [
+            ("/mcp-proxy/srv/messages/", "http://srv.example:8000/messages/"),
+            ("/mcp-proxy/srv/sse", "http://srv.example:8000/sse"),
+            ("/mcp-proxy/srv/mcp/", "http://srv.example:8000/mcp/"),
+        ],
+    )
+    def test_sub_path_keeps_the_clients_trailing_slash(self, path, expected):
+        import auth_server.server as server_module
+
+        patch_cm, captured = _capture_upstream_headers()
+        with (
+            _patch_scope_repo_allow_all(),
+            patch.object(server_module.settings, "egress_auth_enabled", False),
+            patch_cm,
+        ):
+            client = TestClient(server_module.app)
+            client.post(
+                path,
+                json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+                headers=_mcp_proxy_token_headers(
+                    server_name="srv", upstream_url="http://srv.example:8000/"
+                ),
+            )
+        assert captured["url"] == expected

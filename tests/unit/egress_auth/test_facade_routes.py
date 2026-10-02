@@ -67,7 +67,7 @@ def client(monkeypatch):
         monkeypatch.setattr(facade, "nginx_proxied_auth", _session)
 
         class _Svc:
-            def build_consent_url(self, **kwargs):
+            async def build_consent_url(self, **kwargs):
                 _Svc.last_session_id = kwargs.get("session_id")
                 return consent_url
 

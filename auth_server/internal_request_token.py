@@ -17,7 +17,7 @@ import time
 import jwt as pyjwt
 from fastapi import HTTPException, Request, status
 
-from registry.auth.resource_binding import MCP_TRANSPORT_SEGMENTS
+from registry.auth.resource_binding import MCP_TRANSPORT_SEGMENTS, mcp_proxy_route_binding
 
 logger = logging.getLogger(__name__)
 
@@ -184,12 +184,14 @@ def mint_mcp_proxy_token(
     auth_method: str = "",
     egress_user: str = "",
     audit_identity: dict | None = None,
+    version_id: str = "",
+    virtual_backend: bool = False,
 ) -> str:
     """Mint the per-request /mcp-proxy token in /validate's 200 path.
 
-    ``upstream_url`` is the resolved upstream before the MCP proxy appends a
-    transport path. ``server`` is the registered server path without a trailing
-    MCP transport segment; a nested/federated backend keeps its full path.
+    ``upstream_url`` is the selected outbound destination. ``server`` is the
+    already-resolved registered server path, including any legitimate trailing
+    transport-named component (e.g. ``peer/mcp``).
 
     ``auth_method`` is the CANONICAL egress principal method (see
     ``EgressAuthService.canonical_auth_method``): the per-user egress vault keys
@@ -219,12 +221,14 @@ def mint_mcp_proxy_token(
     the verified ``sub`` principal. Chosen over deleting the guard, which would
     sign ``"audit_identity": null`` on those paths.
     """
-    server_parts = [part for part in server_name.strip("/").split("/") if part]
-    if len(server_parts) > 1 and server_parts[-1] in MCP_TRANSPORT_SEGMENTS:
-        server_parts.pop()
+    registered_server = server_name.strip("/")
+    if not registered_server:
+        raise ValueError("registered server path is required")
     extra_claims: dict = {
-        "server": "/".join(server_parts),
+        "server": registered_server,
         "upstream_url": upstream_url,
+        "version_id": version_id,
+        "virtual_backend": virtual_backend,
         "auth_method": auth_method,
         "egress_user": egress_user or "",
         "token_use": MCP_PROXY_TOKEN_USE,
@@ -391,24 +395,68 @@ async def verify_mcp_proxy_token(request: Request) -> None:
             status.HTTP_401_UNAUTHORIZED, detail="Internal proxy token missing upstream"
         )
 
-    # Bind the full registered server path, including nested/federated paths.
-    # The transport tail is not a resource identity; a sibling beneath the
-    # same first segment cannot reuse this token for a different backend.
-    path_parts = [
-        part
-        for part in (request.path_params.get("server_name") or "").strip("/").split("/")
-        if part
-    ]
-    if len(path_parts) > 1 and path_parts[-1] in MCP_TRANSPORT_SEGMENTS:
-        path_parts.pop()
-    path_server = "/".join(path_parts)
-    if claims.get("server") != path_server:
+    path_server = (request.path_params.get("server_name") or "").strip("/")
+    route_mode = request.headers.get("X-Registered-Route-Mode")
+    registered_header = request.headers.get("X-Registered-Server-Path")
+    reason = _mcp_proxy_route_mismatch(claims, path_server, route_mode, registered_header)
+    if reason:
+        # Name the failed check and the route: version skew during a rolling
+        # deploy and a forged route look alike from the status code alone.
         logger.warning(
-            f"mcp_proxy: server claim/path mismatch (claim={claims.get('server')!r} path={path_server!r})"
+            "mcp_proxy: rejecting proxy route (%s): claim=%r path=%r route_mode=%r "
+            "registered_header=%r",
+            reason,
+            claims.get("server"),
+            path_server,
+            route_mode,
+            registered_header,
         )
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Server claim/path mismatch")
 
     request.state.mcp_proxy_claims = claims
+
+
+def _mcp_proxy_route_mismatch(
+    claims: dict,
+    path_server: str,
+    route_mode: str | None,
+    registered_header: str | None,
+) -> str | None:
+    """Why the signed registration does not match the nginx proxy route, or None.
+
+    The signed route mode disambiguates a registered name ending in /mcp from a
+    direct transport suffix; the registered name is never stripped again.
+
+    Two pre-upgrade shapes are accepted, both as direct routes, so auth-server
+    and nginx can be rolled independently: a token without route-binding claims
+    (minted by an older auth-server replica, see ``mcp_proxy_route_binding``) and
+    a hop without the nginx-forced registration headers (an older nginx, which
+    only ever generated direct locations). A virtual route always requires both
+    the claim and the headers.
+    """
+    registered_server = claims.get("server")
+    if not isinstance(registered_server, str) or not registered_server:
+        return "missing server claim"
+    binding = mcp_proxy_route_binding(claims)
+    if binding is None:
+        return "malformed or invalid version binding"
+    _, virtual_backend = binding
+    if route_mode is None and registered_header is None:
+        if virtual_backend:
+            return "virtual token without nginx registration headers"
+    elif route_mode != ("virtual" if virtual_backend else "direct"):
+        return "route mode differs from the signed binding"
+    elif registered_header != "/" + registered_server:
+        return "registered path header differs from the server claim"
+    if path_server == registered_server:
+        return None
+    if (
+        virtual_backend
+        or path_server.rsplit("/", 1)[-1] not in MCP_TRANSPORT_SEGMENTS
+        or path_server.rsplit("/", 1)[0] != registered_server
+    ):
+        return "proxy path differs from the server claim"
+    return None
 
 
 def _norm_path(value: str) -> str:

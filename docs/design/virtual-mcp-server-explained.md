@@ -223,6 +223,8 @@ Your app gets one virtual `vs-...` client session. Each backend is initialized l
 
 The nginx shared-dictionary cache keeps this initialization state for 30 seconds. On a miss, Lua reads an owner-bound MongoDB record that survives nginx restarts and expires after one hour of inactivity. Only if both miss does Lua authorize and initialize the backend again. A failed initialize is not cached as a stateless success. Both tool calls and cached tool-list reads still require a fresh backing-server grant.
 
+If the gateway answers a credentialed backend's initialize locally before the user connects, Lua does not cache it as a backend session. An authorized tool call still reaches the credential broker to return the PAT submission instruction or OAuth connect URL. Resource/prompt discovery skips an unavailable, unsupported or access-denied sibling while retaining items from connected backends; the list is an error only when no backend answered.
+
 ---
 
 ## Listing Tools (Aggregation)

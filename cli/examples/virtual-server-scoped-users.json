@@ -1,9 +1,19 @@
 {
   "scope_name": "virtual-scoped-tools-users",
-  "description": "Users with access to the scoped virtual server combining cloudflare-docs and currenttime tools",
+  "description": "Users with access to the scoped virtual server combining cloudflare-docs and currenttime tools, plus the backing-server grants the virtual server requires",
   "server_access": [
     {
       "server": "/virtual/scoped-tools",
+      "methods": ["initialize", "notifications/initialized", "ping", "tools/list", "tools/call"],
+      "tools": ["*"]
+    },
+    {
+      "server": "/cloudflare-docs",
+      "methods": ["initialize", "notifications/initialized", "ping", "tools/list", "tools/call"],
+      "tools": ["*"]
+    },
+    {
+      "server": "/currenttime",
       "methods": ["initialize", "notifications/initialized", "ping", "tools/list", "tools/call"],
       "tools": ["*"]
     },

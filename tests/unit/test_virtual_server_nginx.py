@@ -1,5 +1,6 @@
 """Unit tests for virtual server nginx configuration generation."""
 
+import re
 from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
@@ -229,7 +230,7 @@ class TestGenerateVirtualBackendLocations:
         service = NginxConfigService()
         result = await service._generate_virtual_backend_locations([vs])
 
-        assert 'set $vs_backend_github "http://insights-service:8000/custom/mcp/http"' in result
+        assert 'set $vs_backend_url "http://insights-service:8000/custom/mcp/http"' in result
         assert "public.example.com" not in result
 
     @pytest.mark.asyncio
@@ -307,8 +308,8 @@ class TestGenerateVirtualBackendLocations:
         # Resolver + variable form means nginx resolves at request time, turning an
         # unresolvable backend into a per-request 502 instead of a startup crash.
         assert "resolver " in result
-        assert 'set $vs_backend_github "http://currenttime-server:8000/mcp"' in result
-        assert "proxy_pass $vs_backend_github" in result
+        assert 'set $vs_backend_url "http://currenttime-server:8000/mcp"' in result
+        assert "proxy_pass $vs_backend_url" in result
 
     @pytest.mark.asyncio
     async def test_deduplicates_backends(self, mock_server_repository):
@@ -408,30 +409,114 @@ class TestGenerateVirtualBackendLocations:
 
     @pytest.mark.asyncio
     async def test_pinned_version_uses_its_registered_endpoint(self, mock_server_repository):
-        """A signed virtual backend claim uses the selected version's own endpoint."""
+        """A pinned virtual backend signs and routes the selected version's own endpoint."""
         from registry.core.nginx_service import NginxConfigService
 
-        service = NginxConfigService()
-        servers = {
+        docs = {
             "/jira": {
                 "proxy_pass_url": "https://active.example.com/mcp",
                 "version": "v2",
                 "other_version_ids": ["/jira:v1"],
-            }
+                "egress_auth_mode": "pat",
+            },
+            "/jira:v1": {
+                "path": "/jira:v1",
+                "proxy_pass_url": "https://legacy.example.com/api",
+                "mcp_endpoint": "https://legacy.example.com/api/custom/mcp",
+                "version": "v1",
+            },
         }
-        version_info = {
-            "proxy_pass_url": "https://legacy.example.com/api",
-            "mcp_endpoint": "https://legacy.example.com/api/custom/mcp",
-            "version": "v1",
-        }
-        with patch(
-            "registry.services.server_service.server_service.get_server_info",
-            return_value=version_info,
-        ):
-            result = await service._generate_version_map(servers)
+        mock_server_repository.get.side_effect = lambda path: docs.get(path)
+        vs = _make_vs_config(
+            tool_mappings=[ToolMapping(tool_name="search", backend_server_path="/jira")]
+        )
+        result = await NginxConfigService()._generate_virtual_backend_locations([vs])
+        auth_block = result.split("location = /_vs_auth_jira {", 1)[1].split("\n    }", 1)[0]
 
-        assert '"~^/_vs_auth_jira(/.*)?:v1$" "https://legacy.example.com/api/custom/mcp";' in result
-        assert '"~^/jira(/.*)?:v1$" "https://legacy.example.com/api";' in result
+        assert (
+            'if ($http_x_mcp_server_version = "v1") {\n'
+            '            set $backend_url "https://legacy.example.com/api/custom/mcp";\n'
+            '            set $resolved_version "/jira:v1";'
+        ) in auth_block
+        # The active label and "latest" select the active version; anything else
+        # is an unknown pin and signs the invalid sentinel (no credential minted).
+        assert 'if ($http_x_mcp_server_version = "v2") { set $version_known "1"; }' in auth_block
+        assert 'if ($version_known = "") { set $resolved_version "__invalid_version__"; }' in (
+            auth_block
+        )
+        assert "proxy_set_header X-Resolved-Version $resolved_version;" in auth_block
+
+    @pytest.mark.asyncio
+    async def test_single_version_backend_accepts_its_active_label(self, mock_server_repository):
+        """A mapping pinned to the label that is now the only (active) version still routes."""
+        from registry.core.nginx_service import NginxConfigService
+
+        mock_server_repository.get.return_value = {
+            "proxy_pass_url": "https://jira.example.com/mcp",
+            "version": "v3",
+            "egress_auth_mode": "pat",
+        }
+        vs = _make_vs_config(
+            tool_mappings=[ToolMapping(tool_name="search", backend_server_path="/jira")]
+        )
+        result = await NginxConfigService()._generate_virtual_backend_locations([vs])
+
+        assert 'if ($http_x_mcp_server_version = "v3") { set $version_known "1"; }' in result
+
+    @pytest.mark.asyncio
+    async def test_plain_backend_authorization_never_refuses_a_pin(self, mock_server_repository):
+        """A plain backend dispatches to its active endpoint whatever the pin, so its
+        authorization binds the active version and a stale pin cannot break it."""
+        from registry.core.nginx_service import NginxConfigService
+
+        docs = {
+            "/plain": {
+                "proxy_pass_url": "https://plain.example.com/mcp",
+                "version": "v2",
+                "other_version_ids": ["/plain:v1"],
+            },
+            "/plain:v1": {"path": "/plain:v1", "proxy_pass_url": "https://old.example.com/mcp"},
+        }
+        mock_server_repository.get.side_effect = lambda path: docs.get(path)
+        vs = _make_vs_config(
+            tool_mappings=[ToolMapping(tool_name="t", backend_server_path="/plain")]
+        )
+        result = await NginxConfigService()._generate_virtual_backend_locations([vs])
+        auth_block = result.split("location = /_vs_auth_plain {", 1)[1].split("\n    }", 1)[0]
+
+        assert "__invalid_version__" not in auth_block
+        assert "old.example.com" not in auth_block
+        assert 'set $backend_url "https://plain.example.com/mcp";' in auth_block
+
+    @pytest.mark.asyncio
+    async def test_paths_differing_only_in_punctuation_get_distinct_locations(
+        self, mock_server_repository
+    ):
+        """/a-b, /a.b and /a_b are distinct registrations and must never share a location."""
+        from registry.core.nginx_service import NginxConfigService
+
+        docs = {
+            path: {"proxy_pass_url": f"https://{host}.example.com/mcp"}
+            for path, host in (("/a-b", "dash"), ("/a.b", "dot"), ("/a_b", "under"))
+        }
+        mock_server_repository.get.side_effect = lambda path: docs.get(path)
+        vs = _make_vs_config(
+            tool_mappings=[
+                ToolMapping(tool_name=f"t{i}", backend_server_path=path)
+                for i, path in enumerate(docs)
+            ]
+        )
+        result = await NginxConfigService()._generate_virtual_backend_locations([vs])
+
+        locations = re.findall(r"location = (/_vs_auth\S*) \{", result)
+        assert sorted(locations) == ["/_vs_auth_a-b", "/_vs_auth_a.2eb", "/_vs_auth_a.5fb"]
+        for location, host in (
+            ("/_vs_auth_a-b", "dash"),
+            ("/_vs_auth_a.2eb", "dot"),
+            ("/_vs_auth_a.5fb", "under"),
+        ):
+            block = result.split(f"location = {location} {{", 1)[1].split("\n    }", 1)[0]
+            assert f'set $backend_url "https://{host}.example.com/mcp";' in block
 
     @pytest.mark.asyncio
     async def test_builtin_backend_valid_endpoint_remains_routable(self, mock_server_repository):
@@ -447,8 +532,8 @@ class TestGenerateVirtualBackendLocations:
         )
         result = await NginxConfigService()._generate_virtual_backend_locations([vs])
 
-        assert "location = /_vs_auth_airegistry_tools" in result
-        assert "location = /_vs_backend_airegistry_tools" in result
+        assert "location = /_vs_auth_airegistry-tools" in result
+        assert "location = /_vs_backend_airegistry-tools" in result
 
     @pytest.mark.asyncio
     async def test_backend_auth_uses_bounded_validation_timeouts(self, mock_server_repository):
@@ -506,6 +591,7 @@ class TestWriteVirtualServerMappings:
         vs = _make_vs_config()
         mock_server_repository.get.return_value = {
             "server_name": "GitHub",
+            "proxy_pass_url": "https://github.example.com/mcp",
             "tool_list": [
                 {
                     "name": "search",
@@ -544,6 +630,7 @@ class TestWriteVirtualServerMappings:
         )
         mock_server_repository.get.return_value = {
             "server_name": "GitHub",
+            "proxy_pass_url": "https://github.example.com/mcp",
             "tool_list": [
                 {
                     "name": "search",
@@ -621,6 +708,7 @@ class TestWriteVirtualServerMappings:
         )
         mock_server_repository.get.return_value = {
             "server_name": "GitHub",
+            "proxy_pass_url": "https://github.example.com/mcp",
             "tool_list": [
                 {"name": "search", "description": "Search", "inputSchema": {}},
             ],
@@ -659,6 +747,7 @@ class TestWriteVirtualServerMappings:
         )
         mock_server_repository.get.return_value = {
             "server_name": "GitHub",
+            "proxy_pass_url": "https://github.example.com/mcp",
             "tool_list": [
                 {"name": "search", "description": "Search", "inputSchema": {}},
             ],
@@ -689,33 +778,69 @@ class TestWriteVirtualServerMappings:
         assert "search" in written_data["tool_backend_map"]
         assert "/_vs_backend" in written_data["tool_backend_map"]["search"]["backend_location"]
 
-
-class TestSanitizePathForLocation:
-    """Tests for _sanitize_path_for_location."""
-
-    def test_sanitize_simple_path(self):
-        """Test sanitizing a simple server path."""
+    @pytest.mark.asyncio
+    async def test_mapping_never_names_a_backend_without_internal_locations(
+        self, mock_server_repository
+    ):
+        """A mapped backend that gets no internal location (deleted, unsafe URL, bad
+        egress mode) must not appear in the mapping: the router would capture a
+        location that does not exist and misreport it as a grant refusal."""
         from registry.core.nginx_service import NginxConfigService
 
+        docs = {
+            "/live": {"proxy_pass_url": "https://live.example.com/mcp"},
+            "/badmode": {
+                "proxy_pass_url": "https://bad.example.com/mcp",
+                "egress_auth_mode": "unknown",
+            },
+        }
+        mock_server_repository.get.side_effect = lambda path: docs.get(path)
+        vs = _make_vs_config(
+            tool_mappings=[
+                ToolMapping(tool_name=name, backend_server_path=path)
+                for name, path in (("a", "/live"), ("b", "/deleted"), ("c", "/badmode"))
+            ]
+        )
+        written_data = {}
         service = NginxConfigService()
-        assert service._sanitize_path_for_location("/github") == "_github"
+        with (
+            patch("registry.core.nginx_service.Path"),
+            patch("json.dump", side_effect=lambda data, f, **kw: written_data.update(data)),
+            patch("builtins.open", mock_open()),
+        ):
+            await service._write_virtual_server_mappings([vs])
+        locations = await service._generate_virtual_backend_locations([vs])
 
-    def test_sanitize_path_with_hyphens(self):
-        """Test sanitizing a path with hyphens."""
+        mapped = {tool["backend_location"] for tool in written_data["tools"]}
+        assert mapped == {"/_vs_backend_live"}
+        for location in mapped:
+            assert f"location = {location} {{" in locations
+
+
+class TestEncodePathForLocation:
+    """Tests for _encode_path_for_location."""
+
+    def test_simple_path_keeps_its_name(self):
         from registry.core.nginx_service import NginxConfigService
 
-        service = NginxConfigService()
-        assert service._sanitize_path_for_location("/my-server") == "_my_server"
+        assert NginxConfigService._encode_path_for_location("/github") == "_github"
 
-    def test_sanitize_path_with_dots(self):
-        """Test sanitizing a path with dots."""
+    def test_encoding_is_injective_over_valid_path_characters(self):
+        """Every valid server-path character maps distinctly: no two paths collide."""
+        from itertools import product
+
         from registry.core.nginx_service import NginxConfigService
 
-        service = NginxConfigService()
-        result = service._sanitize_path_for_location("/ai.smithery-test")
-        assert "/" not in result
-        assert "-" not in result
-        assert "." not in result
+        alphabet = ["a", "/", "-", ".", "_", "5", "f", "2", "e"]
+        paths = ["/" + "".join(chars) for n in range(1, 5) for chars in product(alphabet, repeat=n)]
+        encoded = {NginxConfigService._encode_path_for_location(p) for p in paths}
+        assert len(encoded) == len(paths)
+
+    def test_encoded_name_is_a_safe_location_suffix(self):
+        from registry.core.nginx_service import NginxConfigService
+
+        encoded = NginxConfigService._encode_path_for_location("/ai.smithery-test/x_y")
+        assert re.fullmatch(r"[A-Za-z0-9_.\-]+", encoded)
 
 
 class TestIsHostResolvableAtStartup:

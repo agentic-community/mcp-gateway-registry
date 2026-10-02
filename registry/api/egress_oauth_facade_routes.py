@@ -254,7 +254,7 @@ async def egress_connect(
     # callback stores the token + shows the close-tab page. No client-side code
     # exchange -- the client just retries the original tool call.
     try:
-        provider_authorize_url = get_egress_auth_service().build_consent_url(
+        provider_authorize_url = await get_egress_auth_service().build_consent_url(
             auth_method=auth_method,
             user_id=egress_user_id,
             client_id_audit=user_context.get("client_id") or "",
@@ -262,6 +262,15 @@ async def egress_connect(
             server_path=server_path,
             egress_oauth=oauth_cfg,
             purpose=purpose,
+            server=server_info,
+        )
+    except ValueError:
+        return JSONResponse(
+            {
+                "error": "invalid_request",
+                "error_description": "server versions are not available",
+            },
+            status_code=409,
         )
     except EgressAuthError as exc:
         # build_consent_url validates the client secret before redirecting, so a
