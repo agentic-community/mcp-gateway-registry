@@ -9,8 +9,10 @@ Tests all components of the semantic search API including:
 """
 
 import logging
+import re
 from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
+from urllib.parse import urlparse
 
 import pytest
 from fastapi import HTTPException, Request
@@ -23,6 +25,7 @@ from registry.api.search_routes import (
     SemanticSearchResponse,
     ServerSearchResult,
     ToolSearchResult,
+    _compute_endpoint_url,
     _user_can_access_agent,
     _user_can_access_server,
     semantic_search,
@@ -1301,6 +1304,250 @@ class TestSemanticSearchBackendUrlRedaction:
         # this guards the "users can still find how to connect"
         # property against future changes to _compute_endpoint_url.
         assert server.endpoint_url == "http://internal-backend:8080/mcp"
+
+
+class TestEndpointUrlAppendMcpPath:
+    """endpoint_url follows the server's append_mcp_path.
+
+    Root-endpoint servers set append_mcp_path=False and serve MCP at the server
+    path itself; the nginx location, the per-server PRM resource and the UI's
+    Connect URL all drop the /mcp suffix for them. Search must build the same
+    URL, or a client that installs endpoint_url gets one that does not serve MCP.
+    """
+
+    BASE = "https://gw.example.com"
+
+    @staticmethod
+    def _with_gateway():
+        from registry.core.config import DeploymentMode
+
+        return patch(
+            "registry.api.search_routes.settings.deployment_mode",
+            DeploymentMode.WITH_GATEWAY,
+        )
+
+    @pytest.mark.parametrize("redact", [False, True])
+    @pytest.mark.parametrize(
+        ("append_mcp_path", "expected"),
+        [
+            (None, "https://gw.example.com/aws-knowledge/mcp"),
+            (True, "https://gw.example.com/aws-knowledge/mcp"),
+            (False, "https://gw.example.com/aws-knowledge"),
+        ],
+    )
+    def test_constructed_gateway_url(self, append_mcp_path, expected, redact):
+        """The suffix is dropped only when append_mcp_path is explicitly False."""
+        with self._with_gateway():
+            url = _compute_endpoint_url(
+                path="/aws-knowledge/",
+                proxy_pass_url="https://backend.example.com/",
+                mcp_endpoint=None,
+                base_url=self.BASE,
+                redact_backend_urls=redact,
+                append_mcp_path=append_mcp_path,
+            )
+
+        assert url == expected
+
+    def test_mcp_endpoint_override_is_unchanged(self):
+        """An explicit mcp_endpoint override still wins for unredacted callers."""
+        with self._with_gateway():
+            url = _compute_endpoint_url(
+                path="/aws-knowledge",
+                proxy_pass_url=None,
+                mcp_endpoint="https://backend.example.com/custom",
+                base_url=self.BASE,
+                append_mcp_path=False,
+            )
+
+        assert url == "https://backend.example.com/custom"
+
+    @pytest.mark.parametrize(
+        ("append_mcp_path", "expected"),
+        [
+            (None, "https://gw.example.com/aws-knowledge/mcp"),
+            (False, "https://gw.example.com/aws-knowledge"),
+        ],
+    )
+    def test_path_without_leading_slash(self, append_mcp_path, expected):
+        """A path stored without its leading slash still yields a well-formed URL."""
+        with self._with_gateway():
+            url = _compute_endpoint_url(
+                path="aws-knowledge",
+                proxy_pass_url=None,
+                mcp_endpoint=None,
+                base_url=self.BASE,
+                append_mcp_path=append_mcp_path,
+            )
+
+        assert url == expected
+
+    @pytest.mark.parametrize("append_mcp_path", [None, True, False])
+    def test_endpoint_url_is_served_by_nginx(self, append_mcp_path):
+        """The URL search hands out is one the gateway's nginx config serves.
+
+        Asserting the string alone let a correctly shaped URL through that nginx
+        answered with a 301, so bind it to the locations nginx actually renders.
+        A prefix location ending in "/" serves only URIs continuing past that
+        slash; the bare path needs an exact-match location.
+        """
+        from registry.core.nginx_service import nginx_service
+
+        with self._with_gateway():
+            url = _compute_endpoint_url(
+                path="/aws-knowledge",
+                proxy_pass_url=None,
+                mcp_endpoint=None,
+                base_url=self.BASE,
+                append_mcp_path=append_mcp_path,
+            )
+        blocks = nginx_service._generate_transport_location_blocks(
+            "/aws-knowledge",
+            {
+                "proxy_pass_url": "https://backend.example.com/mcp",
+                "append_mcp_path": append_mcp_path,
+            },
+        )
+        locations = [
+            (bool(exact), location.replace("{{ROOT_PATH}}", ""))
+            for exact, location in re.findall(
+                r"^\s*location\s+(=\s+)?(\S+)\s+\{", "\n".join(blocks), re.MULTILINE
+            )
+        ]
+
+        request_path = urlparse(url).path
+        assert any(
+            request_path == location if exact else request_path.startswith(location)
+            for exact, location in locations
+        ), f"{request_path} is not served by any of {locations}"
+
+    @pytest.fixture
+    def root_endpoint_server_info(self):
+        """get_server_info for a server registered with append_mcp_path=False."""
+
+        async def get_server_info(path: str):
+            return {"path": path, "server_name": "currenttime", "append_mcp_path": False}
+
+        mock = AsyncMock(side_effect=get_server_info)
+        with patch(
+            "registry.services.server_service.server_service.get_server_info",
+            new=mock,
+        ):
+            yield mock
+
+    @pytest.fixture
+    def gateway_request(self, mock_http_request):
+        mock_http_request.headers = {"host": "gw.example.com", "x-forwarded-proto": "https"}
+        return mock_http_request
+
+    @pytest.mark.asyncio
+    async def test_server_result(
+        self, gateway_request, mock_search_repo, regular_user_context, root_endpoint_server_info
+    ):
+        """A root-endpoint server's search hit carries the bare-path URL."""
+        mock_search_repo.search = AsyncMock(
+            return_value={
+                "servers": [
+                    {
+                        "path": "/servers/currenttime",
+                        "server_name": "currenttime",
+                        "description": "Get current time",
+                        "tags": [],
+                        "num_tools": 1,
+                        "is_enabled": True,
+                        "relevance_score": 0.9,
+                        "matching_tools": [],
+                    }
+                ],
+                "tools": [],
+                "agents": [],
+            }
+        )
+
+        with self._with_gateway():
+            response = await semantic_search(
+                gateway_request,
+                SemanticSearchRequest(query="time"),
+                regular_user_context,
+                mock_search_repo,
+            )
+
+        assert response.servers[0].endpoint_url == "https://gw.example.com/servers/currenttime"
+
+    @pytest.mark.asyncio
+    async def test_tool_result_without_its_server(
+        self, gateway_request, mock_search_repo, regular_user_context, root_endpoint_server_info
+    ):
+        """A tool hit whose server is not in the results looks the flag up itself."""
+        mock_search_repo.search = AsyncMock(
+            return_value={
+                "servers": [],
+                "tools": [
+                    {
+                        "server_path": "/servers/currenttime",
+                        "server_name": "currenttime",
+                        "tool_name": "get_time",
+                        "description": "Get time",
+                        "relevance_score": 0.9,
+                    }
+                ],
+                "agents": [],
+            }
+        )
+
+        with self._with_gateway():
+            response = await semantic_search(
+                gateway_request,
+                SemanticSearchRequest(query="time"),
+                regular_user_context,
+                mock_search_repo,
+            )
+
+        assert response.tools[0].endpoint_url == "https://gw.example.com/servers/currenttime"
+
+    @pytest.mark.asyncio
+    async def test_tool_results_share_one_lookup_per_server(
+        self, gateway_request, mock_search_repo, regular_user_context, root_endpoint_server_info
+    ):
+        """Several tool hits from one absent server look its flag up once."""
+        mock_search_repo.search = AsyncMock(
+            return_value={
+                "servers": [],
+                "tools": [
+                    {
+                        "server_path": "/servers/currenttime",
+                        "server_name": "currenttime",
+                        "tool_name": tool_name,
+                        "description": "Get time",
+                        "relevance_score": 0.9,
+                    }
+                    for tool_name in ("get_time", "get_timezone")
+                ],
+                "agents": [],
+            }
+        )
+
+        # The access check does its own server lookup per tool; stub it so the
+        # count below is the endpoint lookup alone.
+        with (
+            self._with_gateway(),
+            patch(
+                "registry.api.search_routes._user_can_access_server",
+                new=AsyncMock(return_value=True),
+            ),
+        ):
+            response = await semantic_search(
+                gateway_request,
+                SemanticSearchRequest(query="time"),
+                regular_user_context,
+                mock_search_repo,
+            )
+
+        assert [tool.endpoint_url for tool in response.tools] == [
+            "https://gw.example.com/servers/currenttime",
+            "https://gw.example.com/servers/currenttime",
+        ]
+        root_endpoint_server_info.assert_awaited_once_with("/servers/currenttime")
 
 
 # =============================================================================
