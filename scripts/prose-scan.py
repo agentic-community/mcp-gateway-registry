@@ -21,9 +21,14 @@ Exit codes:
 """
 
 import argparse
+import os
 import re
+import stat
 import sys
 
+# Bound untrusted hook input and reporting to prevent local resource exhaustion.
+MAX_FILE_BYTES: int = 5 * 1024 * 1024
+MAX_REPORTED_HITS_PER_FILE: int = 200
 CONTEXT_BEFORE: int = 70
 CONTEXT_AFTER: int = 50
 
@@ -65,6 +70,14 @@ TELLS: dict[str, str] = {
         r"\b(it is important to note|it should be noted|in terms of|the fact that)\b"
     ),
     "praise": r"\b(great question|powerful and flexible|robust|seamless|game changer)\b",
+    # Teaser openers. Only the dependency-reveal half is reliably catchable; a
+    # bare count can be legitimate signposting, so this matches the count only
+    # when it opens a paragraph with nothing after it but a comma or full stop.
+    "teaser opener": (
+        r"(and the (second|latter|other|first) \w*\s*(exists|is there|comes) because"
+        r"|(?:^|<p>)(Two|Three|Four|Five) (things|reasons|parts|facts)[,.]"
+        r"|There are (two|three|four|five) (things|reasons|parts)\b)"
+    ),
 }
 
 _COMPILED: dict[str, re.Pattern[str]] = {
@@ -91,6 +104,11 @@ def _fragment(
     return " ".join(text[left:right].split())
 
 
+def _terminal_safe(value: str) -> str:
+    """Return an ASCII-only representation safe to print in a terminal."""
+    return value.encode("unicode_escape").decode("ascii")
+
+
 def _scan_text(
     text: str,
 ) -> list[tuple[int, str, str]]:
@@ -98,6 +116,9 @@ def _scan_text(
     hits: list[tuple[int, str, str]] = []
     for name, pattern in _COMPILED.items():
         for match in pattern.finditer(text):
+            if len(hits) >= MAX_REPORTED_HITS_PER_FILE:
+                hits.sort(key=lambda hit: hit[0])
+                return hits
             hits.append(
                 (
                     _line_of(text, match.start()),
@@ -114,10 +135,17 @@ def _scan_file(
 ) -> list[tuple[int, str, str]] | None:
     """Scan one file. Returns None when the file cannot be read."""
     try:
+        file_stat = os.lstat(path)
+        if not stat.S_ISREG(file_stat.st_mode):
+            raise OSError("refusing to scan a non-regular file")
+        if file_stat.st_size > MAX_FILE_BYTES:
+            raise OSError(f"refusing to scan files larger than {MAX_FILE_BYTES} bytes")
         with open(path, encoding="utf-8") as handle:
             return _scan_text(handle.read())
     except (OSError, UnicodeDecodeError) as exc:
-        print(f"{path}: could not read ({exc})", file=sys.stderr)
+        print(
+            f"{_terminal_safe(path)}: could not read ({_terminal_safe(str(exc))})", file=sys.stderr
+        )
         return None
 
 
@@ -160,7 +188,9 @@ def main() -> int:
             unreadable = True
             continue
         for line, name, fragment in hits:
-            print(f"{path}:{line}: {name}\n    ...{fragment}...")
+            print(
+                f"{_terminal_safe(path)}:{line}: {_terminal_safe(name)}\n    ...{_terminal_safe(fragment)}..."
+            )
         total += len(hits)
 
     if total:
