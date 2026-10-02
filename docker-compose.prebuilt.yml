@@ -183,6 +183,16 @@ services:
       - KEYCLOAK_REALM=${KEYCLOAK_REALM:-mcp-gateway}
       - KEYCLOAK_CLIENT_ID=${KEYCLOAK_CLIENT_ID:-mcp-gateway-web}
       - KEYCLOAK_CLIENT_SECRET=${KEYCLOAK_CLIENT_SECRET}
+      # Logto IAM manager (AUTH_PROVIDER=logto): Management API access via an
+      # M2M application holding the "Logto Management API access" role. The
+      # token request needs resource + scope=all (see logto_admin.py). The
+      # management credentials are required explicitly — the manager refuses
+      # to substitute the web or gateway M2M application's credentials.
+      - LOGTO_URL=${LOGTO_URL:-}
+      - LOGTO_ENDPOINT=${LOGTO_ENDPOINT:-}
+      - LOGTO_MANAGEMENT_M2M_CLIENT_ID=${LOGTO_MANAGEMENT_M2M_CLIENT_ID:-}
+      - LOGTO_MANAGEMENT_M2M_CLIENT_SECRET=${LOGTO_MANAGEMENT_M2M_CLIENT_SECRET:-}
+      - LOGTO_MANAGEMENT_RESOURCE=${LOGTO_MANAGEMENT_RESOURCE:-}
       - KEYCLOAK_ADMIN=${KEYCLOAK_ADMIN:-admin}
       - KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD}
       - KEYCLOAK_M2M_CLIENT_ID=${KEYCLOAK_M2M_CLIENT_ID}
@@ -495,6 +505,14 @@ services:
       - KEYCLOAK_CLIENT_SECRET=${KEYCLOAK_CLIENT_SECRET}
       - KEYCLOAK_M2M_CLIENT_ID=${KEYCLOAK_M2M_CLIENT_ID:-mcp-gateway-m2m}
       - KEYCLOAK_M2M_CLIENT_SECRET=${KEYCLOAK_M2M_CLIENT_SECRET}
+      - LOGTO_ENABLED=${LOGTO_ENABLED:-false}
+      - LOGTO_URL=${LOGTO_URL:-}
+      - LOGTO_EXTERNAL_URL=${LOGTO_EXTERNAL_URL:-}
+      - LOGTO_CLIENT_ID=${LOGTO_CLIENT_ID}
+      - LOGTO_CLIENT_SECRET=${LOGTO_CLIENT_SECRET}
+      - LOGTO_M2M_CLIENT_ID=${LOGTO_M2M_CLIENT_ID}
+      - LOGTO_M2M_CLIENT_SECRET=${LOGTO_M2M_CLIENT_SECRET}
+      - LOGTO_M2M_RESOURCE=${LOGTO_M2M_RESOURCE}
       # Entra ID configuration
       - ENTRA_TENANT_ID=${ENTRA_TENANT_ID}
       - ENTRA_CLIENT_ID=${ENTRA_CLIENT_ID}
