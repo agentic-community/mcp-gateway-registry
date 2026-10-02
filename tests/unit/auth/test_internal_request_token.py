@@ -33,6 +33,8 @@ def _request(headers: dict[str, str], server_name: str = "airegistry-tools/mcp")
     """Build a minimal stand-in for a FastAPI Request with the bits the
     dependency reads: .headers, .path_params, and a mutable .state."""
     lower = {k.lower(): v for k, v in headers.items()}
+    lower.setdefault("x-registered-server-path", "/" + server_name.strip("/").removesuffix("/mcp"))
+    lower.setdefault("x-registered-route-mode", "direct")
     return SimpleNamespace(
         headers=SimpleNamespace(get=lambda k, default=None: lower.get(k.lower(), default)),
         path_params={"server_name": server_name},
@@ -56,13 +58,13 @@ class TestMint:
         token = mint_mcp_proxy_token(
             subject="alice",
             scopes=["mcp-servers-unrestricted/read"],
-            server_name="airegistry-tools/mcp",
+            server_name="airegistry-tools",
             upstream_url="https://upstream.example/mcp",
         )
         claims = _decode_internal_token(token, audience=MCP_PROXY_AUDIENCE)
         assert claims["sub"] == "alice"
         assert claims["scopes"] == ["mcp-servers-unrestricted/read"]
-        assert claims["server"] == "airegistry-tools"  # first segment only
+        assert claims["server"] == "airegistry-tools"
         assert claims["upstream_url"] == "https://upstream.example/mcp"
         assert claims["token_use"] == "mcp-proxy"
         assert claims["aud"] == "mcp-proxy"
@@ -89,12 +91,52 @@ class TestVerify:
     @pytest.mark.asyncio
     async def test_valid_token_passes_and_stashes_claims(self) -> None:
         token = mint_mcp_proxy_token(
-            "alice", ["s/read"], "airegistry-tools/mcp", "https://u.example/mcp"
+            "alice", ["s/read"], "airegistry-tools", "https://u.example/mcp"
         )
         req = _request({"X-Internal-Token": token}, server_name="airegistry-tools/mcp")
         await verify_mcp_proxy_token(req)
         assert req.state.mcp_proxy_claims["sub"] == "alice"
         assert req.state.mcp_proxy_claims["upstream_url"] == "https://u.example/mcp"
+
+    @pytest.mark.asyncio
+    async def test_nested_registered_transport_name_preserved(self) -> None:
+        token = mint_mcp_proxy_token(
+            "alice", ["scope"], "peer/mcp", "https://u.example/peer/mcp", virtual_backend=True
+        )
+        request = _request(
+            {
+                "X-Internal-Token": token,
+                "X-Registered-Server-Path": "/peer/mcp",
+                "X-Registered-Route-Mode": "virtual",
+            },
+            server_name="peer/mcp",
+        )
+        await verify_mcp_proxy_token(request)
+        assert request.state.mcp_proxy_claims["server"] == "peer/mcp"
+
+        # A token for /peer cannot be replayed at the nested registration.
+        parent = mint_mcp_proxy_token("alice", ["scope"], "peer", "https://u.example/peer")
+        with pytest.raises(HTTPException) as exc:
+            await verify_mcp_proxy_token(
+                _request(
+                    {
+                        "X-Internal-Token": parent,
+                        "X-Registered-Server-Path": "/peer/mcp",
+                        "X-Registered-Route-Mode": "virtual",
+                    },
+                    "peer/mcp",
+                )
+            )
+        assert exc.value.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_invalid_version_marker_is_rejected(self) -> None:
+        token = mint_mcp_proxy_token(
+            "alice", ["scope"], "peer", "https://u.example/peer", version_id="__invalid_version__"
+        )
+        with pytest.raises(HTTPException) as exc:
+            await verify_mcp_proxy_token(_request({"X-Internal-Token": token}, "peer"))
+        assert exc.value.status_code == 401
 
     @pytest.mark.asyncio
     async def test_missing_token_raises_401(self) -> None:
@@ -221,46 +263,12 @@ class TestVerify:
     @pytest.mark.asyncio
     async def test_server_claim_path_mismatch_rejected(self) -> None:
         # Token minted for server "airegistry-tools" but request path is for "github-mcp".
-        token = mint_mcp_proxy_token("alice", [], "airegistry-tools/mcp", "https://u.example/mcp")
+        token = mint_mcp_proxy_token("alice", [], "airegistry-tools", "https://u.example/mcp")
         req = _request({"X-Internal-Token": token}, server_name="github-mcp/mcp")
         with pytest.raises(HTTPException) as exc:
             await verify_mcp_proxy_token(req)
         assert exc.value.status_code == 401
         assert "mismatch" in exc.value.detail.lower()
-
-
-# --------------------------------------------------------------------------- #
-# Sub-path-append parity
-# --------------------------------------------------------------------------- #
-
-
-def _apply_subpath_append(upstream_url: str, server_name: str) -> str:
-    """Mirror mcp_proxy's append logic (auth_server/server.py) so the test pins
-    the contract: bound (pre-append) upstream_url + sub_path == outbound URL."""
-    if "/" in server_name:
-        sub_path = server_name.split("/", 1)[1].lstrip("/")
-        if sub_path and not upstream_url.rstrip("/").endswith("/" + sub_path):
-            upstream_url = upstream_url.rstrip("/") + "/" + sub_path
-    return upstream_url
-
-
-class TestSubPathAppendParity:
-    def test_append_adds_subpath(self) -> None:
-        # Bound claim is the pre-append upstream; proxy appends "extra".
-        assert (
-            _apply_subpath_append("https://docs.example/mcp", "cloudflare-docs/extra")
-            == "https://docs.example/mcp/extra"
-        )
-
-    def test_append_early_out_when_already_ends_with_subpath(self) -> None:
-        # The "URL already ends with sub-path" early-out must not double-append.
-        assert (
-            _apply_subpath_append("https://docs.example/mcp", "cloudflare-docs/mcp")
-            == "https://docs.example/mcp"
-        )
-
-    def test_no_subpath_when_no_segment(self) -> None:
-        assert _apply_subpath_append("https://u.example", "airegistry-tools") == "https://u.example"
 
 
 # --------------------------------------------------------------------------- #

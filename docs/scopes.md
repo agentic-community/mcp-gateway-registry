@@ -371,15 +371,23 @@ UI-Scopes:
 
 ## Virtual MCP Server Access Control
 
-Virtual MCP Servers use the same access control model as regular MCP servers. The key difference is that you reference the virtual server by its path (e.g., `/virtual/scoped-tools`) instead of a backend server name.
+Virtual MCP Servers use the same access control model as regular MCP servers. You reference the virtual server by its
+path (e.g., `/virtual/scoped-tools`) instead of a backend server name.
 
 ### How It Works
 
-Virtual servers are treated identically to regular MCP servers in scope definitions:
+A call through a virtual server needs **two grants**: one for the virtual server and one for each backing server it
+reaches.
 
-1. **Server Identification**: Use the virtual server path as the `server` value
-2. **Method Control**: Same MCP methods apply (`initialize`, `tools/list`, `tools/call`, etc.)
-3. **Tool Control**: You can restrict access to specific tools exposed by the virtual server
+1. **Server Identification**: Use the virtual server path as the `server` value for the virtual grant, and each backing
+   server's path (e.g., `/currenttime`) for the backing grants
+2. **Method Control**: Same MCP methods apply (`initialize`, `tools/list`, `tools/call`, etc.) on both
+3. **Tool Control**: The virtual grant is checked against the tool's alias; the backing grant against the backing
+   server's **original** tool name
+
+A backing server the caller has no grant for is omitted from that caller's virtual `tools/list`, `resources/list` and
+`prompts/list`; calling one of its tools returns 403. A grant to the virtual server alone does not reach any backing
+server.
 
 ### Example: Virtual Server Scope Configuration
 
@@ -390,6 +398,16 @@ Virtual servers are treated identically to regular MCP servers in scope definiti
   "server_access": [
     {
       "server": "/virtual/scoped-tools",
+      "methods": ["initialize", "notifications/initialized", "ping", "tools/list", "tools/call"],
+      "tools": ["*"]
+    },
+    {
+      "server": "/cloudflare-docs",
+      "methods": ["initialize", "notifications/initialized", "ping", "tools/list", "tools/call"],
+      "tools": ["*"]
+    },
+    {
+      "server": "/currenttime",
       "methods": ["initialize", "notifications/initialized", "ping", "tools/list", "tools/call"],
       "tools": ["*"]
     },
@@ -414,7 +432,7 @@ See [virtual-server-scoped-users.json](../cli/examples/virtual-server-scoped-use
 | Server identifier | Server name (e.g., `currenttime`) | Virtual path (e.g., `/virtual/scoped-tools`) |
 | Methods | Standard MCP methods | Same standard MCP methods |
 | Tools | Backend server tools | Aggregated tools (possibly aliased) |
-| Scope configuration | Identical | Identical |
+| Scope configuration | One grant | Virtual grant **plus** a grant for each backing server |
 
 ### Virtual Server-Level Scopes
 

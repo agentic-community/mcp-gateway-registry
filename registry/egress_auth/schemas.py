@@ -109,10 +109,9 @@ class StoredToken(BaseModel):
     )
     bound_upstreams: list[str] = Field(
         default_factory=list,
-        description="Upstream base URLs (scheme://host[:port]) registered for the "
-        "server when this credential was written; the vend requires the request's "
-        "destination to be a member, so repointing proxy_pass_url forces re-consent "
-        "instead of shipping the credential to a new destination.",
+        description="Exact outbound URLs registered when the user approved this "
+        "credential. The vend requires the request's destination to be one of them; "
+        "adding a version at a new URL or repointing an endpoint forces re-consent.",
     )
     bound_token_url: str | None = Field(
         default=None,
@@ -174,3 +173,10 @@ class OAuthState(BaseModel):
     # EGRESS_AUTH_ENABLED, since both use the per-user vault.
     # Default-valued so pre-existing state blobs decode as "egress".
     purpose: str = keys.EGRESS_PURPOSE
+    # What the user is approving, snapshot when consent BEGINS. The callback binds the
+    # credential to these, never to the server record as it stands when the provider
+    # redirects back: a version added or an endpoint repointed in between was never
+    # shown to the user. Empty in a blob that is not a consent state (the MRTR
+    # request_state reuses this model); the callback refuses such a blob.
+    approved_upstreams: list[str] = Field(default_factory=list)
+    token_url: str = ""

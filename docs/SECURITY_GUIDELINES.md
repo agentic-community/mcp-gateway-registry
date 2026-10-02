@@ -643,6 +643,41 @@ sanitizer that isn't called) is equivalent to no check.
   internal host is absent from the derived field, not only from the raw one.
   (This is exactly the leak that survived the first pass on semantic search's
   `endpoint_url` while the raw fields were already nulled.)
+- **Snapshot what the user approves when the approval BEGINS, not when it
+  completes.** An OAuth consent round trip spans minutes at a third party. If the
+  callback re-reads the server record to decide which destinations (or which
+  token endpoint) the returned credential is bound to, anything an operator added
+  or repointed meanwhile inherits an approval the user never saw, and a repointed
+  token endpoint receives the code and client secret. Put the approved
+  destination set and token endpoint in the AEAD consent `state`; bind the stored
+  credential to the snapshot; refuse the callback if the live token endpoint
+  differs; refuse a state that carries no snapshot.
+- **A check made on one read says nothing about the next read.** When a code
+  path reads a credential, validates its bindings, then re-reads it (a refresh
+  single-flight's post-lease double-check, a lease-busy fallback), a concurrent
+  writer can replace the entry between reads. Put the full validation in one
+  gate applied to EVERY read whose result is used, returned, or refreshed --
+  never to the first read only.
+- **An authorization binding must mirror the routing decision, not re-derive
+  it.** When nginx has already chosen a location, the auth layer must bind to
+  what that location asserted (location-`set` variables, which the
+  `auth_request` subrequest shares), checked with the SAME match semantics as the
+  location (prefix `location /a/` -> prefix check), never a narrower or broader
+  re-parse of the URL. Per-registration selection (e.g. versions) belongs inside
+  the registration's own location; a global `map` keyed on `$uri` re-derives
+  routing with regex prefixes (matches nested registrations), aliases when keys
+  come from a lossy encoding, and evaluates against `$uri=/validate` when first
+  read inside the auth subrequest. Internal names derived from registry values
+  must be injective encodings; nginx `map` string keys are case-insensitive and
+  duplicate keys are a fatal config error, so they are not a safe identity index.
+- **A header a new nginx template clears is still forgeable behind an old one.**
+  auth-server and nginx roll independently, so a new auth-server must assume an
+  older template may forward the client's own copy of any header only the new
+  template sets or clears. Honor such headers only alongside proof that a current
+  template sent them -- the marker secret under a header name older templates
+  never set (`X-Validate-Binding-Secret`) -- and treat them as absent otherwise.
+  The existing marker proves "came through nginx", not "came through this
+  version of the template".
 
 ## Frontend (React) URL / href handling
 
@@ -780,6 +815,13 @@ sanitizer that isn't called) is equivalent to no check.
   normal `/validate` location, and require the configured nginx marker and resolved upstream before honoring it. Check
   the real rewritten backing method/tool against the user's backing scopes independently. A direct backing request with
   a virtual-bound token must still fail.
+- **A registered MCP path is not a transport suffix, and an origin is not a credential destination.** A valid server may
+  be named `/peer/mcp`; stripping `mcp` after `/validate` has resolved that registered path makes the token and vend
+  point at `/peer` instead. Sign the exact registered path and route mode from nginx-controlled values, and force-set
+  them separately on both `/validate` and `/mcp-proxy` hops. For pinned versions, sign the selected stored version ID
+  and exact outbound endpoint; resolve the same active/version document when vending, and compare against exact
+  write-time credential bindings. An origin-only comparison can silently put the active version's token on another path.
+  Version selection lives in each registration's own nginx location, never in a shared map (see "An authorization binding must mirror the routing decision").
 - **An nginx `auth_request` subrequest does NOT inherit the parent location's
   `proxy_set_header` directives.** Headers the outer location sets for its own
   `proxy_pass` (e.g. `X-Real-IP $remote_addr`, a sanitized `X-Forwarded-For`) are

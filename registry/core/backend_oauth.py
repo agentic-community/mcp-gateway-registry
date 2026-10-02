@@ -34,7 +34,7 @@ from datetime import UTC, datetime
 from registry.core.config import settings
 from registry.egress_auth import oauth_engine
 from registry.egress_auth.schemas import OAuthProviderConfig, TokenEndpointAuthStyle
-from registry.egress_auth.upstream_binding import base_url
+from registry.egress_auth.upstream_binding import selected_upstream
 from registry.secrets import keys
 from registry.utils.credential_encryption import decrypt_credential
 
@@ -231,9 +231,7 @@ async def resolve_bearer(server_info: dict) -> str | None:
         return None
 
     secret_encrypted = bo.get("client_secret_encrypted")
-    fingerprint = _fingerprint(
-        bo, secret_encrypted, base_url(server_info.get("proxy_pass_url") or "")
-    )
+    fingerprint = _fingerprint(bo, secret_encrypted, server_info.get("proxy_pass_url") or "")
     key = _server_path(server_info) or fingerprint
 
     # Fast path: fresh cache hit for the current config.
@@ -349,16 +347,14 @@ async def resolve_discovery_bearer(server_info: dict) -> str | None:
     try:
         from registry.egress_auth.factory import get_egress_auth_service
 
-        # The vaulted token is destination-bound (issue: newer egress upstream
-        # binding). Discovery hits this server's own endpoint, so bind the borrow
-        # to the server's registered upstream base. A mismatch simply yields None
-        # (discovery degrades), never a cross-upstream credential leak.
+        # Discovery reads its own vault purpose, but uses the same exact
+        # write-time destination approval as per-user egress.
         token = await get_egress_auth_service().get_valid_token(
             auth_method=auth_method,
             user_id=user_id,
             server_path=server_path,
             egress_oauth=oauth_cfg,
-            requested_upstream=base_url(server_info.get("proxy_pass_url") or ""),
+            requested_upstream=selected_upstream(server_info, False),
             # Only an entry vaulted BY a discovery consent. An egress entry at the same
             # address belongs to the user's own runtime use, and borrowing it would put
             # the registry's headless calls on a credential the user consented for
@@ -576,7 +572,7 @@ async def resolve_obo_discovery_bearer(server_info: dict) -> str | None:
     scopes = _obo_discovery_scopes(provider, target)
 
     fingerprint = _obo_fingerprint(
-        client_id, token_url, target, scopes, base_url(server_info.get("proxy_pass_url") or "")
+        client_id, token_url, target, scopes, server_info.get("proxy_pass_url") or ""
     )
     key = _server_path(server_info) or fingerprint
 

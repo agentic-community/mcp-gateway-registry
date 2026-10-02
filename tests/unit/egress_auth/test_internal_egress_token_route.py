@@ -16,13 +16,16 @@ from registry.secrets import keys
 
 
 class _StubRepo:
-    def __init__(self, server):
+    def __init__(self, server, versions=None):
         self._server = server
+        self._versions = versions or {}
         self.queried_paths: list[str] = []
 
     async def get(self, path):
         self.queried_paths.append(path)
-        return self._server
+        if path == "/github-mcp":
+            return self._server
+        return self._versions.get(path)
 
 
 class _StubService:
@@ -34,7 +37,7 @@ class _StubService:
         self.called = True
         return self._token
 
-    def build_consent_url(self, **kwargs):
+    async def build_consent_url(self, **kwargs):
         return "https://github.com/login/oauth/authorize?from=miss"
 
 
@@ -53,11 +56,12 @@ def _server(**over):
 def make_client(monkeypatch):
     """Factory: build a TestClient with controllable claims/server/token."""
 
-    def _build(claims, server, vended_token="at_vended", enabled=True):
+    def _build(claims, server, vended_token="at_vended", enabled=True, versions=None):
         monkeypatch.setattr(routes.settings, "egress_auth_enabled", enabled)
         monkeypatch.setattr(routes, "verify_mcp_proxy_token", lambda tok: claims)
-        repo = _StubRepo(server)
+        repo = _StubRepo(server, versions)
         monkeypatch.setattr(routes, "get_server_repository", lambda: repo)
+        monkeypatch.setattr("registry.repositories.factory.get_server_repository", lambda: repo)
         svc = _StubService(vended_token)
         monkeypatch.setattr(routes, "get_egress_auth_service", lambda: svc)
 
@@ -78,6 +82,9 @@ def _claims(**over):
     # NOT a fallback for it -- the vend refuses to cross that namespace.
     base = {
         "sub": "alice",
+        "server": "github-mcp",
+        "version_id": "",
+        "virtual_backend": False,
         "egress_user": "alice",
         "auth_method": "oauth2",
         "upstream_url": "https://api.githubcopilot.com/mcp",
@@ -167,16 +174,61 @@ class TestInternalEgressTokenRoute:
         assert r.status_code == 403
         assert not client._svc.called
 
-    def test_multi_version_upstream_accepted(self, make_client):
-        # Union: a versioned upstream (not the base proxy_pass_url) is legal.
-        srv = _server(
-            versions=[{"version": "v2", "proxy_pass_url": "https://v2.githubcopilot.com/mcp"}]
+    def test_registered_inactive_version_uses_its_own_endpoint(self, make_client):
+        inactive = {
+            "path": "/github-mcp:v2",
+            "proxy_pass_url": "https://v2.githubcopilot.com/peer/mcp",
+        }
+        srv = _server(other_version_ids=["/github-mcp:v2"])
+        client = make_client(
+            _claims(
+                version_id="/github-mcp:v2",
+                virtual_backend=True,
+                upstream_url="https://v2.githubcopilot.com/peer/mcp",
+            ),
+            srv,
+            versions={"/github-mcp:v2": inactive},
         )
-        client = make_client(_claims(upstream_url="https://v2.githubcopilot.com/mcp/sub"), srv)
-        # note: base-URL comparison ignores the sub-path; v2 host matches the union
         r = _post(client)
         assert r.status_code == 200
-        assert client._svc.called
+        assert r.json()["access_token"] == "at_vended"
+        assert client._repo.queried_paths == ["/github-mcp", "/github-mcp:v2"]
+
+    def test_same_origin_unregistered_path_is_rejected(self, make_client):
+        client = make_client(
+            _claims(upstream_url="https://api.githubcopilot.com/introduced/mcp"), _server()
+        )
+        assert _post(client).status_code == 403
+
+    def test_unlinked_version_is_rejected(self, make_client):
+        client = make_client(
+            _claims(version_id="/github-mcp:v2"),
+            _server(),
+            versions={"/github-mcp:v2": {"proxy_pass_url": "https://api.githubcopilot.com/mcp"}},
+        )
+        assert _post(client).status_code == 403
+
+    def test_token_from_an_older_auth_server_vends_its_active_route(self, make_client):
+        # During a rolling deploy an older auth-server replica mints tokens with no
+        # route-binding claims; they are direct, active-version tokens.
+        legacy = _claims()
+        del legacy["version_id"], legacy["virtual_backend"]
+        client = make_client(legacy, _server())
+        r = _post(client)
+        assert r.status_code == 200
+        assert r.json()["access_token"] == "at_vended"
+
+    def test_legacy_token_cannot_reach_a_non_active_destination(self, make_client):
+        legacy = _claims(upstream_url="https://v2.githubcopilot.com/peer/mcp")
+        del legacy["version_id"], legacy["virtual_backend"]
+        client = make_client(legacy, _server())
+        assert _post(client).status_code == 403
+
+    def test_partial_route_binding_is_refused(self, make_client):
+        partial = _claims()
+        del partial["virtual_backend"]
+        client = make_client(partial, _server())
+        assert _post(client).status_code == 403
 
     def test_vend_miss_returns_consent_url(self, make_client):
         # On a miss for an egress-configured server, the vend builds + returns the
@@ -253,7 +305,6 @@ from registry.egress_auth.service import EgressAuthService  # noqa: E402
 from registry.secrets.interfaces import SecretStoreBase  # noqa: E402
 
 _REGISTERED = "https://api.githubcopilot.com/mcp"
-_REGISTERED_BASE = "https://api.githubcopilot.com"
 _NEW_UPSTREAM = "https://new-upstream.example/mcp"
 
 
@@ -284,10 +335,12 @@ def make_real_client(monkeypatch):
     """Like make_client, but wires the REAL EgressAuthService (in-memory store)
     so the write-time destination binding is actually enforced by the vend."""
 
-    def _build(claims, server, bound_upstreams):
+    def _build(claims, server, bound_upstreams, versions=None):
         monkeypatch.setattr(routes.settings, "egress_auth_enabled", True)
         monkeypatch.setattr(routes, "verify_mcp_proxy_token", lambda tok: claims)
-        monkeypatch.setattr(routes, "get_server_repository", lambda: _StubRepo(server))
+        repo = _StubRepo(server, versions)
+        monkeypatch.setattr(routes, "get_server_repository", lambda: repo)
+        monkeypatch.setattr("registry.repositories.factory.get_server_repository", lambda: repo)
         store = _InMemoryStore()
         store._d[(keys.EGRESS_PURPOSE, "oauth2", "alice", "github", "/github-mcp")] = StoredToken(
             access_token="gho_real",
@@ -311,7 +364,7 @@ class TestDestinationBindingRoute:
         client = make_real_client(
             _claims(upstream_url=_REGISTERED),
             _server(proxy_pass_url=_REGISTERED),
-            bound_upstreams=[_REGISTERED_BASE],
+            bound_upstreams=[_REGISTERED],
         )
         r = _post(client)
         assert r.status_code == 200
@@ -324,13 +377,74 @@ class TestDestinationBindingRoute:
         client = make_real_client(
             _claims(upstream_url=_NEW_UPSTREAM),
             _server(proxy_pass_url=_NEW_UPSTREAM),
-            bound_upstreams=[_REGISTERED_BASE],
+            bound_upstreams=[_REGISTERED],
         )
         r = _post(client)
         assert r.status_code == 200
         body = r.json()
         assert body["consent_required"] is True
         assert body["access_token"] is None
+
+    def test_new_same_origin_version_cannot_reuse_active_grant(self, make_real_client):
+        version_id = "/github-mcp:v2"
+        new_endpoint = "https://api.githubcopilot.com/new/mcp"
+        client = make_real_client(
+            _claims(version_id=version_id, upstream_url=new_endpoint),
+            _server(other_version_ids=[version_id]),
+            bound_upstreams=[_REGISTERED],
+            versions={version_id: {"path": version_id, "proxy_pass_url": new_endpoint}},
+        )
+        result = _post(client)
+        assert result.status_code == 200
+        assert result.json()["access_token"] is None
+        assert result.json()["consent_required"] is True
+
+    def test_existing_independent_origin_version_vends_after_consent(self, make_real_client):
+        version_id = "/github-mcp:v1"
+        endpoint = "https://legacy.example/peer/mcp"
+        client = make_real_client(
+            _claims(version_id=version_id, virtual_backend=True, upstream_url=endpoint),
+            _server(other_version_ids=[version_id]),
+            bound_upstreams=[endpoint],
+            versions={version_id: {"path": version_id, "proxy_pass_url": endpoint}},
+        )
+        result = _post(client)
+        assert result.status_code == 200
+        assert result.json()["access_token"] == "gho_real"
+
+    @pytest.mark.parametrize(
+        "version_id,upstream",
+        [("", "https://v2.githubcopilot.com/mcp"), ("/github-mcp:v1", _REGISTERED)],
+    )
+    def test_promotion_keeps_approvals_for_unchanged_destinations(
+        self, make_real_client, version_id, upstream
+    ):
+        # The user approved both versions' URLs. Promoting v2 swaps which document
+        # is active (v1 becomes the inactive "/github-mcp:v1") without sending
+        # anything anywhere new, so neither route may demand re-consent.
+        promoted_v2 = "https://v2.githubcopilot.com/mcp"
+        client = make_real_client(
+            _claims(version_id=version_id, upstream_url=upstream),
+            _server(proxy_pass_url=promoted_v2, other_version_ids=["/github-mcp:v1"]),
+            bound_upstreams=[_REGISTERED, promoted_v2],
+            versions={"/github-mcp:v1": {"path": "/github-mcp:v1", "proxy_pass_url": _REGISTERED}},
+        )
+        result = _post(client)
+        assert result.status_code == 200
+        assert result.json()["access_token"] == "gho_real"
+
+    def test_version_repoint_on_same_origin_requires_reconsent(self, make_real_client):
+        version_id = "/github-mcp:v1"
+        endpoint = "https://api.githubcopilot.com/new/mcp"
+        client = make_real_client(
+            _claims(version_id=version_id, upstream_url=endpoint),
+            _server(other_version_ids=[version_id]),
+            bound_upstreams=[_REGISTERED],
+            versions={version_id: {"path": version_id, "proxy_pass_url": endpoint}},
+        )
+        result = _post(client)
+        assert result.status_code == 200
+        assert result.json()["access_token"] is None
 
 
 @pytest.mark.unit

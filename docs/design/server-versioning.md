@@ -176,64 +176,56 @@ The separate-documents design was chosen because **search filtering is critical*
 
 ## 4. Nginx Version Routing
 
-### Map Directive
+### Location-Local Version Selection
 
-The nginx configuration uses a `map` directive for O(1) version lookup based on the URI path and the `X-MCP-Server-Version` request header. The map is auto-generated whenever servers are registered, updated, or versions are changed.
-
-```nginx
-map "$uri:$http_x_mcp_server_version" $versioned_backend {
-    default "";
-
-    # context7 versions
-    "~^/context7(/.*)?:$"           "https://mcp.context7.com/mcp";
-    "~^/context7(/.*)?:latest$"     "https://mcp.context7.com/mcp";
-    "~^/context7(/.*)?:v2.0.0$"     "https://mcp.context7.com/mcp";
-    "~^/context7(/.*)?:v1.5.0$"     "https://v1.mcp.context7.com/mcp";
-}
-```
-
-Each entry maps a `path:version` combination to a backend URL. Three entries exist for the active version: empty header (no version specified), `latest` keyword, and the explicit version string.
-
-### Location Block
-
-For multi-version servers, the location block uses a variable-based `proxy_pass` instead of a hardcoded URL:
+Each registration's own nginx location selects its version from the `X-MCP-Server-Version` request header, using rewrite-phase `set` directives and case-sensitive exact `=` comparisons over that registration's own linked versions. The directives are regenerated whenever servers are registered, updated, or versions change.
 
 ```nginx
-location /context7 {
-    # ... existing auth_request, headers, transport config ...
+location /context7/ {
+    set $registered_server_path "/context7";
+    set $registered_route_mode "direct";
+    auth_request /validate;
+    # ... auth_request_set, headers, transport config ...
 
-    set $backend_url "https://mcp.context7.com/mcp";  # Default fallback
-    if ($versioned_backend != "") {
-        set $backend_url $versioned_backend;
+    set $backend_url "https://mcp.context7.com/mcp";   # active version
+    set $resolved_version "";
+    if ($http_x_mcp_server_version = "v1.5.0") {
+        set $backend_url "https://v1.mcp.context7.com/mcp";
+        set $resolved_version "/context7:v1.5.0";
     }
 
-    proxy_pass $backend_url;
+    proxy_set_header X-Upstream-Url $backend_url;
+    proxy_pass http://auth-server:8888/mcp-proxy/context7/;
     add_header X-MCP-Version-Routing "enabled" always;
 }
 ```
 
-Single-version servers continue to use direct `proxy_pass` with no map entries (fully backward compatible).
+An empty header, `latest`, or the active version's own label selects the active version. On a direct location an unknown label also falls back to the active version. On an internal virtual-backend location an unknown pinned label signs `__invalid_version__`, so auth-server mints no backend token rather than silently routing a pin to the active version.
+
+Selection is deliberately not a global `map` keyed on `$uri`. Such a map re-derives routing nginx already decided and is wrong three ways: a regex prefix for `/peer` also matches a nested `/peer/mcp` registration; an internal location name that two registrations share lets one registration's entries answer for the other; and the `/validate` auth subrequest, which reads the selected version, evaluates a `$uri`-keyed map against `$uri=/validate` and gets nothing. Variables `set` in the location are shared with the auth subrequest, so `/validate` signs exactly the version and upstream the location chose (`X-Resolved-Version: $resolved_version`, `X-Resolved-Upstream: $backend_url`).
 
 ### Has-Versions Detection
 
-The nginx config generator checks `server_info.get("other_version_ids", [])` to determine whether a server has multiple versions. If the array is non-empty, the location block uses the variable-based pattern. This check uses `other_version_ids` (the actual MongoDB field), not a `versions` field.
+The config generator resolves a server's versions from `other_version_ids` (the actual MongoDB field) through `registry.egress_auth.upstream_binding.linked_version`, the same linkage check the egress vend applies: an id must be namespaced under the server path, listed on the active document, and point back at it. A broken link is skipped and logged. Single-version servers render only the active-version directives.
 
 ### Request Flow
 
 ```
 Client Request
-  POST /context7
+  POST /context7/mcp
   X-MCP-Server-Version: v1.5.0  (optional)
        |
        v
-  Nginx Map Lookup
-  Key: "/context7:v1.5.0"
-  Result: "https://v1.mcp.context7.com/mcp"
+  Location /context7/ (rewrite phase)
+  $backend_url      = "https://v1.mcp.context7.com/mcp"
+  $resolved_version = "/context7:v1.5.0"
        |
        v
-  Location /context7
-  $backend_url = map result (or default fallback)
-  proxy_pass $backend_url
+  auth_request /validate
+  signs X-Resolved-Version + X-Resolved-Upstream into the internal token
+       |
+       v
+  auth-server /mcp-proxy/context7/ -> X-Upstream-Url
        |
        v
   Backend: https://v1.mcp.context7.com/mcp

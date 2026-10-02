@@ -342,6 +342,11 @@ working in those areas.
   header (clear client copies on normal routes), require the nginx marker and
   resolved upstream, and check the rewritten backing method/tool grant separately.
   Never grant direct backing access from virtual binding alone.
+- **MCP backend identity:** preserve the exact registered path (including a
+  legitimate trailing `/mcp`) across auth, signed proxy token, and vend; never
+  strip a transport segment twice. Bind the exact outbound URL at credential
+  write (snapshot at consent START) and check it on every vend read; select the
+  version inside the registration's own nginx location (see Route-derived authz).
 - **Never log** secrets, tokens, PII, or full credential/claim payloads. Redact
   (including setup/debug scripts in verbose mode).
 - **OAuth/OIDC:** bind the code flow to the login with a per-login `nonce` (checked
@@ -393,6 +398,16 @@ working in those areas.
   Docker build ARGs; pin image tags; TLS verify on by default (private certs via
   a CA bundle, never `verify=False`); dangerous toggles require an explicit flag +
   localhost guard.
+- **Approval TOCTOU:** snapshot what a user approves (destinations, token
+  endpoint) into the signed consent state when consent BEGINS; the callback binds
+  to the snapshot, never to a re-read server record. Apply a credential's binding
+  checks to EVERY vault read that is used/refreshed, not just the first.
+- **Route-derived authz:** bind to what the selecting nginx location asserted
+  (location `set` vars shared with `auth_request`) with the location's own match
+  semantics; no global `$uri`-keyed maps for per-registration selection; internal
+  names from registry values must be injective encodings. A header only a NEW
+  template sets/clears is forgeable behind an OLD one: honor it only with the
+  marker under a new header name (`X-Validate-Binding-Secret`).
 - **After fixing a finding, grep the pattern repo-wide**, because findings usually have
   siblings the report didn't list.
 

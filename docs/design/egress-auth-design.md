@@ -85,16 +85,21 @@ Every stored third-party token is addressed by `(auth_method, user_id, provider,
 
 The stored payload (`StoredToken`) holds `access_token`, optional `refresh_token`, `expires_at`, `status`, and timestamps — the vault read returns everything needed to decide vend-vs-refresh. **There is no companion app-DB row; the vault is the only place token state lives.**
 
-The payload also carries a **write-time destination binding**: `client_id` (the
-provider app it was minted under), `bound_upstreams` (the server's registered
-upstream base URLs at consent / PAT-submit time), and `bound_token_url` (the
-OAuth token endpoint, for a custom provider). The vend requires the request to
-match these, so rotating the provider app or repointing `proxy_pass_url` /
-`custom_token_url` forces re-consent instead of vending a stale credential or
-shipping it to an attacker-chosen destination — the live upstream cross-check
-alone cannot catch this, because an operator edit moves both the server record
-and the minted `upstream_url` claim together. See
-`registry/egress_auth/upstream_binding.py`.
+The payload also carries a **write-time destination binding**: `client_id` (the provider app it was minted under),
+`bound_upstreams` (the exact outbound URLs registered for the server's active and linked versions when the user approved
+the credential), and `bound_token_url` (the OAuth token endpoint). For OAuth consent, both are snapshot into the signed
+consent `state` when consent **begins**, and the callback binds the credential to that snapshot rather than re-reading
+the server: a version added or an endpoint repointed while the user is at the provider is never approved, and a callback
+whose live token endpoint differs from the snapshot is refused before the code is exchanged. A PAT submission snapshots
+at submit time. A newly added or retargeted URL, including a different path on the same origin, requires fresh consent
+or PAT submission; older origin-only entries match only an identical bare-origin URL. Approvals are keyed on the URL,
+not on a version document ID, so promoting a version (which swaps the active and inactive document IDs without sending
+anything anywhere new) does not revoke them. The vend resolves the selected version from the signed internal token,
+requires the signed upstream to be that version's exact registered URL, and requires that URL to be in the binding; the
+binding check runs on **every** vault read on the vend path, including each re-read inside the refresh single-flight, so
+a credential replaced by a concurrent re-consent is never used or refreshed against the original request's destination.
+The live server record alone cannot protect against an operator edit that moves both the route and the signed
+destination together. See `registry/egress_auth/upstream_binding.py`.
 
 Because the key includes `user_id`, one user can never vend another user's token — the identity comes from the **verified** signed internal-hop claims, not a forgeable header.
 

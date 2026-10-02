@@ -27,6 +27,8 @@ def _mint(claims: dict, key: str = SECRET) -> str:
         "iat": now,
         "exp": now + 30,
         "server": "github-mcp",
+        "version_id": "",
+        "virtual_backend": False,
         "upstream_url": "https://api.githubcopilot.com/mcp",
         "auth_method": "oauth2",
         "token_use": "mcp-proxy",
@@ -47,6 +49,13 @@ class TestVerifyMcpProxyToken:
         assert claims["sub"] == "alice"
         assert claims["auth_method"] == "oauth2"
         assert claims["upstream_url"] == "https://api.githubcopilot.com/mcp"
+
+    def test_missing_version_binding_rejected(self):
+        for invalid in (None, "__invalid_version__"):
+            tok = _mint({"version_id": invalid})
+            with pytest.raises(HTTPException) as exc:
+                verify_mcp_proxy_token(tok)
+            assert exc.value.status_code == 401
 
     def test_wrong_audience_rejected(self):
         tok = _mint({"aud": "mcp-registry-ui"})

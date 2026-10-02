@@ -846,6 +846,78 @@ class TestAttachMcpProxyTokenMarker:
         )
         assert "X-Internal-Token" in resp.headers
 
+    def test_virtual_nested_server_claim_keeps_full_registered_path(self, monkeypatch):
+        monkeypatch.setattr(server.settings, "auth_server_nginx_marker_secret", "s3cret")
+        resp = _FakeResponse()
+        server._attach_mcp_proxy_token(
+            _FakeRequest(
+                {
+                    "X-Resolved-Upstream": "https://backend.example/peer/mcp",
+                    "X-Validate-Source-Secret": "s3cret",
+                    "X-Validate-Binding-Secret": "s3cret",
+                    "X-Original-URL": "https://gw.example/peer/mcp/mcp",
+                    "X-Registered-Server-Path": "/peer/mcp",
+                    "X-Registered-Route-Mode": "virtual",
+                    "X-Resolved-Version": "/peer/mcp:v1",
+                }
+            ),
+            resp,
+            subject="alice",
+            scopes=["peer-access"],
+            server_name="peer/mcp",
+            auth_method="oauth2",
+        )
+        claims = _decode(resp.headers["X-Internal-Token"])
+        assert claims["server"] == "peer/mcp"
+        assert claims["version_id"] == "/peer/mcp:v1"
+        assert claims["virtual_backend"] is True
+
+    def test_virtual_nested_wrong_scope_refuses_to_mint(self, monkeypatch):
+        monkeypatch.setattr(server.settings, "auth_server_nginx_marker_secret", "s3cret")
+        resp = _FakeResponse()
+        server._attach_mcp_proxy_token(
+            _FakeRequest(
+                {
+                    "X-Resolved-Upstream": "https://backend.example/peer/mcp",
+                    "X-Validate-Source-Secret": "s3cret",
+                    "X-Validate-Binding-Secret": "s3cret",
+                    "X-Original-URL": "https://gw.example/peer/mcp/mcp",
+                    "X-Registered-Server-Path": "/peer/mcp",
+                    "X-Registered-Route-Mode": "virtual",
+                }
+            ),
+            resp,
+            subject="alice",
+            scopes=["peer-access"],
+            server_name="peer",
+        )
+        assert "X-Internal-Token" not in resp.headers
+
+    def test_registration_headers_without_binding_secret_are_ignored(self, monkeypatch):
+        # Behind an older nginx the client's own registration headers pass
+        # through; only a current template's binding secret makes them count.
+        monkeypatch.setattr(server.settings, "auth_server_nginx_marker_secret", "s3cret")
+        resp = _FakeResponse()
+        server._attach_mcp_proxy_token(
+            _FakeRequest(
+                {
+                    "X-Resolved-Upstream": "https://backend.example/jira/mcp",
+                    "X-Validate-Source-Secret": "s3cret",
+                    "X-Original-URL": "https://gw.example/jira/mcp",
+                    "X-Registered-Server-Path": "/jira",
+                    "X-Registered-Route-Mode": "virtual",
+                    "X-Resolved-Version": "/jira:v9",
+                }
+            ),
+            resp,
+            subject="alice",
+            scopes=["jira-access"],
+            server_name="jira",
+        )
+        claims = _decode(resp.headers["X-Internal-Token"])
+        assert claims["virtual_backend"] is False
+        assert claims["version_id"] == ""
+
     def test_marker_enabled_and_missing_does_not_mint(self, monkeypatch):
         # Direct :8888 caller (no nginx marker) gets no egress-capable token
         # even with a forged X-Resolved-Upstream.

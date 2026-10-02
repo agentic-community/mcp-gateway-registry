@@ -272,7 +272,7 @@ One line each; read the doc for the full rationale.
 - [hybrid-search-architecture.md](hybrid-search-architecture.md) — vector + keyword fused with Reciprocal Rank Fusion (k=60), replacing saturating additive scoring.
 - [idp-provider-support.md](idp-provider-support.md) — multi-IdP via a closed factory keyed on `AUTH_PROVIDER`; new provider = new code.
 - [internal-hop-authentication.md](internal-hop-authentication.md) — short-lived HS256 per-hop tokens, audience-scoped, fail closed, ignore plaintext `X-User`.
-- [server-versioning.md](server-versioning.md) — versions as separate documents; nginx `map` routing; only active version indexed/health-checked.
+- [server-versioning.md](server-versioning.md) — versions as separate documents; per-location nginx version selection; only active version indexed/health-checked.
 - [session-flow-cookie-based.md](session-flow-cookie-based.md) — opaque signed `session_id`; payload server-side in Mongo; id_token AES-GCM encrypted.
 - [session-flow-jwt-bearer.md](session-flow-jwt-bearer.md) — stateless programmatic access validated only at `/validate`; four token kinds converge on one user-context derivation.
 - [storage-architecture-mongodb-documentdb.md](storage-architecture-mongodb-documentdb.md) — MongoDB CE (dev) and DocumentDB (prod) share one repository; sole divergence is vector search.
