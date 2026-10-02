@@ -66,7 +66,7 @@ MAX_SVG_TOTAL_BYTES: int = 8 * 1024 * 1024
 
 # Schemes permitted on a byline href. Everything else renders as inert text, per
 # the project's one-shared-URL-scheme-guard rule (see frontend/src/utils/safeUrl.ts
-# and the "Frontend" invariant in CLAUDE.md). A relative or fragment target has no
+# and the "Frontend" invariant in AGENTS.md). A relative or fragment target has no
 # scheme and is allowed.
 _SAFE_URL_SCHEMES: frozenset[str] = frozenset({"http", "https", "mailto"})
 
