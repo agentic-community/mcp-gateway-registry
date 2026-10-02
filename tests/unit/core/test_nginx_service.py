@@ -6,6 +6,7 @@ Tests the NginxConfigService for configuration generation and reload.
 
 import asyncio
 import re
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, mock_open, patch
 from urllib.parse import urlparse
 
@@ -1040,6 +1041,84 @@ def test_create_location_block_normalises_multi_segment_path(nginx_service):
 
     assert "location {{ROOT_PATH}}/peer-registry/server-name/ {" in block
     assert "location {{ROOT_PATH}}/peer-registry/server-name {" not in block
+
+
+def _location_bodies(block: str) -> dict[str, str]:
+    """Map each `location ... {` header line in a rendered block to its body."""
+    bodies: dict[str, str] = {}
+    for chunk in block.split("\n    location ")[1:]:
+        header, _, body = chunk.partition("\n")
+        bodies[f"location {header.strip()}"] = body.rstrip().removesuffix("}").rstrip()
+    return bodies
+
+
+@pytest.mark.unit
+def test_create_location_block_root_endpoint_serves_bare_path(nginx_service):
+    """A root-endpoint server (append_mcp_path=False) is reached at the bare path,
+    so it also gets an exact-match location there. Without it nginx answers the
+    bare path with a 301 to the trailing-slash form, which MCP clients do not
+    follow on a POST."""
+    block = nginx_service._create_location_block(
+        "/aws-knowledge",
+        "https://knowledge-mcp.example.com",
+        "streamable-http",
+        {"append_mcp_path": False},
+    )
+
+    bodies = _location_bodies(block)
+    assert set(bodies) == {
+        "location {{ROOT_PATH}}/aws-knowledge/ {",
+        "location = {{ROOT_PATH}}/aws-knowledge {",
+    }
+    # Same auth_request, rate limits, body capture and headers: one body, rendered twice.
+    assert (
+        bodies["location = {{ROOT_PATH}}/aws-knowledge {"]
+        == (bodies["location {{ROOT_PATH}}/aws-knowledge/ {"])
+    )
+    assert "auth_request /validate;" in bodies["location = {{ROOT_PATH}}/aws-knowledge {"]
+    # Never the bare prefix form that issue #1501 removed.
+    assert "location {{ROOT_PATH}}/aws-knowledge {" not in block
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("server_info", [None, {}, {"append_mcp_path": True}])
+def test_create_location_block_no_bare_path_unless_root_endpoint(nginx_service, server_info):
+    """Only an explicit append_mcp_path=False adds the exact-match location."""
+    block = nginx_service._create_location_block(
+        "/aws-knowledge",
+        "https://knowledge-mcp.example.com/mcp",
+        "streamable-http",
+        server_info,
+    )
+
+    assert list(_location_bodies(block)) == ["location {{ROOT_PATH}}/aws-knowledge/ {"]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("path", sorted(nginx_module.TEMPLATE_EXACT_LOCATIONS))
+def test_create_location_block_skips_bare_path_the_template_owns(nginx_service, path):
+    """A root-endpoint server registered at a path the template already declares
+    with `location =` keeps only its prefix block: a duplicate exact-match
+    location would fail `nginx -t` for the whole config."""
+    block = nginx_service._create_location_block(
+        path, "https://backend.example.com", "streamable-http", {"append_mcp_path": False}
+    )
+
+    assert list(_location_bodies(block)) == [f"location {{{{ROOT_PATH}}}}{path}/ {{"]
+
+
+@pytest.mark.unit
+def test_template_exact_locations_match_the_bundled_templates():
+    """TEMPLATE_EXACT_LOCATIONS lists every `location =` the bundled templates
+    declare, so a template change cannot silently reopen the duplicate."""
+    docker_dir = Path(__file__).resolve().parents[3] / "docker"
+    exact = re.compile(r"^\s*location\s+=\s+(\S+)\s+\{", re.MULTILINE)
+    declared: set[str] = set()
+    for template in ("nginx_rev_proxy_http_only.conf", "nginx_rev_proxy_http_and_https.conf"):
+        text = (docker_dir / template).read_text()
+        declared |= {p.replace("{{ROOT_PATH}}", "") for p in exact.findall(text)}
+
+    assert declared == nginx_module.TEMPLATE_EXACT_LOCATIONS
 
 
 @pytest.mark.unit
