@@ -1555,7 +1555,7 @@ class NginxConfigService:
         Returns:
             Nginx map block as string, or empty string if no multi-version servers
         """
-        from ..services.server_service import server_service
+        from ..services.server_service import _validate_endpoint_fields, server_service
 
         map_entries = []
 
@@ -1637,9 +1637,11 @@ class NginxConfigService:
                     if escaped_route == virtual_route:
                         try:
                             validate_proxy_pass_url(backend_url, server_path=path)
-                            endpoint_override = v.get("mcp_endpoint")
-                            if endpoint_override:
-                                validate_proxy_pass_url(endpoint_override, server_path=path)
+                            _validate_endpoint_fields(
+                                {"mcp_endpoint": v.get("mcp_endpoint")},
+                                server_path=path,
+                                registered_target_url=backend_url,
+                            )
                         except UrlValidationError:
                             logger.warning("Skipping unsafe virtual version for %s", path)
                             continue
@@ -2129,10 +2131,11 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
             virtual_servers: List of VirtualServerConfig objects
 
         Returns:
-            Nginx configuration string with internal backend location blocks
+            Nginx configuration string with internal backend location blocksw
         """
         try:
             from registry.repositories.factory import get_server_repository
+            from registry.services.server_service import _validate_endpoint_fields
 
             server_repo = get_server_repository()
 
@@ -2170,9 +2173,11 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
                 # them into a signed upstream claim or a proxy_pass directive.
                 try:
                     validate_proxy_pass_url(proxy_pass_url, server_path=backend_path)
-                    endpoint_override = server_info.get("mcp_endpoint")
-                    if endpoint_override:
-                        validate_proxy_pass_url(endpoint_override, server_path=backend_path)
+                    _validate_endpoint_fields(
+                        server_info,
+                        server_path=backend_path,
+                        registered_target_url=proxy_pass_url,
+                    )
                 except UrlValidationError:
                     logger.warning("Skipping unsafe virtual backend URL for %s", backend_path)
                     continue
@@ -2217,9 +2222,15 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
             set $backend_url $versioned_backend;
         }}
         proxy_pass {safe_auth_url};
+        proxy_connect_timeout 10s;
+        proxy_read_timeout 10s;
+        proxy_send_timeout 10s;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Original-URL $scheme://$host{{{{ROOT_PATH}}}}{safe_backend_path}/mcp;
+        # The parent URI is the only source of a virtual-resource token's
+        # binding. The shared /validate location clears client-supplied copies.
+        proxy_set_header X-Virtual-Original-URL $scheme://$host$request_uri;
         proxy_set_header X-Original-URI {{{{ROOT_PATH}}}}{safe_backend_path}/mcp;
         proxy_set_header X-Original-Method POST;
         proxy_set_header X-Resolved-Upstream $backend_url;

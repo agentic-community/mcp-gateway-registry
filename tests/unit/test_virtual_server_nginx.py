@@ -402,6 +402,8 @@ class TestGenerateVirtualBackendLocations:
             )
 
         assert 'X-Validate-Source-Secret "example-marker-for-test";' in result
+        assert "proxy_set_header X-Virtual-Original-URL $scheme://$host$request_uri;" in result
+        assert "proxy_set_header X-Original-URL $scheme://$host{{ROOT_PATH}}/github/mcp;" in result
         assert "{{NGINX_MARKER_SECRET}}" not in result
 
     @pytest.mark.asyncio
@@ -430,6 +432,42 @@ class TestGenerateVirtualBackendLocations:
 
         assert '"~^/_vs_auth_jira(/.*)?:v1$" "https://legacy.example.com/api/custom/mcp";' in result
         assert '"~^/jira(/.*)?:v1$" "https://legacy.example.com/api";' in result
+
+    @pytest.mark.asyncio
+    async def test_builtin_backend_valid_endpoint_remains_routable(self, mock_server_repository):
+        """The built-in private target may use its canonical /mcp endpoint."""
+        from registry.core.nginx_service import NginxConfigService
+
+        mock_server_repository.get.return_value = {
+            "proxy_pass_url": "http://mcpgw-server:8003/",
+            "mcp_endpoint": "http://mcpgw-server:8003/mcp",
+        }
+        vs = _make_vs_config(
+            tool_mappings=[ToolMapping(tool_name="search", backend_server_path="/airegistry-tools")]
+        )
+        result = await NginxConfigService()._generate_virtual_backend_locations([vs])
+
+        assert "location = /_vs_auth_airegistry_tools" in result
+        assert "location = /_vs_backend_airegistry_tools" in result
+
+    @pytest.mark.asyncio
+    async def test_backend_auth_uses_bounded_validation_timeouts(self, mock_server_repository):
+        """A stalled auth-server cannot hold each virtual subrequest for 60 seconds."""
+        from registry.core.nginx_service import NginxConfigService
+
+        mock_server_repository.get.return_value = {
+            "proxy_pass_url": "https://github.example.com/mcp",
+            "egress_auth_mode": "pat",
+        }
+        block = await NginxConfigService()._generate_virtual_backend_locations([_make_vs_config()])
+        auth_block = block.split("location = /_vs_backend_github", 1)[0]
+
+        for directive in (
+            "proxy_connect_timeout 10s;",
+            "proxy_read_timeout 10s;",
+            "proxy_send_timeout 10s;",
+        ):
+            assert directive in auth_block
 
     @pytest.mark.asyncio
     async def test_plain_backend_clears_all_gateway_credentials(self, mock_server_repository):
