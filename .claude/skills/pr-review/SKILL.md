@@ -53,7 +53,7 @@ Based on the files changed, determine which personas should review:
 
 ### Step 2.5: Detect New or Modified Configuration Parameters (CRITICAL)
 
-Before running any reviews, determine whether this PR introduces or modifies any configuration parameters across the three deployment surfaces. If it does, the unified parameter reference must be updated in the same PR — missing updates are a **blocker**.
+Before running any reviews, determine whether this PR introduces or modifies any configuration parameters across the three deployment surfaces. If it does, the unified parameter reference must be updated in the same PR. A missing update is a **blocker**.
 
 **Detection command:**
 
@@ -135,7 +135,7 @@ print(sorted(json.load(sys.stdin)['paths']))
 
 A route added behind a default-off feature flag still belongs in the spec: FastAPI registers the route regardless, and the flag only changes the response at request time.
 
-If a route was added and the spec was not refreshed, the verdict is **REQUEST CHANGES** with a blocker titled "OpenAPI spec not refreshed for new endpoint". The procedure is in [CLAUDE.md](../../../CLAUDE.md#regenerating-apiopenapijson); refreshing it can also be offered as a follow-up PR when the author would rather not rebuild locally.
+If a route was added and the spec was not refreshed, the verdict is **REQUEST CHANGES** with a blocker titled "OpenAPI spec not refreshed for new endpoint". The procedure is in [AGENTS.md](../../../AGENTS.md#regenerating-apiopenapijson); refreshing it can also be offered as a follow-up PR when the author would rather not rebuild locally.
 
 ### Step 3: Run Tests and Quality Checks
 
@@ -235,11 +235,11 @@ Generate the review document using this structure:
 | Check | Status | Details |
 |-------|--------|---------|
 | Unified parameter reference updated (`docs/unified-parameter-reference.md`) | {PASS/FAIL/N/A} | {list of new/renamed/removed parameter names and which rows were added} |
-| Docker column populated (`.env.example`, `docker-compose*.yml`) | {PASS/FAIL/N/A} | — |
-| Terraform column populated (`variables.tf`, `terraform.tfvars.example`, module wiring) | {PASS/FAIL/N/A} | — |
-| Helm column populated (`charts/.../values.yaml`, stack values, templates) | {PASS/FAIL/N/A} | — |
-| `registry/api/config_routes.py` `CONFIG_GROUPS` updated | {PASS/FAIL/N/A} | — |
-| Secrets flagged with **(secret)** and wired through Secrets Manager / `secretKeyRef` | {PASS/FAIL/N/A} | — |
+| Docker column populated (`.env.example`, `docker-compose*.yml`) | {PASS/FAIL/N/A} |, |
+| Terraform column populated (`variables.tf`, `terraform.tfvars.example`, module wiring) | {PASS/FAIL/N/A} |, |
+| Helm column populated (`charts/.../values.yaml`, stack values, templates) | {PASS/FAIL/N/A} |, |
+| `registry/api/config_routes.py` `CONFIG_GROUPS` updated | {PASS/FAIL/N/A} |, |
+| Secrets flagged with **(secret)** and wired through Secrets Manager / `secretKeyRef` | {PASS/FAIL/N/A} |, |
 
 ---
 
@@ -361,7 +361,7 @@ The last line of every review response must be a full markdown link to the PR, s
 the reader can open it without copying a number into a URL bar:
 
 ```markdown
-[#1711 — feat: CIMD client metadata document](https://github.com/agentic-community/mcp-gateway-registry/pull/1711)
+[#1711, feat: CIMD client metadata document](https://github.com/agentic-community/mcp-gateway-registry/pull/1711)
 ```
 
 Rules:

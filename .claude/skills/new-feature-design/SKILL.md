@@ -403,7 +403,7 @@ When working from an existing GitHub issue, create a summary document:
 > factory; MCP spec compliance). Use the doc's
 > "[how to change this system without breaking its theory](../../../docs/design/theory-of-the-system.md#6-how-to-change-this-system-without-breaking-its-theory)"
 > checklist. **If the design would violate an invariant, flag it explicitly to the user** in the
-> LLD (a "Theory impact" note) and in the Expert Review — a deliberate theory change is allowed, but
+> LLD (a "Theory impact" note) and in the Expert Review. A deliberate theory change is allowed, but
 > it must be called out and argued, never slipped in. State which invariant is affected and the
 > justification.
 
@@ -508,7 +508,7 @@ Create a detailed technical design document. This is the most critical document 
 {State whether this feature upholds or changes any core invariant in
 [Theory of the System](../../../docs/design/theory-of-the-system.md). Default: "No invariant
 affected." If an invariant IS affected, name it, explain why the change is deliberate and
-justified, and note the consequence — this is a flag for the reviewer, not something to bury.}
+justified, and note the consequence. This is a flag for the reviewer rather than something to bury.}
 
 ## Codebase Analysis
 
@@ -694,7 +694,7 @@ The project maintains a single cross-surface mapping of every parameter at [`doc
 |------|-------------|-------|
 | `docs/unified-parameter-reference.md` | Add one row per new parameter to the correct logical group table: parameter name, Docker `.env` var, Terraform `.tfvars` var, Helm values path, purpose. Mark secrets with **(secret)**. If no existing group fits, add a new group section and explain why in the PR description. If a surface legitimately does not expose the parameter, leave the cell blank and note the reason in the PR. | [ ] |
 
-Verification: `grep` the new variable name across [`.env.example`](../../../.env.example), [`terraform/aws-ecs/terraform.tfvars.example`](../../../terraform/aws-ecs/terraform.tfvars.example), [`charts/`](../../../charts/), AND `docs/unified-parameter-reference.md` — it must appear in all surfaces that the reference file claims it does.
+Verification: `grep` the new variable name across [`.env.example`](../../../.env.example), [`terraform/aws-ecs/terraform.tfvars.example`](../../../terraform/aws-ecs/terraform.tfvars.example), [`charts/`](../../../charts/), AND `docs/unified-parameter-reference.md`. It must appear in all surfaces that the reference file claims it does.
 
 #### Docker Deployment (5 files)
 
@@ -923,7 +923,7 @@ pathlib.Path("api/openapi.json").write_text(json.dumps(spec, indent=2) + "\n")
 PYEOF
 ```
 
-Do not pass `ensure_ascii=False`: it rewrites every non-ASCII character in every docstring and buries the real change in hundreds of lines of diff. Full procedure and the semantic-diff check in [CLAUDE.md](../../../CLAUDE.md#regenerating-apiopenapijson).
+Do not pass `ensure_ascii=False`: it rewrites every non-ASCII character in every docstring and buries the real change in hundreds of lines of diff. Full procedure and the semantic-diff check in [AGENTS.md](../../../AGENTS.md#regenerating-apiopenapijson).
 
 ### Estimated Lines of Code
 
@@ -1213,7 +1213,7 @@ it unless the item count is small and bounded.
 **Reviewer:** Cipher
 **Focus Areas:** Authentication, authorization, input validation, data protection, OWASP
 
-> **Before writing this section, read [security-patterns.md](../pr-review/personas/security-patterns.md)** — the catalog of security defects that have shipped and been fixed in this project. Design the feature so it does not reintroduce any of them (SSRF on outbound fetches, broken access control / info disclosure on new endpoints, weak defaults, token-boundary confusion, missing CSRF, injection, log/secret leakage, agent execution safety). Call out in the Concerns/Recommendations below which patterns this feature touches and how the design avoids them.
+> **Before writing this section, read [security-patterns.md](../pr-review/personas/security-patterns.md)**. It is the catalog of security defects that have shipped and been fixed in this project. Design the feature so it does not reintroduce any of them (SSRF on outbound fetches, broken access control / info disclosure on new endpoints, weak defaults, token-boundary confusion, missing CSRF, injection, log/secret leakage, agent execution safety). Call out in the Concerns/Recommendations below which patterns this feature touches and how the design avoids them.
 
 ### Assessment
 
@@ -1320,7 +1320,7 @@ See [security-patterns.md#review-checklist](../pr-review/personas/security-patte
    curated highlight in `docs/overview/feature-release-highlights.md`. The README's "What's New"
    section is limited to the 3 most-recent highlights and is rotated only by the `release-notes`
    skill; it has a CI-enforced 350-line budget. A design must not plan to add README sections or
-   inline feature blurbs — call out the docs page it will add instead.
+   inline feature blurbs. Call out the docs page it will add instead.
 
 ## Example Usage
 

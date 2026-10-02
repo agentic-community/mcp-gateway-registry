@@ -5,7 +5,7 @@
 
 Before you start contributing, please review the project's contribution guidelines.
 
-**Then read the [Theory of the System](docs/design/theory-of-the-system.md)** — the causal design
+**Then read the [Theory of the System](docs/design/theory-of-the-system.md)**. It is the causal design
 narrative and the core invariants (control-plane/data-plane split, generic reverse-proxy gateway,
 A2A peer-to-peer, config parity, fail-closed admission, and more). A change that breaks an
 invariant without arguing for it will be flagged in review, so understand them before you design.
@@ -37,10 +37,10 @@ Before making any code changes, ask your AI coding assistant to read:
 - [docs/design/theory-of-the-system.md](docs/design/theory-of-the-system.md) - the system's core invariants and the reasoning behind them
 
 **Coding Standards and Guidelines:**
-- [CLAUDE.md](CLAUDE.md) - Project-specific coding standards
+- [AGENTS.md](AGENTS.md) - Project-specific coding standards (`CLAUDE.md` imports it)
 
-### 2. Review the CLAUDE.md File
-This project uses [CLAUDE.md](CLAUDE.md) for coding standards. The file is already included in the repository root - make sure to review it before contributing.
+### 2. Review the AGENTS.md File
+This project uses [AGENTS.md](AGENTS.md) for coding standards, imported by `CLAUDE.md` so every agent reads one file. The file is already included in the repository root - make sure to review it before contributing.
 
 ## Testing Your Changes
 
@@ -51,17 +51,18 @@ Before submitting a pull request, you must run and pass the test suite:
 # Generate fresh credentials (tokens expire in 5 minutes)
 ./credentials-provider/generate_creds.sh
 
-# Run tests locally (skip production for fast iteration)
-./tests/run_all_tests.sh --skip-production
+# Run the suite locally. This is the same command CI runs on your PR.
+# Drop -n for serial if 8 workers exhaust memory on a small instance.
+uv run python scripts/test.py coverage -n 8
+
+# Other targets (unit, integration, e2e, auth, servers, search, health, core):
+uv run python scripts/test.py --help
 ```
 
 ### For PR Merge (REQUIRED)
-```bash
-# Full test suite including production tests
-./tests/run_all_tests.sh
 
-# All tests must pass (0 failures) before merging
-```
+The same command as above. All tests must pass (0 failures) before merging, and CI runs
+it again on the PR.
 
 ### Understanding the Tests
 See the comprehensive testing documentation:
@@ -114,7 +115,7 @@ grep -i "error\|fail" /tmp/*.log
    git checkout -b feat/your-feature-name
    ```
 
-4. **Make your changes** following the coding standards in CLAUDE.md
+4. **Make your changes** following the coding standards in AGENTS.md
 
 5. **Commit and push to your fork**
    ```bash
@@ -131,11 +132,11 @@ Before submitting a pull request:
 
 - [ ] Completed one of the setup guides (macOS or EC2)
 - [ ] Read docs/llms.txt
-- [ ] Read CLAUDE.md (coding standards)
+- [ ] Read AGENTS.md (coding standards)
 - [ ] Code follows project conventions (use ruff, mypy, pytest)
 - [ ] Generated fresh credentials: `./credentials-provider/generate_creds.sh`
-- [ ] Local tests pass: `./tests/run_all_tests.sh --skip-production`
-- [ ] PR merge tests pass: `./tests/run_all_tests.sh` (all tests must pass)
+- [ ] Local tests pass: `uv run python scripts/test.py coverage -n 8`
+- [ ] PR merge tests pass: `uv run python scripts/test.py coverage -n 8` (all tests must pass)
 - [ ] Reviewed test documentation: [tests/README.md](tests/README.md)
 - [ ] Changes are pushed to a fork, not directly to this repo
 - [ ] Pull request is created with clear description
