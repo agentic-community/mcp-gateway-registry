@@ -134,9 +134,9 @@ class KeycloakProvider(AuthProvider):
                 raise ValueError(f"No matching key found for kid: {kid}")
 
             # Validate and decode token - accept multiple valid issuers, and only
-            # audiences that identify THIS gateway (see _gateway_audiences).
+            # audiences that identify THIS gateway (see accepted_audiences).
             valid_issuers = self._valid_issuers()
-            accepted_audiences = self._gateway_audiences()
+            accepted_audiences = self.accepted_audiences()
 
             claims = None
             last_error = None
@@ -264,7 +264,7 @@ class KeycloakProvider(AuthProvider):
             raise IdTokenVerificationError("exchanged token carries no 'sub' claim")
         aud = claims.get("aud")
         audiences = {aud} if isinstance(aud, str) else set(aud or [])
-        return sorted(audiences.intersection(self._gateway_audiences()))
+        return sorted(audiences.intersection(self.accepted_audiences()))
 
     def _valid_issuers(self) -> list[str]:
         """Issuers a token from this realm may carry.
@@ -279,7 +279,7 @@ class KeycloakProvider(AuthProvider):
             f"http://localhost:8080/realms/{self.realm}",
         ]
 
-    def _gateway_audiences(self) -> list[str]:
+    def accepted_audiences(self) -> list[str]:
         """Audiences that make an access token valid AT THIS GATEWAY.
 
         - ``self.client_id``: the gateway's own pre-defined web client.

@@ -25,6 +25,7 @@ from auth_server.egress_obo import (
     OboUnsupportedIdpError,
     obo_exchange,
 )
+from registry.exceptions import UrlValidationError
 
 
 class _FakeEntraProvider:
@@ -45,6 +46,7 @@ class _FakeKeycloakProvider:
         self.client_id = "gw-client"
         self.client_secret = "gw-secret"
         self.token_url = "https://kc.example/realms/r/protocol/openid-connect/token"
+        self.jwks_url = "https://kc.example/realms/r/protocol/openid-connect/certs"
         self.leaked = leaked or []
         self.verify_error = verify_error
         self.checked: list[tuple[str, str]] = []
@@ -100,6 +102,10 @@ def _patch_post(monkeypatch, response, capture: dict):
         return client
 
     monkeypatch.setattr("registry.utils.url_guard.shared_guarded_async_client", _fake_shared)
+    # The JWKS pre-check in _refuse_gateway_valid_token validates directly
+    # (not through the patched factory), and the fake realm host does not
+    # resolve; stub it the same way the factory above is stubbed.
+    monkeypatch.setattr(egress_obo, "validate_url", lambda url, **kwargs: [])
 
 
 @pytest.mark.unit
@@ -317,11 +323,12 @@ class TestKeycloakExchangeBody:
             )
 
     @pytest.mark.asyncio
-    async def test_access_denied_maps_to_config(self, monkeypatch):
+    async def test_access_denied_maps_to_config(self, monkeypatch, caplog):
         """Keycloak answers access_denied when the target client has not granted
         the token-exchange permission — the common first-run failure. It must
         surface as an actionable configuration error, not a generic exchange
-        failure."""
+        failure. The remediation text is operator diagnostics, so it goes to
+        the log; the exception carries the short, agent-facing message."""
         cap: dict = {}
         _patch_post(
             monkeypatch,
@@ -331,10 +338,12 @@ class TestKeycloakExchangeBody:
             ),
             cap,
         )
-        with pytest.raises(OboConfigError, match="token-exchange permission"):
-            await obo_exchange(
-                _FakeKeycloakProvider(), subject_token="j", target_audience="srv-client"
-            )
+        with caplog.at_level(logging.ERROR):
+            with pytest.raises(OboConfigError, match="did not permit the OBO exchange"):
+                await obo_exchange(
+                    _FakeKeycloakProvider(), subject_token="j", target_audience="srv-client"
+                )
+        assert "token-exchange permission" in caplog.text
 
 
 @pytest.mark.unit
@@ -399,6 +408,31 @@ class TestKeycloakExchangedTokenGuard:
         )
         assert token == "obo-tok"
         assert provider.checked == [("obo-tok", "finance-mcp-server")]
+
+    @pytest.mark.asyncio
+    async def test_blocked_jwks_endpoint_is_typed_error(self, monkeypatch, caplog):
+        """A realm JWKS endpoint the guard rejects fails the exchange with a
+        terminal, non-leaking message — same contract as the token-endpoint
+        block, applied to the verification fetch."""
+        cap: dict = {}
+        _patch_post(monkeypatch, _FakeResponse(200, {"access_token": "obo-tok"}), cap)
+        provider = _FakeKeycloakProvider()
+
+        def _blocked(url, **kwargs):
+            if "openid-connect/certs" not in url:
+                return []  # the token endpoint stays allowed
+            raise UrlValidationError(url, "blocked in test")
+
+        monkeypatch.setattr(egress_obo, "validate_url", _blocked)
+        with caplog.at_level(logging.ERROR):
+            with pytest.raises(OboExchangeError, match="JWKS endpoint blocked"):
+                await obo_exchange(
+                    provider, subject_token="j", target_audience="finance-mcp-server"
+                )
+        assert "JWKS endpoint blocked" in caplog.text
+        # The exchange POST already happened; the block stops the verification
+        # fetch, so the token is never verified nor returned.
+        assert provider.checked == []
 
     @pytest.mark.asyncio
     async def test_token_with_gateway_audience_is_refused(self, monkeypatch):

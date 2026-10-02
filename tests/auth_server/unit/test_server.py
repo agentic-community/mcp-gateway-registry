@@ -5059,6 +5059,12 @@ class TestMcpProxyOboExchange:
             patch.object(server_module, "get_auth_provider", lambda *a, **k: provider),
             patch.object(provider, "get_jwks", return_value=jwks),
             patch("registry.utils.url_guard.shared_guarded_async_client", _unified_client),
+            # The JWKS pre-check validates directly (not through the patched
+            # factory) and the fake realm host does not resolve; stub it the
+            # same way the factory above is stubbed. auth_server/ is on
+            # sys.path, so server.py binds obo_exchange from the TOP-LEVEL
+            # egress_obo twin — patch that one, not auth_server.egress_obo.
+            patch("egress_obo.validate_url", lambda url, **kwargs: []),
             patch.object(server_module, "_read_mcp_filter_enabled", return_value=False),
             _patch_scope_repo_allow_all(),
         ):
