@@ -5,6 +5,8 @@ Tests the DeploymentMode/RegistryMode enums, validation logic,
 and nginx_updates_enabled property.
 """
 
+from types import SimpleNamespace
+
 import pytest
 
 from registry.core.config import (
@@ -401,3 +403,198 @@ class TestInternalDeploymentClassification:
 
         result, Enum = self._run_with(True, InternalDeploymentType.WORKSHOP)
         assert result == Enum.WORKSHOP
+
+
+# =============================================================================
+# TEST CLASS: Registry-only gateway_proxy_disabled 503
+# =============================================================================
+
+
+@pytest.mark.unit
+class TestRegistryOnlyProxyRejection:
+    """The registry-only 503 must hit proxied paths only, never registry routes.
+
+    Regression coverage for the nginx catch-all that returned 503 for every
+    path outside a hardcoded allowlist, which also swallowed /docs,
+    /openapi.json, /rum.js, /oauth/client-metadata.json and every SPA route.
+    """
+
+    @staticmethod
+    def _patch_mode(
+        monkeypatch,
+        nginx_updates_enabled: bool,
+    ) -> None:
+        """Point registry.main at a stub carrying the wanted gateway flag.
+
+        A stub rather than a real Settings, so these tests neither read nor
+        mutate the shared settings singleton and give the same result whatever
+        DEPLOYMENT_MODE the ambient .env carries. The function under test reads
+        this one flag: True in with-gateway mode, False in registry-only.
+        """
+        from registry import main as main_module
+
+        monkeypatch.setattr(
+            main_module,
+            "settings",
+            SimpleNamespace(nginx_updates_enabled=nginx_updates_enabled),
+        )
+
+    @classmethod
+    async def _call(
+        cls,
+        monkeypatch,
+        full_path: str,
+        nginx_updates_enabled: bool = False,
+        known_server: str | None = None,
+    ):
+        from registry import main as main_module
+
+        cls._patch_mode(monkeypatch, nginx_updates_enabled)
+
+        async def fake_get_server_info(path: str, include_credentials: bool = False):
+            if known_server is not None and path == known_server:
+                return {"path": path}
+            return None
+
+        monkeypatch.setattr(
+            main_module.server_service,
+            "get_server_info",
+            fake_get_server_info,
+        )
+        return await main_module._gateway_proxy_disabled_response(full_path)
+
+    @pytest.mark.asyncio
+    async def test_registered_server_path_rejected(self, monkeypatch):
+        """A path whose first segment is a registered server returns 503."""
+        result = await self._call(monkeypatch, "currenttime/mcp", known_server="/currenttime")
+        assert result is not None
+        assert result.status_code == 503
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "full_path",
+        [
+            "agent/flight-booking-agent/",
+            "virtual/dev-essentials/mcp",
+            "gateway/skill/pdf/",
+            "gateway/rest-endpoint/1f32aefe-468a-417a-bdf7-646086015454/",
+        ],
+    )
+    async def test_proxy_namespace_paths_rejected(self, monkeypatch, full_path):
+        """nginx proxy namespaces return 503 without a server lookup.
+
+        Reaching the app means nginx had no location block: agent routing is off
+        in registry-only mode, and a virtual server or skill registered after
+        startup gets none because registry-only mode skips nginx reloads. An MCP
+        client needs the JSON 503 there, not the SPA shell.
+        """
+        result = await self._call(monkeypatch, full_path)
+        assert result is not None
+        assert result.status_code == 503
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "full_path",
+        [
+            "docs",
+            "redoc",
+            "openapi.json",
+            "rum.js",
+            "oauth/client-metadata.json",
+            "servers/register",
+            "settings/users",
+            "login",
+            "logout",
+            "generate-token",
+            "connected-accounts",
+        ],
+    )
+    async def test_registry_own_routes_not_rejected(self, monkeypatch, full_path):
+        """Registry docs, SPA routes and root endpoints must never 503."""
+        result = await self._call(monkeypatch, full_path)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_unregistered_path_not_rejected(self, monkeypatch):
+        """An unknown path falls through to the SPA rather than 503."""
+        result = await self._call(monkeypatch, "not-a-server/mcp")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_never_rejects_in_with_gateway_mode(self, monkeypatch):
+        """with-gateway mode proxies these paths, so the check is inert."""
+        result = await self._call(
+            monkeypatch,
+            "currenttime/mcp",
+            nginx_updates_enabled=True,
+            known_server="/currenttime",
+        )
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_lookup_failure_falls_through_to_spa(self, monkeypatch):
+        """A server lookup error serves the SPA instead of failing the request."""
+        from registry import main as main_module
+
+        self._patch_mode(monkeypatch, nginx_updates_enabled=False)
+
+        async def boom(path: str, include_credentials: bool = False):
+            raise RuntimeError("database unavailable")
+
+        monkeypatch.setattr(main_module.server_service, "get_server_info", boom)
+        result = await main_module._gateway_proxy_disabled_response("currenttime/mcp")
+        assert result is None
+
+
+# =============================================================================
+# TEST CLASS: No nginx catch-all in registry-only mode
+# =============================================================================
+
+
+@pytest.mark.unit
+class TestNoRegistryOnlyNginxCatchAll:
+    """Guard against reintroducing the nginx catch-all 503 for registry-only mode.
+
+    The original bug was an nginx location that 503'd every path outside a
+    hardcoded allowlist. nginx regex locations win over prefix locations, so it
+    also captured the registry's own routes (/docs, /openapi.json, /rum.js,
+    /oauth/client-metadata.json) and every SPA deep link. Because nginx owned
+    the decision, no app-level test could catch it, so the pattern is asserted
+    against here directly.
+    """
+
+    # The negative-lookahead allowlist that made the original block capture
+    # the registry's own routes.
+    FORBIDDEN_PATTERN = "(?!api/"
+
+    @staticmethod
+    def _repo_root():
+        from pathlib import Path
+
+        return Path(__file__).resolve().parents[2]
+
+    def test_nginx_templates_have_no_catch_all_allowlist(self):
+        """No shipped nginx template may carry the allowlist catch-all."""
+        templates = sorted(self._repo_root().joinpath("docker").glob("nginx_rev_proxy*.conf"))
+        assert templates, "expected nginx templates to exist"
+
+        for template in templates:
+            content = template.read_text(encoding="utf-8")
+            assert self.FORBIDDEN_PATTERN not in content, (
+                f"{template.name} reintroduces the registry-only catch-all allowlist. "
+                "A regex location on the allowlist also swallows /docs, /openapi.json, "
+                "/rum.js and the SPA routes. Reject proxy paths in the app instead."
+            )
+
+    def test_nginx_service_does_not_generate_catch_all(self):
+        """nginx_service must not generate the allowlist catch-all either."""
+        source = (
+            self._repo_root()
+            .joinpath("registry", "core", "nginx_service.py")
+            .read_text(encoding="utf-8")
+        )
+        assert self.FORBIDDEN_PATTERN not in source, (
+            "nginx_service reintroduces the registry-only catch-all allowlist. "
+            "Reject proxied paths in the app's SPA catch-all instead, where the "
+            "registered-server list is known."
+        )

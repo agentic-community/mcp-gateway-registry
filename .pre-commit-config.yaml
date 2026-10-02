@@ -160,6 +160,31 @@ repos:
         types: [shell]
         exclude: ^(docker/|scripts/setup/)
 
+      # Flag the phrase-level LLM tells the writing skill bans
+      # (.claude/skills/writing/SKILL.md). ADVISORY ON PURPOSE: the script is
+      # not run with --strict, so it prints hits and exits 0 rather than
+      # blocking the commit. The markdown this hook scans carries 1715 hits
+      # across 117 of 321 files, with 389 in
+      # docs/unified-parameter-reference.md alone, so a blocking hook would
+      # wedge every docs change for prose nobody is touching. Read what it
+      # prints for the lines you wrote and ignore the rest.
+      # Generated prose IS held to --strict, at the point of generation: see
+      # the prose gate in .claude/skills/explainer/SKILL.md.
+      # To make this blocking later, clean the worst offenders first
+      # (docs/unified-parameter-reference.md, docs/SECURITY_GUIDELINES.md) and
+      # then add --strict here.
+      # Runs under the system python, not `uv run`: uv is not on PATH in the
+      # pre-commit CI runner, and this script imports only argparse, re and sys,
+      # so it needs no project environment. Matches the python-syntax hook below.
+      - id: prose-scan
+        name: Scan prose for LLM tells (advisory)
+        entry: python scripts/prose-scan.py
+        language: system
+        types: [markdown]
+        # The writing skill is excluded because it quotes every phrase it bans,
+        # so it reports a hit per ban-list entry by construction.
+        exclude: ^(CHANGELOG|\.github/|\.claude/skills/writing/SKILL\.md$)
+
 # Default stages
 default_stages: [pre-commit]
 

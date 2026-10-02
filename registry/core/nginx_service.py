@@ -79,6 +79,16 @@ DEFAULT_NGINX_CONFIG_MODE: int = 0o644
 # reachable at "{ROOT_PATH}/agent/flight-booking-agent/".
 AGENT_ROUTE_PREFIX: str = "/agent"
 
+# First path segments that nginx owns as reverse-proxy namespaces: A2A agents
+# ("/agent/<agent>/"), virtual MCP servers ("/virtual/<server>/") and gateway
+# REST and skill endpoints ("/gateway/rest-endpoint/<id>/",
+# "/gateway/skill/<skill>/"). The registry serves no route of its own under
+# these, so a request for one that reaches the app means nginx had no matching
+# location block for it.
+PROXY_ROUTE_PREFIXES: frozenset[str] = frozenset(
+    {AGENT_ROUTE_PREFIX.strip("/"), "virtual", "gateway"}
+)
+
 # Agent path and backend url come from registry data and are interpolated into
 # nginx directive positions, so they must be validated to prevent config
 # injection (e.g. "}", ";", newlines breaking out of the location block).
@@ -1355,9 +1365,15 @@ class NginxConfigService:
             # audited client IP becomes the end user instead of the load balancer.
             config_content = config_content.replace("{{REAL_IP_CONFIG}}", _render_real_ip_config())
 
-            # Generate registry-only block (503 response for MCP proxy requests)
-            registry_only_block = self._generate_registry_only_block()
-            config_content = config_content.replace("{{REGISTRY_ONLY_BLOCK}}", registry_only_block)
+            # Registry-only mode used to emit an nginx catch-all here that
+            # returned 503 for every path outside a hardcoded allowlist. That
+            # allowlist could not distinguish a proxied MCP server path from the
+            # registry's own routes, so it also swallowed /docs, /openapi.json,
+            # /rum.js, /oauth/client-metadata.json and every SPA route. The 503
+            # now comes from the app's SPA catch-all, which can check the path
+            # against the registered servers. The placeholder is still replaced
+            # so a template carrying it does not emit a literal into the config.
+            config_content = config_content.replace("{{REGISTRY_ONLY_BLOCK}}", "")
 
             # Generate virtual server blocks
             try:
@@ -1419,9 +1435,8 @@ class NginxConfigService:
             # Generate A2A agent reverse-proxy blocks. Opt-in via
             # A2A_REVERSE_PROXY_ENABLED, and only effective in with-gateway mode
             # (a2a_reverse_proxy_effective is the shared flag-AND-with-gateway
-            # gate). In registry-only mode they are skipped: the registry-only
-            # 503 block already returns 503 for any /agent/* path that is not an
-            # API route.
+            # gate). In registry-only mode they are skipped and the app's SPA
+            # catch-all returns the gateway_proxy_disabled 503 for /agent/*.
             if settings.a2a_reverse_proxy_effective:
                 agent_blocks = await self._generate_agent_location_blocks()
             else:
@@ -1557,33 +1572,6 @@ class NginxConfigService:
         except Exception as e:
             logger.error(f"Error reloading Nginx: {e}")
             return False
-
-    def _generate_registry_only_block(self) -> str:
-        """
-        Generate nginx location block for registry-only mode.
-
-        In registry-only mode, this block returns 503 for paths that look like
-        MCP server requests (paths not matching known API prefixes).
-        In with-gateway mode, this returns an empty string.
-
-        Returns:
-            Nginx location block string or empty string
-        """
-        if settings.nginx_updates_enabled:
-            # with-gateway mode: no blocking needed, MCP servers are proxied
-            return ""
-
-        # registry-only mode: block MCP proxy requests with 503
-        # This regex matches paths that don't start with known API prefixes
-        block = """
-    # Registry-only mode: block MCP proxy requests with 503
-    # Matches paths that don't start with known API/auth prefixes
-    location ~ ^{{ROOT_PATH}}/(?!api/|oauth2/|keycloak/|realms/|resources/|v0\\.1/|health|static/|assets/|_next/|validate).+ {
-        default_type application/json;
-        return 503 '{"error":"gateway_proxy_disabled","message":"Gateway proxy is disabled in registry-only mode. Connect directly to the MCP server using the proxy_pass_url from server registration.","deployment_mode":"registry-only","hint":"Use GET /api/servers/{path} to retrieve the proxy_pass_url for direct connection."}';
-    }"""
-        logger.info("Generated registry-only 503 block for MCP proxy requests")
-        return block
 
     async def _resolve_version_routes(
         self,

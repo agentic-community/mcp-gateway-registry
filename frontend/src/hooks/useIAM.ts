@@ -96,6 +96,9 @@ export interface UpdateGroupPayload {
   description?: string;
   scope_config?: {
     server_access?: Array<{server: string; methods: string[]; tools?: string[]}>;
+    // Must be sent on every update: the API preserves existing values for any
+    // omitted field, so leaving this out silently discards the user's edit.
+    group_mappings?: string[];
     ui_permissions?: Record<string, string[]>;
     agent_access?: string[];
   };

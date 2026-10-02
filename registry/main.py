@@ -81,7 +81,7 @@ from registry.core.config import (
     settings,
 )
 from registry.core.metrics import DEPLOYMENT_MODE_INFO
-from registry.core.nginx_service import nginx_service
+from registry.core.nginx_service import PROXY_ROUTE_PREFIXES, nginx_service
 from registry.core.telemetry import (
     initialize_telemetry,
     send_startup_ping,
@@ -1455,6 +1455,68 @@ async def serve_rum_js():
     return FileResponse(rum_path, media_type="application/javascript", headers=headers)
 
 
+GATEWAY_PROXY_DISABLED_BODY: dict[str, str] = {
+    "error": "gateway_proxy_disabled",
+    "message": (
+        "Gateway proxy is disabled in registry-only mode. Connect directly to the "
+        "MCP server using the proxy_pass_url from server registration."
+    ),
+    "deployment_mode": "registry-only",
+    "hint": "Use GET /api/servers/{path} to retrieve the proxy_pass_url for direct connection.",
+}
+
+
+async def _gateway_proxy_disabled_response(
+    full_path: str,
+) -> JSONResponse | None:
+    """Return the registry-only 503 when a path targets a proxied server or agent.
+
+    In with-gateway mode nginx owns the registered MCP server and A2A agent
+    paths, so this never fires. In registry-only mode no proxy location blocks
+    are generated and the request falls through to the SPA catch-all. Serving
+    index.html to an MCP client would be wrong, so the documented JSON 503 is
+    returned instead.
+
+    Only paths whose first segment is a registered server or one of the nginx
+    proxy namespaces (PROXY_ROUTE_PREFIXES) are rejected. Everything else is a
+    registry route or an SPA route and must be served normally.
+
+    Args:
+        full_path: Request path without a leading slash, as captured by the
+            SPA catch-all route.
+
+    Returns:
+        A 503 JSONResponse for proxy targets, or None to let the SPA serve it.
+    """
+    if settings.nginx_updates_enabled:
+        return None
+
+    first_segment = full_path.strip("/").split("/")[0]
+    if not first_segment:
+        return None
+
+    # Agent, virtual-server and gateway REST/skill paths are nginx proxy
+    # namespaces, never registry app routes, so the prefix alone is enough.
+    # Reaching the app means nginx had no location block for the request:
+    # agent routing is off in registry-only mode, and a virtual server or
+    # skill registered after startup gets no block because registry-only mode
+    # skips nginx reloads.
+    if first_segment in PROXY_ROUTE_PREFIXES:
+        return JSONResponse(status_code=503, content=GATEWAY_PROXY_DISABLED_BODY)
+
+    try:
+        server_info = await server_service.get_server_info(f"/{first_segment}")
+    except Exception:
+        logger.exception("Failed to look up server for registry-only path check")
+        return None
+
+    if server_info is None:
+        return None
+
+    logger.debug("Registry-only mode: returning 503 for proxy path %s", full_path)
+    return JSONResponse(status_code=503, content=GATEWAY_PROXY_DISABLED_BODY)
+
+
 if FRONTEND_BUILD_PATH.exists():
     # Build the cached HTML at import time
     _CACHED_INDEX_HTML = _build_cached_index_html()
@@ -1479,6 +1541,13 @@ if FRONTEND_BUILD_PATH.exists():
             or full_path.startswith("static/")
         ):  # Let static files mount handle these
             raise HTTPException(status_code=404)
+
+        # In registry-only mode there is no gateway to proxy through, so a
+        # request for a registered server (or an agent route) gets a clear JSON
+        # 503 rather than the SPA shell.
+        proxy_disabled = await _gateway_proxy_disabled_response(full_path)
+        if proxy_disabled is not None:
+            return proxy_disabled
 
         if _CACHED_INDEX_HTML is not None:
             return HTMLResponse(content=_CACHED_INDEX_HTML)
