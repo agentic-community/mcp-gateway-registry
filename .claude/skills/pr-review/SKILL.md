@@ -299,7 +299,53 @@ Generate the review document using this structure:
 - [ ] {Action 1}
 ```
 
-### Step 7: Present Review Summary
+### Step 7: Render the review as HTML
+
+A review document is long and heavily tabular, which reads badly as raw markdown in a terminal. Render it so the reader can open a formatted page instead:
+
+```bash
+uv run python scripts/render-doc-html.py .scratchpad/pr-NNNN/review.md
+```
+
+That writes `review.html` beside the markdown, self-contained (all CSS inline, no CDN, no JavaScript, renders from `file://`), using the same stylesheet as the explainer skill so every generated document looks the same. Title and byline come from the document's H1 and the italic lines under it, and a section nav is built from the H2 headings.
+
+Useful flags:
+
+- `--footer-html '...'` for provenance, such as the commit the review was performed against.
+- `--diagrams DIR` to inline SVG from `DIR/<key>.svg` wherever the markdown fences a block as ` ```svg:<key> Optional caption `. Keep the ASCII inside the fence: it is what a terminal reader sees, and a missing `.svg` file falls back to it rather than losing the diagram. A review rarely needs this; a design document often does.
+- `--code-style invert` for the template's dark code blocks. The default (`match`) makes code blocks follow the page surface, which suits a document that is mostly code.
+
+Then check the output, because an unparsed HTML file is worse than none:
+
+```bash
+uv run python scripts/prose-scan.py --strict .scratchpad/pr-NNNN/review.md .scratchpad/pr-NNNN/review.html
+```
+
+The renderer already warns about unfilled placeholders, broken in-page anchors, and `svg:` fences with no matching file. Fix anything it reports and re-run.
+
+Re-render after every edit to the markdown. The markdown is the source; the HTML is a build artifact, and the two drift the moment you hand-edit the HTML.
+
+Open it for the reader rather than starting a server:
+
+```bash
+code -r .scratchpad/pr-NNNN/review.html
+```
+
+Do not start a server. The HTML is self-contained, so the editor's preview or a downloaded copy is enough, and a process the user did not ask for is one they have to hunt down later. If they want HTTP, offer this and let them run it in a VS Code integrated terminal, which is what makes VS Code forward the port:
+
+```bash
+python3 -m http.server 8112 --bind 127.0.0.1 --directory /abs/path/to/.scratchpad/pr-NNNN
+```
+
+Then the URL is `http://127.0.0.1:8112/review.html`, or drop the filename for a directory listing. Point `--directory` at the single document's folder, never at `.scratchpad/` itself: that folder holds credential files and `http.server` serves everything below its root.
+
+#### Trust model for the generated HTML
+
+The renderer treats the markdown body, the byline derived from it, and any inlined SVG as untrusted, because this skill summarizes GitHub-fetched content into that markdown. Raw HTML in the markdown is disabled, the byline is escaped with an href scheme allowlist, and an SVG carrying a script, an event handler, or an external reference aborts the render. A `<script>` in a PR body therefore renders as visible, inert text.
+
+`--byline-html` and `--footer-html` are the two exceptions: both are inserted verbatim. Use them only for first-party provenance text you wrote. Never pass a PR title, an issue body, an author name, or any other fetched metadata through either one.
+
+### Step 8: Present Review Summary
 
 After creating the review document, present a summary to the user:
 
@@ -373,7 +419,8 @@ User: "/pr-review https://github.com/agentic-community/mcp-gateway-registry/pull
 5. Run tests: All pass
 6. Create `.scratchpad/pr-456/review.md`
 7. Conduct reviews from each persona
-8. Present summary with verdict
+8. Render `review.html` with `scripts/render-doc-html.py`
+9. Present summary with verdict
 
 ## Notes
 
@@ -382,3 +429,4 @@ User: "/pr-review https://github.com/agentic-community/mcp-gateway-registry/pull
 - Be constructive and specific - provide file/line references
 - Acknowledge good practices, not just problems
 - Consider the author's experience level when phrasing feedback
+- The markdown is the source of truth and the HTML is a build artifact. Re-render after any edit rather than hand-editing `review.html`

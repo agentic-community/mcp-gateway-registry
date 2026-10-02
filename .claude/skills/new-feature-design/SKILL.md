@@ -35,7 +35,8 @@ When the user invokes this skill:
 6. **Write Low-Level Design** - Create `lld.md` with technical details
 7. **Expert Review** - Create `review.md` with multi-persona feedback
 8. **Write Testing Plan** - Create `testing.md` with functional, backwards-compat, UX, ECS, and E2E tests
-9. **Present Summary & Seek Guidance** - Present findings and ask for direction
+9. **Render HTML** - Generate a styled `.html` for each document with `scripts/render-doc-html.py`
+10. **Present Summary & Seek Guidance** - Present findings and ask for direction
 
 ### GitHub Issue URL Mode Workflow
 1. **Fetch GitHub Issue** - Retrieve issue content using `gh` CLI
@@ -48,7 +49,8 @@ When the user invokes this skill:
 8. **Write Low-Level Design** - Create `lld.md` with technical details
 9. **Expert Review** - Create `review.md` with multi-persona feedback
 10. **Write Testing Plan** - Create `testing.md` with functional, backwards-compat, UX, ECS, and E2E tests
-11. **Present Summary & Seek Guidance** - Present findings and ask for direction
+11. **Render HTML** - Generate a styled `.html` for each document with `scripts/render-doc-html.py`
+12. **Present Summary & Seek Guidance** - Present findings and ask for direction
 
 ---
 
@@ -250,8 +252,15 @@ Create the folder structure:
 ├── github-issue.md    # GitHub issue specification or summary
 ├── lld.md             # Low-level design document
 ├── review.md          # Expert review document
-└── testing.md         # Testing plan (functional, backwards-compat, UX, ECS, E2E)
+├── testing.md         # Testing plan (functional, backwards-compat, UX, ECS, E2E)
+├── diagrams/          # Optional: <key>.svg files inlined into the HTML
+├── github-issue.html  # Generated (see Step 9)
+├── lld.html           # Generated
+├── review.html        # Generated
+└── testing.html       # Generated
 ```
+
+The four markdown files are the source of truth. The `.html` files are build artifacts produced in Step 9; never hand-edit them.
 
 ## Step 4: Write GitHub Issue (github-issue.md)
 
@@ -1822,7 +1831,72 @@ Copy this checklist into the PR description when implementing the feature:
 6. **Do not invent endpoints or flags.** Every curl URL, every `registry_management.py` flag, and every Terraform variable must exist in the LLD or the current codebase.
 
 
-## Step 9: Present Summary & Seek Guidance
+## Step 9: Render the documents as HTML
+
+A low-level design runs to tens of thousands of words with dozens of tables, which reads badly as raw markdown in a terminal. Render every document the design produced:
+
+```bash
+for doc in github-issue lld review testing; do
+  uv run python scripts/render-doc-html.py .scratchpad/issue-NNNN/$doc.md
+done
+```
+
+Each run writes `<doc>.html` beside the markdown, self-contained (all CSS inline, no CDN, no JavaScript, renders from `file://`), using the same stylesheet as the explainer skill so every generated document looks the same. The title comes from the document's H1, the byline from the italic metadata lines beneath it, and a section nav from the H2 headings.
+
+Useful flags:
+
+- `--footer-html '...'` for provenance, such as the commit the design was verified against and the command to regenerate the file.
+- `--diagrams DIR` to point at the SVG directory. A `diagrams/` directory beside the markdown is picked up automatically, so the flag is only needed for a different location.
+- `--code-style invert` for the template's dark code blocks. The default (`match`) makes code blocks follow the page surface, which is what a design document full of code wants.
+
+### Diagrams
+
+The LLD's architecture, sequence, and component views should be SVG in the HTML, not ASCII art. Write each one to `diagrams/<key>.svg` and fence the markdown block as:
+
+````markdown
+```svg:system-context The caption that renders under the diagram.
+  <the ASCII version, which is what a terminal reader sees>
+```
+````
+
+The renderer inlines `diagrams/system-context.svg` in place of the fence and uses the fence text as the `<figcaption>`.
+
+Rules for authoring the SVG:
+
+- Use the template's classes so the diagram follows light and dark mode: `.box` for nodes, `.flow` for normal arrows, `.bad` plus `.bad-text` for a failing path, `.label` for annotations, `.mono` for code-ish text.
+- Give every `svg` a `role="img"` and an `aria-label` describing what it shows.
+- Put markers in a `defs` block inside the same SVG and prefix the ids per diagram, since ids must not collide across one page.
+- Keep the ASCII inside the fence. It is the terminal-readable copy, and a missing `.svg` file falls back to it rather than losing the diagram. Each diagram therefore has two representations: edit both or neither.
+
+### Check the output
+
+```bash
+uv run python scripts/prose-scan.py --strict .scratchpad/issue-NNNN/*.md .scratchpad/issue-NNNN/*.html
+```
+
+The renderer already warns about unfilled placeholders, broken in-page anchors, and `svg:` fences with no matching file. Fix anything it reports and re-run.
+
+Re-render after every edit to a markdown file. The markdown is the source; the HTML is a build artifact, and the two drift the moment you hand-edit the HTML. Then open the LLD for the reader rather than starting a server:
+
+```bash
+code -r .scratchpad/issue-NNNN/lld.html
+```
+
+Do not start a server. The HTML is self-contained, so the editor's preview or a downloaded copy is enough, and a process the user did not ask for is one they have to hunt down later. If they want HTTP, offer this and let them run it in a VS Code integrated terminal, which is what makes VS Code forward the port:
+
+```bash
+python3 -m http.server 8112 --bind 127.0.0.1 --directory /abs/path/to/.scratchpad/issue-NNNN
+```
+
+Then the URL is `http://127.0.0.1:8112/lld.html`, or drop the filename for a directory listing. Point `--directory` at the single document's folder, never at `.scratchpad/` itself: that folder holds credential files and `http.server` serves everything below its root.
+
+#### Trust model for the generated HTML
+
+The renderer treats the markdown body, the byline derived from it, and any inlined SVG as untrusted, because this skill summarizes GitHub-fetched content into that markdown. Raw HTML in the markdown is disabled, the byline is escaped with an href scheme allowlist, and an SVG carrying a script, an event handler, or an external reference aborts the render. A `<script>` in a PR body therefore renders as visible, inert text.
+
+`--byline-html` and `--footer-html` are the two exceptions: both are inserted verbatim. Use them only for first-party provenance text you wrote. Never pass a PR title, an issue body, an author name, or any other fetched metadata through either one.
+
+## Step 10: Present Summary & Seek Guidance
 
 **IMPORTANT:** After completing the design documents and expert review, present a clear summary to the user and ask for guidance on addressing recommendations.
 
@@ -1841,6 +1915,7 @@ Present the following information in a clear, tabular format:
 | Low-Level Design | `.scratchpad/{feature}/lld.md` | Technical design |
 | Expert Review | `.scratchpad/{feature}/review.md` | Multi-persona review |
 | Testing Plan | `.scratchpad/{feature}/testing.md` | Functional, backwards-compat, UX, ECS, and E2E tests |
+| Rendered HTML | `.scratchpad/{feature}/*.html` | Styled, self-contained copies of each document |
 
 ### Review Verdicts
 

@@ -218,19 +218,22 @@ Then give the reader three ways in, cheapest first. The first two need no comman
 
 ### The server command
 
-Offer it as one paste-ready line, rooted at the explainer's own directory:
+Offer it as one paste-ready line, rooted at the document's own directory:
 
 ```bash
 python3 -m http.server 8111 --bind 127.0.0.1 --directory /abs/path/to/.scratchpad/pr-NNNN
 ```
 
-Then the URL is `http://127.0.0.1:8111/explainer.html`.
+Then the URL is `http://127.0.0.1:8111/explainer.html`, or drop the filename for a directory listing.
 
-Use the absolute path, since the user may paste this from any working directory. Keep `--bind 127.0.0.1`: never offer a command that binds `0.0.0.0`.
+Four things to get right:
 
-Two things to say when you offer it. Having the user run it themselves in a VS Code integrated terminal is what makes VS Code auto-forward the port, so a browser on their laptop can reach it; a server started any other way listens on the host and gives `ERR_CONNECTION_REFUSED`. And the server publishes every file in that directory, which is the explainer's own output and nothing else, so check the directory holds only what you generated before offering the line.
+- **Use the absolute path**, since the user may paste this from any working directory.
+- **Keep `--bind 127.0.0.1`.** Never offer a command that binds `0.0.0.0`.
+- **Point `--directory` at the single document's folder, never at `.scratchpad/` itself.** That folder holds credential files (`.hftoken`, `.oai`, `.bedrock`, `.gh-client-id-secret`), and `http.server` serves everything below its root. If several documents need to be reachable at once, copy the generated HTML into a folder of its own and serve that; the files are self-contained, so a copy works.
+- **Have the user run it in a VS Code integrated terminal.** That is what makes VS Code forward the port so a browser on their laptop can reach it. A server started any other way listens only on the host and gives `ERR_CONNECTION_REFUSED`.
 
-`scripts/serve.sh` remains available for anyone who wants the checked version: it validates the port, refuses a target resolving outside the repo, shell-escapes the path it prints, and confirms the process came up. It starts a server, so only reach for it when the user asks for one.
+Say which port you picked and mention nothing is listening until they run it. If a port is already taken the command fails with "Address already in use", so suggest a fresh one rather than reusing a port from an earlier session.
 
 ### Formatting the handover
 
