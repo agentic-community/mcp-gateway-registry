@@ -9,8 +9,10 @@ Tests all components of the semantic search API including:
 """
 
 import logging
+import re
 from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
+from urllib.parse import urlparse
 
 import pytest
 from fastapi import HTTPException, Request
@@ -1379,6 +1381,45 @@ class TestEndpointUrlAppendMcpPath:
             )
 
         assert url == expected
+
+    @pytest.mark.parametrize("append_mcp_path", [None, True, False])
+    def test_endpoint_url_is_served_by_nginx(self, append_mcp_path):
+        """The URL search hands out is one the gateway's nginx config serves.
+
+        Asserting the string alone let a correctly shaped URL through that nginx
+        answered with a 301, so bind it to the locations nginx actually renders.
+        A prefix location ending in "/" serves only URIs continuing past that
+        slash; the bare path needs an exact-match location.
+        """
+        from registry.core.nginx_service import nginx_service
+
+        with self._with_gateway():
+            url = _compute_endpoint_url(
+                path="/aws-knowledge",
+                proxy_pass_url=None,
+                mcp_endpoint=None,
+                base_url=self.BASE,
+                append_mcp_path=append_mcp_path,
+            )
+        blocks = nginx_service._generate_transport_location_blocks(
+            "/aws-knowledge",
+            {
+                "proxy_pass_url": "https://backend.example.com/mcp",
+                "append_mcp_path": append_mcp_path,
+            },
+        )
+        locations = [
+            (bool(exact), location.replace("{{ROOT_PATH}}", ""))
+            for exact, location in re.findall(
+                r"^\s*location\s+(=\s+)?(\S+)\s+\{", "\n".join(blocks), re.MULTILINE
+            )
+        ]
+
+        request_path = urlparse(url).path
+        assert any(
+            request_path == location if exact else request_path.startswith(location)
+            for exact, location in locations
+        ), f"{request_path} is not served by any of {locations}"
 
     @pytest.fixture
     def root_endpoint_server_info(self):
