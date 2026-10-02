@@ -26,6 +26,7 @@ import { useServerList, useServerTools } from '../hooks/useToolCatalog';
 import type { ServerInfo } from '../hooks/useToolCatalog';
 import {
   buildScopeJson,
+  buildUpdateScopeConfig,
   normalizeServerKey as normalizeScopeServerKey,
   applyUiPermSync as applyScopeUiPermSync,
   type ServerAccessEntry,
@@ -287,6 +288,7 @@ const ServerToolsSelector: React.FC<ServerToolsSelectorProps> = ({
 const _normalizeServerKey = normalizeScopeServerKey;
 const _applyUiPermSync = applyScopeUiPermSync;
 const _buildScopeJson = buildScopeJson;
+const _buildUpdateScopeConfig = buildUpdateScopeConfig;
 
 
 const IAMGroups: React.FC<IAMGroupsProps> = ({ onShowToast }) => {
@@ -497,38 +499,21 @@ const IAMGroups: React.FC<IAMGroupsProps> = ({ onShowToast }) => {
     if (!editingGroup) return;
     setIsSaving(true);
     try {
-      // Build scope_config from form state. Proxied non-MCP entities keep their
+      // Build scope_config from form state via the shared builder, which keeps
+      // the field list in one place. Proxied non-MCP entities keep their
       // canonical authz key (entity_type/registered_path); MCP/virtual are
-      // slash-normalized. Uses the SAME shared normalizer + perm-sync as the
-      // create path (_buildScopeJson) so both actions write identical output.
-      const serverAccessPayload = serverAccess
-        .filter((e) => e.server.trim())
-        .map((e) => {
-          const entry: {server: string; methods: string[]; tools?: string[]} = {
-            server: _normalizeServerKey(e.server, proxiedKeys),
-            methods: e.methods.length > 0 ? e.methods : ['all'],
-          };
-          if (e.tools.length > 0) {
-            entry.tools = e.tools;
-          }
-          return entry;
-        });
-
-      // Build UI permissions, then auto-sync (shared helper; proxied excluded).
-      const perms: Record<string, string[]> = {};
-      for (const [key, val] of Object.entries(uiPermissions)) {
-        const items = val.split(',').map((v) => v.trim()).filter(Boolean);
-        if (items.length > 0) perms[key] = items;
-      }
-      _applyUiPermSync(perms, serverAccess, selectedAgents, proxiedKeys);
-
+      // slash-normalized, using the same normalizer + perm-sync as the create
+      // path. Every field is sent, including empty ones, because the API
+      // preserves existing values for any field the payload omits.
       const payload: UpdateGroupPayload = {
         description: formDescription.trim() || undefined,
-        scope_config: {
-          server_access: serverAccessPayload,
-          ui_permissions: perms,
-          agent_access: selectedAgents,
-        },
+        scope_config: _buildUpdateScopeConfig(
+          serverAccess,
+          groupMappings,
+          selectedAgents,
+          uiPermissions,
+          proxiedKeys,
+        ),
       };
 
       await updateGroup(editingGroup, payload);
