@@ -206,7 +206,13 @@ Do not skip this because you already loaded the writing skill. Loading the skill
 .claude/skills/explainer/scripts/serve.sh .scratchpad/issue-NNNN/explainer.html
 ```
 
-The script roots a `python3 -m http.server` at the repo top level on `127.0.0.1:8111`, reuses an already-running server, refuses to stomp a port held by something else, and verifies HTTP 200 before reporting success. Override with `EXPLAINER_PORT`.
+The script copies the explainer into a private `mktemp -d` directory (mode 700) as `index.html` (mode 600) and roots `python3 -m http.server` there on `127.0.0.1:8111`, so the served URL is just `http://127.0.0.1:8111/`. Override the port with `EXPLAINER_PORT`, which it validates as digits in 1024-65535.
+
+Serving one copied file in a private directory is deliberate. `http.server` publishes everything below its root and follows symlinks, so pointing it at the repo would expose `.env` and `.git/config` to any local process, and pointing it at the explainer's own directory would expose siblings and anything a sibling symlink reaches. A single regular file in an owner-only directory can disclose nothing else.
+
+The script validates the port before interpolating it into the command it prints, shell-escapes that command with `printf %q` so an unusual checkout path cannot become shell syntax, refuses a target that resolves outside the repo, logs to a private 0600 temp file, and confirms the process it started is still alive before trusting a 200 response, so a bind race cannot look like a successful start.
+
+It does not reuse an existing server. A second run while the port is busy exits with an error naming the port, rather than attaching to whatever is listening.
 
 Then open the file in the editor so preview is one click away:
 
@@ -221,7 +227,7 @@ Format them so the user can act without editing anything. Put the URL on its own
 ````markdown
 Open this:
 
-http://127.0.0.1:8111/.scratchpad/issue-1832/explainer.html
+http://127.0.0.1:8111/
 
 If the browser cannot reach it, paste this into a VS Code integrated terminal:
 
