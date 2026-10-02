@@ -349,13 +349,20 @@ sanitizer that isn't called) is equivalent to no check.
   couples a read scope with a management scope on the same static token.
 - **Never forward the caller's inbound credential to a proxied/untrusted
   destination.** When the gateway proxies to a registrant-controlled upstream (or
-  an agent calls a discovered remote agent), strip `Authorization`/`Cookie` from
-  the forwarded request — the upstream is authenticated by the gateway's own
-  mechanism, not by relaying the caller's registry token. nginx subrequests
-  inherit the parent request's headers, so `Cookie`/`Authorization` must be
-  explicitly cleared (`proxy_set_header ... "";`) on any location that proxies
-  directly to a registrant-controlled backend. For outbound service-to-service
-  calls, mint an audience-restricted, short-lived delegation token rather than
+  an agent calls a discovered remote agent), strip EVERY caller/gateway
+  credential from the forwarded request — the upstream is authenticated by the
+  gateway's own mechanism, not by relaying the caller's registry token. Clearing
+  only `Authorization`/`Cookie` is NOT enough: this gateway's own clients present
+  the caller's bearer in `X-Authorization` (auth_server treats it as the primary
+  gateway credential on `/validate`), so a location that clears `Authorization`
+  but forwards `X-Authorization` still leaks the bearer. Default-drop the whole
+  credential set on any hop to an untrusted backend — `Authorization`,
+  `X-Authorization`, `Proxy-Authorization`, `Cookie`, and the gateway-internal
+  signed-token headers (`X-Internal-Token*`) — via `proxy_set_header ... "";`,
+  and clear them again in any Lua `ngx.location.capture` path (subrequests
+  inherit the parent request's headers). Keep the strip list in one shared place
+  so future proxy locations inherit it. For outbound service-to-service calls,
+  mint an audience-restricted, short-lived delegation token rather than
   re-sending the inbound one.
 - **Never accept a credential as a URL query parameter.** Query strings land in
   access logs, the audit trail, and browser history. Take secrets via a request
