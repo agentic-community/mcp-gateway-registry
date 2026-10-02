@@ -33,12 +33,15 @@ TEMP_DIR="$PROJECT_ROOT/.tmp/anthropic-import"
 BASE_PORT=8100
 
 # Read API version from constants.py
-ANTHROPIC_API_VERSION=$(python3 -c "
+ANTHROPIC_API_VERSION=$(python3 - "$PROJECT_ROOT" <<'PY'
 import sys
-sys.path.insert(0, '$PROJECT_ROOT')
+
+sys.path.insert(0, sys.argv[1])
 from registry.constants import REGISTRY_CONSTANTS
+
 print(REGISTRY_CONSTANTS.ANTHROPIC_API_VERSION)
-")
+PY
+)
 
 # Gateway URL (can be overridden with GATEWAY_URL environment variable)
 GATEWAY_URL="${GATEWAY_URL:-http://localhost}"
@@ -205,35 +208,17 @@ for server_name in "${servers[@]}"; do
     # For imported servers, use a placeholder URL since they're not deployed yet
         proxy_url="http://localhost:${current_port}/"
 
-    # Use Python transformer for complete transformation
-    python3 -c "
-import json
-import sys
-
-sys.path.append('$SCRIPT_DIR')
-from anthropic_transformer import transform_anthropic_to_gateway
-
-# Load Anthropic server data
-with open('$anthropic_file') as f:
-    data = json.load(f)
-
-# Transform to Gateway Registry format
-result = transform_anthropic_to_gateway(data, $current_port)
-result['path'] = '/$safe_path'
-
-# Remove unsupported fields for register_service tool
-# The user-facing register_service tool only supports basic fields
-# Note: auth_scheme, auth_provider, headers, supported_transports, and tool_list are kept
-unsupported_fields = [
-    'repository_url', 'website_url', 'package_npm', 'remote_url'
-]
-for field in unsupported_fields:
-    result.pop(field, None)
-
-# Write transformed configuration
-with open('$config_file', 'w') as f:
-    json.dump(result, f, indent=2)
-"
+    # Transform via the module entrypoint. The unauthenticated remote record and
+    # all selectors are passed as data (input file, output file, port, path) --
+    # never string-interpolated into interpreter source. The transformer
+    # validates remote-derived fields and fails closed on malformed input.
+    if ! python3 "$SCRIPT_DIR/anthropic_transformer.py" \
+        "$anthropic_file" "$config_file" \
+        --base-port "$current_port" --path "/$safe_path"; then
+        print_error "Failed to transform $server_name (invalid or unsafe remote definition)"
+        current_port=$((current_port + 1))
+        continue
+    fi
 
     print_success "Created config for $server_name (transport: $transport_type)"
 
