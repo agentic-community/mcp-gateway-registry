@@ -38,12 +38,18 @@ from registry.auth.proxied_token import verify_generic_proxy_token, verify_mcp_p
 from registry.common.log_redaction import redact_url
 from registry.core.config import settings
 from registry.core.schemas import _validate_obo_egress_config
+from registry.egress_auth import oauth_engine
 from registry.egress_auth.factory import get_egress_auth_service
 from registry.egress_auth.providers import list_provider_names, resolve_provider
-from registry.egress_auth.schemas import StoredToken
+from registry.egress_auth.schemas import (
+    OAuthProviderConfig,
+    StoredToken,
+    TokenEndpointAuthStyle,
+)
 from registry.egress_auth.service import (
     EgressAuthError,
     EgressAuthService,
+    EgressClientNotRegistered,
     is_per_user_auth_method,
 )
 from registry.egress_auth.upstream_binding import (
@@ -926,6 +932,7 @@ def build_oauth_provider_config(
     custom_token_auth_style: str | None = None,
     custom_resource: str | None = None,
     prior_secret_encrypted: str | None = None,
+    dcr_supported: bool = False,
 ) -> dict:
     """Validate and build a provider OAuth config (the ``EgressOAuthConfig`` shape)
     with the client_secret encrypted. Shared by per-user egress (``oauth_user``)
@@ -933,7 +940,9 @@ def build_oauth_provider_config(
 
     Raises ``HTTPException(400)`` on invalid input. ``client_secret`` blank keeps
     ``prior_secret_encrypted`` (edit); a custom public client (token_auth_style
-    'none') carries no secret.
+    'none') carries no secret. A ``requires_dcr`` provider is refused unless the
+    caller passes ``dcr_supported`` and then completes the client itself with
+    ``_register_or_reuse_dcr_client``; the returned config carries no secret yet.
     """
     if provider not in list_provider_names():
         raise HTTPException(
@@ -970,9 +979,42 @@ def build_oauth_provider_config(
                     "URI without a fragment",
                 )
     try:
-        resolve_provider(eo)
+        cfg = resolve_provider(eo)
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    # Apply provider default_scopes when the operator supplies none.
+    # This is the single authoritative seam: explicit scopes always win because
+    # eo["scopes"] is only substituted when falsy. Baking the value in here
+    # means the persisted entry and any downstream uses (DCR registration,
+    # authorize URL) all see the same resolved scope list.
+    if not eo["scopes"] and cfg.default_scopes:
+        eo["scopes"] = list(cfg.default_scopes)
+    # Union in scopes the AS mandates. A default is not enough: it only applies
+    # when the operator supplies nothing, so any explicit list missing a
+    # mandatory scope would still fail -- and for Atlassian authv2 it fails
+    # only after the user submits consent, with an opaque invalid_request that
+    # names no scope. Appended (not prepended) so the configured order is
+    # preserved and the diff on an already-correct list is empty.
+    if cfg.required_scopes:
+        eo["scopes"] = list(eo["scopes"]) + [
+            s for s in cfg.required_scopes if s not in eo["scopes"]
+        ]
+    if cfg.requires_dcr:
+        # No static operator app is valid for this provider, so the client must
+        # come from RFC 7591 registration, which is async and needs the server's
+        # prior registration to reuse. Only per-user egress does that.
+        if not dcr_supported:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                detail=f"provider '{provider}' requires dynamic client registration, "
+                "which is supported only for per-user egress (oauth_user)",
+            )
+        return eo
+    # Public client (RFC 7591 token_endpoint_auth_method=none, e.g. a DCR-minted
+    # MCP client like Datadog's): no secret exists by design. This branch covers
+    # an OPERATOR-supplied public client, which only the 'custom' provider can
+    # select; a built-in that is NONE-style because it mandates DCR (atlassian)
+    # is handled by the requires_dcr branch above.
     is_public_client = provider == "custom" and custom_token_auth_style == "none"  # nosec B105 - auth style enum value, not a credential
     if is_public_client:
         if not (client_id or "").strip():
@@ -989,6 +1031,102 @@ def build_oauth_provider_config(
         if not eo["client_secret_encrypted"]:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="client_secret required")
     return eo
+
+
+async def _register_or_reuse_dcr_client(
+    cfg: OAuthProviderConfig,
+    eo: dict,
+    body: EgressConfigRequest,
+    server: dict,
+) -> None:
+    """Complete ``eo`` with a client for a ``requires_dcr`` provider, in place.
+
+    The provider mandates RFC 7591 DCR (e.g. Atlassian Rovo authv2): there is no
+    valid static operator app, so the gateway registers its OWN client at the
+    AS -- once, here at config time -- and persists the resulting client_id on
+    the server entry (one app per server, shared by all users; only the vaulted
+    token is per-user). An operator-supplied or previously-registered client_id
+    is reused as-is so a config re-save does not churn a new registration on
+    every edit.
+    """
+    existing_cid = (server.get("egress_oauth") or {}).get("client_id")
+    reuse_cid = body.client_id or existing_cid
+
+    # --- Scope validation (before DCR, so bad scopes never reach the AS) ---
+    # Fetch the PRM once; the same document is forwarded to
+    # register_dcr_client for the discovery walk, so there is exactly one
+    # round-trip to the PRM URL regardless of which path follows.
+    #
+    # An unreachable PRM is fatal ONLY when a registration is about to
+    # happen, because the registration endpoint is discovered from it and
+    # there is nothing to fall back to. On the reuse path validation is
+    # best-effort: re-saving an already-registered server must not depend
+    # on the provider's metadata endpoint being reachable, so an
+    # unreachable PRM degrades to "scopes unvalidated" rather than
+    # blocking the edit. A bad scope then still fails loudly, just later,
+    # at the consent screen.
+    _prm: dict | None = None
+    if cfg.protected_resource_metadata_url:
+        try:
+            _prm = await oauth_engine.fetch_protected_resource_metadata(cfg)
+        except oauth_engine.OAuthEngineError as exc:
+            if not reuse_cid:
+                raise HTTPException(
+                    status.HTTP_502_BAD_GATEWAY,
+                    detail=f"could not fetch protected-resource metadata: {exc}",
+                ) from exc
+            logger.warning(
+                "egress scope validation skipped for provider %s: "
+                "protected-resource metadata unreachable (%s)",
+                cfg.name,
+                exc,
+            )
+    if _prm is not None:
+        unsupported = oauth_engine.validate_scopes_against_prm(eo.get("scopes") or [], _prm)
+        if unsupported:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "requested scopes are not supported by this provider: "
+                    + ", ".join(sorted(unsupported))
+                ),
+            )
+    if reuse_cid:
+        eo["client_id"] = reuse_cid
+        if not body.client_secret:
+            eo["client_secret_encrypted"] = (server.get("egress_oauth") or {}).get(
+                "client_secret_encrypted"
+            )
+        else:
+            eo["client_secret_encrypted"] = encrypt_credential(body.client_secret)
+    else:
+        try:
+            reg_cid, reg_secret = await oauth_engine.register_dcr_client(
+                cfg=cfg,
+                redirect_uri=_callback_url(),
+                scopes=eo.get("scopes") or [],
+                prm=_prm,
+            )
+        except oauth_engine.OAuthEngineError as exc:
+            raise HTTPException(
+                status.HTTP_502_BAD_GATEWAY,
+                detail=f"dynamic client registration failed: {exc}",
+            ) from exc
+        eo["client_id"] = reg_cid
+        eo["client_secret_encrypted"] = encrypt_credential(reg_secret) if reg_secret else None
+    # A NONE-style client authenticates with PKCE alone, so keep no secret:
+    # Atlassian's authv2 DCR hands one back regardless, and persisting a
+    # credential the token leg never reads is needless exposure. Mirrors the
+    # public-client branch of build_oauth_provider_config, which drops a stored
+    # secret for the same reason. A confidential DCR client that returned none
+    # is an error.
+    if cfg.token_endpoint_auth_style == TokenEndpointAuthStyle.NONE:
+        eo["client_secret_encrypted"] = None
+    elif not eo.get("client_secret_encrypted"):
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            detail="DCR returned no client_secret for a confidential client",
+        )
 
 
 @router.post("/servers/{server_path:path}/egress-auth")
@@ -1031,7 +1169,11 @@ async def configure_egress_auth(
             prior_secret_encrypted=(server.get("egress_oauth") or {}).get(
                 "client_secret_encrypted"
             ),
+            dcr_supported=True,
         )
+        cfg = resolve_provider(eo)
+        if cfg.requires_dcr:
+            await _register_or_reuse_dcr_client(cfg, eo, body, server)
         server["egress_auth_mode"] = "oauth_user"
         server["egress_oauth"] = eo
     elif body.egress_auth_mode == "obo_exchange":
@@ -1445,6 +1587,8 @@ async def initiate_consent(
             server_path=server_path,
             egress_oauth=server["egress_oauth"],
         )
+    except EgressClientNotRegistered as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except EgressAuthError as exc:
         # build_consent_url now validates the client secret before redirecting, so a
         # server missing it fails here instead of after a pointless round trip to
