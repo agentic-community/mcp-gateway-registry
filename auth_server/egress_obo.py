@@ -237,12 +237,13 @@ def _map_token_error(
         # different fix and, for CA, not operator configuration at all.
         # Reclassifying it there would also move an already-released code path
         # from the exchange_failed audit bucket into config_error.
-        return OboConfigError(
+        logger.error(
             f"Keycloak denied the exchange (access_denied, status={status_code}): "
             "grant the target client's token-exchange permission (legacy exchange), "
             "or place the gateway client inside the subject token's audience "
             "(standard exchange, Keycloak 26.2+)"
         )
+        return OboConfigError("Keycloak did not permit the OBO exchange for this server")
     if err in ("invalid_client", "invalid_scope", "unauthorized_client"):
         return OboConfigError(f"IdP rejected exchange configuration ({err})")
     # invalid_request is deliberately NOT classified. Keycloak answers it for at
@@ -287,6 +288,12 @@ async def _refuse_gateway_valid_token(
         OboConfigError: The token would also be accepted by this gateway.
         OboExchangeError: The token failed verification.
     """
+    jwks_url = getattr(idp_provider, "jwks_url", "") or ""
+    try:
+        validate_url(jwks_url, profile=CREDENTIALED_OAUTH_PROFILE)
+    except UrlValidationError as exc:
+        logger.error("obo_exchange: realm JWKS endpoint blocked by security policy")
+        raise OboExchangeError("IdP JWKS endpoint blocked by security policy") from exc
     # obo_exchange already refused a Keycloak provider without this method
     # before sending anything; a missing verifier would still fail closed below.
     check = getattr(idp_provider, "exchanged_token_gateway_audiences", None)
