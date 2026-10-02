@@ -64,7 +64,10 @@ TELLS: dict[str, str] = {
         r"\b(that said|with that in mind|having said that|it is also worth adding)\b"
     ),
     "hedge stack": r"\b(may possibly|might potentially|could perhaps|probably likely)\b",
-    "em-dash": "—",
+    # Both the literal character and the HTML entity forms. An entity slips past
+    # a character check but renders as the banned dash, and `&mdash;` inside an
+    # inline SVG also breaks XML parsing, since only XML's five entities exist there.
+    "em-dash": r"(—|&mdash;|&#8212;|&#x2014;)",
     "double hyphen dash": r"\w--\w",
     "throat clearing": (
         r"\b(it is important to note|it should be noted|in terms of|the fact that)\b"
