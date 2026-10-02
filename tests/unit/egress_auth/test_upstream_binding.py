@@ -1,16 +1,4 @@
-"""Destination-binding tests for the egress vend path.
-
-A vaulted credential is bound at write time to the destinations registered for the
-server -- its upstream set, and for a custom provider its OAuth token endpoint. The
-vend requires the request's destination to be a member of that bound set, so the
-credential is only ever released to a destination the user consented to: if
-``proxy_pass_url`` (or ``custom_token_url``) changes, the destination is no longer in
-the bound set and the vend fail-closes to re-consent instead of releasing the
-credential to it.
-
-See registry/egress_auth/upstream_binding.py and EgressAuthService.get_valid_token
-/ get_pat.
-"""
+"""Credential destination tests: exact registered outbound URLs."""
 
 import pytest
 
@@ -18,17 +6,15 @@ from registry.egress_auth import oauth_engine
 from registry.egress_auth.schemas import StoredToken
 from registry.egress_auth.service import EgressAuthService
 from registry.egress_auth.upstream_binding import (
-    base_url,
-    bound_upstreams,
-    registered_upstreams,
+    registered_destinations,
+    selected_upstream,
 )
 from registry.secrets import keys
 from registry.secrets.interfaces import SecretStoreBase
 from registry.utils.credential_encryption import encrypt_credential
 
-# Registered ("consented") upstream and a retarget.
+# Registered upstream and an independently hosted version.
 REGISTERED = "https://api.example.com/mcp"
-REGISTERED_BASE = "https://api.example.com"
 NEW_BASE = "https://new.example.example"
 NEW_VERSION_BASE = "https://v2.example.net"
 
@@ -72,7 +58,7 @@ def egress_oauth():
 
 
 async def _seed(svc, *, bound, client_id="Iv1.testclient", **over):
-    """Store a github credential bound to ``bound`` (list of base URLs)."""
+    """Store a github credential bound to exact approved destinations."""
     token = StoredToken(
         access_token="gho_secret",
         client_id=client_id,
@@ -87,29 +73,57 @@ async def _seed(svc, *, bound, client_id="Iv1.testclient", **over):
 
 @pytest.mark.unit
 class TestBoundUpstreamsHelper:
-    def test_base_url_strips_path_and_lowercases(self):
-        assert base_url("HTTPS://Api.Example.com:443/v3/mcp") == "https://api.example.com:443"
-
-    def test_registered_set_is_proxy_pass_plus_versions(self):
-        server = {
+    async def test_existing_versions_bind_each_exact_destination(self, monkeypatch):
+        active = {
             "proxy_pass_url": REGISTERED,
-            "versions": [{"proxy_pass_url": NEW_VERSION_BASE + "/mcp"}],
+            "other_version_ids": ["/github:v2"],
         }
-        assert registered_upstreams(server) == {REGISTERED_BASE, NEW_VERSION_BASE}
+        inactive = {"path": "/github:v2", "proxy_pass_url": NEW_VERSION_BASE + "/peer/mcp"}
 
-    def test_bound_is_sorted_deterministic(self):
-        server = {"proxy_pass_url": REGISTERED, "versions": [{"proxy_pass_url": NEW_BASE}]}
-        assert bound_upstreams(server) == sorted([REGISTERED_BASE, NEW_BASE])
+        class Repo:
+            async def get(self, path):
+                return inactive if path == "/github:v2" else None
 
-    def test_no_upstream_binds_empty(self):
-        assert bound_upstreams({}) == []
+        monkeypatch.setattr("registry.repositories.factory.get_server_repository", lambda: Repo())
+        assert await registered_destinations(active, "/github") == sorted(
+            {REGISTERED, inactive["proxy_pass_url"]}
+        )
+
+    async def test_foreign_or_missing_version_is_never_approved(self, monkeypatch):
+        # A version document that does not point back at this server (or no longer
+        # exists) is not one of its destinations. It is never approved, and it does
+        # not stop the user approving the server's real destinations.
+        active = {"proxy_pass_url": REGISTERED, "other_version_ids": ["/github:v2", "/github:v3"]}
+        foreign = {
+            "path": "/github:v2",
+            "proxy_pass_url": NEW_VERSION_BASE,
+            "active_version_id": "/other",
+        }
+
+        class Repo:
+            async def get(self, path):
+                return foreign if path == "/github:v2" else None
+
+        monkeypatch.setattr("registry.repositories.factory.get_server_repository", lambda: Repo())
+        assert await registered_destinations(active, "/github") == [REGISTERED]
+
+    async def test_active_version_without_endpoint_cannot_be_approved(self):
+        with pytest.raises(ValueError):
+            await registered_destinations({"other_version_ids": []}, "/github")
+
+    def test_virtual_explicit_endpoint_uses_registered_proxy_host(self):
+        server = {
+            "proxy_pass_url": "https://backend.example/base",
+            "mcp_endpoint": "https://public.example/peer/mcp",
+        }
+        assert selected_upstream(server, True) == "https://backend.example/peer/mcp"
 
 
 @pytest.mark.unit
 class TestRetargetIsRefused:
     async def test_repointed_proxy_pass_url_refuses_vend(self, svc, egress_oauth):
         # Credential consented against the registered host.
-        await _seed(svc, bound=[REGISTERED_BASE])
+        await _seed(svc, bound=[REGISTERED])
         # Admin repoints proxy_pass_url at a host they control; the live server
         # record and the minted upstream claim now BOTH read the new host,
         # so the route's live registered-set cross-check passes. The stored
@@ -127,31 +141,31 @@ class TestRetargetIsRefused:
         )
 
     async def test_registered_upstream_still_vends(self, svc, egress_oauth):
-        await _seed(svc, bound=[REGISTERED_BASE])
+        await _seed(svc, bound=[REGISTERED])
         assert (
             await svc.get_valid_token(
                 "oauth2",
                 "alice",
                 "/github",
                 egress_oauth,
-                requested_upstream=REGISTERED_BASE,
+                requested_upstream=REGISTERED,
                 purpose=keys.EGRESS_PURPOSE,
             )
             == "gho_secret"
         )
 
     async def test_added_version_needs_reconnect_but_old_route_works(self, svc, egress_oauth):
-        # Consent happened before a new version's base was added, so the binding
-        # holds only the old base. The old route still vends; the new base is a
+        # Consent happened before a new version's URL was added, so the binding
+        # holds only the old URL. The old route still vends; the new URL is a
         # miss (one reconnect) -- never a silent vend to the just-added host.
-        await _seed(svc, bound=[REGISTERED_BASE])
+        await _seed(svc, bound=[REGISTERED])
         assert (
             await svc.get_valid_token(
                 "oauth2",
                 "alice",
                 "/github",
                 egress_oauth,
-                requested_upstream=REGISTERED_BASE,
+                requested_upstream=REGISTERED,
                 purpose=keys.EGRESS_PURPOSE,
             )
             == "gho_secret"
@@ -162,7 +176,7 @@ class TestRetargetIsRefused:
                 "alice",
                 "/github",
                 egress_oauth,
-                requested_upstream=NEW_VERSION_BASE,
+                requested_upstream=NEW_VERSION_BASE + "/mcp",
                 purpose=keys.EGRESS_PURPOSE,
             )
             is None
@@ -178,7 +192,7 @@ class TestRetargetIsRefused:
                 "alice",
                 "/github",
                 egress_oauth,
-                requested_upstream=REGISTERED_BASE,
+                requested_upstream=REGISTERED,
                 purpose=keys.EGRESS_PURPOSE,
             )
             is None
@@ -198,7 +212,7 @@ class TestRetargetIsRefused:
                 refresh_token="rt_old",
                 expires_at="2000-01-01T00:00:00+00:00",
                 client_id="Iv1.testclient",
-                bound_upstreams=[REGISTERED_BASE],
+                bound_upstreams=[REGISTERED],
             ),
             purpose=keys.EGRESS_PURPOSE,
         )
@@ -213,7 +227,7 @@ class TestRetargetIsRefused:
                 "alice",
                 "/github",
                 egress_oauth,
-                requested_upstream=REGISTERED_BASE,
+                requested_upstream=REGISTERED,
                 purpose=keys.EGRESS_PURPOSE,
             )
             == "at_refreshed"
@@ -221,7 +235,7 @@ class TestRetargetIsRefused:
         stored = await svc._store.get_token(
             "oauth2", "alice", "github", "/github", purpose=keys.EGRESS_PURPOSE
         )
-        assert stored.bound_upstreams == [REGISTERED_BASE]
+        assert stored.bound_upstreams == [REGISTERED]
         # And the refreshed credential still vends to the bound host next time.
         assert (
             await svc.get_valid_token(
@@ -229,7 +243,7 @@ class TestRetargetIsRefused:
                 "alice",
                 "/github",
                 egress_oauth,
-                requested_upstream=REGISTERED_BASE,
+                requested_upstream=REGISTERED,
                 purpose=keys.EGRESS_PURPOSE,
             )
             == "at_refreshed"
@@ -246,19 +260,112 @@ class TestRetargetIsRefused:
             StoredToken(
                 access_token="ghp_x",
                 expires_at=(datetime.now(UTC) + timedelta(hours=1)).isoformat(),
-                bound_upstreams=[REGISTERED_BASE],
+                bound_upstreams=[REGISTERED],
             ),
             purpose=keys.EGRESS_PURPOSE,
         )
         # Registered host vends; retargeted host misses.
         assert (
             await svc.get_pat(
-                "oauth2", "alice", "github", "/github", requested_upstream=REGISTERED_BASE
+                "oauth2",
+                "alice",
+                "github",
+                "/github",
+                requested_upstream=REGISTERED,
             )
             == "ghp_x"
         )
         assert (
             await svc.get_pat("oauth2", "alice", "github", "/github", requested_upstream=NEW_BASE)
+            is None
+        )
+
+
+class _ReplacingStore(_InMemoryStore):
+    """Serves ``first`` on the first read, then ``replacement`` -- a concurrent
+    re-consent overwriting the vault entry between the vend's reads."""
+
+    def __init__(self, first: StoredToken, replacement: StoredToken) -> None:
+        super().__init__()
+        self._reads = 0
+        self._first = first
+        self._replacement = replacement
+
+    async def get_token(self, auth_method, user_id, provider, server_path, *, purpose):
+        self._reads += 1
+        return self._first if self._reads == 1 else self._replacement
+
+
+class _BusyLease:
+    async def acquire(self, key, holder, ttl):
+        return False
+
+    async def release(self, key, holder):
+        return None
+
+
+@pytest.mark.unit
+class TestRefreshRereadIsRechecked:
+    """The refresh path re-reads the vault; every re-read must pass the same
+    destination binding as the first read, or a credential re-consented for
+    another destination is injected at this request's upstream."""
+
+    @staticmethod
+    def _tokens():
+        stale = StoredToken(
+            access_token="old",
+            refresh_token="rt_old",
+            expires_at="2000-01-01T00:00:00+00:00",
+            client_id="Iv1.testclient",
+            bound_upstreams=[REGISTERED],
+        )
+        elsewhere = StoredToken(
+            access_token="bound_elsewhere",
+            refresh_token="rt_elsewhere",
+            expires_at="2999-01-01T00:00:00+00:00",
+            client_id="Iv1.testclient",
+            bound_upstreams=[NEW_VERSION_BASE + "/mcp"],
+        )
+        return stale, elsewhere
+
+    async def test_lease_holder_refuses_replaced_entry(self, egress_oauth, monkeypatch):
+        stale, elsewhere = self._tokens()
+        svc = EgressAuthService(
+            secret_store=_ReplacingStore(stale, elsewhere), callback_base_url="https://gw.example"
+        )
+
+        async def refresh_must_not_run(cfg, data, headers):
+            raise AssertionError("refreshed a credential bound to another destination")
+
+        monkeypatch.setattr(oauth_engine, "_post_token", refresh_must_not_run)
+        assert (
+            await svc.get_valid_token(
+                "oauth2",
+                "alice",
+                "/github",
+                egress_oauth,
+                requested_upstream=REGISTERED,
+                purpose=keys.EGRESS_PURPOSE,
+            )
+            is None
+        )
+
+    async def test_lease_waiter_refuses_replaced_entry(self, egress_oauth):
+        stale, elsewhere = self._tokens()
+        svc = EgressAuthService(
+            secret_store=_ReplacingStore(stale, elsewhere),
+            callback_base_url="https://gw.example",
+            lease_manager=_BusyLease(),
+        )
+        assert (
+            await svc.get_valid_token(
+                "oauth2",
+                "alice",
+                "/github",
+                egress_oauth,
+                requested_upstream=REGISTERED,
+                purpose=keys.EGRESS_PURPOSE,
+            )
             is None
         )
 
@@ -290,7 +397,7 @@ class TestTokenEndpointBinding:
                 access_token="at",
                 client_id="dcr-public-client-id",
                 expires_at="2999-01-01T00:00:00+00:00",
-                bound_upstreams=[REGISTERED_BASE],
+                bound_upstreams=[REGISTERED],
                 bound_token_url=consented_token_url,
             ),
             purpose=keys.EGRESS_PURPOSE,
@@ -303,7 +410,7 @@ class TestTokenEndpointBinding:
                 "alice",
                 "/custom",
                 repointed,
-                requested_upstream=REGISTERED_BASE,
+                requested_upstream=REGISTERED,
                 purpose=keys.EGRESS_PURPOSE,
             )
             is None
@@ -320,7 +427,7 @@ class TestTokenEndpointBinding:
                 access_token="at",
                 client_id="dcr-public-client-id",
                 expires_at="2999-01-01T00:00:00+00:00",
-                bound_upstreams=[REGISTERED_BASE],
+                bound_upstreams=[REGISTERED],
                 bound_token_url=token_url,
             ),
             purpose=keys.EGRESS_PURPOSE,
@@ -331,7 +438,7 @@ class TestTokenEndpointBinding:
                 "alice",
                 "/custom",
                 self._custom_oauth(token_url),
-                requested_upstream=REGISTERED_BASE,
+                requested_upstream=REGISTERED,
                 purpose=keys.EGRESS_PURPOSE,
             )
             == "at"

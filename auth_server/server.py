@@ -171,10 +171,8 @@ DEFAULT_TOKEN_LIFETIME_HOURS = settings.mcp_token_default_ttl_hours
 # account-selection prompt for multi-account users).
 MAX_LOGOUT_URL_LENGTH: int = 2000
 
-# Trailing path segments that are MCP transport endpoints, not part of the
-# registered server name. Used when deriving the scope key from a proxied path
-# so that /validate and the mcp-proxy hop authorize against the SAME server
-# name (see _registered_server_from_proxy_path).
+# Recognized transport route tails for legacy URL parsing and direct proxy
+# routing; a trusted registered path can itself end in one of these names.
 MCP_TRANSPORT_ENDPOINTS: frozenset[str] = frozenset({"mcp", "sse", "messages"})
 
 # Rate limiting for token generation (simple in-memory counter)
@@ -714,6 +712,71 @@ def _audit_request_id_from_token(claims: dict) -> str | None:
     return _claim_str(raw.get("rid"))
 
 
+def _registered_proxy_url_matches(
+    original_url: str,
+    registered_path: str,
+    route_mode: str,
+) -> bool:
+    """Match the scope-bearing URL to the nginx-selected registration.
+
+    Mirrors the routing decision nginx already made instead of re-deriving a
+    narrower one. A generated direct location is the prefix
+    ``location <root>/<registered>/`` (see ``NginxConfigService._create_location_block``),
+    so every URL it serves -- ``/mcp``, ``/mcp/``, ``/sse``, ``/messages/?session_id=..``
+    -- starts with ``<root>/<registered>/``. Anything else did not come through
+    that location and fails closed. A virtual backend auth subrequest forces its
+    URL to exactly ``<root>/<registered>/mcp``.
+
+    nginx matches locations on the normalized ``$uri`` while ``X-Original-URL``
+    carries the raw ``$request_uri``, so the raw path is canonicalized the same
+    way first (decoded once, slashes merged, dot-segments resolved; the trailing
+    slash kept, as in ``$uri``). Otherwise ``//jira/mcp``, which nginx routes to
+    ``/jira/``, would be refused here.
+    """
+    if not registered_path.startswith("/") or not registered_path.strip("/"):
+        return False
+    raw_path = urlparse(original_url).path
+    path = normalize_request_path(raw_path)
+    if raw_path.endswith("/") and not path.endswith("/"):
+        path += "/"
+    base_path = f"{REGISTRY_ROOT_PATH.rstrip('/')}/{registered_path.strip('/')}"
+    if route_mode == "virtual":
+        return path == f"{base_path}/mcp"
+    return path.startswith(f"{base_path}/")
+
+
+# Header carrying the marker secret that ONLY current nginx templates (the shared
+# /validate blocks and generated /_vs_auth_* locations) force-set. Older templates
+# force-set X-Validate-Source-Secret but neither set nor clear the registration
+# headers below, so behind an older nginx a client's own copies reach /validate.
+NGINX_BINDING_SECRET_HEADER = "X-Validate-Binding-Secret"  # nosec B105 - header name, not a secret  # pragma: allowlist secret
+_NGINX_REGISTRATION_HEADERS: dict[str, str] = {
+    "registered_path": "X-Registered-Server-Path",
+    "route_mode": "X-Registered-Route-Mode",
+    "resolved_version": "X-Resolved-Version",
+    "virtual_original_url": "X-Virtual-Original-URL",
+}
+
+
+def _nginx_registration(request: "Request") -> dict[str, str]:
+    """The registration headers a CURRENT nginx template asserted on /validate.
+
+    Every value is honored only when ``NGINX_BINDING_SECRET_HEADER`` carries the
+    marker secret; otherwise every value is ``""`` (an older nginx, a direct
+    :8888 caller, or no marker configured), which is the pre-binding behavior.
+    Reading these headers anywhere else would trust client-forged copies during
+    an auth-server-first rollout or a registry rollback.
+    """
+    marker = settings.auth_server_nginx_marker_secret
+    trusted = bool(marker) and secrets.compare_digest(
+        request.headers.get(NGINX_BINDING_SECRET_HEADER, ""), marker
+    )
+    return {
+        key: (request.headers.get(header, "") if trusted else "")
+        for key, header in _NGINX_REGISTRATION_HEADERS.items()
+    }
+
+
 def _attach_mcp_proxy_token(
     request: "Request",
     response: "JSONResponse",
@@ -762,6 +825,36 @@ def _attach_mcp_proxy_token(
             "refusing to mint mcp-proxy token (possible direct-:8888 bypass)"
         )
         return
+    registration = _nginx_registration(request)
+    registered_path = registration["registered_path"]
+    route_mode = registration["route_mode"]
+    if route_mode not in ("", "direct", "virtual") or bool(route_mode) != bool(registered_path):
+        return
+    virtual_backend = route_mode == "virtual"
+    if registered_path:
+        # Generated nginx auth locations force-set these two headers, and the
+        # shared /validate location clears client-supplied copies; both are
+        # honored only behind a current template (see _nginx_registration).
+        if (
+            not marker
+            or not _registered_proxy_url_matches(
+                request.headers.get("X-Original-URL", ""), registered_path, route_mode
+            )
+            or server_name != registered_path.strip("/")
+        ):
+            logger.warning("/validate: registered path differs from authorized scope")
+            return
+    if not server_name:
+        return
+    version_id = registration["resolved_version"]
+    if version_id == INVALID_VERSION_SENTINEL:
+        # A permanent misconfiguration, not an outage: name it for operators.
+        logger.warning(
+            "/validate: virtual mapping pins a version %s does not have; no mcp-proxy "
+            "token minted (fix the tool mapping's backend_version)",
+            server_name,
+        )
+        return
     try:
         response.headers["X-Internal-Token"] = mint_mcp_proxy_token(
             subject=subject,
@@ -771,6 +864,8 @@ def _attach_mcp_proxy_token(
             auth_method=auth_method,
             egress_user=egress_user,
             audit_identity=audit_identity,
+            version_id=version_id,
+            virtual_backend=virtual_backend,
         )
     except ValueError as exc:
         logger.error(f"/validate: could not mint mcp-proxy token: {exc}")
@@ -2179,39 +2274,6 @@ def _server_names_match(name1: str, name2: str) -> bool:
     return normalized_name1 == _normalize_server_name(name2)
 
 
-def _registered_server_from_proxy_path(
-    server_path: str,
-) -> str:
-    """Derive the registered server name (the scope key) from a proxy path.
-
-    The ``/mcp-proxy/{server_name:path}`` capture and the ``X-Original-URL``
-    /validate parses both contain the registered server name plus any MCP
-    transport endpoint the client appended (``mcp``/``sse``/``messages``). The
-    scope allowlist is keyed on the registered server name WITHOUT that trailing
-    transport segment. Both the /validate hop and the mcp-proxy hop must strip
-    it identically, otherwise they authorize against different keys and a body
-    authorized by one is not re-checked by the other.
-
-    For local servers the path is ``server-name[/transport]``; for federated
-    servers it is ``peer-name/server-name[/transport]``. Only a trailing
-    transport segment is stripped -- the rest of the path is preserved so
-    federated ``peer/server`` keys stay intact.
-
-    Args:
-        server_path: The proxied path segment (e.g. ``currenttime/mcp`` or
-            ``peer-registry-lob-1/cloudflare-docs``).
-
-    Returns:
-        The registered server name used for the scope lookup.
-    """
-    parts = [p for p in server_path.strip("/").split("/") if p]
-    if not parts:
-        return server_path.strip("/")
-    if len(parts) >= 2 and parts[-1] in MCP_TRANSPORT_ENDPOINTS:
-        return "/".join(parts[:-1])
-    return "/".join(parts)
-
-
 async def _resolve_server_path(server_name: str) -> str:
     """Map the proxy's server identifier to a registered server path.
 
@@ -2475,11 +2537,8 @@ async def filter_tools_list_response(
     tools: ["*"] / ["all"]).
 
     Args:
-        server_name: The REGISTERED server name, i.e. the scope key, with no
-            transport suffix. Callers holding a proxy path (``myserver/mcp``)
-            must run it through _registered_server_from_proxy_path first --
-            passing the suffixed form silently matches no scope entry and
-            filters every tool out (issue #1647).
+        server_name: The registered server name from the signed proxy token,
+            not a URL-derived transport suffix (a registered name can end /mcp).
         user_scopes: Scopes resolved for the caller.
         tools_list: The raw tools array from the upstream JSON-RPC result.
 
@@ -2874,6 +2933,7 @@ class TokenValidationResponse(BaseModel):
 # check and the auth-server's /validate guard call the same functions so
 # they can never disagree on what is blocked or how a URL classifies.
 from registry.auth.resource_binding import (
+    INVALID_VERSION_SENTINEL,
     RESOURCE_ID_CLAIM,
     RESOURCE_TYPE_CLAIM,
     RESOURCE_TYPES,
@@ -2883,6 +2943,7 @@ from registry.auth.resource_binding import (
     check_resource_token_allowed,
     classify_request_url,
     is_resource_token_introspection_path,
+    normalize_request_path,
     normalize_resource_id,
 )
 
@@ -3617,10 +3678,8 @@ def _obo_extra_audiences(server_name_from_url: str | None) -> list[str]:
         from registry.auth.oauth_metadata import build_per_server_resource_url
     except Exception:
         return []
-    # Normalize: strip a trailing /mcp transport segment to get the server path.
+    # server_name_from_url is already the registered path, not a transport URL.
     path = "/" + server_name_from_url.strip("/")
-    if path.endswith("/mcp"):
-        path = path[: -len("/mcp")]
     auds: list[str] = []
     seen: set[str] = set()
     for base_url in base_urls:
@@ -3678,7 +3737,9 @@ async def validate_request(request: Request):
     try:
         # Extract headers
         original_url = request.headers.get("X-Original-URL")
-        virtual_original_url = request.headers.get("X-Virtual-Original-URL") or ""
+        # Registration headers count only when a current nginx template set them.
+        registration = _nginx_registration(request)
+        virtual_original_url = registration["virtual_original_url"]
         x_authorization = request.headers.get("X-Authorization")
         raw_authorization = request.headers.get("Authorization")
 
@@ -3788,10 +3849,9 @@ async def validate_request(request: Request):
 
                 path_parts = path.split("/") if path else []
 
-                # MCP transport endpoints that should be treated as endpoints,
-                # not server names. Shared with the mcp-proxy hop via
-                # MCP_TRANSPORT_ENDPOINTS / _registered_server_from_proxy_path so
-                # both authorize against the identical scope key.
+                # Legacy URL parsing for paths without a trusted registered-path
+                # header; generated MCP auth locations override this with the
+                # exact registration before authorizing its scopes.
                 mcp_endpoints = MCP_TRANSPORT_ENDPOINTS
 
                 # For peer/federated registries, path is: peer-name/server-name/endpoint
@@ -3808,7 +3868,6 @@ async def validate_request(request: Request):
                     if path_parts[0] != "api":
                         server_name_from_url = "/".join(path_parts)
                         endpoint_from_url = None
-
                 logger.debug(
                     "Extracted server_name '%s' and endpoint '%s' from original_url: %s",
                     server_name_from_url,
@@ -3819,6 +3878,18 @@ async def validate_request(request: Request):
                 logger.warning(
                     f"Failed to extract server_name from original_url {original_url}: {e}"
                 )
+        registered_path = registration["registered_path"]
+        route_mode = registration["route_mode"]
+        if registered_path or route_mode:
+            if (
+                route_mode not in ("direct", "virtual")
+                or not _registered_proxy_url_matches(
+                    original_url or "", registered_path, route_mode
+                )
+                or not request.headers.get("X-Resolved-Upstream")
+            ):
+                raise HTTPException(status_code=403, detail="Invalid registered proxy binding")
+            server_name_from_url = registered_path.strip("/")
 
         # Read request body
         request_payload = None
@@ -4668,14 +4739,13 @@ async def validate_request(request: Request):
                 # A virtual-bound resource token may reuse its verified ingress
                 # identity at that backend hop, but only for its own parent URI.
                 if virtual_original_url:
+                    # virtual_original_url is non-empty only behind a current
+                    # nginx template (_nginx_registration), and only the internal
+                    # virtual-backend auth location asserts route mode "virtual".
                     parent_path = urlparse(virtual_original_url).path
                     parent = classify_request_url(parent_path, root_path=REGISTRY_ROOT_PATH)
-                    marker = settings.auth_server_nginx_marker_secret
                     if (
-                        not marker
-                        or not secrets.compare_digest(
-                            request.headers.get("X-Validate-Source-Secret", ""), marker
-                        )
+                        registration["route_mode"] != "virtual"
                         or not request.headers.get("X-Resolved-Upstream")
                         or parent is None
                         or parent[0] != ResourceType.VIRTUAL_SERVER
@@ -7832,28 +7902,80 @@ def _obo_error_response(req_id: object, detail: str):
     )
 
 
+# Discovery list methods and the result key each returns. Before the user has a
+# usable egress credential, every one of them answers with an EMPTY list plus
+# ``EGRESS_CONSENT_REQUIRED_HEADER``: list methods MUST NOT error (that dead-ends
+# clients), and the header lets an aggregating caller (the virtual router) tell
+# "consent pending" apart from "this backend genuinely has nothing". One table for
+# the PAT and OAuth branches so the two cannot answer differently.
+_PRE_CONSENT_LIST_RESULT_KEYS: dict[str, str] = {
+    "tools/list": "tools",
+    "resources/list": "resources",
+    "resources/templates/list": "resourceTemplates",
+    "prompts/list": "prompts",
+}
+EGRESS_CONSENT_REQUIRED_HEADER = "X-Egress-Consent-Required"
+
+
+def _pre_consent_local_response(
+    incoming_method: str | None,
+    req_id: object,
+    incoming_payload: object,
+    mode: str,
+    connect_url: str = "",
+    provider: str = "the provider",
+) -> Response | None:
+    """Answer the methods that never need the upstream while consent is pending.
+
+    One definition for the PAT and OAuth branches so they cannot diverge:
+
+    - ``initialize``: answered locally, negotiating from the client's own request.
+    - ``notifications/*``: 202 with no body (Streamable HTTP).
+    - ``ping``: an empty result.
+    - discovery lists: an empty list marked ``EGRESS_CONSENT_REQUIRED_HEADER``.
+
+    Returns None for every other method; the caller answers those with its
+    consent/PAT instruction.
+    """
+    method = incoming_method or ""
+    if method == "initialize":
+        payload = incoming_payload if isinstance(incoming_payload, dict) else {"params": {}}
+        return _local_initialize_response(
+            req_id, payload, connect_url=connect_url, provider=provider
+        )
+    if method.startswith("notifications/"):
+        return Response(status_code=202)
+    if method == "ping":
+        return JSONResponse(status_code=200, content={"jsonrpc": "2.0", "id": req_id, "result": {}})
+    result_key = _PRE_CONSENT_LIST_RESULT_KEYS.get(method)
+    if result_key is None:
+        return None
+    return JSONResponse(
+        status_code=200,
+        content={"jsonrpc": "2.0", "id": req_id, "result": {result_key: []}},
+        headers={EGRESS_CONSENT_REQUIRED_HEADER: mode},
+    )
+
+
 def _pat_missing_response(
     server_name: str,
     incoming_method: str | None,
     req_id: object,
+    incoming_payload: object = None,
 ):
     """Terminal tool result for a ``pat`` server with no usable PAT.
 
     Unlike the ``oauth_user`` consent path there is no interactive flow the
     gateway can initiate for a PAT (the user must generate one at the provider),
-    so a miss (never submitted OR expired) is TERMINAL. We return a SUCCESSFUL
-    JSON-RPC result with ``isError=true`` (works on every MCP client, no -32042
-    URL elicitation) whose text tells the human where to submit a PAT.
+    so a miss (never submitted, expired, or submitted before the server's
+    endpoint changed) is TERMINAL. We return a SUCCESSFUL JSON-RPC result with
+    ``isError=true`` (works on every MCP client, no -32042 URL elicitation)
+    whose text tells the human where to submit a PAT. Methods that never need
+    the upstream are answered by ``_pre_consent_local_response``.
     """
-    if incoming_method == "tools/list":
-        # MCP discovery must remain valid even before a PAT is submitted. A
-        # virtual server can still aggregate its other connected backends.
-        return JSONResponse(
-            status_code=200,
-            content={"jsonrpc": "2.0", "id": req_id, "result": {"tools": []}},
-        )
-    if incoming_method == "initialize":
-        return _local_initialize_response(req_id, {"params": {}})
+    local = _pre_consent_local_response(incoming_method, req_id, incoming_payload, "pat")
+    if local is not None:
+        return local
 
     logger.info(
         "mcp_proxy: pat server=%s method=%s has no usable PAT; returning terminal "
@@ -7871,8 +7993,10 @@ def _pat_missing_response(
                     {
                         "type": "text",
                         "text": (
-                            "No PAT configured for this server. Submit one via the "
-                            "Registry Connected Accounts page, then retry."
+                            "No usable PAT for this server: none was submitted, it "
+                            "expired, or it was submitted before the server's endpoint "
+                            "changed. Submit one via the Registry Connected Accounts "
+                            "page, then retry."
                         ),
                     }
                 ],
@@ -8108,7 +8232,7 @@ def _select_forwarded_response_headers(
 
 
 async def _authorize_forwarded_mcp_body(
-    server_name: str,
+    registered_server: str,
     request_body: bytes,
     user_scopes: list[str],
 ) -> None:
@@ -8134,10 +8258,8 @@ async def _authorize_forwarded_mcp_body(
         be allowed; a missing/blank tool name is rejected.
 
     Args:
-        server_name: The full ``/mcp-proxy/{server_name:path}`` value. The
-            registered server name (scope key) is derived from it the same way
-            /validate derives it from X-Original-URL, so both hops authorize
-            against the identical key.
+        registered_server: The path verified in the signed proxy token;
+            transport suffixes in the proxy route are not resource identities.
         request_body: The exact bytes being forwarded to the upstream.
         user_scopes: The scopes from the verified X-Internal-Token claims.
 
@@ -8146,10 +8268,7 @@ async def _authorize_forwarded_mcp_body(
             caller's scopes, or when the body is present but cannot be parsed
             to determine the scope-relevant method/tool.
     """
-    # Strip only a trailing MCP transport segment (mcp/sse/messages) so the
-    # scope key matches what /validate authorized against -- including federated
-    # "peer/server" keys, which the naive first-segment split would truncate.
-    registered_server = _registered_server_from_proxy_path(server_name)
+    # The token verifier has already matched the registered path to this route.
 
     method: str | None = None
     actual_tool_name: str | None = None
@@ -8257,16 +8376,20 @@ async def mcp_proxy(
     upstream_url = claims["upstream_url"]
     user_scopes: list[str] = list(claims.get("scopes") or [])
 
-    # The direct-server location forwards a base URL and can include a
-    # transport suffix in its proxy route. The virtual backend location signs
-    # the exact resolved endpoint and ends its internal route at the registered
-    # server path. Append only a recognized transport suffix; never treat the
-    # nested registered path (peer/server) as an upstream path suffix.
-    route_parts = [part for part in server_name.strip("/").split("/") if part]
-    if len(route_parts) > 1 and route_parts[-1] in MCP_TRANSPORT_ENDPOINTS:
-        sub_path = route_parts[-1]
-        if not upstream_url.rstrip("/").endswith("/" + sub_path):
-            upstream_url = upstream_url.rstrip("/") + "/" + sub_path
+    # Only direct proxy routes may append a transport suffix. For virtual
+    # routes the entire capture is the registered path, even if it ends /mcp.
+    # The client's trailing slash is kept: SSE servers mount ``/messages/`` and
+    # redirect (or 404) the slashless form.
+    registered_server = claims["server"]
+    route_path = server_name.strip("/")
+    if route_path != registered_server:
+        segment = route_path.rsplit("/", 1)[-1]
+        trailing_slash = "/" if server_name.endswith("/") else ""
+        base = upstream_url.rstrip("/")
+        if not base.endswith("/" + segment):
+            upstream_url = base + "/" + segment + trailing_slash
+        elif trailing_slash and not upstream_url.endswith("/"):
+            upstream_url += "/"
 
     # Read the incoming body once; we forward it to the upstream.
     try:
@@ -8299,8 +8422,10 @@ async def mcp_proxy(
     # the built-in internal registry-tools server, which receives the relayed
     # Authorization (it is a same-trust-domain component). The decision keys on
     # the verified, path-validated `server` claim, never a forgeable header.
-    registered_server = (claims.get("server") or "").lower()
-    relay_ingress_auth = registered_server in _INTERNAL_INGRESS_RELAY_SERVERS
+    # ``registered_server`` stays the case-preserving claim: it is the identity
+    # /validate authorized, and scope matching is case-sensitive. Only the relay
+    # allowlist lookup is case-folded.
+    relay_ingress_auth = registered_server.lower() in _INTERNAL_INGRESS_RELAY_SERVERS
     forward_headers = _forward_headers(
         dict(request.headers),
         relay_authorization=relay_ingress_auth,
@@ -8318,7 +8443,7 @@ async def mcp_proxy(
     # "retry later" in responses, logs, and metrics. Authorized-but-not-connected
     # callers still pass here and reach the egress consent/local-answer paths
     # below (they already had these methods in scope on the connected path).
-    await _authorize_forwarded_mcp_body(server_name, request_body, user_scopes)
+    await _authorize_forwarded_mcp_body(registered_server, request_body, user_scopes)
 
     # True once we inject a vaulted egress token below. An egress upstream is
     # itself an OAuth resource server: if it rejects our injected token it 401s
@@ -8342,7 +8467,6 @@ async def mcp_proxy(
     if settings.egress_auth_enabled:
         internal_proxy_token = request.headers.get("X-Internal-Token", "")
         if internal_proxy_token:
-            registered_server = _registered_server_from_proxy_path(server_name)
             try:
                 vend = await _vend_egress_token(internal_proxy_token, registered_server)
             except EgressVendUnavailable as exc:
@@ -8541,22 +8665,19 @@ async def mcp_proxy(
                 # terminal -- return the actionable "no PAT configured" message
                 # rather than forwarding stripped credentials to a 401ing upstream.
                 req_id = incoming_payload.get("id") if isinstance(incoming_payload, dict) else None
-                return _pat_missing_response(server_name, incoming_method, req_id)
+                return _pat_missing_response(server_name, incoming_method, req_id, incoming_payload)
             elif vend and (vend.get("connect_url") or vend.get("authorize_url")):
                 # Egress is configured for this server but the user has no usable
                 # token, and the upstream is itself an OAuth resource server that
                 # 401s every call (including initialize). Break the handshake
                 # deadlock by handling the non-upstream methods at the gateway:
                 #
-                #   - initialize: answered LOCALLY (capability negotiation with the
-                #     client; the lifecycle spec does not require reaching the
-                #     upstream). Lets a legacy handshake-based client complete the
-                #     handshake instead of seeing the upstream's 401.
-                #   - notifications/*: acked locally (no response body expected).
-                #   - tools/list: answered LOCALLY with a single synthetic
-                #     "connect" tool. The real upstream list needs the token, and
-                #     erroring here dead-ends clients; the tools spec lets
-                #     tools/list return an auth-dependent (here: connect-only) set.
+                #   - initialize, notifications/*, ping and discovery lists are
+                #     answered locally by _pre_consent_local_response (the same
+                #     helper the PAT branch uses): initialize negotiates with the
+                #     client and carries a connect-instructions hint; lists are
+                #     empty and marked consent-required so an aggregating virtual
+                #     server can publish the mapped tools.
                 #   - tools/call (and prompts/get, resources/read): need the
                 #     third-party token, so we ask the user to connect via MCP
                 #     URL-mode elicitation. The gateway is the MCP server's OAuth
@@ -8565,39 +8686,22 @@ async def mcp_proxy(
                 #     URL and retries). Spec:
                 #     https://modelcontextprotocol.io/specification/draft/client/elicitation
                 req_id = incoming_payload.get("id") if isinstance(incoming_payload, dict) else None
-                if incoming_method == "initialize":
+                local = _pre_consent_local_response(
+                    incoming_method,
+                    req_id,
+                    incoming_payload,
+                    "oauth",
+                    connect_url=vend.get("connect_url") or vend.get("authorize_url") or "",
+                    provider=vend.get("provider") or "the provider",
+                )
+                if local is not None:
                     logger.info(
-                        "mcp_proxy: egress server=%s has no token; answering "
-                        "initialize locally to complete the handshake",
+                        "mcp_proxy: egress server=%s has no token; answering %s locally "
+                        "(connect via the Connected Accounts page)",
                         server_name,
+                        incoming_method,
                     )
-                    return _local_initialize_response(
-                        req_id,
-                        incoming_payload,
-                        connect_url=vend.get("connect_url") or vend.get("authorize_url") or "",
-                        provider=vend.get("provider") or "the provider",
-                    )
-                if incoming_method and incoming_method.startswith("notifications/"):
-                    # Notifications have no result; ack with 202 and no body.
-                    return Response(status_code=202)
-                if incoming_method == "tools/list":
-                    # No vaulted token yet: the upstream tool list needs the
-                    # token, and tools/list MUST NOT error (that dead-ends
-                    # clients). Return an EMPTY list. The user connects the
-                    # account out of band via the Registry "Connected Accounts"
-                    # page (the initialize `instructions` nudge points there);
-                    # once vaulted, the vend HITs and the real upstream tools are
-                    # proxied. A tools/call before connecting still gets the
-                    # consent nudge via _egress_consent_response below.
-                    logger.info(
-                        "mcp_proxy: egress server=%s has no token; returning EMPTY "
-                        "tools/list (connect via the Connected Accounts page)",
-                        server_name,
-                    )
-                    return JSONResponse(
-                        status_code=200,
-                        content={"jsonrpc": "2.0", "id": req_id, "result": {"tools": []}},
-                    )
+                    return local
                 return _egress_consent_response(
                     server_name=server_name,
                     incoming_method=incoming_method,
@@ -8739,7 +8843,7 @@ async def mcp_proxy(
             raise HTTPException(status_code=502, detail="Upstream MCP server error")
         rewritten = await _filter_sse_tools_list_body(
             sse_text,
-            _registered_server_from_proxy_path(server_name),
+            registered_server,
             user_scopes,
         )
         if rewritten is None:
@@ -8767,14 +8871,9 @@ async def mcp_proxy(
 
     result = parsed.get("result") if isinstance(parsed, dict) else None
     if isinstance(result, dict) and isinstance(result.get("tools"), list):
-        # server_name here is the proxy path (e.g. "myserver/mcp"). The scope
-        # allowlist is keyed on the registered name, and the access check
-        # earlier in this same request already stripped the transport suffix
-        # via _authorize_forwarded_mcp_body. Strip it identically, or the
-        # filter looks up a key that does not exist and drops every tool
-        # (issue #1647).
+        # Use the same signed registration as the forwarded-body scope check.
         filtered = await filter_tools_list_response(
-            _registered_server_from_proxy_path(server_name),
+            registered_server,
             user_scopes,
             result["tools"],
         )
