@@ -149,7 +149,9 @@ class TestReadConfig:
 class TestInitiate:
     def test_initiate_returns_authorize_url(self, client):
         svc = AsyncMock()
-        svc.build_consent_url = lambda **kw: "https://github.com/login/oauth/authorize?x=1"
+        svc.build_consent_url = AsyncMock(
+            return_value="https://github.com/login/oauth/authorize?x=1"
+        )
         c = client(USER, server=_server(), svc=svc)
         r = c.post("/api/egress-auth/initiate", json={"server_path": "/github-mcp"})
         assert r.status_code == 200

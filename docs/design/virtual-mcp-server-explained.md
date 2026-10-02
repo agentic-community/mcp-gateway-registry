@@ -106,7 +106,7 @@ The Lua router (`virtual_router.lua`) runs as an nginx content handler. It:
 - Reads tool-to-backend mappings from JSON config files
 - Translates tool aliases back to original names
 - Manages session multiplexing across backends
-- Issues concurrent subrequests for aggregation methods
+- Authorizes each backing request before dispatch, then aggregates results
 
 ### 3. Backend Servers
 
@@ -149,15 +149,15 @@ File: /etc/nginx/lua/virtual_mappings/dev-tools.json
   "tool_backend_map": {
     "github_search": {
       "original_name": "search",
-      "backend_location": "/_backend/github"
+      "backend_location": "/_vs_backend_github"
     },
     "jira_search": {
       "original_name": "search",
-      "backend_location": "/_backend/jira"
+      "backend_location": "/_vs_backend_jira"
     },
     "send_message": {
       "original_name": "send_message",
-      "backend_location": "/_backend/slack"
+      "backend_location": "/_vs_backend_slack"
     }
   }
 }
@@ -185,11 +185,11 @@ Your app sends:
 The Lua router:
 1. Reads the mapping file
 2. Looks up "github_search"
-3. Finds: backend is "/_backend/github", original name is "search"
+3. Finds: backend is `/_vs_backend_github`, original name is `search`
 4. Rewrites the request:
 
 ```
-Forwarded to /_backend/github:
+Forwarded to /_vs_backend_github:
 {
   "method": "tools/call",
   "params": {
@@ -205,107 +205,25 @@ The GitHub backend responds. The Lua router passes it back to your app unchanged
 
 ---
 
-## The Complete Request Flow (Sequence Diagram)
+## The Complete Request Flow
 
-Sequence diagram for a `tools/call` request:
+For `tools/call: github_search` on `/virtual/dev-tools/mcp`:
 
-```
-Your App          Nginx           Lua Router        Backend
-   |                |                  |               |
-   |  POST /virtual/dev-tools          |               |
-   |  tools/call: github_search        |               |
-   |--------------->|                  |               |
-   |                |                  |               |
-   |                |  auth_request    |               |
-   |                |  (check JWT)     |               |
-   |                |----------------->|               |
-   |                |  OK + scopes     |               |
-   |                |<-----------------|               |
-   |                |                  |               |
-   |                |  content_by_lua  |               |
-   |                |----------------->|               |
-   |                |                  |               |
-   |                |      Read mapping file           |
-   |                |      "github_search" ->          |
-   |                |        backend: /_backend/github |
-   |                |        original: search          |
-   |                |                  |               |
-   |                |      Check session cache         |
-   |                |      (do we have a session       |
-   |                |       with this backend?)        |
-   |                |                  |               |
-   |                |      Rewrite tool name           |
-   |                |      github_search -> search     |
-   |                |                  |               |
-   |                |                  | POST to       |
-   |                |                  | /_backend/github
-   |                |                  |-------------->|
-   |                |                  |               |
-   |                |                  |   Response    |
-   |                |                  |<--------------|
-   |                |                  |               |
-   |<----------------------------------|               |
-   |      Response                     |               |
-```
+1. Nginx validates the gateway credential and the caller's virtual-server grant.
+2. Lua resolves `github_search` to `/github` and rewrites the tool name to `search`. It enforces the virtual server's required scopes and alias override.
+3. Lua calls the internal `/_vs_auth_github` location with the **rewritten** JSON-RPC body. Auth-server checks the backing server's scope and original tool name, returning a short-lived token signed for `/github` and its registered upstream.
+4. Lua reuses or initializes that backend's stateful or stateless session and calls `/_vs_backend_github` with the signed token. For a PAT or OAuth-backed registration, this location sends the request through `/mcp-proxy/github/`, which vends the calling user's `/github` credential and injects it. For a plain registration, it proxies directly after stripping gateway credentials.
+5. The backend result returns through Lua to the client. If either the virtual or backing grant fails, there is no backend call or egress vend.
 
 ---
 
 ## Session Management (The Tricky Part)
 
-Each backend server requires its own session.
+Your app gets one virtual `vs-...` client session. Each backend is initialized lazily when it is first used. A stateful backend returns its own `Mcp-Session-Id`; a stateless Streamable-HTTP backend returns a successful `initialize` without one. Lua remembers either result separately for each owner, backend and pinned version. It does not send a fake session ID to stateless backends.
 
-When your app connects to the virtual server, it gets ONE session ID:
+The nginx shared-dictionary cache keeps this initialization state for 30 seconds. On a miss, Lua reads an owner-bound MongoDB record that survives nginx restarts and expires after one hour of inactivity. Only if both miss does Lua authorize and initialize the backend again. A failed initialize is not cached as a stateless success. Both tool calls and cached tool-list reads still require a fresh backing-server grant.
 
-```
-Your app <---> Virtual Server (session: vs-abc123)
-```
-
-But behind the scenes, the virtual server maintains SEPARATE sessions with each backend:
-
-```
-Virtual Server:
-  +-- Session with GitHub: sess-gh-001
-  +-- Session with Slack:  sess-sl-002
-  +-- Session with Jira:   sess-jr-003
-```
-
-The Lua router keeps track of this mapping so you don't have to.
-
-### The Two-Tier Cache
-
-Looking up sessions from the database on every request would be slow. So we use two levels of caching:
-
-```
-Request: "What's the GitHub session for client vs-abc123?"
-
-        +-------------------+
-        |  Level 1 Cache    |  <-- Super fast (in nginx memory)
-        |  (Shared Dict)    |      TTL: 30 seconds
-        |                   |
-        |  "Do I have it?"  |
-        +--------+----------+
-                 |
-        MISS     |
-                 v
-        +-------------------+
-        |  Level 2 Cache    |  <-- Fast (MongoDB lookup)
-        |  (MongoDB)        |      TTL: 1 hour
-        |                   |
-        |  "Check database" |
-        +--------+----------+
-                 |
-        MISS     |
-                 v
-        +-------------------+
-        |  Create New       |  <-- Send "initialize" to backend
-        |  Session          |      Store in both caches
-        +-------------------+
-```
-
-**Why two levels?**
-- Level 1 is in memory - no network call, extremely fast
-- Level 2 is in MongoDB - survives server restarts
-- If the server restarts, we lose Level 1 but Level 2 still has sessions
+If the gateway answers a credentialed backend's initialize locally before the user connects, Lua does not cache it as a backend session. An authorized tool call still reaches the credential broker to return the PAT submission instruction or OAuth connect URL. Resource/prompt discovery skips an unavailable, unsupported or access-denied sibling while retaining items from connected backends; the list is an error only when no backend answered.
 
 ---
 
@@ -332,30 +250,18 @@ Lua Router combines them:
    jira_search, create_issue]                 <-- Renamed "search" to "jira_search"
 ```
 
-**Important optimization:** These backend calls happen IN PARALLEL, not one after another. This makes the aggregation fast.
-
-```
-Time ------>
-
-Sequential (slow):
-  [GitHub call]---[Slack call]---[Jira call]---Done
-
-Parallel (fast):
-  [GitHub call]-----
-  [Slack call]------+---Done
-  [Jira call]-------
-```
+Each backend's `tools/list` request first passes a backing-server scope check. Calls are sequential so a denied backing grant never becomes an upstream request. Plain-backend results can be cached per user with grant rechecks; credentialed-backend discovery is fetched anew because consent and available tools vary by user.
 
 ---
 
 ## What the Nginx Config Looks Like
 
-When a virtual server is enabled, the system generates two things:
+When a virtual server is enabled, the registry generates its virtual ingress, a mapping file, and internal authorization/dispatch locations per backing server:
 
 ### 1. A Location Block (for routing)
 
 ```nginx
-location /virtual/dev-tools {
+location /virtual/dev-tools/ {
     # Tell Lua which virtual server this is
     set $virtual_server_id "dev-tools";
 
@@ -370,21 +276,22 @@ location /virtual/dev-tools {
 ### 2. Internal Backend Locations
 
 ```nginx
-# These are marked "internal" - only Lua can use them
-# Regular users can't access them directly
-
-location /_backend/github {
+location = /_vs_auth_github {
     internal;
-    proxy_pass https://github-mcp.example.com/mcp;
+    set $backend_url "https://github-mcp.example.com/mcp";
+    proxy_set_header X-Original-URL $scheme://$host/github/mcp;
+    proxy_set_header X-Body $http_x_body;
+    proxy_set_header X-Resolved-Upstream $backend_url;
+    proxy_pass http://auth-server:8888/validate;
 }
-
-location /_backend/slack {
+location = /_vs_backend_github {
     internal;
-    proxy_pass https://slack-mcp.example.com/mcp;
+    proxy_set_header X-Internal-Token $http_x_internal_token;
+    proxy_pass http://auth-server:8888/mcp-proxy/github/;
 }
 ```
 
-The Lua router uses these internal locations to talk to backends.
+The example uses a credentialed GitHub backend; a plain backend dispatches directly after clearing all gateway credentials. Only Lua can call these `internal` locations, and the authorization location must return a signed backend token before Lua dispatches.
 
 ---
 
@@ -394,21 +301,7 @@ What happens when things go wrong?
 
 ### Backend is Down
 
-```
-Lua Router tries to call /_backend/github
-  |
-  v
-Connection fails or returns error
-  |
-  v
-Lua Router returns error to your app:
-{
-  "error": {
-    "code": -32000,
-    "message": "Backend server unreachable: /github"
-  }
-}
-```
+After both grants pass, the backend request can still fail (for example, a network error). Lua returns a backend failure to the client; it does not invent a successful tool result or cache a failed `initialize` as a stateless server.
 
 ### Session Expired
 
@@ -429,58 +322,15 @@ Lua Router:
 
 ### User Lacks Permission
 
-```
-User has scopes: ["mcp-access"]
-Tool "create_pr" requires: ["github-write"]
-  |
-  v
-Lua Router checks scopes... DENIED
-  |
-  v
-Response: 403 Forbidden
-{
-  "error": "Missing required scope: github-write"
-}
-```
+If the virtual alias is not granted, the virtual request is denied. If the alias is granted but the original tool is not granted on the backing server, the explicit backing check denies it before a credential vend or backend call. A backend `initialize` permission does not imply permission to call its tools.
 
 ---
 
 ## Access Control in Simple Terms
 
-Access control works at two levels:
+Access requires **both** a virtual-server grant and a backing-server grant. The virtual grant is checked when entering `/virtual/dev-tools`; Lua checks its server-level scopes and any override on the requested alias. The backing grant is checked before every actual backend request, including `initialize`, `tools/list`, and `tools/call`. The backend sees the original tool name, so the backing grant must allow `/github` to call `search`, not just the virtual alias `github_search`.
 
-### Level 1: Server Access
-
-To use the virtual server at all, you need certain scopes:
-
-```
-Virtual Server: /virtual/dev-tools
-Required Scopes: ["mcp-access"]
-
-User with scopes ["mcp-access"] -> Allowed in
-User with scopes ["other-stuff"] -> Blocked at the door
-```
-
-### Level 2: Tool Access
-
-Individual tools can require additional scopes:
-
-```
-Tool: create_pr
-Required Scopes: ["github-write"]
-
-User with ["mcp-access", "github-read"] -> Can't use this tool
-User with ["mcp-access", "github-write"] -> Can use this tool
-```
-
-When listing tools, the Lua router hides tools the user can't access:
-
-```
-Full tool list:    [search, create_pr, delete_repo]
-User scopes:       ["mcp-access", "github-read"]
-
-Filtered list:     [search]  <-- Only shows tools user can actually use
-```
+For example, `mcp-access` plus a `github-write` virtual override is not enough to invoke `create_pr` unless the caller also has an appropriate `/github` backing-server grant. Conversely, a direct `/github` grant does not grant entry to `/virtual/dev-tools`. Discovery is authorized for each backing server; egress discovery is never shared across users or cached while consent changes.
 
 ---
 
@@ -543,7 +393,7 @@ When you create or update a virtual server:
 
 | What You Want | What Happens |
 |---------------|--------------|
-| List tools | Asks all backends in parallel, combines results |
+| List tools | Checks each backing grant, asks backends sequentially, combines allowed results |
 | Call a tool | Looks up backend, translates name, forwards request |
 | Initialize | Creates client session, backend sessions are lazy |
 | Ping | Responds immediately, no backend calls |
@@ -557,7 +407,7 @@ When you create or update a virtual server:
 3. **Lua router reads mapping files** to know which tool goes where
 4. **Aliases solve naming conflicts** when two backends have same tool names
 5. **Sessions are cached in two levels** for speed and reliability
-6. **Access control works at server and tool level** using scopes
-7. **Backend calls happen in parallel** when listing tools
+6. **Both virtual and backing server grants are required** for backend calls
+7. **Backing requests are authorized before dispatch**, and egress credentials are per backend and user
 
 The virtual server acts as a coordinator - all tool execution happens on the backend servers. The virtual server's role is to present a unified endpoint to clients.

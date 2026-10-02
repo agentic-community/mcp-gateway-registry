@@ -1942,8 +1942,8 @@ class BackendSessionRepositoryBase(ABC):
         client_session_id: str,
         backend_key: str,
         user_id: str | None = None,
-    ) -> str | None:
-        """Get backend session ID and bump last_used_at atomically.
+    ) -> tuple[str | None, bool] | None:
+        """Get initialized backend state and bump last_used_at atomically.
 
         Args:
             client_session_id: Client-facing session ID
@@ -1952,8 +1952,8 @@ class BackendSessionRepositoryBase(ABC):
                 When None, ownership is not enforced (legacy behavior).
 
         Returns:
-            Backend session ID if found (and owned by ``user_id`` when given),
-            None otherwise
+            (session ID, false) for stateful, (None, true) for stateless,
+            or None when not found or owned by another user.
         """
         pass
 
@@ -1962,18 +1962,20 @@ class BackendSessionRepositoryBase(ABC):
         self,
         client_session_id: str,
         backend_key: str,
-        backend_session_id: str,
+        backend_session_id: str | None,
         user_id: str,
         virtual_server_path: str,
+        stateless: bool = False,
     ) -> None:
         """Store or update a backend session (upsert).
 
         Args:
             client_session_id: Client-facing session ID
             backend_key: Backend location key
-            backend_session_id: Session ID from the backend MCP server
+            backend_session_id: Session ID, or None after stateless initialize
             user_id: User identity for audit
             virtual_server_path: Virtual server path
+            stateless: Whether initialize succeeded without a session ID
         """
         pass
 

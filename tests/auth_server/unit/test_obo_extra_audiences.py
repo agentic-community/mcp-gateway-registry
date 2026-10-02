@@ -123,11 +123,10 @@ class TestOboExtraAudiences:
         # ...and the internal-URL form too, so a misconfig doesn't 401.
         assert "http://registry.internal:8000/plain/mcp" in auds
 
-    def test_strips_trailing_mcp_before_building(self):
+    def test_registered_nested_mcp_path_keeps_its_resource_identity(self):
         s = _settings(auth_provider="entra", egress_enabled=False)
-        auds = self._call(
-            "plain/mcp", s, env={"AUTH_SERVER_EXTERNAL_URL": "https://gw.example.com"}
+        audiences = self._call(
+            "peer/mcp", s, env={"AUTH_SERVER_EXTERNAL_URL": "https://gw.example.com"}
         )
-        # No doubled /mcp/mcp.
-        assert "https://gw.example.com/plain/mcp/mcp" not in auds
-        assert "https://gw.example.com/plain/mcp" in auds
+        assert "https://gw.example.com/peer/mcp" in audiences
+        assert "https://gw.example.com/peer" not in audiences

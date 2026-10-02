@@ -42,7 +42,7 @@ class _StubService:
         self.get_valid_token_called = True
         return "SHOULD-NOT-BE-USED"
 
-    def build_consent_url(self, **kwargs):
+    async def build_consent_url(self, **kwargs):
         return "https://example.com/authorize"
 
 
@@ -82,6 +82,9 @@ def _claims(**over):
     # NOT a fallback for it -- the vend refuses to cross that namespace.
     base = {
         "sub": "alice",
+        "server": "github",
+        "version_id": "",
+        "virtual_backend": False,
         "egress_user": "alice",
         "auth_method": "oauth2",
         "upstream_url": "https://api.githubcopilot.com/mcp",
