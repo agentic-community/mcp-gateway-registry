@@ -1,0 +1,8 @@
+apiVersion: v2
+name: keycloak
+description: >-
+  Keycloak IdP for the MCP Gateway Registry, built on the official
+  quay.io/keycloak/keycloak image with an official postgres backend.
+type: application
+version: 0.1.0
+appVersion: "26.6.0"
