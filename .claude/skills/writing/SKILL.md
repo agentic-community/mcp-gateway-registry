@@ -120,6 +120,10 @@ Word-level fixes are not enough. LLMs lean on a handful of sentence shapes that 
   - Bad: Now look at what this does to the config.
   - Good: Two identical exact-match locations stop nginx from loading the config at all.
 - No closing flourishes. "That is the whole interface", "and the rest is variations on it", "end of story", "in conclusion", "ultimately" are applause lines. Stop when the information stops.
+- No teaser openers. Do not open a section by announcing how many things are coming, and do not assert a dramatic dependency between them. Start with the first thing and let the count emerge.
+  - Bad: Two things, and the second exists because the first failed.
+  - Good: This PR adds a skill that turns an issue into an explainer. It also adds a prose linter, because the skill's own output broke the writing rules.
+  - Announcing a count is fine when it is doing real work, as in "Four properties make this safe" followed by four named properties. It is not fine as a drum roll.
 - No appended reassurance clause. Do not count the items and then add a clause asserting they are all fine. The clause carries no information and reads as padding.
   - Bad: Four properties make this safe, and each one is checkable.
   - Good: Four properties make this safe.

@@ -163,10 +163,11 @@ repos:
       # Flag the phrase-level LLM tells the writing skill bans
       # (.claude/skills/writing/SKILL.md). ADVISORY ON PURPOSE: the script is
       # not run with --strict, so it prints hits and exits 0 rather than
-      # blocking the commit. The existing docs carry 1758 hits across 118 of
-      # 322 tracked markdown files, so a blocking hook would wedge every docs
-      # change for prose nobody is touching. Read what it prints for the lines
-      # you wrote and ignore the rest.
+      # blocking the commit. The markdown this hook scans carries 1715 hits
+      # across 117 of 321 files, with 389 in
+      # docs/unified-parameter-reference.md alone, so a blocking hook would
+      # wedge every docs change for prose nobody is touching. Read what it
+      # prints for the lines you wrote and ignore the rest.
       # Generated prose IS held to --strict, at the point of generation: see
       # the prose gate in .claude/skills/explainer/SKILL.md.
       # To make this blocking later, clean the worst offenders first
