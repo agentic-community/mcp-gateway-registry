@@ -195,6 +195,37 @@ sanitizer that isn't called) is equivalent to no check.
 - **Every fetch path uses the guarded client** — grep for raw `httpx`/SDK clients
   and third-party SDKs that own their own client. Internal targets are opt-in via
   an explicit allowlist (`SSRF_ALLOWED_HOSTS`/`SSRF_ALLOWED_CIDRS`), default deny.
+- **A transport-level egress relaxation must be opt-in, default off, and must
+  keep resolution and classification.** Reachability sometimes requires giving up
+  one SSRF control, as forward-proxy support does: a `CONNECT` tunnel takes its
+  TLS `server_hostname` from the request URL and ignores the SNI override that
+  pinning sets, so a pinned request through a tunnel verifies the certificate
+  against an IP and fails. Four rules make such a trade safe. Gate it behind an
+  explicit flag that defaults off, so exporting an unrelated environment variable
+  (`HTTP_PROXY`) can never change the posture. Keep resolving and classifying
+  every DNS answer before the connection, so the metadata/credential, link-local,
+  reserved and multicast hard-denies still run and one blocked answer denies the
+  request. Derive the scope of the relaxation from the classification rather than
+  from an operator-maintained exclusion list, so a forgotten entry cannot silently
+  drop the control for an internal target. Refuse cleartext on any path that
+  carries a secret, because a plain forward request hands the full URL and the
+  `Authorization` header to the intermediary. Record what was given up in the
+  module docstring, the setting description, and the feature's docs page.
+  (`EGRESS_FORWARD_PROXY_ENABLED`, `registry/utils/url_guard.py`, issue #1832.)
+- **Implement a proxy inside the guarded transport, never on the client.** Passing
+  `proxy=` to `httpx.AsyncClient` makes `_get_proxy_map` return `{"all://": proxy}`
+  and mount a plain transport that `_transport_for_url` prefers over the custom
+  one. Every request then skips the guard: no validation, no classification, no
+  metadata deny, no per-redirect re-check, while the factory is still called
+  `guarded_async_client`. The one-line fix is the dangerous one.
+- **A CA bundle setting must ADD to the trust store, not replace it.** httpx reads
+  `SSL_CERT_FILE`, so pointing it at a corporate CA looks like it works, but
+  `ssl.create_default_context(cafile=...)` replaces the certifi store rather than
+  extending it, breaking TLS to every other target. Take an explicit path, seed the
+  context from `certifi.where()` (httpx does not read the OS trust store), then
+  `load_verify_locations` the operator's bundle on top. Fail closed at startup on a
+  missing or malformed file: a silent fallback surfaces later as a certificate
+  error on every request and reads like a bug in the feature.
 - **A feature merged in parallel with a hardening PR is the classic gap.** When a
   hardening PR routes "every outbound URL" through the guard, its diff only covers
   files that existed on its branch. A feature developed concurrently (its own new

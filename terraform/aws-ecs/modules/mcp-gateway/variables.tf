@@ -1644,6 +1644,18 @@ variable "ssrf_allowed_cidrs" {
   default     = ""
 }
 
+variable "egress_forward_proxy_enabled" {
+  description = "Route SSRF-guarded egress through the forward proxy named in HTTPS_PROXY / HTTP_PROXY, for targets that resolve exclusively to public addresses. Needed where the tasks have no direct internet egress. Internal targets stay direct and IP-pinned. Relaxes DNS-rebinding protection for public destinations only, so it is opt-in. See docs/forward-proxy-egress.md."
+  type        = bool
+  default     = false
+}
+
+variable "egress_forward_proxy_ca_bundle" {
+  description = "Path INSIDE the container to a PEM CA bundle the SSRF-guarded egress clients trust in addition to the default roots, for a forward proxy that terminates TLS and re-signs with an internal CA. Bake the bundle into the image or mount it from EFS; this variable only names the path. A missing or malformed file fails the task at startup."
+  type        = string
+  default     = ""
+}
+
 variable "cimd_publisher_enabled" {
   description = "Serve the registry's CIMD at GET /oauth/client-metadata.json (describes the registry as an OAuth client for external CIMD-aware IdPs). Default off; 404 when off."
   type        = bool

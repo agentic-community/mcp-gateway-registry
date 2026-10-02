@@ -178,6 +178,25 @@ health_check_total = _meter.create_counter(
 
 
 # =============================================================================
+# Forward-proxy egress routing (issue #1832)
+#
+# Bounded labels only: profile (the small fixed set of _Profile names in
+# registry/utils/url_guard.py), route (proxied/direct), outcome (ok/denied/
+# proxy_error). Never the target host, which is unbounded.
+#
+# route="direct" dominating on a deployment that has EGRESS_FORWARD_PROXY_ENABLED
+# on is the signal that NO_PROXY is too broad, or that targets are resolving to
+# internal addresses and keeping their pin.
+# =============================================================================
+
+egress_forward_proxy_requests_total = _meter.create_counter(
+    name="mcpgw_egress_forward_proxy_requests_total",
+    description="Guarded egress requests by routing decision (forward proxy vs direct)",
+    unit="1",
+)
+
+
+# =============================================================================
 # Rate limiting (issue #295)
 #
 # Bounded labels only: axis (caller/target), entity_type (small allowlist),
