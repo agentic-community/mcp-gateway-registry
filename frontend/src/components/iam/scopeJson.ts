@@ -88,6 +88,64 @@ export function applyUiPermSync(
 }
 
 /**
+ * Parse the comma-separated Group Mappings input into a list of names.
+ */
+export function parseGroupMappings(groupMappings: string): string[] {
+  return groupMappings
+    .split(',')
+    .map((m) => m.trim())
+    .filter(Boolean);
+}
+
+/**
+ * Build the scope_config body for a group update (PATCH).
+ *
+ * Every field is sent on every update, including empty ones, because the
+ * management API treats an omitted field as "preserve existing". Omitting
+ * group_mappings is what made edits to it silently no-op while the UI still
+ * reported success, so it is always included here.
+ */
+export function buildUpdateScopeConfig(
+  serverAccess: ServerAccessEntry[],
+  groupMappings: string,
+  selectedAgents: string[],
+  uiPermissions: Record<string, string>,
+  proxiedKeys: Set<string>,
+): {
+  server_access: Array<{server: string; methods: string[]; tools?: string[]}>;
+  group_mappings: string[];
+  ui_permissions: Record<string, string[]>;
+  agent_access: string[];
+} {
+  const serverAccessPayload = serverAccess
+    .filter((e) => e.server.trim())
+    .map((e) => {
+      const entry: {server: string; methods: string[]; tools?: string[]} = {
+        server: normalizeServerKey(e.server, proxiedKeys),
+        methods: e.methods.length > 0 ? e.methods : ['all'],
+      };
+      if (e.tools.length > 0) {
+        entry.tools = e.tools;
+      }
+      return entry;
+    });
+
+  const perms: Record<string, string[]> = {};
+  for (const [key, val] of Object.entries(uiPermissions)) {
+    const items = val.split(',').map((v) => v.trim()).filter(Boolean);
+    if (items.length > 0) perms[key] = items;
+  }
+  applyUiPermSync(perms, serverAccess, selectedAgents, proxiedKeys);
+
+  return {
+    server_access: serverAccessPayload,
+    group_mappings: parseGroupMappings(groupMappings),
+    ui_permissions: perms,
+    agent_access: selectedAgents,
+  };
+}
+
+/**
  * Build the full scope JSON from form state for preview and API payload.
  */
 export function buildScopeJson(
@@ -121,10 +179,7 @@ export function buildScopeJson(
     });
   if (access.length > 0) result.server_access = access;
 
-  const mappings = groupMappings
-    .split(',')
-    .map((m) => m.trim())
-    .filter(Boolean);
+  const mappings = parseGroupMappings(groupMappings);
   if (mappings.length > 0) result.group_mappings = mappings;
 
   if (selectedAgents.length > 0) result.agent_access = selectedAgents;

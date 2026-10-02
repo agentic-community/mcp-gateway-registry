@@ -9,6 +9,8 @@
 
 import {
   buildScopeJson,
+  buildUpdateScopeConfig,
+  parseGroupMappings,
   normalizeServerKey,
   applyUiPermSync,
   type ServerAccessEntry,
@@ -140,5 +142,66 @@ describe('buildScopeJson', () => {
     );
     const access = json.server_access as Array<Record<string, unknown>>;
     expect(access[0].methods).toEqual(['all']);
+  });
+});
+
+describe('parseGroupMappings', () => {
+  it('splits, trims and drops empty entries', () => {
+    expect(parseGroupMappings(' a , b ,, c ')).toEqual(['a', 'b', 'c']);
+  });
+
+  it('returns an empty list for a blank input', () => {
+    expect(parseGroupMappings('   ')).toEqual([]);
+  });
+});
+
+describe('buildUpdateScopeConfig', () => {
+  /**
+   * Regression coverage: the group edit form rendered a Group Mappings input
+   * but handleUpdate built a payload without group_mappings. The management API
+   * preserves existing values for any omitted field, so the edit was silently
+   * discarded while the UI still reported "updated successfully".
+   */
+  it('includes group_mappings from the form input', () => {
+    const config = buildUpdateScopeConfig(
+      [],
+      'mcp-servers-unrestricted, other-group',
+      [],
+      {},
+      PROXIED,
+    );
+    expect(config.group_mappings).toEqual(['mcp-servers-unrestricted', 'other-group']);
+  });
+
+  it('always sends group_mappings so the field can be cleared', () => {
+    const config = buildUpdateScopeConfig([], '', [], {}, PROXIED);
+    expect(config).toHaveProperty('group_mappings');
+    expect(config.group_mappings).toEqual([]);
+  });
+
+  it('sends every scope_config field, since an omitted field means preserve', () => {
+    const config = buildUpdateScopeConfig([], '', [], {}, PROXIED);
+    expect(Object.keys(config).sort()).toEqual([
+      'agent_access',
+      'group_mappings',
+      'server_access',
+      'ui_permissions',
+    ]);
+  });
+
+  it('normalizes server keys and defaults empty methods to all', () => {
+    const entries: ServerAccessEntry[] = [
+      { server: '/currenttime/', methods: [], tools: [] },
+    ];
+    const config = buildUpdateScopeConfig(entries, '', [], {}, PROXIED);
+    expect(config.server_access).toEqual([{ server: 'currenttime', methods: ['all'] }]);
+  });
+
+  it('keeps a proxied canonical key verbatim', () => {
+    const entries: ServerAccessEntry[] = [
+      { server: 'skill/skills/proxy-demo', methods: ['all'], tools: [] },
+    ];
+    const config = buildUpdateScopeConfig(entries, '', [], {}, PROXIED);
+    expect(config.server_access[0].server).toBe('skill/skills/proxy-demo');
   });
 });
