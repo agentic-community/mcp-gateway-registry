@@ -20702,17 +20702,28 @@
       "GetBackendSessionResponse": {
         "properties": {
           "backend_session_id": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Backend Session Id",
-            "description": "Backend MCP session ID"
+            "description": "Stateful backend session ID",
+            "default": null
+          },
+          "stateless": {
+            "type": "boolean",
+            "title": "Stateless",
+            "description": "Successful sessionless initialize",
+            "default": false
           }
         },
         "type": "object",
-        "required": [
-          "backend_session_id"
-        ],
         "title": "GetBackendSessionResponse",
-        "description": "Response body for backend session lookup."
+        "description": "Response body for an initialized backend session lookup."
       },
       "GovernanceScope": {
         "properties": {
@@ -25983,9 +25994,23 @@
       "StoreSessionRequest": {
         "properties": {
           "backend_session_id": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Backend Session Id",
-            "description": "Session ID from the backend MCP server"
+            "description": "Session ID from a stateful backend; null for a stateless backend",
+            "default": null
+          },
+          "stateless": {
+            "type": "boolean",
+            "title": "Stateless",
+            "description": "Successful sessionless initialize",
+            "default": false
           },
           "client_session_id": {
             "type": "string",
@@ -25995,7 +26020,7 @@
           "user_id": {
             "type": "string",
             "title": "User Id",
-            "description": "User identity from auth context (required). A session must have a concrete owner; defaulting this would silently store a wrong-owner document if a caller omitted it."
+            "description": "User identity from auth context (required)"
           },
           "virtual_server_path": {
             "type": "string",
@@ -26006,12 +26031,11 @@
         },
         "type": "object",
         "required": [
-          "backend_session_id",
           "client_session_id",
           "user_id"
         ],
         "title": "StoreSessionRequest",
-        "description": "Request body for storing a backend session via internal API."
+        "description": "Request body for storing an initialized backend session via internal API."
       },
       "SyncHistoryEntry": {
         "properties": {

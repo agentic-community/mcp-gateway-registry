@@ -96,6 +96,7 @@ A client connecting to `/virtual/dev-tools` sees `search-repo`, `post-message`, 
 2. Nginx validates the caller and authorizes the virtual server and virtual tool name before Lua handles the request.
 3. Lua loads `/etc/nginx/lua/virtual_mappings/{id}.json`, checks the virtual server's required scopes and any alias-level override, and rewrites an aliased `tools/call` to the backend's original tool name.
 4. For every backing request, Lua explicitly captures `/_vs_auth_<backend>` with the rewritten JSON-RPC body. This verifies the same caller has the backing server's method/tool grant and returns a signed token bound to that registered backend and its resolved upstream. `ngx.location.capture` does not run `auth_request` on a captured backend location; the explicit check is required.
+   For a resource token bound to the virtual server, the internal authorization location supplies the original virtual URI separately; auth-server verifies the virtual binding and the rewritten backend's scope grant. Normal `/validate` locations clear that parent header, and the backend hop requires the nginx marker, so the exception cannot be used by a direct backend request.
 5. Lua calls `/_vs_backend_<backend>` only after that grant. A PAT or `oauth_user` backend routes through auth-server's `/mcp-proxy/<backend>/` vend/inject hop. Plain backends retain their direct proxy, with ingress credentials and internal tokens stripped. The resolved backend path, not the virtual alias, keys the egress vault.
 6. Virtual `initialize` creates the client session locally. Backend `initialize` is performed when a backend is first used; both stateful session IDs and successful sessionless initialization are remembered per caller and mapped backend version. `tools/list` and other routed methods also require the backing grant.
 
@@ -192,7 +193,7 @@ The Lua router keeps backend initialization state in the 30-second nginx shared-
 
 Mapping files serialize an unpinned `backend_version` as JSON `null`. Lua-cjson decodes that sentinel as userdata rather than Lua `nil`; the router normalizes it to an empty version before choosing a backend session key or setting `X-MCP-Server-Version`. Only a non-empty mapped string can select a pinned version.
 
-A successful backend `initialize` stores either its `Mcp-Session-Id` or an explicit `stateless: true` state if no ID was returned. A JSON-RPC error, non-200 response, or missing result is not stateless success and is not cached. A stateless backend receives subsequent requests without `Mcp-Session-Id` and is not initialized again just because L1 expires; L2 records the successful sessionless state. Stateful sessions retain their session ID and can be reinitialized if the backend rejects a stale session. Auth failures do not trigger session retries.
+A successful backend `initialize` stores either its `Mcp-Session-Id` or an explicit `stateless: true` state if no ID was returned. A JSON-RPC error, non-200 response, or missing result is not stateless success and is not cached. When the egress hop answers `initialize` locally before consent or a PAT is supplied, it marks the response as **not** backed by an initialized upstream; Lua does not persist that response as stateless and retries initialization when the user connects. A genuinely stateless backend receives subsequent requests without `Mcp-Session-Id` and is not initialized again just because L1 expires; L2 records the successful sessionless state. Stateful sessions retain their session ID and can be reinitialized if the backend rejects a stale session. Auth failures do not trigger session retries.
 
 ### Session Lifecycle
 
@@ -233,6 +234,7 @@ location = /_vs_auth_github {
     internal;
     set $backend_url "https://github-mcp.example.com/mcp";
     proxy_set_header X-Original-URL $scheme://$host/github/mcp;
+    proxy_set_header X-Virtual-Original-URL $scheme://$host$request_uri;
     proxy_set_header X-Body $http_x_body;
     proxy_set_header X-Resolved-Upstream $backend_url;
     proxy_pass http://auth-server:8888/validate;
@@ -340,6 +342,8 @@ Each `tools/list` backing fetch requires backend list access. A successful disco
 ```
 
 The virtual mapping above requires `mcp-access`, then `github-read` for the `search-repo` alias or `github-write` for `create-pr`. The caller must **also** have a backing-server scope that grants `/github` `initialize`, `tools/list`, and the corresponding original tool (`search` or `create_pr`) on `tools/call`. Without that backing grant, the alias cannot be called even if every virtual override is satisfied. Without the virtual grant, a direct `/github` grant does not unlock `/virtual/dev-tools`.
+
+A resource-bound token for `/virtual/dev-tools` keeps that same binding during the internal backend authorization check; the backend grant is still evaluated for the rewritten method/tool and resolved backing server. A direct backend request with that token remains bound to the virtual resource and is denied.
 
 ---
 

@@ -773,6 +773,13 @@ sanitizer that isn't called) is equivalent to no check.
   backend call fails after ingress authentication. Render the validated config value when constructing the dynamic
   block, and verify the fully rendered nginx config contains no marker placeholder in any `/validate` caller. Do not
   disable the marker check to make routing work.
+- **Virtual backend authorization must preserve the ingress resource binding while checking a separate backing grant.**
+  An internal Lua subrequest to `/validate` rewrites the requested URL and JSON-RPC body to the selected backing server;
+  a token bound to the virtual resource cannot be reclassified as a backing-server token. Carry the original virtual URI
+  only in an nginx-generated header from the internal backend-auth location, clear any client-supplied copy in every
+  normal `/validate` location, and require the configured nginx marker and resolved upstream before honoring it. Check
+  the real rewritten backing method/tool against the user's backing scopes independently. A direct backing request with
+  a virtual-bound token must still fail.
 - **An nginx `auth_request` subrequest does NOT inherit the parent location's
   `proxy_set_header` directives.** Headers the outer location sets for its own
   `proxy_pass` (e.g. `X-Real-IP $remote_addr`, a sanitized `X-Forwarded-For`) are
