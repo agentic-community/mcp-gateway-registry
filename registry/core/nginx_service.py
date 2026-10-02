@@ -38,6 +38,16 @@ DEFAULT_NGINX_CONFIG_MODE: int = 0o644
 # reachable at "{ROOT_PATH}/agent/flight-booking-agent/".
 AGENT_ROUTE_PREFIX: str = "/agent"
 
+# First path segments that nginx owns as reverse-proxy namespaces: A2A agents
+# ("/agent/<agent>/"), virtual MCP servers ("/virtual/<server>/") and gateway
+# REST and skill endpoints ("/gateway/rest-endpoint/<id>/",
+# "/gateway/skill/<skill>/"). The registry serves no route of its own under
+# these, so a request for one that reaches the app means nginx had no matching
+# location block for it.
+PROXY_ROUTE_PREFIXES: frozenset[str] = frozenset(
+    {AGENT_ROUTE_PREFIX.strip("/"), "virtual", "gateway"}
+)
+
 # Agent path and backend url come from registry data and are interpolated into
 # nginx directive positions, so they must be validated to prevent config
 # injection (e.g. "}", ";", newlines breaking out of the location block).
