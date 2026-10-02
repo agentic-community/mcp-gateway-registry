@@ -851,6 +851,103 @@ the explanation was wrong. Rewrite it rather than restating it at greater length
 `sleep 300; tail ...` hits the foreground timeout and fails. The harness re-invokes on
 completion.
 
+## Finding a Deployment to Debug Against
+
+Before guessing at a symptom, find the running deployment and read from it. Neither
+source below is in git, so both describe the machine you are on rather than the repo.
+
+### Amazon ECS
+
+`terraform/aws-ecs/terraform.tfstate` is the inventory of the deployed stack. It is
+gitignored (`terraform/aws-ecs/.gitignore` matches `*.tfstate*`), so it exists only on a
+machine that has run `terraform apply`, and it is the fastest way to learn cluster names,
+service names, log groups, load balancer and CloudFront hostnames, and which secrets
+exist.
+
+**It also contains plaintext secrets**: 14 `aws_secretsmanager_secret_version` resources,
+6 `aws_ssm_parameter`, and 5 `random_password`. Query it for the keys you need. Never
+`cat` it, never paste its contents into a file, a PR, an issue, or a chat message, and
+never serve the directory over HTTP.
+
+Pull just the identifiers:
+
+```bash
+python3 - <<'EOF'
+import json
+state = json.load(open("terraform/aws-ecs/terraform.tfstate"))
+def names(kind):
+    return [
+        inst["attributes"].get("name")
+        for res in state["resources"] if res.get("type") == kind
+        for inst in res.get("instances", [])
+    ]
+print("clusters:   ", names("aws_ecs_cluster"))
+print("services:   ", names("aws_ecs_service"))
+print("log groups: ", names("aws_cloudwatch_log_group"))
+EOF
+```
+
+On the current deployment that yields the `mcp-gateway-ecs-cluster` and `keycloak`
+clusters, services named `mcp-gateway-v2-registry`, `-auth`, `-mcpgw`,
+`-metrics-service` and `-grafana`, and log groups under `/ecs/mcp-gateway-v2-*`. Treat
+those as examples: read the state rather than hardcoding them, because a differently
+named deployment is normal.
+
+Then go to the logs and the task state:
+
+```bash
+aws logs tail /ecs/mcp-gateway-v2-registry --since 30m --follow
+aws ecs describe-services --cluster mcp-gateway-ecs-cluster --services mcp-gateway-v2-registry \
+  --query 'services[0].{desired:desiredCount,running:runningCount,events:events[:5]}'
+aws ecs describe-tasks --cluster mcp-gateway-ecs-cluster \
+  --tasks $(aws ecs list-tasks --cluster mcp-gateway-ecs-cluster \
+            --service-name mcp-gateway-v2-registry --query 'taskArns[0]' --output text) \
+  --query 'tasks[0].containers[].{name:name,status:lastStatus,reason:reason}'
+```
+
+A task that will not start usually explains itself in `stoppedReason` or in the last few
+`events` entries, before any application log is written.
+
+### Local Docker Compose
+
+The local stack serves the gateway on `http://localhost` (port 80 maps to the registry's
+8080) and everything else on loopback-only ports. Start from what is actually running:
+
+```bash
+docker ps --format '{{.Names}}\t{{.Status}}\t{{.Ports}}'
+docker compose logs -f --tail 100 registry
+docker compose exec registry sh -c 'grep -n -A3 "<server-path>" /etc/nginx/conf.d/*.conf'
+```
+
+Container names are prefixed `mcp-gateway-registry-`, so the registry is
+`mcp-gateway-registry-registry-1`. A `(healthy)` marker comes from the container's own
+health check, which calls the backend directly on 127.0.0.1 and therefore says nothing
+about whether the nginx proxy path works. Test that through `http://localhost`.
+
+Quick reachability:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' http://localhost/health
+```
+
+### Tokens for a local request
+
+`.token` at the repo root holds a bearer token for the local stack. It is nested JSON, so
+the token is at `.tokens.access_token`, not at the top level:
+
+```bash
+export ACCESS_TOKEN=$(jq -r '.tokens.access_token' .token)
+curl -sS http://localhost/api/servers -H "Authorization: Bearer $ACCESS_TOKEN" | jq
+```
+
+`.oauth-tokens/` holds per-identity token files (`ingress.json`, `admin.json`, agent M2M
+files). Those are also nested; check the shape with `jq 'keys'` before assuming a field.
+Regenerate any of them with `cd credentials-provider && ./generate_creds.sh`.
+
+A token is signed with the deployment's own `SECRET_KEY`, so a token minted locally
+returns 401 against ECS and vice versa. When a request 401s, check which deployment the
+token came from before debugging the auth code.
+
 ## Component Map: What to Run After Changing What
 
 Canonical commands live in `.github/workflows/`, `pyproject.toml` and
