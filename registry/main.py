@@ -81,7 +81,7 @@ from registry.core.config import (
     settings,
 )
 from registry.core.metrics import DEPLOYMENT_MODE_INFO
-from registry.core.nginx_service import AGENT_ROUTE_PREFIX, nginx_service
+from registry.core.nginx_service import PROXY_ROUTE_PREFIXES, nginx_service
 from registry.core.telemetry import (
     initialize_telemetry,
     send_startup_ping,
@@ -1477,9 +1477,9 @@ async def _gateway_proxy_disabled_response(
     index.html to an MCP client would be wrong, so the documented JSON 503 is
     returned instead.
 
-    Only paths whose first segment is a registered server (or the A2A agent
-    prefix) are rejected. Everything else is a registry route or an SPA route
-    and must be served normally.
+    Only paths whose first segment is a registered server or one of the nginx
+    proxy namespaces (PROXY_ROUTE_PREFIXES) are rejected. Everything else is a
+    registry route or an SPA route and must be served normally.
 
     Args:
         full_path: Request path without a leading slash, as captured by the
@@ -1495,9 +1495,13 @@ async def _gateway_proxy_disabled_response(
     if not first_segment:
         return None
 
-    # A2A agent reverse-proxy routes are never registry app routes, so the
-    # prefix alone is enough; agent routing is always off in registry-only mode.
-    if first_segment == AGENT_ROUTE_PREFIX.strip("/"):
+    # Agent, virtual-server and gateway REST/skill paths are nginx proxy
+    # namespaces, never registry app routes, so the prefix alone is enough.
+    # Reaching the app means nginx had no location block for the request:
+    # agent routing is off in registry-only mode, and a virtual server or
+    # skill registered after startup gets no block because registry-only mode
+    # skips nginx reloads.
+    if first_segment in PROXY_ROUTE_PREFIXES:
         return JSONResponse(status_code=503, content=GATEWAY_PROXY_DISABLED_BODY)
 
     try:

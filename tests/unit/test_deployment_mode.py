@@ -471,9 +471,24 @@ class TestRegistryOnlyProxyRejection:
         assert result.status_code == 503
 
     @pytest.mark.asyncio
-    async def test_agent_path_rejected(self, monkeypatch):
-        """A2A agent reverse-proxy paths return 503 without a server lookup."""
-        result = await self._call(monkeypatch, "agent/flight-booking-agent/")
+    @pytest.mark.parametrize(
+        "full_path",
+        [
+            "agent/flight-booking-agent/",
+            "virtual/dev-essentials/mcp",
+            "gateway/skill/pdf/",
+            "gateway/rest-endpoint/1f32aefe-468a-417a-bdf7-646086015454/",
+        ],
+    )
+    async def test_proxy_namespace_paths_rejected(self, monkeypatch, full_path):
+        """nginx proxy namespaces return 503 without a server lookup.
+
+        Reaching the app means nginx had no location block: agent routing is off
+        in registry-only mode, and a virtual server or skill registered after
+        startup gets none because registry-only mode skips nginx reloads. An MCP
+        client needs the JSON 503 there, not the SPA shell.
+        """
+        result = await self._call(monkeypatch, full_path)
         assert result is not None
         assert result.status_code == 503
 
