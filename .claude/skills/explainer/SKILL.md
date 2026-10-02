@@ -1,10 +1,10 @@
 ---
 name: explainer
-description: Explain a GitHub issue or pull request at 100, 200, and 300 level. Verifies every claim against the code, then writes a markdown and a self-contained HTML version into .scratchpad/issue-NNNN/ or .scratchpad/pr-NNNN/, serves it over loopback HTTP, and opens it for preview. Use when asked to explain, write up, or produce an explainer for an issue or PR.
+description: Explain a GitHub issue or pull request at 100, 200, and 300 level. Verifies every claim against the code, then writes a markdown and a self-contained HTML version into .scratchpad/issue-NNNN/ or .scratchpad/pr-NNNN/ and opens it for preview. Starts no server; offers a command for anyone who wants one. Use when asked to explain, write up, or produce an explainer for an issue or PR.
 license: Apache-2.0
 metadata:
   author: mcp-gateway-registry
-  version: "1.0"
+  version: "1.1"
 ---
 
 # Explainer Skill
@@ -200,56 +200,68 @@ uv run python scripts/prose-scan.py --strict <outdir>/explainer.md <outdir>/expl
 
 Do not skip this because you already loaded the writing skill. Loading the skill and skipping its revision pass is exactly how a tell reaches the file: the HTML gate above gets run because it is a command, and the prose pass gets skipped because it is advice. That is why this one is a command too.
 
-## Step 7: serve and preview
+## Step 7: hand over, and offer the server as an option
 
-```bash
-.claude/skills/explainer/scripts/serve.sh .scratchpad/issue-NNNN/explainer.html
-```
+Do not start a server. The HTML is self-contained, so most readers need nothing running, and starting a process the user did not ask for leaves something listening on their machine that they then have to find and stop.
 
-The script copies the explainer into a private `mktemp -d` directory (mode 700) as `index.html` (mode 600) and roots `python3 -m http.server` there on `127.0.0.1:8111`, so the served URL is just `http://127.0.0.1:8111/`. Override the port with `EXPLAINER_PORT`, which it validates as digits in 1024-65535.
-
-Serving one copied file in a private directory is deliberate. `http.server` publishes everything below its root and follows symlinks, so pointing it at the repo would expose `.env` and `.git/config` to any local process, and pointing it at the explainer's own directory would expose siblings and anything a sibling symlink reaches. A single regular file in an owner-only directory can disclose nothing else.
-
-The script validates the port before interpolating it into the command it prints, shell-escapes that command with `printf %q` so an unusual checkout path cannot become shell syntax, refuses a target that resolves outside the repo, logs to a private 0600 temp file, and confirms the process it started is still alive before trusting a 200 response, so a bind race cannot look like a successful start.
-
-It does not reuse an existing server. A second run while the port is busy exits with an error naming the port, rather than attaching to whatever is listening.
-
-Then open the file in the editor so preview is one click away:
+Open the file in the editor so a preview is one click away:
 
 ```bash
 code -r <outdir>/explainer.html
 ```
 
-The script ends with a block delimited by `----- COPY/PASTE` markers holding exactly two lines: the URL to open, and a command to run if the browser cannot reach it. Relay both verbatim.
+Then give the reader three ways in, cheapest first. The first two need no command at all:
 
-Format them so the user can act without editing anything. Put the URL on its own line as a bare autolink, and the command in its own fenced block:
+1. The Live Preview button in the editor title bar for the focused HTML file.
+2. Right-click the file and Download, then open the local copy. The file has no external references, so this works offline and always.
+3. A local HTTP server, only if they want one. Offer the command; do not run it.
 
-````markdown
-Open this:
+### The server command
 
-http://127.0.0.1:8111/
-
-If the browser cannot reach it, paste this into a VS Code integrated terminal:
+Offer it as one paste-ready line, rooted at the explainer's own directory:
 
 ```bash
-kill 427666 2>/dev/null; python3 -m http.server 8111 --bind 127.0.0.1 --directory /home/ubuntu/repos/mcp-gateway-registry
+python3 -m http.server 8111 --bind 127.0.0.1 --directory /abs/path/to/.scratchpad/pr-NNNN
 ```
+
+Then the URL is `http://127.0.0.1:8111/explainer.html`.
+
+Use the absolute path, since the user may paste this from any working directory. Keep `--bind 127.0.0.1`: never offer a command that binds `0.0.0.0`.
+
+Two things to say when you offer it. Having the user run it themselves in a VS Code integrated terminal is what makes VS Code auto-forward the port, so a browser on their laptop can reach it; a server started any other way listens on the host and gives `ERR_CONNECTION_REFUSED`. And the server publishes every file in that directory, which is the explainer's own output and nothing else, so check the directory holds only what you generated before offering the line.
+
+`scripts/serve.sh` remains available for anyone who wants the checked version: it validates the port, refuses a target resolving outside the repo, shell-escapes the path it prints, and confirms the process came up. It starts a server, so only reach for it when the user asks for one.
+
+### Formatting the handover
+
+Put the URL on its own line as a bare autolink and each command in its own fenced block:
+
+````markdown
+The explainer is at `.scratchpad/pr-1833/explainer.html`. Open it with the Live Preview
+button, or download it and open the copy.
+
+If you want it over HTTP instead, paste this into a VS Code integrated terminal:
+
+```bash
+python3 -m http.server 8111 --bind 127.0.0.1 --directory /home/ubuntu/repos/mcp-gateway-registry/.scratchpad/pr-1833
+```
+
+Then open:
+
+http://127.0.0.1:8111/explainer.html
 ````
 
-Rules that make those blocks usable:
+Rules that keep those blocks usable:
 
 - A bare URL on its own line renders as a clickable link in the terminal and in the chat. Do not wrap it in backticks, which kills the link, and do not bury it mid-sentence.
 - One command per fenced block, and nothing else in that fence. The copy button takes the whole fence, so a comment line or a second command makes the paste fail or do something unintended.
-- Keep the `kill <pid>;` prefix the script generated. It frees the port the script is holding and starts a forwarded server in one paste, rather than making the user run two steps.
-- Never retype the path, port, or pid by hand. Use the values the script printed.
+- Never retype a path or port by hand. Use the real output directory.
+- Do not present the URL as if something is already serving it. Say it works once they run the command.
 
-Then mention the two fallbacks in prose, since neither needs a command: the Live Preview button in the editor title bar for the focused HTML file, and right-clicking the file to Download and open it locally. The file is self-contained, so the download always works.
-
-Two known traps on this setup, worth repeating to the user when preview misbehaves:
-
-- A server started from a tool shell listens on the host but VS Code does not auto-forward it, so a laptop browser gets `ERR_CONNECTION_REFUSED`. VS Code only auto-forwards ports it sees opened in an integrated terminal. Forward the port from the Ports panel, or have the user run the printed command themselves.
-- Pasting a Live Preview URL into an external browser returns an empty 401 from port 3000, which renders as a blank white page with the raw URL in the tab title instead of the document title. Live Preview's `openPreviewTarget` needs to be `Embedded Preview`. A blank page means the request reached a server and got an empty body; connection refused means it never arrived. Do not confuse the two.
+One trap worth repeating if preview misbehaves: pasting a VS Code Live Preview URL into an external browser returns an empty 401 from port 3000, which renders as a blank white page showing the raw URL in the tab title instead of the document title. Live Preview's `openPreviewTarget` needs to be `Embedded Preview`. A blank page means the request reached a server and got an empty body; connection refused means it never arrived. Do not confuse the two.
 
 ## Handover
 
-Report where both files landed, the URL, and the commit you verified against. Lead your message with one line naming the audience you wrote for, so the user can correct it. Say plainly where the issue or PR was wrong or out of date, and list anything you could not verify.
+Report where both files landed and the commit you verified against. Lead your message with one line naming the audience you wrote for, so the user can correct it. Say plainly where the issue or PR was wrong or out of date, and list anything you could not verify.
+
+Do not claim a server is running unless you started one because the user asked.
