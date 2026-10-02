@@ -37,7 +37,8 @@ fi
 
 # Function to get admin token
 get_admin_token() {
-    local response=$(curl -s -X POST "${KEYCLOAK_URL}/realms/master/protocol/openid-connect/token" \
+    KEYCLOAK_ADMIN_REALM="${KEYCLOAK_ADMIN_REALM:-master}"
+    local response=$(curl -s -X POST "${KEYCLOAK_URL}/realms/${KEYCLOAK_ADMIN_REALM}/protocol/openid-connect/token" \
         -H "Content-Type: application/x-www-form-urlencoded" \
         -d "username=${KEYCLOAK_ADMIN}" \
         -d "password=${KEYCLOAK_ADMIN_PASSWORD}" \

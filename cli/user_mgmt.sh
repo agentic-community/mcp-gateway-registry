@@ -85,7 +85,8 @@ get_admin_token() {
         exit 1
     fi
 
-    TOKEN=$(curl -s -X POST "$ADMIN_URL/realms/master/protocol/openid-connect/token" \
+    KEYCLOAK_ADMIN_REALM="${KEYCLOAK_ADMIN_REALM:-master}"
+    TOKEN=$(curl -s -X POST "$ADMIN_URL/realms/${KEYCLOAK_ADMIN_REALM}/protocol/openid-connect/token" \
         -H "Content-Type: application/x-www-form-urlencoded" \
         -d "username=$ADMIN_USER" \
         -d "password=$ADMIN_PASS" \
