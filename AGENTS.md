@@ -940,10 +940,6 @@ export ACCESS_TOKEN=$(jq -r '.tokens.access_token' .token)
 curl -sS http://localhost/api/servers -H "Authorization: Bearer $ACCESS_TOKEN" | jq
 ```
 
-`.oauth-tokens/` holds per-identity token files (`ingress.json`, `admin.json`, agent M2M
-files). Those are also nested; check the shape with `jq 'keys'` before assuming a field.
-Regenerate any of them with `cd credentials-provider && ./generate_creds.sh`.
-
 A token is signed with the deployment's own `SECRET_KEY`, so a token minted locally
 returns 401 against ECS and vice versa. When a request 401s, check which deployment the
 token came from before debugging the auth code.
