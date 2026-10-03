@@ -76,7 +76,7 @@ tests:
     set:
       caBundle:
         enabled: true
-        existingSecret: corporate-ca-secret
+        existingSecret: corporate-ca-secret  # pragma: allowlist secret
     asserts:
       - equal:
           path: spec.template.spec.volumes[0].secret.secretName
@@ -114,7 +114,7 @@ tests:
       caBundle:
         enabled: true
         existingConfigMap: corporate-ca
-        existingSecret: corporate-ca-secret
+        existingSecret: corporate-ca-secret  # pragma: allowlist secret
     asserts:
       - failedTemplate:
           errorPattern: "set exactly ONE of existingConfigMap or existingSecret"

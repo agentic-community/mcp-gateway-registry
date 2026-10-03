@@ -457,7 +457,7 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             # forward-proxy egress for the SSRF-guarded clients. The boolean and
             # the CA-bundle PATH are shown; the proxy URL deliberately is NOT,
             # because HTTP_PROXY may embed basic-auth credentials
-            # (http://user:pass@proxy:3128). The boolean answers "is this on".
+            # (http://user:pass@proxy:3128). The boolean answers "is this on".  # pragma: allowlist secret
             ("egress_forward_proxy_enabled", "Forward Proxy Enabled", False),
             ("egress_forward_proxy_ca_bundle", "Forward Proxy CA Bundle", False),
         ],
