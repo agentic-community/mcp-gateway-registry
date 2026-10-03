@@ -202,7 +202,16 @@ SSRF guard[proxy]: acme.example resolves public ['93.184.216.34'], routing via f
 SSRF guard[proxy]: internal.svc.cluster.local resolves internal, staying direct and pinned
 ```
 
-The counter `mcpgw_egress_forward_proxy_requests_total` carries `profile`, `route`, and `outcome` labels on the Prometheus endpoint at `:9464/metrics`. On a proxy-only deployment, `route="direct"` dominating means either `NO_PROXY` is too broad or your targets resolve to internal addresses.
+The counter `mcpgw_egress_forward_proxy_requests_total` carries `profile`, `route`, and `outcome` labels on the Prometheus endpoint at `:9464/metrics`:
+
+```
+mcpgw_egress_forward_proxy_requests_total{profile="proxy",route="proxied",outcome="ok"} 536
+mcpgw_egress_forward_proxy_requests_total{profile="federation",route="proxied",outcome="ok"} 4
+```
+
+Nothing is recorded while the flag is off, so the counter costs an unconfigured deployment nothing. With the flag on, every guarded request lands in one of two routes. `route="proxied"` went through the proxy. `route="direct"` was kept direct and pinned, either because `NO_PROXY` named the host, because no proxy is set for that scheme, or because the target resolved to an internal address. On a deployment you expect to be fully proxied, `route="direct"` traffic is the signal to check `NO_PROXY` first.
+
+The `profile` label shows which trust surface the request came from, so a deployment using egress credential injection should show `egress-upstream` and `credentialed-oauth` alongside `proxy`.
 
 End to end, an external server that was stuck unhealthy should go healthy within one health-check cycle, and its nginx `location` block should appear live rather than commented out:
 

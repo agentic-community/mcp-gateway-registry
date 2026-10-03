@@ -1637,20 +1637,42 @@ class _PinnedResolverMixin:
         # certificate against that name.
         return _RoutedRequest(request, candidate)
 
+    def _excluded_from_proxy(
+        self,
+        hostname: str,
+    ) -> None:
+        """Record a target the proxy is configured for but will not carry.
+
+        Only reached when the feature is ON, so the flag-off path stays free of
+        any observability cost. Recording this is what lets an operator see a
+        proxy-only deployment still sending traffic direct, which usually means
+        NO_PROXY is too broad or no proxy is set for that scheme.
+        """
+        logger.debug(
+            "SSRF guard[%s]: %s excluded from the forward proxy (NO_PROXY or no "
+            "proxy for this scheme), staying direct and pinned",
+            self._guard_profile.name,
+            hostname,
+        )
+        _record_egress_route(self._guard_profile.name, "direct", "ok")
+
     def _route_request(
         self,
         request: httpx.Request,
     ) -> _RoutedRequest:
         """Validate, resolve, then route on where the target actually lives."""
         url, scheme, hostname, port, allowlist = self._request_target(request)
+        # NOTE: _request_target runs twice on every direct branch below, once
+        # here and once inside _pin_request. It is pure CPU validation with no
+        # DNS, and keeping _pin_request self-contained is what preserves the
+        # existing transport tests that call it directly. Do not "optimize" away.
+        if not _forward_proxy_config().enabled:
+            # Feature off: the existing path, byte for byte, and no metric.
+            return _RoutedRequest(self._pin_request(request), None)
+
         candidate = self._forward_proxy_candidate(scheme, hostname, port)
         if candidate is None:
-            # Feature off, NO_PROXY override, or no proxy for this scheme. The
-            # existing path, byte for byte. NOTE: _request_target therefore runs
-            # twice on this branch, once here and once inside _pin_request. It is
-            # pure CPU validation with no DNS, and keeping _pin_request
-            # self-contained is what preserves the existing transport tests that
-            # call it directly. Do not "optimize" this away.
+            self._excluded_from_proxy(hostname)
             return _RoutedRequest(self._pin_request(request), None)
 
         addresses = self._validated_addresses(url, hostname, port, allowlist)
@@ -1662,10 +1684,14 @@ class _PinnedResolverMixin:
     ) -> _RoutedRequest:
         """Async twin of :meth:`_route_request`."""
         url, scheme, hostname, port, allowlist = self._request_target(request)
+        # See the note in _route_request about the deliberate double
+        # _request_target call on the direct branches.
+        if not _forward_proxy_config().enabled:
+            return _RoutedRequest(await self._pin_request_async(request), None)
+
         candidate = self._forward_proxy_candidate(scheme, hostname, port)
         if candidate is None:
-            # See the note in _route_request about the deliberate double
-            # _request_target call on this branch.
+            self._excluded_from_proxy(hostname)
             return _RoutedRequest(await self._pin_request_async(request), None)
 
         addresses = await self._validated_addresses_async(url, hostname, port, allowlist)
