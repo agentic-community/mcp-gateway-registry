@@ -171,7 +171,9 @@ If your proxy endpoint is itself `https://` and signed by the internal CA, the s
 
 ## Settings to revisit
 
-Raise `HEALTH_CHECK_TIMEOUT_SECONDS` from its default of 2. It is a flat timeout, so the connect budget has to cover the TCP connection to the proxy, the `CONNECT` round trip, and the TLS handshake. Two seconds for all three produces the same timeout you are trying to fix, with a different cause. Start at 10 and tune from what you measure.
+`HEALTH_CHECK_TIMEOUT_SECONDS` defaults to 2 and may need raising. It is a flat timeout, so the connect budget has to cover the TCP connection to the proxy, the `CONNECT` round trip, and the TLS handshake. Two seconds for all three can produce the same timeout you are trying to fix, with a different cause.
+
+No deployment surface exposes it as a first-class setting, so set it through the same pass-through as the proxy variables: `extra_env/registry.env` on Compose, `registry.extraEnv` on Helm, `registry_extra_env` on Terraform. Measure before changing it. Against a proxy on the same host, 2 seconds was enough in testing; a proxy across a corporate WAN is the case that needs more.
 
 Check `EGRESS_HTTP_POOL_MAX_CONNECTIONS`, which defaults to 100. Every proxied connection now terminates at the proxy, so this becomes the number of simultaneous tunnels the proxy has to tolerate. Health checks run in batches of 10 with a pause between them, which limits the burst, but a proxy that rate-limits `CONNECT` will drop probes in waves and flap servers between healthy and unhealthy. For a few hundred registered servers against one proxy, 25 is a safer starting point.
 
