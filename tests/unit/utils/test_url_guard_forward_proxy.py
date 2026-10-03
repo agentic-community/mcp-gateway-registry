@@ -439,6 +439,57 @@ class TestNoProxyAndSchemes:
             )
         assert routed.proxy_url == PROXY_URL
 
+    async def test_no_proxy_match_is_recorded_as_a_direct_route(self):
+        """A NO_PROXY exclusion must show up as route="direct" in the metric.
+
+        Found by running the feature against a live stack: the metric had no
+        route="direct" series at all, even though a healthy NO_PROXY-matched
+        server was being probed every cycle, because the early return skipped
+        the recording. That made "the flag is on but everything is going direct"
+        invisible, which is the one question the counter exists to answer.
+        """
+        transport = url_guard.GuardedAsyncTransport(guard_profile=url_guard.PROXY_PROFILE)
+        with (
+            patch.dict("os.environ", _proxy_env(no_proxy="acme.example"), clear=True),
+            patch.object(url_guard, "settings", _settings()),
+            patch.object(
+                url_guard, "_resolve_public_ips_async", new=AsyncMock(return_value=[PUBLIC_IP])
+            ),
+            patch.object(url_guard, "_record_egress_route") as record,
+        ):
+            routed = await transport._route_request_async(
+                httpx.Request("GET", "https://acme.example/x")
+            )
+        assert routed.proxy_url is None
+        record.assert_called_once_with("proxy", "direct", "ok")
+
+    async def test_flag_off_records_nothing(self):
+        """The flag-off path must stay free of observability cost."""
+        transport = url_guard.GuardedAsyncTransport(guard_profile=url_guard.PROXY_PROFILE)
+        with (
+            patch.dict("os.environ", _proxy_env(enabled=None), clear=True),
+            patch.object(url_guard, "settings", _settings()),
+            patch.object(
+                url_guard, "_resolve_public_ips_async", new=AsyncMock(return_value=[PUBLIC_IP])
+            ),
+            patch.object(url_guard, "_record_egress_route") as record,
+        ):
+            await transport._route_request_async(httpx.Request("GET", "https://acme.example/x"))
+        record.assert_not_called()
+
+    async def test_no_proxy_for_this_scheme_is_recorded_as_direct(self):
+        transport = url_guard.GuardedAsyncTransport(guard_profile=url_guard.PROXY_PROFILE)
+        with (
+            patch.dict("os.environ", _proxy_env(http_proxy=None), clear=True),
+            patch.object(url_guard, "settings", _settings()),
+            patch.object(
+                url_guard, "_resolve_public_ips_async", new=AsyncMock(return_value=[PUBLIC_IP])
+            ),
+            patch.object(url_guard, "_record_egress_route") as record,
+        ):
+            await transport._route_request_async(httpx.Request("GET", "http://acme.example/x"))
+        record.assert_called_once_with("proxy", "direct", "ok")
+
     def test_cidr_shaped_no_proxy_entry_warns(self, caplog):
         """A CIDR is not expanded by curl or httpx, so it silently fails to match."""
         with caplog.at_level("WARNING"):
