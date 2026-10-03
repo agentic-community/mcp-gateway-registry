@@ -72,7 +72,7 @@ Put the proxy variables in `extra_env/registry.env` and `extra_env/auth-server.e
 # extra_env/registry.env and extra_env/auth-server.env
 HTTP_PROXY=http://corp-proxy.internal:3128
 HTTPS_PROXY=http://corp-proxy.internal:3128
-NO_PROXY=localhost,127.0.0.1,registry,auth-server,mcpgw-server,keycloak,mongodb
+NO_PROXY=localhost,127.0.0.1,169.254.169.254,169.254.170.2,169.254.170.23,registry,auth-server,mcpgw-server,keycloak,mongodb
 ```
 
 ### Helm and EKS
@@ -87,7 +87,7 @@ registry:
     - name: HTTPS_PROXY
       value: http://corp-proxy.internal:3128
     - name: NO_PROXY
-      value: localhost,127.0.0.1,.svc.cluster.local,.cluster.local,mcpgw-server,auth-server,keycloak
+      value: localhost,127.0.0.1,169.254.169.254,169.254.170.2,169.254.170.23,.svc.cluster.local,.cluster.local,mcpgw-server,auth-server,keycloak
 
 auth-server:
   app:
@@ -98,7 +98,7 @@ auth-server:
     - name: HTTPS_PROXY
       value: http://corp-proxy.internal:3128
     - name: NO_PROXY
-      value: localhost,127.0.0.1,.svc.cluster.local,.cluster.local,mcpgw-server,registry,keycloak
+      value: localhost,127.0.0.1,169.254.169.254,169.254.170.2,169.254.170.23,.svc.cluster.local,.cluster.local,mcpgw-server,registry,keycloak
 ```
 
 `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` are deliberately absent from `charts/*/reserved-env-names.txt`. Reserving them would make the chart reject the configuration this feature needs.
@@ -111,13 +111,13 @@ egress_forward_proxy_enabled = true
 registry_extra_env = [
   { name = "HTTP_PROXY", value = "http://corp-proxy.internal:3128" },
   { name = "HTTPS_PROXY", value = "http://corp-proxy.internal:3128" },
-  { name = "NO_PROXY", value = "localhost,127.0.0.1,mcp-gateway-v2.local" },
+  { name = "NO_PROXY", value = "localhost,127.0.0.1,169.254.169.254,169.254.170.2,169.254.170.23,mcp-gateway-v2.local" },
 ]
 
 auth_server_extra_env = [
   { name = "HTTP_PROXY", value = "http://corp-proxy.internal:3128" },
   { name = "HTTPS_PROXY", value = "http://corp-proxy.internal:3128" },
-  { name = "NO_PROXY", value = "localhost,127.0.0.1,mcp-gateway-v2.local" },
+  { name = "NO_PROXY", value = "localhost,127.0.0.1,169.254.169.254,169.254.170.2,169.254.170.23,mcp-gateway-v2.local" },
 ]
 ```
 
@@ -128,6 +128,10 @@ The ECS task definitions pick up the flag for both services from the single `egr
 `NO_PROXY` is an override, not the routing mechanism. Internal targets are already detected by classification, so a missing entry no longer breaks an in-cluster hop. Use it for two things: public addresses this host reaches directly, which saves a pointless tunnel, and in-cluster hostnames you want to keep explicit.
 
 The guard reads the forms curl reads. An entry matches an exact host (`mcpgw-server`), a `host:port` pair (`acme.example:443`), a domain suffix (`svc.cluster.local` matches `a.svc.cluster.local`, with or without a leading dot), or everything (`*`, which behaves the same as leaving the flag off). Upper case wins over lower case when both spellings are set.
+
+Always include the cloud metadata addresses: `169.254.169.254`, `169.254.170.2` and `169.254.170.23`. This is not cosmetic. The AWS SDK reads `HTTP_PROXY` itself, independently of this feature, so once the variable is set its instance-metadata credential provider sends IAM credential requests to your proxy. Observed on a test deployment: the proxy established connections to `169.254.169.254`, the SDK read the instance role name from `/latest/meta-data/iam/security-credentials/`, and then used the resulting credentials. A proxy operator should never see a credential request, and a proxy that can reach a metadata endpoint itself would be answering from its own network position rather than yours.
+
+Helm and Terraform already set `AWS_EC2_METADATA_DISABLED=true`, which closes that path at the source. Docker Compose does not, because an EC2-hosted Compose deployment may legitimately use the instance role for Amazon Bedrock and AgentCore. On Compose, these `NO_PROXY` entries are the control.
 
 A CIDR entry does not work. Neither curl nor httpx expands one, so `NO_PROXY=10.0.0.0/8` fails to match `10.1.2.3`. The guard logs a warning for a CIDR-shaped entry. Name the host or use a domain suffix instead.
 
@@ -234,6 +238,20 @@ An in-cluster hop breaks after you set `NO_PROXY`. A CIDR entry does not match. 
 A credential-bearing request is refused with a message about an `http` target. The upstream resolves to a public address over plain HTTP, so the credential would reach the proxy in cleartext. Move the upstream to `https`, or add it to `NO_PROXY` if it is reachable directly.
 
 Probes time out in waves and servers flap. The proxy is rate-limiting or capping concurrent tunnels. Lower `EGRESS_HTTP_POOL_MAX_CONNECTIONS`.
+
+## Known limitation: virtual-server tool calls
+
+A tool call to an ordinary MCP server path goes through the auth-server, whose egress this feature covers. A tool call fanned out by a **virtual server** does not. The generated nginx config gives each virtual-server member its own internal location:
+
+```nginx
+location /_vs_backend_cloudflare_docs {
+    internal;
+    proxy_pass https://docs.mcp.cloudflare.com/mcp;
+```
+
+That location is reached by a Lua subrequest, so nginx performs the upstream fetch itself, and nginx has no environment-proxy support for `proxy_pass`. Measured on a test deployment: the same tool through `/cloudflare-docs` opened four new tunnels through the proxy, while the same tool through `/virtual/dev-essentials` opened none.
+
+In a proxy-only network, virtual-server tool calls therefore fail even with this feature enabled. Use the per-server paths there. Closing the gap needs `ngx_http_proxy_connect_module` or an equivalent, which is a separate change.
 
 ## Not supported
 

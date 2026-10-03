@@ -212,6 +212,23 @@ sanitizer that isn't called) is equivalent to no check.
   `Authorization` header to the intermediary. Record what was given up in the
   module docstring, the setting description, and the feature's docs page.
   (`EGRESS_FORWARD_PROXY_ENABLED`, `registry/utils/url_guard.py`, issue #1832.)
+- **Setting `HTTP_PROXY` re-points every proxy-aware SDK in the process, not just
+  your own client.** The AWS SDK honors it independently, so once it is set
+  botocore's instance-metadata credential provider sends IAM credential requests
+  to the proxy. Verified on a test deployment: the proxy established connections
+  to `169.254.169.254`, the SDK read the role name from
+  `/latest/meta-data/iam/security-credentials/`, and used the resulting
+  credentials. A proxy operator must never see a credential request, and a proxy
+  that can itself reach a metadata endpoint answers from its own network position
+  rather than the caller's. Two controls, and ship both: set
+  `AWS_EC2_METADATA_DISABLED=true` wherever the deployment does not need an
+  instance role (Helm and Terraform already do; Compose does not, because an
+  EC2-hosted Compose deployment may use the instance role for Amazon Bedrock),
+  and put every metadata address in the recommended `NO_PROXY`
+  (`169.254.169.254`, `169.254.170.2`, `169.254.170.23`). A `NO_PROXY` listing
+  only hostnames does not cover them, which is how this was missed. When adding a
+  proxy feature, enumerate the OTHER libraries in the process that read the same
+  variables before documenting a recommended value.
 - **Implement a proxy inside the guarded transport, never on the client.** Passing
   `proxy=` to `httpx.AsyncClient` makes `_get_proxy_map` return `{"all://": proxy}`
   and mount a plain transport that `_transport_for_url` prefers over the custom

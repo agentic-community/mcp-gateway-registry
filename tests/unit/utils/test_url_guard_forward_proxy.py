@@ -91,6 +91,16 @@ def _settings(
     return s
 
 
+def _settings_with_pool():
+    """Settings stub carrying the pool fields shared_plain_async_client reads."""
+    s = _settings()
+    s.egress_http_pool_connect_retries = 1
+    s.egress_http_pool_max_connections = 100
+    s.egress_http_pool_max_keepalive = 20
+    s.egress_http_pool_keepalive_expiry_seconds = 30
+    return s
+
+
 def _proxy_env(
     *,
     enabled: str | None = "true",
@@ -908,3 +918,290 @@ class TestCaBundle:
     def test_startup_validation_is_a_noop_when_unconfigured(self):
         with patch.dict("os.environ", {}, clear=True):
             url_guard.validate_forward_proxy_config()  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# The PLAIN egress client (issue #1834).
+#
+# shared_plain_async_client serves operator-configured, already-trusted targets:
+# the login IdP token/userinfo endpoints and the in-cluster registry vends.
+# Pooling the login callback behind an explicit transport removed httpx's
+# environment-proxy support, which is a complete sign-in outage on a proxy-only
+# network with a hosted IdP.
+#
+# This transport must route PUBLIC targets through the proxy while adding NO
+# pinning and NO SSRF denial: its whole purpose is reaching targets the guard
+# rejects, such as an in-cluster http://keycloak:8080 at a private address.
+# ---------------------------------------------------------------------------
+
+
+class TestPlainProxyRoutedTransport:
+    async def test_flag_off_is_a_no_op(self):
+        """Byte-for-byte the previous behavior: no resolution, no delegate."""
+        transport = url_guard.PlainProxyRoutedAsyncTransport()
+        with (
+            patch.dict("os.environ", _proxy_env(enabled=None), clear=True),
+            patch.object(url_guard, "_resolves_exclusively_public_async") as resolver,
+        ):
+            proxy = await transport._proxy_url_for(
+                httpx.Request("POST", "https://login.microsoftonline.com/t/oauth2/v2.0/token")
+            )
+        assert proxy is None
+        resolver.assert_not_called()
+        assert transport._proxy_delegates == {}
+
+    async def test_public_idp_is_routed_through_the_proxy(self):
+        """The #1834 fix: a hosted IdP token endpoint reaches the proxy."""
+        transport = url_guard.PlainProxyRoutedAsyncTransport()
+        with (
+            patch.dict("os.environ", _proxy_env(), clear=True),
+            _stub_async_dns(PUBLIC_IP),
+        ):
+            proxy = await transport._proxy_url_for(
+                httpx.Request("POST", "https://login.microsoftonline.com/t/oauth2/v2.0/token")
+            )
+        assert proxy == PROXY_URL
+
+    async def test_in_cluster_idp_stays_direct_with_no_no_proxy_entry(self):
+        """An in-cluster Keycloak needs no configuration to stay direct.
+
+        This is the property that makes the two internal vends safe: they are
+        direct by construction, not because an operator remembered to exclude
+        them. A plain http:// private target must also NOT raise, which is what
+        would happen if this transport inherited the guard.
+        """
+        transport = url_guard.PlainProxyRoutedAsyncTransport()
+        with (
+            patch.dict("os.environ", _proxy_env(no_proxy=None), clear=True),
+            _stub_async_dns(PRIVATE_IP),
+        ):
+            proxy = await transport._proxy_url_for(
+                httpx.Request(
+                    "POST", "http://keycloak:8080/realms/mcp/protocol/openid-connect/token"
+                )
+            )
+        assert proxy is None
+        assert transport._proxy_delegates == {}
+
+    async def test_in_cluster_vend_stays_direct_with_no_no_proxy_entry(self):
+        transport = url_guard.PlainProxyRoutedAsyncTransport()
+        with (
+            patch.dict("os.environ", _proxy_env(no_proxy=None), clear=True),
+            _stub_async_dns(PRIVATE_IP),
+        ):
+            proxy = await transport._proxy_url_for(
+                httpx.Request("POST", "http://registry:8091/_egress_internal/egress-token")
+            )
+        assert proxy is None
+
+    async def test_no_proxy_override_keeps_a_public_target_direct(self):
+        transport = url_guard.PlainProxyRoutedAsyncTransport()
+        with (
+            patch.dict("os.environ", _proxy_env(no_proxy="login.microsoftonline.com"), clear=True),
+            _stub_async_dns(PUBLIC_IP),
+        ):
+            proxy = await transport._proxy_url_for(
+                httpx.Request("POST", "https://login.microsoftonline.com/t/oauth2/v2.0/token")
+            )
+        assert proxy is None
+
+    async def test_no_proxy_for_this_scheme_stays_direct(self):
+        transport = url_guard.PlainProxyRoutedAsyncTransport()
+        with (
+            patch.dict("os.environ", _proxy_env(http_proxy=None), clear=True),
+            _stub_async_dns(PUBLIC_IP),
+        ):
+            proxy = await transport._proxy_url_for(
+                httpx.Request("POST", "http://public-idp.example/token")
+            )
+        assert proxy is None
+
+    async def test_resolution_failure_falls_back_to_direct_without_raising(self):
+        """A new failure mode would be worse than the one it replaces.
+
+        The guarded client fails closed on a resolution error because it is an
+        access decision there. Here resolution is only a routing hint, so a
+        failure dials direct and lets httpx surface its own error.
+        """
+        transport = url_guard.PlainProxyRoutedAsyncTransport()
+        with (
+            patch.dict("os.environ", _proxy_env(), clear=True),
+            patch.object(
+                url_guard.asyncio.get_event_loop(),
+                "getaddrinfo",
+                new=AsyncMock(side_effect=url_guard.socket.gaierror("nxdomain")),
+            ),
+        ):
+            proxy = await transport._proxy_url_for(
+                httpx.Request("POST", "https://gone.example/token")
+            )
+        assert proxy is None
+
+    async def test_mixed_public_and_internal_answers_stay_direct(self):
+        transport = url_guard.PlainProxyRoutedAsyncTransport()
+        with (
+            patch.dict("os.environ", _proxy_env(), clear=True),
+            _stub_async_dns(PUBLIC_IP, PRIVATE_IP),
+        ):
+            proxy = await transport._proxy_url_for(
+                httpx.Request("POST", "https://split.example/token")
+            )
+        assert proxy is None
+
+    async def test_public_http_target_refuses_cleartext(self):
+        """An IdP token POST carries the operator client_secret.
+
+        httpcore's plain forward path sends the absolute URI and merges headers,
+        so the proxy would see the secret. Fail closed, and name the remedy.
+        """
+        transport = url_guard.PlainProxyRoutedAsyncTransport()
+        with (
+            patch.dict("os.environ", _proxy_env(), clear=True),
+            _stub_async_dns(PUBLIC_IP),
+        ):
+            with pytest.raises(UrlValidationError) as exc:
+                await transport._proxy_url_for(
+                    httpx.Request("POST", "http://public-idp.example/token")
+                )
+        assert "NO_PROXY" in str(exc.value)
+        assert "cleartext" in str(exc.value)
+
+    async def test_public_ip_literal_is_proxied(self):
+        transport = url_guard.PlainProxyRoutedAsyncTransport()
+        with patch.dict("os.environ", _proxy_env(), clear=True):
+            proxy = await transport._proxy_url_for(
+                httpx.Request("POST", f"https://{PUBLIC_IP}/token")
+            )
+        assert proxy == PROXY_URL
+
+    async def test_private_ip_literal_stays_direct(self):
+        transport = url_guard.PlainProxyRoutedAsyncTransport()
+        with patch.dict("os.environ", _proxy_env(), clear=True):
+            proxy = await transport._proxy_url_for(
+                httpx.Request("POST", f"http://{PRIVATE_IP}:8091/_egress_internal/egress-token")
+            )
+        assert proxy is None
+
+    async def test_metadata_ip_literal_stays_direct_and_is_not_denied(self):
+        """This transport does NOT make access decisions.
+
+        A metadata address classifies as internal, so it is routed direct rather
+        than denied. Denying here would be a behavior change on a client whose
+        callers are static operator config, and the guarded client is what
+        protects request-derived targets.
+        """
+        transport = url_guard.PlainProxyRoutedAsyncTransport()
+        with patch.dict("os.environ", _proxy_env(), clear=True):
+            proxy = await transport._proxy_url_for(
+                httpx.Request("GET", f"http://{METADATA_IP}/latest/meta-data/")
+            )
+        assert proxy is None
+
+    async def test_request_is_handed_over_unmodified(self):
+        """No pinning: the host must survive so the tunnel can verify the cert."""
+        transport = url_guard.PlainProxyRoutedAsyncTransport()
+        delegate = MagicMock()
+        delegate.handle_async_request = AsyncMock(return_value=httpx.Response(200))
+        request = httpx.Request("POST", "https://login.microsoftonline.com/t/oauth2/v2.0/token")
+        with (
+            patch.dict("os.environ", _proxy_env(), clear=True),
+            _stub_async_dns(PUBLIC_IP),
+            patch.object(transport, "_proxy_delegate", return_value=delegate),
+        ):
+            await transport.handle_async_request(request)
+        forwarded = delegate.handle_async_request.await_args.args[0]
+        assert forwarded.url.host == "login.microsoftonline.com"
+        assert "sni_hostname" not in forwarded.extensions
+
+    async def test_direct_path_does_not_touch_a_delegate(self):
+        transport = url_guard.PlainProxyRoutedAsyncTransport()
+        with (
+            patch.dict("os.environ", _proxy_env(), clear=True),
+            _stub_async_dns(PRIVATE_IP),
+            patch.object(
+                httpx.AsyncHTTPTransport,
+                "handle_async_request",
+                new=AsyncMock(return_value=httpx.Response(200)),
+            ) as direct,
+        ):
+            await transport.handle_async_request(
+                httpx.Request("POST", "http://keycloak:8080/token")
+            )
+        direct.assert_awaited_once()
+        assert transport._proxy_delegates == {}
+
+    async def test_routing_is_recorded_under_the_plain_profile(self):
+        transport = url_guard.PlainProxyRoutedAsyncTransport()
+        with (
+            patch.dict("os.environ", _proxy_env(), clear=True),
+            _stub_async_dns(PUBLIC_IP),
+            patch.object(url_guard, "_record_egress_route") as record,
+        ):
+            await transport._proxy_url_for(
+                httpx.Request("POST", "https://login.microsoftonline.com/t/oauth2/v2.0/token")
+            )
+        record.assert_called_once_with("plain", "proxied", "ok")
+
+    async def test_delegates_are_closed_on_aclose(self):
+        transport = url_guard.PlainProxyRoutedAsyncTransport()
+        delegate = MagicMock()
+        delegate.aclose = AsyncMock()
+        transport._proxy_delegates[PROXY_URL] = delegate
+        await transport.aclose()
+        delegate.aclose.assert_awaited_once()
+        assert transport._proxy_delegates == {}
+
+    def test_shared_plain_client_uses_the_proxy_routed_transport(self):
+        """The regression guard: a bare AsyncHTTPTransport here is issue #1834."""
+        with patch.object(url_guard, "settings", _settings_with_pool()):
+            url_guard.reset_shared_clients_for_tests()
+            client = url_guard.shared_plain_async_client()
+        assert isinstance(client._transport, url_guard.PlainProxyRoutedAsyncTransport)
+        url_guard.reset_shared_clients_for_tests()
+
+
+class TestResolvesExclusivelyPublic:
+    """The routing classifier used by the plain transport. It must never raise."""
+
+    async def test_public_hostname(self):
+        with _stub_async_dns(PUBLIC_IP):
+            assert await url_guard._resolves_exclusively_public_async("acme.example", 443) is True
+
+    async def test_private_hostname(self):
+        with _stub_async_dns(PRIVATE_IP):
+            assert await url_guard._resolves_exclusively_public_async("keycloak", 8080) is False
+
+    async def test_mixed_answers_are_not_exclusively_public(self):
+        with _stub_async_dns(PUBLIC_IP, PRIVATE_IP):
+            assert await url_guard._resolves_exclusively_public_async("split.example", 443) is False
+
+    async def test_resolution_failure_returns_none(self):
+        with patch.object(
+            url_guard.asyncio.get_event_loop(),
+            "getaddrinfo",
+            new=AsyncMock(side_effect=url_guard.socket.gaierror("nxdomain")),
+        ):
+            assert await url_guard._resolves_exclusively_public_async("gone.example", 443) is None
+
+    async def test_timeout_returns_none(self):
+        with patch.object(
+            url_guard.asyncio.get_event_loop(),
+            "getaddrinfo",
+            new=AsyncMock(side_effect=TimeoutError()),
+        ):
+            assert await url_guard._resolves_exclusively_public_async("slow.example", 443) is None
+
+    @pytest.mark.parametrize(
+        "ip,expected",
+        [
+            (PUBLIC_IP, True),
+            (PRIVATE_IP, False),
+            (METADATA_IP, False),
+            ("127.0.0.1", False),
+            ("100.64.0.1", False),  # CGNAT
+            ("2001:4860:4860::8888", True),  # public IPv6
+            ("::1", False),
+        ],
+    )
+    async def test_ip_literals_need_no_resolution(self, ip, expected):
+        assert await url_guard._resolves_exclusively_public_async(ip, 443) is expected
