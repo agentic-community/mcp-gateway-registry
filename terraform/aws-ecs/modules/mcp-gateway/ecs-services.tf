@@ -627,6 +627,18 @@ module "ecs_service_auth" {
         {
           name  = "EGRESS_HTTP_POOL_CONNECT_RETRIES"
           value = tostring(var.egress_http_pool_connect_retries)
+        },
+        # Forward-proxy egress for the SSRF-guarded clients (issue #1832). OFF by
+        # default. HTTP_PROXY / HTTPS_PROXY / NO_PROXY are passed through the
+        # *_extra_env variables, not here, because they are standard environment
+        # variables rather than chart-managed ones.
+        {
+          name  = "EGRESS_FORWARD_PROXY_ENABLED"
+          value = tostring(var.egress_forward_proxy_enabled)
+        },
+        {
+          name  = "EGRESS_FORWARD_PROXY_CA_BUNDLE"
+          value = var.egress_forward_proxy_ca_bundle
         }
         ],
         # PR #947: MongoDB connection string override (plain-text variant).
@@ -1946,6 +1958,18 @@ module "ecs_service_registry" {
         {
           name  = "EGRESS_HTTP_POOL_CONNECT_RETRIES"
           value = tostring(var.egress_http_pool_connect_retries)
+        },
+        # Forward-proxy egress for the SSRF-guarded clients (issue #1832). OFF by
+        # default. HTTP_PROXY / HTTPS_PROXY / NO_PROXY are passed through the
+        # *_extra_env variables, not here, because they are standard environment
+        # variables rather than chart-managed ones.
+        {
+          name  = "EGRESS_FORWARD_PROXY_ENABLED"
+          value = tostring(var.egress_forward_proxy_enabled)
+        },
+        {
+          name  = "EGRESS_FORWARD_PROXY_CA_BUNDLE"
+          value = var.egress_forward_proxy_ca_bundle
         },
         # obo_exchange target_audience allowlist (whitespace-separated). When set,
         # the authoritative positive control; when empty a shape rule applies

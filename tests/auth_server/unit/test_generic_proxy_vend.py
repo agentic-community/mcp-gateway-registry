@@ -31,22 +31,12 @@ class _FakeResponse:
 
 
 class _FakeAsyncClient:
-    """Async-context-manager stand-in for httpx.AsyncClient."""
+    """Stand-in for the pooled client returned by shared_plain_async_client."""
 
     def __init__(self, *, response=None, post_exc=None):
         self._response = response
         self._post_exc = post_exc
         self.post_calls = []
-
-    def __call__(self, *args, **kwargs):
-        # httpx.AsyncClient(timeout=...) construction; capture and return self.
-        return self
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *exc):
-        return False
 
     async def post(self, url, **kwargs):
         self.post_calls.append((url, kwargs))
@@ -56,7 +46,16 @@ class _FakeAsyncClient:
 
 
 def _patch_client(client):
-    return patch.object(server.httpx, "AsyncClient", client)
+    """Patch the pooled plain client this hop uses.
+
+    The hop deliberately uses ``shared_plain_async_client()`` rather than a bare
+    ``httpx.AsyncClient``, matching its sibling egress-token vend: a bare client
+    defaults to ``trust_env=True``, so an operator-set HTTP_PROXY would send this
+    in-cluster POST to a corporate forward proxy (issue #1832). Patch the same
+    way ``_patch_vend_httpx`` in test_server.py does, so both vend test files
+    agree on what they are standing in for.
+    """
+    return patch("registry.utils.url_guard.shared_plain_async_client", return_value=client)
 
 
 def _patch_mint(**kwargs):
@@ -135,3 +134,34 @@ async def test_success_missing_overridable_defaults_empty():
     defaults, overridable = result
     assert defaults == {"X-Api-Key": "secret"}
     assert overridable == []
+
+
+async def test_uses_the_pooled_plain_client_not_a_bare_one():
+    """The hop must be proxy-blind (issue #1832).
+
+    A bare ``httpx.AsyncClient`` defaults to ``trust_env=True``, so an
+    operator-set HTTP_PROXY would hand this in-cluster POST to the corporate
+    forward proxy and the vend would fail unless NO_PROXY happened to cover the
+    internal registry URL. ``shared_plain_async_client`` passes a custom
+    transport, which is what keeps the request direct.
+    """
+    client = _FakeAsyncClient(response=_FakeResponse(200, json_value={"headers": {}}))
+    with (
+        _patch_mint(return_value="svc-token"),
+        _patch_client(client) as pooled,
+        patch.object(server.httpx, "AsyncClient") as bare,
+    ):
+        await server._vend_generic_upstream_headers("gtok", "server", "/svc")
+
+    pooled.assert_called_once_with()
+    bare.assert_not_called()
+
+
+async def test_passes_the_vend_timeout_per_request():
+    """A pooled client's default timeout is a fallback, so the hop must pass its own."""
+    client = _FakeAsyncClient(response=_FakeResponse(200, json_value={"headers": {}}))
+    with _patch_mint(return_value="svc-token"), _patch_client(client):
+        await server._vend_generic_upstream_headers("gtok", "server", "/svc")
+
+    _url, kwargs = client.post_calls[0]
+    assert kwargs["timeout"] == server._egress_vend_timeout_seconds()

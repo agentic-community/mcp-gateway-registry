@@ -378,6 +378,10 @@ module "mcp_gateway" {
   ssrf_allowed_hosts        = var.ssrf_allowed_hosts
   ssrf_allowed_cidrs        = var.ssrf_allowed_cidrs
 
+  # Forward-proxy egress for the SSRF-guarded clients (issue #1832)
+  egress_forward_proxy_enabled   = var.egress_forward_proxy_enabled
+  egress_forward_proxy_ca_bundle = var.egress_forward_proxy_ca_bundle
+
   # CIMD (Client ID Metadata Document) publisher
   cimd_publisher_enabled = var.cimd_publisher_enabled
   cimd_cache_ttl         = var.cimd_cache_ttl

@@ -454,6 +454,12 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             ("egress_http_pool_max_keepalive", "HTTP Pool Max Keep-Alive", False),
             ("egress_http_pool_keepalive_expiry_seconds", "HTTP Pool Keep-Alive Expiry (s)", False),
             ("egress_http_pool_connect_retries", "HTTP Pool Connect Retries", False),
+            # forward-proxy egress for the SSRF-guarded clients. The boolean and
+            # the CA-bundle PATH are shown; the proxy URL deliberately is NOT,
+            # because HTTP_PROXY may embed basic-auth credentials
+            # (http://user:pass@proxy:3128). The boolean answers "is this on".
+            ("egress_forward_proxy_enabled", "Forward Proxy Enabled", False),
+            ("egress_forward_proxy_ca_bundle", "Forward Proxy CA Bundle", False),
         ],
     },
     "a2a_reverse_proxy": {

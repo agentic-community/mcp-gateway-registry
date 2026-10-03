@@ -5,6 +5,21 @@
 {{- $imgPullPolicy := default .Values.global.image.pullPolicy .Values.image.pullPolicy }}
 {{- /* Fail-fast validation of user-supplied extraEnv */ -}}
 {{- include "registry.validateExtraEnv" . -}}
+{{- /* caBundle requires exactly one source, and a key and mountPath (issue #1832). */ -}}
+{{- if .Values.caBundle.enabled }}
+  {{- if and .Values.caBundle.existingConfigMap .Values.caBundle.existingSecret }}
+    {{- fail "registry.caBundle: set exactly ONE of existingConfigMap or existingSecret, not both" }}
+  {{- end }}
+  {{- if not (or .Values.caBundle.existingConfigMap .Values.caBundle.existingSecret) }}
+    {{- fail "registry.caBundle.enabled is true but neither existingConfigMap nor existingSecret is set. Create a ConfigMap or Secret holding the PEM bundle and name it here, otherwise EGRESS_FORWARD_PROXY_CA_BUNDLE would point at a path that does not exist in the pod." }}
+  {{- end }}
+  {{- if not .Values.caBundle.key }}
+    {{- fail "registry.caBundle.key must not be empty" }}
+  {{- end }}
+  {{- if not .Values.caBundle.mountPath }}
+    {{- fail "registry.caBundle.mountPath must not be empty" }}
+  {{- end }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -443,9 +458,27 @@ spec:
             - name: EMBEDDINGS_RESPONSE_FORMAT
               value: {{ .Values.embeddings.responseFormat | quote }}
             {{- end }}
+            # Forward-proxy egress for the SSRF-guarded clients (issue #1832).
+            # OFF by default; see values.yaml for the security trade-off. The CA
+            # bundle path is DERIVED from the caBundle block so an operator never
+            # writes it twice, and is empty (no change) when caBundle is disabled.
+            - name: EGRESS_FORWARD_PROXY_ENABLED
+              value: {{ .Values.app.egressForwardProxyEnabled | default false | toString | quote }}
+            - name: EGRESS_FORWARD_PROXY_CA_BUNDLE
+              {{- if .Values.caBundle.enabled }}
+              value: {{ printf "%s/%s" (trimSuffix "/" .Values.caBundle.mountPath) .Values.caBundle.key | quote }}
+              {{- else }}
+              value: ""
+              {{- end }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
+          {{- if .Values.caBundle.enabled }}
+          volumeMounts:
+            - name: egress-forward-proxy-ca
+              mountPath: {{ .Values.caBundle.mountPath | quote }}
+              readOnly: true
+          {{- end }}
           livenessProbe:
             httpGet:
               path: /health
@@ -462,3 +495,20 @@ spec:
             periodSeconds: 5
             timeoutSeconds: 3
             failureThreshold: 3
+      {{- if .Values.caBundle.enabled }}
+      volumes:
+        - name: egress-forward-proxy-ca
+          {{- if .Values.caBundle.existingSecret }}
+          secret:
+            secretName: {{ .Values.caBundle.existingSecret | quote }}
+            items:
+              - key: {{ .Values.caBundle.key | quote }}
+                path: {{ .Values.caBundle.key | quote }}
+          {{- else }}
+          configMap:
+            name: {{ .Values.caBundle.existingConfigMap | quote }}
+            items:
+              - key: {{ .Values.caBundle.key | quote }}
+                path: {{ .Values.caBundle.key | quote }}
+          {{- end }}
+      {{- end }}

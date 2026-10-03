@@ -794,7 +794,12 @@ class NginxConfigService:
 
         # Priority 2: Try EC2 metadata service for private IP
         try:
-            async with httpx.AsyncClient() as client:
+            # trust_env=False is load-bearing, matching registry/core/telemetry.py:
+            # it tells httpx to ignore HTTP_PROXY / HTTPS_PROXY / NO_PROXY so a
+            # 169.254.169.254 probe is never handed to a corporate forward proxy.
+            # Without it, this lookup fails in any egress-restricted deployment
+            # that exports HTTP_PROXY (issue #1832).
+            async with httpx.AsyncClient(trust_env=False) as client:
                 # Get session token for IMDSv2
                 token_response = await client.put(
                     "http://169.254.169.254/latest/api/token",

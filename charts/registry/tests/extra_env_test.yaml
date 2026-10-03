@@ -154,7 +154,8 @@ tests:
       # AWS_EC2_METADATA_DISABLED (chart-managed security constant, always
       # rendered) is env[62]; SECURITY_BLOCK_ON_SCAN_FAILURE (always rendered)
       # directly follows it;
-      # user extraEnv entries are appended at the end (env[63] onward).
+      # the forward-proxy egress pair (issue #1832, always rendered) is
+      # env[57]/env[58]; user extraEnv entries are appended at the end.
       #
       # The seven CIMD publisher vars (always rendered) sit at env[16]-env[22],
       # between SSRF_ALLOWED_CIDRS and A2A_REVERSE_PROXY_ENABLED, which is why
@@ -306,11 +307,19 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].env[56].name
           value: SECURITY_BLOCK_ON_SCAN_FAILURE
+      # Forward-proxy egress pair (issue #1832), always rendered, immediately
+      # before the extraEnv append.
       - equal:
           path: spec.template.spec.containers[0].env[57].name
-          value: MY_FLAG
+          value: EGRESS_FORWARD_PROXY_ENABLED
       - equal:
           path: spec.template.spec.containers[0].env[58].name
+          value: EGRESS_FORWARD_PROXY_CA_BUNDLE
+      - equal:
+          path: spec.template.spec.containers[0].env[59].name
+          value: MY_FLAG
+      - equal:
+          path: spec.template.spec.containers[0].env[60].name
           value: MY_SECRET_VAR
 
   - it: appends extraEnvFrom entries after chart-managed envFrom sources

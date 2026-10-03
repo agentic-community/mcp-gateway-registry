@@ -136,6 +136,27 @@ app:
   gatewayGenericAcquireTimeoutSeconds: 5 # Max wait (s) for either concurrency pool before 503
   gatewayGenericStreamMaxDurationSeconds: 3600 # Absolute lifetime (s) for one stream
   gatewayGenericStreamMaxBytes: "104857600" # Raw response-byte ceiling per stream (100 MiB)
+  # Forward-proxy egress for the SSRF-guarded clients (issue #1832). OFF by
+  # default. Only needed where the pod has NO direct internet egress and all
+  # outbound traffic must traverse a corporate forward proxy.
+  #
+  # The auth-server needs this as much as the registry: the
+  # egress-credential-injected runtime tool call and the OBO token exchange both
+  # run here, so a proxy configured only on the registry fixes half the paths.
+  #
+  # When true, a target is sent through the proxy named in HTTPS_PROXY /
+  # HTTP_PROXY ONLY when every address it resolves to is on the public internet.
+  # An internal target stays direct and IP-pinned with no extra configuration.
+  # Resolution and classification still run before any CONNECT, and metadata /
+  # credential endpoints stay hard-denied, but a proxied request is dialed by
+  # hostname rather than a pinned IP, so DNS-rebinding protection is relaxed for
+  # public destinations only. Hence opt-in rather than inferred from HTTP_PROXY.
+  #
+  # Credential-bearing egress (OBO token exchange, the injected egress credential,
+  # federation) accepts only https through a proxy, so the secret stays inside the
+  # CONNECT tunnel. Set HTTP_PROXY / HTTPS_PROXY / NO_PROXY through `extraEnv`;
+  # they are deliberately not chart-managed. See docs/forward-proxy-egress.md.
+  egressForwardProxyEnabled: false
 # Authentication Provider Configuration
 # Choose ONE provider: keycloak, entra, okta, auth0, cognito, or pingfederate
 authProvider:
@@ -310,6 +331,24 @@ resources:
 #       secretKeyRef:
 #         name: my-secret
 #         key: my-key
+# PEM CA bundle mounted into the pod and trusted by the SSRF-guarded egress
+# clients IN ADDITION to the default roots (issue #1832). Needed only when the
+# forward proxy terminates TLS and re-signs it with an internal CA, which makes
+# every proxied upstream certificate fail verification against public roots.
+#
+# Deliberately a narrow, dedicated block rather than generic extraVolumes: it is
+# self-documenting and does not hand operators a way to mount anything anywhere.
+# The deployment derives EGRESS_FORWARD_PROXY_CA_BUNDLE from mountPath and key, so
+# the path is never written twice. A missing or malformed PEM fails the pod at
+# startup rather than surfacing as a certificate error on every proxied request.
+caBundle:
+  enabled: false
+  # Exactly one of these is required when enabled (a `fail` guard enforces it).
+  existingConfigMap: ""   # ConfigMap holding the PEM
+  existingSecret: ""      # or a Secret, for operators who treat the chain as sensitive
+  key: ca-bundle.pem      # key within the ConfigMap or Secret
+  mountPath: /etc/ssl/mcp-gateway   # directory the volume is mounted at
+
 extraEnv: []
 # Extra `envFrom:` sources appended to the container. Use this to inject
 # all keys from an external ConfigMap or Secret you manage (e.g. via

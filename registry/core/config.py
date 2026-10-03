@@ -776,6 +776,68 @@ class Settings(BaseSettings):
             "tokens and user assertions."
         ),
     )
+
+    # Forward-proxy egress. OFF by default, deliberately: turning it on relaxes
+    # IP-rebind pinning for targets that resolve exclusively to public addresses
+    # (a CONNECT tunnel is dialed by name, and the proxy resolves that name
+    # itself), so it must be an explicit operator decision rather than a side
+    # effect of HTTP_PROXY happening to be exported into the container.
+    #
+    # NOTE: the SSRF guard reads EGRESS_FORWARD_PROXY_ENABLED from os.environ
+    # directly (registry/utils/url_guard.py::_forward_proxy_config), NOT through
+    # this field. The guard must stay importable without building Settings,
+    # because cli/agentcore uses it with zero registry configuration. This field
+    # exists so the value is documented, validated, and visible on the System
+    # Config page. tests/unit/utils/test_url_guard_forward_proxy.py asserts the
+    # two readers agree on the default and on every truthy spelling Pydantic
+    # accepts, because a config page showing 'true' while the guard behaves as
+    # 'false' is worse than the feature simply being off.
+    egress_forward_proxy_enabled: bool = Field(
+        default=False,
+        description=(
+            "When true, the SSRF-guarded egress clients send a target through the "
+            "forward proxy named in HTTPS_PROXY / HTTP_PROXY only when every "
+            "address it resolves to is on the public internet. Needed where the "
+            "registry has no direct internet egress. A target resolving to an "
+            "internal address stays direct and IP-pinned with no further "
+            "configuration, so internal MCP servers are unaffected. On the proxied "
+            "route the guard still resolves the host and classifies every answer, "
+            "and cloud/workload credential, metadata, link-local, reserved and "
+            "multicast addresses stay hard-denied, but the request is dialed by "
+            "hostname instead of a pinned IP, so DNS-rebinding protection is "
+            "relaxed for public destinations only. NO_PROXY is an override for "
+            "public addresses reachable directly. Credential-bearing profiles "
+            "(egress OAuth, federation, egress upstream) accept only https targets "
+            "through a proxy, so the secret stays inside the CONNECT tunnel. "
+            "Requires the pod to resolve external DNS, because classification runs "
+            "before the CONNECT. See docs/forward-proxy-egress.md."
+        ),
+    )
+
+    # TLS-intercepting proxy support. Follows the existing CA-bundle pattern
+    # (PF_ADMIN_CA_BUNDLE, PINGFEDERATE_CA_BUNDLE, KEYCLOAK_CA_BUNDLE): an env var
+    # holding a path to a mounted PEM, validated fail-closed at startup.
+    # Deliberately NOT SSL_CERT_FILE: ssl.create_default_context(cafile=...)
+    # REPLACES the certifi store instead of adding to it, so an operator who points
+    # SSL_CERT_FILE at the one CA their proxy team gave them loses TLS to every
+    # direct-path target. This setting loads the bundle ON TOP of the default roots.
+    egress_forward_proxy_ca_bundle: str = Field(
+        default="",
+        description=(
+            "Path to a PEM CA bundle the SSRF-guarded egress clients trust, in "
+            "addition to the default roots. Needed when the forward proxy "
+            "terminates TLS and re-signs it with an internal CA, which makes every "
+            "proxied upstream certificate fail verification against public roots. "
+            "The bundle is also used to verify the connection to the proxy itself "
+            "when the proxy endpoint is https. Empty (default) keeps the default "
+            "trust store and changes nothing. A path that is missing, unreadable, "
+            "or not valid PEM raises at startup rather than falling back, because a "
+            "silent fallback surfaces as a certificate error on every proxied "
+            "request. Mount the file into the registry and auth-server containers "
+            "the same way KEYCLOAK_CA_BUNDLE is mounted. Consumed by both "
+            "processes."
+        ),
+    )
     nginx_config_validation_required: bool = Field(
         default=False,
         description=(

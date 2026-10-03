@@ -195,6 +195,54 @@ sanitizer that isn't called) is equivalent to no check.
 - **Every fetch path uses the guarded client** — grep for raw `httpx`/SDK clients
   and third-party SDKs that own their own client. Internal targets are opt-in via
   an explicit allowlist (`SSRF_ALLOWED_HOSTS`/`SSRF_ALLOWED_CIDRS`), default deny.
+- **A transport-level egress relaxation must be opt-in, default off, and must
+  keep resolution and classification.** Reachability sometimes requires giving up
+  one SSRF control, as forward-proxy support does: a `CONNECT` tunnel takes its
+  TLS `server_hostname` from the request URL and ignores the SNI override that
+  pinning sets, so a pinned request through a tunnel verifies the certificate
+  against an IP and fails. Four rules make such a trade safe. Gate it behind an
+  explicit flag that defaults off, so exporting an unrelated environment variable
+  (`HTTP_PROXY`) can never change the posture. Keep resolving and classifying
+  every DNS answer before the connection, so the metadata/credential, link-local,
+  reserved and multicast hard-denies still run and one blocked answer denies the
+  request. Derive the scope of the relaxation from the classification rather than
+  from an operator-maintained exclusion list, so a forgotten entry cannot silently
+  drop the control for an internal target. Refuse cleartext on any path that
+  carries a secret, because a plain forward request hands the full URL and the
+  `Authorization` header to the intermediary. Record what was given up in the
+  module docstring, the setting description, and the feature's docs page.
+  (`EGRESS_FORWARD_PROXY_ENABLED`, `registry/utils/url_guard.py`, issue #1832.)
+- **Setting `HTTP_PROXY` re-points every proxy-aware SDK in the process, not just
+  your own client.** The AWS SDK honors it independently, so once it is set
+  botocore's instance-metadata credential provider sends IAM credential requests
+  to the proxy. Verified on a test deployment: the proxy established connections
+  to `169.254.169.254`, the SDK read the role name from
+  `/latest/meta-data/iam/security-credentials/`, and used the resulting
+  credentials. A proxy operator must never see a credential request, and a proxy
+  that can itself reach a metadata endpoint answers from its own network position
+  rather than the caller's. Two controls, and ship both: set
+  `AWS_EC2_METADATA_DISABLED=true` wherever the deployment does not need an
+  instance role (Helm and Terraform already do; Compose does not, because an
+  EC2-hosted Compose deployment may use the instance role for Amazon Bedrock),
+  and put every metadata address in the recommended `NO_PROXY`
+  (`169.254.169.254`, `169.254.170.2`, `169.254.170.23`). A `NO_PROXY` listing
+  only hostnames does not cover them, which is how this was missed. When adding a
+  proxy feature, enumerate the OTHER libraries in the process that read the same
+  variables before documenting a recommended value.
+- **Implement a proxy inside the guarded transport, never on the client.** Passing
+  `proxy=` to `httpx.AsyncClient` makes `_get_proxy_map` return `{"all://": proxy}`
+  and mount a plain transport that `_transport_for_url` prefers over the custom
+  one. Every request then skips the guard: no validation, no classification, no
+  metadata deny, no per-redirect re-check, while the factory is still called
+  `guarded_async_client`. The one-line fix is the dangerous one.
+- **A CA bundle setting must ADD to the trust store, not replace it.** httpx reads
+  `SSL_CERT_FILE`, so pointing it at a corporate CA looks like it works, but
+  `ssl.create_default_context(cafile=...)` replaces the certifi store rather than
+  extending it, breaking TLS to every other target. Take an explicit path, seed the
+  context from `certifi.where()` (httpx does not read the OS trust store), then
+  `load_verify_locations` the operator's bundle on top. Fail closed at startup on a
+  missing or malformed file: a silent fallback surfaces later as a certificate
+  error on every request and reads like a bug in the feature.
 - **A feature merged in parallel with a hardening PR is the classic gap.** When a
   hardening PR routes "every outbound URL" through the guard, its diff only covers
   files that existed on its branch. A feature developed concurrently (its own new

@@ -2752,6 +2752,15 @@ async def lifespan(app: FastAPI):
             "redirect validation. Configure the allowlist for the hardened posture."
         )
 
+    # Resolve forward-proxy egress configuration now (issue #1832), so a bad
+    # EGRESS_FORWARD_PROXY_CA_BUNDLE path fails the process here rather than
+    # surfacing as a certificate error on the first proxied runtime hop. The
+    # auth-server needs this as much as the registry: the egress-credential-
+    # injected tool call and the OBO token exchange both run here.
+    from registry.utils.url_guard import validate_forward_proxy_config
+
+    validate_forward_proxy_config()
+
     # Build multi-key static token map (Issue #779).
     # Runs after scopes are loaded so map_groups_to_scopes can resolve groups.
     await _build_static_token_map()
@@ -7648,16 +7657,38 @@ async def _vend_generic_upstream_headers(
         return None
 
     try:
-        async with httpx.AsyncClient(timeout=_egress_vend_timeout_seconds()) as client:
-            resp = await client.post(
-                f"{base}/_egress_internal/generic-upstream-headers",
-                json={"entity_type": entity_type, "registered_path": registered_path},
-                headers={
-                    "Authorization": f"Bearer {service_token}",
-                    "X-Internal-Token-Generic": generic_token,
-                    "Content-Type": "application/json",
-                },
-            )
+        # Pooled, process-lifetime PLAIN client for this in-cluster registry hop,
+        # matching its sibling vend above. A bare httpx.AsyncClient here would
+        # default to trust_env=True, so an operator-set HTTP_PROXY would send this
+        # internal POST to the corporate forward proxy unless NO_PROXY happened to
+        # cover the internal registry URL (issue #1832). The plain shared client
+        # passes a custom transport and is therefore proxy-blind, which is what
+        # keeps this hop reaching the registry directly. The registry re-derives
+        # and re-vends per request, so the POST is idempotent and safe to re-POST
+        # once when a pooled keep-alive was closed while idle.
+        #
+        # Flat-first import: the container flattens auth_server/* into /app, so
+        # the packaged form resolves only when running from the repo root (tests).
+        try:
+            from observability.meters import record_egress_conn_reset
+        except ImportError:
+            from auth_server.observability.meters import record_egress_conn_reset
+
+        from registry.utils.url_guard import post_with_reconnect, shared_plain_async_client
+
+        client = shared_plain_async_client()
+        resp = await post_with_reconnect(
+            client,
+            f"{base}/_egress_internal/generic-upstream-headers",
+            json={"entity_type": entity_type, "registered_path": registered_path},
+            headers={
+                "Authorization": f"Bearer {service_token}",
+                "X-Internal-Token-Generic": generic_token,
+                "Content-Type": "application/json",
+            },
+            timeout=_egress_vend_timeout_seconds(),
+            on_reset=lambda: record_egress_conn_reset("generic-headers-vend"),
+        )
     except httpx.HTTPError as exc:
         logger.error("generic upstream-headers vend: registry unreachable (%s)", type(exc).__name__)
         return None
