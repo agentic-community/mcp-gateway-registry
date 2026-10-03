@@ -32,7 +32,7 @@ EGRESS_FORWARD_PROXY_ENABLED=true
 # extra_env/registry.env and extra_env/auth-server.env
 HTTP_PROXY=http://corp-proxy.internal:3128
 HTTPS_PROXY=http://corp-proxy.internal:3128
-NO_PROXY=localhost,127.0.0.1,registry,auth-server,mcpgw-server,keycloak,mongodb
+NO_PROXY=localhost,127.0.0.1,169.254.169.254,169.254.170.2,169.254.170.23,registry,auth-server,mcpgw-server,keycloak,mongodb
 ```
 
 ### Helm
@@ -47,7 +47,7 @@ registry:
     - name: HTTP_PROXY
       value: http://corp-proxy.internal:3128
     - name: NO_PROXY
-      value: localhost,127.0.0.1,.svc.cluster.local,mcpgw-server,auth-server,keycloak
+      value: localhost,127.0.0.1,169.254.169.254,169.254.170.2,169.254.170.23,.svc.cluster.local,mcpgw-server,auth-server,keycloak
 
 auth-server:
   app:
@@ -58,7 +58,7 @@ auth-server:
     - name: HTTP_PROXY
       value: http://corp-proxy.internal:3128
     - name: NO_PROXY
-      value: localhost,127.0.0.1,.svc.cluster.local,mcpgw-server,registry,keycloak
+      value: localhost,127.0.0.1,169.254.169.254,169.254.170.2,169.254.170.23,.svc.cluster.local,mcpgw-server,registry,keycloak
 ```
 
 ### Terraform and ECS
@@ -69,12 +69,12 @@ egress_forward_proxy_enabled = true
 registry_extra_env = [
   { name = "HTTPS_PROXY", value = "http://corp-proxy.internal:3128" },
   { name = "HTTP_PROXY", value = "http://corp-proxy.internal:3128" },
-  { name = "NO_PROXY", value = "localhost,127.0.0.1,mcp-gateway-v2.local" },
+  { name = "NO_PROXY", value = "localhost,127.0.0.1,169.254.169.254,169.254.170.2,169.254.170.23,mcp-gateway-v2.local" },
 ]
 auth_server_extra_env = [
   { name = "HTTPS_PROXY", value = "http://corp-proxy.internal:3128" },
   { name = "HTTP_PROXY", value = "http://corp-proxy.internal:3128" },
-  { name = "NO_PROXY", value = "localhost,127.0.0.1,mcp-gateway-v2.local" },
+  { name = "NO_PROXY", value = "localhost,127.0.0.1,169.254.169.254,169.254.170.2,169.254.170.23,mcp-gateway-v2.local" },
 ]
 ```
 
@@ -87,6 +87,8 @@ The registry runs the health probes and tool discovery. The auth-server runs the
 A target goes through the proxy only when every address it resolves to is on the public internet. An internal target stays direct and keeps its IP pin with no extra configuration, so in-cluster MCP servers are unaffected and you do not have to list them anywhere.
 
 `NO_PROXY` is an override rather than the routing mechanism. Use it for public addresses this host reaches directly, which saves a pointless tunnel. Listing your in-cluster hostnames as well costs nothing and is good hygiene.
+
+Keep the cloud metadata addresses in `NO_PROXY`. The AWS SDK reads `HTTP_PROXY` on its own, so once you set it the SDK's instance-metadata credential provider starts sending IAM credential requests to your proxy. Helm and Terraform set `AWS_EC2_METADATA_DISABLED=true` to close that at the source; on Docker Compose, where an EC2 instance role may be the credential source for Amazon Bedrock, these `NO_PROXY` entries are what stop it.
 
 A CIDR entry in `NO_PROXY` does not work. Neither curl nor httpx expands one, so `10.0.0.0/8` fails to match `10.1.2.3`. Name the host, or use a domain suffix such as `.svc.cluster.local`. The guard logs a warning if it sees a CIDR-shaped entry.
 
