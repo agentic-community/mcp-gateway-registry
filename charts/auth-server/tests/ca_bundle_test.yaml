@@ -26,6 +26,11 @@ tests:
     set:
       app:
         egressForwardProxyEnabled: true
+      # NO_PROXY must exclude the cloud credential endpoints once the flag is on,
+      # enforced by the guard in deployment.yaml. See no_proxy_guard_test.yaml.
+      extraEnv:
+        - name: NO_PROXY
+          value: "localhost,169.254.169.254,169.254.170.2,169.254.170.23"
     asserts:
       - contains:
           path: spec.template.spec.containers[0].env

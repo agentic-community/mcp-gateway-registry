@@ -1,0 +1,109 @@
+suite: forward proxy NO_PROXY credential-endpoint guard (issue #1832)
+templates:
+  - deployment.yaml
+release:
+  name: test
+  namespace: default
+tests:
+  - it: imposes no requirement when the proxy is disabled
+    asserts:
+      - isKind:
+          of: Deployment
+
+  - it: refuses to render when the proxy is on and NO_PROXY is absent
+    set:
+      app:
+        egressForwardProxyEnabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "does not exclude the cloud credential endpoint"
+
+  - it: refuses when NO_PROXY omits all three endpoints
+    set:
+      app:
+        egressForwardProxyEnabled: true
+      extraEnv:
+        - name: NO_PROXY
+          value: "localhost,127.0.0.1,keycloak"
+    asserts:
+      - failedTemplate:
+          errorPattern: "169.254.169.254"
+
+  - it: refuses when NO_PROXY covers only EC2 IMDS
+    # AWS_EC2_METADATA_DISABLED would cover this one address and no more, which is
+    # why the container-credential endpoints have to be listed explicitly.
+    set:
+      app:
+        egressForwardProxyEnabled: true
+      extraEnv:
+        - name: NO_PROXY
+          value: "localhost,169.254.169.254"
+    asserts:
+      - failedTemplate:
+          errorPattern: "169.254.170.2"
+
+  - it: renders when NO_PROXY excludes all three endpoints
+    set:
+      app:
+        egressForwardProxyEnabled: true
+      extraEnv:
+        - name: HTTPS_PROXY
+          value: "http://corp-proxy.internal:3128"
+        - name: NO_PROXY
+          value: "localhost,127.0.0.1,169.254.169.254,169.254.170.2,169.254.170.23,keycloak"
+    asserts:
+      - isKind:
+          of: Deployment
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: EGRESS_FORWARD_PROXY_ENABLED
+            value: "true"
+
+  - it: accepts the NO_PROXY wildcard
+    set:
+      app:
+        egressForwardProxyEnabled: true
+      extraEnv:
+        - name: NO_PROXY
+          value: "*"
+    asserts:
+      - isKind:
+          of: Deployment
+
+  - it: accepts the value the docs recommend
+    # Guards the chart and docs/forward-proxy-egress.md against drifting apart.
+    set:
+      app:
+        egressForwardProxyEnabled: true
+      extraEnv:
+        - name: NO_PROXY
+          value: "localhost,127.0.0.1,169.254.169.254,169.254.170.2,169.254.170.23,.svc.cluster.local,.cluster.local,mcpgw-server,auth-server,keycloak"
+    asserts:
+      - isKind:
+          of: Deployment
+
+  - it: does not accept 169.254.170.23 as covering 169.254.170.2
+    # A substring test would wrongly pass here, letting the chart render a config
+    # the startup check rejects, which is a CrashLoopBackOff instead of a clear
+    # install-time error.
+    set:
+      app:
+        egressForwardProxyEnabled: true
+      extraEnv:
+        - name: NO_PROXY
+          value: "localhost,169.254.169.254,169.254.170.23"
+    asserts:
+      - failedTemplate:
+          errorPattern: "169.254.170.2"
+
+  - it: tolerates whitespace around NO_PROXY entries
+    set:
+      app:
+        egressForwardProxyEnabled: true
+      extraEnv:
+        - name: NO_PROXY
+          value: "localhost, 169.254.169.254 , 169.254.170.2 , 169.254.170.23"
+    asserts:
+      - isKind:
+          of: Deployment

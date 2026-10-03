@@ -1140,11 +1140,18 @@ registry_api_token = "m3zT65wREARMVDToKosg_DgNkKqS_434hNxy3sslGPY"
 # egress_forward_proxy_enabled = false
 
 # HTTP_PROXY / HTTPS_PROXY / NO_PROXY are standard environment variables, passed
-# through the existing *_extra_env lists rather than through dedicated variables:
+# through the existing *_extra_env lists rather than through dedicated variables.
+#
+# NO_PROXY MUST exclude the three cloud credential endpoints below. The task
+# refuses to start without them: setting HTTP_PROXY re-points every proxy-aware
+# SDK in the process, so the AWS SDK would send IAM credential requests to the
+# proxy, over plain HTTP and from the proxy's own network position.
+# AWS_EC2_METADATA_DISABLED=true does NOT substitute: botocore applies it only to
+# 169.254.169.254, not to the ECS task-credential endpoint.
 # registry_extra_env = [
 #   { name = "HTTPS_PROXY", value = "http://corp-proxy.internal:3128" },
 #   { name = "HTTP_PROXY", value = "http://corp-proxy.internal:3128" },
-#   { name = "NO_PROXY", value = "localhost,127.0.0.1,mcp-gateway-v2.local" },
+#   { name = "NO_PROXY", value = "localhost,127.0.0.1,169.254.169.254,169.254.170.2,169.254.170.23,mcp-gateway-v2.local" },
 # ]
 # auth_server_extra_env = [ ... the same three ... ]
 

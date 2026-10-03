@@ -377,7 +377,20 @@ app:
   # IP, so DNS-rebinding protection is relaxed for public destinations only. That
   # is why this is opt-in rather than inferred from HTTP_PROXY being set.
   #
-  # Set HTTP_PROXY / HTTPS_PROXY / NO_PROXY through `extraEnv` below. They are
+  # Set HTTP_PROXY / HTTPS_PROXY / NO_PROXY through `extraEnv` below.
+  #
+  #   extraEnv:
+  #     - name: HTTPS_PROXY
+  #       value: "http://corp-proxy.internal:3128"
+  #     - name: HTTP_PROXY
+  #       value: "http://corp-proxy.internal:3128"
+  #     - name: NO_PROXY
+  #       value: "localhost,127.0.0.1,169.254.169.254,169.254.170.2,169.254.170.23,.svc.cluster.local,mcpgw-server,auth-server,keycloak"
+  #
+  # NO_PROXY MUST exclude those three cloud credential endpoints. The pod refuses
+  # to start without them, because setting HTTP_PROXY re-points every proxy-aware
+  # SDK in the process and the AWS SDK would then send IAM credential requests to
+  # the proxy, over plain HTTP and from the proxy's own network position. They are
   # deliberately NOT chart-managed and NOT in reserved-env-names.txt, because
   # reserving them would make the chart refuse the configuration this feature
   # needs. Set them on the auth-server too: it runs the egress-credential-injected

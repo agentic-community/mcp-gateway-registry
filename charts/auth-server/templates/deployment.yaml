@@ -11,6 +11,34 @@
 {{- /* Fail-fast validation of user-supplied extraEnv and proxy egress policy. */ -}}
 {{- include "auth-server.validateExtraEnv" . -}}
 {{- include "auth-server.validateGenericProxyEgress" . -}}
+{{- /* Forward proxy: NO_PROXY must exclude the cloud credential endpoints.
+       Mirrors the startup check in registry/utils/url_guard.py so a bad config
+       fails at `helm install` rather than as a CrashLoopBackOff. Setting
+       HTTP_PROXY re-points every proxy-aware SDK in the process, so the AWS SDK
+       would send IAM credential requests to the proxy, over plain HTTP and from
+       the proxy's own network position. AWS_EC2_METADATA_DISABLED is NOT a
+       substitute: botocore applies it only to 169.254.169.254, not to the
+       container-credential endpoints. Issue #1832. */ -}}
+{{- if .Values.app.egressForwardProxyEnabled }}
+  {{- $noProxy := "" }}
+  {{- range .Values.extraEnv }}
+    {{- if eq .name "NO_PROXY" }}{{- $noProxy = .value | toString }}{{- end }}
+  {{- end }}
+  {{- /* Exact per-entry comparison, NOT a substring test: sprig's `contains`
+         would match "169.254.170.2" inside "169.254.170.23" and let a config
+         render that the startup check then rejects. */ -}}
+  {{- $patterns := list }}
+  {{- range (splitList "," $noProxy) }}{{- $patterns = append $patterns (trim .) }}{{- end }}
+  {{- if not (has "*" $patterns) }}
+    {{- $missing := list }}
+    {{- range $ip := list "169.254.169.254" "169.254.170.2" "169.254.170.23" }}
+      {{- if not (has $ip $patterns) }}{{- $missing = append $missing $ip }}{{- end }}
+    {{- end }}
+    {{- if $missing }}
+      {{- fail (printf "auth-server.app.egressForwardProxyEnabled is true but extraEnv NO_PROXY does not exclude the cloud credential endpoint(s) %s. The AWS SDK would send IAM credential requests to the forward proxy in cleartext. Add '169.254.169.254,169.254.170.2,169.254.170.23' to the NO_PROXY entry in auth-server.extraEnv (AWS_EC2_METADATA_DISABLED=true is NOT sufficient). See docs/forward-proxy-egress.md." (join ", " $missing)) }}
+    {{- end }}
+  {{- end }}
+{{- end }}
 {{- /* caBundle requires exactly one source, and a key and mountPath (issue #1832). */ -}}
 {{- if .Values.caBundle.enabled }}
   {{- if and .Values.caBundle.existingConfigMap .Values.caBundle.existingSecret }}
