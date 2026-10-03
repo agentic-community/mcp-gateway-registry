@@ -819,6 +819,73 @@ def _delegate_kwargs_with_ca_bundle(
     return kwargs
 
 
+# Cloud credential endpoints that MUST be excluded from the forward proxy.
+#
+# These are link-local, so a proxy dialing one reaches ITS OWN host's metadata
+# service, not the caller's. Setting HTTP_PROXY re-points every proxy-aware SDK
+# in the process, and botocore is one: its credential providers will send these
+# requests to the proxy. The endpoints speak plain HTTP, so there is no CONNECT
+# tunnel and the proxy sees the full response body, which is the credential
+# document (AccessKeyId, SecretAccessKey, Token) in cleartext.
+#
+# AWS_EC2_METADATA_DISABLED=true is NOT a sufficient substitute. It is read only
+# by botocore's IMDSFetcher (botocore/utils.py), so it covers 169.254.169.254
+# alone. ContainerProvider (botocore/credentials.py) is gated purely on
+# AWS_CONTAINER_CREDENTIALS_RELATIVE_URI / _FULL_URI being present, with no such
+# check, so the ECS and EKS task-credential endpoints stay exposed. NO_PROXY is
+# the only control that covers all three.
+#
+# The IPv6 (fd00:ec2::*) and Alibaba (100.100.100.200) endpoints in
+# _CREDENTIAL_ENDPOINT_IPS are deliberately not required here: no SDK dials them
+# through HTTP_PROXY in practice, and NO_PROXY matching of a bracketed IPv6
+# literal is inconsistent across clients. This module's own transports hard-deny
+# every one of them regardless, so the requirement below exists purely to protect
+# the OTHER libraries sharing the process.
+_PROXY_REQUIRED_NO_PROXY_IPS: tuple[str, ...] = (
+    "169.254.169.254",  # EC2 IMDS
+    "169.254.170.2",  # ECS task credentials
+    "169.254.170.23",  # EKS Pod Identity
+)
+
+
+def _assert_credential_endpoints_bypass_proxy(
+    config: _ForwardProxyConfig,
+) -> None:
+    """Refuse to start when a credential endpoint could be sent to the proxy.
+
+    Fails closed rather than warning. The blocked combination is never a correct
+    configuration: no deployment legitimately wants its IAM credential requests
+    routed through a forward proxy. A warning would also be read too late, since
+    the leak happens on the first boto3 call, which can be long after startup.
+
+    This can only fire for a deployment that explicitly enabled
+    EGRESS_FORWARD_PROXY_ENABLED, so it cannot affect an existing one, and the
+    remedy is a single NO_PROXY entry.
+    """
+    if not config.enabled:
+        return
+    missing = [
+        ip for ip in _PROXY_REQUIRED_NO_PROXY_IPS if not _no_proxy_matches(config.no_proxy, ip, 80)
+    ]
+    if not missing:
+        return
+    raise UrlValidationError(
+        ",".join(missing),
+        f"{_FORWARD_PROXY_ENABLED_ENV} is true but NO_PROXY does not exclude the "
+        f"cloud credential endpoint(s) {', '.join(missing)}. Setting HTTP_PROXY "
+        "re-points every proxy-aware SDK in this process, so the AWS SDK would "
+        "send IAM credential requests to the forward proxy. Those endpoints speak "
+        "plain HTTP, so the proxy would see the returned AccessKeyId, "
+        "SecretAccessKey and Token in cleartext, and because the addresses are "
+        "link-local the proxy would be answering from its own host rather than "
+        "this one. Refusing to start. Fix: add "
+        f"'{','.join(_PROXY_REQUIRED_NO_PROXY_IPS)}' to NO_PROXY on this service "
+        "(AWS_EC2_METADATA_DISABLED=true is NOT sufficient: botocore applies it "
+        "only to 169.254.169.254, not to the container-credential endpoints). "
+        "See docs/forward-proxy-egress.md.",
+    )
+
+
 def validate_forward_proxy_config() -> None:
     """Resolve and validate forward-proxy configuration at process startup.
 
@@ -829,9 +896,11 @@ def validate_forward_proxy_config() -> None:
 
     Raises:
         UrlValidationError: If the CA bundle path is missing, unreadable, or not
-            valid PEM.
+            valid PEM, or if the proxy is enabled without NO_PROXY excluding the
+            cloud credential endpoints.
     """
-    _forward_proxy_config()
+    config = _forward_proxy_config()
+    _assert_credential_endpoints_bypass_proxy(config)
     _forward_proxy_ssl_context()
 
 

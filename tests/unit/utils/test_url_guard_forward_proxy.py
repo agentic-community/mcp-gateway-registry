@@ -1205,3 +1205,86 @@ class TestResolvesExclusivelyPublic:
     )
     async def test_ip_literals_need_no_resolution(self, ip, expected):
         assert await url_guard._resolves_exclusively_public_async(ip, 443) is expected
+
+
+class TestCredentialEndpointBypassIsMandatory:
+    """The proxy must not be able to carry a cloud credential request.
+
+    Fails closed at startup rather than warning, because the blocked combination
+    is never a correct configuration and the leak would otherwise happen on the
+    first boto3 call, long after anyone read the log.
+    """
+
+    ALL_THREE = "169.254.169.254,169.254.170.2,169.254.170.23"
+
+    def test_flag_on_without_the_exclusions_refuses_to_start(self):
+        env = _proxy_env(no_proxy="localhost,127.0.0.1,keycloak")
+        with patch.dict("os.environ", env, clear=True):
+            with pytest.raises(UrlValidationError) as exc:
+                url_guard.validate_forward_proxy_config()
+        message = str(exc.value)
+        assert "Refusing to start" in message
+        # The message must carry both the reason and the exact remedy.
+        assert "169.254.169.254" in message
+        assert "NO_PROXY" in message
+        assert "cleartext" in message
+
+    def test_the_imds_flag_is_not_accepted_as_a_substitute(self):
+        """AWS_EC2_METADATA_DISABLED covers only 169.254.169.254.
+
+        botocore reads it in IMDSFetcher alone; ContainerProvider is gated purely
+        on AWS_CONTAINER_CREDENTIALS_RELATIVE_URI, so the ECS and EKS
+        task-credential endpoints stay exposed. Accepting the flag here would
+        leave two of the three addresses proxied.
+        """
+        env = _proxy_env(no_proxy="localhost")
+        env["AWS_EC2_METADATA_DISABLED"] = "true"
+        with patch.dict("os.environ", env, clear=True):
+            with pytest.raises(UrlValidationError) as exc:
+                url_guard.validate_forward_proxy_config()
+        assert "not sufficient" in str(exc.value).lower()
+
+    def test_partial_exclusion_still_refuses(self):
+        """Excluding EC2 IMDS alone leaves the container endpoints exposed."""
+        env = _proxy_env(no_proxy="169.254.169.254,localhost")
+        with patch.dict("os.environ", env, clear=True):
+            with pytest.raises(UrlValidationError) as exc:
+                url_guard.validate_forward_proxy_config()
+        message = str(exc.value)
+        assert "169.254.170.2" in message
+        assert "169.254.170.23" in message
+
+    def test_all_three_excluded_starts_cleanly(self):
+        env = _proxy_env(no_proxy=f"localhost,127.0.0.1,{self.ALL_THREE},keycloak")
+        with patch.dict("os.environ", env, clear=True):
+            url_guard.validate_forward_proxy_config()  # must not raise
+
+    def test_no_proxy_wildcard_satisfies_the_requirement(self):
+        """NO_PROXY=* excludes everything, including the credential endpoints."""
+        with patch.dict("os.environ", _proxy_env(no_proxy="*"), clear=True):
+            url_guard.validate_forward_proxy_config()  # must not raise
+
+    def test_flag_off_does_not_require_anything(self):
+        """An unconfigured deployment is unaffected: no proxy, no hazard."""
+        with patch.dict("os.environ", _proxy_env(enabled=None, no_proxy=None), clear=True):
+            url_guard.validate_forward_proxy_config()  # must not raise
+
+    def test_flag_on_with_no_proxy_configured_does_not_require_anything(self):
+        """The flag alone is inert: _forward_proxy_config returns disabled."""
+        env = _proxy_env(http_proxy=None, https_proxy=None, no_proxy=None)
+        with patch.dict("os.environ", env, clear=True):
+            url_guard.validate_forward_proxy_config()  # must not raise
+
+    def test_the_recommended_docs_value_satisfies_the_check(self):
+        """Guards against the docs and the code drifting apart.
+
+        This is the value docs/forward-proxy-egress.md and the FAQ recommend. If
+        someone trims it, this test fails rather than a deployment refusing to
+        boot.
+        """
+        recommended = (
+            "localhost,127.0.0.1,169.254.169.254,169.254.170.2,169.254.170.23,"
+            ".svc.cluster.local,mcpgw-server,auth-server,keycloak"
+        )
+        with patch.dict("os.environ", _proxy_env(no_proxy=recommended), clear=True):
+            url_guard.validate_forward_proxy_config()  # must not raise
