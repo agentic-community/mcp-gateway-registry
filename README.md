@@ -165,7 +165,7 @@ High-traffic pages by audience:
 - [Quick Start](docs/quickstart.md) · [Installation Guide](docs/installation.md) · [Configuration Reference](docs/configuration.md) · [FAQ / Troubleshooting](docs/faq/index.md)
 
 **Platform & security**
-- [Authentication Guide](docs/auth.md) · [Access Control & Scopes](docs/scopes.md) · [Gateway Proxy Guide](docs/gateway-proxy-operational-guide.md) · [AWS ECS Deployment](terraform/aws-ecs/README.md) · [Amazon EKS (Helm)](charts/README.md) · [Observability](docs/OBSERVABILITY.md) · [Federation](docs/federation.md) · [Forward-Proxy Egress](docs/forward-proxy-egress.md)
+- [Authentication Guide](docs/auth.md) · [Access Control & Scopes](docs/scopes.md) · [Gateway Proxy Guide](docs/gateway-proxy-operational-guide.md) · [AWS ECS Deployment](terraform/aws-ecs/README.md) · [Amazon EKS (Helm)](charts/README.md) · [Observability](docs/OBSERVABILITY.md) · [Federation](docs/federation.md) · [Forward-Proxy Egress](docs/faq/configuring-a-forward-proxy-for-egress.md)
 
 **Architecture & development**
 - [Architecture Diagrams](docs/architecture-diagrams.md) · [API Reference](docs/registry_api.md) · [AI Coding Assistant Integration](docs/ai-coding-assistants-setup.md) · [MCP Registry CLI](docs/mcp-registry-cli.md)
