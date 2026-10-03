@@ -2120,6 +2120,37 @@ variable "registry_extra_env" {
     ])
     error_message = "registry_extra_env must not override Terraform-managed variables (AWS_EC2_METADATA_DISABLED, the canonical gateway_* generic-proxy variables, or SEARCH_LOG_QUERY_TEXT; use the matching Terraform variable instead)."
   }
+
+  # Forward-proxy egress: NO_PROXY must exclude the cloud credential endpoints.
+  # Mirrors the startup check in registry/utils/url_guard.py and the Helm chart
+  # guard, so a bad combination fails at plan time instead of as a crash-looping
+  # task. Setting HTTP_PROXY re-points every proxy-aware SDK in the task, so the
+  # AWS SDK would send IAM credential requests to the forward proxy, over plain
+  # HTTP and from the proxy's own network position. AWS_EC2_METADATA_DISABLED is
+  # NOT a substitute: botocore applies it only to 169.254.169.254, not to the
+  # ECS task-credential endpoint. Issue #1832.
+  #
+  # Exact per-entry comparison, not a substring test: "169.254.170.2" occurs
+  # inside "169.254.170.23", so a substring check would pass a config the task
+  # then refuses to start with.
+  validation {
+    condition = (
+      !var.egress_forward_proxy_enabled
+      || anytrue([
+        for entry in var.registry_extra_env : (
+          upper(trimspace(entry.name)) == "NO_PROXY"
+          && (
+            contains([for s in split(",", entry.value) : trimspace(s)], "*")
+            || length(setsubtract(
+              toset(["169.254.169.254", "169.254.170.2", "169.254.170.23"]),
+              toset([for s in split(",", entry.value) : trimspace(s)])
+            )) == 0
+          )
+        )
+      ])
+    )
+    error_message = "egress_forward_proxy_enabled is true, so registry_extra_env must contain a NO_PROXY entry excluding 169.254.169.254, 169.254.170.2 and 169.254.170.23 (or '*'). Without it the AWS SDK would send IAM credential requests to the forward proxy in cleartext, and the task refuses to start. AWS_EC2_METADATA_DISABLED=true is not sufficient. See docs/forward-proxy-egress.md."
+  }
 }
 
 variable "auth_server_extra_env" {
@@ -2146,6 +2177,37 @@ variable "auth_server_extra_env" {
       ], upper(trimspace(entry.name)))
     ])
     error_message = "auth_server_extra_env must not override Terraform-managed generic-proxy or metadata-hardening variables; use the canonical variables instead."
+  }
+
+  # Forward-proxy egress: NO_PROXY must exclude the cloud credential endpoints.
+  # Mirrors the startup check in registry/utils/url_guard.py and the Helm chart
+  # guard, so a bad combination fails at plan time instead of as a crash-looping
+  # task. Setting HTTP_PROXY re-points every proxy-aware SDK in the task, so the
+  # AWS SDK would send IAM credential requests to the forward proxy, over plain
+  # HTTP and from the proxy's own network position. AWS_EC2_METADATA_DISABLED is
+  # NOT a substitute: botocore applies it only to 169.254.169.254, not to the
+  # ECS task-credential endpoint. Issue #1832.
+  #
+  # Exact per-entry comparison, not a substring test: "169.254.170.2" occurs
+  # inside "169.254.170.23", so a substring check would pass a config the task
+  # then refuses to start with.
+  validation {
+    condition = (
+      !var.egress_forward_proxy_enabled
+      || anytrue([
+        for entry in var.auth_server_extra_env : (
+          upper(trimspace(entry.name)) == "NO_PROXY"
+          && (
+            contains([for s in split(",", entry.value) : trimspace(s)], "*")
+            || length(setsubtract(
+              toset(["169.254.169.254", "169.254.170.2", "169.254.170.23"]),
+              toset([for s in split(",", entry.value) : trimspace(s)])
+            )) == 0
+          )
+        )
+      ])
+    )
+    error_message = "egress_forward_proxy_enabled is true, so auth_server_extra_env must contain a NO_PROXY entry excluding 169.254.169.254, 169.254.170.2 and 169.254.170.23 (or '*'). Without it the AWS SDK would send IAM credential requests to the forward proxy in cleartext, and the task refuses to start. AWS_EC2_METADATA_DISABLED=true is not sufficient. See docs/forward-proxy-egress.md."
   }
 }
 

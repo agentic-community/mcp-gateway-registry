@@ -154,7 +154,20 @@ app:
   #
   # Credential-bearing egress (OBO token exchange, the injected egress credential,
   # federation) accepts only https through a proxy, so the secret stays inside the
-  # CONNECT tunnel. Set HTTP_PROXY / HTTPS_PROXY / NO_PROXY through `extraEnv`;
+  # CONNECT tunnel. Set HTTP_PROXY / HTTPS_PROXY / NO_PROXY through `extraEnv`
+  #
+  #   extraEnv:
+  #     - name: HTTPS_PROXY
+  #       value: "http://corp-proxy.internal:3128"
+  #     - name: HTTP_PROXY
+  #       value: "http://corp-proxy.internal:3128"
+  #     - name: NO_PROXY
+  #       value: "localhost,127.0.0.1,169.254.169.254,169.254.170.2,169.254.170.23,.svc.cluster.local,mcpgw-server,registry,keycloak"
+  #
+  # NO_PROXY MUST exclude those three cloud credential endpoints. The pod refuses
+  # to start without them, because setting HTTP_PROXY re-points every proxy-aware
+  # SDK in the process and the AWS SDK would then send IAM credential requests to
+  # the proxy, over plain HTTP and from the proxy's own network position.;
   # they are deliberately not chart-managed. See docs/forward-proxy-egress.md.
   egressForwardProxyEnabled: false
 # Authentication Provider Configuration
