@@ -383,9 +383,11 @@ app:
   # needs. Set them on the auth-server too: it runs the egress-credential-injected
   # tool call and the OBO token exchange.
   #
-  # Also raise app.healthCheckTimeoutSeconds when enabling this: it is a flat
-  # timeout whose connect budget must cover the TCP connection to the proxy, the
-  # CONNECT round trip AND the TLS handshake. See docs/forward-proxy-egress.md.
+  # Consider raising HEALTH_CHECK_TIMEOUT_SECONDS too: it is a flat timeout whose
+  # connect budget must cover the TCP connection to the proxy, the CONNECT round
+  # trip AND the TLS handshake. There is no chart value for it, so set it through
+  # `extraEnv` below, the same way as the proxy variables.
+  # See docs/forward-proxy-egress.md.
   egressForwardProxyEnabled: false
   # CIMD (Client ID Metadata Document) publisher. When enabled, the registry
   # serves GET /oauth/client-metadata.json describing itself as an OAuth client
