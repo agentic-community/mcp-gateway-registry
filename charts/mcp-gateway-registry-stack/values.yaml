@@ -8,7 +8,7 @@ global:
   image:
     # Container registry (host + optional namespace), e.g. "public.ecr.aws/p3v1o3c6"
     registry: public.ecr.aws/p3v1o3c6
-    tag: 1.31.0
+    tag: 1.32.0
     pullPolicy: IfNotPresent
   # When installing chart from repository, add --set global.chartVersion=$(git rev-parse HEAD) to add the git hash to a configmap for debugging
   chartVersion:
@@ -330,8 +330,7 @@ registry:
     # Enabling this relaxes DNS-rebinding protection for targets that resolve
     # exclusively to public addresses; internal targets keep their IP pin with no
     # extra configuration. See docs/forward-proxy-egress.md before turning it on.
-      # egressForwardProxyEnabled: false
-
+    # egressForwardProxyEnabled: false
     replicas: 2 # set to > 1 replica for high availability
     # Session cookie Domain attribute. Leave empty to default to
     # ".<global.domain>" (cookie valid across all subdomains of the
@@ -631,8 +630,7 @@ auth-server:
     # Enabling this relaxes DNS-rebinding protection for targets that resolve
     # exclusively to public addresses; internal targets keep their IP pin with no
     # extra configuration. See docs/forward-proxy-egress.md before turning it on.
-      # egressForwardProxyEnabled: false
-
+    # egressForwardProxyEnabled: false
     replicas: 2 # set to > 1 replica for high availability
     # Session cookie Domain attribute. See registry.app.sessionCookieDomain
     # above for guidance — keep these two in sync.

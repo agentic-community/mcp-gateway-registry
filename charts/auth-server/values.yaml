@@ -3,7 +3,7 @@ global:
   image:
     # Container registry (host + optional namespace). Shared default across subcharts.
     registry: public.ecr.aws/p3v1o3c6
-    tag: 1.31.0
+    tag: 1.32.0
     pullPolicy: IfNotPresent
 # Per-service image configuration
 # Any field left empty falls back to the corresponding global.image.* value.
@@ -357,11 +357,10 @@ resources:
 caBundle:
   enabled: false
   # Exactly one of these is required when enabled (a `fail` guard enforces it).
-  existingConfigMap: ""   # ConfigMap holding the PEM
-  existingSecret: ""      # or a Secret, for operators who treat the chain as sensitive
-  key: ca-bundle.pem      # key within the ConfigMap or Secret
-  mountPath: /etc/ssl/mcp-gateway   # directory the volume is mounted at
-
+  existingConfigMap: "" # ConfigMap holding the PEM
+  existingSecret: "" # or a Secret, for operators who treat the chain as sensitive
+  key: ca-bundle.pem # key within the ConfigMap or Secret
+  mountPath: /etc/ssl/mcp-gateway # directory the volume is mounted at
 extraEnv: []
 # Extra `envFrom:` sources appended to the container. Use this to inject
 # all keys from an external ConfigMap or Secret you manage (e.g. via
