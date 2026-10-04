@@ -1060,6 +1060,32 @@ class Settings(BaseSettings):
         ),
     )
 
+    # Per-user long-lived API keys ("patch keys", wire-platform-v1 task 2.1).
+    # Console users mint non-expiring `wgk-` Bearer keys stored as SHA-256
+    # hashes in the patch_keys collection; the auth server's /validate accepts
+    # them on MCP and registry API paths and continues as the owning user.
+    # The path only activates for `wgk-` prefixed bearers, so with no minted
+    # keys the auth flow is byte-for-byte the previous one (JWT / static keys
+    # unchanged). Set PATCH_KEY_AUTH_ENABLED=false to disable both the
+    # /validate acceptance and the mint API.
+    patch_key_auth_enabled: bool = Field(
+        default=True,
+        description=(
+            "Accept per-user long-lived `wgk-` API keys on /validate and expose "
+            "the /api/patch-keys mint/list/revoke console API. Default true; the "
+            "acceptance path is inert until a key is minted."
+        ),
+    )
+    patch_key_max_active_per_user: int = Field(
+        default=20,
+        ge=1,
+        le=1000,
+        description=(
+            "Maximum number of active (non-revoked) patch keys one user may "
+            "hold. Further mints are rejected with 429 until one is revoked."
+        ),
+    )
+
     # User-to-group fallback for IdPs that don't carry groups in JWTs (issue #1127).
     # Auth server consults the idp_user_groups collection only when the JWT's
     # groups claim is empty AND the token's provider name appears in this list.

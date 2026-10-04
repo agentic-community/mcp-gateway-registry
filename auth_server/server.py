@@ -121,6 +121,8 @@ from registry.core.config import settings
 # Configure logging using shared module (RotatingFileHandler + optional MongoDB)
 from registry.exceptions import UrlValidationError
 from registry.repositories.factory import get_scope_repository, get_server_repository
+from registry.repositories.factory import get_server_repository
+from registry.services.patch_key_service import PATCH_KEY_PREFIX
 from registry.utils.logging_setup import setup_logging as _setup_logging
 from registry.utils.request_utils import get_client_ip
 from registry.utils.url_guard import PROXY_PROFILE, guarded_async_client
@@ -1070,6 +1072,17 @@ if _registry_static_token_requested and not REGISTRY_API_TOKEN and not _REGISTRY
     REGISTRY_STATIC_TOKEN_AUTH_ENABLED: bool = False
 else:
     REGISTRY_STATIC_TOKEN_AUTH_ENABLED = _registry_static_token_requested
+
+
+# Per-user long-lived API keys ("patch keys", wire-platform-v1 task 2.1).
+# Console users mint non-expiring `wgk-` keys (SHA-256-hash stored in the
+# patch_keys collection) via the registry's /api/patch-keys. /validate accepts
+# them as Bearer credentials on BOTH MCP proxy paths and registry /api/ paths
+# and continues the request as the owning user (their groups -> their scopes).
+# The acceptance path is keyed on the `wgk-` prefix, so every other credential
+# (IdP JWT, self-signed JWT, REGISTRY_API_KEYS static token) skips this branch
+# entirely -- those mechanisms are bit-for-bit unchanged.
+PATCH_KEY_AUTH_ENABLED: bool = bool(getattr(settings, "patch_key_auth_enabled", True))
 
 
 # ---------------------------------------------------------------------------
@@ -2765,6 +2778,21 @@ async def lifespan(app: FastAPI):
     # Runs after scopes are loaded so map_groups_to_scopes can resolve groups.
     await _build_static_token_map()
 
+    # Ensure patch_keys indexes for the per-user long-lived API key feature
+    # (wire-platform-v1 task 2.1). Best-effort: verification works without the
+    # index (it only backs lookup speed); a failure here disables nothing.
+    if PATCH_KEY_AUTH_ENABLED:
+        try:
+            from registry.services.patch_key_service import get_patch_key_service
+
+            await (await get_patch_key_service()).ensure_indexes()
+        except Exception as e:  # noqa: BLE001 - non-fatal, verification still works
+            logger.warning(
+                "Failed to ensure patch_keys index during startup (%s); "
+                "patch-key verification continues without it",
+                type(e).__name__,
+            )
+
     # Run the legacy-scope audit. This used to be registered via the
     # deprecated @app.on_event("startup") API, but FastAPI/Starlette never
     # invokes on_event handlers once a custom `lifespan` is passed to
@@ -3527,6 +3555,89 @@ def _check_registry_static_token(
     }
 
 
+async def _validate_patch_key_token(access_token: str) -> dict:
+    """Validate a per-user long-lived API key ("patch key", `wgk-` prefix).
+
+    Resolves the SHA-256 hash against the ``patch_keys`` collection with the
+    ``status == active`` filter INSIDE the query, so a revoke is visible to
+    the very next request (no cache). On success, returns a
+    ``validation_result`` shaped like the self-signed JWT validator's so the
+    caller continues through the standard downstream chain (per-server scope
+    validation, MCP audit, mcp-proxy/registry token mints) exactly as the
+    owning user would with a JWT. On any miss -- unknown, revoked, feature
+    disabled, datastore error -- raises ValueError, which the /validate JWT
+    block maps to a 401 with WWW-Authenticate (fail closed).
+
+    SECURITY: neither the plaintext nor any prefix/hash of it is ever
+    logged; the rejection log line carries no key material at all.
+
+    Args:
+        access_token: The bearer value (already known to start with "wgk-").
+
+    Returns:
+        Validation-result dict with method "patch-key".
+
+    Raises:
+        ValueError: If the key is unknown, revoked, or verification failed.
+    """
+    from registry.services.patch_key_service import get_patch_key_service
+
+    try:
+        service = await get_patch_key_service()
+        record = await service.verify_key(access_token)
+    except Exception as exc:  # noqa: BLE001 - any failure fails closed
+        logger.error(
+            "Patch key verification error (%s); rejecting",
+            type(exc).__name__,
+        )
+        raise ValueError("Invalid or revoked API key") from exc
+
+    if record is None:
+        # No key material in the log line -- not even a hash prefix.
+        logger.warning("Patch key rejected: unknown, revoked, or disabled")
+        raise ValueError("Invalid or revoked API key")
+
+    # Resolve scope NAMES from the current mappings on every use (the stored
+    # document snapshots only the owner's groups): a scope-mapping change in
+    # the registry takes effect for existing keys immediately.
+    scopes = await map_groups_to_scopes(list(record.groups))
+
+    # Best-effort metadata refresh; never blocks or fails the request.
+    await service.touch_last_used(record.key_id)
+
+    logger.info(
+        "Validated patch key key_id=%s for user %s (%d group(s) -> %d scope(s))",
+        record.key_id,
+        hash_username(record.username),
+        len(record.groups),
+        len(scopes),
+    )
+
+    return {
+        "valid": True,
+        "method": "patch-key",
+        # `data` mirrors the shape other validators return; `sub`/`username`
+        # keep the audit identity resolution working, `provider` preserves
+        # the IdP the owner authenticated with at mint time.
+        "data": {
+            "sub": record.username,
+            "username": record.username,
+            "provider": record.provider or "patch-key",
+            "email": record.email or "",
+        },
+        "client_id": "patch-key",
+        "username": record.username,
+        "email": record.email or "",
+        # Non-expiring by design: no expires_at claim.
+        "scopes": scopes,
+        "groups": list(record.groups),
+        # Marks the caller as a per-USER credential so the M2M group
+        # enrichment fallback never treats it as a service account
+        # (mirrors the self-signed validator's marker).
+        "token_type": "user_generated",
+    }
+
+
 def _is_federation_api_request(
     original_url: str,
 ) -> bool:
@@ -4131,17 +4242,30 @@ async def validate_request(request: Request):
 
             # Get authentication provider based on AUTH_PROVIDER environment variable
             try:
+                # Per-user long-lived API key ("patch key", wire-platform-v1
+                # task 2.1). The `wgk-` prefix gates this branch: every other
+                # credential falls straight through to the self-signed /
+                # provider checks below, unchanged. Runs BEFORE the self-signed
+                # check so a patch key is never handed to the JWT decoder.
+                # _validate_patch_key_token raises ValueError on unknown /
+                # revoked / disabled keys, which maps to the 401 below (a
+                # revoked key must 401 on the very next call).
+                if PATCH_KEY_AUTH_ENABLED and access_token.startswith(PATCH_KEY_PREFIX):
+                    validation_result = await _validate_patch_key_token(access_token)
+                    logger.info("Token validated as patch key (prefix=wgk-)")
+
                 # Try self-signed token first (tokens minted by this auth server).
                 # This must run before provider-specific validation because the
                 # Connect button generates locally-signed JWTs with iss=mcp-auth-server
                 # regardless of the configured auth provider (Entra, Okta, etc.).
-                try:
-                    unverified = jwt.decode(access_token, options={"verify_signature": False})
-                    if unverified.get("iss") == JWT_ISSUER:
-                        validation_result = validator.validate_self_signed_token(access_token)
-                        logger.info("Token validated as self-signed (iss=mcp-auth-server)")
-                except Exception as e:
-                    logger.debug(f"Self-signed check failed, continuing to provider: {e}")
+                if not validation_result:
+                    try:
+                        unverified = jwt.decode(access_token, options={"verify_signature": False})
+                        if unverified.get("iss") == JWT_ISSUER:
+                            validation_result = validator.validate_self_signed_token(access_token)
+                            logger.info("Token validated as self-signed (iss=mcp-auth-server)")
+                    except Exception as e:
+                        logger.debug(f"Self-signed check failed, continuing to provider: {e}")
 
                 if not validation_result:
                     auth_provider = get_auth_provider()
@@ -8322,6 +8446,7 @@ async def mcp_proxy(
     # callers still pass here and reach the egress consent/local-answer paths
     # below (they already had these methods in scope on the connected path).
     await _authorize_forwarded_mcp_body(server_name, request_body, user_scopes)
+
 
     # True once we inject a vaulted egress token below. An egress upstream is
     # itself an OAuth resource server: if it rejects our injected token it 401s
