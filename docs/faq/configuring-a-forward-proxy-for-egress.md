@@ -191,7 +191,7 @@ A target goes through the proxy only when every address it resolves to is on the
 
 `NO_PROXY` is an override rather than the routing mechanism. Use it for public addresses this host reaches directly, which saves a pointless tunnel. Listing your in-cluster hostnames as well costs nothing and is good hygiene.
 
-Keep the cloud metadata addresses in `NO_PROXY`. The AWS SDK reads `HTTP_PROXY` on its own, so once you set it the SDK's instance-metadata credential provider starts sending IAM credential requests to your proxy. Helm and Terraform set `AWS_EC2_METADATA_DISABLED=true` to close that at the source; on Docker Compose, where an EC2 instance role may be the credential source for Amazon Bedrock, these `NO_PROXY` entries are what stop it.
+Keep the cloud metadata addresses in `NO_PROXY`. The AWS SDK reads `HTTP_PROXY` on its own, so once you set it the SDK's instance-metadata credential provider starts sending IAM credential requests to your proxy. `AWS_EC2_METADATA_DISABLED=true` closes that at the source and is the default on Helm and Terraform, where task roles and IRSA supply credentials. On Docker Compose it is settable but defaults to `false`, because an EC2-hosted deployment often uses the instance role for Amazon Bedrock and AgentCore. Either control works; the `NO_PROXY` entries are the one that is mandatory, because they also cover the container-credential endpoints that the flag does not.
 
 A CIDR entry in `NO_PROXY` does not work. Neither curl nor httpx expands one, so `10.0.0.0/8` fails to match `10.1.2.3`. Name the host, or use a domain suffix such as `.svc.cluster.local`. The guard logs a warning if it sees a CIDR-shaped entry.
 

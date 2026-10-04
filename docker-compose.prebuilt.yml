@@ -138,6 +138,15 @@ services:
       #   volumes:
       #     - ./certs/corporate-ca.pem:/etc/ssl/mcp-gateway/ca-bundle.pem:ro
       - EGRESS_FORWARD_PROXY_ENABLED=${EGRESS_FORWARD_PROXY_ENABLED:-false}
+      # Close boto3's IMDS credential fallback (issue #1839). Helm and
+      # Terraform/ECS default this to "true" because task roles and IRSA supply
+      # credentials there, so IMDS is only a fallback. Compose defaults to
+      # "false" because an EC2-hosted Compose deployment often uses the instance
+      # role as its real credential source for Amazon Bedrock and AgentCore, and
+      # "true" would break it. Set it to "true" if you do not need the instance
+      # role. botocore only treats the literal "true" as disabled, so "false" is
+      # exactly equivalent to leaving it unset.
+      - AWS_EC2_METADATA_DISABLED=${AWS_EC2_METADATA_DISABLED:-false}
       - EGRESS_FORWARD_PROXY_CA_BUNDLE=${EGRESS_FORWARD_PROXY_CA_BUNDLE:-}
       - AUTH_SERVER_NGINX_MARKER_SECRET=${AUTH_SERVER_NGINX_MARKER_SECRET:-}
       - AWS_SECRETS_REGION=${AWS_SECRETS_REGION:-}
@@ -471,6 +480,15 @@ services:
       #   volumes:
       #     - ./certs/corporate-ca.pem:/etc/ssl/mcp-gateway/ca-bundle.pem:ro
       - EGRESS_FORWARD_PROXY_ENABLED=${EGRESS_FORWARD_PROXY_ENABLED:-false}
+      # Close boto3's IMDS credential fallback (issue #1839). Helm and
+      # Terraform/ECS default this to "true" because task roles and IRSA supply
+      # credentials there, so IMDS is only a fallback. Compose defaults to
+      # "false" because an EC2-hosted Compose deployment often uses the instance
+      # role as its real credential source for Amazon Bedrock and AgentCore, and
+      # "true" would break it. Set it to "true" if you do not need the instance
+      # role. botocore only treats the literal "true" as disabled, so "false" is
+      # exactly equivalent to leaving it unset.
+      - AWS_EC2_METADATA_DISABLED=${AWS_EC2_METADATA_DISABLED:-false}
       - EGRESS_FORWARD_PROXY_CA_BUNDLE=${EGRESS_FORWARD_PROXY_CA_BUNDLE:-}
       - AUTH_SERVER_NGINX_MARKER_SECRET=${AUTH_SERVER_NGINX_MARKER_SECRET:-}
       - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID}
