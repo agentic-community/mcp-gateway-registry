@@ -159,6 +159,13 @@ auth_server_extra_env = [
 ]
 ```
 
+Pushing a new image is not enough on ECS. These variables live in the task definition, so `terraform apply` has to run to produce a new revision carrying them. Set `egress_forward_proxy_enabled = true` without applying and the container never sees it: the flag stays absent, the feature stays off, and nothing in the logs explains why. Confirm with:
+
+```bash
+aws ecs describe-task-definition --task-definition <arn> \
+  --query "taskDefinition.containerDefinitions[].environment[?starts_with(name,'EGRESS_FORWARD_PROXY')]"
+```
+
 For a TLS-intercepting proxy, bake the bundle into the image or mount it from the EFS volume the stack already provisions, then name the path:
 
 ```hcl
