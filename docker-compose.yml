@@ -1019,14 +1019,15 @@ services:
       - "${HOST_BIND_IP:-127.0.0.1}:4318:4318"   # OTLP HTTP
       # 8889 (Prometheus exporter) is scraped container-to-container (see
       # config/prometheus.yml job 'otel-collector' -> otel-collector:8889) and
-      # 13133 (health_check) is used only by the in-container healthcheck below,
-      # so neither needs a host mapping. Not published.
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:13133"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
+      # 13133 (health_check) is reachable container-to-container for anything
+      # that wants to poll it, so neither needs a host mapping. Not published.
+    # No healthcheck is declared here on purpose. The collector image is
+    # distroless and ships only /otelcol-contrib, with no shell, wget or curl,
+    # so every in-container test exits -1 and reports a working collector as
+    # unhealthy. Liveness stays observable from outside the container: Prometheus
+    # scrapes :8889 (config/prometheus.yml) and the health_check extension still
+    # listens on :13133 (config/otel/collector.yaml). No service depends on this
+    # container's health status, so there is no startup ordering to preserve.
     security_opt:
       - no-new-privileges:true
     cap_drop:
