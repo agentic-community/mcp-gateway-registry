@@ -117,6 +117,20 @@ class TestCreateRecord:
         )
         assert out.name == "x"
 
+    async def test_enabled_by_default(self, service):
+        svc, _, _, _ = service
+        out = await svc.create_record(TYPE, CustomEntityCreate(name="x"), owner="bob")
+        assert out.is_enabled is True
+
+    async def test_created_disabled_is_stored_and_indexed_disabled(self, service):
+        svc, entities, search, _ = service
+        out = await svc.create_record(
+            TYPE, CustomEntityCreate(name="x", is_enabled=False), owner="bob"
+        )
+        assert out.is_enabled is False
+        assert entities.create.call_args[0][0].is_enabled is False
+        assert search.index_custom_entity.call_args.kwargs["record"].is_enabled is False
+
 
 @pytest.mark.unit
 class TestUpdateRecord:
@@ -471,3 +485,44 @@ class TestUpdateRecordConnectNotes:
         await svc.update_record(TYPE, f"/{TYPE}/abc", CustomEntityUpdate(visibility="private"), BOB)
         # Editing an unrelated field must not blank notes the operator wrote.
         assert "proxy_connect_notes" not in entities.update.call_args[0][1]
+
+
+@pytest.mark.unit
+class TestUpdateRecordEnabled:
+    """Custom types have no toggle endpoint, so PUT is the only way to switch a record off."""
+
+    async def test_disable_is_persisted_and_reindexed(self, service):
+        svc, entities, search, _ = service
+        existing = _record(owner="bob")
+        disabled = _record(owner="bob", is_enabled=False)
+        entities.get = AsyncMock(return_value=existing)
+        entities.update = AsyncMock(return_value=disabled)
+        await svc.update_record(TYPE, f"/{TYPE}/abc", CustomEntityUpdate(is_enabled=False), BOB)
+        assert entities.update.call_args[0][1]["is_enabled"] is False
+        assert search.index_custom_entity.call_args.kwargs["record"].is_enabled is False
+
+    async def test_enable_is_persisted(self, service):
+        svc, entities, _, _ = service
+        existing = _record(owner="bob", is_enabled=False)
+        entities.get = AsyncMock(return_value=existing)
+        entities.update = AsyncMock(return_value=existing)
+        await svc.update_record(TYPE, f"/{TYPE}/abc", CustomEntityUpdate(is_enabled=True), BOB)
+        assert entities.update.call_args[0][1]["is_enabled"] is True
+
+    async def test_omitted_leaves_enablement_untouched(self, service):
+        svc, entities, _, _ = service
+        existing = _record(owner="bob", is_enabled=False)
+        entities.get = AsyncMock(return_value=existing)
+        entities.update = AsyncMock(return_value=existing)
+        await svc.update_record(TYPE, f"/{TYPE}/abc", CustomEntityUpdate(name="z"), BOB)
+        assert "is_enabled" not in entities.update.call_args[0][1]
+
+    async def test_non_owner_cannot_toggle(self, service):
+        from fastapi import HTTPException
+
+        svc, entities, _, _ = service
+        entities.get = AsyncMock(return_value=_record(owner="bob", visibility="public"))
+        with pytest.raises(HTTPException) as exc:
+            await svc.update_record(TYPE, f"/{TYPE}/abc", CustomEntityUpdate(is_enabled=False), EVE)
+        assert exc.value.status_code == 403
+        entities.update.assert_not_awaited()
