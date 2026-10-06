@@ -882,6 +882,75 @@ class TestCaBundle:
             proxy = url_guard._build_proxy("https://proxy.corp.example:8443")
         assert isinstance(proxy.ssl_context, ssl.SSLContext)
 
+    def test_http_proxy_gets_no_proxy_ssl_context(self, tmp_path):
+        """Issue #1849. httpcore refuses proxy_ssl_context for the http scheme,
+        so the context must be withheld from a plain CONNECT proxy."""
+        path = _single_cert_pem(tmp_path)
+        with patch.dict("os.environ", {"EGRESS_FORWARD_PROXY_CA_BUNDLE": str(path)}, clear=True):
+            proxy = url_guard._build_proxy(PROXY_URL)
+        assert proxy.ssl_context is None
+
+    @pytest.mark.parametrize(
+        "make_transport",
+        [
+            pytest.param(
+                lambda: url_guard.GuardedTransport(guard_profile=url_guard.PROXY_PROFILE),
+                id="GuardedTransport",
+            ),
+            pytest.param(
+                lambda: url_guard.GuardedAsyncTransport(guard_profile=url_guard.PROXY_PROFILE),
+                id="GuardedAsyncTransport",
+            ),
+            pytest.param(
+                url_guard.PlainProxyRoutedAsyncTransport,
+                id="PlainProxyRoutedAsyncTransport",
+            ),
+        ],
+    )
+    def test_http_proxy_delegate_constructs_with_a_ca_bundle(self, tmp_path, make_transport):
+        """The #1849 regression itself, on the real construction path.
+
+        httpcore raises while the delegate transport is being BUILT, not when a
+        request is sent, so asserting on Proxy.ssl_context alone would not have
+        caught this: _proxy_delegate() has to actually run.
+
+        Every transport that can build a delegate is covered, because every one
+        of them raised. PlainProxyRoutedAsyncTransport is the one the customer
+        reported: it backs the pooled login client, so this is the IdP callback
+        that returned ?error=oauth2_callback_failed.
+        """
+        path = _single_cert_pem(tmp_path)
+        transport = make_transport()
+        with patch.dict("os.environ", _proxy_env(ca_bundle=str(path)), clear=True):
+            delegate = transport._proxy_delegate(PROXY_URL)
+        assert delegate is not None
+
+    def test_http_proxy_still_verifies_upstream_with_the_bundle(self, tmp_path):
+        """What withholding the proxy-side context does NOT give up.
+
+        That argument only governs the TLS leg to the proxy, which an http://
+        proxy does not have. The upstream server inside the CONNECT tunnel is
+        verified from `verify`, so the bundle still reaches the leg that matters.
+        """
+        path = _single_cert_pem(tmp_path)
+        with patch.dict("os.environ", {"EGRESS_FORWARD_PROXY_CA_BUNDLE": str(path)}, clear=True):
+            assert url_guard._build_proxy(PROXY_URL).ssl_context is None
+            kwargs = url_guard._delegate_kwargs_with_ca_bundle({"verify": True})
+        assert isinstance(kwargs["verify"], ssl.SSLContext)
+
+    def test_http_proxy_without_a_bundle_is_unchanged(self):
+        """The pre-1.32.0 path: no bundle, no context, for either scheme."""
+        with patch.dict("os.environ", {}, clear=True):
+            assert url_guard._build_proxy(PROXY_URL).ssl_context is None
+            assert url_guard._build_proxy("https://proxy.corp.example:8443").ssl_context is None
+
+    def test_proxy_scheme_match_is_case_insensitive(self, tmp_path):
+        """An operator may well write HTTPS:// in an env var."""
+        path = _single_cert_pem(tmp_path)
+        with patch.dict("os.environ", {"EGRESS_FORWARD_PROXY_CA_BUNDLE": str(path)}, clear=True):
+            proxy = url_guard._build_proxy("HTTPS://proxy.corp.example:8443")
+        assert isinstance(proxy.ssl_context, ssl.SSLContext)
+
     def test_ca_bundle_replaces_default_verify_on_the_delegate(self, tmp_path):
         """The bundle must reach the upstream leg inside the tunnel too."""
         path = _single_cert_pem(tmp_path)
