@@ -396,6 +396,14 @@ def mock_server_repository():
     mock.get_state.return_value = False
     mock.get_all_states.return_value = {}
     mock.set_state.return_value = True
+    # Per-tool blocking (tool_blocks.py) reads these on every read projection.
+    # They need real empty containers: an unconfigured AsyncMock attribute
+    # answers any call, so `await mock.get_tool_overrides(path)` yields another
+    # AsyncMock whose .items() is a coroutine, and the caller fails with
+    # "'coroutine' object is not iterable" deep inside a comprehension rather
+    # than at the boundary.
+    mock.get_tool_overrides.return_value = {}
+    mock.get_blocked_tools.return_value = set()
     return mock
 
 
