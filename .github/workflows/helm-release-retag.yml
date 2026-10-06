@@ -12,9 +12,13 @@ jobs:
   retag-release:
     name: Move Release Tag to Main
     runs-on: ubuntu-latest
+    # The prefix MUST match the branch that helm-chart-update.yml pushes
+    # (`branch: release-update-${version}`). These two files are a matched pair:
+    # when the prefixes drifted apart, this job silently skipped on every
+    # release, leaving the tag on the commit before the image-tag bump.
     if: >-
       github.event.pull_request.merged == true &&
-      startsWith(github.event.pull_request.head.ref, 'helm-update-') &&
+      startsWith(github.event.pull_request.head.ref, 'release-update-') &&
       github.repository == 'agentic-community/mcp-gateway-registry'
 
     steps:
@@ -27,7 +31,14 @@ jobs:
       - name: Extract version and move tag
         run: |
           BRANCH="${GITHUB_EVENT_PULL_REQUEST_HEAD_REF}"
-          VERSION="${BRANCH#helm-update-}"
+          VERSION="${BRANCH#release-update-}"
+
+          if [ "$VERSION" = "$BRANCH" ]; then
+            echo "Branch '$BRANCH' does not carry the release-update- prefix;"
+            echo "refusing to guess a version. Check that this job's prefix still"
+            echo "matches the branch helm-chart-update.yml creates."
+            exit 1
+          fi
 
           # Pre-1.23.0 releases used a `v` prefix (e.g. v1.0.22). From 1.23.0
           # onward tags are bare semver (1.23.0, 1.24.0, ...). Probe both
