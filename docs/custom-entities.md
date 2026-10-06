@@ -155,8 +155,14 @@ uv run python api/registry_management.py --registry-url http://localhost --token
 
 The record envelope is uniform across all types: `name`, `description`,
 `visibility` (`public` / `private` / `group-restricted`), `allowed_groups`,
-`tags`, plus the per-type `attributes` validated against the descriptor. The
-`owner` is always derived from the caller, never the request body.
+`tags`, `is_enabled`, plus the per-type `attributes` validated against the
+descriptor. The `owner` is always derived from the caller, never the request body.
+
+`is_enabled` defaults to `true`. Custom types have no toggle endpoint, so a record
+is switched off by sending `"is_enabled": false` on create or on
+`PUT /api/custom/{type}/{uuid}`. A disabled record is left out of semantic search;
+the list and get endpoints still return it, with `is_enabled: false`, so callers
+can still read it by its path.
 
 ### Through the UI
 
