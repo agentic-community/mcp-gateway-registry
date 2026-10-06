@@ -231,6 +231,8 @@ An external server stays unhealthy after you set the flag. Check the startup log
 
 Every proxied request fails with a certificate error. Your proxy intercepts TLS. Set `EGRESS_FORWARD_PROXY_CA_BUNDLE` and mount the PEM.
 
+Every proxied request fails with `The proxy_ssl_context argument is not allowed for the http scheme`, and sign-in returns `?error=oauth2_callback_failed`. This affects 1.32.0 only, whenever `EGRESS_FORWARD_PROXY_CA_BUNDLE` is set and the proxy URL is `http://`. Upgrade to 1.32.1, or leave the bundle empty until you do: a proxy that does not intercept TLS needs no bundle (#1849).
+
 Probes fail with `DNS resolution failed` rather than a timeout. The pod cannot resolve public names. Classification needs that lookup before the `CONNECT`.
 
 An in-cluster hop breaks after you set `NO_PROXY`. A CIDR entry does not match. Replace it with hostnames or a domain suffix.

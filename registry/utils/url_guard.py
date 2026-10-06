@@ -794,11 +794,24 @@ def _build_proxy(
     proxy signed by an internal CA would be verified against httpcore's default
     context and fail. ``httpx.Proxy`` also extracts userinfo from the URL into
     ``raw_auth`` itself, which is what keeps proxy basic auth working.
+
+    The context is attached ONLY for an ``https://`` proxy. httpcore refuses
+    ``proxy_ssl_context`` for the ``http`` scheme outright ("The
+    ``proxy_ssl_context`` argument is not allowed for the http scheme"), and it
+    raises while the delegate transport is being CONSTRUCTED, so attaching it
+    unconditionally broke every request through a plain ``http://`` CONNECT
+    proxy as soon as a bundle was configured, before the request left the
+    process. Omitting it costs nothing: the argument governs the TLS leg TO the
+    proxy, which a plain ``http://`` proxy does not have, while the upstream leg
+    inside the tunnel takes the bundle from ``verify`` in
+    ``_delegate_kwargs_with_ca_bundle``.
     """
     context = _forward_proxy_ssl_context()
+    proxy_is_https = urlsplit(proxy_url).scheme.lower() == "https"
+    # isinstance stays inline in the ternary so mypy narrows the bool away.
     return httpx.Proxy(
         url=proxy_url,
-        ssl_context=context if isinstance(context, ssl.SSLContext) else None,
+        ssl_context=context if proxy_is_https and isinstance(context, ssl.SSLContext) else None,
     )
 
 
