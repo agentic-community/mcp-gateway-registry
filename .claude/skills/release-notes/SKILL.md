@@ -435,10 +435,10 @@ Once the user confirms the release notes are ready:
      bullet format.
    - **Rotate the README:** add that same highlight as the new first bullet under `## What's New`
      in `README.md`, then **delete the now-sixth bullet** so exactly five remain (the dropped one
-     already lives in the archive — this is a delete, not a re-copy). Keep the
+     already lives in the archive, so this is a delete, not a re-copy). Keep the
      "Older highlights → Feature & Release Highlights" line in place.
    - This is the ONLY change the release cut makes to `README.md`. **Never add a new `##` section,
-     never let What's New exceed 5 bullets, and never touch any other part of the README** — those
+     never let What's New exceed 5 bullets, and never touch any other part of the README**. Those
      require their own dedicated PR. The README has a CI line-budget (350 lines) that will fail the
      build otherwise. A patch release with no user-facing feature skips this step entirely.
 
@@ -455,8 +455,42 @@ Once the user confirms the release notes are ready:
    Wait for CI to pass, then merge. This repo is **rebase-and-merge only**, so a branch carrying
    a merge commit cannot be merged; rebase and force-push instead.
 
-4. **Tag only after the PR is merged**, so the tag points at a commit on `main` that contains
-   the release notes:
+4. **Wait for the image-tag bump PR before you tag. Do not tag as soon as the notes PR merges.**
+
+   Merging the notes PR causes `helm-chart-update.yml` to open a second PR,
+   `chore: update image tags to {version}`, on the branch `release-update-{version}`. It
+   rewrites every `charts/*/values.yaml` image tag and the Terraform image defaults in
+   `terraform/aws-ecs/variables.tf` and
+   `terraform/aws-ecs/modules/mcp-gateway/variables.tf` from the previous version to this
+   one. It always lands AFTER the notes PR.
+
+   Tag before it merges and the tag points at a commit whose charts and Terraform still
+   reference the PREVIOUS release's images. An operator who follows the upgrade
+   instructions and runs `git checkout {version}` then `helm upgrade` or `terraform apply`
+   installs the previous release. This happened on 1.32.1.
+
+   So: watch for that PR, merge it, pull `main`, and only then tag.
+   ```bash
+   gh pr list --state open --json number,title,headRefName \
+     --jq '.[] | select(.headRefName == "release-update-{version}") | "#\(.number) \(.title)"'
+   ```
+
+   `helm-release-retag.yml` is meant to force-move the tag onto that commit if you tagged
+   early, so it reads like a safety net. Do not rely on it. Its branch-prefix gate had
+   drifted from the branch `helm-chart-update.yml` actually creates, so the job silently
+   skipped on every release through 1.32.1 (fixed in #1857). Earlier releases looked
+   correct only because whoever cut them happened to tag after the bump PR merged.
+
+   **This also changes what you write in Step 5.** The `git diff {base_tag}..HEAD -- charts/`
+   check runs before the bump PR exists, so it reports zero chart changes and tempts you to
+   write "you do not need to rebuild chart dependencies". That is wrong on any release where
+   the bump PR lands, because it rewrites five chart values files. Whenever that PR is part
+   of the release, the Helm upgrade instructions MUST include `helm dependency build` and
+   `helm dependency update`. Re-run the charts diff after the bump PR merges, and correct
+   the notes before tagging if you already wrote the "no chart changes" wording.
+
+5. **Tag only after both PRs are merged**, so the tag points at a commit on `main` that
+   contains the release notes AND the updated image references:
    ```bash
    # If tag already exists, delete it locally and remotely first
    git tag -d {version} 2>/dev/null || true
@@ -470,17 +504,33 @@ Once the user confirms the release notes are ready:
    git push origin {version}
    ```
 
-5. **Verify:**
+   Create a LIGHTWEIGHT tag, as above. Do not pass `-m` or `-a`: that makes an annotated
+   tag object, which every release tag in this repo is not. Pushing the tag triggers
+   `release-images.yml`, which builds and pushes the release images to ECR Public.
+
+6. **Verify:**
    ```bash
    git log --oneline -1
    git tag -l {version} --format="%(refname:short) -> %(objectname:short)"
+
+   # The tag must carry THIS version's image references, not the previous one's
+   git show {version}:charts/registry/values.yaml | grep -m1 'tag:'
+   git show {version}:terraform/aws-ecs/variables.tf | grep -m1 'registry:'
    ```
 
-6. Tell the user the release notes are committed and the tag is created and pushed.
+7. Tell the user the release notes are committed and the tag is created and pushed.
 
 ## Important Rules
 
 - **Always run the Step 0 smoke-test gate first.** Confirm the end-to-end release smoke test (`tests/e2e_release_test.py`) was run and passed, or offer to run it. If it reports any FAILED test, STOP and do not cut the release. Only a user's explicit decision to skip may bypass this, and it must be warned about once.
+- **Never tag before the `release-update-{version}` PR merges.** Merging the notes PR opens a
+  second PR that rewrites the chart and Terraform image references, and it lands afterward.
+  Tagging early produces a tag whose charts and Terraform deploy the PREVIOUS release, which
+  is what went wrong on 1.32.1. Do not treat `helm-release-retag.yml` as a safety net: it
+  skipped silently on every release through 1.32.1. Because that PR changes files under
+  `charts/`, the Helm upgrade instructions always need `helm dependency build` and
+  `helm dependency update` on a release where it lands, even though the Step 3 charts diff
+  reports nothing before it exists.
 - **Never skip the user confirmation** for base version in Step 2. The user may want to create release notes that span multiple versions.
 - **Never include emojis** in the release notes file. The project CLAUDE.md prohibits emojis in documentation.
 - **Never include Claude Code attribution** or "Co-Authored-By" lines in commits.
