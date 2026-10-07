@@ -613,6 +613,37 @@ class TestConsentAndCallback:
                 "oauth2",
             )
 
+    async def test_provider_rejected_exchange_is_egress_error_and_stores_nothing(
+        self, svc, egress_oauth, monkeypatch
+    ):
+        """A provider token-endpoint rejection (e.g. GitHub's
+        incorrect_client_credentials) must surface as EgressAuthError so the
+        callback route renders its error page instead of a 500, and no token
+        may be vaulted."""
+        url = await svc.build_consent_url(
+            "oauth2",
+            "alice",
+            "Iv1.testclient",
+            "sess-1",
+            "/github-mcp",
+            egress_oauth,
+            server=SERVER,
+        )
+
+        async def rejecting_post(cfg, data, headers):
+            raise oauth_engine.OAuthEngineError(
+                "token endpoint error: incorrect_client_credentials"
+            )
+
+        monkeypatch.setattr(oauth_engine, "_post_token", rejecting_post)
+        with pytest.raises(service.EgressAuthError, match="code exchange failed"):
+            await svc.handle_callback("c", _extract_state(url), egress_oauth, "alice", "oauth2")
+
+        stored = await svc._store.get_token(
+            "oauth2", "alice", "github", "/github-mcp", purpose=keys.EGRESS_PURPOSE
+        )
+        assert stored is None
+
 
 @pytest.mark.unit
 class TestPublicClientFlow:
