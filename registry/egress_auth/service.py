@@ -371,14 +371,26 @@ class EgressAuthService:
         # repointed custom_token_url must not receive this code + client secret.
         if cfg.token_url != state.token_url:
             raise EgressAuthError("token endpoint changed during consent")
-        token = await oauth_engine.exchange_code(
-            cfg=cfg,
-            client_id=egress_oauth["client_id"],
-            client_secret=self._client_secret(cfg, egress_oauth),
-            code=code,
-            redirect_uri=self._callback_url,
-            pkce_verifier=state.pkce_verifier,
-        )
+        try:
+            token = await oauth_engine.exchange_code(
+                cfg=cfg,
+                client_id=egress_oauth["client_id"],
+                client_secret=self._client_secret(cfg, egress_oauth),
+                code=code,
+                redirect_uri=self._callback_url,
+                pkce_verifier=state.pkce_verifier,
+            )
+        except oauth_engine.OAuthEngineError as exc:
+            # Provider rejected the exchange (e.g. incorrect_client_credentials) or
+            # was unreachable. The engine message carries the provider's error code
+            # only, never the secret; log it here because callers show a generic page.
+            logger.warning(
+                "egress code exchange failed provider=%s server=%s: %s",
+                state.provider,
+                state.server_path,
+                exc,
+            )
+            raise EgressAuthError("code exchange failed") from exc
         # Bind the credential to exactly what the user approved when consent began;
         # the vend refuses any other upstream / token URL (see get_valid_token).
         token = token.model_copy(
