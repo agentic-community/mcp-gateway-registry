@@ -1820,6 +1820,9 @@ class NginxConfigService:
                 logger.info("No enabled virtual servers found")
                 return ""
 
+            from registry.api.wellknown_routes import virtual_server_needs_per_server_prm
+            from registry.auth.oauth_metadata import build_per_server_prm_url
+
             location_blocks = []
             for vs in virtual_servers:
                 # Extract server_id from path (e.g., '/virtual/dev-essentials' -> 'dev-essentials')
@@ -1838,6 +1841,47 @@ class NginxConfigService:
                 # subtree. The virtual_router.lua content handler receives the full
                 # URI, so the added slash does not affect routing.
                 safe_vs_path = self._sanitize_for_nginx_set(vs.path).rstrip("/") + "/"
+
+                # A virtual server's 401 must point MCP clients at its PER-SERVER
+                # PRM, not the bare-origin gateway PRM. On Entra the bare origin
+                # is unmatchable to an App ID URI (AADSTS9010010) and its
+                # OIDC-basics scopes are refused (AADSTS70011), so without this
+                # override an MCP client can never complete the ingress login for
+                # a virtual path. Mirrors the per-registration override in
+                # _create_location_block.
+                #
+                # Deliberately fail SOFT: the gate reads backing-server entries,
+                # and losing the override only degrades Entra ingress discovery
+                # for this one virtual server (recoverable, and visible as a 401
+                # pointing at the root PRM). Letting the error escape would abort
+                # the whole generator and drop EVERY virtual location from the
+                # rendered config, taking the endpoints down. This is a discovery
+                # hint, not an authorization decision: /validate still gates the
+                # request either way.
+                vs_resource_metadata = ""
+                try:
+                    if await virtual_server_needs_per_server_prm(
+                        tm.backend_server_path for tm in (vs.tool_mappings or [])
+                    ):
+                        per_server_prm = build_per_server_prm_url(settings.registry_url, vs.path)
+                        # Defense-in-depth: the PRM URL embeds the virtual server
+                        # path (build_per_server_prm_url does a raw concat, no
+                        # escaping), so sanitize before it lands in the quoted
+                        # `set $mcp_resource_metadata "..."` directive.
+                        safe_per_server_prm = self._sanitize_for_nginx_set(per_server_prm)
+                        vs_resource_metadata = (
+                            f'\n        set $mcp_resource_metadata "{safe_per_server_prm}";'
+                        )
+                except Exception as exc:
+                    # Covers a missing/unusable registry_url (ValueError) and any
+                    # backing-server lookup failure in the gate.
+                    logger.warning(
+                        "Virtual server %s: keeping the gateway-wide PRM, "
+                        "per-server resource_metadata could not be resolved: %s",
+                        vs.path,
+                        exc,
+                    )
+                    vs_resource_metadata = ""
 
                 block = f"""
     # Virtual MCP Server: {safe_name}
@@ -1864,7 +1908,7 @@ class NginxConfigService:
         # Route 401s through @auth_error so the WWW-Authenticate header
         # mandated by RFC 9728 §5.1 is emitted (issue #989).
         error_page 401 = @auth_error;
-        error_page 403 = @forbidden_error;
+        error_page 403 = @forbidden_error;{vs_resource_metadata}
     }}"""
                 location_blocks.append(block)
                 logger.debug(f"Generated virtual server location block for {vs.path}")

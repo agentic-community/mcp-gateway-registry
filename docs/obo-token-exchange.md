@@ -727,6 +727,13 @@ app's `identifierUris` array.
   ```
 - The shared `user_impersonation` scope (1a-bis) resolves under each of these
   URIs via its stable permission id -- no per-server scope or re-consent needed.
+- **Virtual MCP servers need an entry too.** A `/virtual/<id>/mcp` endpoint is an
+  ingress login endpoint like any other, so on Entra it gets its own per-server
+  PRM and its connection URL must be an `identifierUris` entry. Enabled virtual
+  servers are included in the `/api/egress/obo-identifier-uris` output above.
+  Without the entry the client fails at authorize (`AADSTS9010010`), and without
+  the per-server PRM it never gets that far: it falls back to the bare-origin
+  root PRM, whose OIDC-basics scopes Entra refuses (`AADSTS70011`).
 - **Do this AFTER registering the server (3b)** so its path exists, and BEFORE
   the client connects (3d-alt). The registry side is automatic (per-server PRM +
   audience validation); this array is the one manual Entra step per obo server.

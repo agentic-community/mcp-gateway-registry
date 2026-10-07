@@ -722,3 +722,126 @@ class TestPerServerOAuthProtectedResource:
             client = TestClient(_make_oauth_discovery_app(fake_provider))
             client.get("/.well-known/oauth-protected-resource/obo-echo/mcp")
             assert seen["path"] == "/obo-echo"
+
+
+class TestVirtualServerPerServerPrm:
+    """GET /.well-known/oauth-protected-resource/virtual/<id>/mcp.
+
+    A virtual server is an MCP connection endpoint like any other, so on Entra
+    it needs the per-server resource: the bare-origin root PRM is unmatchable to
+    an App ID URI and its OIDC-basics scopes are refused, which blocks the
+    ingress login for the whole virtual path.
+    """
+
+    def _settings(self, auth_provider="entra"):
+        s = MagicMock()
+        s.registry_url = "https://gw.example.com"
+        s.mcp_https_required = True
+        s.mcp_resource_documentation_url = None
+        s.mcp_advertised_scopes = ""
+        s.auth_provider = auth_provider
+        return s
+
+    def _virtual_server(self, backend_paths, is_enabled=True):
+        vs = MagicMock()
+        vs.is_enabled = is_enabled
+        vs.tool_mappings = [MagicMock(backend_server_path=p) for p in backend_paths]
+        return vs
+
+    def _get(self, fake_provider, settings_obj, vs_result, backing=None):
+        """Issue the virtual PRM request with the two lookups stubbed.
+
+        ``vs_result`` is returned by get_virtual_server (or raised if it is an
+        Exception); ``backing`` maps a backing path to its server doc.
+        """
+        vs_service = MagicMock()
+        if isinstance(vs_result, Exception):
+            vs_service.get_virtual_server = AsyncMock(side_effect=vs_result)
+        else:
+            vs_service.get_virtual_server = AsyncMock(return_value=vs_result)
+        with (
+            patch(
+                "registry.api.wellknown_routes._get_active_auth_provider",
+                return_value=fake_provider,
+            ),
+            patch("registry.auth.oauth_metadata.settings", settings_obj),
+            patch("registry.api.wellknown_routes.settings", settings_obj),
+            patch(
+                "registry.services.virtual_server_service.get_virtual_server_service",
+                return_value=vs_service,
+            ),
+            patch(
+                "registry.api.wellknown_routes.server_service.get_server_info",
+                new=AsyncMock(side_effect=lambda p: (backing or {}).get(p)),
+            ),
+        ):
+            client = TestClient(_make_oauth_discovery_app(fake_provider))
+            return client.get("/.well-known/oauth-protected-resource/virtual/test/mcp")
+
+    def test_entra_virtual_server_advertises_its_connection_url(self, fake_provider):
+        resp = self._get(
+            fake_provider,
+            self._settings(auth_provider="entra"),
+            self._virtual_server(["/github"]),
+            backing={"/github": {"egress_auth_mode": "oauth_user"}},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        # The /mcp transport segment is always present for a virtual path.
+        assert data["resource"] == "https://gw.example.com/virtual/test/mcp"
+        assert data["scopes_supported"] == [
+            "https://gw.example.com/virtual/test/mcp/user_impersonation"
+        ]
+
+    def test_lenient_idp_plain_backends_fall_back_to_global_prm(self, fake_provider):
+        """REGRESSION GUARD: Keycloak/Cognito virtual servers work off the
+        bare-origin root PRM today. Serving a per-server document there would
+        force an exact connection-URL match they do not need."""
+        resp = self._get(
+            fake_provider,
+            self._settings(auth_provider="keycloak"),
+            self._virtual_server(["/plain-a", "/plain-b"]),
+            backing={
+                "/plain-a": {"egress_auth_mode": "none"},
+                "/plain-b": {"egress_auth_mode": "oauth_user"},
+            },
+        )
+        assert resp.status_code == 404
+
+    def test_lenient_idp_obo_backend_forces_per_server_resource(self, fake_provider):
+        """obo_exchange audiences its ingress token per-resource on ANY provider,
+        so one such backing server pulls the virtual path onto a per-server PRM."""
+        resp = self._get(
+            fake_provider,
+            self._settings(auth_provider="keycloak"),
+            self._virtual_server(["/plain-a", "/obo-echo"]),
+            backing={
+                "/plain-a": {"egress_auth_mode": "none"},
+                "/obo-echo": {"egress_auth_mode": "obo_exchange"},
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["resource"] == "https://gw.example.com/virtual/test/mcp"
+
+    def test_disabled_virtual_server_404s(self, fake_provider):
+        """A disabled virtual server has no nginx location, so no 401 and no
+        discovery document -- advertising one would name an unroutable path."""
+        resp = self._get(
+            fake_provider,
+            self._settings(auth_provider="entra"),
+            self._virtual_server(["/github"], is_enabled=False),
+        )
+        assert resp.status_code == 404
+
+    def test_unknown_virtual_server_404s(self, fake_provider):
+        resp = self._get(fake_provider, self._settings(auth_provider="entra"), None)
+        assert resp.status_code == 404
+
+    def test_lookup_failure_returns_502_without_leaking_detail(self, fake_provider):
+        resp = self._get(
+            fake_provider,
+            self._settings(auth_provider="entra"),
+            RuntimeError("documentdb connection refused"),
+        )
+        assert resp.status_code == 502
+        assert "documentdb" not in resp.text.lower()
