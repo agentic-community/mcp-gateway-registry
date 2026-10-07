@@ -126,6 +126,88 @@ class TestGenerateVirtualServerBlocks:
         assert "error_page 403 = @forbidden_error" in result
 
     @pytest.mark.asyncio
+    async def test_entra_block_points_401_at_the_per_virtual_prm(
+        self, mock_virtual_server_repository
+    ):
+        """On Entra the 401 must advertise the virtual server's OWN PRM.
+
+        The gateway-wide default is the bare origin, whose resource Entra cannot
+        match to an App ID URI and whose OIDC-basics scopes it refuses, so a
+        client following that default can never log in to a virtual path.
+        """
+        vs = _make_vs_config()
+        mock_virtual_server_repository.list_enabled.return_value = [vs]
+
+        # The gate reads settings from registry.api.wellknown_routes and the URL
+        # from registry.core.nginx_service. The conftest rebinds the settings
+        # singleton, so each module can hold a distinct object: patch both
+        # references or the gate silently sees the unpatched provider.
+        from registry.core.nginx_service import NginxConfigService
+
+        with (
+            patch("registry.api.wellknown_routes.settings.auth_provider", "entra"),
+            patch("registry.core.nginx_service.settings.registry_url", "https://gw.example.com"),
+        ):
+            result = await NginxConfigService()._generate_virtual_server_blocks()
+
+        assert (
+            'set $mcp_resource_metadata "https://gw.example.com'
+            '/.well-known/oauth-protected-resource/virtual/dev-essentials/mcp";' in result
+        )
+
+    @pytest.mark.asyncio
+    async def test_lenient_idp_block_keeps_the_gateway_wide_prm(
+        self, mock_virtual_server_repository, mock_server_repository
+    ):
+        """REGRESSION GUARD: on Keycloak/Cognito the bare-origin PRM works, so a
+        plain-backed virtual server must NOT override $mcp_resource_metadata."""
+        vs = _make_vs_config()
+        mock_virtual_server_repository.list_enabled.return_value = [vs]
+        mock_server_repository.get.return_value = {
+            "proxy_pass_url": "https://backend.example.com/mcp",
+            "egress_auth_mode": "none",
+        }
+
+        from registry.core.nginx_service import NginxConfigService
+
+        with (
+            patch("registry.api.wellknown_routes.settings.auth_provider", "keycloak"),
+            patch("registry.core.nginx_service.settings.registry_url", "https://gw.example.com"),
+        ):
+            result = await NginxConfigService()._generate_virtual_server_blocks()
+
+        assert "/virtual/dev-essentials" in result
+        assert "set $mcp_resource_metadata" not in result
+
+    @pytest.mark.asyncio
+    async def test_prm_gate_failure_still_renders_the_location(
+        self, mock_virtual_server_repository
+    ):
+        """A backing-server lookup failure must cost only the PRM override.
+
+        The gate reads backing entries, so letting its error escape would abort
+        the generator and drop EVERY virtual location from the rendered config,
+        taking the endpoints down to protect a discovery hint.
+        """
+        vs = _make_vs_config()
+        mock_virtual_server_repository.list_enabled.return_value = [vs]
+
+        from registry.core.nginx_service import NginxConfigService
+
+        with (
+            patch("registry.api.wellknown_routes.settings.auth_provider", "keycloak"),
+            patch(
+                "registry.api.wellknown_routes.server_service.get_server_info",
+                side_effect=RuntimeError("documentdb unavailable"),
+            ),
+        ):
+            result = await NginxConfigService()._generate_virtual_server_blocks()
+
+        assert "location {{ROOT_PATH}}/virtual/dev-essentials/ {" in result
+        assert "content_by_lua_file /etc/nginx/lua/virtual_router.lua" in result
+        assert "set $mcp_resource_metadata" not in result
+
+    @pytest.mark.asyncio
     async def test_location_normalised_to_trailing_slash(self, mock_virtual_server_repository):
         """Issue #1501: the virtual-server location must render with a trailing
         slash so nginx does a subtree prefix match (`/virtual/dev/`) instead of

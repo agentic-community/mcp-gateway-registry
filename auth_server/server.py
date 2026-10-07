@@ -3705,6 +3705,33 @@ def _obo_extra_audiences(server_name_from_url: str | None) -> list[str]:
     return auds
 
 
+def _virtual_parent_server_path(
+    route_mode: str,
+    virtual_original_url: str,
+) -> str | None:
+    """Parent virtual server path (e.g. ``virtual/test``) for a backing-grant hop.
+
+    A virtual server's router authorizes each backing server through the
+    generated internal ``/_vs_auth_*`` location, re-using the caller's ingress
+    token. On an IdP with per-server PRMs (Entra), that token's ``aud`` is the
+    VIRTUAL server's resource (``https://gw/virtual/<name>/mcp``), never the
+    backing server's, so the backing hop must also accept the parent's audience.
+
+    Returns ``None`` unless nginx asserted route mode ``virtual`` and the
+    parent URL classifies as a virtual server. Both values come from
+    ``_nginx_registration``, which honors them only behind the binding secret,
+    so a client cannot widen audiences by forging the header. The accepted
+    audience is bound to that one parent, and scope checks still run against
+    the backing server's own grants.
+    """
+    if route_mode != "virtual" or not virtual_original_url:
+        return None
+    parent = classify_request_url(urlparse(virtual_original_url).path, root_path=REGISTRY_ROOT_PATH)
+    if parent is None or parent[0] != ResourceType.VIRTUAL_SERVER:
+        return None
+    return parent[1]
+
+
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
@@ -4232,6 +4259,13 @@ async def validate_request(request: Request):
                         # does not accept the kwarg still work (fall back to the
                         # bare call).
                         extra_audiences = _obo_extra_audiences(server_name_from_url)
+                        virtual_parent = _virtual_parent_server_path(
+                            route_mode, virtual_original_url
+                        )
+                        if virtual_parent:
+                            for audience in _obo_extra_audiences(virtual_parent):
+                                if audience not in extra_audiences:
+                                    extra_audiences.append(audience)
                         try:
                             validation_result = auth_provider.validate_token(
                                 access_token, extra_audiences=extra_audiences

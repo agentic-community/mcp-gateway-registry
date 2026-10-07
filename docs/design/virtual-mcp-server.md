@@ -97,6 +97,7 @@ A client connecting to `/virtual/dev-tools` sees `search-repo`, `post-message`, 
 3. Lua loads `/etc/nginx/lua/virtual_mappings/{id}.json`, checks the virtual server's required scopes and any alias-level override, and rewrites an aliased `tools/call` to the backend's original tool name.
 4. For every backing request, Lua explicitly captures `/_vs_auth_<backend>` with the rewritten JSON-RPC body. This verifies the same caller has the backing server's method/tool grant and returns a signed token bound to that registered backend and its resolved upstream. `ngx.location.capture` does not run `auth_request` on a captured backend location; the explicit check is required.
    For a resource token bound to the virtual server, the internal authorization location supplies the original virtual URI separately; auth-server verifies the virtual binding and the rewritten backend's scope grant. Normal `/validate` locations clear that parent header, and the backend hop requires the nginx marker, so the exception cannot be used by a direct backend request.
+   An IdP token issued for the virtual server's own resource (Entra issues one per server, so its `aud` is `https://<gateway>/virtual/<id>/mcp`) is accepted at the backend hop for that parent virtual server only. The backend's own audience is still accepted, and the backend's scope grant is still required.
 5. Lua calls `/_vs_backend_<backend>` only after that grant. A PAT or `oauth_user` backend routes through auth-server's `/mcp-proxy/<backend>/` vend/inject hop. Plain backends retain their direct proxy, with ingress credentials and internal tokens stripped. The resolved backend path, not the virtual alias, keys the egress vault.
    The signed token retains the exact registered backing path and selected version ID. Vend checks the selected version's exact outbound endpoint against the credential's write-time destination binding; adding or retargeting a version requires reconnecting or resubmitting its credential.
 6. Virtual `initialize` creates the client session locally. Backend `initialize` is performed when a backend is first used; both stateful session IDs and successful sessionless initialization are remembered per caller and mapped backend version. `tools/list` and other routed methods also require the backing grant.
@@ -370,6 +371,31 @@ Resource/prompt lists are rebuilt per user: a pre-consent, unavailable, unsuppor
 The virtual mapping above requires `mcp-access`, then `github-read` for the `search-repo` alias or `github-write` for `create-pr`. The caller must **also** have a backing-server scope that grants `/github` `initialize`, `tools/list`, and the corresponding original tool (`search` or `create_pr`) on `tools/call`. Without that backing grant, the alias cannot be called even if every virtual override is satisfied. Without the virtual grant, a direct `/github` grant does not unlock `/virtual/dev-tools`.
 
 A resource-bound token for `/virtual/dev-tools` keeps that same binding during the internal backend authorization check; the backend grant is still evaluated for the rewritten method/tool and resolved backing server. A direct backend request with that token remains bound to the virtual resource and is denied.
+
+### Ingress Discovery (OAuth)
+
+A virtual endpoint is a connection URL that MCP clients authenticate to, so it
+participates in RFC 9728 discovery on the same terms as a registered server.
+
+`GET /.well-known/oauth-protected-resource/virtual/{slug}/mcp` serves a
+per-virtual PRM whose `resource` is the connection URL
+(`https://<gw>/virtual/{slug}/mcp`), and the virtual ingress location overrides
+`$mcp_resource_metadata` so its 401 `WWW-Authenticate` points there instead of
+at the gateway-wide document. The gate is
+`virtual_server_needs_per_server_prm`: true on Entra for every virtual server,
+and on a lenient IdP only when a backing server's own egress mode already
+requires a per-resource audience (`obo_exchange`). Keycloak and Cognito
+deployments therefore keep using the gateway-wide PRM, unchanged.
+
+This matters because the gateway-wide document advertises the bare origin, which
+Entra cannot match to an Application ID URI and whose OIDC-basics scopes it
+rejects. A client following it can never complete the login for a virtual path.
+On Entra each virtual connection URL must also be registered in the gateway
+app's `identifierUris`; `GET /api/egress/obo-identifier-uris` lists the enabled
+ones alongside the registered servers.
+
+A disabled virtual server has no nginx location and therefore no 401 to discover
+from, so its PRM returns 404 rather than naming an unroutable path.
 
 ---
 

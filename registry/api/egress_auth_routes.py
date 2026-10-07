@@ -1376,7 +1376,9 @@ async def get_obo_identifier_uris(
     Each server that logs the client in at the gateway via a per-server PRM has a
     per-server resource URL -- the value the gateway advertises in its PRM and
     validates as the ingress ``aud``. On Entra this is EVERY server (issue #990),
-    plus ``obo_exchange`` / the 3LO ``oauth_user`` ingress leg on any provider.
+    plus ``obo_exchange`` / the 3LO ``oauth_user`` ingress leg on any provider,
+    and every enabled **virtual** server (its ``/virtual/<id>/mcp`` connection URL
+    is an ingress login endpoint exactly like a registered server's).
     On Entra, every one of those URLs must be present in the gateway app's
     ``identifierUris`` list. This endpoint returns the exact set so the operator
     can keep Entra in sync as servers are added/removed -- the registry side is
@@ -1393,9 +1395,13 @@ async def get_obo_identifier_uris(
     """
     _require_admin(user_context)
 
-    from registry.api.wellknown_routes import server_needs_per_server_prm
+    from registry.api.wellknown_routes import (
+        server_needs_per_server_prm,
+        virtual_server_needs_per_server_prm,
+    )
     from registry.auth.oauth_metadata import build_per_server_resource_url
     from registry.core.config import settings
+    from registry.services.virtual_server_service import get_virtual_server_service
 
     servers = await server_service.get_all_servers(include_inactive=True)
     uris: list[str] = []
@@ -1406,6 +1412,15 @@ async def get_obo_identifier_uris(
         uris.append(
             build_per_server_resource_url(settings.registry_url, path, append_mcp=append_mcp)
         )
+    # Virtual servers live in their own collection. Only enabled ones have an
+    # nginx location (and therefore a 401 to discover from), so a disabled one
+    # needs no App ID URI.
+    for vs in await get_virtual_server_service().list_virtual_servers():
+        if not vs.is_enabled:
+            continue
+        if not await virtual_server_needs_per_server_prm(vs.backend_paths):
+            continue
+        uris.append(build_per_server_resource_url(settings.registry_url, vs.path))
     uris = sorted(set(uris))
     return {"identifier_uris": uris, "count": len(uris)}
 
