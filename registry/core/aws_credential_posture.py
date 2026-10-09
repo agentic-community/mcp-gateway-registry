@@ -40,6 +40,16 @@ IAM_DOCS_REFERENCE: str = "docs/installation.md (IAM for Docker Compose on EC2)"
 COGNITO_AUTH_PROVIDER: str = "cognito"
 SECRETS_MANAGER_BACKEND: str = "secrets-manager"  # nosec B105 - backend name, not a password
 
+# boto3 defaults to a 60s connect timeout, a 60s read timeout and legacy retries,
+# so an unreachable STS endpoint (no egress, a misconfigured proxy) would stall
+# FastAPI lifespan for minutes. This is a log line, so it gets seconds.
+STS_TIMEOUT_SECONDS: int = 2
+STS_MAX_ATTEMPTS: int = 1
+
+# Hard ceiling on the whole check, covering provider resolution as well as the STS
+# call. Startup must not wait on a diagnostic. Issue #1129 is the precedent.
+POSTURE_CHECK_DEADLINE_SECONDS: float = 10.0
+
 
 def _resolved_credential_provider() -> str | None:
     """Return the name of the botocore provider that supplied credentials.
@@ -81,11 +91,19 @@ def _caller_identity_arn() -> str | None:
     """
     try:
         import boto3
+        from botocore.config import Config
     except ImportError:
         return None
 
+    # Short timeouts and a single attempt. The caller is on the startup path.
+    config = Config(
+        connect_timeout=STS_TIMEOUT_SECONDS,
+        read_timeout=STS_TIMEOUT_SECONDS,
+        retries={"max_attempts": STS_MAX_ATTEMPTS},
+    )
+
     try:
-        return boto3.client("sts").get_caller_identity().get("Arn")
+        return boto3.client("sts", config=config).get_caller_identity().get("Arn")
     except Exception:
         # No network, no endpoint, a proxy in the way: none of it is fatal here.
         logger.debug("sts:GetCallerIdentity failed", exc_info=True)
@@ -121,51 +139,71 @@ def _aws_backed_features(
     return features
 
 
+async def _report_credential_posture(
+    aws_federation_enabled: bool,
+) -> None:
+    """Work out the credential position and log one line about it.
+
+    Args:
+        aws_federation_enabled: Whether AgentCore registry federation is on.
+    """
+    provider = await asyncio.to_thread(_resolved_credential_provider)
+    if provider is None:
+        logger.info("No AWS credentials resolve in this container. Nothing to report.")
+        return
+
+    features = _aws_backed_features(aws_federation_enabled)
+    arn = await asyncio.to_thread(_caller_identity_arn)
+    identity = arn or "an identity that sts:GetCallerIdentity did not return"
+
+    if provider != IMDS_PROVIDER_NAME:
+        logger.info(
+            f"AWS credentials come from the '{provider}' provider as {identity}. "
+            f"AWS-backed features enabled: {', '.join(features) or 'none'}."
+        )
+        return
+
+    if features:
+        logger.info(
+            f"AWS credentials come from the EC2 instance metadata service as "
+            f"{identity}. AWS-backed features enabled: {', '.join(features)}. "
+            f"Scope the instance role to these features only, see "
+            f"{IAM_DOCS_REFERENCE}."
+        )
+        return
+
+    logger.warning(
+        f"This registry calls no AWS API, yet it can read credentials for "
+        f"{identity} from the EC2 instance metadata service. Every container "
+        f"on the Docker bridge network can read them too, so the instance "
+        f"profile adds risk with no benefit here. Detach the instance profile, "
+        f"or scope it to the features you turn on. See {IAM_DOCS_REFERENCE}."
+    )
+
+
 async def log_aws_credential_posture(
     aws_federation_enabled: bool,
 ) -> None:
     """Log which AWS identity the registry runs as, and warn if it is unused.
 
-    Never raises. A failure to work any of this out is logged at debug level and
-    startup continues, because a diagnostic must not be able to stop the service.
+    Never raises, and never waits longer than ``POSTURE_CHECK_DEADLINE_SECONDS``.
+    A diagnostic must not be able to stop or slow the service, so every failure
+    becomes a debug line and startup continues.
 
     Args:
         aws_federation_enabled: Whether AgentCore registry federation is on.
     """
     try:
-        provider = await asyncio.to_thread(_resolved_credential_provider)
-        if provider is None:
-            logger.info(
-                "No AWS credentials resolve in this container. Nothing to report."
-            )
-            return
-
-        features = _aws_backed_features(aws_federation_enabled)
-        arn = await asyncio.to_thread(_caller_identity_arn)
-        identity = arn or "an identity that sts:GetCallerIdentity did not return"
-
-        if provider != IMDS_PROVIDER_NAME:
-            logger.info(
-                f"AWS credentials come from the '{provider}' provider as {identity}. "
-                f"AWS-backed features enabled: {', '.join(features) or 'none'}."
-            )
-            return
-
-        if features:
-            logger.info(
-                f"AWS credentials come from the EC2 instance metadata service as "
-                f"{identity}. AWS-backed features enabled: {', '.join(features)}. "
-                f"Scope the instance role to these features only, see "
-                f"{IAM_DOCS_REFERENCE}."
-            )
-            return
-
-        logger.warning(
-            f"This registry calls no AWS API, yet it can read credentials for "
-            f"{identity} from the EC2 instance metadata service. Every container "
-            f"on the Docker bridge network can read them too, so the instance "
-            f"profile adds risk with no benefit here. Detach the instance profile, "
-            f"or scope it to the features you turn on. See {IAM_DOCS_REFERENCE}."
+        await asyncio.wait_for(
+            _report_credential_posture(aws_federation_enabled),
+            timeout=POSTURE_CHECK_DEADLINE_SECONDS,
+        )
+    except TimeoutError:
+        # asyncio cannot cancel a thread started by to_thread, so a stuck AWS call
+        # runs on to its own timeout. Startup does not wait for it.
+        logger.debug(
+            f"The AWS credential posture check passed "
+            f"{POSTURE_CHECK_DEADLINE_SECONDS}s and was abandoned"
         )
     except Exception:
         logger.debug("The AWS credential posture check did not complete", exc_info=True)
