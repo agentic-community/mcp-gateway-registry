@@ -174,9 +174,7 @@ def _safe_server_path(server_name: str) -> str:
             "such as 'currenttime' or 'mcpgw/mcp'."
         )
     if ".." in candidate:
-        raise AgentConfigError(
-            f"server_name '{server_name}' walks outside the registry path."
-        )
+        raise AgentConfigError(f"server_name '{server_name}' walks outside the registry path.")
 
     return candidate
 
