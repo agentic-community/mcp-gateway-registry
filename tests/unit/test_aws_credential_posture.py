@@ -7,7 +7,9 @@ diagnostic that can stop startup is worse than the finding it reports.
 Covers issue #1861.
 """
 
+import asyncio
 import logging
+import time
 
 import pytest
 
@@ -216,6 +218,60 @@ class TestFailuresNeverBlockStartup:
 
         monkeypatch.setattr(boto3, "client", explode)
         assert _caller_identity_arn() is None
+
+
+class TestStartupIsNeverDelayed:
+    """A diagnostic on the startup path must be bounded."""
+
+    @pytest.mark.asyncio
+    async def test_a_hanging_check_is_abandoned_at_the_deadline(
+        self,
+        monkeypatch,
+        no_aws_features,
+    ):
+        monkeypatch.setattr(
+            aws_credential_posture,
+            "POSTURE_CHECK_DEADLINE_SECONDS",
+            0.05,
+        )
+
+        async def never_finishes(aws_federation_enabled):
+            await asyncio.sleep(30)
+
+        monkeypatch.setattr(
+            aws_credential_posture,
+            "_report_credential_posture",
+            never_finishes,
+        )
+
+        started = time.monotonic()
+        await log_aws_credential_posture(aws_federation_enabled=False)
+        assert time.monotonic() - started < 5
+
+    def test_the_sts_client_uses_short_timeouts_and_one_attempt(self, monkeypatch):
+        captured = {}
+
+        class FakeClient:
+            def get_caller_identity(self):
+                return {"Arn": EXAMPLE_ARN}
+
+        def fake_client(service, config=None):
+            captured["service"] = service
+            captured["config"] = config
+            return FakeClient()
+
+        import boto3
+
+        monkeypatch.setattr(boto3, "client", fake_client)
+
+        assert _caller_identity_arn() == EXAMPLE_ARN
+        assert captured["service"] == "sts"
+
+        config = captured["config"]
+        assert config is not None, "the STS client must not use boto3's 60s defaults"
+        assert config.connect_timeout == aws_credential_posture.STS_TIMEOUT_SECONDS
+        assert config.read_timeout == aws_credential_posture.STS_TIMEOUT_SECONDS
+        assert config.retries["max_attempts"] == aws_credential_posture.STS_MAX_ATTEMPTS
 
 
 class TestNoPolicyReads:
