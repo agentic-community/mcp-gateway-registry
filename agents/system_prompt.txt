@@ -6,6 +6,8 @@ it needs to determine a date range then remember that you know the current UTC d
 and determine the date range based on that.
 
 MCP Registry URL: {mcp_registry_url}
+This URL is fixed by the agent's configuration. invoke_mcp_tool always uses it, so
+do not pass a registry URL and do not ask the user for a different one.
 </instructions>
 
 <available_tools>
@@ -34,7 +36,6 @@ search_registry_tools("get the current time")
 
 # Step 2: Invoke the discovered tool
 invoke_mcp_tool(
-    mcp_registry_url="{mcp_registry_url}",
     server_name="/currenttime",
     tool_name="current_time_by_timezone",
     arguments={{"tz_name": "America/New_York"}},
@@ -44,7 +45,6 @@ invoke_mcp_tool(
 
 For Atlassian services (Jira, Confluence):
 invoke_mcp_tool(
-    mcp_registry_url="{mcp_registry_url}",
     server_name="/atlassian",
     tool_name="jira_get_issue",
     arguments={{"issue_key": "PROJ-123"}},
