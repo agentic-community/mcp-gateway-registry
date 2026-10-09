@@ -171,6 +171,36 @@ open http://localhost:8080  # macOS
 
 ## Installation on Amazon EC2
 
+### IAM: start with no instance profile
+
+Attach no IAM instance profile unless a feature below needs one. A default Docker Compose deployment, meaning Keycloak for auth and the default secret store with federation off, calls no AWS API at all.
+
+This matters because of how the containers reach credentials. Each container sits on a Docker bridge network and has no route for `169.254.0.0/16`, so a request to the instance metadata service takes the default route to the bridge gateway on the host. The host forwards it and rewrites the source address, so any container that can open a socket can read the instance role's temporary credentials. Requiring IMDSv2 does not change that. The IMDSv2 token response carries the TTL set by `http-put-response-hop-limit`, and the default of `1` stops at the bridge, so a hop limit of `2` or more is what lets a container complete the flow.
+
+`AWS_EC2_METADATA_DISABLED=true` is not a control here. botocore reads it only in its IMDS credential fetcher, so it governs how the SDK inside the process resolves credentials rather than what any other client does with a socket.
+
+The registry logs its own position at startup. When it resolves credentials from the instance metadata service and no AWS-backed feature is enabled, it warns and names the role. Use that line to confirm whether the profile on your instance is doing anything.
+
+#### Permissions per feature
+
+Add only the rows for the features you turn on. The call sites are listed so you can check the set yourself after an upgrade.
+
+| Feature | Actions | Resource | Call site |
+|---|---|---|---|
+| `AUTH_PROVIDER=cognito` | `cognito-idp:ListUsers`, `cognito-idp:ListGroups`, `cognito-idp:AdminListGroupsForUser` | The user pool ARN | `registry/utils/cognito_manager.py` |
+| `SECRET_STORE_BACKEND=secrets-manager` | `secretsmanager:GetSecretValue`, `secretsmanager:PutSecretValue`, `secretsmanager:CreateSecret`, `secretsmanager:DeleteSecret` | The secret ARNs, scoped by your name prefix | `registry/secrets/factory.py` |
+| `SECRET_STORE_BACKEND=secrets-manager` | `secretsmanager:ListSecrets` | `*`, since the API has no resource-level permission | `registry/secrets/factory.py` |
+| AgentCore federation | `bedrock-agentcore:ListRegistries`, `bedrock-agentcore:ListRegistryRecords`, `bedrock-agentcore:GetRegistryRecord` | The registry ARNs | `registry/services/federation/agentcore_client.py` |
+| AgentCore federation across accounts | `sts:AssumeRole` | The exact role ARNs you federate with, never `*` | `registry/services/federation/agentcore_client.py` |
+
+`cognito-idp:GetUser` in `auth_server/server.py` authorizes with the caller's own access token, so it needs no IAM permission.
+
+See [AWS Agent Registry Federation](aws-agent-registry-federation.md) for the cross-account trust policy that goes with the last row.
+
+#### If you do attach a profile
+
+Scope it to the rows above with specific ARNs, and set `http-tokens=required` so IMDSv1 is off. Setting `http-put-response-hop-limit=1` keeps the host's own access working while stopping every bridge-network container from completing the IMDSv2 flow. Only do that if nothing in your stack needs AWS, since it also cuts the registry off from the credentials it would use for the features above.
+
 ### System Requirements
 
 **Minimum (Development)**:
