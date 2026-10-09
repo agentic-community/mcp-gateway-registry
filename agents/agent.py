@@ -693,7 +693,9 @@ async def invoke_mcp_tool(
     # the bearer token added below would go with it.
     base_url = _configured_registry_base_url()
 
-    # Remove leading slash from server_name if present
+    # Strip the leading slash, and refuse anything that could move the request off
+    # base_url. urljoin honors an absolute URL here, so "http://evil.example/x"
+    # would replace the configured host outright.
     server_name_clean = _safe_server_path(server_name)
     server_url = urljoin(base_url + "/", server_name_clean)
 
