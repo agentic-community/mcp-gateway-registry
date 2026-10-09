@@ -281,9 +281,7 @@ class TestNoPolicyReads:
         from pathlib import Path
 
         source = Path(aws_credential_posture.__file__).read_text()
-        body = "\n".join(
-            line for line in source.splitlines() if not line.strip().startswith("#")
-        )
+        body = "\n".join(line for line in source.splitlines() if not line.strip().startswith("#"))
         for forbidden in [
             "list_attached_role_policies",
             "get_policy_version",
