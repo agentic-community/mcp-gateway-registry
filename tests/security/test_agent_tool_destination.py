@@ -129,14 +129,16 @@ class TestNoTokenLeavesForAnotherHost:
         self,
         configured_registry,
     ):
-        from urllib.parse import urljoin
+        from urllib.parse import urljoin, urlparse
 
         hostile = "http://evil.example/x"
 
         # What the old code did: lstrip("/") then urljoin, which urljoin honors as
         # an absolute URL and so drops the configured host.
         unguarded = urljoin(configured_registry + "/", hostile.lstrip("/"))
-        assert unguarded.startswith("http://evil.example")
+        parsed = urlparse(unguarded)
+        assert parsed.scheme == "http"
+        assert parsed.hostname == "evil.example"
 
         # The guard refuses it instead.
         with pytest.raises(agent.AgentConfigError):
