@@ -311,6 +311,8 @@ class CustomEntityCreate(BaseModel):
     allowed_groups: list[str] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list, max_length=MAX_ARRAY_ITEMS)
     attributes: dict[str, Any] = Field(default_factory=dict)
+    # Custom types have no toggle endpoint, so enablement is set on the record.
+    is_enabled: bool = Field(default=True)
     # Gateway-proxy opt-in (a custom entity has no native backend URL, so
     # proxy_target_url is required when is_proxied).
     is_proxied: bool = Field(default=False)
@@ -381,6 +383,7 @@ class CustomEntityUpdate(BaseModel):
     allowed_groups: list[str] | None = None
     tags: list[str] | None = Field(default=None, max_length=MAX_ARRAY_ITEMS)
     attributes: dict[str, Any] | None = None
+    is_enabled: bool | None = None
     # Gateway-proxy opt-in (patchable; None = leave unchanged).
     is_proxied: bool | None = None
     proxy_target_url: str | None = None
