@@ -70,6 +70,20 @@ class ConsentRequired(EgressAuthError):
         self.authorize_url = authorize_url
 
 
+class EgressClientNotRegistered(EgressAuthError):
+    """A requires_dcr provider has no client_id yet; re-saving the config registers one.
+
+    The message is fixed and carries no config or secret material, so routes may
+    return it to the caller verbatim.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            "egress client is not registered yet -- re-save the server's egress "
+            "config to trigger dynamic client registration"
+        )
+
+
 class ReplayGuard(Protocol):
     """Single-use guard for OAuth ``state`` nonces (a Mongo-TTL-backed implementation backs this).
 
@@ -268,9 +282,18 @@ class EgressAuthService:
         """Build the provider authorize URL with an AEAD-encrypted, single-use state.
 
         Raises:
+            EgressClientNotRegistered: a requires_dcr provider has no client_id yet.
             EgressAuthError: the client secret is missing or undecryptable.
         """
         cfg = resolve_provider(egress_oauth)
+        # A requires_dcr provider has no static client_id: the gateway registers its
+        # own at config time and persists it on the server entry. If that has not
+        # happened yet, fail with a clear, actionable error instead of a KeyError/500.
+        # Kept DCR-specific so a plain misconfigured provider is not told to re-save
+        # for a registration that would never run. Checked before the secret: an
+        # unregistered DCR client has neither, and re-saving is the fix for both.
+        if cfg.requires_dcr and not egress_oauth.get("client_id"):
+            raise EgressClientNotRegistered()
 
         # Fail here rather than at the callback. The secret is only READ during the
         # code exchange, so a server missing it used to send the user out to the
