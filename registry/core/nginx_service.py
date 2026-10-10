@@ -48,6 +48,23 @@ PROXY_ROUTE_PREFIXES: frozenset[str] = frozenset(
     {AGENT_ROUTE_PREFIX.strip("/"), "virtual", "gateway"}
 )
 
+# Exact-match locations the bundled templates (docker/nginx_rev_proxy_*.conf)
+# declare themselves, without their {{ROOT_PATH}} prefix. A root-endpoint
+# server's bare-path `location =` block must never duplicate one: nginx refuses
+# to load a config with two identical exact-match locations, so a single server
+# registered at such a path would take the whole gateway config down.
+TEMPLATE_EXACT_LOCATIONS: frozenset[str] = frozenset(
+    {
+        "/502.html",
+        "/_egress_internal/egress-token",
+        "/_egress_internal/generic-upstream-headers",
+        "/api/auth/me",
+        "/favicon.ico",
+        "/oauth2/egress/callback",
+        "/validate",
+    }
+)
+
 # Agent path and backend url come from registry data and are interpolated into
 # nginx directive positions, so they must be validated to prevent config
 # injection (e.g. "}", ";", newlines breaking out of the location block).
@@ -2946,16 +2963,38 @@ map "$uri:$http_x_mcp_server_version" $versioned_backend {{
         # auth_request /validate. `location /a/` only matches /a/ and paths that
         # literally continue past the slash, so `/api/...` no longer matches. MCP
         # clients already call `/server-name/mcp` (or /sse), which continue to match.
-        # A bare `GET /a` (no trailing slash) no longer matches this block; nginx does
-        # NOT auto-redirect it to `/a/` for a proxy_pass location, so it falls through
-        # to the catch-all. This is fine because the discovery/connect URLs always
-        # include the `/mcp` (or `/sse`) suffix -- no client connects at the bare path.
+        # A request for the bare `/a` does not match this block either: nginx answers
+        # it with a 301 to `/a/`, which MCP clients do not follow on a POST.
         location_path = path.rstrip("/") + "/"
         logger.info(f"Creating location block for {location_path} with {transport_type} transport")
 
-        return f"""
-    location {{{{ROOT_PATH}}}}{location_path} {{{transport_settings}{common_settings}
+        body = f"{transport_settings}{common_settings}"
+        block = f"""
+    location {{{{ROOT_PATH}}}}{location_path} {{{body}
     }}"""
+
+        # A root-endpoint server (append_mcp_path=False) is reached at the bare path:
+        # that is the URL its per-server PRM resource and the UI Connect URL hand out.
+        # Serve it with an exact-match location carrying the same body, so the request
+        # is proxied instead of redirected. `location =` matches only that URI, so it
+        # cannot reopen the prefix hijack above, and proxy_pass rewrites it to the
+        # same /mcp-proxy/<path>/ the trailing-slash form reaches.
+        if server_info and server_info.get("append_mcp_path") is False:
+            bare_path = path.rstrip("/")
+            if bare_path in TEMPLATE_EXACT_LOCATIONS:
+                logger.error(
+                    "Not adding a bare-path location for root-endpoint server %r: the "
+                    "nginx template already declares 'location = %s', and a duplicate "
+                    "would stop the whole config from loading.",
+                    path,
+                    bare_path,
+                )
+            else:
+                block += f"""
+    location = {{{{ROOT_PATH}}}}{bare_path} {{{body}
+    }}"""
+
+        return block
 
 
 # Global nginx service instance
