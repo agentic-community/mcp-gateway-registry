@@ -1,0 +1,48 @@
+suite: keycloak adminRealm wiring
+# The post-install Job authenticates KEYCLOAK_ADMIN against the admin realm's
+# token endpoint. KEYCLOAK_ADMIN_REALM (default "master") names that realm —
+# deliberately distinct from REALM (the realm being administered) — and must
+# reach the Job's script or the Job keeps hitting master while the registry
+# uses the configured realm.
+release:
+  name: test
+  namespace: default
+templates:
+  - templates/secret.yaml
+  - templates/configmap.yaml
+tests:
+  - it: emits KEYCLOAK_ADMIN_REALM=master in the Job secret by default
+    templates:
+      - templates/secret.yaml
+    asserts:
+      - equal:
+          path: data.KEYCLOAK_ADMIN_REALM
+          value: bWFzdGVy # base64("master")
+
+  - it: emits a custom keycloak.adminRealm when set
+    templates:
+      - templates/secret.yaml
+    set:
+      keycloak:
+        adminRealm: mcp-gateway
+    asserts:
+      - equal:
+          path: data.KEYCLOAK_ADMIN_REALM
+          value: bWNwLWdhdGV3YXk= # base64("mcp-gateway")
+
+  - it: configmap script resolves KEYCLOAK_ADMIN_REALM instead of hardcoding master
+    templates:
+      - templates/configmap.yaml
+    asserts:
+      - matchRegex:
+          path: data["script.sh"]
+          pattern: 'KEYCLOAK_ADMIN_REALM="\$\{KEYCLOAK_ADMIN_REALM:-master\}"'
+      - matchRegex:
+          path: data["script.sh"]
+          pattern: 'realms/\$\{KEYCLOAK_ADMIN_REALM\}/protocol/openid-connect/token'
+      - notMatchRegex:
+          path: data["script.sh"]
+          # Written as a character class so the repo-wide no-master-realm
+          # guard test (tests/unit/test_keycloak_admin_realm.py) doesn't flag
+          # this assertion's own literal.
+          pattern: 'realms/maste[r]'

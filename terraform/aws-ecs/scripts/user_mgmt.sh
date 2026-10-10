@@ -102,7 +102,8 @@ get_admin_token() {
         exit 1
     fi
 
-    TOKEN=$(curl -s -X POST "$ADMIN_URL/realms/master/protocol/openid-connect/token" \
+    KEYCLOAK_ADMIN_REALM="${KEYCLOAK_ADMIN_REALM:-master}"
+    TOKEN=$(curl -s -X POST "$ADMIN_URL/realms/${KEYCLOAK_ADMIN_REALM}/protocol/openid-connect/token" \
         -H "Content-Type: application/x-www-form-urlencoded" \
         -d "username=$ADMIN_USER" \
         -d "password=$ADMIN_PASS" \
@@ -379,6 +380,7 @@ refresh_all_credentials() {
             export KEYCLOAK_REALM="$REALM"
             export KEYCLOAK_ADMIN="$ADMIN_USER"
             export KEYCLOAK_ADMIN_PASSWORD="$ADMIN_PASS"
+            export KEYCLOAK_ADMIN_REALM="${KEYCLOAK_ADMIN_REALM:-master}"
             (cd "$script_dir" && ./get-all-client-credentials.sh)
             echo -e "${GREEN}✓ All credentials refreshed${NC}"
             script_found=true
@@ -415,6 +417,7 @@ generate_access_token() {
             export KEYCLOAK_REALM="$REALM"
             export KEYCLOAK_ADMIN="$ADMIN_USER"
             export KEYCLOAK_ADMIN_PASSWORD="$ADMIN_PASS"
+            export KEYCLOAK_ADMIN_REALM="${KEYCLOAK_ADMIN_REALM:-master}"
             (cd "$script_dir" && ./generate-agent-token.sh "$client_id")
             echo -e "${GREEN}✓ Access token generated${NC}"
             script_found=true
