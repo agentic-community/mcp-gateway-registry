@@ -85,16 +85,21 @@ Every stored third-party token is addressed by `(auth_method, user_id, provider,
 
 The stored payload (`StoredToken`) holds `access_token`, optional `refresh_token`, `expires_at`, `status`, and timestamps — the vault read returns everything needed to decide vend-vs-refresh. **There is no companion app-DB row; the vault is the only place token state lives.**
 
-The payload also carries a **write-time destination binding**: `client_id` (the
-provider app it was minted under), `bound_upstreams` (the server's registered
-upstream base URLs at consent / PAT-submit time), and `bound_token_url` (the
-OAuth token endpoint, for a custom provider). The vend requires the request to
-match these, so rotating the provider app or repointing `proxy_pass_url` /
-`custom_token_url` forces re-consent instead of vending a stale credential or
-shipping it to an attacker-chosen destination — the live upstream cross-check
-alone cannot catch this, because an operator edit moves both the server record
-and the minted `upstream_url` claim together. See
-`registry/egress_auth/upstream_binding.py`.
+The payload also carries a **write-time destination binding**: `client_id` (the provider app it was minted under),
+`bound_upstreams` (the exact outbound URLs registered for the server's active and linked versions when the user approved
+the credential), and `bound_token_url` (the OAuth token endpoint). For OAuth consent, both are snapshot into the signed
+consent `state` when consent **begins**, and the callback binds the credential to that snapshot rather than re-reading
+the server: a version added or an endpoint repointed while the user is at the provider is never approved, and a callback
+whose live token endpoint differs from the snapshot is refused before the code is exchanged. A PAT submission snapshots
+at submit time. A newly added or retargeted URL, including a different path on the same origin, requires fresh consent
+or PAT submission; older origin-only entries match only an identical bare-origin URL. Approvals are keyed on the URL,
+not on a version document ID, so promoting a version (which swaps the active and inactive document IDs without sending
+anything anywhere new) does not revoke them. The vend resolves the selected version from the signed internal token,
+requires the signed upstream to be that version's exact registered URL, and requires that URL to be in the binding; the
+binding check runs on **every** vault read on the vend path, including each re-read inside the refresh single-flight, so
+a credential replaced by a concurrent re-consent is never used or refreshed against the original request's destination.
+The live server record alone cannot protect against an operator edit that moves both the route and the signed
+destination together. See `registry/egress_auth/upstream_binding.py`.
 
 Because the key includes `user_id`, one user can never vend another user's token — the identity comes from the **verified** signed internal-hop claims, not a forgeable header.
 
@@ -164,6 +169,12 @@ What each hop guarantees:
 - **`/validate`** binds the verified `subject` (user identity) into a signed `X-Internal-Token`. `mcp_proxy` reads identity from these verified claims, not from forgeable inbound headers (internal-hop hardening).
 - **`/internal/egress-token`** (registry) is guarded by internal auth, re-checks the server is `egress_auth_mode == oauth_user`, and returns the access token only (never the refresh token). Lazy refresh + cross-replica single-flight happen here.
 - **Injection** happens last in `mcp_proxy`: the user's own gateway credentials/identity headers are stripped and replaced with `Authorization: Bearer <vaulted third-party token>`. The token never transits the coding assistant.
+
+### Virtual MCP server backends
+
+Virtual aggregation keeps the same per-user, per-registered-server vault key. The client first passes the virtual server's ingress authorization. Lua resolves an alias to its backend path and original tool name, then explicitly checks that the same caller has that backing server's method/tool grant. Only a successful backing check yields a signed, backend/upstream-bound `X-Internal-Token`; Lua then sends the rewritten request to that backend's internal `/mcp-proxy/<backend-path>/` hop. The vend uses the resolved backing path (for example `/mcp-jira`, not `/virtual/work-tools`) and the verified user's vault identity, so two backing servers cannot swap credentials. A virtual-only grant or an unconnected PAT/OAuth account cannot produce a credentialed upstream call.
+
+The caller's gateway `Authorization`, `X-Authorization`, cookie, and internal hop token never reach the third-party backend. Auth-server removes ingress headers and injects only the backend's own vaulted credential. Plain backends retain their direct virtual dispatch path with the same gateway-credential stripping, and both backing types require the extra grant. A successful stateless backend `initialize` is remembered without inventing an `Mcp-Session-Id`, while egress-backed `tools/list` is fetched per request so user-specific consent and discovery are not served from a shared cache.
 
 ---
 

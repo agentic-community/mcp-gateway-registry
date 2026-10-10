@@ -30,6 +30,7 @@ from registry.egress_auth.schemas import (
     TokenEndpointAuthStyle,
 )
 from registry.egress_auth.state_codec import InvalidState, decode_state, encode_state
+from registry.egress_auth.upstream_binding import registered_destinations
 from registry.secrets import keys
 from registry.secrets.interfaces import SecretStoreBase
 
@@ -255,7 +256,7 @@ class EgressAuthService:
 
     # -- consent -------------------------------------------------------------- #
 
-    def build_consent_url(
+    async def build_consent_url(
         self,
         auth_method: str,
         user_id: str,
@@ -264,11 +265,18 @@ class EgressAuthService:
         server_path: str,
         egress_oauth: dict,
         purpose: str = "egress",
+        *,
+        server: dict,
     ) -> str:
         """Build the provider authorize URL with an AEAD-encrypted, single-use state.
 
+        The destinations the user is approving are snapshot HERE, into the signed
+        state, not re-read at the callback: a version added or retargeted while the
+        user is away at the provider must not inherit an approval the user never saw.
+
         Raises:
             EgressAuthError: the client secret is missing or undecryptable.
+            ValueError: a linked server version is unavailable.
         """
         cfg = resolve_provider(egress_oauth)
 
@@ -283,6 +291,7 @@ class EgressAuthService:
         # counts as configured, and a public client (auth style NONE) still
         # returns None here without raising.
         self._client_secret(cfg, egress_oauth)
+        approved_upstreams = await registered_destinations(server, server_path)
 
         verifier = oauth_engine.generate_pkce_verifier() if cfg.use_pkce else None
         challenge = oauth_engine.pkce_challenge_s256(verifier) if verifier else None
@@ -297,6 +306,8 @@ class EgressAuthService:
             nonce=secrets.token_urlsafe(16),
             issued_at=datetime.now(UTC).isoformat(),
             purpose=purpose,
+            approved_upstreams=approved_upstreams,
+            token_url=cfg.token_url,
         )
         return oauth_engine.build_authorize_url(
             cfg=cfg,
@@ -316,8 +327,6 @@ class EgressAuthService:
         egress_oauth: dict,
         current_user_id: str | None = None,
         current_auth_method: str | None = None,
-        *,
-        bound_upstreams: list[str],
     ) -> EgressConnection:
         """Verify state, exchange the code, and store the token.
 
@@ -334,6 +343,11 @@ class EgressAuthService:
         except InvalidState as exc:
             raise EgressAuthError(f"invalid state: {exc}") from exc
 
+        # Only a consent state carries the approval snapshot. A state without one
+        # (pre-upgrade, or the MRTR request_state that reuses this codec) would bind
+        # a credential to nothing the user approved.
+        if not state.approved_upstreams or not state.token_url:
+            raise EgressAuthError("state carries no approved destinations")
         # TTL
         try:
             issued = datetime.fromisoformat(state.issued_at)
@@ -353,21 +367,36 @@ class EgressAuthService:
             raise EgressAuthError("state auth_method mismatch")
 
         cfg = resolve_provider(egress_oauth)
-        token = await oauth_engine.exchange_code(
-            cfg=cfg,
-            client_id=egress_oauth["client_id"],
-            client_secret=self._client_secret(cfg, egress_oauth),
-            code=code,
-            redirect_uri=self._callback_url,
-            pkce_verifier=state.pkce_verifier,
-        )
-        # Bind the credential to the destinations + token endpoint registered at
-        # consent time; the vend refuses any other upstream / token URL (see
-        # egress_auth.upstream_binding and get_valid_token).
+        # The code is exchanged at the token endpoint the user consented under. A
+        # repointed custom_token_url must not receive this code + client secret.
+        if cfg.token_url != state.token_url:
+            raise EgressAuthError("token endpoint changed during consent")
+        try:
+            token = await oauth_engine.exchange_code(
+                cfg=cfg,
+                client_id=egress_oauth["client_id"],
+                client_secret=self._client_secret(cfg, egress_oauth),
+                code=code,
+                redirect_uri=self._callback_url,
+                pkce_verifier=state.pkce_verifier,
+            )
+        except oauth_engine.OAuthEngineError as exc:
+            # Provider rejected the exchange (e.g. incorrect_client_credentials) or
+            # was unreachable. The engine message carries the provider's error code
+            # only, never the secret; log it here because callers show a generic page.
+            logger.warning(
+                "egress code exchange failed provider=%s server=%s: %s",
+                state.provider,
+                state.server_path,
+                exc,
+            )
+            raise EgressAuthError("code exchange failed") from exc
+        # Bind the credential to exactly what the user approved when consent began;
+        # the vend refuses any other upstream / token URL (see get_valid_token).
         token = token.model_copy(
             update={
-                "bound_upstreams": list(bound_upstreams),
-                "bound_token_url": cfg.token_url,
+                "bound_upstreams": list(state.approved_upstreams),
+                "bound_token_url": state.token_url,
             }
         )
         # `purpose` is part of the ADDRESS, not the payload: this write cannot land on
@@ -392,39 +421,23 @@ class EgressAuthService:
 
     # -- vend ----------------------------------------------------------------- #
 
-    async def get_valid_token(
+    def _vendable(
         self,
-        auth_method: str,
-        user_id: str,
-        server_path: str,
+        token: StoredToken | None,
         egress_oauth: dict,
-        *,
         requested_upstream: str,
-        purpose: str,
-    ) -> str | None:
-        """Vend a valid access token, refreshing if near expiry. None on miss.
+        server_path: str,
+    ) -> bool:
+        """The one gate every stored OAuth token passes before it is used or refreshed.
 
-        Primary refresh mechanism (lazy-on-vend). Returns None when there is no
-        connection, the connection is dead (refresh_failed), the caller is not a
-        per-user principal, or the stored client_id no longer matches (rotated
-        provider app -> force re-consent).
-
-        ``purpose`` is required, not defaulted, because it selects which vault address
-        space to read: a user's own runtime credential (``egress``) and the identity the
-        registry borrows for its headless calls (``discovery``) live at different
-        addresses. A caller therefore cannot reach the other purpose's credential at
-        all -- not "is refused after reading it". Defaulting would let a caller cross
-        the boundary by omission, which is the whole failure mode.
+        Applied to EVERY vault read on the vend path -- the first read and each
+        re-read inside the refresh single-flight -- because a concurrent re-consent
+        can replace the entry between reads with a credential bound elsewhere. A
+        check made on one read says nothing about the next.
         """
-        if not is_per_user_auth_method(auth_method):
-            return None
-
         provider = egress_oauth["provider"]
-        token = await self._store.get_token(
-            auth_method, user_id, provider, server_path, purpose=purpose
-        )
         if token is None or token.status == "refresh_failed":
-            return None
+            return False
 
         # client-id binding: rotated provider app -> re-consent.
         if token.client_id and token.client_id != egress_oauth.get("client_id"):
@@ -433,13 +446,11 @@ class EgressAuthService:
                 provider,
                 server_path,
             )
-            return None
+            return False
 
-        # destination binding: the credential may only travel to an upstream that
-        # was registered when it was stored. A repointed proxy_pass_url (or a
-        # newly added version) is a MISS -> re-consent, never a vend to the new
-        # host. Legacy entries carry an empty set and re-consent once.
-        if requested_upstream not in set(token.bound_upstreams):
+        # Exact destination binding: a credential is only sent to a URL the user
+        # approved when it was written.
+        if requested_upstream not in token.bound_upstreams:
             logger.warning(
                 "egress vend: upstream binding mismatch for %s/%s (requested %r not in "
                 "bound set); refusing to vend -- forcing re-consent",
@@ -447,7 +458,7 @@ class EgressAuthService:
                 server_path,
                 requested_upstream,
             )
-            return None
+            return False
 
         # token-endpoint binding: a repointed custom_token_url would send the
         # refresh_token + client_secret to a new endpoint on the next refresh.
@@ -464,11 +475,58 @@ class EgressAuthService:
                     provider,
                     server_path,
                 )
-                return None
+                return False
+        return True
 
-        if self._is_near_expiry(token):
+    async def _read_vendable(
+        self,
+        auth_method: str,
+        user_id: str,
+        server_path: str,
+        egress_oauth: dict,
+        requested_upstream: str,
+        purpose: str,
+    ) -> StoredToken | None:
+        """Read the vault entry; None unless it passes ``_vendable``."""
+        token = await self._store.get_token(
+            auth_method, user_id, egress_oauth["provider"], server_path, purpose=purpose
+        )
+        if not self._vendable(token, egress_oauth, requested_upstream, server_path):
+            return None
+        return token
+
+    async def get_valid_token(
+        self,
+        auth_method: str,
+        user_id: str,
+        server_path: str,
+        egress_oauth: dict,
+        *,
+        requested_upstream: str,
+        purpose: str,
+    ) -> str | None:
+        """Vend a valid access token, refreshing if near expiry. None on miss.
+
+        Primary refresh mechanism (lazy-on-vend). Returns None when there is no
+        connection, the connection is dead (refresh_failed), the caller is not a
+        per-user principal, or the entry fails a binding (``_vendable``).
+
+        ``purpose`` is required, not defaulted, because it selects which vault address
+        space to read: a user's own runtime credential (``egress``) and the identity the
+        registry borrows for its headless calls (``discovery``) live at different
+        addresses. A caller therefore cannot reach the other purpose's credential at
+        all -- not "is refused after reading it". Defaulting would let a caller cross
+        the boundary by omission, which is the whole failure mode.
+        """
+        if not is_per_user_auth_method(auth_method):
+            return None
+
+        token = await self._read_vendable(
+            auth_method, user_id, server_path, egress_oauth, requested_upstream, purpose
+        )
+        if token is not None and self._is_near_expiry(token):
             token = await self._refresh_single_flight(
-                auth_method, user_id, server_path, egress_oauth, token, purpose
+                auth_method, user_id, server_path, egress_oauth, requested_upstream, purpose
             )
         return token.access_token if token else None
 
@@ -478,7 +536,7 @@ class EgressAuthService:
         user_id: str,
         server_path: str,
         egress_oauth: dict,
-        token: StoredToken,
+        requested_upstream: str,
         purpose: str,
     ) -> StoredToken | None:
         """Single-flight refresh: cross-replica lease + post-acquire double-check.
@@ -488,6 +546,9 @@ class EgressAuthService:
         refresh storms / rotating-refresh churn across replicas. The lease key is
         the canonical vault tuple -- purpose included -- so it matches the vault
         namespacing exactly and two purposes never contend for one lease.
+
+        Every re-read goes through ``_read_vendable``: the entry may have been
+        replaced since the caller's first read.
         """
         provider = egress_oauth["provider"]
         key = f"{purpose}|{auth_method}|{user_id}|{provider}|{server_path}"
@@ -497,18 +558,19 @@ class EgressAuthService:
             # Could not take the lease (another replica is refreshing). Re-read
             # once -- if it refreshed, use that; else fall back to the stale token
             # rather than racing a concurrent refresh against a rotating provider.
-            current = await self._store.get_token(
-                auth_method, user_id, provider, server_path, purpose=purpose
+            return await self._read_vendable(
+                auth_method, user_id, server_path, egress_oauth, requested_upstream, purpose
             )
-            return current if current and current.status != "refresh_failed" else None
 
         try:
-            current = await self._store.get_token(
-                auth_method, user_id, provider, server_path, purpose=purpose
+            current = await self._read_vendable(
+                auth_method, user_id, server_path, egress_oauth, requested_upstream, purpose
             )
-            if current and not self._is_near_expiry(current):
+            if current is None:
+                return None
+            if not self._is_near_expiry(current):
                 return current  # another waiter already refreshed
-            if current is None or not current.refresh_token:
+            if not current.refresh_token:
                 return None
             cfg = resolve_provider(egress_oauth)
             try:
@@ -630,7 +692,7 @@ class EgressAuthService:
         # Enforce the bounded lifetime at the sink: an expired PAT is a MISS.
         if not token.expires_at or self._is_expired(token.expires_at):
             return None
-        if requested_upstream not in set(token.bound_upstreams):
+        if requested_upstream not in token.bound_upstreams:
             logger.warning(
                 "egress vend: pat upstream binding mismatch for %s/%s; treating as a miss",
                 provider,

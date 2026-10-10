@@ -344,8 +344,8 @@ def _disc_server_info(**overrides) -> dict:
         "auth_scheme": "none",
         "service_path": "/tableau-hosted",
         "path": "/tableau-hosted",
-        # Registered upstream: the discovery borrow binds the vaulted token to
-        # this server's own endpoint base (destination binding).
+        # Discovery borrows only a token approved for this exact registered
+        # upstream endpoint, not merely the host origin.
         "proxy_pass_url": "https://tableau.example.com/mcp",
         # Self-contained backend-auth discovery config (no top-level egress_oauth).
         "oauth_discovery": {
@@ -415,7 +415,13 @@ class TestDiscoveryBorrow:
         self._patch_svc(monkeypatch, svc)
         assert await backend_oauth.resolve_discovery_bearer(_disc_server_info()) == "BORROWED"
         assert svc.calls == [
-            ("oauth2", "u-1", "/tableau-hosted", "https://tableau.example.com", "discovery")
+            (
+                "oauth2",
+                "u-1",
+                "/tableau-hosted",
+                "https://tableau.example.com/mcp",
+                "discovery",
+            )
         ]
 
     @pytest.mark.parametrize("scheme", ["bearer", "api_key"])

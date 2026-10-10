@@ -14,9 +14,8 @@ Security model for POST /internal/egress-token:
   never from the request body.
 - Non-per-user auth_method is rejected so a static-key/federation caller
   can never address a per-user vault bucket.
-- claims["upstream_url"] is cross-checked against the server's registered
-  proxy_pass_url union so a forged X-Resolved-Upstream (minted via a
-  direct /validate call) cannot vend a token to an attacker-controlled host.
+- claims["server"], the selected version ID, and its exact outbound endpoint
+  are checked against the live registration and write-time credential binding.
 """
 
 import logging
@@ -35,6 +34,7 @@ from registry.auth.csrf import verify_csrf_token_flexible
 from registry.auth.dependencies import nginx_proxied_auth
 from registry.auth.internal import validate_internal_auth
 from registry.auth.proxied_token import verify_generic_proxy_token, verify_mcp_proxy_token
+from registry.auth.resource_binding import mcp_proxy_route_binding
 from registry.common.log_redaction import redact_url
 from registry.core.config import settings
 from registry.core.schemas import _validate_obo_egress_config
@@ -47,9 +47,9 @@ from registry.egress_auth.service import (
     is_per_user_auth_method,
 )
 from registry.egress_auth.upstream_binding import (
-    base_url,
-    bound_upstreams,
-    registered_upstreams,
+    linked_version,
+    registered_destinations,
+    selected_upstream,
 )
 from registry.exceptions import UrlValidationError
 from registry.repositories.factory import (
@@ -205,6 +205,32 @@ def _resolve_target_principal(
     return verified_auth_method, verified_sub
 
 
+def _vend_refused(
+    detail: str,
+    server_path: str,
+    claims: dict,
+    approved_url: str = "",
+) -> HTTPException:
+    """Log one egress vend refusal with the context an operator needs, return the 403.
+
+    Names the server, signed version and route mode, and the (redacted) signed
+    and approved destinations, so version skew, a stale pin and a deleted linked
+    version can be told apart. None of these values are secrets.
+    """
+    logger.warning(
+        "egress vend REFUSED (%s): server=%s claim_server=%r version_id=%r "
+        "virtual_backend=%r signed_upstream=%s approved_upstream=%s",
+        detail,
+        server_path,
+        claims.get("server"),
+        claims.get("version_id"),
+        claims.get("virtual_backend"),
+        redact_url(claims.get("upstream_url") or ""),
+        redact_url(approved_url) if approved_url else "-",
+    )
+    return HTTPException(status.HTTP_403_FORBIDDEN, detail=detail)
+
+
 def _feature_enabled_or_404() -> None:
     if not settings.egress_auth_enabled:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="egress auth disabled")
@@ -269,9 +295,9 @@ def _build_request_state(
 class EgressTokenRequest(BaseModel):
     """Body for POST /internal/egress-token.
 
-    server_path identifies the registered server whose egress config + upstream
-    allowlist the vend is checked against. Identity (sub/auth_method) is NOT in
-    the body -- it is re-derived from the forwarded mcp-proxy token.
+    server_path identifies the registered server whose selected version and exact
+    outbound destination are checked against the signed proxy token. Identity
+    (sub/auth_method) is re-derived from that token, never the request body.
     """
 
     server_path: str
@@ -338,32 +364,6 @@ class EgressTokenResponse(BaseModel):
         default=None,
         description="pat: value prefix before the PAT (e.g. 'Bearer ' or '' for a bare token).",
     )
-
-
-def _base_url(url: str) -> str:
-    """scheme://host[:port] of a URL, lowercased -- the comparison surface for the upstream cross-check.
-
-    The mcp_proxy sub-path append is confined to the bound host, so the cross-check
-    compares the BASE (scheme+host+port), not the full post-append path.
-    """
-    p = urlparse(url)
-    return f"{(p.scheme or '').lower()}://{(p.netloc or '').lower()}"
-
-
-def _registered_upstreams(server: dict) -> set[str]:
-    """The legal upstream base-URL set for a server: proxy_pass_url ∪ versions[*]."""
-    bases: set[str] = set()
-    if server.get("proxy_pass_url"):
-        bases.add(_base_url(server["proxy_pass_url"]))
-    for ver in server.get("versions") or []:
-        ppu = (
-            ver.get("proxy_pass_url")
-            if isinstance(ver, dict)
-            else getattr(ver, "proxy_pass_url", None)
-        )
-        if ppu:
-            bases.add(_base_url(ppu))
-    return bases
 
 
 class GenericUpstreamHeadersRequest(BaseModel):
@@ -693,37 +693,39 @@ async def vend_egress_token(
         logger.info("egress vend: non-per-user auth_method %r -> consent", auth_method)
         return EgressTokenResponse(consent_required=True)
 
-    # Normalize the server path: mcp_proxy passes the first path segment without a
-    # leading slash ("github"), but server entries, the vault key, and the consent
-    # state all use the slash-prefixed path ("/github"). Without this, the lookup
-    # misses and consent loops forever. Use the canonical form everywhere below.
+    # The proxy passes the registered backend's full path without a leading
+    # slash (e.g. "peer/jira"). Preserve every segment so the vault key and
+    # upstream allowlist belong to that backend, never its peer prefix.
     server_path = body.server_path if body.server_path.startswith("/") else "/" + body.server_path
+    if claims.get("server") != server_path.strip("/"):
+        raise _vend_refused("server binding mismatch", server_path, claims)
 
     server = await get_server_repository().get(server_path)
     if server is None:
         return EgressTokenResponse(consent_required=True)
 
-    # Per-server enablement: a misconfigured/half-deleted server never vends.
     egress_mode = server.get("egress_auth_mode")
     if egress_mode not in ("oauth_user", "obo_exchange", "pat") or not server.get("egress_oauth"):
         return EgressTokenResponse(consent_required=True)
 
-    # The bound upstream MUST match a registered upstream for this server. This
-    # cross-check applies to BOTH egress modes: an OBO directive must only be
-    # handed out for a legitimately-bound upstream, same as a vault vend.
-    legal = registered_upstreams(server)
-    requested_upstream = base_url(token_upstream)
-    if requested_upstream not in legal:
-        logger.warning(
-            "egress vend REFUSED: upstream %r not in registered set %r for %s",
-            requested_upstream,
-            legal,
-            server_path,
-        )
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN, detail="upstream not registered for this server"
-        )
+    binding = mcp_proxy_route_binding(claims)
+    if binding is None:
+        raise _vend_refused("version binding missing", server_path, claims)
+    version_id, virtual_backend = binding
+    selected = await linked_version(server, server_path, version_id) if version_id else server
+    if selected is None:
+        raise _vend_refused("version not registered", server_path, claims)
 
+    try:
+        approved_url = selected_upstream(selected, virtual_backend)
+    except ValueError as exc:
+        raise _vend_refused("version has no endpoint", server_path, claims) from exc
+    if token_upstream != approved_url:
+        raise _vend_refused(
+            "upstream not registered for this version", server_path, claims, approved_url
+        )
+    # The credential must have been approved for this exact destination.
+    requested_upstream = approved_url
     egress_oauth = server["egress_oauth"]
 
     # A per-user principal with no resolved vault id: refuse rather than guess.
@@ -833,13 +835,14 @@ async def vend_egress_token(
     # URL so mcp_proxy can hand it back to the user to self-serve (the gateway
     # triggers consent automatically rather than forwarding unauthenticated).
     try:
-        authorize_url = svc.build_consent_url(
+        authorize_url = await svc.build_consent_url(
             auth_method=auth_method,
             user_id=sub,
             client_id_audit=claims.get("client_id") or "",
             session_id="",
             server_path=server_path,
             egress_oauth=egress_oauth,
+            server=server,
         )
     except Exception as exc:  # bad provider config etc. -- still a clean miss
         logger.warning(f"egress vend: could not build consent URL type={type(exc).__name__}")
@@ -1197,13 +1200,19 @@ async def set_egress_pat(
         )
 
     provider = server["egress_oauth"]["provider"]
+    try:
+        destinations = await registered_destinations(server, server_path)
+    except ValueError as exc:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, detail="server versions are not available"
+        ) from exc
     now = datetime.now(UTC)
     token = StoredToken(
         access_token=body.secret,
         token_type="Bearer",  # nosec B106 - token type label, not a credential
         created_at=now.isoformat(),
         expires_at=(now + timedelta(seconds=ttl_seconds)).isoformat(),
-        bound_upstreams=bound_upstreams(server),
+        bound_upstreams=destinations,
     )
     # A PAT is the user's own runtime credential, so it is written to the egress address
     # space. It cannot land on a discovery entry: those have their own addresses.
@@ -1367,7 +1376,9 @@ async def get_obo_identifier_uris(
     Each server that logs the client in at the gateway via a per-server PRM has a
     per-server resource URL -- the value the gateway advertises in its PRM and
     validates as the ingress ``aud``. On Entra this is EVERY server (issue #990),
-    plus ``obo_exchange`` / the 3LO ``oauth_user`` ingress leg on any provider.
+    plus ``obo_exchange`` / the 3LO ``oauth_user`` ingress leg on any provider,
+    and every enabled **virtual** server (its ``/virtual/<id>/mcp`` connection URL
+    is an ingress login endpoint exactly like a registered server's).
     On Entra, every one of those URLs must be present in the gateway app's
     ``identifierUris`` list. This endpoint returns the exact set so the operator
     can keep Entra in sync as servers are added/removed -- the registry side is
@@ -1384,9 +1395,13 @@ async def get_obo_identifier_uris(
     """
     _require_admin(user_context)
 
-    from registry.api.wellknown_routes import server_needs_per_server_prm
+    from registry.api.wellknown_routes import (
+        server_needs_per_server_prm,
+        virtual_server_needs_per_server_prm,
+    )
     from registry.auth.oauth_metadata import build_per_server_resource_url
     from registry.core.config import settings
+    from registry.services.virtual_server_service import get_virtual_server_service
 
     servers = await server_service.get_all_servers(include_inactive=True)
     uris: list[str] = []
@@ -1397,6 +1412,15 @@ async def get_obo_identifier_uris(
         uris.append(
             build_per_server_resource_url(settings.registry_url, path, append_mcp=append_mcp)
         )
+    # Virtual servers live in their own collection. Only enabled ones have an
+    # nginx location (and therefore a 401 to discover from), so a disabled one
+    # needs no App ID URI.
+    for vs in await get_virtual_server_service().list_virtual_servers():
+        if not vs.is_enabled:
+            continue
+        if not await virtual_server_needs_per_server_prm(vs.backend_paths):
+            continue
+        uris.append(build_per_server_resource_url(settings.registry_url, vs.path))
     uris = sorted(set(uris))
     return {"identifier_uris": uris, "count": len(uris)}
 
@@ -1434,7 +1458,7 @@ async def initiate_consent(
         )
 
     try:
-        url = get_egress_auth_service().build_consent_url(
+        url = await get_egress_auth_service().build_consent_url(
             auth_method=auth_method,
             # Canonical egress user (OIDC sub, else username): must match the id the
             # vend path derives from the mcp-proxy token so one human maps to one
@@ -1444,7 +1468,12 @@ async def initiate_consent(
             session_id=user_context.get("session_id") or "",
             server_path=server_path,
             egress_oauth=server["egress_oauth"],
+            server=server,
         )
+    except ValueError as exc:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, detail="server versions are not available"
+        ) from exc
     except EgressAuthError as exc:
         # build_consent_url now validates the client secret before redirecting, so a
         # server missing it fails here instead of after a pointless round trip to
@@ -1503,7 +1532,6 @@ async def egress_callback(
         oauth_cfg = server.get("egress_oauth")
     if not oauth_cfg:
         return HTMLResponse("<h3>Connection failed: server not configured.</h3>", status_code=400)
-
     # Account-swap guard: cross-check the live session principal when present.
     # The provider redirect often lands in a fresh tab with a valid session
     # cookie (same browser), in which case we enforce it; if there is no live
@@ -1533,7 +1561,6 @@ async def egress_callback(
             egress_oauth=oauth_cfg,
             current_user_id=current_user,
             current_auth_method=current_method,
-            bound_upstreams=bound_upstreams(server),
         )
     except EgressAuthError as exc:
         # Detail to server logs only. Do NOT reflect the exception text into the

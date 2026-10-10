@@ -92,19 +92,15 @@ A client connecting to `/virtual/dev-tools` sees `search-repo`, `post-message`, 
 
 ### Request Lifecycle
 
-1. Client sends an MCP JSON-RPC request to `/virtual/{server-slug}`
-2. Nginx matches the location block and issues an `auth_request` to validate the JWT
-3. The auth subrequest returns user scopes in response headers
-4. Nginx invokes `virtual_router.lua` as the content handler
-5. Lua loads the virtual server mapping file from disk (`/etc/nginx/lua/virtual_mappings/{id}.json`)
-6. Lua validates user scopes against server-level `required_scopes`
-7. Lua dispatches the request based on JSON-RPC method:
-   - **`initialize`**: Creates a client session in MongoDB, returns MCP capabilities
-   - **`tools/list`**: Fetches tools from each distinct backend (concurrent subrequests), applies aliases and scope filtering, returns merged list
-   - **`tools/call`**: Looks up the tool in the mapping, translates alias back to original name, routes to the correct backend with the appropriate backend session
-   - **`resources/list`** / **`prompts/list`**: Aggregates from all backends, builds a lookup map for subsequent read/get calls
-   - **`resources/read`** / **`prompts/get`**: Uses the lookup map to route to the owning backend
-   - **`ping`**: Responds directly without contacting backends
+1. The client sends an MCP JSON-RPC request to `/virtual/{server-slug}/mcp`.
+2. Nginx validates the caller and authorizes the virtual server and virtual tool name before Lua handles the request.
+3. Lua loads `/etc/nginx/lua/virtual_mappings/{id}.json`, checks the virtual server's required scopes and any alias-level override, and rewrites an aliased `tools/call` to the backend's original tool name.
+4. For every backing request, Lua explicitly captures `/_vs_auth_<backend>` with the rewritten JSON-RPC body. This verifies the same caller has the backing server's method/tool grant and returns a signed token bound to that registered backend and its resolved upstream. `ngx.location.capture` does not run `auth_request` on a captured backend location; the explicit check is required.
+   For a resource token bound to the virtual server, the internal authorization location supplies the original virtual URI separately; auth-server verifies the virtual binding and the rewritten backend's scope grant. Normal `/validate` locations clear that parent header, and the backend hop requires the nginx marker, so the exception cannot be used by a direct backend request.
+   An IdP token issued for the virtual server's own resource (Entra issues one per server, so its `aud` is `https://<gateway>/virtual/<id>/mcp`) is accepted at the backend hop for that parent virtual server only. The backend's own audience is still accepted, and the backend's scope grant is still required.
+5. Lua calls `/_vs_backend_<backend>` only after that grant. A PAT or `oauth_user` backend routes through auth-server's `/mcp-proxy/<backend>/` vend/inject hop. Plain backends retain their direct proxy, with ingress credentials and internal tokens stripped. The resolved backend path, not the virtual alias, keys the egress vault.
+   The signed token retains the exact registered backing path and selected version ID. Vend checks the selected version's exact outbound endpoint against the credential's write-time destination binding; adding or retargeting a version requires reconnecting or resubmitting its credential.
+6. Virtual `initialize` creates the client session locally. Backend `initialize` is performed when a backend is first used; both stateful session IDs and successful sessionless initialization are remembered per caller and mapped backend version. `tools/list` and other routed methods also require the backing grant.
 
 ### Component Responsibilities
 
@@ -173,23 +169,14 @@ class ToolScopeOverride:
 
 ### Backend Session
 
-Tracks the session mapping between a client session and each backend:
-
-```python
-class BackendSession:
-    client_session_id: str
-    backend_location: str              # e.g., "/_backend/github"
-    backend_session_id: str
-    created_at: datetime
-    expires_at: datetime               # TTL-based expiry
-```
+`backend_sessions` stores a client session ID, the internal `/_vs_backend_<path>` location (plus a pinned-version suffix when present), the authenticated owner, and a `stateless` flag. `backend_session_id` is a real ID for stateful backends and `null` only after a successful stateless `initialize`. MongoDB expires inactive records using `last_used_at`. The client-facing `Mcp-Session-Id` belongs to the virtual server; it is never forwarded as a backend session ID.
 
 ### Storage Design
 
 | Collection | `_id` | Purpose |
 |------------|-------|---------|
 | `virtual_servers` | path (e.g., `/virtual/dev-tools`) | Virtual server configuration |
-| `backend_sessions` | `{client_session_id}:{backend_location}` | Session mapping with TTL index |
+| `backend_sessions` | `{client_session_id}:{backend_location}[:version]` | Owner-bound stateful/stateless initialization with idle TTL |
 | `client_sessions` | `{session_id}` | Client session metadata for audit |
 
 Indexes on `virtual_servers`:
@@ -204,51 +191,22 @@ Indexes on `virtual_servers`:
 
 ### Two-Tier Caching
 
-The Lua router uses a two-tier cache to minimize latency for session lookups:
+The Lua router keeps backend initialization state in the 30-second nginx shared-dictionary L1 cache and an owner-bound MongoDB L2 record with a one-hour idle TTL. The key includes the virtual client session, backing location, and pinned backend version; L1 also includes the authenticated owner. Every backing request still reauthorizes the rewritten method/tool before using either cache.
 
-```
-Request arrives
-    |
-    v
-+-------------------+
-| L1: Shared Dict   |  nginx shared memory (lua_shared_dict)
-| TTL: 30 seconds   |  Key: "bsess:{client_session}:{backend_location}"
-+--------+----------+
-         | miss
-         v
-+-------------------+
-| L2: MongoDB       |  via internal API subrequest
-| TTL: 1 hour       |  GET /_internal/sessions/{client_session}/{backend}
-+--------+----------+
-         | miss
-         v
-+-------------------+
-| Initialize        |  POST to backend with MCP initialize
-| Backend Session   |  Store result in L1 + L2
-+-------------------+
-```
+Mapping files serialize an unpinned `backend_version` as JSON `null`. Lua-cjson decodes that sentinel as userdata rather than Lua `nil`; the router normalizes it to an empty version before choosing a backend session key or setting `X-MCP-Server-Version`. Only a non-empty mapped string can select a pinned version.
 
-**L1 Cache (Nginx Shared Dictionary)**:
-- In-worker memory, no network calls
-- 30-second TTL keeps sessions warm for burst traffic
-- 2 MB allocation (`lua_shared_dict virtual_server_map 2m`)
+A successful backend `initialize` stores either its `Mcp-Session-Id` or an explicit `stateless: true` state if no ID was returned. A JSON-RPC error, non-200 response, or missing result is not stateless success and is not cached. When the egress hop answers `initialize` locally before consent or a PAT is supplied, it marks the response as **not** backed by an initialized upstream; Lua does not persist that response as stateless and retries initialization when the user connects. A genuinely stateless backend receives subsequent requests without `Mcp-Session-Id` and is not initialized again just because L1 expires; L2 records the successful sessionless state. Stateful sessions retain their session ID and can be reinitialized if the backend rejects a stale session. Auth failures do not trigger session retries.
 
-**L2 Cache (MongoDB)**:
-- Survives nginx reloads and worker restarts
-- 1-hour TTL with MongoDB TTL index on `expires_at`
-- Accessed via FastAPI internal endpoints (`/_internal/sessions/*`)
+Before connection, the broker answers every discovery list (`tools/list`, `resources/list`, `resources/templates/list`, `prompts/list`) with an empty list marked by the `X-Egress-Consent-Required` response header. Lua classifies every backend's list result the same way for tools, resources and prompts: `ok`, `consent`, `unsupported` (JSON-RPC -32601), `failed`, `unverified`, or `denied`. Only the gateway's own 401/403 for a backend's `/_vs_auth_*` check is `denied`: that backend is omitted and its siblings stay listed (a call to it is still refused with 403). If the check itself fails (rate limit, auth-server error or timeout, no token), the backend is `unverified`: omitted with no mapping fallback, and a single-backend call returns a retryable 502. A 401/403 or JSON-RPC error the backend itself returns is that backend's `failed` outcome, so one registrant or one revoked upstream credential cannot blank its siblings. A list is an error only when no backend answered: a 403 when that included a grant refusal, otherwise a 502. The broker markers (`X-Egress-Consent-Required`, `X-MCP-Backend-Initialized`) are honoured only from egress-brokered backends and are stripped from plain backend responses by nginx. A `consent` backend publishes its mapped tools (both grants already passed) so a client can call one and receive the PAT instruction or OAuth connect URL; a failed credentialed backend contributes nothing while healthy siblings stay listed; a failed plain backend falls back to its mapping metadata. The aggregate is an error only when no backend answered at all; backends that are unsupported or pending consent produce an empty list. Results involving consent, failure, or credentialed backends are never cached. A verified egress-backed `tools/call` before connection still reaches the broker and returns the normal PAT submission instruction or OAuth connect URL without persisting a synthetic session. A plain backend returning the pre-consent initialize marker is rejected.
+
+The mapping-file cache is keyed by `$vs_config_generation`, a deterministic hash of the rendered virtual and internal backend locations (not ratings or other non-routing fields). `lua_shared_dict` survives an nginx reload, so without the generation a mapping cached under the previous config could name internal locations the new config no longer defines.
 
 ### Session Lifecycle
 
-1. Client calls `initialize` on the virtual server endpoint
-2. Lua generates a client session ID (`vs-{uuid}`) and stores it in MongoDB
-3. Lua returns `Mcp-Session-Id` header to the client
-4. On subsequent requests, client includes `Mcp-Session-Id`
-5. For each backend involved in the request:
-   - Check L1 cache for existing backend session
-   - On miss, check L2 (MongoDB)
-   - On miss, send `initialize` to the backend, store the returned session ID in both L1 and L2
-6. If a backend returns HTTP 400+, Lua invalidates the stale session in both tiers and retries with a fresh session
+1. Client `initialize` on the virtual endpoint mints its client-facing `vs-...` session ID.
+2. Every routed request first checks the virtual grant and then checks the backing server grant on the rewritten method and original backend tool name.
+3. On an L1/L2 miss, Lua authorizes and sends backend `initialize`; a successful stateful session ID or explicit stateless result is stored for that owner, backend and pinned version.
+4. Only a session-related HTTP 400, 404, or 410 invalidates the cached state (a stateful session ID or a stateless marker) and triggers one reinitialize. An authorization failure does not retry or become a stateless marker.
 
 ---
 
@@ -258,14 +216,15 @@ When a virtual server is created, updated, toggled, or deleted, the registry reg
 
 ### Generated Artifacts
 
-For each enabled virtual server, three artifacts are produced:
+For each enabled virtual server, the registry generates a virtual ingress location and JSON mapping file; each unique mapped backend also gets an internal authorization location and dispatch location:
 
 **1. Location Block** (in `nginx.conf`):
 
 ```nginx
 # Virtual MCP Server: Dev Tools
-location /virtual/dev-tools {
+location /virtual/dev-tools/ {
     set $virtual_server_id "dev-tools";
+    set $vs_config_generation "9100afcbd96cdb05";
     auth_request /validate;
     auth_request_set $auth_scopes $upstream_http_x_scopes;
     auth_request_set $auth_user $upstream_http_x_user;
@@ -275,16 +234,44 @@ location /virtual/dev-tools {
 }
 ```
 
-**2. Internal Backend Locations** (one per unique backend referenced by any virtual server):
+**2. Internal Backend Locations** (one authorization and dispatch pair per unique backend):
 
 ```nginx
-location /_backend/github {
+location = /_vs_auth_github {
     internal;
-    proxy_pass https://github-mcp.example.com;
-    proxy_set_header Host github-mcp.example.com;
-    # ... standard proxy headers
+    set $backend_url "https://github-mcp.example.com/mcp";
+    set $resolved_version "";
+    set $version_known "";
+    if ($http_x_mcp_server_version = "") { set $version_known "1"; }
+    if ($http_x_mcp_server_version = "latest") { set $version_known "1"; }
+    if ($http_x_mcp_server_version = "v2") { set $version_known "1"; }
+    if ($http_x_mcp_server_version = "v1") {
+        set $backend_url "https://github-mcp-v1.example.com/mcp";
+        set $resolved_version "/github:v1";
+        set $version_known "1";
+    }
+    if ($version_known = "") { set $resolved_version "__invalid_version__"; }
+    proxy_set_header X-Original-URL $scheme://$host/github/mcp;
+    proxy_set_header X-Virtual-Original-URL $scheme://$host$request_uri;
+    proxy_set_header X-Registered-Server-Path "/github";
+    proxy_set_header X-Registered-Route-Mode "virtual";
+    proxy_set_header X-Resolved-Version $resolved_version;
+    proxy_set_header X-Body $http_x_body;
+    proxy_set_header X-Resolved-Upstream $backend_url;
+    proxy_pass http://auth-server:8888/validate;
+}
+location = /_vs_backend_github {
+    internal;
+    proxy_set_header X-Internal-Token $http_x_internal_token;
+    proxy_set_header X-Registered-Server-Path "/github";
+    proxy_set_header X-Registered-Route-Mode "virtual";
+    proxy_pass http://auth-server:8888/mcp-proxy/github/;
 }
 ```
+
+The second location above is for a credentialed backend; a plain backend's dispatch location proxies to its MCP endpoint directly and clears gateway credentials. Lua calls the authorization location explicitly before dispatch and refuses a response without a signed backend token. Version selection lives in the backend's own location and covers its active label too, so a mapping pinned to a version that has since become the only (active) version keeps working.
+
+Internal location names encode the backend path injectively: `/` becomes `_`, ASCII letters, digits and `-` are kept, and every other byte becomes `.XX` (lowercase hex), so `/a-b`, `/a.b` and `/a_b` become `_a-b`, `_a.2eb` and `_a.5fb`. Paths made only of letters, digits and `/` keep their previous names. When upgrading, backends whose paths contain `-`, `.` or `_` get new internal names: each live client session re-initializes those backends once (stateful backends receive a new `Mcp-Session-Id`; old L2 session records age out through their TTL index). Registered virtual servers, tool mappings and client URLs are unchanged.
 
 **3. JSON Mapping File** (`/etc/nginx/lua/virtual_mappings/dev-tools.json`):
 
@@ -295,8 +282,9 @@ location /_backend/github {
     {
       "name": "search-repo",
       "original_name": "search",
-      "backend_location": "/_backend/github",
+      "backend_location": "/_vs_backend_github",
       "backend_version": null,
+      "egress_auth_mode": "pat",
       "description": "Search repositories",
       "required_scopes": ["github-access"],
       "inputSchema": { "type": "object", "properties": { "query": { "type": "string" } } }
@@ -305,7 +293,7 @@ location /_backend/github {
   "tool_backend_map": {
     "search-repo": {
       "original_name": "search",
-      "backend_location": "/_backend/github",
+      "backend_location": "/_vs_backend_github",
       "backend_version": null,
       "required_scopes": ["github-access"]
     }
@@ -354,17 +342,7 @@ Version pinning locks a tool mapping to a specific backend server version:
 }
 ```
 
-When proxying to the backend, the Lua router sets the `X-MCP-Server-Version: v1.5.0` header. The nginx configuration for versioned backends uses separate internal locations:
-
-```nginx
-location /_backend/github:v1.5.0 {
-    internal;
-    proxy_pass https://github-mcp.example.com;
-    proxy_set_header X-MCP-Server-Version v1.5.0;
-}
-```
-
-This enables scenarios where one virtual server pins to a stable version while another uses the latest.
+The mapping includes `backend_version` per tool. Lua selects that version before backend authorization and dispatch, so the signed upstream claim and backend session key use the selected version. The backend's own internal authorization location selects the version ID and endpoint from that backend's linked versions (see Section 5); no other registration can influence it. Vend checks the selected endpoint against destinations bound when the credential was stored, so a new or retargeted version needs fresh consent or PAT submission. A client-supplied `X-MCP-Server-Version` cannot override the mapping. The active version is used for unpinned tools. Plain backends retain their existing direct proxy to the active endpoint (a literal `proxy_pass`, resolved at load time), and their authorization location binds the active version too, so a stale pin never breaks them. The version-specific dispatch guarantee, and the refusal of a pin to a version the backend does not have, apply to egress-routed backends, whose dispatch follows the signed upstream.
 
 ---
 
@@ -372,34 +350,11 @@ This enables scenarios where one virtual server pins to a stable version while a
 
 ### Scope Validation Flow
 
-```
-JWT Token --> auth_request --> Extract scopes --> Lua validation
-                                                       |
-                                                       v
-                                          +---------------------------+
-                                          | 1. Server-level scopes    |
-                                          |    required_scopes: [A,B] |
-                                          |    User must have A AND B |
-                                          +---------------------------+
-                                                       |
-                                                       v
-                                          +---------------------------+
-                                          | 2. Tool-level scopes      |
-                                          |    (on tools/call only)   |
-                                          |    tool.required_scopes   |
-                                          +---------------------------+
-                                                       |
-                                                       v
-                                          +---------------------------+
-                                          | 3. tools/list filtering   |
-                                          |    Tools the user cannot  |
-                                          |    access are excluded    |
-                                          +---------------------------+
-```
+Both grants are required. `/validate` first authorizes the caller for the virtual server and requested alias; Lua also checks virtual `required_scopes` and alias-specific overrides. Before each backend `initialize`, `tools/list`, or `tools/call`, Lua authorizes the resolved backing server with the rewritten JSON-RPC method and **original** backend tool name. The backing grant uses the same scopes and blocked-tool check as direct calls to that server. A grant to the virtual server alone does not authorize the backing server, and a backing grant alone does not authorize the virtual server. A missing grant prevents credential vending and upstream requests.
 
-**Server-level scopes** are checked on every request. If the user lacks any required scope, the request is rejected with HTTP 403.
+Each backend request is authorized once on a warm session. A cold session's initialize authorizes its own body; the request's token is then restored if it is under 4 seconds old (below the 5-second internal-token TTL floor), and the request is authorized again otherwise, so a slow initialize never forwards an expired token. Each `tools/list` backing fetch requires backend list access. A successful discovery for a plain backend can be cached per authenticated caller, but every backing grant is re-checked on each cache hit, and any grant that no longer passes forces a fresh discovery. Egress-backed discovery is not cached: consent and available tools can vary per user and change when credentials are connected or revoked.
 
-**Tool-level scopes** are checked on `tools/call` and used as a filter on `tools/list`. A user who has server-level access but lacks a specific tool scope will not see that tool in listings and cannot invoke it.
+Resource/prompt lists are rebuilt per user: a pre-consent, unavailable, unsupported, or denied backing server contributes no items, while healthy siblings remain listable and readable. To route a `resources/read` or `prompts/get`, the router reuses the caller's own item-to-backend lookup from a complete discovery (every backend answered, none egress-brokered) for 60 seconds; the read itself still authorizes the owning backend. Partial results are not cached.
 
 ### Example
 
@@ -413,12 +368,34 @@ JWT Token --> auth_request --> Extract scopes --> Lua validation
 }
 ```
 
-| User Scopes | Visible Tools | Can Call |
-|-------------|--------------|---------|
-| `mcp-access` | (none with extra scopes, any without) | Tools without scope overrides |
-| `mcp-access`, `github-read` | `search-repo` + unscoped tools | `search-repo` |
-| `mcp-access`, `github-read`, `github-write` | All tools | All tools |
-| `github-read` (missing `mcp-access`) | HTTP 403 | Nothing |
+The virtual mapping above requires `mcp-access`, then `github-read` for the `search-repo` alias or `github-write` for `create-pr`. The caller must **also** have a backing-server scope that grants `/github` `initialize`, `tools/list`, and the corresponding original tool (`search` or `create_pr`) on `tools/call`. Without that backing grant, the alias cannot be called even if every virtual override is satisfied. Without the virtual grant, a direct `/github` grant does not unlock `/virtual/dev-tools`.
+
+A resource-bound token for `/virtual/dev-tools` keeps that same binding during the internal backend authorization check; the backend grant is still evaluated for the rewritten method/tool and resolved backing server. A direct backend request with that token remains bound to the virtual resource and is denied.
+
+### Ingress Discovery (OAuth)
+
+A virtual endpoint is a connection URL that MCP clients authenticate to, so it
+participates in RFC 9728 discovery on the same terms as a registered server.
+
+`GET /.well-known/oauth-protected-resource/virtual/{slug}/mcp` serves a
+per-virtual PRM whose `resource` is the connection URL
+(`https://<gw>/virtual/{slug}/mcp`), and the virtual ingress location overrides
+`$mcp_resource_metadata` so its 401 `WWW-Authenticate` points there instead of
+at the gateway-wide document. The gate is
+`virtual_server_needs_per_server_prm`: true on Entra for every virtual server,
+and on a lenient IdP only when a backing server's own egress mode already
+requires a per-resource audience (`obo_exchange`). Keycloak and Cognito
+deployments therefore keep using the gateway-wide PRM, unchanged.
+
+This matters because the gateway-wide document advertises the bare origin, which
+Entra cannot match to an Application ID URI and whose OIDC-basics scopes it
+rejects. A client following it can never complete the login for a virtual path.
+On Entra each virtual connection URL must also be registered in the gateway
+app's `identifierUris`; `GET /api/egress/obo-identifier-uris` lists the enabled
+ones alongside the registered servers.
+
+A disabled virtual server has no nginx location and therefore no 401 to discover
+from, so its PRM returns 404 rather than naming an unroutable path.
 
 ---
 
@@ -434,11 +411,11 @@ The Lua router (`virtual_router.lua`) implements the full MCP protocol for virtu
 | `ping` | None | No | No | Responds directly |
 | `notifications/initialized` | None | No | No | Returns HTTP 202 Accepted per MCP spec |
 | `notifications/cancelled` | None | No | No | Returns HTTP 202 Accepted per MCP spec |
-| `tools/list` | All distinct backends | 60s TTL | Yes | Aggregated and scope-filtered |
+| `tools/list` | All distinct backends | Plain: per-user 60s; egress: none | Yes | Backing grants rechecked; aggregated and scope-filtered |
 | `tools/call` | Single backend | No | Yes | Alias translated, routed to owner backend |
-| `resources/list` | All distinct backends | 60s TTL | Yes | Aggregated with lookup map |
+| `resources/list` | All distinct backends | No | Yes | Aggregated with lookup map |
 | `resources/read` | Single backend | No | Yes | Routed via lookup map |
-| `prompts/list` | All distinct backends | 60s TTL | Yes | Aggregated with lookup map |
+| `prompts/list` | All distinct backends | No | Yes | Aggregated with lookup map |
 | `prompts/get` | Single backend | No | Yes | Routed via lookup map |
 
 **HTTP Method Handling:**
@@ -446,19 +423,9 @@ The Lua router (`virtual_router.lua`) implements the full MCP protocol for virtu
 - `GET` - Returns HTTP 405 (server-initiated SSE streams not supported)
 - `DELETE` - Returns HTTP 405 (client-initiated session termination not supported)
 
-### Concurrent Backend Requests
+### Backend Request Ordering
 
-For aggregation methods (`tools/list`, `resources/list`, `prompts/list`), the Lua router issues concurrent subrequests to all distinct backend locations using `ngx.location.capture_multi()`. This parallelizes backend calls and minimizes latency.
-
-```lua
--- Pseudocode for concurrent tool aggregation
-local requests = {}
-for _, location in ipairs(distinct_backends) do
-    table.insert(requests, { location, { method = ngx.HTTP_POST, body = tools_list_body } })
-end
-local responses = { ngx.location.capture_multi(unpack(requests)) }
--- Merge tools from all responses, apply aliases, filter by scope
-```
+Lua sends backend authorization and backend requests sequentially, not via `capture_multi()`. Each backing method is checked before it can reach the backend or egress vend. `tools/list` merges per-backend results only after those checks; a failed egress discovery cannot be treated as a successful cached list or substituted with mapping-only metadata; it contributes nothing while healthy siblings stay listed.
 
 ---
 
@@ -481,14 +448,16 @@ All management endpoints are served by FastAPI on the registry port.
 
 ### Internal API (Lua Router <-> FastAPI)
 
-These endpoints are marked `internal` in nginx and are only accessible from Lua subrequests:
+Nginx exposes these locations only for Lua subrequests. The backing authorization location checks the same caller against the resolved server path and exact rewritten body before any backend dispatch.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `GET` | `/_internal/sessions/{client_id}/{backend}` | Get backend session ID |
-| `PUT` | `/_internal/sessions/{client_id}/{backend}` | Store backend session ID |
-| `DELETE` | `/_internal/sessions/{client_id}/{backend}` | Invalidate backend session |
-| `POST` | `/_internal/sessions` | Create client session record |
+| `GET` | `/_vs_auth_<backend>` | Authorize backing server and mint an upstream-bound internal token |
+| `POST` | `/_vs_backend_<backend>` | Dispatch to auth-server's egress broker or a plain direct backend |
+| `GET` | `/_internal/sessions/backend/{client_id}:{backend}` | Read owner-bound stateful ID or explicit stateless state |
+| `PUT` | `/_internal/sessions/backend/{client_id}:{backend}` | Persist successful backend initialization state |
+| `DELETE` | `/_internal/sessions/backend/{client_id}:{backend}` | Invalidate a stale stateful backend session |
+| `POST` | `/_internal/sessions/client` | Create client-facing virtual session |
 
 ### Path Validation
 
@@ -661,7 +630,7 @@ When a virtual server is created or updated, the service layer performs the foll
 |----------------|---------------------|
 | Missing `Mcp-Session-Id` header | Returns JSON-RPC error: "Missing session" |
 | Invalid/expired client session | Returns JSON-RPC error: "Invalid session" |
-| Backend returns HTTP 400+ | Invalidates cached session, retries with fresh `initialize` |
+| Backend returns HTTP 400, 404, or 410 | Invalidates cached session state (stateful or stateless), retries once with a fresh `initialize` |
 | Backend unreachable | Returns JSON-RPC error with backend details |
 | User lacks required scope | Returns HTTP 403 with scope details |
 | Unknown tool name in `tools/call` | Returns JSON-RPC error: "Tool not found" |
@@ -675,10 +644,11 @@ When a virtual server is created or updated, the service layer performs the foll
 
 | Data | Cache Location | TTL | Invalidation |
 |------|---------------|-----|--------------|
-| Backend sessions | L1 (shared dict) | 30s | On 400+ response |
-| Backend sessions | L2 (MongoDB) | 1 hour | On 400+ response |
-| Enriched tool list | L1 (shared dict) | 60s | On nginx reload |
-| Resource/prompt lookup maps | L1 (shared dict) | 60s | On nginx reload |
+| Backend initialization state | L1 (shared dict) | 30s | State-appropriate session rejection or TTL |
+| Backend initialization state | L2 (MongoDB) | 1 hour idle | Stateful session rejection or idle TTL |
+| Plain enriched tool list | L1 (per-user shared dict) | 60s | Backing grant rechecked on hits; TTL |
+| Credentialed enriched tool list | None | Per request | Consent and tool availability remain current |
+| Resource/prompt item lookup (per user; complete, plain-only discoveries) | L1 (shared dict) | 60s | On TTL |
 | Mapping files | Disk | Until regenerated | On CRUD mutation |
 
 ### Stress Test Results
@@ -694,7 +664,7 @@ Testing with a production-representative configuration:
 
 ### Latency Overhead
 
-Virtual server routing adds overhead compared to direct backend access due to session lookup, tool mapping resolution, and (for aggregation methods) concurrent subrequests. The latency benchmarks measure 20 iterations per method to characterize this overhead under realistic conditions.
+Virtual routing adds a virtual grant and a fresh backend-bound authorization check for each backing request, plus a vend/inject hop for credentialed backends. Earlier latency benchmarks predate this dual-grant egress path and do not measure its overhead.
 
 ---
 

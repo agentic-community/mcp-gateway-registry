@@ -745,13 +745,18 @@ Users can review and revoke their connections in the UI at **Connected Accounts*
   `proxy_pass_url` (and version allowlist) before vending — a forged upstream is
   rejected.
 - **Destination binding (write-time).** Each stored credential records the
-  server's registered upstream base URLs — and, for a custom provider, the OAuth
-  token endpoint — as they stood at consent / PAT-submit time. The vend requires
-  the request's destination to be a member of that stored set. The live
-  cross-check above reads the *current* server record, so an operator who
-  repoints `proxy_pass_url` (or `custom_token_url`) moves both sides of that
-  check together; the write-time binding does **not** move, so the vend
-  fail-closes to re-consent instead of shipping the credential to the new host.
+  server's exact registered outbound URLs (active and linked versions, direct and
+  virtual route forms) — and the OAuth token endpoint — as they stood when the
+  user approved it. For OAuth these are snapshot into the encrypted consent
+  `state` when consent starts, so a version added or an endpoint repointed while
+  the user is at the provider is not approved. The vend requires the request's
+  exact destination to be a member of that stored set, on every vault read
+  (including refresh re-reads). The live cross-check above reads the *current*
+  server record, so an operator who repoints `proxy_pass_url` (or
+  `custom_token_url`) moves both sides of that check together; the write-time
+  binding does **not** move, so the vend fail-closes to re-consent instead of
+  shipping the credential to the new destination. Promoting a version does not
+  change any destination and keeps existing approvals.
   See `registry/egress_auth/upstream_binding.py`.
 - **Anti-phishing consent.** The connect URL points at the gateway, not the
   provider. The AS facade requires a live gateway session and stores the token
@@ -809,13 +814,47 @@ Users can review and revoke their connections in the UI at **Connected Accounts*
 | Client never gets a consent prompt | The MCP client must support URL-mode elicitation (`-32042` `URLElicitationRequiredError`), and the elicitation only fires on token-requiring methods (`tools/call`, `prompts/get`, `resources/read`). Check the server's `egress_auth_mode` is `oauth_user`. |
 | Consent loops (re-asked every call) | Usually an `auth_method` mismatch between consent-write and vend-read — confirm the IdP method canonicalizes to `oauth2`. Or the stored refresh token is dead (provider revoked it) → re-consent. |
 | Connected once, but tools still show empty / vend logs "has no token" | The consent-write and vend paths keyed the vault on different `user_id`s. Since keying moved to the OIDC `sub` (see [Vault key scheme](#vault-key-scheme)), an existing connection created under the old display-name key is invisible to the new `sub`-keyed lookup. Fix: **disconnect and reconnect once** (from Connected Accounts), which re-writes the entry under the `sub`. On Entra this reconnect must follow a fresh gateway login so the session carries the persisted `subject`. |
-| Connected, but a `tools/call` asks to reconnect after a backend URL change | Destination binding: changing a server's `proxy_pass_url` (or a custom provider's `custom_token_url`) invalidates credentials bound to the old destination. **Reconnect once** (from Connected Accounts) to rebind. Adding a *new version* whose base URL differs only requires a reconnect for calls routed to that new version; existing routes are unaffected. |
-| After upgrading to the destination-binding release, every connection asks to reconnect once | Credentials stored before the upgrade carry an empty binding, which never matches — a deliberate one-time forced reconnect (`oauth_user` → connect nudge, `pat` → "submit a PAT"), mirroring the `sub`-keying migration above. |
+| Connected, but a `tools/call` asks to reconnect after a backend URL change | Destination binding: changing a server's `proxy_pass_url`, `mcp_endpoint` (or a custom provider's `custom_token_url`) invalidates credentials bound to the old destination. **Reconnect once** (from Connected Accounts) to rebind. Adding a *new version* at a URL that was not registered when you connected only requires a reconnect for calls routed to that new version; existing routes are unaffected. Promoting a version never requires a reconnect. |
+| After upgrading to the exact-destination-binding release, every connection asks to reconnect once | Credentials stored before the upgrade carry an empty or origin-only binding (for example `https://api.example.com` instead of `https://api.example.com/mcp`), which does not match the exact outbound URL — a deliberate one-time forced reconnect (`oauth_user` → connect nudge, `pat` → "submit a PAT"; a designated discovery identity must reconnect too, and its server reports unhealthy discovery until then), mirroring the `sub`-keying migration above. |
 | "Connection failed" on the consent callback; registry logs `state user mismatch` | The account-swap guard saw the consent-initiate principal differ from the callback's live-session principal. Almost always the session predates the `sub`-persisting login — **log out and back in**, then reconnect, so the cookie session carries the `subject` the initiate leg bound the state to. |
 | Vend returns 401 from auth-server | Marker secret mismatch. Ensure `AUTH_SERVER_NGINX_MARKER_SECRET` matches on registry + auth-server, and nginx sets it on `/validate`. |
 | OpenBao reads fail with permission denied | The role token lapsed. The store re-authenticates and retries once; persistent failure means a real policy/role gap — verify the `mcp-egress` policy and the role binding to the registry ServiceAccount. |
 | `decrypt` errors on client secret | `SECRET_KEY` was rotated after the server's egress config was saved. Re-save the egress config with the client secret. |
 | Vend/list fails: "Egress credential failed authentication" or "is encrypted but ... not set" | `EGRESS_CREDENTIAL_ENCRYPTION_KEY` is missing, was changed, or does not match the key entries were encrypted under. The store fails closed rather than returning/overwriting plaintext. Restore the original key (rotation needs the old key available to decrypt existing entries). |
+
+### Rolling upgrades (registry and auth-server)
+
+The registry (which renders nginx and serves the egress vend) and auth-server deploy separately, and neither the stack
+Helm chart nor the Terraform apply sequences them. Upgrade the **registry first, then auth-server**, and keep the
+auth-server overlap short (for example `maxSurge: 1`, `maxUnavailable: 0`).
+
+- **Simple direct routes keep working in every mix.** A new auth-server accepts tokens from an older auth-server
+  replica (no route-binding claims) and hops from an older nginx (no registration headers), both as direct,
+  active-version routes; the vend still requires such a token's upstream to be the active version's exact registered
+  URL.
+- **An older nginx cannot assert registrations.** Registration headers (`X-Registered-*`, `X-Resolved-Version`,
+  `X-Virtual-Original-URL`) are honored only when a current template also sends `X-Validate-Binding-Secret`; behind an
+  older nginx they are ignored, so a client cannot forge a virtual-server binding during the window.
+- **Expect intermittent 401s on some routes until every auth-server replica is new:** nested and federated
+  registrations (`/peer/remote`), virtual-server backend routes, and pinned direct versions. They are bound by their
+  full path, route mode and version only once both sides are upgraded.
+- **In-flight OAuth consents** started before the registry upgrade fail at the callback ("state carries no approved
+  destinations"); the user starts the connection again.
+- **Stale version pins on credentialed backends fail closed.** A virtual tool mapping on an egress-brokered backend
+  pinned to a version that backend no longer has gets no credential and a 502 (plain backends dispatch to their active
+  endpoint whatever the pin, as before). The registry logs `Tool ... pins version ..., which ... does not have` when it
+  writes the mapping, and auth-server logs the refusal.
+
+A refused hop is logged by auth-server as
+`mcp_proxy: rejecting proxy route (<reason>): claim=... path=... route_mode=... registered_header=...`, and a refused
+vend by the registry as `egress vend REFUSED (<reason>): server=... version_id=...`, so version skew can be told apart
+from a forged route.
+
+The same release newly enforces the **backing-server grant** for virtual servers: a caller needs both the virtual
+server's grant and each backing server's grant. A backing server the caller lacks is omitted from that caller's virtual
+lists, and calling one of its tools returns 403. Review group scopes before upgrading so users of a virtual server also
+hold the backing grants they need (
+see [Virtual MCP Server Access Control](scopes.md#virtual-mcp-server-access-control)).
 
 ### Related documentation
 

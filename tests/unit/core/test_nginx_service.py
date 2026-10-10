@@ -945,6 +945,38 @@ def test_create_location_block_streamable_http(nginx_service):
 
 
 @pytest.mark.unit
+def test_create_location_block_selects_version_in_its_own_location(nginx_service):
+    """A pinned direct request selects this registration's own version.
+
+    Selection is rewrite-phase ``set`` directives in the registration's location,
+    so /validate reads the shared ``$resolved_version``. A ``$uri``-keyed global
+    map first read inside /validate evaluates against ``/validate`` and loses it.
+    """
+    from registry.core.nginx_service import _VersionRoute
+
+    active = {"proxy_pass_url": "https://jira.example.com/mcp", "version": "v2"}
+    routes = [
+        _VersionRoute("v2", "", active),
+        _VersionRoute(
+            "v1", "/jira:v1", {"path": "/jira:v1", "proxy_pass_url": "https://old.example.com/mcp"}
+        ),
+    ]
+    block = nginx_service._create_location_block(
+        "/jira", active["proxy_pass_url"], "streamable-http", active, version_routes=routes
+    )
+
+    selection = (
+        'if ($http_x_mcp_server_version = "v1") {\n'
+        '            set $backend_url "https://old.example.com/mcp";\n'
+        '            set $resolved_version "/jira:v1";\n'
+        "        }"
+    )
+    assert selection in block
+    assert "$versioned_backend" not in block
+    assert 'add_header X-MCP-Version-Routing "enabled" always;' in block
+
+
+@pytest.mark.unit
 def test_create_location_block_sse(nginx_service):
     """Test creating location block for SSE."""
     block = nginx_service._create_location_block("/test", "http://localhost:8000/sse", "sse")

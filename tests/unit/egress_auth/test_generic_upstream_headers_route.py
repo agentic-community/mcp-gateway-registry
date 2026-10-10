@@ -383,39 +383,6 @@ class TestOverridableNamesVended:
         assert resp.json()["detail"] == "stored upstream credential metadata is invalid"
 
 
-class TestUrlHelpers:
-    """The private URL helpers that define the upstream comparison surface."""
-
-    def test_base_url_lowercases_scheme_and_netloc_and_drops_path(self):
-        assert routes._base_url("HTTP://Host:8080/path?q=1") == "http://host:8080"
-
-    def test_base_url_bare_origin(self):
-        assert routes._base_url("https://LLM.Example") == "https://llm.example"
-
-    def test_registered_upstreams_unions_proxy_pass_and_versions(self):
-        # versions carries a mix of a plain dict and an attribute-style object;
-        # both contribute their base URL, unioned with the top-level proxy_pass_url.
-        version_obj = SimpleNamespace(proxy_pass_url="HTTPS://V2.Example:443/api")
-        server = {
-            "proxy_pass_url": "http://Primary:9000/mcp",
-            "versions": [
-                {"proxy_pass_url": "https://V1.Example/path"},
-                version_obj,
-                {"proxy_pass_url": None},
-                SimpleNamespace(proxy_pass_url=None),
-            ],
-        }
-        assert routes._registered_upstreams(server) == {
-            "http://primary:9000",
-            "https://v1.example",
-            "https://v2.example:443",
-        }
-
-    def test_registered_upstreams_empty_when_no_upstreams(self):
-        assert routes._registered_upstreams({}) == set()
-        assert routes._registered_upstreams({"versions": []}) == set()
-
-
 class TestProxyableRepoFor:
     """Each entity-type token routes to the repository that owns it."""
 
