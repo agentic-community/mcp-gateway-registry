@@ -168,8 +168,8 @@ delivery is logged and never blocks the caller.
 
 ### 2.7 Auth is agnostic across a supported set of IdPs — but that set is a closed, hand-written factory
 
-Any of six identity providers — Keycloak, Amazon Cognito, Microsoft Entra ID, Okta, Auth0,
-PingFederate — can be selected via `AUTH_PROVIDER`, and the system does not couple to any one of
+Any of seven identity providers — Keycloak, Amazon Cognito, Microsoft Entra ID, Okta, Auth0,
+PingFederate, Logto — can be selected via `AUTH_PROVIDER`, and the system does not couple to any one of
 them. Group-to-scope mapping lives in the database, not in provider-specific code.
 
 - **Precision (verified — corrects an overstatement):** this is **not** generic "point at any OIDC
@@ -179,7 +179,7 @@ them. Group-to-scope mapping lives in the database, not in provider-specific cod
   ([`docs/design/idp-provider-support.md`](idp-provider-support.md): "Create Provider Class / Create
   IAM Manager / Update Factory"). Some providers resolve endpoints via
   `.well-known/openid-configuration` (Keycloak, PingFederate, Okta); others hardcode (Cognito's
-  JWKS URL). So: agnostic across the supported six = true; "zero-code OIDC discovery for any
+  JWKS URL). So: agnostic across the supported seven = true; "zero-code OIDC discovery for any
   provider" = false. State it as the former.
 - **Why:** enterprises bring their own IdP; coupling to one would make the system a non-starter for
   everyone else. A closed factory (rather than open discovery) is the deliberate trade — more code
@@ -304,7 +304,7 @@ security-specific version of this list; the theory-level checks are:
    [`docs/unified-parameter-reference.md`](../unified-parameter-reference.md) (§2.5).
 6. **New external integration?** Decide explicitly whether it is admission (fail closed) or
    notification (fail open) — and implement the matching failure mode (§2.6).
-7. **Auth change?** Keep it provider-agnostic across the supported six; do not leak one provider's
+7. **Auth change?** Keep it provider-agnostic across the supported seven; do not leak one provider's
    assumptions into shared code (§2.7).
 8. **MCP-facing endpoint?** Preserve the PRM / `WWW-Authenticate` discovery contract (§2.8).
 
