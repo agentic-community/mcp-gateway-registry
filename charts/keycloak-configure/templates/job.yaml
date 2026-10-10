@@ -30,6 +30,10 @@ spec:
               name: KEYCLOAK_ADMIN_PASSWORD
             - name: ENABLE_DCR_CONFIG
               value: {{ .Values.dcr.enabled | default false | toString | quote }}
+            - name: ENABLE_CIMD_CONFIG
+              value: {{ .Values.cimd.enabled | default false | toString | quote }}
+            - name: CIMD_TRUSTED_DOMAINS
+              value: {{ .Values.cimd.trustedDomains | default (list "vscode.dev" "code.visualstudio.com" "claude.ai" "127.0.0.1" "localhost") | toJson | quote }}
           volumeMounts:
             - mountPath: /app/script.sh
               name: script
