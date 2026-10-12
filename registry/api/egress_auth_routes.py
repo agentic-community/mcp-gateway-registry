@@ -1203,8 +1203,11 @@ async def set_egress_pat(
     try:
         destinations = await registered_destinations(server, server_path)
     except ValueError as exc:
+        # 503, not 409: a linked version document is missing or has no endpoint,
+        # which is a server-side configuration fault the caller cannot resolve by
+        # retrying or by changing the request.
         raise HTTPException(
-            status.HTTP_409_CONFLICT, detail="server versions are not available"
+            status.HTTP_503_SERVICE_UNAVAILABLE, detail="server versions are not available"
         ) from exc
     now = datetime.now(UTC)
     token = StoredToken(
@@ -1471,8 +1474,11 @@ async def initiate_consent(
             server=server,
         )
     except ValueError as exc:
+        # 503, not 409: a linked version document is missing or has no endpoint,
+        # which is a server-side configuration fault the caller cannot resolve by
+        # retrying or by changing the request.
         raise HTTPException(
-            status.HTTP_409_CONFLICT, detail="server versions are not available"
+            status.HTTP_503_SERVICE_UNAVAILABLE, detail="server versions are not available"
         ) from exc
     except EgressAuthError as exc:
         # build_consent_url now validates the client secret before redirecting, so a

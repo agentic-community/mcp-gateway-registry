@@ -1156,14 +1156,24 @@ class NginxConfigService:
 
                         # Include servers that are healthy or just have expired auth (server is up)
                         if HealthStatus.is_healthy(health_status):
-                            # Generate transport-aware location blocks
-                            transport_blocks = self._generate_transport_location_blocks(
-                                path,
-                                server_info,
-                                version_routes=await self._resolve_version_routes(
-                                    path, server_info
-                                ),
-                            )
+                            # Keep one malformed record from aborting the whole
+                            # render. _version_selection_directives raises when a
+                            # server has no routable endpoint, and the enclosing
+                            # `if proxy_pass_url:` only happens to exclude that
+                            # case; without this the raise would drop EVERY
+                            # server's location, taking the gateway down rather
+                            # than failing closed for the one bad record.
+                            try:
+                                transport_blocks = self._generate_transport_location_blocks(
+                                    path,
+                                    server_info,
+                                    version_routes=await self._resolve_version_routes(
+                                        path, server_info
+                                    ),
+                                )
+                            except (UrlValidationError, ValueError) as exc:
+                                logger.error("Skipping nginx location blocks for %s: %s", path, exc)
+                                continue
                             location_blocks.extend(transport_blocks)
                             logger.debug(f"Added location blocks for healthy service: {path}")
                         else:

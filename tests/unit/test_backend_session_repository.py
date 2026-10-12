@@ -148,6 +148,58 @@ class TestClientSessionDocument:
         assert restored.user_id == doc.user_id
 
 
+class TestBackendSessionStateMessages:
+    """The validator must name which side of the invariant failed.
+
+    Both shapes are legitimate and in use: a session ID with ``stateless``
+    left at its default, and ``stateless=True`` with no session ID. Only a
+    genuine contradiction raises, and the message says which one it was, so a
+    stateful record missing its ID is not reported as a stateless problem.
+    """
+
+    def test_session_id_alone_is_valid(self):
+        doc = BackendSessionDocument(
+            client_session_id="vs-abc123",
+            backend_key="/_vs_backend_x",
+            backend_session_id="sid-1",
+            user_id="alice",
+            virtual_server_path="/virtual/a",
+        )
+        assert doc.stateless is False
+
+    def test_stateless_flag_alone_is_valid(self):
+        doc = BackendSessionDocument(
+            client_session_id="vs-abc123",
+            backend_key="/_vs_backend_x",
+            stateless=True,
+            user_id="alice",
+            virtual_server_path="/virtual/a",
+        )
+        assert doc.backend_session_id is None
+
+    def test_stateful_without_an_id_names_the_stateful_side(self):
+        with pytest.raises(ValidationError, match="stateful backend requires a backend session ID"):
+            BackendSessionDocument(
+                client_session_id="vs-abc123",
+                backend_key="/_vs_backend_x",
+                backend_session_id=None,
+                stateless=False,
+                user_id="alice",
+                virtual_server_path="/virtual/a",
+            )
+
+    def test_stateless_with_an_id_names_the_stateless_side(self):
+        with pytest.raises(ValidationError, match="stateless backend must not have"):
+            BackendSessionDocument(
+                client_session_id="vs-abc123",
+                backend_key="/_vs_backend_x",
+                backend_session_id="sid-1",
+                stateless=True,
+                user_id="alice",
+                virtual_server_path="/virtual/a",
+            )
+
+
 class TestStoreSessionRequest:
     """Tests for StoreSessionRequest model."""
 
