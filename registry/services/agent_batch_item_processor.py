@@ -23,6 +23,7 @@ from ..schemas.agent_models import (
     AgentBatchItem,
     AgentBatchItemResult,
     AgentCard,
+    AgentInterface,
     BatchItemOp,
     _DeleteItem,
     _PatchItem,
@@ -68,7 +69,7 @@ async def _authorize(
 
     The scope half routes through ``user_has_asset_permission("agent", ...)`` (the
     same map the HTTP handlers use), so a sibling family's scope (e.g.
-    modify_service) can never satisfy an agent op here -- the previous bug where
+    modify_service) can never satisfy an agent op here. The previous bug where
     batch patch/replace accepted modify_service and batch delete required no
     delete_agent scope at all (owner-or-admin only, bypassing the single-card
     gate). ``user_has_asset_permission`` reads only is_admin + ui_permissions, so
@@ -161,10 +162,18 @@ def _build_card_from_request(request, path: str, existing: AgentCard | None) -> 
         )
 
     optional_kwargs: dict[str, Any] = {}
+    if request.security_requirements:
+        optional_kwargs["security_requirements"] = request.security_requirements
+    if request.signatures:
+        optional_kwargs["signatures"] = request.signatures
     if request.default_input_modes:
         optional_kwargs["default_input_modes"] = request.default_input_modes
     if request.default_output_modes:
         optional_kwargs["default_output_modes"] = request.default_output_modes
+    if request.supported_interfaces:
+        optional_kwargs["supported_interfaces"] = [
+            AgentInterface(**iface) for iface in request.supported_interfaces
+        ]
 
     capabilities = dict(request.capabilities) if request.capabilities else {}
     if request.streaming and "streaming" not in capabilities:
@@ -231,7 +240,19 @@ async def _do_register(
     if await agent_service.get_agent_info(path):
         return _result(index, item.op, path, 409, "conflict", f"path '{path}' already exists")
 
-    card = _build_card_from_request(request, path, existing=None)
+    # _build_card_from_request can raise (e.g. a malformed supportedInterfaces
+    # entry fails AgentInterface construction) on genuinely bad client input,
+    # which must come back as a 422 validation error, not an unhandled
+    # exception reported as a 500. Narrowed to ValueError (pydantic's
+    # ValidationError is a ValueError subclass) rather than bare Exception;
+    # unlike _do_replace's sibling try/except below, this one deliberately
+    # does NOT catch arbitrary exceptions, so a genuine programming/
+    # infrastructure failure here still surfaces as the outer handler's 500,
+    # instead of being misreported as a client input error.
+    try:
+        card = _build_card_from_request(request, path, existing=None)
+    except ValueError as e:
+        return _result(index, item.op, path, 422, "validation_error", str(e))
     card.registered_by = submitted_by
 
     is_valid, errors = await _validate(card)
