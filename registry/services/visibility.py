@@ -246,9 +246,10 @@ async def user_can_access_server(
         logger.debug("Unable to validate server path via service for %s", path, exc_info=True)
 
     technical_name = path.strip("/")
-    return technical_name in accessible_servers or (
-        bool(server_name) and server_name in accessible_servers
-    )
+    return any(
+        isinstance(grant, str) and grant.strip("/") == technical_name
+        for grant in accessible_servers
+    ) or (bool(server_name) and server_name in accessible_servers)
 
 
 def user_can_access_server_from_doc(
@@ -275,9 +276,10 @@ def user_can_access_server_from_doc(
         return False
 
     technical_name = path.strip("/")
-    return technical_name in accessible_servers or (
-        bool(server_name) and server_name in accessible_servers
-    )
+    return any(
+        isinstance(grant, str) and grant.strip("/") == technical_name
+        for grant in accessible_servers
+    ) or (bool(server_name) and server_name in accessible_servers)
 
 
 async def user_can_access_agent(

@@ -127,6 +127,27 @@ class TestPullCardDryRun:
         # Health refresh still runs.
         svc.update_agent.assert_awaited_once()
 
+    def test_proxied_preview_fetches_backend_without_gateway_url_diff(self, test_client):
+        backend = "https://agent.example.com/"
+        gateway = "https://gateway.example.com/agent/test-a2a-agent/"
+        agent = _a2a_agent(url=gateway, proxy_pass_url=backend)
+        remote = {"name": "agent", "version": "1.0.0", "url": backend}
+        svc = MagicMock()
+        svc.get_agent_info = AsyncMock(return_value=agent)
+        svc.update_agent = AsyncMock(return_value=agent)
+        with (
+            patch("registry.api.agent_routes._check_agent_permission", MagicMock()),
+            patch("registry.api.agent_routes.agent_service", svc),
+            patch(
+                "registry.api.agent_routes._fetch_remote_agent_card",
+                AsyncMock(return_value=(remote, CARD_URL)),
+            ) as fetch,
+        ):
+            response = test_client.post(f"/agents{AGENT_PATH}/pull-card?dry_run=true")
+        assert response.status_code == 200
+        assert response.json()["has_changes"] is False
+        fetch.assert_awaited_once_with(backend.rstrip("/"))
+
 
 class TestPullCardApply:
     def test_113_apply_updates_a2a_and_preserves_registry(self, test_client):
@@ -179,6 +200,30 @@ class TestPullCardApply:
             query="?dry_run=false",
         )
         assert svc.update_agent.await_count == 1
+
+    def test_proxied_apply_preserves_gateway_url_when_backend_card_changes(self, test_client):
+        backend = "https://agent.example.com/"
+        gateway = "https://gateway.example.com/agent/test-a2a-agent/"
+        agent = _a2a_agent(url=gateway, proxy_pass_url=backend)
+        replacement = "https://other.example.com/"
+        svc = MagicMock()
+        svc.get_agent_info = AsyncMock(return_value=agent)
+        svc.update_agent = AsyncMock(return_value=agent)
+        svc.is_agent_enabled = AsyncMock(return_value=True)
+        with (
+            patch("registry.api.agent_routes._check_agent_permission", MagicMock()),
+            patch("registry.api.agent_routes.agent_service", svc),
+            patch(
+                "registry.api.agent_routes._fetch_remote_agent_card",
+                AsyncMock(return_value=({"url": replacement}, CARD_URL)),
+            ),
+        ):
+            response = test_client.post(f"/agents{AGENT_PATH}/pull-card?dry_run=false")
+        assert response.status_code == 200
+        assert response.json()["applied"] is True
+        updates = svc.update_agent.await_args.args[1]
+        assert updates["proxy_pass_url"] == replacement
+        assert "url" not in updates
 
 
 class TestPullCardGuards:

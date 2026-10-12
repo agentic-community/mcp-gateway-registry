@@ -1,6 +1,9 @@
 """Unit tests for virtual server nginx configuration generation."""
 
+import json
 import re
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
@@ -299,6 +302,20 @@ class TestGenerateVirtualBackendLocations:
         assert "/mcp/http/mcp" not in result
 
     @pytest.mark.asyncio
+    async def test_root_mcp_endpoint_replaces_internal_capture_uri(self, mock_server_repository):
+        """The backend must receive POST /, never POST /_vs_backend... ."""
+        vs = _make_vs_config()
+        mock_server_repository.get.return_value = {
+            "proxy_pass_url": "https://knowledge-mcp.global.api.aws",
+            "mcp_endpoint": "https://knowledge-mcp.global.api.aws/",
+        }
+
+        from registry.core.nginx_service import NginxConfigService
+
+        blocks = await NginxConfigService()._generate_virtual_backend_locations([vs])
+        assert "proxy_pass https://knowledge-mcp.global.api.aws/;" in blocks
+
+    @pytest.mark.asyncio
     async def test_explicit_mcp_endpoint_keeps_proxy_host(self, mock_server_repository):
         """Explicit endpoint paths use the private proxy host for internal routing."""
         vs = _make_vs_config()
@@ -312,7 +329,10 @@ class TestGenerateVirtualBackendLocations:
         service = NginxConfigService()
         result = await service._generate_virtual_backend_locations([vs])
 
-        assert 'set $vs_backend_url "http://insights-service:8000/custom/mcp/http"' in result
+        assert re.search(
+            r'set \$vs_backend_[0-9a-f]{16} "http://insights-service:8000/custom/mcp/http"',
+            result,
+        )
         assert "public.example.com" not in result
 
     @pytest.mark.asyncio
@@ -390,8 +410,110 @@ class TestGenerateVirtualBackendLocations:
         # Resolver + variable form means nginx resolves at request time, turning an
         # unresolvable backend into a per-request 502 instead of a startup crash.
         assert "resolver " in result
-        assert 'set $vs_backend_url "http://currenttime-server:8000/mcp"' in result
-        assert "proxy_pass $vs_backend_url" in result
+        assert re.search(
+            r'set \$vs_backend_[0-9a-f]{16} "http://currenttime-server:8000/mcp"', result
+        )
+        assert re.search(r"proxy_pass \$vs_backend_[0-9a-f]{16};", result)
+
+    @pytest.mark.asyncio
+    async def test_pinned_mapping_uses_its_version_document_backend(self, mock_server_repository):
+        """A pinned tool must not fall back to the active version's upstream."""
+        mappings = [
+            ToolMapping(tool_name="search", backend_server_path="/github"),
+            ToolMapping(tool_name="issues", backend_server_path="/github", backend_version="v2"),
+        ]
+        vs = _make_vs_config(tool_mappings=mappings)
+        mock_server_repository.get.side_effect = {
+            "/github": {
+                "proxy_pass_url": "http://old-service:8000/mcp",
+                "other_version_ids": ["/github:v2"],
+            },
+            "/github:v2": {
+                "path": "/github:v2",
+                "active_version_id": "/github",
+                "version": "v2",
+                "proxy_pass_url": "http://new-service:8000/mcp",
+                "tool_list": [
+                    {
+                        "name": "issues",
+                        "description": "Version-specific issues",
+                        "inputSchema": {"type": "object"},
+                    }
+                ],
+            },
+        }.get
+        from registry.core.nginx_service import NginxConfigService
+
+        service = NginxConfigService()
+        blocks = await service._generate_virtual_backend_locations([vs])
+        variables = re.findall(r'        set (\$vs_backend_[0-9a-f]{16}) "http://', blocks)
+        assert len(variables) == len(set(variables)) == 2
+        assert blocks.count("    location = /_vs_backend") == 2
+        assert 'set $backend_url "http://new-service:8000/mcp";' in blocks
+        assert 'set $backend_url "http://old-service:8000/mcp";' in blocks
+        assert "proxy_pass http://old-service:8000/mcp;" not in blocks
+        assert "proxy_pass http://new-service:8000/mcp;" not in blocks
+
+        with TemporaryDirectory() as tmpdir:
+            with patch("registry.core.nginx_service.Path", return_value=Path(tmpdir)):
+                await service._write_virtual_server_mappings([vs])
+            data = json.loads((Path(tmpdir) / "dev-essentials.json").read_text())
+        active = data["tool_backend_map"]["search"]["backend_location"]
+        pinned = data["tool_backend_map"]["issues"]["backend_location"]
+        assert active != pinned
+        assert f"location = {active} {{" in blocks
+        assert f"location = {pinned} {{" in blocks
+        assert data["tool_backend_map"]["issues"]["backend_server_path"] == "/github:v2"
+        assert data["tools"][1]["backend_server_path"] == "/github:v2"
+        assert data["tools"][1]["original_name"] == "issues"
+        assert data["tools"][1]["description"] == "Version-specific issues"
+        assert data["tools"][1]["inputSchema"] == {"type": "object"}
+        for key in ("backend_location", "backend_server_path", "original_name", "backend_version"):
+            assert data["tools"][1][key] == data["tool_backend_map"]["issues"][key]
+        assert f"location = {pinned.replace('/_vs_backend', '/_vs_auth', 1)} {{" in blocks
+
+    @pytest.mark.asyncio
+    async def test_versioned_path_without_explicit_pin_uses_selected_doc(
+        self, mock_server_repository
+    ):
+        """A pre-versioned mapping must not become /github:v2:v2 or authorize under that path."""
+        docs = {
+            "/github": {
+                "proxy_pass_url": "https://active.example.com/mcp",
+                "egress_auth_mode": "pat",
+                "other_version_ids": ["/github:v2"],
+            },
+            "/github:v2": {
+                "path": "/github:v2",
+                "active_version_id": "/github",
+                "version": "v2",
+                "proxy_pass_url": "https://pinned.example.com/mcp",
+                "tool_list": [{"name": "issues", "description": "Pinned version"}],
+            },
+        }
+        mock_server_repository.get.side_effect = docs.get
+        vs = _make_vs_config(
+            tool_mappings=[ToolMapping(tool_name="issues", backend_server_path="/github:v2")]
+        )
+        from registry.core.nginx_service import NginxConfigService
+
+        service = NginxConfigService()
+        blocks = await service._generate_virtual_backend_locations([vs])
+        assert "proxy_pass https://pinned.example.com/mcp;" not in blocks
+        assert "location = /_vs_backend_github.3av2 {" in blocks
+        assert 'set $resolved_version "/github:v2";' in blocks
+        assert 'proxy_set_header X-Registered-Server-Path "/github";' in blocks
+        assert "/mcp-proxy/github/;" in blocks
+
+        with TemporaryDirectory() as tmpdir:
+            with patch("registry.core.nginx_service.Path", return_value=Path(tmpdir)):
+                await service._write_virtual_server_mappings([vs])
+            data = json.loads((Path(tmpdir) / "dev-essentials.json").read_text())
+        assert data["tools"][0]["backend_server_path"] == "/github:v2"
+        assert data["tools"][0]["description"] == "Pinned version"
+        assert data["tool_backend_map"]["issues"]["backend_location"] == (
+            "/_vs_backend_github.3av2"
+        )
 
     @pytest.mark.asyncio
     async def test_deduplicates_backends(self, mock_server_repository):
@@ -506,11 +628,17 @@ class TestGenerateVirtualBackendLocations:
                 "proxy_pass_url": "https://legacy.example.com/api",
                 "mcp_endpoint": "https://legacy.example.com/api/custom/mcp",
                 "version": "v1",
+                "active_version_id": "/jira",
             },
         }
         mock_server_repository.get.side_effect = lambda path: docs.get(path)
         vs = _make_vs_config(
-            tool_mappings=[ToolMapping(tool_name="search", backend_server_path="/jira")]
+            tool_mappings=[
+                ToolMapping(tool_name="search", backend_server_path="/jira"),
+                ToolMapping(
+                    tool_name="old_search", backend_server_path="/jira", backend_version="v1"
+                ),
+            ]
         )
         result = await NginxConfigService()._generate_virtual_backend_locations([vs])
         auth_block = result.split("location = /_vs_auth_jira {", 1)[1].split("\n    }", 1)[0]
@@ -527,6 +655,14 @@ class TestGenerateVirtualBackendLocations:
             auth_block
         )
         assert "proxy_set_header X-Resolved-Version $resolved_version;" in auth_block
+        pinned_auth = result.split("location = /_vs_auth_jira.3av1 {", 1)[1].split("\n    }", 1)[0]
+        assert 'set $backend_url "https://legacy.example.com/api/custom/mcp";' in pinned_auth
+        assert 'set $resolved_version "/jira:v1";' in pinned_auth
+        assert "$http_x_mcp_server_version" not in pinned_auth
+        assert "proxy_set_header X-Resolved-Upstream $backend_url;" in pinned_auth
+        assert 'proxy_set_header X-Registered-Server-Path "/jira";' in pinned_auth
+        assert "location = /_vs_backend_jira.3av1 {" in result
+        assert "proxy_pass " in result.split("location = /_vs_backend_jira.3av1 {", 1)[1]
 
     @pytest.mark.asyncio
     async def test_single_version_backend_accepts_its_active_label(self, mock_server_repository):
@@ -539,11 +675,15 @@ class TestGenerateVirtualBackendLocations:
             "egress_auth_mode": "pat",
         }
         vs = _make_vs_config(
-            tool_mappings=[ToolMapping(tool_name="search", backend_server_path="/jira")]
+            tool_mappings=[
+                ToolMapping(tool_name="search", backend_server_path="/jira", backend_version="v3")
+            ]
         )
         result = await NginxConfigService()._generate_virtual_backend_locations([vs])
-
-        assert 'if ($http_x_mcp_server_version = "v3") { set $version_known "1"; }' in result
+        pinned = result.split("location = /_vs_auth_jira.3av3 {", 1)[1].split("\n    }", 1)[0]
+        assert 'set $backend_url "https://jira.example.com/mcp";' in pinned
+        assert 'set $resolved_version "";' in pinned
+        assert "$http_x_mcp_server_version" not in pinned
 
     @pytest.mark.asyncio
     async def test_plain_backend_authorization_never_refuses_a_pin(self, mock_server_repository):

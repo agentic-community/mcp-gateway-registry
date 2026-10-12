@@ -145,6 +145,7 @@ class ServerService:
                         path=path,
                         version=new_version,
                         proxy_pass_url=server_info.get("proxy_pass_url"),
+                        mcp_endpoint=server_info.get("mcp_endpoint"),
                         status=server_info.get("status", "stable"),
                         is_default=False,
                     )
@@ -981,6 +982,7 @@ class ServerService:
         proxy_pass_url: str,
         status: str = "stable",
         is_default: bool = False,
+        mcp_endpoint: str | None = None,
     ) -> bool:
         """
         Add a new version to an existing server.
@@ -1039,6 +1041,7 @@ class ServerService:
             "server_name": active_server.get("server_name"),
             "version": version,
             "proxy_pass_url": proxy_pass_url,
+            "mcp_endpoint": mcp_endpoint,
             "status": status,
             "is_active": False,
             "version_group": version_group,

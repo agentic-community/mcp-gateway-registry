@@ -49,13 +49,58 @@ local dict = _new_dict()
 -- Programmable ngx.location.capture responses, keyed by backend location.
 local capture_responses = {}
 local capture_handler = nil
-
+local block_responses = {
+    ["/_internal/sessions/tool-block?server_path=%2Fok&tool_name=live_tool"] =
+        { status = 200, body = '{"blocked":false}' },
+    ["/_internal/sessions/tool-block?server_path=%2Fdown&tool_name=down_tool"] =
+        { status = 200, body = '{"blocked":false}' },
+    ["/_internal/sessions/tool-block?server_path=%2Fone&tool_name=regions"] =
+        { status = 200, body = '{"blocked":false}' },
+    ["/_internal/sessions/tool-block?server_path=%2Ftwo&tool_name=docs"] =
+        { status = 200, body = '{"blocked":false}' },
+    ["/_internal/sessions/tool-block?server_path=%2Fok&tool_name=no_arg"] =
+        { status = 200, body = '{"blocked":false}' },
+    ["/_internal/sessions/tool-block?server_path=%2Fok&tool_name=one_arg"] =
+        { status = 200, body = '{"blocked":false}' },
+    ["/_internal/sessions/tool-block?server_path=%2Fok&tool_name=odd"] =
+        { status = 200, body = '{"blocked":false}' },
+    ["/_internal/sessions/tool-block?server_path=%2Falias&tool_name=underlying"] =
+        { status = 200, body = '{"blocked":false}' },
+    ["/_internal/sessions/tool-block?server_path=%2Fgithub%3Av2&tool_name=underlying"] =
+        { status = 200, body = '{"blocked":false}' },
+    ["/_internal/sessions/tool-block?server_path=%2Fgithub&tool_name=get_me"] =
+        { status = 200, body = '{"blocked":false}' },
+    ["/_internal/sessions/tool-block?server_path=%2Fpersonal&tool_name=underlying"] =
+        { status = 200, body = '{"blocked":false}' },
+    ["/_internal/sessions/tool-block?server_path=%2Fplain&tool_name=underlying"] =
+        { status = 200, body = '{"blocked":false}' },
+    ["/_internal/sessions/tool-block?server_path=%2Fpat&tool_name=pat_tool"] =
+        { status = 200, body = '{"blocked":false}' },
+    ["/_internal/sessions/tool-block?server_path=%2Fhealthy&tool_name=public_tool"] =
+        { status = 200, body = '{"blocked":false}' },
+    ["/_internal/sessions/tool-block?server_path=%2Frpc_error&tool_name=actual"] =
+        { status = 200, body = '{"blocked":false}' },
+    ["/_internal/sessions/tool-block?server_path=%2Foauth&tool_name=upstream"] =
+        { status = 200, body = '{"blocked":false}' },
+    ["/_internal/sessions/tool-block?server_path=%2Foutage_egress&tool_name=brokered"] =
+        { status = 200, body = '{"blocked":false}' },
+    ["/_internal/sessions/tool-block?server_path=%2Foutage_plain&tool_name=healthy"] =
+        { status = 200, body = '{"blocked":false}' },
+    ["/_internal/sessions/tool-block?server_path=%2Ffine&tool_name=healthy"] =
+        { status = 200, body = '{"blocked":false}' },
+}
 
 _G.ngx = {
     shared = { virtual_server_map = dict },
     location = {
         capture = function(loc, opts)
-            if capture_handler then return capture_handler(loc, opts) end
+            if loc:find("/_internal/sessions/tool-block?", 1, true) == 1 then
+                return block_responses[loc] or { status = 404, body = "" }
+            end
+            if capture_handler then
+                local response = capture_handler(loc, opts)
+                if response then return response end
+            end
             if loc:sub(1, 9) == "/_vs_auth" then
                 return { status = 200, header = { ["X-Internal-Token"] = "signed" } }
             end
@@ -72,17 +117,21 @@ _G.ngx = {
         read_body = function() end,
         get_body_data = function() return _G.ngx.req._body end,
     },
+    escape_uri = function(s)
+        return (s:gsub("([^%w%-%.%_%~])", function(char)
+            return string.format("%%%02X", string.byte(char))
+        end))
+    end,
     log = function() end,
     ERR = 4,
     WARN = 5,
-    HTTP_POST = 8,
     HTTP_GET = 2,
+    HTTP_POST = 8,
     HTTP_PUT = 16,
     HTTP_DELETE = 32,
-    escape_uri = function(v) return v end,
     var = { request_id = "0", auth_user = "alice" },
     status = 200,
-    say = function(body) _G.ngx._last_body = body end,
+    say = function(body) _G.ngx._last_body = body; _G.ngx._reply = body end,
     exit = function() end,
     print = function(body) _G.ngx._last_body = body end,
     header = {},
@@ -172,8 +221,9 @@ do
     dict._store["tools_enriched::srv1:5:alice"] = nil
     local mapping = { required_scopes = nil, tools = {
         { name = "live_tool", original_name = "live_tool", backend_location = "/_vs_backend_ok",
-          inputSchema = { type = "object" } },
+          backend_server_path = "/ok", inputSchema = { type = "object" } },
         { name = "down_tool", original_name = "down_tool", backend_location = "/_vs_backend_down",
+          backend_server_path = "/down",
           inputSchema = { type = "object" } },
     } }
     capture_responses = {}
@@ -218,8 +268,9 @@ do
     dict._store["tools_enriched::srv2:5:alice"] = nil
     local mapping = { required_scopes = nil, tools = {
         { name = "live_tool", original_name = "live_tool", backend_location = "/_vs_backend_ok",
-          inputSchema = { type = "object" } },
+          backend_server_path = "/ok", inputSchema = { type = "object" } },
         { name = "down_tool", original_name = "down_tool", backend_location = "/_vs_backend_down",
+          backend_server_path = "/down",
           inputSchema = { type = "object" } },
     } }
     capture_responses = {}
@@ -230,6 +281,90 @@ do
 
     M._handle_tools_list("1", mapping, "", nil, "srv2")
     check(dict._store["tools_enriched::srv2:5:alice"] ~= nil, "fully-discovered result IS cached")
+end
+
+-- Two different backends can both advertise the same original tool. A virtual
+-- mapping selects each tool by backend location, never by name alone.
+print("test: tools/list resolves overlapping upstream names once per mapped backend")
+do
+    dict._store["tools_enriched::overlap:5:alice"] = nil
+    local mapping = { tools = {
+        { name = "regions", original_name = "regions", backend_location = "/_vs_backend_one", backend_server_path = "/one" },
+        { name = "docs_alias", original_name = "docs", backend_location = "/_vs_backend_two", backend_server_path = "/two" },
+    } }
+    capture_responses["/_vs_backend_one"] = { status = 200, body = cjson.encode({ result = { tools = {
+        { name = "regions" }, { name = "docs" },
+    } } }) }
+    capture_responses["/_vs_backend_two"] = { status = 200, body = cjson.encode({ result = { tools = {
+        { name = "regions" }, { name = "docs" },
+    } } }) }
+    local listed = cjson.decode(M._handle_tools_list(5, mapping, "", nil, "overlap"))
+    check(#listed.result.tools == 2, "only two selected tools returned")
+    check(listed.result.tools[1].name == "regions" and listed.result.tools[2].name == "docs_alias",
+        "each mapping keeps its own displayed tool name")
+end
+
+-- Fully discovered metadata can stay cached, but its block decision cannot.
+print("test: tools/list hides a blocked tool immediately even with cached metadata")
+do
+    dict._store["tools_enriched::block-change:5:alice"] = nil
+    local mapping = { tools = {
+        { name = "docs_alias", original_name = "docs", backend_location = "/_vs_backend_backend-two.3av2",
+          backend_server_path = "/backend-two:v2", backend_version = "v2" },
+    } }
+    capture_responses["/_vs_backend_backend-two.3av2"] = { status = 200, body = cjson.encode({ result = { tools = {
+        { name = "docs" },
+    } } }) }
+    local uri = "/_internal/sessions/tool-block?server_path=%2Fbackend-two%3Av2&tool_name=docs"
+    block_responses[uri] = { status = 200, body = '{"blocked":false}' }
+    local before = cjson.decode(M._handle_tools_list(1, mapping, "", nil, "block-change"))
+    check(#before.result.tools == 1, "tool is visible while unblocked")
+    check(dict._store["tools_enriched::block-change:5:alice"] ~= nil, "metadata is cached")
+    capture_responses["/_vs_backend_backend-two.3av2"] = { status = 503, body = "" }
+    block_responses[uri] = { status = 200, body = '{"blocked":true}' }
+    local after = cjson.decode(M._handle_tools_list(2, mapping, "", nil, "block-change"))
+    check(#after.result.tools == 0, "cached tool is hidden after block")
+    block_responses[uri] = { status = 503, body = "" }
+    local failed = cjson.decode(M._handle_tools_list(3, mapping, "", nil, "block-change"))
+    check(#failed.result.tools == 0, "unreadable block state hides cached tool")
+    block_responses[uri] = nil
+end
+
+-- A backend override is read at execution time. Stale/missing block state
+-- denies rather than routing an unsafe tool through the virtual server.
+print("test: tools/call rejects blocked or unreadable backend tool state")
+do
+    local mapping = { tools = { { name = "docs_alias", original_name = "docs",
+        backend_location = "/_vs_backend_backend-two.3av2", backend_server_path = "/backend-two:v2",
+        backend_version = "v2", required_scopes = {} } },
+        tool_backend_map = { docs_alias = {
+            original_name = "docs", backend_location = "/_vs_backend_backend-two.3av2",
+            backend_server_path = "/backend-two:v2", backend_version = "v2",
+        } } }
+    local block_uri = "/_internal/sessions/tool-block?server_path=%2Fbackend-two%3Av2&tool_name=docs"
+    block_responses[block_uri] = { status = 200, body = '{"blocked":true}' }
+    ngx._reply = nil
+    M._handle_tools_call(1, mapping, { name = "docs_alias", arguments = {} }, "", nil, "overlap")
+    local blocked = cjson.decode(ngx._reply)
+    check(blocked.error and blocked.error.code == -32603
+        and blocked.error.message == "Access denied: backend tool blocked or unavailable",
+        "blocked original tool denied by canonical versioned path")
+    block_responses[block_uri] = { status = 503, body = "" }
+    ngx._reply = nil
+    M._handle_tools_call(2, mapping, { name = "docs_alias", arguments = {} }, "", nil, "overlap")
+    local unavailable = cjson.decode(ngx._reply)
+    check(unavailable.error and unavailable.error.code == -32603
+        and unavailable.error.message == "Access denied: backend tool blocked or unavailable",
+        "unavailable override state denied")
+    block_responses[block_uri] = nil
+    local wrong = { tools = { mapping.tools[1] }, tool_backend_map = { docs_alias = {
+        original_name = "docs", backend_location = "/_vs_backend_other",
+        backend_server_path = "/backend-two:v2", backend_version = "v2",
+    } } }
+    ngx._reply = nil
+    M._handle_tools_call(3, wrong, { name = "docs_alias" }, "", nil, "overlap")
+    check(cjson.decode(ngx._reply).error.message == "Inconsistent backend mapping for tool",
+        "tool alias cannot dispatch to a different backend after scope selection")
 end
 
 -- ---------------------------------------------------------------------------
@@ -283,8 +418,8 @@ print("test: _handle_tools_list keeps empty schema arrays as [] (issue #1532)")
 do
     dict._store["tools_enriched::srv3:5:alice"] = nil
     local mapping = { required_scopes = nil, tools = {
-        { name = "no_arg", original_name = "no_arg", backend_location = "/_vs_backend_ok" },
-        { name = "one_arg", original_name = "one_arg", backend_location = "/_vs_backend_ok" },
+        { name = "no_arg", original_name = "no_arg", backend_location = "/_vs_backend_ok", backend_server_path = "/ok" },
+        { name = "one_arg", original_name = "one_arg", backend_location = "/_vs_backend_ok", backend_server_path = "/ok" },
     } }
     capture_responses = {}
     capture_responses["/_vs_backend_ok"] = { status = 200, body = cjson.encode({ result = { tools = {
@@ -320,7 +455,7 @@ print("test: a property named like a schema keyword stays an object")
 do
     dict._store["tools_enriched::srv4:5:alice"] = nil
     local mapping = { required_scopes = nil, tools = {
-        { name = "odd", original_name = "odd", backend_location = "/_vs_backend_ok" },
+        { name = "odd", original_name = "odd", backend_location = "/_vs_backend_ok", backend_server_path = "/ok" },
     } }
     capture_responses = {}
     capture_responses["/_vs_backend_ok"] = { status = 200, body = cjson.encode({ result = { tools = {
@@ -531,8 +666,10 @@ do
     local seen_auth, seen_backend = nil, nil
     ngx.var.auth_user = "alice"
     local mapping = { tool_backend_map = { alias = {
-        backend_location = "/_vs_backend_alias", original_name = "underlying",
-    } }, tools = { { name = "alias", backend_location = "/_vs_backend_alias" } } }
+        backend_location = "/_vs_backend_alias", backend_server_path = "/alias",
+        original_name = "underlying",
+    } }, tools = { { name = "alias", backend_location = "/_vs_backend_alias",
+        backend_server_path = "/alias", original_name = "underlying" } } }
     capture_handler = function(loc, opts)
         if loc == "/_vs_auth_alias" then
             seen_auth = cjson.decode(ngx.req._headers["X-Body"]).params.name
@@ -552,13 +689,43 @@ do
     capture_handler = nil
 end
 
+-- An explicitly pinned alias selects its own auth and backend locations.
+print("test: pinned alias authorizes and calls the selected backend version")
+do
+    local auth_location, backend_location, seen_version
+    local mapping = { tools = { { name = "alias", original_name = "underlying",
+        backend_location = "/_vs_backend_github.3av2", backend_server_path = "/github:v2",
+        backend_version = "v2" } }, tool_backend_map = { alias = {
+        original_name = "underlying", backend_location = "/_vs_backend_github.3av2",
+        backend_server_path = "/github:v2", backend_version = "v2" } } }
+    capture_handler = function(loc, opts)
+        if loc == "/_vs_auth_github.3av2" then
+            auth_location = loc
+            check(cjson.decode(ngx.req._headers["X-Body"]).params.name == "underlying",
+                "pinned backend grant authorizes the original tool")
+            return { status = 200, header = { ["X-Internal-Token"] = "signed" } }
+        end
+        if loc == "/_vs_backend_github.3av2" then
+            backend_location = loc
+            seen_version = ngx.req._headers["X-MCP-Server-Version"]
+            return { status = 200, body = '{"jsonrpc":"2.0","result":{}}' }
+        end
+    end
+    ngx.req._headers["X-MCP-Server-Version"] = "client-selected"
+    M._handle_tools_call(2, mapping, { name = "alias" }, "", nil, "srv")
+    check(auth_location == "/_vs_auth_github.3av2"
+        and backend_location == "/_vs_backend_github.3av2" and seen_version == "v2",
+        "pin routes both grant and call through the versioned location")
+    capture_handler = nil
+end
+
 -- A mapping file written by json.dump uses null for an unpinned version.
 -- cjson decodes null as userdata, not Lua nil; it must not become a header
 -- or be used with the length operator when choosing the backend session key.
 print("test: unpinned JSON mapping call handles cjson.null version")
 do
     local initialized, called = 0, 0
-    local mapping = cjson.decode('{"tool_backend_map":{"get_me":{"backend_location":"/_vs_backend_github","original_name":"get_me","backend_version":null}},"tools":[{"name":"get_me","backend_location":"/_vs_backend_github"}]}')
+    local mapping = cjson.decode('{"tool_backend_map":{"get_me":{"backend_location":"/_vs_backend_github","backend_server_path":"/github","original_name":"get_me","backend_version":null}},"tools":[{"name":"get_me","backend_location":"/_vs_backend_github","backend_server_path":"/github","original_name":"get_me"}]}')
     capture_handler = function(loc, opts)
         if loc == "/_vs_auth_github" then
             return { status = 200, header = { ["X-Internal-Token"] = "signed" } }
@@ -590,7 +757,8 @@ print("test: user-specific tools/list cache never crosses users or freezes conse
 do
     local requests, auths = 0, 0
     local mapping = { tools = { { name = "alias", original_name = "underlying",
-        backend_location = "/_vs_backend_personal", egress_auth_mode = "pat" } } }
+        backend_location = "/_vs_backend_personal", backend_server_path = "/personal",
+        egress_auth_mode = "pat" } } }
     capture_handler = function(loc, opts)
         if loc == "/_vs_auth_personal" then
             auths = auths + 1
@@ -626,7 +794,8 @@ print("test: plain backend cache rechecks authorization and isolates principals"
 do
     local calls, auths = 0, 0
     local mapping = { tools = { { name = "alias", original_name = "underlying",
-        backend_location = "/_vs_backend_plain", egress_auth_mode = "none" } } }
+        backend_location = "/_vs_backend_plain", backend_server_path = "/plain",
+        egress_auth_mode = "none" } } }
     capture_handler = function(loc, opts)
         if loc == "/_vs_auth_plain" then
             auths = auths + 1
@@ -753,9 +922,10 @@ do
     local initializes, puts, pat_puts, lists, calls = 0, 0, 0, 0, 0
     local mapping = { tools = {
         { name = "personal", original_name = "pat_tool",
-          backend_location = "/_vs_backend_pat", egress_auth_mode = "pat" },
+          backend_location = "/_vs_backend_pat", backend_server_path = "/pat",
+          egress_auth_mode = "pat" },
         { name = "healthy", original_name = "public_tool",
-          backend_location = "/_vs_backend_healthy" },
+          backend_location = "/_vs_backend_healthy", backend_server_path = "/healthy" },
     } }
     capture_handler = function(loc, opts)
         if loc:find("/_internal/sessions/backend/", 1, true) == 1 then
@@ -841,7 +1011,8 @@ do
         "empty pre-consent PAT discovery is never cached")
     ngx.status = 200
     M._handle_tools_call(3, { tools = mapping.tools, tool_backend_map = { personal = {
-        backend_location = "/_vs_backend_pat", original_name = "pat_tool" } } },
+        backend_location = "/_vs_backend_pat", backend_server_path = "/pat",
+        original_name = "pat_tool" } } },
         { name = "personal" }, "", "vs-consent", "consent")
     local pat_message = cjson.decode(ngx._last_body)
     check(ngx.status == 200 and calls == 1 and pat_message.result.isError == true
@@ -866,7 +1037,8 @@ print("test: a plain backend's own errors and 403 fall back to mapping metadata"
 do
     ngx.var.auth_user = "alice"
     local mapping = { tools = { { name = "mapped", original_name = "actual",
-        backend_location = "/_vs_backend_rpc_error", inputSchema = { type = "object" } } } }
+        backend_location = "/_vs_backend_rpc_error", backend_server_path = "/rpc_error",
+        inputSchema = { type = "object" } } } }
     capture_responses["/_vs_backend_rpc_error"] = { status = 200,
         body = '{"jsonrpc":"2.0","error":{"code":-32000,"message":"offline"}}' }
     local response = cjson.decode(M._handle_tools_list(1, mapping, "", nil, "rpc_error"))
@@ -887,9 +1059,10 @@ do
     ngx.var.auth_user = "alice"
     local backend_calls, auths, writes = 0, 0, 0
     local mapping = { tools = { { name = "alias", original_name = "upstream",
-        backend_location = "/_vs_backend_oauth", egress_auth_mode = "oauth_user" } },
+        backend_location = "/_vs_backend_oauth", backend_server_path = "/oauth",
+        egress_auth_mode = "oauth_user" } },
         tool_backend_map = { alias = { backend_location = "/_vs_backend_oauth",
-            original_name = "upstream" } } }
+            backend_server_path = "/oauth", original_name = "upstream" } } }
     capture_handler = function(loc, opts)
         if loc == "/_vs_auth_oauth" or loc == "/_vs_auth_plain_marker" then
             auths = auths + 1
@@ -1217,9 +1390,11 @@ do
     ngx.var.auth_user = "alice"
     local mapping = { tools = {
         { name = "brokered", original_name = "brokered", egress_auth_mode = "oauth_user",
-          backend_location = "/_vs_backend_outage_egress", inputSchema = { type = "object" } },
+          backend_location = "/_vs_backend_outage_egress", backend_server_path = "/outage_egress",
+          inputSchema = { type = "object" } },
         { name = "healthy", original_name = "healthy",
-          backend_location = "/_vs_backend_outage_plain", inputSchema = { type = "object" } },
+          backend_location = "/_vs_backend_outage_plain", backend_server_path = "/outage_plain",
+          inputSchema = { type = "object" } },
     } }
     capture_handler = function(loc)
         if loc:find("/_vs_auth_outage_", 1, true) == 1 then
@@ -1278,9 +1453,9 @@ do
             .. (auth_response.header and " without token" or "") .. " -> unverified")
     end
     local mapping = { tools = {
-        { name = "flaky", original_name = "flaky", backend_location = "/_vs_backend_flaky" },
-        { name = "denied", original_name = "denied", backend_location = "/_vs_backend_nogrant" },
-        { name = "healthy", original_name = "healthy", backend_location = "/_vs_backend_fine" },
+        { name = "flaky", original_name = "flaky", backend_location = "/_vs_backend_flaky", backend_server_path = "/flaky" },
+        { name = "denied", original_name = "denied", backend_location = "/_vs_backend_nogrant", backend_server_path = "/nogrant" },
+        { name = "healthy", original_name = "healthy", backend_location = "/_vs_backend_fine", backend_server_path = "/fine" },
     } }
     capture_handler = function(loc)
         if loc == "/_vs_auth_flaky" then return { status = 503 } end

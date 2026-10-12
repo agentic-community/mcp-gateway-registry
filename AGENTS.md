@@ -349,6 +349,9 @@ working in those areas.
   version inside the registration's own nginx location (see Route-derived authz).
 - **Never log** secrets, tokens, PII, or full credential/claim payloads. Redact
   (including setup/debug scripts in verbose mode).
+- **IdP client credentials:** ordinary setup hooks must reuse OAuth client
+  secrets; rotate only with coordinated auth-server rollout. Never log bootstrap
+  passwords or put them on subprocess argv; write Kubernetes Secrets via stdin.
 - **OAuth/OIDC:** bind the code flow to the login with a per-login `nonce` (checked
   after signature verification) + PKCE (`S256`), fail closed if the verifier is
   missing. Authorize the EXACT bytes you forward, never a separately-captured
@@ -377,6 +380,9 @@ working in those areas.
 - **One entity type's access grant must never gate a different entity type** (a
   skill filter keyed on agent access = bypass); filter each resource by its own
   access check, admin-only universal bypass.
+- **Virtual MCP tools:** a backend tool's blocked override must be checked at
+  every `tools/call` and `tools/list` boundary, including cached lists. Bind the
+  decision to the mapped backend path and original tool name; unknown state denies.
 - **Honor the disabled/inactive flag** on every request where access is derived
   (group→scope enrichment / validate), not just login; filter it in the query AND
   re-check the doc; fail closed.

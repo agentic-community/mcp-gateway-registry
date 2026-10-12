@@ -103,6 +103,7 @@ from pydantic import (
     BaseModel,
     Field,
     StrictStr,
+    ValidationInfo,
     field_validator,
 )
 
@@ -2986,7 +2987,7 @@ class ResourceBinding(BaseModel):
 
     @field_validator("id")
     @classmethod
-    def _normalize_id(cls, v: str) -> str:
+    def _normalize_id(cls, v: str, info: ValidationInfo) -> str:
         # Reject path traversal, URL-encoded payloads, and control
         # characters (null byte, CR, LF, tabs, etc.) before any
         # normalization. Control characters in particular can cause
@@ -2999,9 +3000,12 @@ class ResourceBinding(BaseModel):
         stripped = v.strip()
         if not stripped:
             raise ValueError("Resource id cannot be empty")
-        # Delegate to the shared normalizer so mint-time and compare-time
-        # canonicalize identically.
-        return normalize_resource_id(stripped)
+        # The skill API uses /api/skills/<slug>, while persisted skill ids are
+        # /skills/<slug>. Both accepted request forms must mint the same claim.
+        normalized = normalize_resource_id(stripped)
+        if info.data.get("type") == ResourceType.SKILL and not normalized.startswith("skills/"):
+            normalized = f"skills/{normalized}"
+        return normalized
 
 
 class GenerateTokenRequest(BaseModel):

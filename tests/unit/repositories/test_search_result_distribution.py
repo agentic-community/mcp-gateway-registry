@@ -16,11 +16,15 @@ Covers:
 
 import math
 
+import pytest
+
 from registry.repositories.documentdb.search_repository import (
     SOFT_CAP_RATIO,
+    DocumentDBSearchRepository,
     _distribute_results,
     _tool_extraction_limit,
 )
+from registry.services.visibility import user_can_access_skill
 
 # =============================================================================
 # HELPERS
@@ -390,3 +394,34 @@ class TestSoftCapRatio:
         assert math.ceil(5 * SOFT_CAP_RATIO) == 3
         assert math.ceil(50 * SOFT_CAP_RATIO) == 30
         assert math.ceil(1 * SOFT_CAP_RATIO) == 1
+
+
+@pytest.mark.asyncio
+async def test_skill_search_preserves_group_visibility():
+    """Search results admit the granted group and deny an unrelated group."""
+    repo = DocumentDBSearchRepository()
+    doc = {
+        "entity_type": "skill",
+        "path": "/skills/restricted",
+        "name": "restricted",
+        "visibility": "group",
+        "allowed_groups": ["team-a"],
+        "text_boost": 9.0,
+        "metadata": {},
+    }
+    hit = repo._format_lexical_results([doc], 10)["skills"][0]
+    allowed = await user_can_access_skill(
+        hit["path"],
+        hit["visibility"],
+        hit["owner"],
+        hit["allowed_groups"],
+        {"groups": ["team-a"]},
+    )
+    denied = await user_can_access_skill(
+        hit["path"],
+        hit["visibility"],
+        hit["owner"],
+        hit["allowed_groups"],
+        {"groups": ["team-b"]},
+    )
+    assert allowed and not denied

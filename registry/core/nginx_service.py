@@ -1741,6 +1741,11 @@ class NginxConfigService:
                 encoded.append("".join(f".{byte:02x}" for byte in char.encode()))
         return "".join(encoded)
 
+    def _virtual_backend_location(self, path: str, version: str | None = None) -> str:
+        """Give each selected version document an injective internal route."""
+        backend_key = f"{path}:{version}" if version and not path.endswith(f":{version}") else path
+        return f"/_vs_backend{self._encode_path_for_location(backend_key)}"
+
     @staticmethod
     def _is_host_resolvable_at_startup(
         hostname: str,
@@ -2225,51 +2230,63 @@ class NginxConfigService:
         self,
         backend_path: str,
         server_repo: Any,
-    ) -> dict | None:
-        """The backend's server document if it gets internal virtual locations, else None.
+        backend_version: str | None = None,
+    ) -> tuple[dict, str, str, str] | None:
+        """Return the linked safe version, active egress mode, signed id and base path.
 
-        The single definition used by BOTH the location generator and the Lua
-        mapping writer, so a mapping file never names an internal location that
-        was not rendered (a capture of it would fall through to the catch-all and
-        look like a grant refusal). Rejects invalid paths, unknown servers, a
-        missing or unsafe ``proxy_pass_url``/endpoint, and an unknown egress mode.
+        Both location and mapping generation use this gate; a mapped backend
+        cannot refer to an absent route or to a version the vend would reject.
         """
-        from registry.services.server_service import _validate_endpoint_fields
-
         try:
             validate_server_path(backend_path)
+            if backend_version:
+                validate_server_path(f"{backend_path}:{backend_version}")
         except UrlValidationError:
             logger.warning("Skipping invalid virtual backend path %r", backend_path)
             return None
-        server_info = await server_repo.get(backend_path)
-        if not server_info:
-            logger.warning(f"Backend server not found for virtual server mapping: {backend_path}")
+
+        requested = await server_repo.get(backend_path)
+        if not requested:
+            logger.warning("Backend server not found for virtual server mapping: %s", backend_path)
             return None
-        proxy_pass_url = server_info.get("proxy_pass_url", "")
-        if not proxy_pass_url:
-            logger.warning(f"No proxy_pass_url for backend server: {backend_path}")
-            return None
-        # Reject legacy malformed backend URLs before interpolating them into a
-        # signed upstream claim or a proxy_pass directive.
+        base_path = requested.get("active_version_id") or backend_path
         try:
-            validate_proxy_pass_url(proxy_pass_url, server_path=backend_path)
-            _validate_endpoint_fields(
-                server_info,
-                server_path=backend_path,
-                registered_target_url=proxy_pass_url,
-            )
+            validate_server_path(base_path)
         except UrlValidationError:
-            logger.warning("Skipping unsafe virtual backend URL for %s", backend_path)
+            logger.warning("Skipping invalid active path for virtual backend %s", backend_path)
             return None
-        if server_info.get("egress_auth_mode", "none") not in (
-            "none",
-            "pat",
-            "oauth_user",
-            "obo_exchange",
-        ):
+        active = await server_repo.get(base_path) if base_path != backend_path else requested
+        if not active:
+            logger.warning("Active server not found for virtual backend %s", backend_path)
+            return None
+        egress_mode = active.get("egress_auth_mode", "none")
+        if egress_mode not in ("none", "pat", "oauth_user", "obo_exchange"):
             logger.warning("Invalid egress auth mode for virtual backend %s", backend_path)
             return None
-        return server_info
+
+        requested_version = backend_version or (
+            requested.get("version") if base_path != backend_path else None
+        )
+        if (
+            base_path != backend_path
+            and backend_version
+            and backend_version != requested.get("version")
+        ):
+            logger.warning("Conflicting virtual backend version for %s", backend_path)
+            return None
+        selected, version_id = active, ""
+        if requested_version:
+            routes = await self._resolve_version_routes(base_path, active)
+            route = next((r for r in routes if r.label == requested_version), None)
+            if route is None or base_path != backend_path and route.version_id != backend_path:
+                logger.warning("Skipping unavailable virtual backend version %s", backend_path)
+                return None
+            selected, version_id = route.server, route.version_id
+
+        if self._version_upstream(base_path, _VersionRoute("", version_id, selected), True) is None:
+            logger.warning("Skipping unsafe virtual backend endpoint for %s", backend_path)
+            return None
+        return selected, egress_mode, version_id, base_path
 
     async def _generate_virtual_backend_locations(
         self,
@@ -2288,21 +2305,32 @@ class NginxConfigService:
 
             server_repo = get_server_repository()
 
-            # Collect unique backend server paths
-            backend_paths = set()
-            for vs in virtual_servers:
-                for tm in vs.tool_mappings:
-                    backend_paths.add(tm.backend_server_path)
+            # A pinned mapping must reach its own version document's backend,
+            # not the active server's internal proxy location.
+            backend_keys = {
+                (tm.backend_server_path, tm.backend_version)
+                for vs in virtual_servers
+                for tm in vs.tool_mappings
+            }
 
-            if not backend_paths:
+            if not backend_keys:
                 return ""
 
             location_blocks = []
-            for backend_path in sorted(backend_paths):
-                server_info = await self._renderable_virtual_backend(backend_path, server_repo)
-                if server_info is None:
+            rendered_locations: set[str] = set()
+            for backend_path, backend_version in sorted(
+                backend_keys, key=lambda item: (item[0], item[1] or "")
+            ):
+                location_path = self._virtual_backend_location(backend_path, backend_version)
+                if location_path in rendered_locations:
                     continue
-                encoded = self._encode_path_for_location(backend_path)
+                renderable = await self._renderable_virtual_backend(
+                    backend_path, server_repo, backend_version
+                )
+                if renderable is None:
+                    continue
+                rendered_locations.add(location_path)
+                server_info, egress_mode, version_id, base_path = renderable
                 proxy_pass_url = server_info["proxy_pass_url"]
                 # Determine upstream host from proxy_pass_url
                 parsed_url = urlparse(proxy_pass_url)
@@ -2311,36 +2339,43 @@ class NginxConfigService:
                 # The same function the vend uses to approve the signed upstream, so
                 # the routed URL and the approved URL cannot drift.
                 mcp_proxy_url = selected_upstream(server_info, True)
-                version_routes = await self._resolve_version_routes(backend_path, server_info)
-                if server_info.get("egress_auth_mode", "none") == "none":
-                    # A plain backend dispatches to its active endpoint whatever the
-                    # pin (see the dispatch location below), so its authorization
-                    # binds the active version too and never fails on a stale pin.
-                    version_selection = self._version_selection_directives(
-                        backend_path, version_routes[:1], virtual=True, enforce_pins=False
+                # The common egress identity strips a terminal slash; a direct
+                # nginx proxy_pass needs the URI slash to replace the capture URI.
+                plain_proxy_url = mcp_proxy_url
+                if not urlparse(mcp_proxy_url).path and (
+                    urlparse(server_info.get("mcp_endpoint") or "").path == "/"
+                    or not server_info.get("mcp_endpoint")
+                    and parsed_url.path == "/"
+                ):
+                    plain_proxy_url += "/"
+                if backend_version or version_id:
+                    # The mapping owns one exact version: never let a client header
+                    # change the signed destination chosen for this location.
+                    version_selection = (
+                        f'        set $backend_url "{self._sanitize_for_nginx_set(mcp_proxy_url)}";\n'
+                        f'        set $resolved_version "{self._sanitize_for_nginx_set(version_id)}";'
                     )
                 else:
+                    version_routes = await self._resolve_version_routes(base_path, server_info)
                     version_selection = self._version_selection_directives(
-                        backend_path, version_routes, virtual=True, enforce_pins=True
+                        base_path,
+                        version_routes if egress_mode != "none" else version_routes[:1],
+                        virtual=True,
+                        enforce_pins=egress_mode != "none",
                     )
 
-                # Use regular internal location (not named @) so proxy_pass
-                # can include a URI path for the MCP endpoint
-                location_path = f"/_vs_backend{encoded}"
+                # Pair each backend with an exact internal /validate capture.
                 # ngx.location.capture does not run auth_request on the captured
                 # location. Lua explicitly captures this sibling first, passing
                 # the rewritten JSON-RPC body in X-Body and using its signed
                 # response token for the backend hop.
-                auth_location = f"/_vs_auth{encoded}"
-                safe_backend_path = self._sanitize_for_nginx_set(backend_path.rstrip("/"))
+                auth_location = location_path.replace("/_vs_backend", "/_vs_auth", 1)
+                safe_backend_path = self._sanitize_for_nginx_set(base_path.rstrip("/"))
                 auth_server_target = settings.auth_server_url.rstrip("/")
                 safe_auth_url = f"{auth_server_target}/validate"
-                safe_proxy_target = f"{auth_server_target}/mcp-proxy/{backend_path.strip('/')}/"
-                egress_mode = server_info.get("egress_auth_mode", "none")
-
-                # Bind the same selected URL into both the signed token and the
-                # actual outbound destination: the version is chosen here, from
-                # this backend's own versions, never by a global $uri-keyed map.
+                safe_proxy_target = f"{auth_server_target}/mcp-proxy/{base_path.strip('/')}/"
+                # A version-specific location signs its selected registered URL;
+                # only the active base path authorizes the backend's scope and vend.
                 auth_block = f"""
     location = {auth_location} {{
         internal;
@@ -2426,30 +2461,25 @@ class NginxConfigService:
                     backend_hostname
                 )
 
-                # Defense-in-depth: escape the backend URL and Host header before
-                # interpolating them into proxy_pass / set / proxy_set_header
-                # directives, matching the escaping applied to the versioned
-                # backend map. Registration-time validation already rejects URLs
-                # with nginx metacharacters; escaping here means legacy data
-                # persisted before validation still cannot break out of the
-                # directive context.
-                safe_mcp_proxy_url = self._sanitize_for_nginx_set(mcp_proxy_url)
+                # Registration and endpoint validation reject nginx metacharacters;
+                # sanitize again before interpolating a persisted URL or Host.
+                safe_mcp_proxy_url = self._sanitize_for_nginx_set(plain_proxy_url)
                 safe_upstream_host = self._sanitize_for_nginx_set(upstream_host)
 
-                # Plain backends dispatch to the active endpoint (pins are honoured
-                # on egress-brokered backends, whose dispatch uses the signed
-                # upstream). A literal proxy_pass keeps load-time resolution
-                # through the system resolver for private dotted hostnames.
                 if host_is_resolvable_at_startup:
                     proxy_directive = f"proxy_pass {safe_mcp_proxy_url};"
                 else:
+                    # Nginx variables are server-scoped: keep versions disjoint.
+                    backend_var = (
+                        "$vs_backend_" + hashlib.sha256(location_path.encode()).hexdigest()[:16]
+                    )
                     dns_resolver = os.environ.get("NGINX_DNS_RESOLVER", "8.8.8.8 8.8.4.4")
                     dns_resolver_timeout = os.environ.get("NGINX_DNS_RESOLVER_TIMEOUT", "5")
                     proxy_directive = (
                         f"resolver {dns_resolver} valid=10s;\n"
                         f"        resolver_timeout {dns_resolver_timeout}s;\n"
-                        f'        set $vs_backend_url "{safe_mcp_proxy_url}";\n'
-                        "        proxy_pass $vs_backend_url;"
+                        f'        set {backend_var} "{safe_mcp_proxy_url}";\n'
+                        f"        proxy_pass {backend_var};"
                     )
 
                 block = f"""
@@ -2536,10 +2566,10 @@ class NginxConfigService:
                 for tm in vs.tool_mappings:
                     # Only backends that get internal locations may appear in a
                     # mapping: the same check the location generator applies.
-                    server_info = await self._renderable_virtual_backend(
-                        tm.backend_server_path, server_repo
+                    renderable = await self._renderable_virtual_backend(
+                        tm.backend_server_path, server_repo, tm.backend_version
                     )
-                    if server_info is None:
+                    if renderable is None:
                         logger.warning(
                             "Omitting tool %r of %s: backend %s has no internal location",
                             tm.tool_name,
@@ -2547,24 +2577,11 @@ class NginxConfigService:
                             tm.backend_server_path,
                         )
                         continue
-                    # Only credentialed backends honor pins (plain ones dispatch to
-                    # the active endpoint), so only their stale pins break calls.
-                    if tm.backend_version and server_info.get("egress_auth_mode", "none") != "none":
-                        routes = await self._resolve_version_routes(
-                            tm.backend_server_path, server_info
-                        )
-                        known = {route.label for route in routes} | set(_ACTIVE_VERSION_SELECTORS)
-                        if tm.backend_version not in known:
-                            # Calls to it fail closed (no credential is minted); say why.
-                            logger.warning(
-                                "Tool %r of %s pins version %r, which %s does not have",
-                                tm.tool_name,
-                                vs.path,
-                                tm.backend_version,
-                                tm.backend_server_path,
-                            )
-                    encoded_backend = self._encode_path_for_location(tm.backend_server_path)
-                    backend_location = f"/_vs_backend{encoded_backend}"
+                    server_info, egress_mode, version_id, base_path = renderable
+                    backend_key = version_id or base_path
+                    backend_location = self._virtual_backend_location(
+                        tm.backend_server_path, tm.backend_version
+                    )
                     tool_display_name = tm.alias if tm.alias else tm.tool_name
                     description = tm.description_override or ""
                     input_schema: dict[str, Any] = {}
@@ -2587,14 +2604,16 @@ class NginxConfigService:
                             "description": description,
                             "inputSchema": input_schema,
                             "backend_location": backend_location,
+                            "backend_server_path": backend_key,
                             "backend_version": tm.backend_version,
-                            "egress_auth_mode": server_info.get("egress_auth_mode", "none"),
+                            "egress_auth_mode": egress_mode,
                             "required_scopes": required_scopes,
                         }
                     )
 
                     tool_backend_map[tool_display_name] = {
                         "backend_location": backend_location,
+                        "backend_server_path": backend_key,
                         "original_name": tm.tool_name,
                         "backend_version": tm.backend_version,
                     }

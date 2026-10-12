@@ -53,6 +53,32 @@ def _get_repo():
     return repo
 
 
+@router.get("/internal/sessions/tool-block", status_code=200)
+async def get_backend_tool_block(
+    server_path: str,
+    tool_name: str,
+) -> dict[str, bool]:
+    """Return the current block decision for a virtual backend tool.
+
+    This route uses the same internal-secret gate as virtual session management.
+    A missing backend or an unreadable override is an error, never an allow.
+    """
+    from registry.repositories.factory import get_server_repository
+
+    repo = get_server_repository()
+    if not server_path.startswith("/") or not tool_name:
+        raise HTTPException(status_code=400, detail="Invalid backend tool identity")
+    try:
+        if not await repo.get(server_path):
+            raise HTTPException(status_code=404, detail="Backend server not found")
+        return {"blocked": tool_name in await repo.get_blocked_tools(server_path)}
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Unable to read virtual backend tool block state")
+        raise HTTPException(status_code=503, detail="Tool block state unavailable") from None
+
+
 @router.post(
     "/internal/sessions/client",
     response_model=CreateClientSessionResponse,
