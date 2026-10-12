@@ -105,6 +105,20 @@ end
 -- `proxy_set_header X-User $auth_user;` unconditionally so a client header can
 -- never survive. Always overwrite or clear; never pass through.
 local function _forward_identity_headers()
+    -- Defense in depth: the _vs_backend location already clears every caller /
+    -- gateway credential via proxy_set_header, but the ngx.location.capture
+    -- subrequest inherits the parent request's headers, so strip them here too
+    -- before routing. A backend must never receive the caller's gateway bearer
+    -- (Authorization / X-Authorization), the registry session Cookie, or the
+    -- gateway's own signed internal tokens -- any of those could be replayed
+    -- against the registry. Fail closed: clear unconditionally.
+    ngx.req.clear_header("Authorization")
+    ngx.req.clear_header("X-Authorization")
+    ngx.req.clear_header("Proxy-Authorization")
+    ngx.req.clear_header("Cookie")
+    ngx.req.clear_header("X-Internal-Token")
+    ngx.req.clear_header("X-Internal-Token-Registry")
+    ngx.req.clear_header("X-Internal-Token-Generic")
     local auth_user = ngx.var.auth_user
     local auth_username = ngx.var.auth_username
     if auth_user and auth_user ~= "" then
