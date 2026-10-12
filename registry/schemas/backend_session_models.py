@@ -55,8 +55,10 @@ class BackendSessionDocument(BaseModel):
 
     @model_validator(mode="after")
     def _validate_state(self) -> "BackendSessionDocument":
-        if self.stateless != (self.backend_session_id is None):
+        if self.stateless and self.backend_session_id is not None:
             raise ValueError("A stateless backend must not have a backend session ID")
+        if not self.stateless and self.backend_session_id is None:
+            raise ValueError("A stateful backend requires a backend session ID, or stateless=True")
         if self.backend_session_id == "":
             raise ValueError("A backend session ID cannot be empty")
         return self
@@ -108,8 +110,10 @@ class StoreSessionRequest(BaseModel):
 
     @model_validator(mode="after")
     def _validate_state(self) -> "StoreSessionRequest":
-        if self.stateless != (self.backend_session_id is None):
+        if self.stateless and self.backend_session_id is not None:
             raise ValueError("A stateless backend must not have a backend session ID")
+        if not self.stateless and self.backend_session_id is None:
+            raise ValueError("A stateful backend requires a backend session ID, or stateless=True")
         if self.backend_session_id == "":
             raise ValueError("A backend session ID cannot be empty")
         return self
@@ -148,8 +152,10 @@ class GetBackendSessionResponse(BaseModel):
 
     @model_validator(mode="after")
     def _validate_state(self) -> "GetBackendSessionResponse":
-        if self.stateless != (self.backend_session_id is None):
+        if self.stateless and self.backend_session_id is not None:
             raise ValueError("A stateless backend must not have a backend session ID")
+        if not self.stateless and self.backend_session_id is None:
+            raise ValueError("A stateful backend requires a backend session ID, or stateless=True")
         if self.backend_session_id == "":
             raise ValueError("A backend session ID cannot be empty")
         return self

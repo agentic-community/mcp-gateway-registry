@@ -15,6 +15,7 @@ import pytest
 from registry.constants import HealthStatus
 from registry.core import nginx_service as nginx_module
 from registry.core.nginx_service import NginxConfigService
+from registry.exceptions import UrlValidationError
 
 # Capture the real write-validate-promote helpers before the autouse fixture
 # stubs the module attributes, so the dedicated validation tests can exercise
@@ -2669,3 +2670,46 @@ async def test_proxy_ssl_placeholder_is_substituted_end_to_end(
         f"{conf_path.name} (pingfederate): {{{{PINGFEDERATE_PROXY_SSL}}}} placeholder was NOT "
         "substituted -- the .replace() wiring in _render_config_impl is broken."
     )
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_one_unroutable_server_does_not_drop_the_others(
+    nginx_service, sample_servers, mock_health_service, mock_atomic_write
+):
+    """A server whose blocks cannot be generated is skipped, not fatal to the render.
+
+    ``_version_selection_directives`` raises ``UrlValidationError`` when a
+    registration has no routable endpoint, where the code it replaced degraded
+    to an empty ``$backend_url``. Without a per-server guard that raise escapes
+    the whole loop and EVERY server's location disappears from the rendered
+    config, taking the gateway down instead of failing closed for the one bad
+    record. Pin that the healthy sibling still renders.
+    """
+    template_content = "{{LOCATION_BLOCKS}}\n{{VIRTUAL_SERVER_BLOCKS}}\n{{AGENT_LOCATION_BLOCKS}}"
+    mock_health_service.server_health_status = {
+        "/test-server": HealthStatus.HEALTHY,
+        "/test-server-2": HealthStatus.HEALTHY,
+    }
+    real_generate = nginx_service._generate_transport_location_blocks
+
+    def _raise_for_the_first_server(path, server_info, version_routes=None):
+        if path == "/test-server":
+            raise UrlValidationError(path, "active version has no routable endpoint")
+        return real_generate(path, server_info, version_routes=version_routes)
+
+    with patch.object(nginx_service.nginx_template_path, "exists", return_value=True):
+        with patch("builtins.open", mock_open(read_data=template_content)):
+            with patch("registry.health.service.health_service", mock_health_service):
+                with patch.object(nginx_service, "get_additional_server_names", return_value=""):
+                    with patch.object(nginx_service, "reload_nginx", return_value=True):
+                        with patch.object(
+                            nginx_service,
+                            "_generate_transport_location_blocks",
+                            side_effect=_raise_for_the_first_server,
+                        ):
+                            result = await nginx_service.generate_config_async(sample_servers)
+
+    assert result is True, "one unroutable server must not fail the whole render"
+    rendered = mock_atomic_write.call_args_list[0][0][1]
+    assert "/test-server-2" in rendered, "the healthy sibling's location was dropped"

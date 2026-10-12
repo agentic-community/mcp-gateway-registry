@@ -235,6 +235,25 @@ class TestSetPat:
         assert r.status_code == 409
         assert store.put_calls == []
 
+    def test_unavailable_versions_is_503_not_409(self, client, monkeypatch):
+        """A linked version with no endpoint is our fault, so it must not read as a conflict.
+
+        ``registered_destinations`` raises ValueError when a linked version
+        document is missing or has no endpoint. The caller cannot fix that by
+        retrying or by changing the request, so 409 would mislead; 503 says the
+        server cannot serve the request right now. The PAT is not stored.
+        """
+        store = _StubStore()
+        monkeypatch.setattr(
+            routes,
+            "registered_destinations",
+            AsyncMock(side_effect=ValueError("linked version has no endpoint")),
+        )
+        c = client(USER, server=_server(), store=store)
+        r = c.put("/api/servers/github/egress-pat", json=_put_body())
+        assert r.status_code == 503
+        assert store.put_calls == []
+
     def test_unknown_server_404(self, client):
         store = _StubStore()
         c = client(USER, server=None, store=store)

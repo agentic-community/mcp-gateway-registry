@@ -172,6 +172,26 @@ class TestConnectRoute:
         # must authenticate before consent starts)
         assert "oauth2%2Fegress%2Fconnect" in loc
 
+    def test_unavailable_versions_is_503_temporarily_unavailable(self, client, monkeypatch):
+        """An incomplete registration must not be reported as the caller's bad request.
+
+        ``build_consent_url`` raises ValueError when a linked version document is
+        missing or has no endpoint. That is a server-side configuration fault, so
+        the OAuth error must be ``temporarily_unavailable`` with 503, not
+        ``invalid_request`` with 409, which would tell the client its own request
+        was malformed and invite it to change the request.
+        """
+
+        class _Broken:
+            async def build_consent_url(self, **kwargs):
+                raise ValueError("linked version has no endpoint")
+
+        c = client(server=_server())
+        monkeypatch.setattr(facade, "get_egress_auth_service", lambda: _Broken())
+        r = c.get("/oauth2/egress/connect", params={"server": "/github"})
+        assert r.status_code == 503
+        assert r.json()["error"] == "temporarily_unavailable"
+
     def test_connect_non_per_user_denied(self, client):
         c = client(user_context=STATIC, server=_server())
         r = c.get("/oauth2/egress/connect", params={"server": "/github"})

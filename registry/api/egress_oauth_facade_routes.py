@@ -265,12 +265,14 @@ async def egress_connect(
             server=server_info,
         )
     except ValueError:
+        # 503 with "temporarily_unavailable": the registration is incomplete on
+        # our side, so "invalid_request" would wrongly blame the caller's request.
         return JSONResponse(
             {
-                "error": "invalid_request",
+                "error": "temporarily_unavailable",
                 "error_description": "server versions are not available",
             },
-            status_code=409,
+            status_code=503,
         )
     except EgressAuthError as exc:
         # build_consent_url validates the client secret before redirecting, so a
