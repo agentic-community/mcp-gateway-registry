@@ -46,6 +46,7 @@ from ..schemas.agent_models import (
     AgentCard,
     AgentCardPatch,
     AgentInfo,
+    AgentInterface,
     AgentProvider,
     AgentRegistrationRequest,
     PullCardFieldChange,
@@ -406,11 +407,14 @@ A2A_SPEC_FIELDS: set[str] = {
     "default_output_modes",
     "skills",
     "preferred_transport",
+    "supported_interfaces",
     "provider",
     "icon_url",
     "documentation_url",
     "security_schemes",
     "security",
+    "security_requirements",
+    "signatures",
     "supports_authenticated_extended_card",
 }
 
@@ -420,9 +424,11 @@ A2A_CAMEL_TO_SNAKE: dict[str, str] = {
     "defaultInputModes": "default_input_modes",
     "defaultOutputModes": "default_output_modes",
     "preferredTransport": "preferred_transport",
+    "supportedInterfaces": "supported_interfaces",
     "iconUrl": "icon_url",
     "documentationUrl": "documentation_url",
     "securitySchemes": "security_schemes",
+    "securityRequirements": "security_requirements",
     "supportsAuthenticatedExtendedCard": "supports_authenticated_extended_card",
 }
 
@@ -584,6 +590,69 @@ def _compute_card_diff(
                     key=lambda s: (s.get("id") if isinstance(s, dict) else "") or "",
                 )
 
+        if field_name == "supported_interfaces":
+            # _normalize_remote_card_keys only converts TOP-LEVEL keys, so
+            # each remote entry still has camelCase protocolBinding/
+            # protocolVersion while current_dict's entries (from
+            # current_agent.model_dump()) use snake_case, so normalize the
+            # remote side's nested keys too (generically, by key, so any
+            # future AgentInterface field, e.g. the optional `tenant`
+            # field, survives comparison without needing a matching
+            # hardcoded entry here), or every comparison would spuriously
+            # report a diff on every registered agent, since these are
+            # required fields present on every entry (unlike the
+            # skills/inputModes case, which is optional and often absent).
+            #
+            # Handled via its own comparison + append + continue, rather
+            # than reassigning current_value/remote_value like the
+            # skills/security_schemes blocks do, for two reasons:
+            #  1. Order is a meaningful preference signal in A2A 1.0 (first
+            #     entry = preferred), unlike skills' unordered list, so the
+            #     comparison must stay order-sensitive, with no sorting.
+            #  2. The value stored in PullCardFieldChange.remote_value
+            #     (what _build_safe_card_updates later writes back verbatim)
+            #     must keep the agent's own original keys/order/casing.
+            #     Normalizing it for the comparison and then storing that
+            #     normalized copy would silently alter what gets persisted
+            #     the next time this diff is applied.
+            _interface_camel_to_snake = {
+                "protocolBinding": "protocol_binding",
+                "protocolVersion": "protocol_version",
+            }
+
+            def _normalize_interface_entry(entry: Any) -> Any:
+                if not isinstance(entry, dict):
+                    return entry
+                # Also drop null values, since current_dict's entries (from
+                # current_agent.model_dump()) include unset optional fields
+                # (e.g. `tenant`) as explicit None, while a remote card
+                # that never set them omits the key entirely. Without this,
+                # every comparison would spuriously differ by that one key,
+                # same reasoning as the existing provider/skills handling
+                # below.
+                return {
+                    _interface_camel_to_snake.get(k, k): v
+                    for k, v in entry.items()
+                    if v is not None
+                }
+
+            current_cmp = current_value
+            remote_cmp = remote_value
+            if isinstance(current_cmp, list):
+                current_cmp = [_normalize_interface_entry(e) for e in current_cmp]
+            if isinstance(remote_cmp, list):
+                remote_cmp = [_normalize_interface_entry(e) for e in remote_cmp]
+
+            if current_cmp != remote_cmp:
+                changes.append(
+                    PullCardFieldChange(
+                        field=field_name,
+                        current_value=current_value,
+                        remote_value=remote_value,
+                    )
+                )
+            continue
+
         if field_name == "security_schemes" and isinstance(current_value, dict):
             current_value = {
                 k: _drop_nulls(v) if isinstance(v, dict) else v for k, v in current_value.items()
@@ -592,6 +661,41 @@ def _compute_card_diff(
                 remote_value = {
                     k: _drop_nulls(v) if isinstance(v, dict) else v for k, v in remote_value.items()
                 }
+
+        if field_name == "security_requirements":
+            # Each entry is a SecurityRequirement wrapping its scheme map
+            # under "schemes" (a2a.proto: SecurityRequirement.schemes is
+            # map<string, StringList>, not inlined onto the entry itself).
+            # model_dump() uses the StringList field name ("values"); the A2A
+            # wire format (and remote cards) use its alias ("list"). Normalize
+            # both sides to the wire key so an equivalent requirement doesn't
+            # report a spurious diff.
+            def _normalize_requirement(entry: Any) -> Any:
+                if not isinstance(entry, dict):
+                    return entry
+                schemes = entry.get("schemes")
+                if not isinstance(schemes, dict):
+                    return entry
+                return {
+                    "schemes": {
+                        scheme: (
+                            {"list": scopes.get("list", scopes.get("values", []))}
+                            if isinstance(scopes, dict)
+                            else scopes
+                        )
+                        for scheme, scopes in schemes.items()
+                    }
+                }
+
+            if isinstance(current_value, list):
+                current_value = [_normalize_requirement(e) for e in current_value]
+            if isinstance(remote_value, list):
+                remote_value = [_normalize_requirement(e) for e in remote_value]
+
+        if field_name == "signatures" and isinstance(current_value, list):
+            current_value = [_drop_nulls(s) if isinstance(s, dict) else s for s in current_value]
+            if isinstance(remote_value, list):
+                remote_value = [_drop_nulls(s) if isinstance(s, dict) else s for s in remote_value]
 
         if current_value != remote_value:
             changes.append(
@@ -1035,10 +1139,18 @@ async def register_agent(
 
         # Build optional kwargs for fields that have defaults on AgentCard
         optional_card_kwargs: dict[str, Any] = {}
+        if request.security_requirements:
+            optional_card_kwargs["security_requirements"] = request.security_requirements
+        if request.signatures:
+            optional_card_kwargs["signatures"] = request.signatures
         if request.default_input_modes:
             optional_card_kwargs["default_input_modes"] = request.default_input_modes
         if request.default_output_modes:
             optional_card_kwargs["default_output_modes"] = request.default_output_modes
+        if request.supported_interfaces:
+            optional_card_kwargs["supported_interfaces"] = [
+                AgentInterface(**iface) for iface in request.supported_interfaces
+            ]
         if request.metadata:
             optional_card_kwargs["metadata"] = request.metadata
         # Build capabilities: merge explicit capabilities dict with streaming bool
@@ -1121,7 +1233,7 @@ async def register_agent(
         # gateway. Mirrors the MCP-server url/proxy_pass_url split; proxy_pass_url
         # is redacted from non-admin reads (registry/services/visibility.py) and
         # the nginx generator proxies to it. When the flag is off, the card is
-        # stored exactly as registered (no proxy_pass_url) -- backwards compatible.
+        # stored exactly as registered (no proxy_pass_url), i.e. backwards compatible.
         #
         # Gated on a2a_reverse_proxy_effective (flag AND with-gateway), NOT the
         # raw flag: in registry-only mode there is no gateway to route through, so
@@ -2301,10 +2413,18 @@ async def update_agent(
     try:
         # Build optional kwargs for fields that have defaults on AgentCard
         update_optional_kwargs: dict[str, Any] = {}
+        if request.security_requirements:
+            update_optional_kwargs["security_requirements"] = request.security_requirements
+        if request.signatures:
+            update_optional_kwargs["signatures"] = request.signatures
         if request.default_input_modes:
             update_optional_kwargs["default_input_modes"] = request.default_input_modes
         if request.default_output_modes:
             update_optional_kwargs["default_output_modes"] = request.default_output_modes
+        if request.supported_interfaces:
+            update_optional_kwargs["supported_interfaces"] = [
+                AgentInterface(**iface) for iface in request.supported_interfaces
+            ]
 
         updated_agent = AgentCard(
             protocol_version=request.protocol_version,
@@ -2645,7 +2765,7 @@ async def delete_agent(
     # Strict dual gate, uniform with server/skill/custom-entity delete: the caller
     # must hold the delete_agent scope AND be an admin or the agent's owner.
     # Previously ownership alone sufficed (scope OR owner), letting an owner delete
-    # without the delete_agent grant -- the lone outlier among the asset families.
+    # without the delete_agent grant, the lone outlier among the asset families.
     # The scope half routes through the canonical helper keyed on the agent NAME
     # (matching modify/toggle and the batch path); the ownership check below
     # (skipped for admins) supplies the AND-owner half.
@@ -2761,7 +2881,7 @@ async def discover_agents_by_skills(
 
         relevance_score = 0.6 * skill_match_score + 0.2 * tag_match_score + 0.2 * trust_boost
 
-        # Extract streaming capability -- check capabilities dict first, fall back to
+        # Extract streaming capability: check capabilities dict first, fall back to
         # top-level field for agents registered before the capabilities dict change
         streaming = (
             agent.capabilities.get("streaming", False)
