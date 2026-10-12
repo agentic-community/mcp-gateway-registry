@@ -207,6 +207,55 @@ class TestVirtualServerServiceValidation:
         with pytest.raises(VirtualServerValidationError, match="Version"):
             await service._validate_tool_mappings(mappings)
 
+    @pytest.mark.asyncio
+    async def test_create_pinned_mapping_uses_version_tools(
+        self, service, mock_vs_repo, mock_server_repo
+    ):
+        """A version-only tool can be mapped even when the active backend lacks it."""
+        mock_server_repo.get.side_effect = [
+            {"tool_list": [{"name": "active_only"}]},
+            {"tool_list": [{"name": "pinned_only"}]},
+        ]
+        mock_vs_repo.create.side_effect = lambda config: config
+        request = CreateVirtualServerRequest(
+            server_name="Pinned",
+            path="/virtual/pinned",
+            tool_mappings=[
+                ToolMapping(
+                    tool_name="pinned_only",
+                    backend_server_path="/github",
+                    backend_version="v2",
+                )
+            ],
+        )
+
+        with patch.object(service, "_trigger_nginx_reload", new_callable=AsyncMock):
+            created = await service.create_virtual_server(request, created_by="admin")
+
+        assert created.path == "/virtual/pinned"
+        assert created.tool_mappings[0].backend_version == "v2"
+
+    @pytest.mark.asyncio
+    async def test_validate_pinned_mapping_rejects_tool_only_on_active_version(
+        self, service, mock_server_repo
+    ):
+        """An active-version tool cannot be routed to a version lacking it."""
+        mock_server_repo.get.side_effect = [
+            {"tool_list": [{"name": "active_only"}]},
+            {"tool_list": [{"name": "pinned_only"}]},
+        ]
+
+        with pytest.raises(VirtualServerValidationError, match="active_only.*not found"):
+            await service._validate_tool_mappings(
+                [
+                    ToolMapping(
+                        tool_name="active_only",
+                        backend_server_path="/github",
+                        backend_version="v2",
+                    )
+                ]
+            )
+
 
 # --- Unit tests for service CRUD operations ---
 
@@ -725,6 +774,47 @@ class TestToolResolution:
         return docs.get(path)
 
     @pytest.mark.asyncio
+    async def test_resolve_tools_hides_only_blocked_original_backend_tool(
+        self, service, mock_vs_repo, mock_server_repo
+    ):
+        """A shared tool name on another backend stays visible after a block."""
+        mock_vs_repo.get.return_value = VirtualServerConfig(
+            path="/virtual/dev",
+            server_name="Dev",
+            tool_mappings=[
+                ToolMapping(
+                    tool_name="search", alias="github_search", backend_server_path="/github"
+                ),
+                ToolMapping(tool_name="search", alias="jira_search", backend_server_path="/jira"),
+            ],
+        )
+        mock_server_repo.get.side_effect = lambda path: {
+            "server_name": path,
+            "tool_list": [{"name": "search", "description": path, "inputSchema": {}}],
+        }
+        blocked = {"/github": {"search"}, "/jira": set()}
+        mock_server_repo.get_blocked_tools.side_effect = lambda path: blocked[path]
+
+        before = await service.resolve_tools("/virtual/dev", user_context={"is_admin": True})
+        assert [tool.name for tool in before] == ["jira_search"]
+
+        blocked["/github"] = set()
+        after = await service.resolve_tools("/virtual/dev", user_context={"is_admin": True})
+        assert [tool.name for tool in after] == ["github_search", "jira_search"]
+
+    @pytest.mark.asyncio
+    async def test_resolve_tools_does_not_disclose_when_block_lookup_fails(
+        self, service, mock_vs_repo, mock_server_repo
+    ):
+        """Unreadable block state must not turn a model-facing list into allow."""
+        mock_vs_repo.get.return_value = self._multi_backend_config()
+        mock_server_repo.get.side_effect = self._multi_backend_docs
+        mock_server_repo.get_blocked_tools.side_effect = RuntimeError("override store unavailable")
+
+        with pytest.raises(RuntimeError, match="override store unavailable"):
+            await service.resolve_tools("/virtual/dev", user_context={"is_admin": True})
+
+    @pytest.mark.asyncio
     async def test_resolve_tools_fails_closed_without_context(
         self, service, mock_vs_repo, mock_server_repo
     ):
@@ -779,6 +869,22 @@ class TestToolResolution:
         tools = await service.resolve_tools("/virtual/dev", user_context=user_context)
 
         assert [t.name for t in tools] == ["search"]
+
+    @pytest.mark.asyncio
+    async def test_resolve_tools_accepts_canonical_path_grant(
+        self, service, mock_vs_repo, mock_server_repo
+    ):
+        """A slash-prefixed scope rule grants exactly its named backend tool."""
+        mock_vs_repo.get.return_value = self._multi_backend_config()
+        mock_server_repo.get.side_effect = self._multi_backend_docs
+        context = {
+            "is_admin": False,
+            "accessible_servers": ["/github"],
+            "accessible_tools": {"/github": {"search"}},
+            "scopes": [],
+        }
+        tools = await service.resolve_tools("/virtual/dev", user_context=context)
+        assert [(tool.name, tool.backend_server_path) for tool in tools] == [("search", "/github")]
 
     @pytest.mark.asyncio
     async def test_resolve_tools_empty_allowlist_fails_closed(

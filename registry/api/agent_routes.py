@@ -2048,15 +2048,16 @@ async def pull_agent_card(
             detail="Pull card is only supported for A2A protocol agents",
         )
 
-    # 5. Fetch remote card
-    base_url = str(existing_agent.url).rstrip("/")
-    remote_card_raw, remote_card_url = await _fetch_remote_agent_card(base_url)
+    # In reverse-proxy mode `url` is the advertised gateway route. Fetch and
+    # compare against the registrant's backend, as the health checker does.
+    backend_url = existing_agent.proxy_pass_url or existing_agent.url
+    remote_card_raw, remote_card_url = await _fetch_remote_agent_card(str(backend_url).rstrip("/"))
 
-    # 6. Normalize camelCase keys to snake_case
     remote_card = _normalize_remote_card_keys(remote_card_raw)
-
-    # 7. Compute diff (A2A-spec fields only)
-    changes = _compute_card_diff(existing_agent, remote_card)
+    comparison_card = existing_agent
+    if existing_agent.proxy_pass_url:
+        comparison_card = existing_agent.model_copy(update={"url": str(backend_url)})
+    changes = _compute_card_diff(comparison_card, remote_card)
     has_changes = len(changes) > 0
 
     # S3: a change to the agent's URL could indicate a redirect/takeover, so log
@@ -2115,6 +2116,11 @@ async def pull_agent_card(
     applied = False
     if not dry_run and has_changes:
         updates.update(_build_safe_card_updates(changes))
+        if existing_agent.proxy_pass_url and "url" in updates:
+            # Pulling a changed backend URL must not publish it as the gateway
+            # URL. Validate before persisting it under the backend field.
+            validate_agent_url(str(updates["url"]))
+            updates["proxy_pass_url"] = updates.pop("url")
 
     # 9. Persist. In dry-run mode this is just the health side-effect; in apply
     #    mode it is health + A2A fields in one call.

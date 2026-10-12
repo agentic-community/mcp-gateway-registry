@@ -73,6 +73,15 @@ sanitizer that isn't called) is equivalent to no check.
   config; the application code must never supply it as a default.
 - **Example credentials in help text/docs must be unmistakably fake** (`YOUR_*`,
   `EXAMPLE_*`). Do not alter functional lookup keys that merely resemble IDs.
+- **An IdP setup hook must not rotate OAuth client secrets during an ordinary
+  upgrade.** Pods read Kubernetes Secrets only at startup; rotating a Keycloak
+  web-client secret after the auth-server rollout leaves live pods holding a
+  stale credential, so browser code exchange fails with HTTP 401 while direct
+  password-grant tests using the newly written Secret still pass. Read the
+  existing IdP credential and synchronize the Kubernetes Secret without
+  rotation; treat intentional rotation as a separate coordinated rollout.
+  Never print bootstrap passwords in Job logs or pass them on kubectl argv —
+  deliver Secret data through stdin instead.
 - **Never log secrets, tokens, PII, or full credential/claim payloads.** Redact
   before logging; log identifiers/counts, not values. Watch: request-header
   dumps, `updates`/body dicts that contain tokens, decoded id_token claims. This
@@ -389,6 +398,17 @@ sanitizer that isn't called) is equivalent to no check.
   byte-exact deny-list. Decode exactly once (a doubly-encoded `%252e` stays
   literal and fails closed), clamp traversal at root, and put the normalization
   inside the single shared entrypoint so every consumer benefits.
+- **A virtual MCP server must inherit each mapped backend tool's block state at
+  the execution boundary AND on discovery, including cached lists.** A mapping
+  file and a 60-second enriched-tools cache contain tool metadata, not the
+  backend's current `tool_overrides`. Checking only the direct MCP proxy allows
+  the virtual router to execute a tool an admin or scanner has blocked; hiding
+  it only from discovery still leaves `tools/call` exploitable. Bind the lookup
+  to the exact backend server path and original tool name, read the persisted
+  override for each request through an internal authenticated route, and deny
+  when the lookup or mapping identity is unavailable. Scope cached metadata by
+  backend location as well as original tool name: two backends can advertise
+  the same name without authorizing duplicate or cross-backend results.
 - **Attach a shared/global credential only on explicit opt-in.** Make the
   privileged code path default to not attaching it and gate its use behind an
   admin check.

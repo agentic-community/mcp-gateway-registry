@@ -94,6 +94,40 @@ class TestInternalSessionSecretGate:
 
 
 @pytest.mark.unit
+class TestVirtualBackendToolBlocks:
+    """A blocked virtual tool cannot bypass the backend's fresh override state."""
+
+    def test_public_route_cannot_read_tool_decisions(self, client) -> None:
+        response = client.get(
+            "/api/internal/sessions/tool-block",
+            params={"server_path": "/owned", "tool_name": "search"},
+        )
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_block_toggle_changes_next_decision_and_repository_failure_denies(
+        self, client, monkeypatch
+    ) -> None:
+        from unittest.mock import AsyncMock
+
+        import registry.repositories.factory as factory
+
+        repo = AsyncMock()
+        repo.get.return_value = {"path": "/owned"}
+        repo.get_blocked_tools.side_effect = [{"search"}, set(), RuntimeError("DB unavailable")]
+        monkeypatch.setattr(factory, "get_server_repository", lambda: repo)
+        params = {"server_path": "/owned", "tool_name": "search"}
+        headers = {"X-Internal-Secret": "test-internal-secret"}
+        first = client.get("/api/internal/sessions/tool-block", params=params, headers=headers)
+        second = client.get("/api/internal/sessions/tool-block", params=params, headers=headers)
+        unavailable = client.get(
+            "/api/internal/sessions/tool-block", params=params, headers=headers
+        )
+        assert (first.status_code, first.json()) == (200, {"blocked": True})
+        assert (second.status_code, second.json()) == (200, {"blocked": False})
+        assert unavailable.status_code == 503
+
+
+@pytest.mark.unit
 class TestOwnershipParamRequired:
     """The ownership-bound endpoints require user_id so the check cannot be
     silently skipped.

@@ -448,35 +448,31 @@ class VirtualServerService:
         errors = []
 
         for mapping in tool_mappings:
-            # Check backend server exists
             server_path = mapping.backend_server_path
             server_info = await self._server_repo.get(server_path)
-
             if not server_info:
                 errors.append(f"Backend server '{server_path}' does not exist")
                 continue
 
-            # Check tool exists in backend
-            tool_list = server_info.get("tool_list", [])
-            tool_names = [t.get("name", "") for t in tool_list]
+            selected = server_info
+            if mapping.backend_version:
+                version_id = f"{server_path}:{mapping.backend_version}"
+                selected = await self._server_repo.get(version_id)
+                if not selected:
+                    errors.append(
+                        f"Version '{mapping.backend_version}' not found "
+                        f"for backend server '{server_path}'"
+                    )
+                    continue
 
+            tool_list = selected.get("tool_list", [])
+            tool_names = [tool.get("name", "") for tool in tool_list]
             if mapping.tool_name not in tool_names:
                 errors.append(
                     f"Tool '{mapping.tool_name}' not found in backend "
                     f"server '{server_path}'. Available tools: "
                     f"{', '.join(tool_names[:10])}"
                 )
-
-            # Check version exists if pinned
-            if mapping.backend_version:
-                version_id = f"{server_path}:{mapping.backend_version}"
-                version_info = await self._server_repo.get(version_id)
-                if not version_info:
-                    errors.append(
-                        f"Version '{mapping.backend_version}' not found "
-                        f"for backend server '{server_path}'"
-                    )
-
         if errors:
             raise VirtualServerValidationError(
                 "Tool mapping validation failed:\n" + "\n".join(f"- {e}" for e in errors)
@@ -567,6 +563,7 @@ class VirtualServerService:
         # Cache the per-backend visible-tool-name set so filter_tools_for_user
         # runs once per fetched backend doc rather than once per mapping.
         allowed_names_cache: dict[str, set[str]] = {}
+        blocked_by_backend: dict[str, set[str]] = {}
 
         for mapping in config.tool_mappings:
             effective_name = _get_effective_tool_name(mapping)
@@ -625,6 +622,15 @@ class VirtualServerService:
                     mapping.tool_name,
                     server_path,
                 )
+                continue
+
+            # The alias is only a display name; overrides belong to the
+            # original tool on its own backend. Fail closed on read errors.
+            if server_path not in blocked_by_backend:
+                blocked_by_backend[server_path] = await self._server_repo.get_blocked_tools(
+                    server_path
+                )
+            if mapping.tool_name in blocked_by_backend[server_path]:
                 continue
 
             # Find tool in backend's tool list

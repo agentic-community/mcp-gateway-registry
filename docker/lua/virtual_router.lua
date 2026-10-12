@@ -496,6 +496,11 @@ local function _invalidate_backend_session(client_session_id, backend_location, 
 end
 
 
+-- A mapped tool without a valid backend identity cannot be safely displayed.
+-- The actual decision helper is defined later, before the router executes.
+local _backend_tool_is_blocked
+
+
 -- Collect unique backend locations from a mapping's tools array
 local function _collect_backend_locations(mapping)
     local locations = {}
@@ -525,6 +530,8 @@ local function _append_mapping_tools_for_backend(enriched_tools, mapping, backen
         if tool.backend_location == backend_location then
             enriched_tools[#enriched_tools + 1] = {
                 name = tool.name,
+                original_name = tool.original_name or tool.name,
+                backend_server_path = tool.backend_server_path,
                 description = tool.description or "",
                 inputSchema = _ensure_mcp_schema(tool.inputSchema),
                 required_scopes = tool.required_scopes,
@@ -777,11 +784,16 @@ local function _handle_tools_list(request_id, mapping, user_scopes_str, client_s
         return _jsonrpc_error(request_id, -32603, "Access denied: missing required server scopes")
     end
 
-    -- Build a set of allowed tools from the mapping (display_name -> mapping entry)
+    -- Each upstream can export a tool with the same original name. Only its
+    -- own mapping may contribute to this virtual server's discovery results.
     local allowed_tools = {}
     if mapping.tools then
         for _, tool in ipairs(mapping.tools) do
-            allowed_tools[tool.original_name or tool.name] = tool
+            local loc = tool.backend_location
+            if loc then
+                allowed_tools[loc] = allowed_tools[loc] or {}
+                allowed_tools[loc][tool.original_name or tool.name] = tool
+            end
         end
     end
 
@@ -835,7 +847,8 @@ local function _handle_tools_list(request_id, mapping, user_scopes_str, client_s
                     cacheable = false
                 end
                 for _, bt in ipairs(result.items) do
-                    local mapping_entry = allowed_tools[bt.name]
+                    local mapping_entry = allowed_tools[result.location]
+                        and allowed_tools[result.location][bt.name]
                     if mapping_entry then
                         -- Use the mapping's display name (alias) instead of original name
                         local display_name = mapping_entry.name
@@ -846,6 +859,8 @@ local function _handle_tools_list(request_id, mapping, user_scopes_str, client_s
                         end
                         enriched_tools[#enriched_tools + 1] = {
                             name = display_name,
+                            original_name = mapping_entry.original_name or mapping_entry.name,
+                            backend_server_path = mapping_entry.backend_server_path,
                             description = desc,
                             inputSchema = _ensure_mcp_schema(bt.inputSchema or bt.input_schema),
                             required_scopes = mapping_entry.required_scopes,
@@ -900,11 +915,12 @@ local function _handle_tools_list(request_id, mapping, user_scopes_str, client_s
             end
         end
     end
-
-    -- Scope filter: filter cached tools by user's scopes at request time
+    -- Discovery must not expose a backend tool blocked after enrichment was
+    -- cached. Read its override on every response; unknown state fails closed.
     local tools = setmetatable({}, empty_array_mt)
     for _, tool in ipairs(enriched_tools) do
-        if _has_scopes(user_scopes_str, tool.required_scopes) then
+        if _has_scopes(user_scopes_str, tool.required_scopes)
+            and _backend_tool_is_blocked(tool.backend_server_path, tool.original_name) == false then
             tools[#tools + 1] = {
                 name = tool.name,
                 description = tool.description or "",
@@ -1186,6 +1202,26 @@ local function _handle_initialize(request_id, server_id, params)
     }
     return _jsonrpc_result(request_id, result)
 end
+_backend_tool_is_blocked = function(server_path, tool_name)
+
+-- Check the persisted backend override on every call, never the cached mapping.
+-- This subrequest is gated by nginx `internal;` and the registry's shared secret.
+    if type(server_path) ~= "string" or server_path:sub(1, 1) ~= "/"
+        or type(tool_name) ~= "string" or tool_name == "" then
+        return nil
+    end
+    local uri = "/_internal/sessions/tool-block?server_path=" .. ngx.escape_uri(server_path)
+        .. "&tool_name=" .. ngx.escape_uri(tool_name)
+    local res = ngx.location.capture(uri, { method = ngx.HTTP_GET })
+    if not res or res.status ~= 200 then
+        return nil
+    end
+    local ok, body = pcall(cjson.decode, res.body or "")
+    if not ok or type(body) ~= "table" or type(body.blocked) ~= "boolean" then
+        return nil
+    end
+    return body.blocked
+end
 
 
 -- Handle tools/call method - proxy to the correct backend with session management
@@ -1236,6 +1272,26 @@ local function _handle_tools_call(request_id, mapping, params, user_scopes_str, 
     if not backend_location then
         ngx.status = 200
         ngx.say(_jsonrpc_error(request_id, -32603, "No backend location for tool: " .. tool_name))
+        return
+    end
+    -- The alias's scope entry and backend dispatch entry must describe the same
+    -- selected backend. Never authorize one location/path then dispatch another.
+    local mapped_version = type(mapped_tool.backend_version) == "string"
+        and mapped_tool.backend_version or ""
+    local dispatched_version = type(tool_info.backend_version) == "string"
+        and tool_info.backend_version or ""
+    if mapped_tool.backend_location ~= backend_location
+        or mapped_tool.backend_server_path ~= tool_info.backend_server_path
+        or (mapped_tool.original_name or tool_name) ~= original_name
+        or mapped_version ~= dispatched_version then
+        ngx.status = 200
+        ngx.say(_jsonrpc_error(request_id, -32603, "Inconsistent backend mapping for tool"))
+        return
+    end
+    local blocked = _backend_tool_is_blocked(tool_info.backend_server_path, original_name)
+    if blocked ~= false then
+        ngx.status = 200
+        ngx.say(_jsonrpc_error(request_id, -32603, "Access denied: backend tool blocked or unavailable"))
         return
     end
 

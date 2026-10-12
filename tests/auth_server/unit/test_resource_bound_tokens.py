@@ -214,11 +214,12 @@ class TestMintResourceBoundToken:
         assert response.status_code == 422  # Pydantic validation
 
     def test_resource_token_accepts_all_four_types(self, auth_env_vars):
-        for rtype, rid in [
-            ("server", "cloudflare-docs"),
-            ("virtual_server", "virtual/my-agg"),
-            ("agent", "code-reviewer"),
-            ("skill", "python-linter"),
+        for rtype, rid, expected in [
+            ("server", "cloudflare-docs", "cloudflare-docs"),
+            ("virtual_server", "virtual/my-agg", "virtual/my-agg"),
+            ("agent", "code-reviewer", "code-reviewer"),
+            ("skill", "python-linter", "skills/python-linter"),
+            ("skill", "/skills/python-linter", "skills/python-linter"),
         ]:
             response, secret = self._mint(
                 resource={"type": rtype, "id": rid},
@@ -233,7 +234,7 @@ class TestMintResourceBoundToken:
             )
             assert claims["token_kind"] == "resource"
             assert claims["resource_type"] == rtype
-            assert claims["resource_id"] == rid
+            assert claims["resource_id"] == expected
 
 
 class TestLegacyTokenWarningScoping:
