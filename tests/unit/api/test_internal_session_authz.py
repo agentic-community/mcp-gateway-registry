@@ -100,7 +100,7 @@ class TestVirtualBackendToolBlocks:
     def test_public_route_cannot_read_tool_decisions(self, client) -> None:
         response = client.get(
             "/api/internal/sessions/tool-block",
-            params={"server_path": "/owned", "tool_name": "search"},
+            params={"server_path": "/owned"},
         )
         assert response.status_code == status.HTTP_403_FORBIDDEN
 
@@ -113,17 +113,21 @@ class TestVirtualBackendToolBlocks:
 
         repo = AsyncMock()
         repo.get.return_value = {"path": "/owned"}
-        repo.get_blocked_tools.side_effect = [{"search"}, set(), RuntimeError("DB unavailable")]
+        repo.get_blocked_tools.side_effect = [
+            {"search", "docs"},
+            set(),
+            RuntimeError("DB unavailable"),
+        ]
         monkeypatch.setattr(factory, "get_server_repository", lambda: repo)
-        params = {"server_path": "/owned", "tool_name": "search"}
+        params = {"server_path": "/owned"}
         headers = {"X-Internal-Secret": "test-internal-secret"}
         first = client.get("/api/internal/sessions/tool-block", params=params, headers=headers)
         second = client.get("/api/internal/sessions/tool-block", params=params, headers=headers)
         unavailable = client.get(
             "/api/internal/sessions/tool-block", params=params, headers=headers
         )
-        assert (first.status_code, first.json()) == (200, {"blocked": True})
-        assert (second.status_code, second.json()) == (200, {"blocked": False})
+        assert (first.status_code, first.json()) == (200, {"blocked_tools": ["docs", "search"]})
+        assert (second.status_code, second.json()) == (200, {"blocked_tools": []})
         assert unavailable.status_code == 503
 
 

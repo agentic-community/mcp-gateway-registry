@@ -120,6 +120,27 @@ def _caller_has_required_scopes(
     return all(scope in user_scopes for scope in required_scopes)
 
 
+def _is_linked_inactive_version(
+    active: dict,
+    inactive: dict,
+    server_path: str,
+    version: str,
+) -> bool:
+    """Check that an inactive version belongs to this active registration."""
+    version_id = f"{server_path}:{version}"
+    return (
+        active.get("path") == server_path
+        and inactive.get("path") == version_id
+        and inactive.get("version") == version
+        and inactive.get("active_version_id") == server_path
+        and inactive.get("is_active") is False
+        and bool(active.get("version_group"))
+        and inactive.get("version_group") == active["version_group"]
+        and isinstance(active.get("other_version_ids"), list)
+        and version_id in active["other_version_ids"]
+    )
+
+
 class VirtualServerService:
     """Service for managing virtual MCP server configurations."""
 
@@ -450,23 +471,34 @@ class VirtualServerService:
         for mapping in tool_mappings:
             server_path = mapping.backend_server_path
             server_info = await self._server_repo.get(server_path)
-            if not server_info:
+            if not isinstance(server_info, dict) or not server_info:
                 errors.append(f"Backend server '{server_path}' does not exist")
                 continue
 
             selected = server_info
-            if mapping.backend_version:
+            if mapping.backend_version and mapping.backend_version != server_info.get("version"):
                 version_id = f"{server_path}:{mapping.backend_version}"
                 selected = await self._server_repo.get(version_id)
-                if not selected:
+                if not isinstance(selected, dict) or not _is_linked_inactive_version(
+                    server_info, selected, server_path, mapping.backend_version
+                ):
                     errors.append(
                         f"Version '{mapping.backend_version}' not found "
                         f"for backend server '{server_path}'"
                     )
                     continue
+                # Newly added inactive versions lack discovered tools. A present
+                # version list is authoritative, including an empty one.
+                if "tool_list" not in selected:
+                    selected = server_info
 
-            tool_list = selected.get("tool_list", [])
-            tool_names = [tool.get("name", "") for tool in tool_list]
+            tool_list = selected.get("tool_list")
+            if not isinstance(tool_list, list) or any(
+                not isinstance(tool, dict) for tool in tool_list
+            ):
+                errors.append(f"Invalid tool list for backend server '{server_path}'")
+                continue
+            tool_names = [tool["name"] for tool in tool_list if isinstance(tool.get("name"), str)]
             if mapping.tool_name not in tool_names:
                 errors.append(
                     f"Tool '{mapping.tool_name}' not found in backend "
@@ -568,22 +600,44 @@ class VirtualServerService:
         for mapping in config.tool_mappings:
             effective_name = _get_effective_tool_name(mapping)
 
-            # Get tool metadata from backend
-            server_path = mapping.backend_server_path
-
-            # If version is pinned, look up version-specific server doc
-            if mapping.backend_version:
-                doc_key = f"{server_path}:{mapping.backend_version}"
-                server_info = await self._server_repo.get(doc_key)
-            else:
-                doc_key = server_path
-                server_info = await self._server_repo.get(server_path)
-
-            if not server_info:
-                logger.warning(
-                    f"Backend server '{server_path}' not found, skipping tool '{mapping.tool_name}'"
-                )
+            # Resolve metadata from the selected version, but authorize and
+            # check blocks under the active server's canonical path.
+            requested_path = mapping.backend_server_path
+            requested = await self._server_repo.get(requested_path)
+            if not isinstance(requested, dict) or not requested:
                 continue
+            server_path = requested.get("active_version_id") or requested_path
+            active = (
+                await self._server_repo.get(server_path)
+                if server_path != requested_path
+                else requested
+            )
+            if not isinstance(active, dict) or not active:
+                continue
+            if server_path != requested_path:
+                version = requested.get("version")
+                if (
+                    not isinstance(version, str)
+                    or not _is_linked_inactive_version(active, requested, server_path, version)
+                    or mapping.backend_version
+                    and mapping.backend_version != version
+                ):
+                    continue
+
+            server_info = requested
+            doc_key = requested_path
+            if mapping.backend_version and server_path == requested_path:
+                if mapping.backend_version != active.get("version"):
+                    doc_key = f"{server_path}:{mapping.backend_version}"
+                    selected = await self._server_repo.get(doc_key)
+                    if not isinstance(selected, dict) or not _is_linked_inactive_version(
+                        active, selected, server_path, mapping.backend_version
+                    ):
+                        continue
+                    server_info = selected
+            if "tool_list" not in server_info and server_info is not active:
+                # Only linked inactive versions may borrow the active metadata.
+                server_info = active
 
             server_name = server_info.get("server_name", server_path)
 

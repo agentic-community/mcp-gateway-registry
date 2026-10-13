@@ -198,6 +198,18 @@ sanitizer that isn't called) is equivalent to no check.
   checked leaks that secret the first time a caller forgets. Pass the destination
   into the builder and have it withhold the decrypted secret (return only
   non-secret headers) when the destination is missing or fails validation.
+- **A public backend URL can still be an unsafe self-proxy.** An agent's
+  gateway-facing `url` identifies its nginx route, while `proxy_pass_url` is the
+  backend. A remote A2A card may echo that advertised route; Pull Card must treat
+  only a raw-path-equivalent echo on the advertised listener as no backend change,
+  not save it to `proxy_pass_url`. Reject aliases, child routes, and query variants
+  on the same gateway (including its alternate HTTP/HTTPS listener) before
+  preview or apply. Compare canonical URL host/default-port identities with
+  `normalize_url_identity`, and compare route paths after
+  `normalize_request_path` has decoded escapes, collapsed repeated slashes, and
+  resolved dot segments. Classify on a segment boundary; do not conflate an
+  unrelated host or nonstandard port with the gateway. Public-IP SSRF checks
+  alone cannot detect this loop. Preserve genuinely different backends.
 - **Never build or attach credentials for a target that fails validation.**
   Validate the URL before decrypting/attaching stored credentials, so a
   malicious registered URL cannot exfiltrate them.

@@ -53,14 +53,29 @@ data:
 
     # Function to get admin token
     get_admin_token() {
-        local response=$(curl -s -X POST "${KEYCLOAK_URL}/realms/master/protocol/openid-connect/token" \
-            -H "Content-Type: application/x-www-form-urlencoded" \
-            -d "username=${KEYCLOAK_ADMIN}" \
-            -d "password=${KEYCLOAK_ADMIN_PASSWORD}" \
-            -d "grant_type=password" \
-            -d "client_id=admin-cli")
+        local response token status=0
+        if ! command -v curl >/dev/null || ! command -v jq >/dev/null; then
+            echo "Keycloak setup requires curl and jq" >&2
+            exit 1
+        fi
 
-        echo "$response" | grep -o '"access_token":"[^"]*' | cut -d'"' -f4
+        response=$(printf '%s' "$KEYCLOAK_ADMIN_PASSWORD" | curl -s -f -X POST \
+            "${KEYCLOAK_URL}/realms/master/protocol/openid-connect/token" \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            --data-urlencode "username=${KEYCLOAK_ADMIN}" \
+            --data-urlencode 'password@-' \
+            -d "grant_type=password" \
+            -d "client_id=admin-cli") || status=$?
+        if [ "$status" -eq 22 ]; then
+            return 0
+        elif [ "$status" -ne 0 ]; then
+            echo "Keycloak admin token request failed (curl exit ${status})" >&2
+            exit 1
+        fi
+
+        if token=$(jq -er '.access_token | select(type == "string" and length > 0)' <<< "$response" 2>/dev/null); then
+            printf '%s\n' "$token"
+        fi
     }
 
     # Function to check if realm exists
@@ -163,6 +178,26 @@ data:
         fi
     }
 
+    # Empty output means no matching client; request or JSON failures are errors.
+    _lookup_client_id() {
+        local token=$1
+        local client_id=$2
+        local response
+
+        if ! response=$(curl -fs \
+            -H "Authorization: Bearer ${token}" \
+            "${KEYCLOAK_URL}/admin/realms/${REALM}/clients?clientId=${client_id}"); then
+            echo -e "${RED}Failed to look up client ${client_id}${NC}" >&2
+            return 1
+        fi
+        if ! jq -r --arg client_id "$client_id" \
+            'if type == "array" then [.[] | select(.clientId == $client_id) | .id | select(type == "string" and length > 0)][0] // empty else error("invalid client list") end' \
+            <<< "$response" 2>/dev/null; then
+            echo -e "${RED}Invalid client lookup response for ${client_id}${NC}" >&2
+            return 1
+        fi
+    }
+
     # Upsert a Keycloak client: create if missing, otherwise PUT the full
     # representation to apply any attribute changes (e.g. post.logout.redirect.uris)
     # to existing deployments.
@@ -171,10 +206,8 @@ data:
         local client_id=$2
         local client_json=$3
 
-        local existing_id=$(curl -s \
-            -H "Authorization: Bearer ${token}" \
-            "${KEYCLOAK_URL}/admin/realms/${REALM}/clients?clientId=${client_id}" \
-            | grep -o '"id":"[^"]*' | head -1 | cut -d'"' -f4)
+        local existing_id
+        existing_id=$(_lookup_client_id "$token" "$client_id") || return 1
 
         if [ -z "$existing_id" ]; then
             local status=$(curl -s -o /dev/null -w "%{http_code}" \
@@ -189,10 +222,7 @@ data:
                 # empty (e.g. a create race). Accepting 409 as success here would
                 # skip the PUT and silently drop the representation, which is the
                 # bug this function exists to prevent. Re-resolve and update.
-                existing_id=$(curl -s \
-                    -H "Authorization: Bearer ${token}" \
-                    "${KEYCLOAK_URL}/admin/realms/${REALM}/clients?clientId=${client_id}" \
-                    | grep -o '"id":"[^"]*' | head -1 | cut -d'"' -f4)
+                existing_id=$(_lookup_client_id "$token" "$client_id") || return 1
                 if [ -z "$existing_id" ]; then
                     echo -e "${RED}Client ${client_id} reported 409 but could not be resolved${NC}" >&2
                     return 1

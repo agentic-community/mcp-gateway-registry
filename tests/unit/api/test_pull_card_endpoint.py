@@ -148,6 +148,59 @@ class TestPullCardDryRun:
         assert response.json()["has_changes"] is False
         fetch.assert_awaited_once_with(backend.rstrip("/"))
 
+    @pytest.mark.parametrize("dry_run", [True, False])
+    @pytest.mark.parametrize(
+        "echo_url",
+        [
+            "https://gateway.example.com/agent/test-a2a-agent/",
+            "https://GATEWAY.example.com:443/agent/test-a2a-agent",
+        ],
+    )
+    def test_gateway_advertised_card_updates_metadata_without_repointing_backend(
+        self, test_client, dry_run, echo_url
+    ):
+        backend = "https://agent.example.com/"
+        gateway = "https://gateway.example.com/agent/test-a2a-agent/"
+        agent = _a2a_agent(url=gateway, proxy_pass_url=backend)
+        remote = {"url": echo_url, "version": "2.0.0"}
+
+        response, svc = _run(test_client, agent, remote, query=f"?dry_run={str(dry_run).lower()}")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["has_changes"] is True
+        assert body["applied"] is (not dry_run)
+        assert {change["field"] for change in body["changes"]} == {"version"}
+        assert body["remote_card"]["url"] == remote["url"]
+        updates = svc.update_agent.await_args.args[1]
+        assert updates["health_status"] == "healthy"
+        assert "url" not in updates
+        assert "proxy_pass_url" not in updates
+        assert (updates.get("version") == "2.0.0") is (not dry_run)
+
+    @pytest.mark.parametrize(
+        "replacement",
+        [
+            "https://other.example.com/",
+            "https://other.example.com/agent/test-a2a-agent/requests",
+            "https://gateway.example.com:9443/agent/test-a2a-agent/requests",
+            "http://gateway.example.com:9080/agent/test-a2a-agent/requests",
+            "https://gateway.example.com/agent/test-a2a-agent-2/",
+        ],
+    )
+    def test_proxied_preview_shows_legitimate_backend_change(self, test_client, replacement):
+        backend = "https://agent.example.com/"
+        gateway = "https://gateway.example.com/agent/test-a2a-agent/"
+        agent = _a2a_agent(url=gateway, proxy_pass_url=backend)
+
+        response, svc = _run(test_client, agent, {"url": replacement}, query="?dry_run=true")
+
+        assert response.status_code == 200
+        assert response.json()["changes"] == [
+            {"field": "url", "current_value": backend, "remote_value": replacement}
+        ]
+        assert "proxy_pass_url" not in svc.update_agent.await_args.args[1]
+
 
 class TestPullCardApply:
     def test_113_apply_updates_a2a_and_preserves_registry(self, test_client):
@@ -224,6 +277,43 @@ class TestPullCardApply:
         updates = svc.update_agent.await_args.args[1]
         assert updates["proxy_pass_url"] == replacement
         assert "url" not in updates
+
+    @pytest.mark.parametrize("dry_run", [True, False])
+    @pytest.mark.parametrize(
+        "malicious_url",
+        [
+            "https://GATEWAY.example.com:443/agent/test-a2a-agent/requests",
+            "https://gateway.example.com/agent/test-a2a-agent/?recursive=1",
+            "https://gateway.example.com/agent/test-a2a-agent%2Frequests",
+            "https://gateway.example.com/agent/%74est-a2a-agent/requests",
+            "https://gateway.example.com/agent/%74est-a2a-agent/",
+            "https://gateway.example.com./agent/test-a2a-agent/",
+            "http://gateway.example.com/agent/test-a2a-agent/",
+            "https://gateway.example.com/agent//test-a2a-agent/",
+            "https://gateway.example.com/agent/./test-a2a-agent/",
+            "https://gateway.example.com/agent/other/../test-a2a-agent/",
+            "https://gateway.example.com/agent/%2e/test-a2a-agent/",
+            "https://gateway.example.com/agent/%2Ftest-a2a-agent/",
+            "https://gateway.example.com/agent/test-a2a-agent//requests",
+            "https://gateway.example.com/agent/test-a2a-agent/%2e/requests",
+            "https://gateway.example.com/agent/test-a2a-agent/other/../requests",
+            "http://gateway.example.com/agent/other/../test-a2a-agent/requests",
+            "https://gateway.example.com/agent/test-a2a-agent//",
+        ],
+    )
+    def test_gateway_subroute_or_query_cannot_become_backend(
+        self, test_client, dry_run, malicious_url
+    ):
+        backend = "https://agent.example.com/"
+        gateway = "https://gateway.example.com/agent/test-a2a-agent/"
+        agent = _a2a_agent(url=gateway, proxy_pass_url=backend)
+        remote = {"url": malicious_url}
+
+        response, svc = _run(test_client, agent, remote, query=f"?dry_run={str(dry_run).lower()}")
+
+        assert response.status_code == 400
+        assert "gateway route" in response.json()["detail"]
+        svc.update_agent.assert_not_awaited()
 
 
 class TestPullCardGuards:

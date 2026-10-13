@@ -9852,6 +9852,74 @@
         ]
       }
     },
+    "/api/internal/sessions/tool-block": {
+      "get": {
+        "summary": "Get Backend Tool Block",
+        "description": "Return fresh blocked tool names for a registered backing server.\n\nThe caller groups virtual tools by their active server path. A missing\nserver or unreadable overrides fail closed, including on cache hits.",
+        "operationId": "get_backend_tool_block_api_internal_sessions_tool_block_get",
+        "parameters": [
+          {
+            "name": "server_path",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Server Path"
+            }
+          },
+          {
+            "name": "X-Internal-Secret",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Internal-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "title": "Response Get Backend Tool Block Api Internal Sessions Tool Block Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Bearer": []
+          }
+        ]
+      }
+    },
     "/api/internal/sessions/client": {
       "post": {
         "summary": "Create Client Session",

@@ -405,6 +405,8 @@ POST /api/servers/register
 
 The second call returns `is_new_version: true` to indicate a new version was added rather than a new server being created.
 
+An inactive version added by this path initially has no stored `tool_list`: normal health checks refresh only the active version. A virtual-server mapping pinned to such a version can use a tool name from the linked active server's list to validate the mapping, but that name is provisional; it does not prove the inactive backend implements the tool. A stored version-specific `tool_list`, including an empty list, takes precedence. Before promoting a version or relying on a pinned virtual tool, exercise `tools/list` and `tools/call` through the gateway with the selected version and confirm the backend's actual tool set. Calls still route to the selected backend and remain subject to the backing server's grant and active-path tool blocks.
+
 ---
 
 ## 8. Version Swap Operation
