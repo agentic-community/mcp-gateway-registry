@@ -7091,7 +7091,6 @@ class TestRegisteredProxyUrlMatches:
     @pytest.mark.parametrize(
         "url",
         [
-            "https://gw.example/jira",
             "https://gw.example/jiraX/mcp",
             "https://gw.example/other/mcp",
             "https://gw.example/jira/../other/mcp",
@@ -7103,6 +7102,37 @@ class TestRegisteredProxyUrlMatches:
 
         monkeypatch.setattr(server_module, "REGISTRY_ROOT_PATH", "")
         assert not server_module._registered_proxy_url_matches(url, "/jira", "direct")
+
+    def test_bare_registered_path_binds_for_a_root_endpoint_server(self, monkeypatch):
+        """The bare path binds, because nginx now serves it with `location =`.
+
+        A server registered with ``append_mcp_path: false`` serves MCP at its
+        path itself, and that bare path is what the gateway advertises as the
+        server's PRM resource and Connect URL. #1831 renders an exact-match
+        location for it, so /validate must authorize a URL with no trailing
+        slash; otherwise the request nginx now routes is refused with 403 and
+        the server stays unreachable at the URL it is advertised under.
+
+        The equality arm cannot reopen the #1501 prefix hijack: a sibling path
+        is neither equal to the registration nor prefixed by it plus a slash.
+        """
+        import auth_server.server as server_module
+
+        monkeypatch.setattr(server_module, "REGISTRY_ROOT_PATH", "")
+        assert server_module._registered_proxy_url_matches(
+            "https://gw.example/jira", "/jira", "direct"
+        )
+        # Still the routed forms, unchanged.
+        assert server_module._registered_proxy_url_matches(
+            "https://gw.example/jira/mcp", "/jira", "direct"
+        )
+        # Still not a sibling that merely shares the prefix.
+        for sibling in ("https://gw.example/jiraX", "https://gw.example/jira-other"):
+            assert not server_module._registered_proxy_url_matches(sibling, "/jira", "direct")
+        # A virtual backend is unaffected: it binds only its forced /mcp endpoint.
+        assert not server_module._registered_proxy_url_matches(
+            "https://gw.example/jira", "/jira", "virtual"
+        )
 
     def test_nested_registration_binds_only_its_own_subtree(self, monkeypatch):
         import auth_server.server as server_module

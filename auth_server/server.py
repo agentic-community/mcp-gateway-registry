@@ -742,7 +742,11 @@ def _registered_proxy_url_matches(
     base_path = f"{REGISTRY_ROOT_PATH.rstrip('/')}/{registered_path.strip('/')}"
     if route_mode == "virtual":
         return path == f"{base_path}/mcp"
-    return path.startswith(f"{base_path}/")
+    # A root-endpoint server (append_mcp_path=False) is served at its bare path by
+    # an exact-match location, so the authorized URL carries no trailing slash.
+    # Accepting the exact path cannot reopen the #1501 prefix hijack: a sibling
+    # like /jira-other is neither equal to /jira nor prefixed by /jira/.
+    return path == base_path or path.startswith(f"{base_path}/")
 
 
 # Header carrying the marker secret that ONLY current nginx templates (the shared
