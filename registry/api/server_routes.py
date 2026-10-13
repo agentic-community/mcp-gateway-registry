@@ -4602,6 +4602,21 @@ async def register_service_api(
         if external_tags_list:
             server_entry["external_tags"] = external_tags_list
 
+    # Normalize metadata before admission control so the gate evaluates what is stored.
+    if metadata:
+        try:
+            parsed_metadata = json.loads(metadata) if isinstance(metadata, str) else metadata
+            server_entry["metadata"] = _coerce_metadata_to_dict(parsed_metadata, path)
+        except json.JSONDecodeError:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": "Invalid metadata",
+                    "reason": "metadata must be valid JSON",
+                    "detail": "Provide metadata as a JSON string",
+                },
+            )
+
     # Registration gate check (admission control, issue #809)
     gate_result = await check_registration_gate(
         asset_type="server",
@@ -4644,20 +4659,6 @@ async def register_service_api(
             return JSONResponse(
                 status_code=500,
                 content={"error": "Failed to encrypt custom headers"},
-            )
-
-    if metadata:
-        try:
-            parsed_metadata = json.loads(metadata) if isinstance(metadata, str) else metadata
-            server_entry["metadata"] = _coerce_metadata_to_dict(parsed_metadata, path)
-        except json.JSONDecodeError:
-            return JSONResponse(
-                status_code=400,
-                content={
-                    "error": "Invalid metadata",
-                    "reason": "metadata must be valid JSON",
-                    "detail": "Provide metadata as a JSON string",
-                },
             )
 
     # Check if server exists and handle overwrite/version logic

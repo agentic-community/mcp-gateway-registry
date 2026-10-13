@@ -12,6 +12,7 @@ Tests the main server routes including:
 
 import json
 import logging
+from copy import deepcopy
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -20,6 +21,7 @@ from fastapi.templating import Jinja2Templates
 from fastapi.testclient import TestClient
 
 from registry.auth.internal import generate_internal_token
+from registry.schemas.registration_gate_models import RegistrationGateResult
 
 logger = logging.getLogger(__name__)
 
@@ -2966,6 +2968,117 @@ class TestServersRegisterAPIMetadata:
         assert response.status_code == 201
         assert self._stored(mock_server_service)["metadata"] == {}
         assert any("coerced to {}" in rec.message for rec in caplog.records)
+
+
+@pytest.mark.unit
+@pytest.mark.api
+@pytest.mark.servers
+class TestServersRegisterAPIGateMetadata:
+    """Admission control must see the metadata that registration will persist."""
+
+    _BASE_FORM = {
+        "name": "Gate Metadata Server",
+        "description": "Registration gate metadata test",
+        "path": "/gate-metadata-server",
+        "proxy_pass_url": "http://localhost:9000",
+    }
+
+    @pytest.mark.parametrize(
+        ("metadata", "expected"),
+        [
+            (None, {}),
+            ("", {}),
+            ("{}", {}),
+            ("null", {}),
+            ("[]", {}),
+            ("42", {}),
+            (
+                '{"team":"platform","deployment":{"environment":"staging"}}',
+                {"team": "platform", "deployment": {"environment": "staging"}},
+            ),
+        ],
+        ids=["omitted", "empty", "object", "null", "array", "scalar", "nested"],
+    )
+    def test_gate_receives_normalized_metadata_before_registration(
+        self,
+        test_client_admin,
+        mock_server_service,
+        metadata: str | None,
+        expected: dict[str, Any],
+    ):
+        observed_payloads = []
+
+        async def _check_gate(**kwargs):
+            # The route mutates this dict later; snapshot it at the gate call.
+            observed_payloads.append(deepcopy(kwargs["registration_payload"]))
+            return RegistrationGateResult(allowed=True)
+
+        form = dict(self._BASE_FORM)
+        if metadata is not None:
+            form["metadata"] = metadata
+        with patch(
+            "registry.api.server_routes.check_registration_gate",
+            side_effect=_check_gate,
+        ) as gate:
+            response = test_client_admin.post("/api/servers/register", data=form)
+
+        assert response.status_code == 201
+        gate.assert_awaited_once()
+        assert observed_payloads[0]["metadata"] == expected
+        assert mock_server_service.register_server.call_args.args[0]["metadata"] == expected
+
+    def test_invalid_metadata_is_rejected_before_gate_or_persistence(
+        self,
+        test_client_admin,
+        mock_server_service,
+    ):
+        with patch(
+            "registry.api.server_routes.check_registration_gate",
+            return_value=RegistrationGateResult(allowed=True),
+        ) as gate:
+            response = test_client_admin.post(
+                "/api/servers/register",
+                data={**self._BASE_FORM, "metadata": '{"team":'},
+            )
+
+        assert response.status_code == 400
+        assert response.json()["error"] == "Invalid metadata"
+        gate.assert_not_awaited()
+        mock_server_service.register_server.assert_not_awaited()
+        mock_server_service.update_server.assert_not_awaited()
+
+    @pytest.mark.parametrize("overwrite", [False, True], ids=["create", "overwrite"])
+    def test_metadata_gate_denial_prevents_persistence(
+        self,
+        test_client_admin,
+        mock_server_service,
+        overwrite: bool,
+    ):
+        if overwrite:
+            mock_server_service.get_server_info.return_value = {
+                "path": self._BASE_FORM["path"],
+                "registered_by": "admin",
+            }
+        observed_payloads = []
+
+        async def _deny_gate(**kwargs):
+            observed_payloads.append(deepcopy(kwargs["registration_payload"]))
+            return RegistrationGateResult(allowed=False, error_message="Team is not approved")
+
+        with patch(
+            "registry.api.server_routes.check_registration_gate",
+            side_effect=_deny_gate,
+        ) as gate:
+            response = test_client_admin.post(
+                "/api/servers/register",
+                data={**self._BASE_FORM, "metadata": '{"team":"unapproved"}'},
+            )
+
+        assert response.status_code == 403
+        gate.assert_awaited_once()
+        assert observed_payloads[0]["metadata"] == {"team": "unapproved"}
+        mock_server_service.register_server.assert_not_awaited()
+        mock_server_service.update_server.assert_not_awaited()
 
 
 # =============================================================================
