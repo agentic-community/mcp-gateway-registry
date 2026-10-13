@@ -441,27 +441,20 @@ Navigate to the registry based on your routing mode:
 
 ### With Keycloak
 
-The username/password are displayed in the output of the `keycloak-configure job`
+The configuration Job stores the initial login accounts in the `registry-login-credentials` Kubernetes Secret in the release namespace; it does not print passwords in Job logs. Retrieve only the credentials you need from a trusted terminal (replace `MYNAMESPACE` with the release namespace). Run each command separately so you can see lookup errors; these commands do not put passwords in your shell history:
 
 ```bash
-kubectl get pods -l job-name=setup-keycloak -n MYNAMESPACE
+set -o pipefail
+# Initial administrator account
+kubectl get secret registry-login-credentials -n MYNAMESPACE -o jsonpath='{.data.REGISTRY_ADMIN_NAME}' | base64 -d
+kubectl get secret registry-login-credentials -n MYNAMESPACE -o jsonpath='{.data.REGISTRY_ADMIN_PASSWORD}' | base64 -d
+
+# Initial test user account, if needed
+kubectl get secret registry-login-credentials -n MYNAMESPACE -o jsonpath='{.data.REGISTRY_USER_NAME}' | base64 -d
+kubectl get secret registry-login-credentials -n MYNAMESPACE -o jsonpath='{.data.REGISTRY_USER_PASSWORD}' | base64 -d
 ```
 
-The output will look similar to:
-
-```
-NAME                   READY   STATUS      RESTARTS   AGE
-setup-keycloak-d6g2r   0/1     Completed   0          29m
-setup-keycloak-nnqgj   0/1     Error       0          31m
-```
-
-Use the pod name that completed successfully:
-
-```
-kubectl logs -n MYNAMESPACE setup-keycloak-d6g2r --tail 20
-```
-
-You will see the credentials in the output
+The Secret keys are `REGISTRY_ADMIN_NAME`, `REGISTRY_ADMIN_PASSWORD`, `REGISTRY_USER_NAME`, and `REGISTRY_USER_PASSWORD`. The commands display decoded values on your terminal; avoid running them in shared logs, recorded sessions, or CI output. Do not use `kubectl logs` to look for credentials.
 
 ### With Entra ID:
 

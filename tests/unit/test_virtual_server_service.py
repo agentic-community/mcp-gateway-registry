@@ -188,13 +188,8 @@ class TestVirtualServerServiceValidation:
         # First call: server exists
         # Second call: version doc doesn't exist
         mock_server_repo.get.side_effect = [
-            {
-                "server_name": "GitHub",
-                "tool_list": [
-                    {"name": "search", "description": "Search"},
-                ],
-            },
-            None,  # Version doc not found
+            {"path": "/github", "server_name": "GitHub", "tool_list": [{"name": "search"}]},
+            None,
         ]
 
         mappings = [
@@ -213,8 +208,20 @@ class TestVirtualServerServiceValidation:
     ):
         """A version-only tool can be mapped even when the active backend lacks it."""
         mock_server_repo.get.side_effect = [
-            {"tool_list": [{"name": "active_only"}]},
-            {"tool_list": [{"name": "pinned_only"}]},
+            {
+                "path": "/github",
+                "version_group": "github",
+                "other_version_ids": ["/github:v2"],
+                "tool_list": [{"name": "active_only"}],
+            },
+            {
+                "path": "/github:v2",
+                "version": "v2",
+                "version_group": "github",
+                "active_version_id": "/github",
+                "is_active": False,
+                "tool_list": [{"name": "pinned_only"}],
+            },
         ]
         mock_vs_repo.create.side_effect = lambda config: config
         request = CreateVirtualServerRequest(
@@ -236,13 +243,247 @@ class TestVirtualServerServiceValidation:
         assert created.tool_mappings[0].backend_version == "v2"
 
     @pytest.mark.asyncio
+    async def test_new_inactive_version_without_tools_allows_known_mapping_on_create_and_enable(
+        self, service, mock_vs_repo, mock_server_repo
+    ):
+        """A newly registered inactive version inherits only known base tool names."""
+        docs = {
+            "/github": {
+                "path": "/github",
+                "version": "v1",
+                "version_group": "github",
+                "other_version_ids": ["/github:v2"],
+                "tool_list": [{"name": "search"}],
+            },
+            "/github:v2": {
+                "path": "/github:v2",
+                "version": "v2",
+                "version_group": "github",
+                "active_version_id": "/github",
+                "is_active": False,
+            },
+        }
+        mock_server_repo.get.side_effect = docs.get
+        mock_vs_repo.create.side_effect = lambda config: config
+        request = CreateVirtualServerRequest(
+            server_name="Pinned",
+            tool_mappings=[
+                ToolMapping(tool_name="search", backend_server_path="/github", backend_version="v2")
+            ],
+        )
+        with (
+            patch.object(service, "_trigger_nginx_reload", new_callable=AsyncMock),
+            patch.object(service, "_index_for_search", new_callable=AsyncMock),
+        ):
+            created = await service.create_virtual_server(request, created_by="admin")
+            mock_vs_repo.get.return_value = created
+            mock_vs_repo.set_state.return_value = True
+            enabled = await service.toggle_virtual_server(created.path, True)
+
+        assert enabled is True
+        mock_vs_repo.set_state.assert_called_once_with(created.path, True)
+
+    @pytest.mark.asyncio
+    async def test_active_version_pin_uses_current_tool_list_on_create_and_enable(
+        self, service, mock_vs_repo, mock_server_repo
+    ):
+        """The catalog offers the current label even though it has no inactive doc."""
+        mock_server_repo.get.side_effect = {
+            "/github": {
+                "path": "/github",
+                "version": "v2",
+                "tool_list": [{"name": "search"}],
+                "other_version_ids": ["/github:v1"],
+            },
+        }.get
+        mock_vs_repo.create.side_effect = lambda config: config
+        request = CreateVirtualServerRequest(
+            server_name="Pinned active",
+            tool_mappings=[
+                ToolMapping(tool_name="search", backend_server_path="/github", backend_version="v2")
+            ],
+        )
+        with (
+            patch.object(service, "_trigger_nginx_reload", new_callable=AsyncMock),
+            patch.object(service, "_index_for_search", new_callable=AsyncMock),
+        ):
+            created = await service.create_virtual_server(request, created_by="admin")
+            mock_vs_repo.get.return_value = created
+            mock_vs_repo.set_state.return_value = True
+            enabled = await service.toggle_virtual_server(created.path, True)
+
+        assert enabled is True
+        assert mock_server_repo.get.await_args_list[-1].args == ("/github",)
+        mock_vs_repo.set_state.assert_called_once_with(created.path, True)
+
+    @pytest.mark.asyncio
+    async def test_new_inactive_version_rejects_tool_not_known_on_base(
+        self, service, mock_server_repo
+    ):
+        """Missing version metadata is not a wildcard permission for arbitrary tools."""
+        mock_server_repo.get.side_effect = [
+            {
+                "path": "/github",
+                "version_group": "github",
+                "other_version_ids": ["/github:v2"],
+                "tool_list": [{"name": "search"}],
+            },
+            {
+                "path": "/github:v2",
+                "version": "v2",
+                "version_group": "github",
+                "active_version_id": "/github",
+                "is_active": False,
+            },
+        ]
+        with pytest.raises(VirtualServerValidationError, match="unknown.*not found"):
+            await service._validate_tool_mappings(
+                [
+                    ToolMapping(
+                        tool_name="unknown", backend_server_path="/github", backend_version="v2"
+                    )
+                ]
+            )
+
+    @pytest.mark.asyncio
+    async def test_explicit_version_tool_list_rejects_base_tool(self, service, mock_server_repo):
+        """Once a version advertises tools, absent base-only tools cannot be pinned."""
+        docs = {
+            "/github": {
+                "path": "/github",
+                "version_group": "github",
+                "other_version_ids": ["/github:v2"],
+                "tool_list": [{"name": "search"}],
+            },
+            "/github:v2": {
+                "path": "/github:v2",
+                "version": "v2",
+                "version_group": "github",
+                "active_version_id": "/github",
+                "is_active": False,
+                "tool_list": [{"name": "create_issue"}],
+            },
+        }
+        mock_server_repo.get.side_effect = docs.get
+        with pytest.raises(VirtualServerValidationError, match="search.*not found"):
+            await service._validate_tool_mappings(
+                [
+                    ToolMapping(
+                        tool_name="search", backend_server_path="/github", backend_version="v2"
+                    )
+                ]
+            )
+
+    @pytest.mark.asyncio
+    async def test_explicit_empty_version_tool_list_rejects_base_tool(
+        self, service, mock_server_repo
+    ):
+        """A present empty list overrides the base tool list rather than inheriting it."""
+        mock_server_repo.get.side_effect = [
+            {
+                "path": "/github",
+                "version_group": "github",
+                "other_version_ids": ["/github:v2"],
+                "tool_list": [{"name": "search"}],
+            },
+            {
+                "path": "/github:v2",
+                "version": "v2",
+                "version_group": "github",
+                "active_version_id": "/github",
+                "is_active": False,
+                "tool_list": [],
+            },
+        ]
+        with pytest.raises(VirtualServerValidationError, match="search.*not found"):
+            await service._validate_tool_mappings(
+                [
+                    ToolMapping(
+                        tool_name="search", backend_server_path="/github", backend_version="v2"
+                    )
+                ]
+            )
+
+    @pytest.mark.asyncio
+    async def test_present_malformed_version_tool_list_does_not_fall_back(
+        self, service, mock_server_repo
+    ):
+        """Malformed stored metadata never authorizes a base tool by omission."""
+        docs = {
+            "/github": {
+                "path": "/github",
+                "version_group": "github",
+                "other_version_ids": ["/github:v2"],
+                "tool_list": [{"name": "search"}],
+            },
+            "/github:v2": {
+                "path": "/github:v2",
+                "version": "v2",
+                "version_group": "github",
+                "active_version_id": "/github",
+                "is_active": False,
+                "tool_list": None,
+            },
+        }
+        mock_server_repo.get.side_effect = docs.get
+        with pytest.raises(VirtualServerValidationError, match="Invalid tool list"):
+            await service._validate_tool_mappings(
+                [
+                    ToolMapping(
+                        tool_name="search", backend_server_path="/github", backend_version="v2"
+                    )
+                ]
+            )
+
+    @pytest.mark.asyncio
+    async def test_unrelated_version_document_does_not_inherit_base_tools(
+        self, service, mock_server_repo
+    ):
+        """Only a linked inactive version may use a missing-list fallback."""
+        mock_server_repo.get.side_effect = [
+            {
+                "path": "/github",
+                "version_group": "github",
+                "other_version_ids": ["/github:v2"],
+                "tool_list": [{"name": "search"}],
+            },
+            {
+                "path": "/github:v2",
+                "version": "v2",
+                "version_group": "foreign",
+                "active_version_id": "/elsewhere",
+                "is_active": False,
+            },
+        ]
+        with pytest.raises(VirtualServerValidationError, match="Version 'v2' not found"):
+            await service._validate_tool_mappings(
+                [
+                    ToolMapping(
+                        tool_name="search", backend_server_path="/github", backend_version="v2"
+                    )
+                ]
+            )
+
+    @pytest.mark.asyncio
     async def test_validate_pinned_mapping_rejects_tool_only_on_active_version(
         self, service, mock_server_repo
     ):
         """An active-version tool cannot be routed to a version lacking it."""
         mock_server_repo.get.side_effect = [
-            {"tool_list": [{"name": "active_only"}]},
-            {"tool_list": [{"name": "pinned_only"}]},
+            {
+                "path": "/github",
+                "version_group": "github",
+                "other_version_ids": ["/github:v2"],
+                "tool_list": [{"name": "active_only"}],
+            },
+            {
+                "path": "/github:v2",
+                "version": "v2",
+                "version_group": "github",
+                "active_version_id": "/github",
+                "is_active": False,
+                "tool_list": [{"name": "pinned_only"}],
+            },
         ]
 
         with pytest.raises(VirtualServerValidationError, match="active_only.*not found"):
@@ -693,6 +934,171 @@ class TestToolResolution:
 
         assert len(tools) == 1
         assert tools[0].description == "Custom description"
+
+    @pytest.mark.asyncio
+    async def test_resolve_pinned_new_version_uses_linked_base_metadata_with_access_checks(
+        self, service, mock_vs_repo, mock_server_repo
+    ):
+        """Discovery of an unscanned pinned version uses linked base metadata, not broad access."""
+        mock_vs_repo.get.return_value = VirtualServerConfig(
+            path="/virtual/pinned",
+            server_name="Pinned",
+            tool_mappings=[
+                ToolMapping(
+                    tool_name="search",
+                    alias="repo_search",
+                    backend_server_path="/github",
+                    backend_version="v2",
+                )
+            ],
+        )
+        docs = {
+            "/github": {
+                "path": "/github",
+                "server_name": "GitHub",
+                "version_group": "github",
+                "other_version_ids": ["/github:v2"],
+                "tool_list": [
+                    {
+                        "name": "search",
+                        "description": "Search repos",
+                        "inputSchema": {"type": "object"},
+                    }
+                ],
+            },
+            "/github:v2": {
+                "path": "/github:v2",
+                "version": "v2",
+                "version_group": "github",
+                "active_version_id": "/github",
+                "is_active": False,
+            },
+        }
+        mock_server_repo.get.side_effect = docs.get
+        mock_server_repo.get_blocked_tools.return_value = {"search"}
+        context = {
+            "is_admin": False,
+            "accessible_servers": ["/github"],
+            "accessible_tools": {"/github": {"search"}},
+            "scopes": [],
+        }
+
+        found = await service.resolve_tools("/virtual/pinned", user_context=context)
+        assert found == []
+        mock_server_repo.get_blocked_tools.return_value = set()
+        found = await service.resolve_tools("/virtual/pinned", user_context=context)
+        assert [(tool.name, tool.description, tool.backend_version) for tool in found] == [
+            ("repo_search", "Search repos", "v2")
+        ]
+        context["accessible_tools"] = {}
+        denied = await service.resolve_tools("/virtual/pinned", user_context=context)
+        assert denied == []
+        mock_server_repo.get_blocked_tools.assert_called_with("/github")
+
+    @pytest.mark.asyncio
+    async def test_resolve_pinned_explicit_tool_list_does_not_inherit_base(
+        self, service, mock_vs_repo, mock_server_repo
+    ):
+        """Explicit pinned metadata excluding a base tool hides that tool."""
+        mock_vs_repo.get.return_value = VirtualServerConfig(
+            path="/virtual/pinned",
+            server_name="Pinned",
+            tool_mappings=[
+                ToolMapping(tool_name="search", backend_server_path="/github", backend_version="v2")
+            ],
+        )
+        mock_server_repo.get.return_value = {
+            "path": "/github:v2",
+            "server_name": "GitHub",
+            "tool_list": [],
+        }
+        assert await service.resolve_tools("/virtual/pinned", user_context={"is_admin": True}) == []
+
+    @pytest.mark.asyncio
+    async def test_version_id_path_uses_active_server_grant_and_block(
+        self, service, mock_vs_repo, mock_server_repo
+    ):
+        """REST virtual discovery must agree with Lua's active backend block key."""
+        mock_vs_repo.get.return_value = VirtualServerConfig(
+            path="/virtual/pinned",
+            server_name="Pinned",
+            tool_mappings=[ToolMapping(tool_name="search", backend_server_path="/github:v1")],
+        )
+        docs = {
+            "/github": {
+                "path": "/github",
+                "server_name": "GitHub",
+                "version_group": "github",
+                "other_version_ids": ["/github:v1"],
+                "tool_list": [{"name": "search", "description": "Active"}],
+            },
+            "/github:v1": {
+                "path": "/github:v1",
+                "server_name": "GitHub",
+                "version": "v1",
+                "version_group": "github",
+                "active_version_id": "/github",
+                "is_active": False,
+                "tool_list": [{"name": "search", "description": "Pinned"}],
+            },
+        }
+        mock_server_repo.get.side_effect = docs.get
+        mock_server_repo.get_blocked_tools.side_effect = lambda path: (
+            {"search"} if path == "/github" else set()
+        )
+        context = {
+            "is_admin": False,
+            "accessible_servers": ["/github"],
+            "accessible_tools": {"/github": {"search"}},
+            "scopes": [],
+        }
+
+        assert await service.resolve_tools("/virtual/pinned", user_context=context) == []
+        mock_server_repo.get_blocked_tools.assert_awaited_once_with("/github")
+        mock_server_repo.get_blocked_tools.side_effect = lambda path: set()
+        visible = await service.resolve_tools("/virtual/pinned", user_context=context)
+        assert [(tool.name, tool.description) for tool in visible] == [("search", "Pinned")]
+
+        mock_vs_repo.get.return_value.tool_mappings = [
+            ToolMapping(tool_name="search", backend_server_path="/github:v1", backend_version="v1")
+        ]
+        mock_server_repo.get_blocked_tools.side_effect = lambda path: (
+            {"search"} if path == "/github" else set()
+        )
+        assert await service.resolve_tools("/virtual/pinned", user_context=context) == []
+        mock_server_repo.get_blocked_tools.assert_awaited_with("/github")
+
+    @pytest.mark.asyncio
+    async def test_resolve_pinned_unrelated_version_without_tools_stays_hidden(
+        self, service, mock_vs_repo, mock_server_repo
+    ):
+        """A forged or stale version document cannot borrow another server's metadata."""
+        mock_vs_repo.get.return_value = VirtualServerConfig(
+            path="/virtual/pinned",
+            server_name="Pinned",
+            tool_mappings=[
+                ToolMapping(tool_name="search", backend_server_path="/github", backend_version="v2")
+            ],
+        )
+        docs = {
+            "/github": {
+                "path": "/github",
+                "server_name": "GitHub",
+                "version_group": "github",
+                "other_version_ids": ["/github:v2"],
+                "tool_list": [{"name": "search", "description": "Private metadata"}],
+            },
+            "/github:v2": {
+                "path": "/github:v2",
+                "version": "v2",
+                "version_group": "github",
+                "active_version_id": "/other-server",
+                "is_active": False,
+            },
+        }
+        mock_server_repo.get.side_effect = docs.get
+        assert await service.resolve_tools("/virtual/pinned", user_context={"is_admin": True}) == []
+        mock_server_repo.get_blocked_tools.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_resolve_tools_not_found(self, service, mock_vs_repo):

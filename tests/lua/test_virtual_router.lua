@@ -49,45 +49,38 @@ local dict = _new_dict()
 -- Programmable ngx.location.capture responses, keyed by backend location.
 local capture_responses = {}
 local capture_handler = nil
+local block_requests = 0
 local block_responses = {
-    ["/_internal/sessions/tool-block?server_path=%2Fok&tool_name=live_tool"] =
-        { status = 200, body = '{"blocked":false}' },
-    ["/_internal/sessions/tool-block?server_path=%2Fdown&tool_name=down_tool"] =
-        { status = 200, body = '{"blocked":false}' },
-    ["/_internal/sessions/tool-block?server_path=%2Fone&tool_name=regions"] =
-        { status = 200, body = '{"blocked":false}' },
-    ["/_internal/sessions/tool-block?server_path=%2Ftwo&tool_name=docs"] =
-        { status = 200, body = '{"blocked":false}' },
-    ["/_internal/sessions/tool-block?server_path=%2Fok&tool_name=no_arg"] =
-        { status = 200, body = '{"blocked":false}' },
-    ["/_internal/sessions/tool-block?server_path=%2Fok&tool_name=one_arg"] =
-        { status = 200, body = '{"blocked":false}' },
-    ["/_internal/sessions/tool-block?server_path=%2Fok&tool_name=odd"] =
-        { status = 200, body = '{"blocked":false}' },
-    ["/_internal/sessions/tool-block?server_path=%2Falias&tool_name=underlying"] =
-        { status = 200, body = '{"blocked":false}' },
-    ["/_internal/sessions/tool-block?server_path=%2Fgithub%3Av2&tool_name=underlying"] =
-        { status = 200, body = '{"blocked":false}' },
-    ["/_internal/sessions/tool-block?server_path=%2Fgithub&tool_name=get_me"] =
-        { status = 200, body = '{"blocked":false}' },
-    ["/_internal/sessions/tool-block?server_path=%2Fpersonal&tool_name=underlying"] =
-        { status = 200, body = '{"blocked":false}' },
-    ["/_internal/sessions/tool-block?server_path=%2Fplain&tool_name=underlying"] =
-        { status = 200, body = '{"blocked":false}' },
-    ["/_internal/sessions/tool-block?server_path=%2Fpat&tool_name=pat_tool"] =
-        { status = 200, body = '{"blocked":false}' },
-    ["/_internal/sessions/tool-block?server_path=%2Fhealthy&tool_name=public_tool"] =
-        { status = 200, body = '{"blocked":false}' },
-    ["/_internal/sessions/tool-block?server_path=%2Frpc_error&tool_name=actual"] =
-        { status = 200, body = '{"blocked":false}' },
-    ["/_internal/sessions/tool-block?server_path=%2Foauth&tool_name=upstream"] =
-        { status = 200, body = '{"blocked":false}' },
-    ["/_internal/sessions/tool-block?server_path=%2Foutage_egress&tool_name=brokered"] =
-        { status = 200, body = '{"blocked":false}' },
-    ["/_internal/sessions/tool-block?server_path=%2Foutage_plain&tool_name=healthy"] =
-        { status = 200, body = '{"blocked":false}' },
-    ["/_internal/sessions/tool-block?server_path=%2Ffine&tool_name=healthy"] =
-        { status = 200, body = '{"blocked":false}' },
+    ["/_internal/sessions/tool-block?server_path=%2Fok"] =
+        { status = 200, body = '{"blocked_tools":[]}' },
+    ["/_internal/sessions/tool-block?server_path=%2Fdown"] =
+        { status = 200, body = '{"blocked_tools":[]}' },
+    ["/_internal/sessions/tool-block?server_path=%2Fone"] =
+        { status = 200, body = '{"blocked_tools":[]}' },
+    ["/_internal/sessions/tool-block?server_path=%2Ftwo"] =
+        { status = 200, body = '{"blocked_tools":[]}' },
+    ["/_internal/sessions/tool-block?server_path=%2Falias"] =
+        { status = 200, body = '{"blocked_tools":[]}' },
+    ["/_internal/sessions/tool-block?server_path=%2Fgithub"] =
+        { status = 200, body = '{"blocked_tools":[]}' },
+    ["/_internal/sessions/tool-block?server_path=%2Fpersonal"] =
+        { status = 200, body = '{"blocked_tools":[]}' },
+    ["/_internal/sessions/tool-block?server_path=%2Fplain"] =
+        { status = 200, body = '{"blocked_tools":[]}' },
+    ["/_internal/sessions/tool-block?server_path=%2Fpat"] =
+        { status = 200, body = '{"blocked_tools":[]}' },
+    ["/_internal/sessions/tool-block?server_path=%2Fhealthy"] =
+        { status = 200, body = '{"blocked_tools":[]}' },
+    ["/_internal/sessions/tool-block?server_path=%2Frpc_error"] =
+        { status = 200, body = '{"blocked_tools":[]}' },
+    ["/_internal/sessions/tool-block?server_path=%2Foauth"] =
+        { status = 200, body = '{"blocked_tools":[]}' },
+    ["/_internal/sessions/tool-block?server_path=%2Foutage_egress"] =
+        { status = 200, body = '{"blocked_tools":[]}' },
+    ["/_internal/sessions/tool-block?server_path=%2Foutage_plain"] =
+        { status = 200, body = '{"blocked_tools":[]}' },
+    ["/_internal/sessions/tool-block?server_path=%2Ffine"] =
+        { status = 200, body = '{"blocked_tools":[]}' },
 }
 
 _G.ngx = {
@@ -95,6 +88,7 @@ _G.ngx = {
     location = {
         capture = function(loc, opts)
             if loc:find("/_internal/sessions/tool-block?", 1, true) == 1 then
+                block_requests = block_requests + 1
                 return block_responses[loc] or { status = 404, body = "" }
             end
             if capture_handler then
@@ -310,24 +304,51 @@ do
     dict._store["tools_enriched::block-change:5:alice"] = nil
     local mapping = { tools = {
         { name = "docs_alias", original_name = "docs", backend_location = "/_vs_backend_backend-two.3av2",
-          backend_server_path = "/backend-two:v2", backend_version = "v2" },
+          backend_server_path = "/backend-two:v2", block_server_path = "/backend-two",
+          backend_version = "v2" },
     } }
     capture_responses["/_vs_backend_backend-two.3av2"] = { status = 200, body = cjson.encode({ result = { tools = {
         { name = "docs" },
     } } }) }
-    local uri = "/_internal/sessions/tool-block?server_path=%2Fbackend-two%3Av2&tool_name=docs"
-    block_responses[uri] = { status = 200, body = '{"blocked":false}' }
+    local uri = "/_internal/sessions/tool-block?server_path=%2Fbackend-two"
+    block_responses[uri] = { status = 200, body = '{"blocked_tools":[]}' }
     local before = cjson.decode(M._handle_tools_list(1, mapping, "", nil, "block-change"))
     check(#before.result.tools == 1, "tool is visible while unblocked")
     check(dict._store["tools_enriched::block-change:5:alice"] ~= nil, "metadata is cached")
     capture_responses["/_vs_backend_backend-two.3av2"] = { status = 503, body = "" }
-    block_responses[uri] = { status = 200, body = '{"blocked":true}' }
+    block_responses[uri] = { status = 200, body = '{"blocked_tools":["docs"]}' }
     local after = cjson.decode(M._handle_tools_list(2, mapping, "", nil, "block-change"))
-    check(#after.result.tools == 0, "cached tool is hidden after block")
+    check(#after.result.tools == 0, "cached pinned tool is hidden after base-server block")
     block_responses[uri] = { status = 503, body = "" }
     local failed = cjson.decode(M._handle_tools_list(3, mapping, "", nil, "block-change"))
-    check(#failed.result.tools == 0, "unreadable block state hides cached tool")
+    check(failed.error and failed.error.code == -32603, "unreadable block state is an explicit error")
     block_responses[uri] = nil
+end
+
+-- Two aliases on one backend incur one fresh block read per listing, even on
+-- cache hits; the blocked original name is removed without hiding its sibling.
+print("test: tools/list batches block checks by backing server")
+do
+    local uri = "/_internal/sessions/tool-block?server_path=%2Fok"
+    local mapping = { tools = {
+        { name = "first", original_name = "no_arg", backend_location = "/_vs_backend_ok",
+          backend_server_path = "/ok" },
+        { name = "second", original_name = "one_arg", backend_location = "/_vs_backend_ok",
+          backend_server_path = "/ok" },
+    } }
+    dict._store["tools_enriched::two-aliases:5:alice"] = nil
+    capture_responses["/_vs_backend_ok"] = { status = 200, body = cjson.encode({ result = { tools = {
+        { name = "no_arg" }, { name = "one_arg" },
+    } } }) }
+    block_requests = 0
+    local before = cjson.decode(M._handle_tools_list(1, mapping, "", nil, "two-aliases"))
+    check(#before.result.tools == 2 and block_requests == 1,
+        "two visible aliases require only one fresh block read")
+    block_responses[uri] = { status = 200, body = '{"blocked_tools":["one_arg"]}' }
+    local after = cjson.decode(M._handle_tools_list(2, mapping, "", nil, "two-aliases"))
+    check(#after.result.tools == 1 and after.result.tools[1].name == "first"
+        and block_requests == 2, "cached metadata rechecks one server and hides only blocked alias")
+    block_responses[uri] = { status = 200, body = '{"blocked_tools":[]}' }
 end
 
 -- A backend override is read at execution time. Stale/missing block state
@@ -336,19 +357,20 @@ print("test: tools/call rejects blocked or unreadable backend tool state")
 do
     local mapping = { tools = { { name = "docs_alias", original_name = "docs",
         backend_location = "/_vs_backend_backend-two.3av2", backend_server_path = "/backend-two:v2",
-        backend_version = "v2", required_scopes = {} } },
+        block_server_path = "/backend-two", backend_version = "v2", required_scopes = {} } },
         tool_backend_map = { docs_alias = {
             original_name = "docs", backend_location = "/_vs_backend_backend-two.3av2",
-            backend_server_path = "/backend-two:v2", backend_version = "v2",
+            backend_server_path = "/backend-two:v2", block_server_path = "/backend-two",
+            backend_version = "v2",
         } } }
-    local block_uri = "/_internal/sessions/tool-block?server_path=%2Fbackend-two%3Av2&tool_name=docs"
-    block_responses[block_uri] = { status = 200, body = '{"blocked":true}' }
+    local block_uri = "/_internal/sessions/tool-block?server_path=%2Fbackend-two"
+    block_responses[block_uri] = { status = 200, body = '{"blocked_tools":["docs"]}' }
     ngx._reply = nil
     M._handle_tools_call(1, mapping, { name = "docs_alias", arguments = {} }, "", nil, "overlap")
     local blocked = cjson.decode(ngx._reply)
     check(blocked.error and blocked.error.code == -32603
         and blocked.error.message == "Access denied: backend tool blocked or unavailable",
-        "blocked original tool denied by canonical versioned path")
+        "blocked original tool denied by canonical base path")
     block_responses[block_uri] = { status = 503, body = "" }
     ngx._reply = nil
     M._handle_tools_call(2, mapping, { name = "docs_alias", arguments = {} }, "", nil, "overlap")
@@ -359,7 +381,8 @@ do
     block_responses[block_uri] = nil
     local wrong = { tools = { mapping.tools[1] }, tool_backend_map = { docs_alias = {
         original_name = "docs", backend_location = "/_vs_backend_other",
-        backend_server_path = "/backend-two:v2", backend_version = "v2",
+        backend_server_path = "/backend-two:v2", block_server_path = "/backend-two",
+        backend_version = "v2",
     } } }
     ngx._reply = nil
     M._handle_tools_call(3, wrong, { name = "docs_alias" }, "", nil, "overlap")
@@ -695,9 +718,9 @@ do
     local auth_location, backend_location, seen_version
     local mapping = { tools = { { name = "alias", original_name = "underlying",
         backend_location = "/_vs_backend_github.3av2", backend_server_path = "/github:v2",
-        backend_version = "v2" } }, tool_backend_map = { alias = {
+        block_server_path = "/github", backend_version = "v2" } }, tool_backend_map = { alias = {
         original_name = "underlying", backend_location = "/_vs_backend_github.3av2",
-        backend_server_path = "/github:v2", backend_version = "v2" } } }
+        backend_server_path = "/github:v2", block_server_path = "/github", backend_version = "v2" } } }
     capture_handler = function(loc, opts)
         if loc == "/_vs_auth_github.3av2" then
             auth_location = loc

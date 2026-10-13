@@ -13,6 +13,7 @@ import json
 import logging
 from datetime import UTC, datetime
 from typing import Annotated, Any
+from urllib.parse import urlsplit
 
 import httpx
 from fastapi import (
@@ -33,6 +34,7 @@ from ..audit.request_id import sanitize_correlation_id
 from ..auth.asset_permissions import user_has_asset_permission
 from ..auth.csrf import verify_csrf_token_flexible
 from ..auth.dependencies import nginx_proxied_auth
+from ..auth.resource_binding import normalize_request_path
 from ..common.log_redaction import redact_headers, redact_mapping, redact_url
 from ..core.config import settings
 from ..core.metrics import ASSET_ID_SUPPLIED_TOTAL
@@ -80,7 +82,12 @@ from ..utils.metadata import (
     project_metadata,
 )
 from ..utils.request_utils import get_client_ip
-from ..utils.url_guard import PROXY_PROFILE, guarded_async_client, validate_agent_url
+from ..utils.url_guard import (
+    PROXY_PROFILE,
+    guarded_async_client,
+    normalize_url_identity,
+    validate_agent_url,
+)
 from ._etag_utils import (
     parse_if_match,
     updated_ms,
@@ -693,6 +700,41 @@ def _gateway_agent_url(
 
     base = settings.registry_url.rstrip("/")
     return f"{base}{AGENT_ROUTE_PREFIX}/{agent_path.strip('/')}/"
+
+
+def _classify_gateway_agent_route(
+    candidate_url: str,
+    gateway_url: str,
+) -> str | None:
+    """Classify a card URL against this agent's nginx route.
+
+    Both standard HTTP and HTTPS listeners serve agent routes. Only those
+    paired ports (or the advertised listener itself) belong to this gateway;
+    another hostname or nonstandard port may be a genuine backend.
+    """
+    candidate = urlsplit(normalize_url_identity(candidate_url))
+    gateway = urlsplit(normalize_url_identity(gateway_url))
+    if (candidate.hostname or "").rstrip(".") != (gateway.hostname or "").rstrip("."):
+        return None
+    if (candidate.scheme, candidate.netloc) != (gateway.scheme, gateway.netloc):
+        # Both standard public listeners are represented without a port after
+        # URL normalization. A custom port may be a different application.
+        if candidate.port is not None or gateway.port is not None:
+            return None
+    gateway_path = normalize_request_path(gateway.path)
+    candidate_path = normalize_request_path(candidate.path)
+    if candidate_path != gateway_path and not candidate_path.startswith(gateway_path + "/"):
+        return None
+
+    # An echo may differ in host casing, explicit default port or trailing
+    # slash, but a rewritten path, query or other listener is not an echo.
+    if (
+        not candidate.query
+        and (candidate.scheme, candidate.netloc) == (gateway.scheme, gateway.netloc)
+        and candidate.path.removesuffix("/") == gateway.path.removesuffix("/")
+    ):
+        return "same"
+    return "nested"
 
 
 def _apply_a2a_reverse_proxy_split(
@@ -2034,7 +2076,6 @@ async def pull_agent_card(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Agent '{path}' is synced from {source_peer} and cannot be updated locally.",
         )
-
     # 4. Check agent has a valid URL and is A2A protocol
     if not existing_agent.url:
         raise HTTPException(
@@ -2054,6 +2095,28 @@ async def pull_agent_card(
     remote_card_raw, remote_card_url = await _fetch_remote_agent_card(str(backend_url).rstrip("/"))
 
     remote_card = _normalize_remote_card_keys(remote_card_raw)
+
+    # A proxied agent advertises the gateway in `url`, while `proxy_pass_url`
+    # is the backend we fetched. An echo of the advertised listener and raw
+    # path does not repoint the backend; nginx-canonicalized aliases, child
+    # routes and the alternate listener loop back.
+    remote_url = remote_card.get("url")
+    if isinstance(remote_url, str):
+        gateway_url = (
+            str(existing_agent.url) if existing_agent.proxy_pass_url else _gateway_agent_url(path)
+        )
+        try:
+            gateway_route = _classify_gateway_agent_route(remote_url, gateway_url)
+        except UrlValidationError:
+            gateway_route = None  # Invalid URLs reach the URL-change validator below.
+        if gateway_route == "same" and existing_agent.proxy_pass_url:
+            remote_card.pop("url")
+        elif gateway_route is not None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Remote agent card URL points back to this agent's gateway route",
+            )
+
     comparison_card = existing_agent
     if existing_agent.proxy_pass_url:
         comparison_card = existing_agent.model_copy(update={"url": str(backend_url)})

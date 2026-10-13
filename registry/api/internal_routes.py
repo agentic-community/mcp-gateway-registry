@@ -56,22 +56,21 @@ def _get_repo():
 @router.get("/internal/sessions/tool-block", status_code=200)
 async def get_backend_tool_block(
     server_path: str,
-    tool_name: str,
-) -> dict[str, bool]:
-    """Return the current block decision for a virtual backend tool.
+) -> dict[str, list[str]]:
+    """Return fresh blocked tool names for a registered backing server.
 
-    This route uses the same internal-secret gate as virtual session management.
-    A missing backend or an unreadable override is an error, never an allow.
+    The caller groups virtual tools by their active server path. A missing
+    server or unreadable overrides fail closed, including on cache hits.
     """
     from registry.repositories.factory import get_server_repository
 
     repo = get_server_repository()
-    if not server_path.startswith("/") or not tool_name:
-        raise HTTPException(status_code=400, detail="Invalid backend tool identity")
+    if not server_path.startswith("/"):
+        raise HTTPException(status_code=400, detail="Invalid backend server path")
     try:
         if not await repo.get(server_path):
             raise HTTPException(status_code=404, detail="Backend server not found")
-        return {"blocked": tool_name in await repo.get_blocked_tools(server_path)}
+        return {"blocked_tools": sorted(await repo.get_blocked_tools(server_path))}
     except HTTPException:
         raise
     except Exception:

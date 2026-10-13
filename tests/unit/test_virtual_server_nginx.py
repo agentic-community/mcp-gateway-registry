@@ -301,13 +301,19 @@ class TestGenerateVirtualBackendLocations:
         assert "proxy_pass https://insights.example.com/mcp/http;" in result
         assert "/mcp/http/mcp" not in result
 
+    @pytest.mark.parametrize(
+        "endpoint",
+        ["https://knowledge-mcp.global.api.aws/", "https://knowledge-mcp.global.api.aws"],
+    )
     @pytest.mark.asyncio
-    async def test_root_mcp_endpoint_replaces_internal_capture_uri(self, mock_server_repository):
+    async def test_root_mcp_endpoint_replaces_internal_capture_uri(
+        self, mock_server_repository, endpoint
+    ):
         """The backend must receive POST /, never POST /_vs_backend... ."""
         vs = _make_vs_config()
         mock_server_repository.get.return_value = {
             "proxy_pass_url": "https://knowledge-mcp.global.api.aws",
-            "mcp_endpoint": "https://knowledge-mcp.global.api.aws/",
+            "mcp_endpoint": endpoint,
         }
 
         from registry.core.nginx_service import NginxConfigService
@@ -464,7 +470,9 @@ class TestGenerateVirtualBackendLocations:
         assert f"location = {active} {{" in blocks
         assert f"location = {pinned} {{" in blocks
         assert data["tool_backend_map"]["issues"]["backend_server_path"] == "/github:v2"
+        assert data["tool_backend_map"]["issues"]["block_server_path"] == "/github"
         assert data["tools"][1]["backend_server_path"] == "/github:v2"
+        assert data["tools"][1]["block_server_path"] == "/github"
         assert data["tools"][1]["original_name"] == "issues"
         assert data["tools"][1]["description"] == "Version-specific issues"
         assert data["tools"][1]["inputSchema"] == {"type": "object"}
@@ -510,6 +518,7 @@ class TestGenerateVirtualBackendLocations:
                 await service._write_virtual_server_mappings([vs])
             data = json.loads((Path(tmpdir) / "dev-essentials.json").read_text())
         assert data["tools"][0]["backend_server_path"] == "/github:v2"
+        assert data["tools"][0]["block_server_path"] == "/github"
         assert data["tools"][0]["description"] == "Pinned version"
         assert data["tool_backend_map"]["issues"]["backend_location"] == (
             "/_vs_backend_github.3av2"

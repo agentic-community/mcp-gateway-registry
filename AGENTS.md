@@ -329,6 +329,14 @@ working in those areas.
   configured header; missing/invalid/mismatched destinations return protocol-
   only headers. Actual ARD fetches use guarded transport; its domain wrapper
   delegates canonical URL/IP logic.
+- **Gateway self-proxy:** a public URL is not automatically a valid backend.
+  For A2A Pull Card, `url` is the advertised gateway route and `proxy_pass_url`
+  is the real backend. A raw-path-equivalent echo on the advertised listener is
+  no backend change; reject aliases, child routes, and query variants on either
+  standard HTTP/HTTPS listener before preview/apply. Use `normalize_url_identity`
+  for host/port identity and `normalize_request_path` for nginx-equivalent path
+  routing, with segment-boundary comparison. Preserve a genuinely changed backend
+  on a different host or nonstandard port without publishing it as agent `url`.
 - **Injection:** sanitize at EVERY interpolation site AND validate at the source
   (a sanitizer that exists but isn't called is worthless); `re.escape` user input
   in regex/`$regex` queries.

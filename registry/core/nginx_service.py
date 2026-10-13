@@ -2359,11 +2359,7 @@ class NginxConfigService:
                 # The common egress identity strips a terminal slash; a direct
                 # nginx proxy_pass needs the URI slash to replace the capture URI.
                 plain_proxy_url = mcp_proxy_url
-                if not urlparse(mcp_proxy_url).path and (
-                    urlparse(server_info.get("mcp_endpoint") or "").path == "/"
-                    or not server_info.get("mcp_endpoint")
-                    and parsed_url.path == "/"
-                ):
+                if not urlparse(mcp_proxy_url).path:
                     plain_proxy_url += "/"
                 if backend_version or version_id:
                     # The mapping owns one exact version: never let a client header
@@ -2622,6 +2618,7 @@ class NginxConfigService:
                             "inputSchema": input_schema,
                             "backend_location": backend_location,
                             "backend_server_path": backend_key,
+                            "block_server_path": base_path,
                             "backend_version": tm.backend_version,
                             "egress_auth_mode": egress_mode,
                             "required_scopes": required_scopes,
@@ -2631,6 +2628,7 @@ class NginxConfigService:
                     tool_backend_map[tool_display_name] = {
                         "backend_location": backend_location,
                         "backend_server_path": backend_key,
+                        "block_server_path": base_path,
                         "original_name": tm.tool_name,
                         "backend_version": tm.backend_version,
                     }
