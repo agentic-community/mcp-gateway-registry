@@ -12,6 +12,7 @@ that applies to all tests.
 
 import errno
 import os
+import re
 import uuid
 
 _original_stat = os.stat
@@ -119,6 +120,13 @@ def pytest_configure(config):
     # (dedicated gate tests mock settings directly)
     os.environ["REGISTRATION_GATE_ENABLED"] = "false"
 
+    # Keep application logs out of MongoDB during tests. The centralized sink
+    # writes application_logs_default in a background flush, which outlived the
+    # teardown below: dropping the session database and then flushing recreated
+    # it, so one database still leaked per run. Tests have no use for shipped
+    # logs, and this also removes a write per log line from every run.
+    os.environ["APP_LOG_CENTRALIZED_ENABLED"] = "false"
+
     # NOTE: SECRET_KEY is set at module-import time near the top of this
     # conftest, because Settings() is constructed during import and refuses
     # to start without one — pytest_configure runs too late for that path.
@@ -162,6 +170,51 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "api: API route tests")
     config.addinivalue_line("markers", "search: Search functionality tests")
     config.addinivalue_line("markers", "slow: Tests that take a long time to run")
+
+
+# Only a name this conftest generated above is ever dropped. Matching the exact
+# shape is the whole safety mechanism: were DOCUMENTDB_DATABASE ever to point at
+# a real database, an unguarded teardown would destroy it.
+_TEST_DB_PATTERN = re.compile(r"test_[0-9a-f]{8}\Z")
+
+
+def pytest_unconfigure(config):
+    """Drop this session's isolated database so test runs stop accumulating.
+
+    ``pytest_configure`` gives every session (and, under xdist, every worker)
+    its own ``test_<hex>`` database for isolation. Nothing dropped them, so they
+    accumulated: 599 were found on one developer machine, holding 6,215 of
+    mongod's 6,407 WiredTiger files open against a soft limit of 1024, at which
+    point mongod refused connections with "Too many open files".
+
+    Each worker drops only the database it created and used alone, so this
+    cannot interfere with another worker still running. Failure to drop is
+    logged and ignored: leaking one database is a cleanup problem, whereas
+    raising here would fail an otherwise green run.
+    """
+    name = os.environ.get("DOCUMENTDB_DATABASE", "")
+    if not _TEST_DB_PATTERN.fullmatch(name):
+        return
+
+    try:
+        from pymongo import MongoClient
+
+        from registry.core.config import settings
+
+        # Credentials reach the app through pydantic Settings (which reads .env),
+        # not os.environ, so an environment-only lookup authenticates as nobody
+        # and the drop fails with "requires authentication".
+        host = os.environ.get("DOCUMENTDB_HOST") or settings.documentdb_host
+        port = int(os.environ.get("DOCUMENTDB_PORT") or settings.documentdb_port)
+        user = os.environ.get("DOCUMENTDB_USERNAME") or settings.documentdb_username
+        password = os.environ.get("DOCUMENTDB_PASSWORD") or settings.documentdb_password
+        kwargs = {"directConnection": True, "serverSelectionTimeoutMS": 5000}
+        if user and password:
+            kwargs.update({"username": user, "password": password, "authSource": "admin"})
+        with MongoClient(host, port, **kwargs) as client:
+            client.drop_database(name)
+    except Exception as exc:  # cleanup must never fail a green run
+        print(f"conftest: could not drop test database {name}: {type(exc).__name__}: {exc}")
 
 
 # =============================================================================
