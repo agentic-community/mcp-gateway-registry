@@ -3,7 +3,7 @@
   "info": {
     "title": "MCP Gateway Registry",
     "description": "A registry and management system for Model Context Protocol (MCP) servers",
-    "version": "1.32.2"
+    "version": "1.33.0"
   },
   "paths": {
     "/api/version": {
