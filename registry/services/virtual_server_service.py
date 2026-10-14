@@ -40,6 +40,7 @@ from ..services.rating_service import (
     validate_rating,
 )
 from ..services.visibility import user_can_access_server_from_doc
+from ..utils.path_utils import make_version_id
 
 # Configure logging
 logging.basicConfig(
@@ -120,25 +121,82 @@ def _caller_has_required_scopes(
     return all(scope in user_scopes for scope in required_scopes)
 
 
+def _linked_inactive_version_mismatch(
+    active: dict,
+    inactive: dict,
+    server_path: str,
+    version: str,
+) -> str | None:
+    """Name the first linkage property the inactive version fails, or None.
+
+    All nine properties must hold for an inactive version document to belong to
+    this active registration. Returning the failed one rather than a bare
+    boolean is what makes a rejection diagnosable: the user-visible symptom is a
+    virtual tool that silently disappears from the catalogue, and without this
+    an operator cannot tell a stale ``other_version_ids`` entry from a version
+    document that was never linked.
+
+    Args:
+        active: The active server document.
+        inactive: The candidate inactive version document.
+        server_path: The active server's registered path.
+        version: The version label being pinned.
+
+    Returns:
+        A short description of the first failed property, or None when the
+        version is correctly linked.
+    """
+    version_id = make_version_id(server_path, version)
+    checks: list[tuple[bool, str]] = [
+        (active.get("path") == server_path, "active path differs from the requested server path"),
+        (inactive.get("path") == version_id, f"version path is not {version_id!r}"),
+        (inactive.get("version") == version, f"version label is not {version!r}"),
+        (
+            inactive.get("active_version_id") == server_path,
+            "version does not point back at this active server",
+        ),
+        (inactive.get("is_active") is False, "version is not marked inactive"),
+        (bool(active.get("version_group")), "active server has no version group"),
+        (
+            inactive.get("version_group") == active.get("version_group"),
+            "version group differs from the active server's",
+        ),
+        (
+            isinstance(active.get("other_version_ids"), list),
+            "active server's other_version_ids is not a list",
+        ),
+        (
+            version_id in (active.get("other_version_ids") or []),
+            f"{version_id!r} is not listed in the active server's other_version_ids",
+        ),
+    ]
+    for ok, reason in checks:
+        if not ok:
+            return reason
+    return None
+
+
 def _is_linked_inactive_version(
     active: dict,
     inactive: dict,
     server_path: str,
     version: str,
 ) -> bool:
-    """Check that an inactive version belongs to this active registration."""
-    version_id = f"{server_path}:{version}"
-    return (
-        active.get("path") == server_path
-        and inactive.get("path") == version_id
-        and inactive.get("version") == version
-        and inactive.get("active_version_id") == server_path
-        and inactive.get("is_active") is False
-        and bool(active.get("version_group"))
-        and inactive.get("version_group") == active["version_group"]
-        and isinstance(active.get("other_version_ids"), list)
-        and version_id in active["other_version_ids"]
+    """Whether an inactive version belongs to this active registration.
+
+    Logs the failed linkage property at debug level, so a silently dropped
+    virtual tool is traceable without changing any caller.
+    """
+    reason = _linked_inactive_version_mismatch(active, inactive, server_path, version)
+    if reason is None:
+        return True
+    logger.debug(
+        "Version %r of %s is not a linked inactive version: %s",
+        version,
+        server_path,
+        reason,
     )
+    return False
 
 
 class VirtualServerService:
@@ -477,7 +535,7 @@ class VirtualServerService:
 
             selected = server_info
             if mapping.backend_version and mapping.backend_version != server_info.get("version"):
-                version_id = f"{server_path}:{mapping.backend_version}"
+                version_id = make_version_id(server_path, mapping.backend_version)
                 selected = await self._server_repo.get(version_id)
                 if not isinstance(selected, dict) or not _is_linked_inactive_version(
                     server_info, selected, server_path, mapping.backend_version
@@ -628,7 +686,7 @@ class VirtualServerService:
             doc_key = requested_path
             if mapping.backend_version and server_path == requested_path:
                 if mapping.backend_version != active.get("version"):
-                    doc_key = f"{server_path}:{mapping.backend_version}"
+                    doc_key = make_version_id(server_path, mapping.backend_version)
                     selected = await self._server_repo.get(doc_key)
                     if not isinstance(selected, dict) or not _is_linked_inactive_version(
                         active, selected, server_path, mapping.backend_version

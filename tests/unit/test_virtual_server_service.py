@@ -21,6 +21,8 @@ from registry.services.virtual_server_service import (
     _generate_path_from_name,
     _get_effective_tool_name,
     _get_unique_backends,
+    _is_linked_inactive_version,
+    _linked_inactive_version_mismatch,
 )
 
 # --- Unit tests for helper functions ---
@@ -2425,3 +2427,55 @@ class TestVirtualServerRating:
         assert len(result) == 1
         assert result[0].num_stars == 4.5
         assert len(result[0].rating_details) == 1
+
+
+@pytest.mark.unit
+class TestLinkedInactiveVersionMismatch:
+    """A rejected version must say which linkage property failed.
+
+    The user-visible symptom of a rejection is a virtual tool that silently
+    disappears from the catalogue. Without a reason, an operator cannot tell a
+    stale `other_version_ids` entry from a version document that was never
+    linked in the first place.
+    """
+
+    @staticmethod
+    def _pair():
+        active = {
+            "path": "/github",
+            "version_group": "grp-1",
+            "other_version_ids": ["/github:v2"],
+        }
+        inactive = {
+            "path": "/github:v2",
+            "version": "v2",
+            "active_version_id": "/github",
+            "is_active": False,
+            "version_group": "grp-1",
+        }
+        return active, inactive
+
+    def test_a_correctly_linked_version_has_no_mismatch(self):
+        active, inactive = self._pair()
+        assert _linked_inactive_version_mismatch(active, inactive, "/github", "v2") is None
+        assert _is_linked_inactive_version(active, inactive, "/github", "v2") is True
+
+    @pytest.mark.parametrize(
+        "mutate, expected_fragment",
+        [
+            (lambda a, i: i.update(version="v3"), "version label"),
+            (lambda a, i: i.update(active_version_id="/other"), "point back"),
+            (lambda a, i: i.update(is_active=True), "not marked inactive"),
+            (lambda a, i: a.update(version_group=""), "no version group"),
+            (lambda a, i: i.update(version_group="grp-2"), "version group differs"),
+            (lambda a, i: a.update(other_version_ids="not-a-list"), "not a list"),
+            (lambda a, i: a.update(other_version_ids=[]), "other_version_ids"),
+        ],
+    )
+    def test_each_failed_property_is_named(self, mutate, expected_fragment):
+        active, inactive = self._pair()
+        mutate(active, inactive)
+        reason = _linked_inactive_version_mismatch(active, inactive, "/github", "v2")
+        assert reason is not None
+        assert expected_fragment in reason
+        assert _is_linked_inactive_version(active, inactive, "/github", "v2") is False

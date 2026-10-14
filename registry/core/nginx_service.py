@@ -20,6 +20,7 @@ from registry.constants import REGISTRY_CONSTANTS, DeploymentType, HealthStatus
 from registry.egress_auth.upstream_binding import registered_versions, selected_upstream
 from registry.exceptions import UrlValidationError
 from registry.schemas.proxy_mixin import _assert_egress_allowed, build_proxy_client_path
+from registry.utils.path_utils import make_version_id
 from registry.utils.url_guard import validate_proxy_pass_url, validate_server_path
 
 from .config import settings
@@ -1760,7 +1761,7 @@ class NginxConfigService:
 
     def _virtual_backend_location(self, path: str, version: str | None = None) -> str:
         """Give each selected version document an injective internal route."""
-        backend_key = f"{path}:{version}" if version and not path.endswith(f":{version}") else path
+        backend_key = make_version_id(path, version) if version else path
         return f"/_vs_backend{self._encode_path_for_location(backend_key)}"
 
     @staticmethod
