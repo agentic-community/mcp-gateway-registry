@@ -12,6 +12,7 @@ from ..utils.credential_encryption import (
     _migrate_auth_type_to_auth_scheme,
     strip_credentials_from_dict,
 )
+from ..utils.path_utils import make_version_id
 from ..utils.url_guard import (
     proxy_profile_for_entity_target,
     validate_proxy_pass_url,
@@ -1026,7 +1027,7 @@ class ServerService:
             await self._repo.update(path, active_server)
 
         # Check if version already exists
-        new_version_id = f"{path}:{version}"
+        new_version_id = make_version_id(path, version)
         existing_inactive = await self._repo.get(new_version_id)
         if existing_inactive:
             raise ValueError(f"Version {version} already exists for server {path}")
@@ -1104,7 +1105,7 @@ class ServerService:
             raise ValueError(f"Server {path} has no versions to remove")
 
         # Find and remove the inactive version document
-        version_id = f"{path}:{version}"
+        version_id = make_version_id(path, version)
         inactive_version = await self._repo.get(version_id)
         if not inactive_version:
             raise ValueError(f"Version {version} not found for server {path}")
@@ -1166,7 +1167,7 @@ class ServerService:
             raise ValueError(f"Server {path} has no other versions configured")
 
         # Find target inactive version
-        target_version_id = f"{path}:{version}"
+        target_version_id = make_version_id(path, version)
         target_inactive = await self._repo.get(target_version_id)
         if not target_inactive:
             # List available versions
