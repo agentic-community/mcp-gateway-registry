@@ -153,10 +153,6 @@ _AGENT_BACKEND_URL_FIELDS: tuple[str, ...] = (
 # transport (JSONRPC, HTTP+JSON, ...) is servable; GRPC and WebSocket are not.
 _GATEWAY_UNSERVABLE_BINDINGS: frozenset[str] = frozenset({"GRPC"})
 _WS_URL_SCHEMES: tuple[str, ...] = ("ws://", "wss://")
-# Binding to advertise when a proxied agent declared ONLY gateway-unservable
-# interfaces (all GRPC/WS): the gateway fronts JSON-RPC over HTTP, so a single
-# JSONRPC interface keeps the A2A 1.0 card complete with a usable endpoint.
-_GATEWAY_FALLBACK_BINDING: str = "JSONRPC"
 
 
 def _project_proxied_supported_interfaces(
@@ -173,7 +169,10 @@ def _project_proxied_supported_interfaces(
     binding the gateway can actually serve - the HTTP transports (e.g. JSONRPC,
     HTTP+JSON), since the gateway route is a generic HTTP ``proxy_pass``. Bindings
     the gateway cannot serve (GRPC, WebSocket) are omitted rather than pointed at a
-    dead gateway url, and the registrant's backend never appears in the result.
+    dead gateway url, and the registrant's backend never appears in the result. If
+    the agent declared *only* gateway-unservable interfaces, the result is an empty
+    list: the gateway cannot front any declared transport, so fabricating a JSONRPC
+    endpoint would only advertise a dead address.
 
     Gated on ``proxy_pass_url``: its presence marks the agent as reverse-proxied
     (``url`` is the gateway, interfaces carry the backend). A non-proxied agent's
@@ -220,11 +219,10 @@ def _project_proxied_supported_interfaces(
             new_entry[version_key] = version
         projected.append(new_entry)
 
-    if not projected:
-        # Only gateway-unservable interfaces were declared; still advertise one
-        # usable HTTP endpoint at the gateway so the A2A 1.0 card stays complete.
-        projected = [{"url": gateway_url, binding_key: _GATEWAY_FALLBACK_BINDING}]
-
+    # When nothing gateway-servable remains (only GRPC/WS were declared), leave the
+    # list empty rather than inventing a JSONRPC endpoint: the gateway's HTTP
+    # proxy_pass cannot front those transports, so a synthetic entry would 502 and
+    # would also carry no protocol_version. An empty list is the honest projection.
     agent_dict[key] = projected
     # Drop the other-cased spelling if both somehow coexist, so the backend
     # interfaces cannot survive under the alternate key.
