@@ -434,6 +434,12 @@ variable "keycloak_admin_password" {
   sensitive   = true
 }
 
+variable "keycloak_admin_realm" {
+  description = "Realm hosting the Keycloak admin user, NOT the realm being administered (KEYCLOAK_REALM)"
+  type        = string
+  default     = "master"
+}
+
 # =============================================================================
 # SESSION COOKIE SECURITY CONFIGURATION
 # =============================================================================

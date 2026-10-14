@@ -1,6 +1,10 @@
 # Keycloak configuration
 keycloak:
   adminUser: user
+  # Realm hosting the admin user (its token endpoint authenticates
+  # KEYCLOAK_ADMIN), NOT the realm being administered. Keep "master" unless
+  # the admin user lives inside the managed realm.
+  adminRealm: master
   realm: mcp-gateway
   existingSecret: ""  # If set, use this existing secret instead of creating one
 

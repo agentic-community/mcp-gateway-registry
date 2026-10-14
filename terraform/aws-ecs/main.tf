@@ -124,6 +124,7 @@ module "mcp_gateway" {
 
   # Keycloak admin credentials (for Management API)
   keycloak_admin_password = var.keycloak_admin_password
+  keycloak_admin_realm    = var.keycloak_admin_realm
 
   # Session cookie security configuration
   session_cookie_secure        = var.session_cookie_secure

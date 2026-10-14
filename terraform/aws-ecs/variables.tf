@@ -135,6 +135,12 @@ variable "keycloak_admin_password" {
   sensitive   = true
 }
 
+variable "keycloak_admin_realm" {
+  description = "Realm hosting the Keycloak admin user (its token endpoint authenticates keycloak_admin), NOT the realm being administered. Keep master unless the admin user lives inside the managed realm"
+  type        = string
+  default     = "master"
+}
+
 variable "keycloak_database_username" {
   description = "Keycloak database username"
   type        = string

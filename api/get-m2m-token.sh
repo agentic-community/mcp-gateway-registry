@@ -216,7 +216,8 @@ fi
 
 # Get admin token
 echo "Getting admin token..." >&2
-ADMIN_TOKEN=$(curl -s -X POST "${KEYCLOAK_URL}/realms/master/protocol/openid-connect/token" \
+KEYCLOAK_ADMIN_REALM="${KEYCLOAK_ADMIN_REALM:-master}"
+ADMIN_TOKEN=$(curl -s -X POST "${KEYCLOAK_URL}/realms/${KEYCLOAK_ADMIN_REALM}/protocol/openid-connect/token" \
     -H "Content-Type: application/x-www-form-urlencoded" \
     -d "username=admin" \
     -d "password=${KEYCLOAK_ADMIN_PASSWORD}" \

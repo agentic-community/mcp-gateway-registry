@@ -19,6 +19,14 @@ KEYCLOAK_REALM: str = os.environ.get("KEYCLOAK_REALM", "mcp-gateway")
 KEYCLOAK_ADMIN: str = os.environ.get("KEYCLOAK_ADMIN", "admin")
 KEYCLOAK_ADMIN_PASSWORD: str | None = os.environ.get("KEYCLOAK_ADMIN_PASSWORD")
 
+# Realm hosting KEYCLOAK_ADMIN. Distinct from KEYCLOAK_REALM, which is the realm
+# being administered: Keycloak isolates users per realm, so a user in one realm
+# cannot authenticate against another realm's token endpoint. Deployments that
+# grant the realm-management roles to a user inside the managed realm rather
+# than to a master user set this to that realm. Empty falls back to the default
+# so a bare "KEYCLOAK_ADMIN_REALM=" in .env cannot produce a //realms// URL.
+KEYCLOAK_ADMIN_REALM: str = os.environ.get("KEYCLOAK_ADMIN_REALM") or "master"
+
 
 class KeycloakAdminError(RuntimeError):
     """Raised when Keycloak admin API operations fail."""
@@ -37,7 +45,7 @@ async def _get_keycloak_admin_token() -> str:
     if not KEYCLOAK_ADMIN_PASSWORD:
         raise Exception("KEYCLOAK_ADMIN_PASSWORD environment variable not set")
 
-    token_url = f"{KEYCLOAK_ADMIN_URL}/realms/master/protocol/openid-connect/token"
+    token_url = f"{KEYCLOAK_ADMIN_URL}/realms/{KEYCLOAK_ADMIN_REALM}/protocol/openid-connect/token"
 
     data = {
         "username": KEYCLOAK_ADMIN,

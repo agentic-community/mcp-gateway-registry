@@ -1,0 +1,53 @@
+suite: keycloak adminRealm wiring
+# KEYCLOAK_ADMIN_REALM names the realm whose token endpoint authenticates
+# KEYCLOAK_ADMIN (default "master"). It is deliberately distinct from
+# KEYCLOAK_REALM (the realm being administered). These tests pin both the
+# default and a custom value so the secret stays in sync with
+# registry/utils/keycloak_manager.py.
+release:
+  name: test
+  namespace: default
+templates:
+  - templates/secret.yaml
+tests:
+  - it: emits KEYCLOAK_ADMIN_REALM=master by default
+    set:
+      app:
+        secretKey: "test-key-not-for-prod"
+      egressAuth:
+        markerSecret: "test-marker-not-for-prod"
+    asserts:
+      - equal:
+          path: data.KEYCLOAK_ADMIN_REALM
+          value: bWFzdGVy # base64("master")
+
+  - it: emits a custom adminRealm when set
+    set:
+      app:
+        secretKey: "test-key-not-for-prod"
+      egressAuth:
+        markerSecret: "test-marker-not-for-prod"
+      global:
+        authProvider:
+          type: keycloak
+          keycloak:
+            adminRealm: mcp-gateway
+    asserts:
+      - equal:
+          path: data.KEYCLOAK_ADMIN_REALM
+          value: bWNwLWdhdGV3YXk= # base64("mcp-gateway")
+
+  - it: rejects KEYCLOAK_ADMIN_REALM via extraEnv (reserved name)
+    set:
+      app:
+        secretKey: "test-key-not-for-prod"
+      egressAuth:
+        markerSecret: "test-marker-not-for-prod"
+      extraEnv:
+        - name: KEYCLOAK_ADMIN_REALM
+          value: mcp-gateway
+    templates:
+      - templates/deployment.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: 'extraEnv\[0\]: "KEYCLOAK_ADMIN_REALM" is a reserved variable'
