@@ -22,8 +22,6 @@ from registry.schemas.agent_models import (
     StringList,
 )
 
-
-
 _REAL_CARD_INTERFACES = [
     {
         "url": "https://agent.example.com/a2a",
@@ -364,6 +362,23 @@ class TestSecurityRequirementsA2A1Shape:
         assert card.security == [{"oauth2": ["read"]}]
         assert card.security_requirements[0].schemes["oauth2"].values == ["read"]
 
+    def test_scope_list_uses_wire_key_without_by_alias(self):
+        # The registry's publish/projection paths dump without by_alias. The
+        # scope list must still surface under the A2A wire key "list", not the
+        # Python field name "values", or a consumer reading the card off the
+        # registry sees a non-spec shape.
+        card = AgentCard(
+            name="a",
+            description="d",
+            url="https://example.com",
+            version="1.0",
+            securitySchemes={"oauth2": {"type": "oauth2"}},
+            securityRequirements=[{"schemes": {"oauth2": {"list": ["read"]}}}],
+        )
+        dumped = card.model_dump()["security_requirements"]
+        assert dumped == [{"schemes": {"oauth2": {"list": ["read"]}}}]
+        assert "values" not in dumped[0]["schemes"]["oauth2"]
+
     def test_security_requirements_reject_undefined_scheme(self):
         # Regression: the validator used to check only the legacy `security`
         # field's scheme references against security_schemes; a
@@ -448,5 +463,3 @@ class TestSignaturesA2A1Shape:
             signatures=[{"protected": "abc", "signature": "xyz", "header": {"kid": "k1"}}],
         )
         assert req.signatures == [{"protected": "abc", "signature": "xyz", "header": {"kid": "k1"}}]
-
-

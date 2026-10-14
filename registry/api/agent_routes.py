@@ -545,6 +545,32 @@ def _normalize_remote_card_keys(
     return normalized
 
 
+# Nested AgentInterface entry keys that _normalize_remote_card_keys (top-level
+# only) does not reach. A subset of A2A_CAMEL_TO_SNAKE scoped to the fields that
+# appear on an interface entry.
+_INTERFACE_CAMEL_TO_SNAKE = {
+    "protocolBinding": "protocol_binding",
+    "protocolVersion": "protocol_version",
+}
+
+
+def _normalize_interface_entry(
+    entry: Any,
+) -> Any:
+    """Normalize one supported_interfaces entry for diff comparison.
+
+    Converts the nested camelCase keys a remote card uses to the snake_case
+    spelling current_agent.model_dump() produces, and drops null values:
+    current_dict's entries include unset optional fields (e.g. `tenant`) as
+    explicit None, while a remote card that never set them omits the key
+    entirely, so without this every comparison would spuriously differ by
+    that one key.
+    """
+    if not isinstance(entry, dict):
+        return entry
+    return {_INTERFACE_CAMEL_TO_SNAKE.get(k, k): v for k, v in entry.items() if v is not None}
+
+
 def _compute_card_diff(
     current_agent: AgentCard,
     remote_card: dict[str, Any],
@@ -622,27 +648,8 @@ def _compute_card_diff(
             #     Normalizing it for the comparison and then storing that
             #     normalized copy would silently alter what gets persisted
             #     the next time this diff is applied.
-            _interface_camel_to_snake = {
-                "protocolBinding": "protocol_binding",
-                "protocolVersion": "protocol_version",
-            }
-
-            def _normalize_interface_entry(entry: Any) -> Any:
-                if not isinstance(entry, dict):
-                    return entry
-                # Also drop null values, since current_dict's entries (from
-                # current_agent.model_dump()) include unset optional fields
-                # (e.g. `tenant`) as explicit None, while a remote card
-                # that never set them omits the key entirely. Without this,
-                # every comparison would spuriously differ by that one key,
-                # same reasoning as the existing provider/skills handling
-                # below.
-                return {
-                    _interface_camel_to_snake.get(k, k): v
-                    for k, v in entry.items()
-                    if v is not None
-                }
-
+            # Normalization (nested camelCase to snake_case, null-dropping) is
+            # done by the module-level _normalize_interface_entry.
             current_cmp = current_value
             remote_cmp = remote_value
             if isinstance(current_cmp, list):

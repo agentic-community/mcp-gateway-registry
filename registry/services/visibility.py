@@ -146,14 +146,42 @@ _AGENT_BACKEND_URL_FIELDS: tuple[str, ...] = (
 )
 
 
+def _redact_proxied_supported_interfaces(
+    agent_dict: dict,
+) -> None:
+    """Drop ``supported_interfaces`` from a reverse-proxied agent's redacted read.
+
+    In A2A reverse-proxy mode only the top-level ``url`` is rewritten to the
+    gateway; each ``supported_interfaces[*].url`` still holds the registrant's
+    real backend, so leaving the list in a redacted response leaks the backend
+    the gateway exists to hide. The gateway fronts a single route already
+    advertised by the top-level ``url``, so a non-admin needs nothing from this
+    list; it is removed wholesale.
+
+    Gated on ``proxy_pass_url``: its presence is what marks the agent as
+    reverse-proxied (``url`` is the gateway, interfaces carry the backend). A
+    non-proxied agent's interfaces are its real, public address and stay
+    visible. MUST run before ``proxy_pass_url`` is stripped. No-op otherwise.
+
+    Args:
+        agent_dict: An agent card dict, mutated in place.
+    """
+    if not (agent_dict.get("proxy_pass_url") or agent_dict.get("proxyPassUrl")):
+        return
+    agent_dict.pop("supported_interfaces", None)
+    agent_dict.pop("supportedInterfaces", None)
+
+
 def redact_agent_backend_fields(
     agent_dict: dict,
 ) -> dict:
     """Strip internal backend URL fields from an agent card dict in place.
 
     Removes ``proxy_pass_url`` (both snake_case and camelCase spellings) so a
-    non-admin caller sees only the gateway-facing ``url``. Callers MUST gate this
-    behind :func:`should_redact_backend_urls`; this function performs no
+    non-admin caller sees only the gateway-facing ``url``, and drops a
+    reverse-proxied agent's ``supported_interfaces`` (whose per-entry urls are
+    backend addresses the top-level rewrite does not reach). Callers MUST gate
+    this behind :func:`should_redact_backend_urls`; this function performs no
     authorization decision of its own. Mirrors
     :func:`redact_server_backend_fields`.
 
@@ -163,6 +191,8 @@ def redact_agent_backend_fields(
     Returns:
         The same dict, with backend URL fields removed.
     """
+    # Before stripping proxy_pass_url, since that field is the signal for it.
+    _redact_proxied_supported_interfaces(agent_dict)
     for field in _AGENT_BACKEND_URL_FIELDS:
         agent_dict.pop(field, None)
     return agent_dict

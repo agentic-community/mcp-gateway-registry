@@ -26,6 +26,7 @@ from ..repositories.factory import (
 )
 from ..services.ard_mapping import _sanitize_name
 from ..services.canonical_export import redact_backend_urls, to_canonical
+from ..services.visibility import redact_agent_backend_fields
 from ..utils.credential_encryption import strip_credentials_from_dict
 
 logger = logging.getLogger(__name__)
@@ -55,6 +56,7 @@ _AGENT_SENSITIVE_FIELDS = _PUBLIC_PROXY_INTERNAL_FIELDS | frozenset(
     {
         "security",
         "security_schemes",
+        "security_requirements",
         "allowed_groups",
         "registered_by",
         "auth_credential_encrypted",
@@ -132,6 +134,12 @@ async def get_public_agent(
     records = await repo.find_with_filter({"is_enabled": True, "visibility": "public"}, limit=None)
     for path, record in records.items():
         if _sanitize_name(path) == target:
+            # Anonymous callers never receive the reverse-proxy backend: strip
+            # proxy_pass_url and, for a proxied agent, its supported_interfaces
+            # (whose per-entry urls are the backend the gateway hides). Shared
+            # with the authenticated detail/search reads so the three surfaces
+            # redact the agent backend identically.
+            redact_agent_backend_fields(record)
             return _strip_fields(record, _AGENT_SENSITIVE_FIELDS)
     raise HTTPException(status_code=404, detail="Agent not found")
 

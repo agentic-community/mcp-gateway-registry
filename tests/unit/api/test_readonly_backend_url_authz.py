@@ -362,6 +362,43 @@ class TestBackendUrlRedactionHelpers:
         assert "proxyPassUrl" not in camel
         assert camel["url"] == "https://gw/agent/x/"
 
+    def test_redact_agent_drops_proxied_supported_interfaces(self):
+        """A reverse-proxied agent's supported_interfaces hold backend urls the
+        top-level rewrite does not reach, so a redacted read drops them."""
+        from registry.services.visibility import redact_agent_backend_fields
+
+        card = {
+            "name": "Flight Booking Agent",
+            "url": "https://gateway.example.com/agent/flight-booking-agent/",
+            "proxy_pass_url": "https://flight-backend.internal:9000/a2a",
+            "supported_interfaces": [
+                {"url": "https://flight-backend.internal:9000/a2a", "protocol_binding": "JSONRPC"},
+                {"url": "https://flight-backend.internal:9000/grpc", "protocol_binding": "GRPC"},
+            ],
+        }
+        redact_agent_backend_fields(card)
+        assert "proxy_pass_url" not in card
+        assert "supported_interfaces" not in card
+        # Only the gateway-facing url is exposed.
+        assert card["url"] == "https://gateway.example.com/agent/flight-booking-agent/"
+
+    def test_redact_agent_keeps_supported_interfaces_when_not_proxied(self):
+        """A non-proxied agent has no proxy_pass_url; its supported_interfaces
+        are its real public address and must stay visible."""
+        from registry.services.visibility import redact_agent_backend_fields
+
+        card = {
+            "name": "Public Agent",
+            "url": "https://public.example.com/a2a",
+            "supported_interfaces": [
+                {"url": "https://public.example.com/a2a", "protocol_binding": "JSONRPC"},
+            ],
+        }
+        redact_agent_backend_fields(card)
+        assert card["supported_interfaces"] == [
+            {"url": "https://public.example.com/a2a", "protocol_binding": "JSONRPC"},
+        ]
+
     def test_redact_proxy_target_for_non_admin_dict_and_model(self):
         """proxy_target_url is stripped for a non-admin; is_proxied/client_url stay."""
         from types import SimpleNamespace

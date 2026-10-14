@@ -20,6 +20,7 @@ from pydantic import (
     ConfigDict,
     Field,
     field_validator,
+    model_serializer,
     model_validator,
 )
 
@@ -257,6 +258,53 @@ def _is_valid_grpc_authority(
     return _is_valid_hostname(host) and _is_valid_port(port)
 
 
+# Schemes accepted for a non-GRPC AgentInterface url. HTTP(S) covers the
+# JSONRPC and HTTP+JSON bindings; WS(S) covers WebSocket custom protocol
+# bindings, whose endpoint the A2A spec declares here as a ws:// or wss://
+# url (https://a2a-protocol.org/latest/topics/custom-protocol-bindings/).
+_INTERFACE_URL_SCHEMES = ("http://", "https://", "ws://", "wss://")
+
+
+def _validate_interface_url_format(
+    url: str,
+) -> str:
+    """
+    Validate a non-GRPC AgentInterface url.
+
+    Like _validate_url_format, but also accepts the WebSocket schemes
+    (ws://, wss://) that A2A custom protocol bindings use, which the
+    HTTP(S)-only _validate_url_format would otherwise reject.
+
+    Args:
+        url: URL string to validate
+
+    Returns:
+        Validated URL string
+
+    Raises:
+        ValueError: If the url is empty, uses an unsupported scheme, or has
+            no hostname
+    """
+    if not url:
+        raise ValueError("URL cannot be empty")
+
+    if not url.startswith(_INTERFACE_URL_SCHEMES):
+        raise ValueError("Interface URL must use HTTP(S) or WS(S) protocol")
+
+    try:
+        from urllib.parse import urlparse
+
+        parsed = urlparse(url)
+        if not parsed.netloc:
+            raise ValueError("URL must include a valid hostname")
+    except ValueError:
+        raise
+    except Exception as e:
+        raise ValueError(f"Invalid URL format: {e}")
+
+    return url
+
+
 def _validate_interface_url(
     url: str,
     protocol_binding: str,
@@ -266,7 +314,7 @@ def _validate_interface_url(
 
     GRPC interfaces may be a bare host:port authority address (no scheme)
     in addition to a full HTTP(S) URL (e.g. a gateway fronting gRPC);
-    every other binding requires a full HTTP(S) URL, same as before.
+    every other binding requires a full HTTP(S) or WS(S) URL.
 
     Args:
         url: URL or address string to validate
@@ -285,7 +333,7 @@ def _validate_interface_url(
             "GRPC interface url must be a host:port address (e.g. "
             "'grpc.example.com:443') or a full HTTP(S) URL"
         )
-    return _validate_url_format(url)
+    return _validate_interface_url_format(url)
 
 
 def _validate_security_references(
@@ -399,6 +447,22 @@ class StringList(BaseModel):
     values: list[str] = Field(default_factory=list, alias="list")
 
     model_config = ConfigDict(populate_by_name=True)
+
+    @model_serializer
+    def _serialize(
+        self,
+    ) -> dict[str, list[str]]:
+        """Always serialize under the A2A wire key ``list``.
+
+        Pydantic emits a field's name, not its alias, unless ``by_alias=True``
+        is passed, and the registry's publish/projection paths dump without it.
+        That would surface this field as ``values`` on read, diverging from the
+        A2A wire shape (``list``). Serializing explicitly pins the wire key on
+        every dump, regardless of ``by_alias``, so stored and returned cards
+        stay spec-shaped. Input still accepts both spellings via
+        ``populate_by_name``.
+        """
+        return {"list": self.values}
 
 
 class SecurityRequirement(BaseModel):

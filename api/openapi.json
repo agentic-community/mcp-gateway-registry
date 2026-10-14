@@ -16120,6 +16120,21 @@
             ],
             "title": "Skills"
           },
+          "supportedInterfaces": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supportedinterfaces"
+          },
           "securitySchemes": {
             "anyOf": [
               {
@@ -16166,6 +16181,36 @@
               }
             ],
             "title": "Security"
+          },
+          "securityRequirements": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Securityrequirements"
+          },
+          "signatures": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Signatures"
           },
           "tags": {
             "anyOf": [
@@ -16725,6 +16770,22 @@
             "title": "Defaultoutputmodes",
             "description": "Supported output MIME types (e.g., ['text', 'text/plain'])"
           },
+          "supportedInterfaces": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supportedinterfaces",
+            "description": "Transport interfaces this agent exposes, e.g. [{'url': ..., 'protocolBinding': 'JSONRPC', 'protocolVersion': '1.0'}]. Optional at registration time."
+          },
           "ans_agent_id": {
             "anyOf": [
               {
@@ -16741,6 +16802,38 @@
             "type": "string",
             "title": "Supportedprotocol",
             "description": "Agent protocol: 'a2a' for A2A protocol agents, 'other' for non-A2A agents"
+          },
+          "securityRequirements": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Securityrequirements",
+            "description": "A2A 1.0 security requirements array, e.g. [{'schemes': {'oauth2': {'list': ['read']}}}]. Optional at registration time."
+          },
+          "signatures": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Signatures",
+            "description": "A2A 1.0 signatures array, e.g. [{'protected': ..., 'signature': ...}]. Optional at registration time."
           },
           "metadata": {
             "additionalProperties": true,
