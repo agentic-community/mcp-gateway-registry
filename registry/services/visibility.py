@@ -146,30 +146,89 @@ _AGENT_BACKEND_URL_FIELDS: tuple[str, ...] = (
 )
 
 
-def _redact_proxied_supported_interfaces(
+# Protocol bindings the gateway's HTTP reverse-proxy route cannot serve, so they
+# are omitted from a proxied agent's client-facing interfaces rather than pointed
+# at a dead gateway url. The gateway location block is a generic HTTP proxy_pass
+# (registry/core/nginx_service.py _create_agent_location_block), so every HTTP
+# transport (JSONRPC, HTTP+JSON, ...) is servable; GRPC and WebSocket are not.
+_GATEWAY_UNSERVABLE_BINDINGS: frozenset[str] = frozenset({"GRPC"})
+_WS_URL_SCHEMES: tuple[str, ...] = ("ws://", "wss://")
+# Binding to advertise when a proxied agent declared ONLY gateway-unservable
+# interfaces (all GRPC/WS): the gateway fronts JSON-RPC over HTTP, so a single
+# JSONRPC interface keeps the A2A 1.0 card complete with a usable endpoint.
+_GATEWAY_FALLBACK_BINDING: str = "JSONRPC"
+
+
+def _project_proxied_supported_interfaces(
     agent_dict: dict,
 ) -> None:
-    """Drop ``supported_interfaces`` from a reverse-proxied agent's redacted read.
+    """Project a reverse-proxied agent's interfaces onto the gateway.
 
-    In A2A reverse-proxy mode only the top-level ``url`` is rewritten to the
+    In A2A reverse-proxy mode the split rewrites only the top-level ``url`` to the
     gateway; each ``supported_interfaces[*].url`` still holds the registrant's
-    real backend, so leaving the list in a redacted response leaks the backend
-    the gateway exists to hide. The gateway fronts a single route already
-    advertised by the top-level ``url``, so a non-admin needs nothing from this
-    list; it is removed wholesale.
+    real backend. Dropping the list wholesale would leave an A2A 1.0 card with no
+    usable endpoint (the proto has no top-level ``url`` and marks
+    ``supportedInterfaces`` required). Instead, for a proxied agent we rewrite the
+    gateway-facing ``url`` (already on the card's top-level ``url``) onto every
+    binding the gateway can actually serve - the HTTP transports (e.g. JSONRPC,
+    HTTP+JSON), since the gateway route is a generic HTTP ``proxy_pass``. Bindings
+    the gateway cannot serve (GRPC, WebSocket) are omitted rather than pointed at a
+    dead gateway url, and the registrant's backend never appears in the result.
 
-    Gated on ``proxy_pass_url``: its presence is what marks the agent as
-    reverse-proxied (``url`` is the gateway, interfaces carry the backend). A
-    non-proxied agent's interfaces are its real, public address and stay
-    visible. MUST run before ``proxy_pass_url`` is stripped. No-op otherwise.
+    Gated on ``proxy_pass_url``: its presence marks the agent as reverse-proxied
+    (``url`` is the gateway, interfaces carry the backend). A non-proxied agent's
+    interfaces are its real, public address and stay untouched. MUST run before
+    ``proxy_pass_url`` is stripped. No-op when not proxied, when the card carries
+    no ``supported_interfaces``, or when the top-level ``url`` is missing.
 
     Args:
         agent_dict: An agent card dict, mutated in place.
     """
     if not (agent_dict.get("proxy_pass_url") or agent_dict.get("proxyPassUrl")):
         return
-    agent_dict.pop("supported_interfaces", None)
-    agent_dict.pop("supportedInterfaces", None)
+
+    camel = "supportedInterfaces" in agent_dict
+    key = "supportedInterfaces" if camel else "supported_interfaces"
+    interfaces = agent_dict.get(key)
+    if not isinstance(interfaces, list):
+        return
+
+    gateway_url = agent_dict.get("url")
+    if not gateway_url:
+        return
+
+    binding_key = "protocolBinding" if camel else "protocol_binding"
+    version_key = "protocolVersion" if camel else "protocol_version"
+
+    projected: list[dict] = []
+    seen: set[str] = set()
+    for entry in interfaces:
+        if not isinstance(entry, dict):
+            continue
+        binding = entry.get("protocol_binding") or entry.get("protocolBinding")
+        entry_url = entry.get("url") or ""
+        if binding in _GATEWAY_UNSERVABLE_BINDINGS:
+            continue
+        if isinstance(entry_url, str) and entry_url.startswith(_WS_URL_SCHEMES):
+            continue
+        if not binding or binding in seen:
+            continue
+        seen.add(binding)
+        new_entry: dict = {"url": gateway_url, binding_key: binding}
+        version = entry.get("protocol_version") or entry.get("protocolVersion")
+        if version:
+            new_entry[version_key] = version
+        projected.append(new_entry)
+
+    if not projected:
+        # Only gateway-unservable interfaces were declared; still advertise one
+        # usable HTTP endpoint at the gateway so the A2A 1.0 card stays complete.
+        projected = [{"url": gateway_url, binding_key: _GATEWAY_FALLBACK_BINDING}]
+
+    agent_dict[key] = projected
+    # Drop the other-cased spelling if both somehow coexist, so the backend
+    # interfaces cannot survive under the alternate key.
+    agent_dict.pop("supported_interfaces" if camel else "supportedInterfaces", None)
 
 
 def redact_agent_backend_fields(
@@ -178,12 +237,12 @@ def redact_agent_backend_fields(
     """Strip internal backend URL fields from an agent card dict in place.
 
     Removes ``proxy_pass_url`` (both snake_case and camelCase spellings) so a
-    non-admin caller sees only the gateway-facing ``url``, and drops a
-    reverse-proxied agent's ``supported_interfaces`` (whose per-entry urls are
-    backend addresses the top-level rewrite does not reach). Callers MUST gate
-    this behind :func:`should_redact_backend_urls`; this function performs no
-    authorization decision of its own. Mirrors
-    :func:`redact_server_backend_fields`.
+    non-admin caller sees only the gateway-facing ``url``, and projects a
+    reverse-proxied agent's ``supported_interfaces`` onto the gateway (whose
+    per-entry urls would otherwise be backend addresses the top-level rewrite
+    does not reach). Callers MUST gate this behind
+    :func:`should_redact_backend_urls`; this function performs no authorization
+    decision of its own. Mirrors :func:`redact_server_backend_fields`.
 
     Args:
         agent_dict: An agent card dict to redact in place.
@@ -192,7 +251,7 @@ def redact_agent_backend_fields(
         The same dict, with backend URL fields removed.
     """
     # Before stripping proxy_pass_url, since that field is the signal for it.
-    _redact_proxied_supported_interfaces(agent_dict)
+    _project_proxied_supported_interfaces(agent_dict)
     for field in _AGENT_BACKEND_URL_FIELDS:
         agent_dict.pop(field, None)
     return agent_dict

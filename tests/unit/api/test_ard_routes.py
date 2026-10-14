@@ -214,35 +214,87 @@ class TestPublicAgent:
         assert body["num_stars"] == 4.5
         assert body["rating_count"] == 2
 
-    def test_reverse_proxied_agent_does_not_leak_backend(self):
-        # A reverse-proxied agent stores the real backend in proxy_pass_url and
-        # in each supported_interfaces[*].url. An anonymous public read must
-        # expose neither, only the gateway-facing top-level url.
+    def test_reverse_proxied_agent_projects_interfaces_in_with_gateway(self):
+        # In with-gateway mode a reverse-proxied agent stores the real backend in
+        # proxy_pass_url and in each supported_interfaces[*].url. An anonymous
+        # public read must expose neither: the top-level url is the gateway, and
+        # the HTTP interfaces are projected onto that gateway url (GRPC omitted).
+        from registry.core.config import DeploymentMode
+
+        gateway = "https://gateway.example.com/agent/trav/"
         agents = {
             "/trav": {
                 "name": "Trav",
                 "visibility": "public",
                 "is_enabled": True,
-                "url": "https://gateway.example.com/agent/trav/",
+                "url": gateway,
                 "proxy_pass_url": "https://trav-backend.internal:9000/a2a",
                 "supported_interfaces": [
                     {
                         "url": "https://trav-backend.internal:9000/a2a",
                         "protocol_binding": "JSONRPC",
                     },
+                    {
+                        "url": "https://trav-backend.internal:9000/a2a",
+                        "protocol_binding": "HTTP+JSON",
+                    },
                     {"url": "https://trav-backend.internal:9000/grpc", "protocol_binding": "GRPC"},
                 ],
             }
         }
         repo = SimpleNamespace(find_with_filter=AsyncMock(return_value=agents))
-        with patch.object(public_record_routes, "get_agent_repository", return_value=repo):
+        with (
+            patch.object(public_record_routes, "get_agent_repository", return_value=repo),
+            patch(
+                "registry.services.visibility.settings.deployment_mode",
+                DeploymentMode.WITH_GATEWAY,
+            ),
+        ):
             resp = _client().get("/api/public/agents/trav")
         assert resp.status_code == 200
         body = resp.json()
-        assert body["url"] == "https://gateway.example.com/agent/trav/"
+        assert body["url"] == gateway
         assert "proxy_pass_url" not in body
-        assert "supported_interfaces" not in body
+        assert body["supported_interfaces"] == [
+            {"url": gateway, "protocol_binding": "JSONRPC"},
+            {"url": gateway, "protocol_binding": "HTTP+JSON"},
+        ]
         assert "trav-backend.internal" not in resp.text
+
+    def test_registry_only_public_read_serves_direct_card(self):
+        # In registry-only mode there is no gateway route, so the public read is
+        # not projected: a non-proxied agent's real interfaces are served as-is
+        # (clients connect directly), matching the authenticated reads which also
+        # skip backend redaction in registry-only mode.
+        from registry.core.config import DeploymentMode
+
+        direct = "https://trav.example.com/a2a"
+        agents = {
+            "/trav": {
+                "name": "Trav",
+                "visibility": "public",
+                "is_enabled": True,
+                "url": direct,
+                "supported_interfaces": [
+                    {"url": direct, "protocol_binding": "JSONRPC"},
+                ],
+            }
+        }
+        repo = SimpleNamespace(find_with_filter=AsyncMock(return_value=agents))
+        with (
+            patch.object(public_record_routes, "get_agent_repository", return_value=repo),
+            patch(
+                "registry.services.visibility.settings.deployment_mode",
+                DeploymentMode.REGISTRY_ONLY,
+            ),
+        ):
+            resp = _client().get("/api/public/agents/trav")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["url"] == direct
+        assert body["supported_interfaces"] == [
+            {"url": direct, "protocol_binding": "JSONRPC"},
+        ]
 
     def test_non_public_agent_404(self):
         # find_with_filter only returns public+enabled, so a private agent is absent.
