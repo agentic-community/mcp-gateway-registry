@@ -19,6 +19,12 @@ Keycloak full-path claim such as ``/mcp-admins`` matches a mapping stored as
 ``mcp-admins``. The filtered list is returned in canonical form too, which is
 what the session then carries (issue #1689).
 
+``ALLOWED_IDP_GROUPS`` entries are written without a leading slash; the
+validator below rejects ``/``. Only the claim side is canonicalised, so an
+allowlist entry of ``mcp-admins`` matches a claim of ``/mcp-admins``. This is
+the operator contract: the parameter takes bare names, and full-path claims
+are accepted on the way in.
+
 Scope of this filter: it runs on the session-cookie login path only, at the
 session write. A bearer-token request reads its groups live from the verified
 token claim and does not pass through here, so the same user can carry a

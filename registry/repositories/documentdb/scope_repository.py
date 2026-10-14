@@ -13,7 +13,7 @@ from ...auth.privileged_constants import (
     PRIVILEGED_SCOPE_NAMES,
     is_admin_conferring_action,
 )
-from ...utils.group_names import group_name_variants
+from ...utils.group_names import group_name_variants, normalize_group_name
 from ..interfaces import ScopeRepositoryBase
 from .client import get_collection_name, get_documentdb_client
 
@@ -108,10 +108,15 @@ def _is_privileged_write(
     Returns:
         True if the write requires admin authorization.
     """
-    if group_name in _PRIVILEGED_SCOPE_NAMES:
+    # Compare the canonical form. The privileged set holds unslashed names, so
+    # without this a full-path spelling such as "/registry-admins" misses the
+    # membership test, is accepted as non-privileged, and reaches storage
+    # (issue #1689). Lookups canonicalise the same way, so it would then
+    # resolve for a "/registry-admins" claim exactly like the real thing.
+    if normalize_group_name(group_name) in _PRIVILEGED_SCOPE_NAMES:
         return True
     for mapped in group_mappings or []:
-        if mapped in _PRIVILEGED_SCOPE_NAMES:
+        if normalize_group_name(mapped) in _PRIVILEGED_SCOPE_NAMES:
             return True
     return _grants_admin(ui_permissions)
 

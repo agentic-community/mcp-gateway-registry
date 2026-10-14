@@ -16,6 +16,7 @@ from ..auth.internal import generate_internal_token
 from ..auth.privileged_constants import PRIVILEGED_SCOPE_NAMES
 from ..core.config import settings
 from ..repositories.factory import get_scope_repository
+from ..utils.group_names import normalize_group_name
 from .server_service import server_service
 
 # Configure logging
@@ -98,11 +99,13 @@ def _import_touches_privileged_scope(
     Returns:
         True if the write requires admin privileges.
     """
-    if scope_name in PRIVILEGED_SCOPE_NAMES:
+    # Canonical form, mirroring the repository guard: a full-path spelling such
+    # as "/registry-admins" must not slip past an exact membership test.
+    if normalize_group_name(scope_name) in PRIVILEGED_SCOPE_NAMES:
         return True
 
     for mapped in group_mappings or []:
-        if mapped in PRIVILEGED_SCOPE_NAMES:
+        if normalize_group_name(mapped) in PRIVILEGED_SCOPE_NAMES:
             return True
 
     # Any permission granting "all" resources requires an admin to author the
