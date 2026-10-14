@@ -362,25 +362,57 @@ class TestBackendUrlRedactionHelpers:
         assert "proxyPassUrl" not in camel
         assert camel["url"] == "https://gw/agent/x/"
 
-    def test_redact_agent_drops_proxied_supported_interfaces(self):
+    def test_redact_agent_projects_proxied_interfaces_to_gateway(self):
         """A reverse-proxied agent's supported_interfaces hold backend urls the
-        top-level rewrite does not reach, so a redacted read drops them."""
+        top-level rewrite does not reach, so a redacted read projects every
+        gateway-servable (HTTP) binding onto the gateway url, omits GRPC, and
+        never exposes the backend."""
         from registry.services.visibility import redact_agent_backend_fields
 
+        gateway = "https://gateway.example.com/agent/flight-booking-agent/"
         card = {
             "name": "Flight Booking Agent",
-            "url": "https://gateway.example.com/agent/flight-booking-agent/",
+            "url": gateway,
             "proxy_pass_url": "https://flight-backend.internal:9000/a2a",
             "supported_interfaces": [
                 {"url": "https://flight-backend.internal:9000/a2a", "protocol_binding": "JSONRPC"},
+                {
+                    "url": "https://flight-backend.internal:9000/a2a",
+                    "protocol_binding": "HTTP+JSON",
+                },
                 {"url": "https://flight-backend.internal:9000/grpc", "protocol_binding": "GRPC"},
             ],
         }
         redact_agent_backend_fields(card)
         assert "proxy_pass_url" not in card
-        assert "supported_interfaces" not in card
-        # Only the gateway-facing url is exposed.
-        assert card["url"] == "https://gateway.example.com/agent/flight-booking-agent/"
+        assert card["url"] == gateway
+        # Both HTTP bindings projected onto the gateway url; GRPC omitted.
+        assert card["supported_interfaces"] == [
+            {"url": gateway, "protocol_binding": "JSONRPC"},
+            {"url": gateway, "protocol_binding": "HTTP+JSON"},
+        ]
+        assert "flight-backend.internal" not in str(card)
+
+    def test_redact_agent_projects_single_jsonrpc_when_only_unservable(self):
+        """If a proxied agent declared only gateway-unservable interfaces (GRPC/WS),
+        project a single JSONRPC gateway interface so the A2A 1.0 card stays usable."""
+        from registry.services.visibility import redact_agent_backend_fields
+
+        gateway = "https://gateway.example.com/agent/g/"
+        card = {
+            "name": "Grpc Agent",
+            "url": gateway,
+            "proxy_pass_url": "https://g-backend.internal:9000/grpc",
+            "supported_interfaces": [
+                {"url": "https://g-backend.internal:9000/grpc", "protocol_binding": "GRPC"},
+                {"url": "wss://g-backend.internal:9000/ws", "protocol_binding": "org.example.ws"},
+            ],
+        }
+        redact_agent_backend_fields(card)
+        assert card["supported_interfaces"] == [
+            {"url": gateway, "protocol_binding": "JSONRPC"},
+        ]
+        assert "g-backend.internal" not in str(card)
 
     def test_redact_agent_keeps_supported_interfaces_when_not_proxied(self):
         """A non-proxied agent has no proxy_pass_url; its supported_interfaces

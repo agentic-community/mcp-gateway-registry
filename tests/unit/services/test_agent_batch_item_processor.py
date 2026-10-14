@@ -231,6 +231,37 @@ class TestDoRegister:
         fire.assert_called_once()
         assert fire.call_args.args[0] == "registration"
 
+    async def test_proxied_register_applies_reverse_proxy_split(self):
+        """A batch-registered a2a agent must go through the same reverse-proxy
+        split as the single-card path: in with-gateway mode the stored url
+        becomes the gateway address and the backend is preserved in
+        proxy_pass_url, so the read-time redaction (keyed on proxy_pass_url) can
+        later fire. Without the split, a batch agent would persist the backend as
+        its top-level url and never set proxy_pass_url."""
+        from registry.api import agent_routes
+        from registry.core.config import DeploymentMode
+
+        item = _item({"op": "register", "card": REGISTER_CARD})
+        register_mock = AsyncMock()
+        with (
+            patch.object(proc.agent_service, "get_agent_info", AsyncMock(return_value=None)),
+            patch.object(proc, "_validate", AsyncMock(return_value=(True, []))),
+            patch.object(proc, "_run_gate", AsyncMock(return_value=(True, ""))),
+            patch.object(proc.agent_service, "register_agent", register_mock),
+            patch.object(proc.agent_service, "is_agent_enabled", AsyncMock(return_value=True)),
+            patch.object(proc, "_fire_webhook"),
+            patch.object(agent_routes.settings, "a2a_reverse_proxy_enabled", True),
+            patch.object(agent_routes.settings, "deployment_mode", DeploymentMode.WITH_GATEWAY),
+            patch.object(agent_routes.settings, "registry_url", "https://gw.example.com"),
+        ):
+            result = await proc._do_register(0, item, "alice")
+        assert result.status == 201
+        stored = register_mock.call_args.args[0]
+        # Advertised url rewritten to the gateway; original backend kept internal.
+        assert stored.url.startswith("https://gw.example.com/agent/")
+        assert stored.url.endswith("/")
+        assert stored.proxy_pass_url == "https://example.com/new"
+
 
 @pytest.mark.unit
 @pytest.mark.asyncio

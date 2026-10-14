@@ -160,6 +160,37 @@ class TestAgentInterfaceModel:
                 protocolVersion="1.0",
             )
 
+    @pytest.mark.parametrize("binding", ["JSONRPC", "HTTP+JSON"])
+    @pytest.mark.parametrize("url", ["ws://agent.example.net/a2a", "wss://agent.example.net/a2a"])
+    def test_standard_binding_rejects_websocket_scheme(self, binding, url):
+        """Standard HTTP bindings (JSONRPC, HTTP+JSON) are HTTP transports, so a
+        WebSocket url on them is a contradiction and must be rejected; WS(S) is
+        only for custom URI-identified bindings."""
+        with pytest.raises(ValidationError):
+            AgentInterface(url=url, protocolBinding=binding, protocolVersion="1.0")
+
+    @pytest.mark.parametrize("url", ["ws://agent.example.net/ws", "wss://agent.example.net/ws"])
+    def test_custom_binding_accepts_websocket_scheme(self, url):
+        """A custom (URI-identified) binding is where a WebSocket endpoint
+        legitimately appears, so WS(S) is accepted there."""
+        iface = AgentInterface(
+            url=url,
+            protocolBinding="org.example.custom-ws",
+            protocolVersion="1.0",
+        )
+
+        assert iface.url == url
+
+    def test_standard_binding_accepts_https(self):
+        """The common case: a standard binding with an HTTPS url is valid."""
+        iface = AgentInterface(
+            url="https://agent.example.net/a2a",
+            protocolBinding="HTTP+JSON",
+            protocolVersion="1.0",
+        )
+
+        assert iface.url == "https://agent.example.net/a2a"
+
     def test_accepts_optional_tenant(self):
         iface = AgentInterface(
             url="https://agent.example.net/a2a",

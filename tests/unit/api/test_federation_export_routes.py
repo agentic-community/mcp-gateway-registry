@@ -819,6 +819,62 @@ class TestAgentsEndpoint:
 
         app.dependency_overrides.clear()
 
+    def test_export_agents_projects_proxied_backend(
+        self,
+        mock_federation_auth: Any,
+    ) -> None:
+        """A proxied agent exported to a peer must not carry the backend origin.
+
+        strip_proxy_fields (inside _item_to_dict) covers neither proxy_pass_url nor
+        supported_interfaces, so the export applies the agent backend projection:
+        proxy_pass_url is dropped and the HTTP interfaces are projected onto the
+        gateway url (GRPC omitted), with no backend address anywhere in the payload.
+        """
+        from registry.auth.dependencies import nginx_proxied_auth
+
+        app.dependency_overrides[nginx_proxied_auth] = mock_federation_auth
+
+        gateway = "https://gw.example.com/agent/flight/"
+        proxied = {
+            "name": "Flight",
+            "path": "/agents/flight",
+            "visibility": "public",
+            "allowed_groups": [],
+            "sync_metadata": {},
+            "url": gateway,
+            "proxy_pass_url": "https://flight-backend.internal:9000/a2a",
+            "supported_interfaces": [
+                {"url": "https://flight-backend.internal:9000/a2a", "protocol_binding": "JSONRPC"},
+                {"url": "https://flight-backend.internal:9000/grpc", "protocol_binding": "GRPC"},
+            ],
+        }
+        mock_agent = Mock()
+        mock_agent.path = proxied["path"]
+        mock_agent.name = proxied["name"]
+        mock_agent.visibility = proxied["visibility"]
+        mock_agent.allowed_groups = proxied["allowed_groups"]
+        mock_agent.sync_metadata = proxied["sync_metadata"]
+        mock_agent.model_dump = Mock(return_value=proxied)
+
+        with (
+            patch.object(agent_service, "get_all_agents", return_value=[mock_agent]),
+            patch.object(
+                agent_service, "get_all_agent_states", return_value={"/agents/flight": True}
+            ),
+        ):
+            client = TestClient(app)
+            response = client.get("/api/federation/agents")
+
+        assert response.status_code == status.HTTP_200_OK
+        item = response.json()["items"][0]
+        assert "proxy_pass_url" not in item
+        assert item["supported_interfaces"] == [
+            {"url": gateway, "protocol_binding": "JSONRPC"},
+        ]
+        assert "flight-backend.internal" not in response.text
+
+        app.dependency_overrides.clear()
+
     def test_export_agents_visibility_filtering(
         self,
         mock_federation_auth: Any,

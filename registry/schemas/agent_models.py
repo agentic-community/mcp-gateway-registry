@@ -258,10 +258,12 @@ def _is_valid_grpc_authority(
     return _is_valid_hostname(host) and _is_valid_port(port)
 
 
-# Schemes accepted for a non-GRPC AgentInterface url. HTTP(S) covers the
-# JSONRPC and HTTP+JSON bindings; WS(S) covers WebSocket custom protocol
-# bindings, whose endpoint the A2A spec declares here as a ws:// or wss://
-# url (https://a2a-protocol.org/latest/topics/custom-protocol-bindings/).
+# Schemes accepted for a CUSTOM (URI-identified) AgentInterface binding url.
+# Standard HTTP bindings (JSONRPC, HTTP+JSON) are HTTP(S)-only and validated
+# with _validate_url_format; only custom bindings reach this set, where WS(S)
+# covers the WebSocket endpoint the A2A custom-protocol-binding spec declares
+# as a ws:// or wss:// url
+# (https://a2a-protocol.org/latest/topics/custom-protocol-bindings/).
 _INTERFACE_URL_SCHEMES = ("http://", "https://", "ws://", "wss://")
 
 
@@ -312,9 +314,16 @@ def _validate_interface_url(
     """
     Validate an AgentInterface url, binding-aware.
 
-    GRPC interfaces may be a bare host:port authority address (no scheme)
-    in addition to a full HTTP(S) URL (e.g. a gateway fronting gRPC);
-    every other binding requires a full HTTP(S) or WS(S) URL.
+    Three cases, by binding:
+
+    - ``GRPC``: a bare host:port authority address (no scheme) in addition to a
+      full HTTP(S) URL (e.g. a gateway fronting gRPC).
+    - The other bindings a2a.proto names explicitly (``JSONRPC``, ``HTTP+JSON``):
+      these are HTTP transports, so they require a full HTTP(S) URL. A WebSocket
+      URL on a standard HTTP binding is a contradiction and is rejected.
+    - Custom (URI-identified) bindings: HTTP(S) or the WebSocket schemes
+      (ws://, wss://) the A2A custom-protocol-binding spec declares, since a
+      custom binding is where a WebSocket endpoint legitimately appears.
 
     Args:
         url: URL or address string to validate
@@ -324,7 +333,7 @@ def _validate_interface_url(
         Validated url string
 
     Raises:
-        ValueError: If the url does not match either accepted form
+        ValueError: If the url does not match the form its binding accepts
     """
     if protocol_binding == "GRPC":
         if _is_valid_grpc_authority(url) or _is_valid_http_url(url):
@@ -333,6 +342,10 @@ def _validate_interface_url(
             "GRPC interface url must be a host:port address (e.g. "
             "'grpc.example.com:443') or a full HTTP(S) URL"
         )
+    # Standard HTTP bindings named by a2a.proto must use HTTP(S); only custom
+    # bindings may use the WebSocket schemes.
+    if protocol_binding in _WELL_KNOWN_PROTOCOL_BINDINGS:
+        return _validate_url_format(url)
     return _validate_interface_url_format(url)
 
 
