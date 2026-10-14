@@ -214,6 +214,36 @@ class TestPublicAgent:
         assert body["num_stars"] == 4.5
         assert body["rating_count"] == 2
 
+    def test_reverse_proxied_agent_does_not_leak_backend(self):
+        # A reverse-proxied agent stores the real backend in proxy_pass_url and
+        # in each supported_interfaces[*].url. An anonymous public read must
+        # expose neither, only the gateway-facing top-level url.
+        agents = {
+            "/trav": {
+                "name": "Trav",
+                "visibility": "public",
+                "is_enabled": True,
+                "url": "https://gateway.example.com/agent/trav/",
+                "proxy_pass_url": "https://trav-backend.internal:9000/a2a",
+                "supported_interfaces": [
+                    {
+                        "url": "https://trav-backend.internal:9000/a2a",
+                        "protocol_binding": "JSONRPC",
+                    },
+                    {"url": "https://trav-backend.internal:9000/grpc", "protocol_binding": "GRPC"},
+                ],
+            }
+        }
+        repo = SimpleNamespace(find_with_filter=AsyncMock(return_value=agents))
+        with patch.object(public_record_routes, "get_agent_repository", return_value=repo):
+            resp = _client().get("/api/public/agents/trav")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["url"] == "https://gateway.example.com/agent/trav/"
+        assert "proxy_pass_url" not in body
+        assert "supported_interfaces" not in body
+        assert "trav-backend.internal" not in resp.text
+
     def test_non_public_agent_404(self):
         # find_with_filter only returns public+enabled, so a private agent is absent.
         repo = SimpleNamespace(find_with_filter=AsyncMock(return_value={}))

@@ -179,6 +179,32 @@ class TestDoRegister:
         assert result.status == 422
         assert result.error["code"] == "validation_error"
 
+    async def test_invalid_interface_returns_422(self):
+        # supported_interfaces is list[dict] at the request layer (unvalidated),
+        # so a malformed interface parses into the item but fails when
+        # _build_card_from_request constructs the AgentCard. _do_register must
+        # surface that as 422, not let it escape as a 500. Here a non-GRPC
+        # binding with a bare host:port (no scheme) fails interface validation.
+        item = _item(
+            {
+                "op": "register",
+                "card": {
+                    **REGISTER_CARD,
+                    "supported_interfaces": [
+                        {
+                            "url": "agent.example.net:443",
+                            "protocol_binding": "JSONRPC",
+                            "protocol_version": "1.0",
+                        }
+                    ],
+                },
+            }
+        )
+        with patch.object(proc.agent_service, "get_agent_info", AsyncMock(return_value=None)):
+            result = await proc._do_register(0, item, "alice")
+        assert result.status == 422
+        assert result.error["code"] == "validation_error"
+
     async def test_gate_denied_returns_403(self):
         item = _item({"op": "register", "card": REGISTER_CARD})
         with (
