@@ -3,7 +3,7 @@
   "info": {
     "title": "MCP Gateway Registry",
     "description": "A registry and management system for Model Context Protocol (MCP) servers",
-    "version": "1.31.0"
+    "version": "1.32.2"
   },
   "paths": {
     "/api/version": {
@@ -919,7 +919,7 @@
     "/api/egress/obo-identifier-uris": {
       "get": {
         "summary": "Get Obo Identifier Uris",
-        "description": "List the Entra Application ID URIs the operator must register.\n\nEach server that logs the client in at the gateway via a per-server PRM has a\nper-server resource URL -- the value the gateway advertises in its PRM and\nvalidates as the ingress ``aud``. On Entra this is EVERY server (issue #990),\nplus ``obo_exchange`` / the 3LO ``oauth_user`` ingress leg on any provider.\nOn Entra, every one of those URLs must be present in the gateway app's\n``identifierUris`` list. This endpoint returns the exact set so the operator\ncan keep Entra in sync as servers are added/removed -- the registry side is\nautomatic; only this list is manual.\n\nNOT gated on egress being enabled: on an Entra ingress-only deployment\n(egress off -- the default) plain servers still need per-server App ID URIs,\nand the operator needs this list to register them. Available whenever a\nper-server PRM is advertised, i.e. on Entra OR when egress auth is enabled;\notherwise (lenient IdP + egress off, no per-server PRMs) it returns an empty\nlist rather than 404, so the caller always gets a definitive answer.\n\nAdmin only. Returns ``{\"identifier_uris\": [...], \"count\": N}``.",
+        "description": "List the Entra Application ID URIs the operator must register.\n\nEach server that logs the client in at the gateway via a per-server PRM has a\nper-server resource URL -- the value the gateway advertises in its PRM and\nvalidates as the ingress ``aud``. On Entra this is EVERY server (issue #990),\nplus ``obo_exchange`` / the 3LO ``oauth_user`` ingress leg on any provider,\nand every enabled **virtual** server (its ``/virtual/<id>/mcp`` connection URL\nis an ingress login endpoint exactly like a registered server's).\nOn Entra, every one of those URLs must be present in the gateway app's\n``identifierUris`` list. This endpoint returns the exact set so the operator\ncan keep Entra in sync as servers are added/removed -- the registry side is\nautomatic; only this list is manual.\n\nNOT gated on egress being enabled: on an Entra ingress-only deployment\n(egress off -- the default) plain servers still need per-server App ID URIs,\nand the operator needs this list to register them. Available whenever a\nper-server PRM is advertised, i.e. on Entra OR when egress auth is enabled;\notherwise (lenient IdP + egress off, no per-server PRMs) it returns an empty\nlist rather than 404, so the caller always gets a definitive answer.\n\nAdmin only. Returns ``{\"identifier_uris\": [...], \"count\": N}``.",
         "operationId": "get_obo_identifier_uris_api_egress_obo_identifier_uris_get",
         "responses": {
           "200": {
@@ -10001,7 +10001,7 @@
     "/api/internal/sessions/backend/{session_key}": {
       "get": {
         "summary": "Get Backend Session",
-        "description": "Look up a backend session by compound key, bound to the caller.\n\nThe session_key is '<client_session_id>:<backend_key>'.\nReturns the backend_session_id if found, 404 otherwise.\nAlso bumps last_used_at atomically.\n\nThe Lua router passes the authenticated user via the ``user_id`` query\nparam. Binding the lookup to the owner is defense in depth (the\nclient-session gate already enforces ownership upstream): a backend session\nbelonging to a different user is treated as not found. ``user_id`` is\nREQUIRED so the owner check cannot be silently skipped; a request without it\nfails with 422.",
+        "description": "Look up a backend session by compound key, bound to the caller.\n\nThe session_key is '<client_session_id>:<backend_key>'.\nReturns an initialized stateless state or backend session ID, 404 otherwise.\nAlso bumps last_used_at atomically.\n\nThe Lua router passes the authenticated user via the ``user_id`` query\nparam. Binding the lookup to the owner is defense in depth (the\nclient-session gate already enforces ownership upstream): a backend session\nbelonging to a different user is treated as not found. ``user_id`` is\nREQUIRED so the owner check cannot be silently skipped; a request without it\nfails with 422.",
         "operationId": "get_backend_session_api_internal_sessions_backend__session_key__get",
         "parameters": [
           {
@@ -15280,7 +15280,7 @@
           "Discovery"
         ],
         "summary": "Get Oauth Protected Resource For Server",
-        "description": "Per-server RFC 9728 PRM (path-aware discovery).\n\nSpec-compliant MCP clients (Claude Code, etc.) try the path-suffixed\nwell-known URL first, derived from the per-server connection URL. We serve a\ndocument only for servers that need it (see ``server_needs_per_server_prm``):\n``obo_exchange`` on any provider, ``oauth_user`` on Entra, and -- on Entra --\n**every server including plain ones** (issue #990). Everything else --\nincluding Keycloak/Cognito/Okta/Auth0 plain and 3LO servers, which work with\nthe gateway-wide root PRM -- 404s here so the client falls back to the global\nPRM (unchanged behavior).\n\nThe advertised ``resource`` is the **per-server connection URL** (e.g.\n``https://gw/github/mcp``). This is the ONLY value that satisfies all three\nconstraints simultaneously:\n  - RFC 9728 \u00a73.3: the client only accepts a PRM ``resource`` equal to the\n    connection URL it is accessing (or the origin); a made-up shared path is\n    rejected.\n  - RFC 8707 canonicalization: a bare origin gets a trailing ``/`` on the\n    wire, which Entra App ID URIs cannot match -- a path-qualified per-server\n    URL is sent verbatim.\n  - Entra: the sent ``resource`` must equal a registered App ID URI exactly.\nThe trade-off (Entra only): each such server's per-server URL must be an App\nID URI on the gateway app (operator maintains the ``identifierUris`` list;\nsee GET /api/egress/obo-identifier-uris for the exact list to register).\nOn Entra this applies to EVERY server (issue #990), not just the egress\nmodes. The registry side is fully dynamic -- derived from the server entry,\nno per-server env config. Lenient IdPs (Keycloak/Cognito/Okta/Auth0) do not\nhit these constraints; their plain servers keep using the gateway-wide PRM\nand this per-server PRM is what makes Entra ingress login work.",
+        "description": "Per-server RFC 9728 PRM (path-aware discovery).\n\nSpec-compliant MCP clients (Claude Code, etc.) try the path-suffixed\nwell-known URL first, derived from the per-server connection URL. We serve a\ndocument only for servers that need it (see ``server_needs_per_server_prm``):\n``obo_exchange`` on any provider, ``oauth_user`` on Entra, and -- on Entra --\n**every server including plain ones** (issue #990). Everything else --\nincluding Keycloak/Cognito/Okta/Auth0 plain and 3LO servers, which work with\nthe gateway-wide root PRM -- 404s here so the client falls back to the global\nPRM (unchanged behavior).\n\nA ``/virtual/<id>`` path resolves against the virtual-server collection\ninstead, gated by :func:`virtual_server_needs_per_server_prm`. A virtual\nserver is an MCP connection endpoint like any other, so without this an\nEntra client could not log in to one at all: it would fall back to the\nbare-origin root PRM that Entra refuses.\n\nThe advertised ``resource`` is the **per-server connection URL** (e.g.\n``https://gw/github/mcp``). This is the ONLY value that satisfies all three\nconstraints simultaneously:\n  - RFC 9728 \u00a73.3: the client only accepts a PRM ``resource`` equal to the\n    connection URL it is accessing (or the origin); a made-up shared path is\n    rejected.\n  - RFC 8707 canonicalization: a bare origin gets a trailing ``/`` on the\n    wire, which Entra App ID URIs cannot match -- a path-qualified per-server\n    URL is sent verbatim.\n  - Entra: the sent ``resource`` must equal a registered App ID URI exactly.\nThe trade-off (Entra only): each such server's per-server URL must be an App\nID URI on the gateway app (operator maintains the ``identifierUris`` list;\nsee GET /api/egress/obo-identifier-uris for the exact list to register).\nOn Entra this applies to EVERY server (issue #990), not just the egress\nmodes. The registry side is fully dynamic -- derived from the server entry,\nno per-server env config. Lenient IdPs (Keycloak/Cognito/Okta/Auth0) do not\nhit these constraints; their plain servers keep using the gateway-wide PRM\nand this per-server PRM is what makes Entra ingress login work.",
         "operationId": "get_oauth_protected_resource_for_server__well_known_oauth_protected_resource__server_path__get",
         "parameters": [
           {
@@ -19226,6 +19226,11 @@
             "type": "object",
             "title": "Attributes"
           },
+          "is_enabled": {
+            "type": "boolean",
+            "title": "Is Enabled",
+            "default": true
+          },
           "is_proxied": {
             "type": "boolean",
             "title": "Is Proxied",
@@ -19694,6 +19699,17 @@
               }
             ],
             "title": "Attributes"
+          },
+          "is_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Enabled"
           },
           "is_proxied": {
             "anyOf": [
@@ -20181,7 +20197,7 @@
           "server_path"
         ],
         "title": "EgressTokenRequest",
-        "description": "Body for POST /internal/egress-token.\n\nserver_path identifies the registered server whose egress config + upstream\nallowlist the vend is checked against. Identity (sub/auth_method) is NOT in\nthe body -- it is re-derived from the forwarded mcp-proxy token."
+        "description": "Body for POST /internal/egress-token.\n\nserver_path identifies the registered server whose selected version and exact\noutbound destination are checked against the signed proxy token. Identity\n(sub/auth_method) is re-derived from that token, never the request body."
       },
       "EgressTokenResponse": {
         "properties": {
@@ -20711,8 +20727,7 @@
               }
             ],
             "title": "Backend Session Id",
-            "description": "Stateful backend session ID",
-            "default": null
+            "description": "Stateful backend session ID"
           },
           "stateless": {
             "type": "boolean",
@@ -26003,8 +26018,7 @@
               }
             ],
             "title": "Backend Session Id",
-            "description": "Session ID from a stateful backend; null for a stateless backend",
-            "default": null
+            "description": "Session ID from a stateful backend; null for a stateless backend"
           },
           "stateless": {
             "type": "boolean",
