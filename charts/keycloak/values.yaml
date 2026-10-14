@@ -1,0 +1,78 @@
+# Keycloak subchart — official quay.io/keycloak/keycloak image + official postgres.
+
+# Gate: the stack sets this to false for Entra / external Keycloak.
+create: true
+
+image:
+  repository: quay.io/keycloak/keycloak
+  tag: "26.6.0" # CIMD (Client ID Metadata Documents) requires >= 26.6
+  pullPolicy: IfNotPresent
+
+replicas: 1
+
+# Admin bootstrap (Keycloak 26 KC_BOOTSTRAP_ADMIN_*). Password comes from a
+# pre-created secret (the stack's keycloak-admin-secret template).
+auth:
+  adminUser: user
+  existingSecret: "" # defaults to {{ .Release.Name }}-keycloak
+  existingSecretPasswordKey: admin-password # pragma: allowlist secret
+
+# The admin realm whose sslRequired is relaxed by the SSL-init hook.
+adminRealm: master
+
+# Comma-separated KC_FEATURES to enable, e.g. "cimd" for Client ID Metadata
+# Documents (experimental, >= 26.6). Empty disables the flag.
+features: ""
+
+# Reverse-proxy / HTTP settings (Keycloak runs HTTP behind the registry nginx).
+proxyHeaders: xforwarded
+hostnameStrict: false
+httpRelativePath: "/"
+cache: local # 'local' for single replica; use HA cache config for replicas > 1
+
+# Relax sslRequired on the admin realm so the admin console works over HTTP
+# behind the edge proxy. Replaces the former Bitnami postStart hook.
+sslInit:
+  enabled: true
+
+service:
+  httpPort: 80
+  containerPort: 8080
+  managementPort: 9000
+
+resources: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podAnnotations: {}
+extraEnv: []
+
+postgres:
+  image:
+    repository: postgres
+    tag: "17" # matches the Bitnami source major (17.x) for a clean dump/restore
+    pullPolicy: IfNotPresent
+  database: keycloak
+  username: keycloak
+  existingSecret: "" # defaults to {{ .Release.Name }}-keycloak-postgresql
+  existingSecretPasswordKey: password # pragma: allowlist secret
+  persistence:
+    size: 8Gi
+    storageClass: ""
+  resources: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  # Bitnami->official data migration (default TRUE, auto-detecting). A pre-upgrade
+  # Job dumps the bitnami DB into a migration PVC and the new postgres
+  # restores it (normalized to the DB/user above) on first init. If the
+  # source isn't reachable (fresh install, or repeat upgrade after it's gone) the
+  # Job skips and it's a no-op — safe by default so a missed flag can't drop a DB.
+  migrateFromBitnami: false
+  # Source to dump from (pre-upgrade only).
+  source:
+    serviceName: "" # defaults to {{ .Release.Name }}-postgresql
+    port: 5432
+    database: bitnami_keycloak
+    username: bn_keycloak
+  migrationPvcSize: 2Gi

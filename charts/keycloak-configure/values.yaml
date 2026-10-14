@@ -28,3 +28,24 @@ keycloak:
 # MCP_ADVERTISED_SCOPES value.
 dcr:
   enabled: true
+
+# Client ID Metadata Documents (CIMD) realm setup.
+#
+# When true, the Job configures a client policy so MCP clients whose client_id
+# is an https URL (e.g. VS Code, Claude Code) can authenticate by publishing
+# their own metadata document -- Keycloak fetches + validates it, no
+# pre-registration. Requires the Keycloak server 'cimd' feature
+# (keycloak.features: "cimd", i.e. KC_FEATURES=cimd; >= 26.6).
+#
+# trustedDomains is the allowlist Keycloak will fetch CIMD documents from AND
+# validate every URL host inside them against. It must include, for each trusted
+# client: the client_id host, its loopback redirect hosts (127.0.0.1/localhost),
+# and any logo_uri/client_uri CDN hosts the document references.
+cimd:
+  enabled: false
+  trustedDomains:
+    - vscode.dev
+    - code.visualstudio.com
+    - claude.ai
+    - "127.0.0.1"
+    - localhost

@@ -6,8 +6,8 @@ version: 0.1.0
 appVersion: "1.0.0"
 dependencies:
   - name: keycloak
-    version: 25.2.0
-    repository: oci://registry-1.docker.io/bitnamicharts
+    version: 0.1.0
+    repository: "file://../keycloak"
     condition: keycloak.create
   - name: mongodb-kubernetes
     version: 1.6.1
