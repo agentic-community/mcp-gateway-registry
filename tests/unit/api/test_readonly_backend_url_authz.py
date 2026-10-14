@@ -393,9 +393,10 @@ class TestBackendUrlRedactionHelpers:
         ]
         assert "flight-backend.internal" not in str(card)
 
-    def test_redact_agent_projects_single_jsonrpc_when_only_unservable(self):
+    def test_redact_agent_drops_all_interfaces_when_only_unservable(self):
         """If a proxied agent declared only gateway-unservable interfaces (GRPC/WS),
-        project a single JSONRPC gateway interface so the A2A 1.0 card stays usable."""
+        the gateway's HTTP proxy_pass cannot front any of them, so the projection
+        emits an empty list rather than fabricating a dead JSONRPC endpoint."""
         from registry.services.visibility import redact_agent_backend_fields
 
         gateway = "https://gateway.example.com/agent/g/"
@@ -409,9 +410,7 @@ class TestBackendUrlRedactionHelpers:
             ],
         }
         redact_agent_backend_fields(card)
-        assert card["supported_interfaces"] == [
-            {"url": gateway, "protocol_binding": "JSONRPC"},
-        ]
+        assert card["supported_interfaces"] == []
         assert "g-backend.internal" not in str(card)
 
     def test_redact_agent_keeps_supported_interfaces_when_not_proxied(self):
