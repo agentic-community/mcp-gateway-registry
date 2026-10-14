@@ -335,6 +335,9 @@ An agent card is a JSON document that describes what an agent does, how to reach
 - `url`: The URL other agents use to reach this agent after discovery. In **registry-only mode** this is the agent's direct backend. In **reverse-proxy mode** the registry rewrites it at registration time to the gateway address (`{REGISTRY_URL}/agent/{path}/`) and moves the real backend to `proxy_pass_url` (see below).
 - `proxy_pass_url` (reverse-proxy mode only): the agent's real private backend that the gateway proxies to. Written by the registry at registration time, read by the nginx generator / health checker / security scanner, and **redacted from non-admin reads** (single-agent GET and discovery) — exactly like the MCP-server backend-URL split. For legacy agents registered before reverse-proxy mode existed, this is absent and consumers fall back to `url`.
 
+**Multi-transport interfaces (A2A 1.0)**:
+- `supported_interfaces`: the transports this agent accepts. Each entry is an `AgentInterface` with a `url`, a `protocol_binding`, and an optional `protocol_version`. A2A 1.0 lets one agent offer several transports (for example `JSONRPC`, `HTTP+JSON`, and `GRPC`) side by side. The registry validates the `url` against the binding: a `GRPC` entry takes a `host:port` authority or an HTTP(S) URL; the standard bindings `JSONRPC` and `HTTP+JSON` take an HTTP(S) URL only; a custom (vendor) binding also accepts `ws://` or `wss://`. A bad entry fails registration with a 422 that names the binding. In reverse-proxy mode the registry projects these onto the gateway on read (see [the reverse-proxy section](#reverse-proxy-mode-proxying-a2a-traffic)).
+
 **Capabilities**:
 - `skills`: List of capabilities the agent offers. Each skill has:
   - `id`: Unique identifier within the agent
@@ -346,6 +349,8 @@ An agent card is a JSON document that describes what an agent does, how to reach
 **Security**:
 - `security_schemes`: How to authenticate with the agent (bearer, OAuth2, etc.)
 - `security`: Which schemes are required
+- `security_requirements` (A2A 1.0): a list of `SecurityRequirement`, each wrapping a `schemes` map from scheme name to its required scopes. The A2A wire format keys the scope list as `list`, so the registry serializes and diffs it under that key.
+- `signatures` (A2A 1.0): detached JWS signatures over the card, so a consumer can verify the card was not altered after the agent published it.
 - `trust_level`: Verification status (unverified, community, verified, trusted)
 
 **Registry Metadata**:
@@ -1136,6 +1141,7 @@ Reverse-proxy mode mirrors the MCP-server `url`/`proxy_pass_url` split so the ag
 - At **registration** (when `a2a_reverse_proxy_effective` and `supported_protocol == "a2a"`), the registry stores the registrant's real backend in **`proxy_pass_url`** and rewrites the advertised **`url`** to the gateway address `{REGISTRY_URL}/agent/{path}/`. The rewrite happens *after* endpoint validation, so the registration health check still probes the real backend.
 - **Discovery, the nginx generator, the health checker, and the security scanner** all read the backend from `proxy_pass_url`, falling back to `url` for legacy agents registered before the flag existed (backwards compatible).
 - **`proxy_pass_url` is redacted from non-admin reads** (single-agent GET and semantic discovery) via the shared `should_redact_backend_urls` helper — admin-only, exactly like the MCP-server backend-URL redaction. Discovery therefore returns only the gateway `url` to non-admins.
+- **A proxied agent's `supported_interfaces` are projected onto the gateway on the same non-admin reads.** The registration split rewrites only the top-level `url`; each `supported_interfaces[*].url` still holds the real backend. `redact_agent_backend_fields` (shared by detail, search, public read, and federation export) rewrites every gateway-servable binding onto the gateway `url` and drops the backend. The gateway route is a plain HTTP `proxy_pass`, so it serves the HTTP transports (`JSONRPC`, `HTTP+JSON`) but not `GRPC` or WebSocket; those entries are dropped rather than pointed at a gateway address that cannot serve them. An agent that declared only GRPC or WebSocket interfaces projects to an empty list, because the gateway fronts none of its transports.
 
 So a discovering agent always receives the gateway URL and routes back through the proxy; only admins ever see the private backend.
 
@@ -1170,6 +1176,8 @@ sequenceDiagram
 `agent_card_rewrite.lua` (a `body_filter`) makes the proxy transparent: it rewrites the card's top-level `url` and advertised interface URLs (`additionalInterfaces` for A2A 0.2.x, `supportedInterfaces` for proto/1.0 SDKs) from the backend origin to the gateway, so the client's JSON-RPC calls return through the proxy. A companion `header_filter` clears `Content-Length` since the body changes.
 
 **Scheme behind a TLS-terminating proxy:** the advertised URL's scheme is chosen from, in order, `X-Cloudfront-Forwarded-Proto`, then `X-Forwarded-Proto`, then `ngx.var.scheme` (only the exact values `http`/`https` are accepted). This matters when CloudFront terminates TLS and forwards to the ALB over plain HTTP: the ALB overwrites `X-Forwarded-Proto` with the CloudFront→ALB hop scheme (`http`), but `X-Cloudfront-Forwarded-Proto` preserves the original viewer scheme (`https`), so the card correctly advertises `https`. Empty-array card fields (e.g. a skill's `tags: []`) are preserved by rewriting only the URL substrings rather than decode/re-encoding the whole JSON.
+
+**The live rewrite and the DB-read projection differ on purpose.** The projection above reshapes the card the registry stored, so it drops a GRPC or WebSocket entry the gateway cannot serve. This Lua filter rewrites the card the backend returns live, by literal string substitution, and so cannot remove an array entry without decode/re-encoding the body (which would corrupt empty arrays, as noted). It rewrites every interface url, GRPC and WebSocket included, to the HTTP gateway. A client that reads a GRPC interface from the live proxied card therefore gets the gateway address, which does not serve GRPC. Aligning the live filter with the projection is a tracked follow-up.
 
 ### Invocation Flow (Per-Agent FGAC)
 

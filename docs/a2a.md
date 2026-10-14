@@ -160,7 +160,7 @@ In the default mode the registry hands a discovering agent the target's *direct*
 ### What changes when it is on
 
 - Each **enabled** agent gets two `auth_request`-guarded nginx locations: an exact-match agent-card route (`/agent/{path}/.well-known/agent-card.json`) and a prefix JSON-RPC/SSE route (`/agent/{path}/`).
-- At registration the registry stores your real backend in **`proxy_pass_url`** and rewrites the advertised **`url`** to the gateway (`{REGISTRY_URL}/agent/{path}/`). This mirrors the MCP-server backend/advertised split. The backend is **redacted from non-admin reads**, so discovering agents only ever get the gateway URL.
+- At registration the registry stores your real backend in **`proxy_pass_url`** and rewrites the advertised **`url`** to the gateway (`{REGISTRY_URL}/agent/{path}/`). This mirrors the MCP-server backend/advertised split. The backend is **redacted from non-admin reads**, so discovering agents only ever get the gateway URL. A2A 1.0 `supported_interfaces` get the same treatment: each HTTP binding is projected onto the gateway URL, and bindings the gateway cannot serve (GRPC, WebSocket) are dropped.
 - Invocation is gated per agent at `/validate`: the caller needs an `invoke_agent` grant for that agent path.
 - The caller's gateway token travels in **`X-Authorization`** (stripped at egress); the target agent's own credential travels in **`Authorization`** (forwarded end to end). The gateway never brokers credentials to the backend.
 

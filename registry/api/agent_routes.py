@@ -564,6 +564,34 @@ def _normalize_interface_entry(
     return {_INTERFACE_CAMEL_TO_SNAKE.get(k, k): v for k, v in entry.items() if v is not None}
 
 
+def _normalize_requirement(
+    entry: Any,
+) -> Any:
+    """Normalize one security_requirements entry for diff comparison.
+
+    Each entry is a SecurityRequirement wrapping a `schemes` map of scheme name
+    to its scope list. model_dump() emits the scope list under the wire alias
+    `list`; the `values` fallback covers a hand-built or remote card that used
+    the StringList field name. Both sides are keyed to `list` so an equivalent
+    requirement does not report a spurious diff.
+    """
+    if not isinstance(entry, dict):
+        return entry
+    schemes = entry.get("schemes")
+    if not isinstance(schemes, dict):
+        return entry
+    return {
+        "schemes": {
+            scheme: (
+                {"list": scopes.get("list", scopes.get("values", []))}
+                if isinstance(scopes, dict)
+                else scopes
+            )
+            for scheme, scopes in schemes.items()
+        }
+    }
+
+
 def _compute_card_diff(
     current_agent: AgentCard,
     remote_card: dict[str, Any],
@@ -673,27 +701,11 @@ def _compute_card_diff(
             # Each entry is a SecurityRequirement wrapping its scheme map
             # under "schemes" (a2a.proto: SecurityRequirement.schemes is
             # map<string, StringList>, not inlined onto the entry itself).
-            # model_dump() uses the StringList field name ("values"); the A2A
-            # wire format (and remote cards) use its alias ("list"). Normalize
-            # both sides to the wire key so an equivalent requirement doesn't
-            # report a spurious diff.
-            def _normalize_requirement(entry: Any) -> Any:
-                if not isinstance(entry, dict):
-                    return entry
-                schemes = entry.get("schemes")
-                if not isinstance(schemes, dict):
-                    return entry
-                return {
-                    "schemes": {
-                        scheme: (
-                            {"list": scopes.get("list", scopes.get("values", []))}
-                            if isinstance(scopes, dict)
-                            else scopes
-                        )
-                        for scheme, scopes in schemes.items()
-                    }
-                }
-
+            # model_dump() emits the StringList under its wire alias ("list")
+            # via StringList's model_serializer; the "values" fallback in
+            # _normalize_requirement covers a hand-built or remote card that
+            # used the field name. Both sides are normalized to the wire key so
+            # an equivalent requirement doesn't report a spurious diff.
             if isinstance(current_value, list):
                 current_value = [_normalize_requirement(e) for e in current_value]
             if isinstance(remote_value, list):
