@@ -602,8 +602,13 @@ class Settings(BaseSettings):
             "clients. Useful when the IdP performs RFC 7591 DCR and rejects "
             "registration requests containing scope names it doesn't recognize. "
             "Example: `openid email profile offline_access`. "
-            "When unset, all scopes from the registry's authorization config are "
-            "advertised (default)."
+            "When unset, the OIDC-universal set is advertised (see "
+            "DEFAULT_ADVERTISED_SCOPES in registry/auth/oauth_metadata.py). The "
+            "registry's internal scope names are deliberately NOT advertised: "
+            "they are authorization identifiers rather than IdP OAuth scopes, a "
+            "scope-validating IdP rejects the authorization request with "
+            "`invalid_scope`, and advertising them would name privileged scopes "
+            "to a client that may request them via DCR."
         ),
     )
 

@@ -710,6 +710,67 @@ sanitizer that isn't called) is equivalent to no check.
   never set (`X-Validate-Binding-Secret`) -- and treat them as absent otherwise.
   The existing marker proves "came through nginx", not "came through this
   version of the template".
+- **Validate the type of any claim that drives authorization, and reject rather
+  than coerce.** A `groups` claim arrives as a JSON array of strings. Six
+  readings of it had each guessed differently at what to do with other shapes:
+  one wrapped a bare string into a single-element list, so a token asserting
+  `"groups": "mcp-registry-admin"` became membership in that group; others
+  passed a dict or a list of booleans through to the mapping query. The rule is
+  one shared validator (`normalize_groups_claim` in
+  `auth_server/providers/base.py`), accepting only a list of strings, treating
+  absent and null as the empty list, and raising on anything else. Coercion
+  guesses at intent on a value the caller controls, and the guess runs in the
+  authorization path. Apply it in every provider, including the self-signed and
+  userinfo paths, because a validator that one reading skips is the reading an
+  attacker uses.
+
+## Identity-provider self-registration (DCR)
+
+RFC 7591 Dynamic Client Registration lets an MCP client create its own IdP
+client with no operator involvement, and anonymous DCR needs no credential at
+all. It does not let anyone authenticate as someone else: a user still logs in
+at the IdP with their own credentials. What it does decide is what the token
+that login produces asserts, so the registration surface is an authorization
+surface.
+
+- **Restrict both ends: which scopes a self-registered client may request, and
+  whether it may define protocol mappers.** The scope restriction alone is not
+  enough. A mapper chooses what a claim contains, so a client permitted to
+  attach a hardcoded-claim mapper can stamp a `groups` value regardless of the
+  user's real membership, and the gateway derives access from that claim. In
+  Keycloak terms, both the "Allowed Client Scopes" and "Allowed Protocol Mapper
+  Types" registration policies are load-bearing, for the `anonymous` and
+  `authenticated` subtypes alike, since Keycloak picks the subtype by whether
+  the request carried a registration token.
+- **Derive the withheld set from the list that creates the scopes, never from a
+  naming convention.** The first version of this filter excluded any scope whose
+  name contained a `/`, which covered the four `<group>/<action>` scopes it was
+  written against. The Helm surface also created `mcp-registry-admin` and
+  `registry-admins`, whose names carry no slash and which are the `_id` of scope
+  documents granting `server: "*"` with every action, so both stayed requestable
+  there. A convention nothing enforces is not a boundary. Name the privileged
+  set explicitly, build the DCR exclusion from that same list so a scope added
+  in one place cannot stay requestable in the other, and keep a shape-based rule
+  only as a second filter.
+- **Report what the allowlist resolved to.** Setup scripts that compute a policy
+  from live realm state should print the resulting allowlist and flag anything
+  excluded only by the weaker rule. The failure mode of a computed allowlist is
+  silent widening, which no amount of reading the script reveals.
+- **A provider that passes the IdP's discovery document through inherits that
+  IdP's DCR policy.** Of six providers here, `keycloak` and `pingfederate`
+  return the upstream `openid-configuration`, so whatever `registration_endpoint`
+  the IdP publishes is advertised to clients; `entra`, `okta`, `auth0` and
+  `cognito` build a static document with no such field. Okta and Auth0 support
+  DCR natively, so those two are unexposed only because of what the static
+  document omits. Switching any provider to passthrough therefore adds a
+  registration surface, and the restrictions above have to exist on that IdP
+  before the switch.
+- **A privileged scope name and an authorization identifier are the same string.**
+  `resolve_scope_access` looks up each scope in the token by name as a scope
+  document, so any scope name that matches a document resolves to that
+  document's grants. Creating an IdP client scope named after an admin scope
+  document is therefore equivalent to creating a requestable admin credential,
+  which is how the two slash-free names above came to matter.
 
 ## Frontend (React) URL / href handling
 
