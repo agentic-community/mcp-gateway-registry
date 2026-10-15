@@ -10,7 +10,7 @@ from urllib.parse import urlencode
 import jwt
 import requests
 
-from .base import AuthProvider
+from .base import AuthProvider, normalize_groups_claim
 
 JWT_ISSUER = os.environ.get("JWT_ISSUER", "mcp-auth-server")
 JWT_AUDIENCE = os.environ.get("JWT_AUDIENCE", "mcp-registry")
@@ -198,9 +198,9 @@ class PingFederateProvider(AuthProvider):
                     scopes = scope_value
 
             # Extract groups from claims
-            groups = claims.get("groups", [])
-            if isinstance(groups, str):
-                groups = [groups]
+            groups = normalize_groups_claim(
+                claims.get("groups"), source="pingfederate self-signed groups"
+            )
 
             logger.info(
                 f"Successfully validated self-signed token for user: {claims.get('sub')}, "
@@ -315,11 +315,9 @@ class PingFederateProvider(AuthProvider):
             logger.debug(f"Token validation successful for user: {claims.get('sub', 'unknown')}")
 
             # Extract groups using configurable claim name
-            groups = claims.get(self.groups_claim, [])
-            if not isinstance(groups, list):
-                groups = [groups] if groups else []
-            if not all(isinstance(g, str) for g in groups):
-                raise ValueError("Invalid groups claim format: must contain only strings")
+            groups = normalize_groups_claim(
+                claims.get(self.groups_claim), source="pingfederate groups"
+            )
 
             if not groups:
                 logger.warning(

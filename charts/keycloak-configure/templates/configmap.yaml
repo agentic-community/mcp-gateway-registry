@@ -786,7 +786,7 @@ data:
     # =========================================================================
     # Dynamic Client Registration (RFC 7591) support
     # =========================================================================
-    # Three configuration changes are needed so that MCP clients (Claude Code,
+    # Four configuration changes are needed so that MCP clients (Claude Code,
     # Claude.ai connectors, Cursor, etc.) can register themselves dynamically
     # and receive tokens that carry the user's groups for per-user authorization
     # at the gateway:
@@ -799,6 +799,10 @@ data:
     #    "Allowed Client Scopes" policies to accept all realm client-scopes.
     # 3. configure_dcr_trusted_hosts - relax the anonymous DCR "Trusted Hosts"
     #    policy so MCP clients running on diverse cloud egress IPs can register.
+    # 4. configure_dcr_allowed_mapper_types() - narrow down the DCR "Allowed Protocol
+    #    Mapper Types" policy (anonymous + authenticated). The gateway's own groups/audience
+    #    mappers live on the server-side `basic` client-scope, so this does not
+    #    affect legitimate MCP.
 
     setup_dcr_groups_mapper() {
         local token=$1
@@ -905,9 +909,9 @@ data:
     }
 
     # Widen one subType's "Allowed Client Scopes" policy to include every
-    # client-scope defined in the realm. Both 'anonymous' and 'authenticated'
-    # subTypes need this because Keycloak picks one based on whether the DCR
-    # request carries an initial-access / registration token.
+    # NON-PRIVILEGED client-scope defined in the realm. Both 'anonymous' and
+    # 'authenticated' subTypes need this because Keycloak picks one based on
+    # whether the DCR request carries an initial-access / registration token.
     _widen_allowed_scopes_policy() {
         local token=$1
         local sub_type=$2
@@ -950,7 +954,7 @@ data:
             -d "$policy_json")
 
         if [ "$response" = "204" ]; then
-            echo -e "${GREEN}${sub_type} Allowed Client Scopes policy includes all realm scopes.${NC}"
+            echo -e "${GREEN}${sub_type} Allowed Client Scopes policy includes non-privileged realm scopes.${NC}"
         else
             echo -e "${RED}FAILED (${sub_type}): HTTP status ${response}${NC}"
             return 1
@@ -967,7 +971,7 @@ data:
 
         local all_scope_names=$(curl -s -H "Authorization: Bearer ${token}" \
             "${KEYCLOAK_URL}/admin/realms/${REALM}/client-scopes" | \
-            jq -c '[.[].name]')
+            jq -c '[.[].name | select(contains("/") | not)]')
 
         _widen_allowed_scopes_policy "$token" "anonymous" "$components" "$all_scope_names" || return 1
         _widen_allowed_scopes_policy "$token" "authenticated" "$components" "$all_scope_names" || return 1
@@ -1018,6 +1022,56 @@ data:
             echo -e "${RED}Failed to update Trusted Hosts policy. HTTP status: ${response}${NC}"
             return 1
         fi
+    }
+
+    configure_dcr_allowed_mapper_types() {
+        local token=$1
+
+        local components=$(curl -s -H "Authorization: Bearer ${token}" \
+            "${KEYCLOAK_URL}/admin/realms/${REALM}/components?type=org.keycloak.services.clientregistration.policy.ClientRegistrationPolicy")
+
+        local sub_type
+        for sub_type in anonymous authenticated; do
+            local policy_id=$(echo "$components" | \
+                jq -r --arg st "$sub_type" '.[] | select(.name=="Allowed Protocol Mapper Types" and .subType==$st) | .id')
+            local parent_id=$(echo "$components" | \
+                jq -r --arg st "$sub_type" '.[] | select(.name=="Allowed Protocol Mapper Types" and .subType==$st) | .parentId')
+
+            if [ -z "$policy_id" ] || [ "$policy_id" = "null" ]; then
+                echo -e "${YELLOW}No '${sub_type}' Allowed Protocol Mapper Types policy found; skipping.${NC}"
+                continue
+            fi
+
+            local policy_json=$(jq -n \
+                --arg name "Allowed Protocol Mapper Types" \
+                --arg providerId "allowed-protocol-mappers" \
+                --arg providerType "org.keycloak.services.clientregistration.policy.ClientRegistrationPolicy" \
+                --arg parentId "$parent_id" \
+                --arg subType "$sub_type" \
+                '{
+                    name: $name,
+                    providerId: $providerId,
+                    providerType: $providerType,
+                    parentId: $parentId,
+                    subType: $subType,
+                    config: {
+                        "allowed-protocol-mapper-types": []
+                    }
+                }')
+
+            local response=$(curl -s -o /dev/null -w "%{http_code}" \
+                -X PUT "${KEYCLOAK_URL}/admin/realms/${REALM}/components/${policy_id}" \
+                -H "Authorization: Bearer ${token}" \
+                -H "Content-Type: application/json" \
+                -d "$policy_json")
+
+            if [ "$response" = "204" ]; then
+                echo -e "${GREEN}Allowed Protocol Mapper Types (${sub_type}) narrowed down: no client-supplied mappers permitted.${NC}"
+            else
+                echo -e "${RED}Failed to update Allowed Protocol Mapper Types (${sub_type}). HTTP status: ${response}${NC}"
+                return 1
+            fi
+        done
     }
 
     # Function to generate random password
@@ -1143,6 +1197,7 @@ data:
                 setup_dcr_audience_mapper "$TOKEN"
                 configure_dcr_allowed_scopes "$TOKEN"
                 configure_dcr_trusted_hosts "$TOKEN"
+                configure_dcr_allowed_mapper_types "$TOKEN"
             else
                 echo ""
                 echo -e "${YELLOW}DCR realm setup skipped (ENABLE_DCR_CONFIG=${ENABLE_DCR_CONFIG:-false}).${NC}"

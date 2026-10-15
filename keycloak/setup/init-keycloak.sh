@@ -639,7 +639,7 @@ setup_groups_mapper() {
 # =============================================================================
 # Dynamic Client Registration (RFC 7591) support
 # =============================================================================
-# Three configuration changes are needed so that MCP clients (Claude Code,
+# Four configuration changes are needed so that MCP clients (Claude Code,
 # Claude.ai connectors, Cursor, etc.) can register themselves dynamically and
 # receive tokens that carry the user's groups for per-user authorization at
 # the gateway:
@@ -657,6 +657,11 @@ setup_groups_mapper() {
 #    policy so MCP clients running on diverse cloud egress IPs (Claude Code's
 #    cloud listener, etc.) can register. The client-URI check stays on with
 #    `localhost` allowed for the OAuth callback redirect URI.
+#
+# 4. configure_dcr_allowed_mapper_types() - narrow down the DCR "Allowed Protocol
+#    Mapper Types" policy (anonymous + authenticated). The gateway's own groups/audience
+#    mappers live on the server-side `basic` client-scope, so this does not
+#    affect legitimate MCP.
 
 setup_dcr_groups_mapper() {
     local token=$1
@@ -785,12 +790,13 @@ configure_dcr_allowed_scopes() {
         return 1
     fi
 
-    # Get the union of all realm client-scope NAMES, plus "openid" (which is
-    # the OIDC identifier scope Claude/MCP DCR clients always request but is
-    # not defined as a Keycloak client-scope; without it the policy 403s).
+    # Build the allowed-client-scopes list from the realm's client-scope NAMES,
+    # plus "openid" (the OIDC identifier scope Claude/MCP DCR clients always
+    # request but which is not a Keycloak client-scope; without it the policy
+    # 403s).
     local all_scope_names=$(curl -s -H "Authorization: Bearer ${token}" \
         "${KEYCLOAK_URL}/admin/realms/${REALM}/client-scopes" | \
-        jq -c '[.[].name] + ["openid"] | unique')
+        jq -c '[.[].name | select(contains("/") | not)] + ["openid"] | unique')
 
     # Build the updated policy body. Keep `allow-default-scopes` true so the
     # built-in OIDC scopes still pass; explicitly include every realm scope
@@ -874,6 +880,56 @@ configure_dcr_trusted_hosts() {
         echo -e "${RED}Failed to update Trusted Hosts policy. HTTP status: ${response}${NC}"
         return 1
     fi
+}
+
+configure_dcr_allowed_mapper_types() {
+    local token=$1
+
+    local components=$(curl -s -H "Authorization: Bearer ${token}" \
+        "${KEYCLOAK_URL}/admin/realms/${REALM}/components?type=org.keycloak.services.clientregistration.policy.ClientRegistrationPolicy")
+
+    local sub_type
+    for sub_type in anonymous authenticated; do
+        local policy_id=$(echo "$components" | \
+            jq -r --arg st "$sub_type" '.[] | select(.name=="Allowed Protocol Mapper Types" and .subType==$st) | .id')
+        local parent_id=$(echo "$components" | \
+            jq -r --arg st "$sub_type" '.[] | select(.name=="Allowed Protocol Mapper Types" and .subType==$st) | .parentId')
+
+        if [ -z "$policy_id" ] || [ "$policy_id" = "null" ]; then
+            echo -e "${YELLOW}No '${sub_type}' Allowed Protocol Mapper Types policy found; skipping.${NC}"
+            continue
+        fi
+
+        local policy_json=$(jq -n \
+            --arg name "Allowed Protocol Mapper Types" \
+            --arg providerId "allowed-protocol-mappers" \
+            --arg providerType "org.keycloak.services.clientregistration.policy.ClientRegistrationPolicy" \
+            --arg parentId "$parent_id" \
+            --arg subType "$sub_type" \
+            '{
+                name: $name,
+                providerId: $providerId,
+                providerType: $providerType,
+                parentId: $parentId,
+                subType: $subType,
+                config: {
+                    "allowed-protocol-mapper-types": []
+                }
+            }')
+
+        local response=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X PUT "${KEYCLOAK_URL}/admin/realms/${REALM}/components/${policy_id}" \
+            -H "Authorization: Bearer ${token}" \
+            -H "Content-Type: application/json" \
+            -d "$policy_json")
+
+        if [ "$response" = "204" ]; then
+            echo -e "${GREEN}Allowed Protocol Mapper Types (${sub_type}) narrowed down: no client-supplied mappers permitted.${NC}"
+        else
+            echo -e "${RED}Failed to update Allowed Protocol Mapper Types (${sub_type}). HTTP status: ${response}${NC}"
+            return 1
+        fi
+    done
 }
 
 # Main execution
@@ -964,6 +1020,7 @@ main() {
         setup_dcr_audience_mapper "$TOKEN"
         configure_dcr_allowed_scopes "$TOKEN"
         configure_dcr_trusted_hosts "$TOKEN"
+        configure_dcr_allowed_mapper_types "$TOKEN"
     else
         exit 1
     fi

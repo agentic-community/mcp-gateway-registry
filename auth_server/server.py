@@ -98,6 +98,7 @@ except ImportError:
     )
 
 # Import provider factory
+from providers.base import normalize_groups_claim
 from providers.factory import get_auth_provider
 from pydantic import (
     BaseModel,
@@ -1944,6 +1945,14 @@ async def map_groups_to_scopes(groups: list[str]) -> list[str]:
     Returns:
         List of MCP scopes
     """
+    if not isinstance(groups, list) or not all(isinstance(group, str) for group in groups):
+        logger.warning(
+            "map_groups_to_scopes received a non-array groups value (%s); "
+            "treating as no groups (fail closed)",
+            type(groups).__name__,
+        )
+        return []
+
     scopes = []
 
     # Resolve all groups to scopes in a single query. Issuing one query per
@@ -3281,10 +3290,8 @@ class SimplifiedCognitoValidator:
             scope_string = claims.get("scope", "")
             scopes = scope_string.split() if scope_string else []
 
-            # Extract groups from claims (for OAuth user tokens)
-            groups = claims.get("groups", [])
-            if isinstance(groups, str):
-                groups = [groups]
+            # Extract groups from claims (fail closed on a non-array claim).
+            groups = normalize_groups_claim(claims.get("groups"), source="self-signed groups")
 
             logger.info(
                 f"Successfully validated self-signed token for user: {claims.get('sub')}, "
@@ -3363,7 +3370,9 @@ class SimplifiedCognitoValidator:
                 "username": jwt_claims.get("cognito:username") or jwt_claims.get("username") or "",
                 "expires_at": jwt_claims.get("exp"),
                 "scopes": scopes,
-                "groups": jwt_claims.get("cognito:groups", []),
+                "groups": normalize_groups_claim(
+                    jwt_claims.get("cognito:groups"), source="cognito jwt groups"
+                ),
             }
 
         except ValueError as jwt_error:

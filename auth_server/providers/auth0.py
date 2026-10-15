@@ -9,7 +9,7 @@ from urllib.parse import urlencode
 import jwt
 import requests
 
-from .base import AuthProvider, IdTokenVerificationError
+from .base import AuthProvider, IdTokenVerificationError, normalize_groups_claim
 
 # Constants for self-signed token validation
 JWT_ISSUER = os.environ.get("JWT_ISSUER", "mcp-auth-server")
@@ -163,11 +163,14 @@ class Auth0Provider(AuthProvider):
                 f"{claims.get('nickname', claims.get('sub', 'unknown'))}"
             )
 
-            # Extract groups from custom namespaced claim
-            groups = claims.get(self.groups_claim, [])
-            if not groups:
-                # Fallback: check permissions claim (Auth0 RBAC)
-                groups = claims.get("permissions", [])
+            # Extract groups from the custom namespaced claim, falling back to
+            # the Auth0 RBAC 'permissions' claim. The resolved claim is strictly
+            # validated as a JSON array of strings (fail closed on a non-array
+            # claim) rather than iterated into group names.
+            raw_groups = claims.get(self.groups_claim)
+            if not raw_groups:
+                raw_groups = claims.get("permissions")
+            groups = normalize_groups_claim(raw_groups, source="auth0 groups")
 
             return {
                 "valid": True,
@@ -231,10 +234,8 @@ class Auth0Provider(AuthProvider):
                 elif isinstance(scope_value, list):
                     scopes = scope_value
 
-            # Extract groups from claims
-            groups = claims.get("groups", [])
-            if isinstance(groups, str):
-                groups = [groups]
+            # Extract groups from claims (fail closed on a non-array claim).
+            groups = normalize_groups_claim(claims.get("groups"), source="auth0 self-signed groups")
 
             logger.info(
                 f"Successfully validated self-signed token for user: {claims.get('sub')}, "
@@ -589,13 +590,14 @@ class Auth0Provider(AuthProvider):
             )
             logger.info(f"Auth0 ID token claims decoded for sub: {id_token_claims.get('sub')}")
 
-            # Extract groups from custom namespaced claim.
-            # Requires an Auth0 Action or Rule to add groups to the ID token.
-            # Example Action: api.idToken.setCustomClaim("https://mcp-gateway/groups", event.user.groups)
-            groups = id_token_claims.get(self.groups_claim, [])
-            if not groups:
-                # Fallback: check permissions claim (Auth0 RBAC)
-                groups = id_token_claims.get("permissions", [])
+            # Extract groups from the custom namespaced id_token claim, falling
+            # back to the Auth0 RBAC 'permissions' claim. Requires an Auth0
+            # Action/Rule to add groups to the ID token. The resolved claim is
+            # strictly validated as a JSON array of strings (fail closed).
+            raw_groups = id_token_claims.get(self.groups_claim)
+            if not raw_groups:
+                raw_groups = id_token_claims.get("permissions")
+            groups = normalize_groups_claim(raw_groups, source="auth0 id_token groups")
 
             return {
                 "username": id_token_claims.get("nickname")

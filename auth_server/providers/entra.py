@@ -10,7 +10,7 @@ import httpx
 import jwt
 import requests
 
-from .base import AuthProvider
+from .base import AuthProvider, normalize_groups_claim
 
 # Constants for self-signed token validation
 JWT_ISSUER = os.environ.get("JWT_ISSUER", "mcp-auth-server")
@@ -427,15 +427,13 @@ class EntraIdProvider(AuthProvider):
                 f"Token validation successful for user: {claims.get('preferred_username', 'unknown')}"
             )
 
-            # Extract user info from claims
-            # For M2M tokens, group memberships are in 'roles' claim instead of 'groups'
-            # For user tokens, they're in 'groups' claim
-            groups = claims.get("groups", [])
-            if not groups and "roles" in claims:
-                # M2M token - use roles claim as groups
-                groups = claims.get("roles", [])
-                # Count only: role/group names reveal the internal authz structure.
-                logger.debug("M2M token detected, using %d roles as groups", len(groups))
+            # Extract group memberships. M2M tokens carry them in 'roles',
+            # user tokens in 'groups'. Whichever applies, the claim is strictly
+            # validated as a JSON array of strings.
+            raw_groups = claims.get("groups")
+            if not raw_groups and "roles" in claims:
+                raw_groups = claims.get("roles")
+            groups = normalize_groups_claim(raw_groups, source="entra groups")
 
             return {
                 "valid": True,
@@ -530,9 +528,7 @@ class EntraIdProvider(AuthProvider):
                     scopes = scope_value
 
             # Extract groups from claims
-            groups = claims.get("groups", [])
-            if isinstance(groups, str):
-                groups = [groups]
+            groups = normalize_groups_claim(claims.get("groups"), source="entra self-signed groups")
 
             logger.info(
                 f"Successfully validated self-signed token for user: {claims.get('sub')}, "

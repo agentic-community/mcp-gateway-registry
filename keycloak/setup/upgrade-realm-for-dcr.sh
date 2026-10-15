@@ -46,7 +46,7 @@ setup_dcr_groups_mapper() {
     local token=$1
 
     echo ""
-    echo "[1/4] Attaching Groups protocol mapper to the 'basic' client-scope..."
+    echo "[1/5] Attaching Groups protocol mapper to the 'basic' client-scope..."
 
     local basic_scope_id=$(curl -s -H "Authorization: Bearer ${token}" \
         "${KEYCLOAK_URL}/admin/realms/${REALM}/client-scopes" | \
@@ -56,7 +56,7 @@ setup_dcr_groups_mapper() {
         # Older Keycloak versions and custom realm imports do not include a
         # 'basic' client-scope. The Groups mapper is recommended but not
         # required for DCR to succeed; skip gracefully so the policy fixes
-        # in steps 3 and 4 still run.
+        # in steps 3-5 still run.
         echo -e "${YELLOW}WARNING: 'basic' client-scope not found in realm '${REALM}' — skipping groups mapper. Add the mapper manually if you need group claims in DCR'd-client tokens.${NC}"
         return 0
     fi
@@ -102,7 +102,7 @@ setup_dcr_audience_mapper() {
     local token=$1
 
     echo ""
-    echo "[2/4] Attaching Audience protocol mapper to the 'basic' client-scope..."
+    echo "[2/5] Attaching Audience protocol mapper to the 'basic' client-scope..."
 
     local basic_scope_id=$(curl -s -H "Authorization: Bearer ${token}" \
         "${KEYCLOAK_URL}/admin/realms/${REALM}/client-scopes" | \
@@ -111,7 +111,7 @@ setup_dcr_audience_mapper() {
     if [ -z "$basic_scope_id" ] || [ "$basic_scope_id" = "null" ]; then
         # See setup_dcr_groups_mapper() for the rationale: skip when the
         # realm does not have a 'basic' client-scope so the policy fixes
-        # in steps 3 and 4 can still run.
+        # in steps 3-5 can still run.
         echo -e "${YELLOW}WARNING: 'basic' client-scope not found — skipping audience mapper. Add the mapper manually if DCR'd-client tokens need aud=\"mcp-gateway\".${NC}"
         return 0
     fi
@@ -153,10 +153,11 @@ setup_dcr_audience_mapper() {
 
 _widen_allowed_scopes_policy() {
     # Widen one subType's "Allowed Client Scopes" policy to include every
-    # client-scope defined in the realm. Both 'anonymous' and 'authenticated'
-    # subTypes need this because Keycloak picks one based on whether the DCR
-    # request carries an initial-access / registration token. Claude Code,
-    # Claude.ai connectors, and Cursor have been observed to hit either path.
+    # NON-PRIVILEGED client-scope defined in the realm. Both 'anonymous' and
+    # 'authenticated' subTypes need this because Keycloak picks one based on
+    # whether the DCR request carries an initial-access / registration token.
+    # Claude Code, Claude.ai connectors, and Cursor have been observed to hit
+    # either path.
     local token=$1
     local sub_type=$2  # "anonymous" or "authenticated"
     local components=$3
@@ -198,7 +199,7 @@ _widen_allowed_scopes_policy() {
         -d "$policy_json")
 
     if [ "$response" = "204" ]; then
-        echo -e "${GREEN}OK: ${sub_type} Allowed Client Scopes policy includes all realm scopes.${NC}"
+        echo -e "${GREEN}OK: ${sub_type} Allowed Client Scopes policy includes non-privileged realm scopes.${NC}"
     else
         echo -e "${RED}FAILED (${sub_type}): HTTP status ${response}${NC}"
         return 1
@@ -209,14 +210,14 @@ configure_dcr_allowed_scopes() {
     local token=$1
 
     echo ""
-    echo "[3/4] Widening 'Allowed Client Scopes' DCR policy (anonymous + authenticated)..."
+    echo "[3/5] Widening 'Allowed Client Scopes' DCR policy (anonymous + authenticated)..."
 
     local components=$(curl -s -H "Authorization: Bearer ${token}" \
         "${KEYCLOAK_URL}/admin/realms/${REALM}/components?type=org.keycloak.services.clientregistration.policy.ClientRegistrationPolicy")
 
     local all_scope_names=$(curl -s -H "Authorization: Bearer ${token}" \
         "${KEYCLOAK_URL}/admin/realms/${REALM}/client-scopes" | \
-        jq -c '[.[].name] + ["openid"]')
+        jq -c '[.[].name | select(contains("/") | not)] + ["openid"]')
 
     _widen_allowed_scopes_policy "$token" "anonymous" "$components" "$all_scope_names" || return 1
     _widen_allowed_scopes_policy "$token" "authenticated" "$components" "$all_scope_names" || return 1
@@ -226,7 +227,7 @@ configure_dcr_trusted_hosts() {
     local token=$1
 
     echo ""
-    echo "[4/4] Relaxing anonymous-DCR 'Trusted Hosts' policy..."
+    echo "[4/5] Relaxing anonymous-DCR 'Trusted Hosts' policy..."
 
     local components=$(curl -s -H "Authorization: Bearer ${token}" \
         "${KEYCLOAK_URL}/admin/realms/${REALM}/components?type=org.keycloak.services.clientregistration.policy.ClientRegistrationPolicy")
@@ -266,6 +267,59 @@ configure_dcr_trusted_hosts() {
         echo -e "${RED}FAILED: HTTP status ${response}${NC}"
         return 1
     fi
+}
+
+configure_dcr_allowed_mapper_types() {
+    local token=$1
+
+    echo ""
+    echo "[5/5] Narrowing down DCR 'Allowed Protocol Mapper Types' policy (anonymous + authenticated)..."
+
+    local components=$(curl -s -H "Authorization: Bearer ${token}" \
+        "${KEYCLOAK_URL}/admin/realms/${REALM}/components?type=org.keycloak.services.clientregistration.policy.ClientRegistrationPolicy")
+
+    local sub_type
+    for sub_type in anonymous authenticated; do
+        local policy_id=$(echo "$components" | \
+            jq -r --arg st "$sub_type" '.[] | select(.name=="Allowed Protocol Mapper Types" and .subType==$st) | .id')
+        local parent_id=$(echo "$components" | \
+            jq -r --arg st "$sub_type" '.[] | select(.name=="Allowed Protocol Mapper Types" and .subType==$st) | .parentId')
+
+        if [ -z "$policy_id" ] || [ "$policy_id" = "null" ]; then
+            echo -e "${YELLOW}No '${sub_type}' Allowed Protocol Mapper Types policy found; skipping.${NC}"
+            continue
+        fi
+
+        local policy_json=$(jq -n \
+            --arg name "Allowed Protocol Mapper Types" \
+            --arg providerId "allowed-protocol-mappers" \
+            --arg providerType "org.keycloak.services.clientregistration.policy.ClientRegistrationPolicy" \
+            --arg parentId "$parent_id" \
+            --arg subType "$sub_type" \
+            '{
+                name: $name,
+                providerId: $providerId,
+                providerType: $providerType,
+                parentId: $parentId,
+                subType: $subType,
+                config: {
+                    "allowed-protocol-mapper-types": []
+                }
+            }')
+
+        local response=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X PUT "${KEYCLOAK_URL}/admin/realms/${REALM}/components/${policy_id}" \
+            -H "Authorization: Bearer ${token}" \
+            -H "Content-Type: application/json" \
+            -d "$policy_json")
+
+        if [ "$response" = "204" ]; then
+            echo -e "${GREEN}OK: Allowed Protocol Mapper Types (${sub_type}) narrowed down (no client-supplied mappers).${NC}"
+        else
+            echo -e "${RED}FAILED: HTTP status ${response}${NC}"
+            return 1
+        fi
+    done
 }
 
 main() {
@@ -318,6 +372,7 @@ main() {
     setup_dcr_audience_mapper "$TOKEN"
     configure_dcr_allowed_scopes "$TOKEN"
     configure_dcr_trusted_hosts "$TOKEN"
+    configure_dcr_allowed_mapper_types "$TOKEN"
 
     echo ""
     echo -e "${GREEN}DCR upgrade complete.${NC}"
