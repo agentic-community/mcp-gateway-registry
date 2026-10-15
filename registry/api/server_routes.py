@@ -4316,6 +4316,15 @@ async def register_service_api(
     - Local: local_runtime JSON required (admin-only). Registry stores the
       launch recipe for stdio MCP servers; it does NOT execute the server.
 
+    **The registered server comes back disabled.** `register_server` (the shared
+    service method this and every other registration route calls) persists a new
+    server with `is_enabled` defaulting to `False`
+    (`registry/repositories/documentdb/server_repository.py`), so it is excluded
+    from default search results and the gateway route until enabled. Call
+    `POST /api/servers/toggle` (or use the Dashboard's toggle switch) to enable
+    it. The one route that auto-enables on registration is the legacy, internal
+    `POST /api/internal/register`, used only by mcpgw-server.
+
     **Authentication:** JWT Bearer token (via nginx X-User header)
     **Authorization:** Requires valid JWT token. Local registration requires admin.
 
@@ -4736,6 +4745,17 @@ async def register_service_api(
         else:
             logger.info(
                 f"Service registered successfully via API: {path} by user {user_context.get('username')}"
+            )
+            # register_server defaults is_enabled to False (see the docstring
+            # above), so the server exists but is excluded from default search
+            # and the gateway route until it is toggled on. Trace this at the
+            # one place every external-API registration passes through, so a
+            # caller debugging "my new server isn't showing up" can tell this
+            # is expected rather than a bug, without re-reading the service layer.
+            logger.info(
+                f"Service {path} registered disabled (is_enabled=False); "
+                f"enable via POST /api/servers/toggle (or the Dashboard) before "
+                f"it appears in default search results or the gateway route."
             )
 
         # Security scanning (non-blocking). Skipped for local stdio servers.
