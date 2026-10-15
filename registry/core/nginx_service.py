@@ -2785,13 +2785,11 @@ class NginxConfigService:
     ) -> str:
         """Create nginx location blocks for a single A2A agent.
 
-        Emits two prefix locations under ``{ROOT_PATH}/agent/{agent_path}/``:
-          1. The agent card (``.well-known/agent-card.json``) for discovery.
-          2. The JSON-RPC endpoint for ``message/send`` / ``message/stream``.
-
-        Both are protected by the ``/validate`` auth subrequest (the same hop
-        used for MCP servers) and proxy straight to the agent backend. A2A is
-        JSON-RPC over HTTP, so no protocol translation is required.
+        Emits an authorized card discovery location, an internal-only card
+        upstream location, and an authorized JSON-RPC/HTTP+JSON endpoint under
+        ``{ROOT_PATH}/agent/{agent_path}/``. The card handler reads the live
+        card before sending response headers; it returns 502 if no declared
+        interface matches the registered backend route.
 
         Args:
             agent_path: Agent path without surrounding slashes
@@ -2800,7 +2798,7 @@ class NginxConfigService:
             agent_name: Human-readable agent name (used in a comment only).
 
         Returns:
-            Nginx configuration string with the two location blocks.
+            Nginx configuration string with the three location blocks.
 
         Raises:
             ValueError: If ``agent_path`` or ``backend_url`` contains characters
@@ -2834,6 +2832,11 @@ class NginxConfigService:
         # two must agree or the health check calls an agent healthy while its
         # gateway card route fails (issue #1724).
         card_origin = f"{parsed_url.scheme}://{upstream_host}"
+        card_internal_uri = f"{{{{ROOT_PATH}}}}{route}/_agent_card_upstream"
+        safe_backend_url = self._sanitize_for_nginx_set(backend_url)
+        # nginx's location body filter cannot replace a successful upstream
+        # status after headers are sent. Read the card in the content phase so
+        # an unroutable remote declaration produces a genuine 502 instead.
 
         return f"""
     # A2A agent card (discovery): {safe_name}
@@ -2844,27 +2847,34 @@ class NginxConfigService:
         resolver_timeout {dns_resolver_timeout}s;
         auth_request /validate;
         auth_request_set $auth_scopes $upstream_http_x_scopes;
+        set $agent_backend_url "{safe_backend_url}";
+        set $agent_card_upstream "{card_internal_uri}";
+        content_by_lua_file /etc/nginx/lua/agent_card_rewrite.lua;
+        error_page 401 = @auth_error;
+        error_page 403 = @forbidden_error;
+    }}
+
+    # Accessible only from the authenticated discovery handler above. Explicitly
+    # strip gateway credentials again: internal subrequests inherit client headers.
+    location = {card_internal_uri} {{
+        internal;
+        resolver {dns_resolver} valid=10s;
+        resolver_timeout {dns_resolver_timeout}s;
         proxy_pass {card_origin}/.well-known/agent-card.json;
         proxy_http_version 1.1;
         proxy_ssl_server_name on;
         proxy_set_header Host {host_header};
-        # SECURITY (A2A egress trust model): X-Authorization carries the caller's
-        # gateway credential -- it is validated at /validate and MUST NOT reach
-        # this registrant-controlled backend, or a malicious agent could replay
-        # it against the registry (the B1 / #1391 class of bug). Strip it and the
-        # session Cookie. The standard Authorization header is left intact: per
-        # the A2A spec, credentials are obtained out-of-band by the calling agent
-        # and passed end-to-end in Authorization for the target agent to
-        # authenticate -- the gateway is not a credential broker here.
         proxy_set_header X-Authorization "";
         proxy_set_header Cookie "";
-        # Rewrite the card's endpoint URLs from the backend to this gateway so
-        # clients send JSON-RPC back through the proxy. Body size changes, so
-        # Content-Length must be cleared before the rewrite runs.
-        header_filter_by_lua_block {{ ngx.header.content_length = nil }}
-        body_filter_by_lua_file /etc/nginx/lua/agent_card_rewrite.lua;
-        error_page 401 = @auth_error;
-        error_page 403 = @forbidden_error;
+        proxy_set_header Accept-Encoding "";
+        # Card fetches do not consume caller identity. Clear spoofable copies
+        # instead of forwarding headers that an agent could mistake for
+        # validated gateway assertions.
+        proxy_set_header X-User "";
+        proxy_set_header X-Username "";
+        proxy_set_header X-Scopes "";
+        proxy_set_header X-Auth-Method "";
+        proxy_pass_request_headers on;
     }}
 
     # A2A agent JSON-RPC endpoint: {safe_name}

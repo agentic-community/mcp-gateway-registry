@@ -844,7 +844,11 @@ class TestAgentsEndpoint:
             "url": gateway,
             "proxy_pass_url": "https://flight-backend.internal:9000/a2a",
             "supported_interfaces": [
-                {"url": "https://flight-backend.internal:9000/a2a", "protocol_binding": "JSONRPC"},
+                {
+                    "url": "https://flight-backend.internal:9000/a2a",
+                    "protocol_binding": "JSONRPC",
+                    "protocol_version": "1.0",
+                },
                 {"url": "https://flight-backend.internal:9000/grpc", "protocol_binding": "GRPC"},
             ],
         }
@@ -869,7 +873,7 @@ class TestAgentsEndpoint:
         item = response.json()["items"][0]
         assert "proxy_pass_url" not in item
         assert item["supported_interfaces"] == [
-            {"url": gateway, "protocol_binding": "JSONRPC"},
+            {"url": gateway, "protocol_binding": "JSONRPC", "protocol_version": "1.0"},
         ]
         assert "flight-backend.internal" not in response.text
 

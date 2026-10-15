@@ -76,6 +76,7 @@ from ..services.lifecycle_events import (
     user_can_change_lifecycle_status,
 )
 from ..services.registration_gate_service import check_registration_gate
+from ..services.visibility import gateway_routable_agent_interfaces
 from ..services.webhook_service import send_registration_webhook
 from ..utils.metadata import (
     flatten_metadata_to_text,
@@ -864,24 +865,12 @@ def _apply_a2a_reverse_proxy_split(
     agent_card: AgentCard,
     path: str,
 ) -> None:
-    """Advertise the gateway url and keep the registrant backend in proxy_pass_url.
+    """Advertise the gateway only for declared interfaces its route can serve.
 
-    In A2A reverse-proxy mode the stored ``url`` is the gateway-facing address and
-    the registrant's real backend lives in ``proxy_pass_url``. This mutates the
-    card in place so discovery routes callers through the gateway. It is idempotent
-    and MUST run on every write path (register, PUT, PATCH), not just register, or
-    an edit that changes ``url`` would desync the advertised url from the backend.
-
-    Only applies when ``a2a_reverse_proxy_effective`` (flag AND with-gateway) and
-    the agent speaks a2a; otherwise the card is left untouched (registry-only mode
-    keeps url == backend, and non-a2a agents are never proxied). When the card's
-    ``url`` already points at the gateway (an edit that did not touch the backend),
-    the existing ``proxy_pass_url`` is preserved rather than overwritten with the
-    gateway url.
-
-    Args:
-        agent_card: The card being written; mutated in place.
-        path: Normalized agent path with a leading slash (e.g. "/travel").
+    The nginx agent location forwards one HTTP backend path. Keep the original
+    interfaces in storage, but reject a card if no declared JSONRPC or
+    HTTP+JSON interface points at that exact backend. Legacy cards without an
+    interface list retain their existing top-level URL behavior.
     """
     if not settings.a2a_reverse_proxy_effective:
         return
@@ -889,17 +878,20 @@ def _apply_a2a_reverse_proxy_split(
         return
 
     gateway_url = _gateway_agent_url(path)
+    backend_url = agent_card.proxy_pass_url if agent_card.url == gateway_url else agent_card.url
+    if agent_card.supported_interfaces and not gateway_routable_agent_interfaces(
+        agent_card.supported_interfaces, str(backend_url or "")
+    ):
+        raise ValueError(
+            "A2A gateway requires a declared JSONRPC or HTTP+JSON interface "
+            "at the registered backend URL; disable reverse proxy or register "
+            "a routable interface"
+        )
     if agent_card.url == gateway_url:
-        # url already gateway-facing (edit that did not change the backend); keep
-        # the stored backend so we do not clobber it with the gateway url.
         return
-
     agent_card.proxy_pass_url = agent_card.url
     agent_card.url = gateway_url
-    logger.info(
-        f"A2A reverse-proxy: agent '{path}' advertised url set to gateway "
-        f"({agent_card.url}); backend preserved in proxy_pass_url."
-    )
+    logger.info("A2A reverse-proxy: agent '%s' advertised gateway url %s", path, gateway_url)
 
 
 def _weak_etag_for(agent_card: AgentCard) -> str:
@@ -2331,6 +2323,11 @@ async def pull_agent_card(
                 "(private/internal addresses are not allowed)"
             ),
         ) from e
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Remote agent card is not routable through the gateway: {e}",
+        ) from e
     except Exception as e:
         # In dry-run mode a failed health write should not fail the preview.
         if dry_run or not has_changes:
@@ -2754,7 +2751,13 @@ async def patch_agent(
     # Re-apply the reverse-proxy url/proxy_pass_url split so a PATCH of url keeps
     # the advertised gateway url in sync with the stored backend (idempotent when
     # url already points at the gateway).
-    _apply_a2a_reverse_proxy_split(merged_agent, path)
+    try:
+        _apply_a2a_reverse_proxy_split(merged_agent, path)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid agent card: {e}",
+        ) from e
 
     # Registration gate (parity with PUT)
     gate_result = await check_registration_gate(

@@ -262,6 +262,38 @@ class TestDoRegister:
         assert stored.url.endswith("/")
         assert stored.proxy_pass_url == "https://example.com/new"
 
+    async def test_proxied_register_rejects_unroutable_declared_interface(self):
+        from registry.api import agent_routes
+        from registry.core.config import DeploymentMode
+
+        item = _item(
+            {
+                "op": "register",
+                "card": {
+                    **REGISTER_CARD,
+                    "supportedInterfaces": [
+                        {
+                            "url": "https://example.com/grpc",
+                            "protocolBinding": "GRPC",
+                            "protocolVersion": "1.0",
+                        }
+                    ],
+                },
+            }
+        )
+        register_mock = AsyncMock()
+        with (
+            patch.object(proc.agent_service, "get_agent_info", AsyncMock(return_value=None)),
+            patch.object(proc, "_validate", AsyncMock(return_value=(True, []))),
+            patch.object(proc, "_run_gate", AsyncMock(return_value=(True, ""))),
+            patch.object(proc.agent_service, "register_agent", register_mock),
+            patch.object(agent_routes.settings, "a2a_reverse_proxy_enabled", True),
+            patch.object(agent_routes.settings, "deployment_mode", DeploymentMode.WITH_GATEWAY),
+        ):
+            result = await proc._do_register(0, item, "alice")
+        assert result.status == 422
+        register_mock.assert_not_awaited()
+
 
 @pytest.mark.unit
 @pytest.mark.asyncio

@@ -375,10 +375,15 @@ class TestBackendUrlRedactionHelpers:
             "url": gateway,
             "proxy_pass_url": "https://flight-backend.internal:9000/a2a",
             "supported_interfaces": [
-                {"url": "https://flight-backend.internal:9000/a2a", "protocol_binding": "JSONRPC"},
+                {
+                    "url": "https://flight-backend.internal:9000/a2a/",
+                    "protocol_binding": "JSONRPC",
+                    "protocol_version": "1.0",
+                },
                 {
                     "url": "https://flight-backend.internal:9000/a2a",
                     "protocol_binding": "HTTP+JSON",
+                    "protocol_version": "1.0",
                 },
                 {"url": "https://flight-backend.internal:9000/grpc", "protocol_binding": "GRPC"},
             ],
@@ -388,10 +393,48 @@ class TestBackendUrlRedactionHelpers:
         assert card["url"] == gateway
         # Both HTTP bindings projected onto the gateway url; GRPC omitted.
         assert card["supported_interfaces"] == [
-            {"url": gateway, "protocol_binding": "JSONRPC"},
-            {"url": gateway, "protocol_binding": "HTTP+JSON"},
+            {"url": gateway, "protocol_binding": "JSONRPC", "protocol_version": "1.0"},
+            {"url": gateway, "protocol_binding": "HTTP+JSON", "protocol_version": "1.0"},
         ]
         assert "flight-backend.internal" not in str(card)
+
+    def test_redact_agent_omits_different_path_and_custom_binding(self):
+        from registry.services.visibility import redact_agent_backend_fields
+
+        gateway = "https://gateway.example.com/agent/a/"
+        card = {
+            "url": gateway,
+            "proxy_pass_url": "https://backend.example.com/a2a",
+            "supportedInterfaces": [
+                {
+                    "url": "https://backend.example.com/rest",
+                    "protocolBinding": "HTTP+JSON",
+                    "protocolVersion": "1.0",
+                },
+                {
+                    "url": "https://backend.example.com/a2a",
+                    "protocolBinding": "https://example.com/custom",
+                    "protocolVersion": "1.0",
+                },
+                {
+                    "url": "https://backend.example.com/a2a",
+                    "protocolBinding": "JSONRPC",
+                    "protocolVersion": "1.0",
+                    "tenant": "team-a",
+                    "note": "https://backend.example.com/secret",
+                },
+            ],
+        }
+        redact_agent_backend_fields(card)
+        assert card["supportedInterfaces"] == [
+            {
+                "url": gateway,
+                "protocolBinding": "JSONRPC",
+                "protocolVersion": "1.0",
+                "tenant": "team-a",
+            }
+        ]
+        assert "backend.example.com" not in str(card)
 
     def test_redact_agent_drops_all_interfaces_when_only_unservable(self):
         """If a proxied agent declared only gateway-unservable interfaces (GRPC/WS),

@@ -233,10 +233,12 @@ class TestPublicAgent:
                     {
                         "url": "https://trav-backend.internal:9000/a2a",
                         "protocol_binding": "JSONRPC",
+                        "protocol_version": "1.0",
                     },
                     {
                         "url": "https://trav-backend.internal:9000/a2a",
                         "protocol_binding": "HTTP+JSON",
+                        "protocol_version": "1.0",
                     },
                     {"url": "https://trav-backend.internal:9000/grpc", "protocol_binding": "GRPC"},
                 ],
@@ -256,8 +258,8 @@ class TestPublicAgent:
         assert body["url"] == gateway
         assert "proxy_pass_url" not in body
         assert body["supported_interfaces"] == [
-            {"url": gateway, "protocol_binding": "JSONRPC"},
-            {"url": gateway, "protocol_binding": "HTTP+JSON"},
+            {"url": gateway, "protocol_binding": "JSONRPC", "protocol_version": "1.0"},
+            {"url": gateway, "protocol_binding": "HTTP+JSON", "protocol_version": "1.0"},
         ]
         assert "trav-backend.internal" not in resp.text
 
