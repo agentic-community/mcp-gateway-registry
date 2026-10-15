@@ -449,6 +449,7 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             ("openbao_kv_mount", "OpenBao KV Mount", False),
             ("openbao_auth_method", "OpenBao Auth Method", False),
             ("openbao_role", "OpenBao Role", False),
+            ("openbao_auth_mount", "OpenBao Auth Mount", False),
             # egress HTTP connection pooling (shared clients; not sensitive)
             ("egress_http_pool_max_connections", "HTTP Pool Max Connections", False),
             ("egress_http_pool_max_keepalive", "HTTP Pool Max Keep-Alive", False),

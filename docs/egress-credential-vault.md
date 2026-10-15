@@ -425,6 +425,7 @@ and `AUTH_SERVER_NGINX_MARKER_SECRET`.
 | `OPENBAO_KV_MOUNT` | `secret` | OpenBao KV v2 mount point. |
 | `OPENBAO_AUTH_METHOD` | `token` | `token` \| `kubernetes` \| `approle`. |
 | `OPENBAO_ROLE` | `""` | OpenBao role (required for `kubernetes` auth only; `approle` does not read it). |
+| `OPENBAO_AUTH_MOUNT` | `""` | Mount path of the `kubernetes` or `approle` auth method. Empty uses the method's default path (`auth/kubernetes`, `auth/approle`); set it when the method is mounted elsewhere, for example one `kubernetes` mount per cluster on a shared Vault. |
 | `OPENBAO_ROLE_ID` | `""` | AppRole role id (required, together with `OPENBAO_SECRET_ID`, when `OPENBAO_AUTH_METHOD=approle`). |
 | `OPENBAO_SECRET_ID` | `""` | AppRole secret id (required, together with `OPENBAO_ROLE_ID`, when `OPENBAO_AUTH_METHOD=approle`). **(secret)** |
 
