@@ -10,6 +10,36 @@ REALM="mcp-gateway"
 KEYCLOAK_ADMIN=""
 KEYCLOAK_ADMIN_PASSWORD=""
 
+# Client scopes that carry gateway authorization rather than OIDC identity.
+# The gateway resolves these names into server and tool access, so a
+# self-registered (DCR) client must never be able to request one: it would be
+# choosing its own privilege.
+#
+# This list is created in the realm and assigned to the M2M client, which is
+# a trusted first-party client.
+PRIVILEGED_CLIENT_SCOPES=(
+    "mcp-servers-unrestricted/read"
+    "mcp-servers-unrestricted/execute"
+    "mcp-servers-restricted/read"
+    "mcp-servers-restricted/execute"
+)
+
+# Names withheld from the DCR allowlist: everything created above, plus the
+# two admin scope documents. Deriving this from the creation list is the
+# point, so a scope added above cannot stay requestable by omission.
+#
+# The last two are the `_id` of a scope document granting `server: "*"` with
+# every action (scripts/registry-admins.json,
+# scripts/mcp-registry-admin.json). This script does not create them as
+# client scopes, so naming them here changes nothing today; the Helm chart
+# does create them, and withholding a name that does not exist is free,
+# whereas allowing one that does would hand a DCR client full admin.
+DCR_WITHHELD_SCOPES=(
+    "${PRIVILEGED_CLIENT_SCOPES[@]}"
+    "mcp-registry-admin"
+    "registry-admins"
+)
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -278,7 +308,7 @@ create_scopes() {
 
     echo "Creating custom MCP scopes..."
 
-    local scopes=("mcp-servers-unrestricted/read" "mcp-servers-unrestricted/execute" "mcp-servers-restricted/read" "mcp-servers-restricted/execute")
+    local scopes=("${PRIVILEGED_CLIENT_SCOPES[@]}")
 
     for scope in "${scopes[@]}"; do
         local scope_json='{
@@ -321,8 +351,9 @@ setup_m2m_scopes() {
         return 1
     fi
 
-    # Get all available client scopes
-    local scopes=("mcp-servers-unrestricted/read" "mcp-servers-unrestricted/execute" "mcp-servers-restricted/read" "mcp-servers-restricted/execute")
+    # The M2M client is a trusted first-party client, so unlike a DCR client it
+    # does get the privileged scopes.
+    local scopes=("${PRIVILEGED_CLIENT_SCOPES[@]}")
 
     for scope in "${scopes[@]}"; do
         # Get scope ID
@@ -791,12 +822,26 @@ configure_dcr_allowed_scopes() {
     fi
 
     # Build the allowed-client-scopes list from the realm's client-scope NAMES,
-    # plus "openid" (the OIDC identifier scope Claude/MCP DCR clients always
-    # request but which is not a Keycloak client-scope; without it the policy
-    # 403s).
+    # minus every scope in PRIVILEGED_CLIENT_SCOPES, plus "openid" (the OIDC
+    # identifier scope Claude/MCP DCR clients always request but which is not
+    # a Keycloak client-scope; without it the policy 403s).
+    #
+    # The exclusion is driven by DCR_WITHHELD_SCOPES, which is built from the
+    # same list create_scopes() creates from, so a privileged scope added
+    # there cannot become requestable here by omission. The "/" filter stays
+    # as a second rule covering a privileged scope some other tool created in
+    # this realm.
+    local privileged_json=$(printf '%s\n' "${DCR_WITHHELD_SCOPES[@]}" | jq -R . | jq -sc .)
+
     local all_scope_names=$(curl -s -H "Authorization: Bearer ${token}" \
         "${KEYCLOAK_URL}/admin/realms/${REALM}/client-scopes" | \
-        jq -c '[.[].name | select(contains("/") | not)] + ["openid"] | unique')
+        jq -c --argjson privileged "$privileged_json" \
+            '[
+                .[].name
+                | . as $scope
+                | select(($privileged | index($scope)) == null)
+                | select(contains("/") | not)
+             ] + ["openid"] | unique')
 
     # Build the updated policy body. Keep `allow-default-scopes` true so the
     # built-in OIDC scopes still pass; explicitly include every realm scope

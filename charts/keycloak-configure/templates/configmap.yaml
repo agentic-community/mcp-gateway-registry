@@ -20,6 +20,31 @@ data:
     KEYCLOAK_ADMIN=$KEYCLOAK_ADMIN
     KEYCLOAK_ADMIN_PASSWORD=$KEYCLOAK_ADMIN_PASSWORD
 
+    # Client scopes that carry gateway authorization rather than OIDC
+    # identity. The gateway resolves these names into server and tool access,
+    # so a self-registered (DCR) client must never be able to request one: it
+    # would be choosing its own privilege.
+    #
+    # The last two matter most here. They are the `_id` of a scope document
+    # granting `server: "*"` with every action
+    # (scripts/registry-admins.json, scripts/mcp-registry-admin.json), and
+    # unlike the first four their names carry no "/", so the earlier filter,
+    # which excluded only slash-containing names, left both requestable
+    # through anonymous DCR on this deployment surface.
+    PRIVILEGED_CLIENT_SCOPES=(
+        "mcp-servers-unrestricted/read"
+        "mcp-servers-unrestricted/execute"
+        "mcp-servers-restricted/read"
+        "mcp-servers-restricted/execute"
+        "mcp-registry-admin"
+        "registry-admins"
+    )
+
+    # Names withheld from the DCR allowlist. Identical to the creation list
+    # here, because this surface creates all six; kept as its own name so the
+    # three Keycloak setup scripts read the same way.
+    DCR_WITHHELD_SCOPES=("${PRIVILEGED_CLIENT_SCOPES[@]}")
+
     # Colors for output
     RED='\033[0;31m'
     GREEN='\033[0;32m'
@@ -357,7 +382,7 @@ data:
 
         echo "Creating custom MCP scopes..."
 
-        local scopes=("mcp-servers-unrestricted/read" "mcp-servers-unrestricted/execute" "mcp-servers-restricted/read" "mcp-servers-restricted/execute" "mcp-registry-admin" "registry-admins")
+        local scopes=("${PRIVILEGED_CLIENT_SCOPES[@]}")
 
         for scope in "${scopes[@]}"; do
             local scope_json='{
@@ -400,7 +425,9 @@ data:
             return 1
         fi
 
-        # Get all available client scopes
+        # Deliberately NOT "${PRIVILEGED_CLIENT_SCOPES[@]}": the M2M client
+        # gets the four server scopes only, not the two admin scope-document
+        # names, which no client should hold as a default scope.
         local scopes=("mcp-servers-unrestricted/read" "mcp-servers-unrestricted/execute" "mcp-servers-restricted/read" "mcp-servers-restricted/execute")
 
         for scope in "${scopes[@]}"; do
@@ -969,9 +996,22 @@ data:
         local components=$(curl -s -H "Authorization: Bearer ${token}" \
             "${KEYCLOAK_URL}/admin/realms/${REALM}/components?type=org.keycloak.services.clientregistration.policy.ClientRegistrationPolicy")
 
+        # Exclude every scope in DCR_WITHHELD_SCOPES, which is built from the
+        # same list create_scopes() creates from, so a privileged scope added
+        # there cannot stay requestable here by omission. The "/" filter is
+        # kept as a second rule for a privileged scope some other tool
+        # created in this realm.
+        local privileged_json=$(printf '%s\n' "${DCR_WITHHELD_SCOPES[@]}" | jq -R . | jq -sc .)
+
         local all_scope_names=$(curl -s -H "Authorization: Bearer ${token}" \
             "${KEYCLOAK_URL}/admin/realms/${REALM}/client-scopes" | \
-            jq -c '[.[].name | select(contains("/") | not)]')
+            jq -c --argjson privileged "$privileged_json" \
+                '[
+                    .[].name
+                    | . as $scope
+                    | select(($privileged | index($scope)) == null)
+                    | select(contains("/") | not)
+                 ]')
 
         _widen_allowed_scopes_policy "$token" "anonymous" "$components" "$all_scope_names" || return 1
         _widen_allowed_scopes_policy "$token" "authenticated" "$components" "$all_scope_names" || return 1

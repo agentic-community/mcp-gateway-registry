@@ -364,6 +364,19 @@ working in those areas.
   after signature verification) + PKCE (`S256`), fail closed if the verifier is
   missing. Authorize the EXACT bytes you forward, never a separately-captured
   copy; fail closed when the body isn't inspectable.
+- **Claim types:** a claim that drives authorization is type-validated and
+  rejected, never coerced (a bare string wrapped into a list made
+  `"groups": "mcp-registry-admin"` a membership). One shared validator
+  (`normalize_groups_claim`), applied in EVERY provider including the
+  self-signed and userinfo paths.
+- **Self-registration (DCR):** restrict which scopes a self-registered client
+  may request AND whether it may define protocol mappers (a mapper chooses
+  what a claim says), for the `anonymous` and `authenticated` subtypes alike.
+  Build the withheld set from the list that CREATES the privileged scopes,
+  never from a naming convention: a slash-only filter left the slash-free
+  `mcp-registry-admin`/`registry-admins` requestable on Helm, and each is a
+  scope-document `_id` granting `server: "*"`. A provider that passes the
+  IdP's discovery document through inherits that IdP's DCR policy.
 - **Response projection:** redaction + access checks must be uniform across the
   whole entity family (versions, bulk, discovery projections, search, admin-config
   reads) via one shared helper, not just the reported endpoint. Mutation success

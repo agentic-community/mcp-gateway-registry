@@ -1,11 +1,20 @@
 #!/bin/bash
 # Upgrade an existing Keycloak realm to support MCP Dynamic Client Registration
 #
-# This standalone script applies the three configuration changes required for
-# MCP clients (Claude Code, Claude.ai connectors, Cursor) to register dynamically
+# This standalone script applies the configuration changes required for MCP
+# clients (Claude Code, Claude.ai connectors, Cursor) to register dynamically
 # and produce tokens with a `groups` claim for per-user authorization at the
 # gateway. Use this on existing deployments where the realm was created before
 # these changes landed in init-keycloak.sh.
+#
+# What a self-registered client is entitled to, stated positively: the OIDC
+# identity scopes the realm defines, and nothing else. It may not request a
+# scope that confers gateway access (PRIVILEGED_CLIENT_SCOPES below), and it
+# may not define protocol mappers, because a mapper chooses what a claim
+# says and the gateway derives authorization from the `groups` claim. Both
+# limits are realm policy, which is where Keycloak enforces them; there is
+# deliberately no gateway-side setting, because a setting in the gateway
+# could not constrain what the realm hands out.
 #
 # The script is idempotent: re-running it is safe.
 #
@@ -22,6 +31,37 @@ REALM="mcp-gateway"
 # detect whether the caller already exported them so it can skip .env loading
 # and run against a non-.env Keycloak (e.g. ECS).
 KEYCLOAK_URL=""
+
+# Client scopes that carry gateway authorization rather than OIDC identity.
+# A self-registered (DCR) client must never be able to request one of these:
+# the gateway resolves these names into server and tool access, so a client
+# that could request them would be choosing its own privilege.
+#
+# This list is the positive statement of what is privileged. The companion
+# filter also excludes any scope whose name contains "/", the convention
+# most of these follow, so one more created the same way is excluded before
+# anyone remembers to update this list. Neither rule is the boundary alone.
+#
+# This script can run against a realm provisioned by any of the three
+# surfaces, so the list is their union. The last two carry no "/" and are
+# created only by the Helm chart, where the convention alone left them
+# requestable; they are the `_id` of a scope document granting `server: "*"`
+# with every action, so a client that could request one would be asking for
+# full administrative access:
+#   keycloak/setup/init-keycloak.sh                        create_scopes()
+#   terraform/aws-ecs/scripts/init-keycloak.sh             create_scopes()
+#   charts/keycloak-configure/templates/configmap.yaml     create_scopes()
+# In those three the exclusion is derived from the creation list directly.
+# Here it cannot be, so a name absent from the realm is reported by
+# _report_privileged_scope_drift rather than passing unnoticed.
+PRIVILEGED_CLIENT_SCOPES='[
+    "mcp-servers-unrestricted/read",
+    "mcp-servers-unrestricted/execute",
+    "mcp-servers-restricted/read",
+    "mcp-servers-restricted/execute",
+    "mcp-registry-admin",
+    "registry-admins"
+]'
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -151,6 +191,69 @@ setup_dcr_audience_mapper() {
     fi
 }
 
+_build_dcr_allowed_scopes() {
+    # Return the JSON array of scope names a DCR client may request: every
+    # realm scope that is neither on PRIVILEGED_CLIENT_SCOPES nor named with
+    # a "/". "openid" is appended because a DCR client always needs it and a
+    # realm that somehow lacks the scope should not break registration.
+    local realm_scope_names=$1
+
+    jq -nc \
+        --argjson realm "$realm_scope_names" \
+        --argjson privileged "$PRIVILEGED_CLIENT_SCOPES" \
+        '[
+            $realm[]
+            | . as $scope
+            | select(($privileged | index($scope)) == null)
+            | select(contains("/") | not)
+         ] + ["openid"] | unique'
+}
+
+
+_report_privileged_scope_drift() {
+    # Say out loud what the allowlist decided, so the operator can check it
+    # against the realm instead of trusting a naming convention.
+    #
+    # Two things are worth saying. A realm scope excluded only by the "/"
+    # convention means a new privileged-looking scope exists that nobody
+    # added to the list: still excluded today, but resting on the convention
+    # alone, so it is a WARNING. A name on the list that the realm does not
+    # have is usually just a scope another deployment surface creates and
+    # this one does not, so it is a NOTE; it is worth printing because the
+    # other reason for it is a privileged scope that was renamed, which would
+    # leave the new name requestable.
+    local realm_scope_names=$1
+    local allowed=$2
+
+    local absent=$(jq -nr \
+        --argjson realm "$realm_scope_names" \
+        --argjson privileged "$PRIVILEGED_CLIENT_SCOPES" \
+        '[$privileged[] | . as $s | select(($realm | index($s)) == null)] | join(", ")')
+
+    local convention_only=$(jq -nr \
+        --argjson realm "$realm_scope_names" \
+        --argjson privileged "$PRIVILEGED_CLIENT_SCOPES" \
+        '[
+            $realm[]
+            | . as $s
+            | select(contains("/"))
+            | select(($privileged | index($s)) == null)
+         ] | join(", ")')
+
+    echo "  DCR clients may request: $(echo "$allowed" | jq -r 'join(", ")')"
+
+    if [ -n "$convention_only" ]; then
+        echo -e "${YELLOW}  WARNING: excluded by the '/' convention but not named on the privileged list: ${convention_only}${NC}"
+        echo -e "${YELLOW}  Add it to PRIVILEGED_CLIENT_SCOPES if it confers gateway access.${NC}"
+    fi
+
+    if [ -n "$absent" ]; then
+        echo "  NOTE: privileged scopes this realm does not define: ${absent}"
+        echo "  Expected when another deployment surface creates them. If one was renamed, add the new name to PRIVILEGED_CLIENT_SCOPES."
+    fi
+}
+
+
 _widen_allowed_scopes_policy() {
     # Widen one subType's "Allowed Client Scopes" policy to include every
     # NON-PRIVILEGED client-scope defined in the realm. Both 'anonymous' and
@@ -215,9 +318,12 @@ configure_dcr_allowed_scopes() {
     local components=$(curl -s -H "Authorization: Bearer ${token}" \
         "${KEYCLOAK_URL}/admin/realms/${REALM}/components?type=org.keycloak.services.clientregistration.policy.ClientRegistrationPolicy")
 
-    local all_scope_names=$(curl -s -H "Authorization: Bearer ${token}" \
+    local realm_scope_names=$(curl -s -H "Authorization: Bearer ${token}" \
         "${KEYCLOAK_URL}/admin/realms/${REALM}/client-scopes" | \
-        jq -c '[.[].name | select(contains("/") | not)] + ["openid"]')
+        jq -c '[.[].name]')
+
+    local all_scope_names=$(_build_dcr_allowed_scopes "$realm_scope_names")
+    _report_privileged_scope_drift "$realm_scope_names" "$all_scope_names"
 
     _widen_allowed_scopes_policy "$token" "anonymous" "$components" "$all_scope_names" || return 1
     _widen_allowed_scopes_policy "$token" "authenticated" "$components" "$all_scope_names" || return 1
@@ -270,6 +376,12 @@ configure_dcr_trusted_hosts() {
 }
 
 configure_dcr_allowed_mapper_types() {
+    # Unlike the two mapper steps above, this one PUTs unconditionally rather
+    # than skipping when the policy is already in place. That is deliberate:
+    # the mapper steps POST a new mapper, so a second run would create a
+    # duplicate, while this step replaces a policy whose target state is the
+    # constant empty list. Re-running converges on the same state, and an
+    # unconditional write also repairs a policy that was widened by hand.
     local token=$1
 
     echo ""
@@ -380,8 +492,9 @@ main() {
     echo "What this script attempts:"
     echo "  - Groups protocol mapper on 'basic' client-scope (skipped if 'basic' missing)"
     echo "  - Audience mapper on 'basic' client-scope, aud=mcp-gateway (skipped if 'basic' missing)"
-    echo "  - Allowed Client Scopes policy widened to all realm scopes"
+    echo "  - Allowed Client Scopes policy widened to the realm's non-privileged scopes"
     echo "  - Trusted Hosts policy: IP check OFF, URI check ON, 'localhost' trusted"
+    echo "  - Allowed Protocol Mapper Types policy emptied (no client-supplied mappers)"
     echo ""
     echo "Check the output above to see which steps actually ran for this realm."
     echo "Existing DCR'd clients will pick up the policy changes immediately."
