@@ -376,9 +376,9 @@ A common cause on Terraform/ECS CloudFront-only deployments: a `terraform apply`
 
 If even your admin user has no permissions, the bootstrap admin mapping was likely never seeded into DocumentDB. Run the database-init step for your surface (see [Seeding the group-to-scope mappings in DocumentDB](#seeding-the-group-to-scope-mappings-in-documentdb)) — on Terraform/ECS that is `./terraform/aws-ecs/scripts/run-documentdb-init.sh` — and make sure your Cognito admin group is named `registry-admins` to match the seeded mapping.
 
-### "Unable to list IAM groups" on the IAM pages
+### IAM groups missing from the Groups page
 
-**Symptom:** Login works, but the **Settings -> IAM -> Groups** (or Users) page shows `Unable to list IAM groups` (HTTP 502).
+**Symptom:** Login works, but the **Settings -> IAM -> Groups** page lists only the groups stored in the registry's scope documents, and none that exist only in Cognito. The registry logs show `Failed to list IAM groups from the IdP`. Older registry versions failed the whole page with `Unable to list IAM groups` (HTTP 502) instead.
 
 **Fix:** This is a server-side failure listing groups from Cognito. Check two things:
 
