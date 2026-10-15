@@ -112,6 +112,15 @@ async def filter_session_groups(
         The filtered group list. See the module docstring for precedence and
         fail-open semantics.
     """
+    if not isinstance(groups, list) or not all(isinstance(group, str) for group in groups):
+        logger.warning(
+            "Rejecting non-array groups value for user=%s (got %s); storing no "
+            "groups (fail closed)",
+            username_hash,
+            type(groups).__name__,
+        )
+        return []
+
     if not groups:
         return groups
 

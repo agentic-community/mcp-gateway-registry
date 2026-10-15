@@ -24,6 +24,37 @@ class IdTokenVerificationError(Exception):
     """
 
 
+def normalize_groups_claim(value: Any, *, source: str) -> list[str]:
+    """Validate a token's ``groups`` claim as a JSON array of strings.
+
+    Fail closed: accept ONLY a list whose every element is a string. An
+    absent or null claim is the normal machine-to-machine case and maps to an
+    empty list.
+
+    Args:
+        value: The raw claim value decoded from the already signature-verified
+            JWT (or an equivalent verified userinfo/id-token field).
+        source: Short label naming the claim/provider for the rejection log.
+
+    Returns:
+        The validated list of group names (possibly empty).
+
+    Raises:
+        ValueError: When the claim is present but is not a JSON array of
+            strings.
+    """
+    if value is None:
+        return []
+    if not isinstance(value, list) or not all(isinstance(group, str) for group in value):
+        logger.warning(
+            "Rejecting token: %s claim is not a JSON array of strings (got %s)",
+            source,
+            type(value).__name__,
+        )
+        raise ValueError(f"Invalid {source} claim: expected a JSON array of strings")
+    return value
+
+
 class AuthProvider(ABC):
     """Abstract base class for authentication providers."""
 

@@ -10,7 +10,7 @@ from urllib.parse import urlencode
 import jwt
 import requests
 
-from .base import AuthProvider
+from .base import AuthProvider, normalize_groups_claim
 
 # Constants for self-signed token validation
 JWT_ISSUER = os.environ.get("JWT_ISSUER", "mcp-auth-server")
@@ -179,11 +179,12 @@ class KeycloakProvider(AuthProvider):
             )
 
             # Extract user info from claims
+            groups = normalize_groups_claim(claims.get("groups"), source="keycloak groups")
             return {
                 "valid": True,
                 "username": claims.get("preferred_username", claims.get("sub")),
                 "email": claims.get("email"),
-                "groups": claims.get("groups", []),
+                "groups": groups,
                 "scopes": claims.get("scope", "").split() if claims.get("scope") else [],
                 "client_id": claims.get("azp", claims.get("aud", self.client_id)),
                 "method": "keycloak",
@@ -276,9 +277,9 @@ class KeycloakProvider(AuthProvider):
                     scopes = scope_value
 
             # Extract groups from claims
-            groups = claims.get("groups", [])
-            if isinstance(groups, str):
-                groups = [groups]
+            groups = normalize_groups_claim(
+                claims.get("groups"), source="keycloak self-signed groups"
+            )
 
             # Counts only: group names are organizational PII and the scope list
             # reveals the authz model. The subject is masked (may be an email).
