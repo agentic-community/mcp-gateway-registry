@@ -634,6 +634,10 @@ egressAuth:
     # stack's openbao-init Job. Named "registry" (not egress-specific) so more
     # policies can attach to the same role/SA over time.
     role: "registry"
+    # Mount path of the auth method above. Empty = its default path
+    # (auth/kubernetes, auth/approle). Set it when the method is mounted
+    # elsewhere, e.g. "k8s-prod" for one kubernetes mount per cluster.
+    authMount: ""
 # PingFederate integration (used when authProvider.type = "pingfederate")
 pingfederate:
   enabled: false

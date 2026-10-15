@@ -44,6 +44,25 @@ tests:
       # The marker SECRET must NOT appear in the (non-secret) configmap.
       - notExists:
           path: data.AUTH_SERVER_NGINX_MARKER_SECRET
+      # authMount unset: no OPENBAO_AUTH_MOUNT, the app keeps the method's default path.
+      - notExists:
+          path: data.OPENBAO_AUTH_MOUNT
+
+  - it: renders OPENBAO_AUTH_MOUNT when openbao.authMount is set
+    set:
+      egressAuth:
+        enabled: true
+        secretStoreBackend: openbao
+        oauthCallbackBaseUrl: https://gw.example.com
+        openbao:
+          addr: http://openbao.default.svc:8200
+          authMethod: kubernetes
+          role: registry-egress
+          authMount: k8s-prod
+    asserts:
+      - equal:
+          path: data.OPENBAO_AUTH_MOUNT
+          value: "k8s-prod"
 
   - it: derives the callback base URL from global.domain + routing mode
     set:

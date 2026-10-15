@@ -1968,6 +1968,15 @@ class Settings(BaseSettings):
         description="OpenBao auth method: token | kubernetes | approle.",
     )
     openbao_role: str = Field(default="", description="OpenBao role for kubernetes/approle auth.")
+    openbao_auth_mount: str = Field(
+        default="",
+        description=(
+            "Mount path of the OpenBao auth method selected by OPENBAO_AUTH_METHOD "
+            "(kubernetes or approle). Empty keeps the method's default path "
+            "(auth/kubernetes, auth/approle). Set it when the method is mounted "
+            "elsewhere, e.g. one kubernetes mount per cluster on a shared Vault."
+        ),
+    )
 
     @field_validator("app_log_dir", mode="before")
     @classmethod
