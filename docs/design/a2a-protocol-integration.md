@@ -1141,18 +1141,19 @@ Reverse-proxy mode mirrors the MCP-server `url`/`proxy_pass_url` split so the ag
 - At **registration** (when `a2a_reverse_proxy_effective` and `supported_protocol == "a2a"`), the registry stores the registrant's real backend in **`proxy_pass_url`** and rewrites the advertised **`url`** to the gateway address `{REGISTRY_URL}/agent/{path}/`. The rewrite happens *after* endpoint validation, so the registration health check still probes the real backend.
 - **Discovery, the nginx generator, the health checker, and the security scanner** all read the backend from `proxy_pass_url`, falling back to `url` for legacy agents registered before the flag existed (backwards compatible).
 - **`proxy_pass_url` is redacted from non-admin reads** (single-agent GET and semantic discovery) via the shared `should_redact_backend_urls` helper — admin-only, exactly like the MCP-server backend-URL redaction. Discovery therefore returns only the gateway `url` to non-admins.
-- **A proxied agent's `supported_interfaces` are projected onto the gateway on the same non-admin reads.** The registration split rewrites only the top-level `url`; each `supported_interfaces[*].url` still holds the real backend. `redact_agent_backend_fields` (shared by detail, search, public read, and federation export) rewrites every gateway-servable binding onto the gateway `url` and drops the backend. The gateway route is a plain HTTP `proxy_pass`, so it serves the HTTP transports (`JSONRPC`, `HTTP+JSON`) but not `GRPC` or WebSocket; those entries are dropped rather than pointed at a gateway address that cannot serve them. An agent that declared only GRPC or WebSocket interfaces projects to an empty list, because the gateway fronts none of its transports.
+- **A proxied agent's `supported_interfaces` are projected onto the gateway on the same non-admin reads.** The registration split keeps the original interfaces in storage and rewrites only the top-level `url`. `redact_agent_backend_fields` (shared by detail, search, public read, and federation export) advertises only declared `JSONRPC` and `HTTP+JSON` bindings whose URL names the registered backend path, allowing an optional trailing slash and default port. Other paths or transports cannot be served by this agent's single nginx route, so those entries are omitted rather than pointed at a dead gateway URL. New reverse-proxy registrations and updates with a nonempty interface list but no matching binding are rejected before persisting; older cards may still have an empty projected list until corrected.
 
-So a discovering agent always receives the gateway URL and routes back through the proxy; only admins ever see the private backend.
+Discovering agents receive the gateway URL only when the declared interface maps to the backend the gateway actually forwards to. Admins retain the original backend interfaces for maintenance.
 
 ### Routes Per Agent
 
-For an agent at path `flight-booking-agent`, the config generator emits two nginx locations, both guarded by the `auth_request /validate` subrequest (like MCP routes):
+For an agent at path `flight-booking-agent`, the config generator emits three nginx locations. The public card and request routes require `auth_request /validate`; the card fetch is internal-only:
 
 | Route | Purpose |
 | --- | --- |
-| `= /agent/flight-booking-agent/.well-known/agent-card.json` | Agent-card discovery (exact match) |
-| `/agent/flight-booking-agent/` | A2A JSON-RPC endpoint (and SSE streaming) |
+| `= /agent/flight-booking-agent/.well-known/agent-card.json` | Authenticated agent-card projection |
+| `= /agent/flight-booking-agent/_agent_card_upstream` | Internal-only fetch from the registered backend origin |
+| `/agent/flight-booking-agent/` | Authenticated A2A HTTP endpoint and SSE streaming |
 
 ### Discovery Flow (Card Rewrite)
 
@@ -1169,15 +1170,13 @@ sequenceDiagram
     AS-->>GW: 200 + X-Scopes  (else 401 / 403)
     GW->>B: proxy_pass /.well-known/agent-card.json<br/>(X-Authorization + Cookie stripped)
     B-->>GW: card { url: backend, supportedInterfaces: [...] }
-    GW->>GW: agent_card_rewrite.lua: rewrite url + interfaces -> gateway
-    GW-->>C: card advertising https://<gateway>/agent/{path}/
+    GW->>GW: agent_card_rewrite.lua: keep registered-path HTTP bindings
+    GW-->>C: card advertising https://<gateway>/agent/{path}/ (or 502)
 ```
 
-`agent_card_rewrite.lua` (a `body_filter`) makes the proxy transparent: it rewrites the card's top-level `url` and advertised interface URLs (`additionalInterfaces` for A2A 0.2.x, `supportedInterfaces` for proto/1.0 SDKs) from the backend origin to the gateway, so the client's JSON-RPC calls return through the proxy. A companion `header_filter` clears `Content-Length` since the body changes.
+`agent_card_rewrite.lua` runs after `/validate`, fetches the live card through an internal nginx location, and returns 502 if it cannot find a routable interface. For A2A 1.0 it retains only declared `supportedInterfaces` with `JSONRPC` or `HTTP+JSON` bindings whose URL matches the registered `proxy_pass_url` (apart from a trailing slash or default port). It keeps each surviving entry's `protocolVersion`, rewrites its URL to the gateway, and never invents a binding. For A2A 0.x it checks the top-level `url` and `preferredTransport` as one binding and filters `additionalInterfaces` the same way; a usable additional interface can replace an unroutable preferred transport. The filter drops other bindings and paths rather than exposing backend URLs. OpenResty's `cjson.decode_array_with_array_mt(true)` preserves arrays, including nested empty arrays, when the card is re-encoded.
 
-**Scheme behind a TLS-terminating proxy:** the advertised URL's scheme is chosen from, in order, `X-Cloudfront-Forwarded-Proto`, then `X-Forwarded-Proto`, then `ngx.var.scheme` (only the exact values `http`/`https` are accepted). This matters when CloudFront terminates TLS and forwards to the ALB over plain HTTP: the ALB overwrites `X-Forwarded-Proto` with the CloudFront→ALB hop scheme (`http`), but `X-Cloudfront-Forwarded-Proto` preserves the original viewer scheme (`https`), so the card correctly advertises `https`. Empty-array card fields (e.g. a skill's `tags: []`) are preserved by rewriting only the URL substrings rather than decode/re-encoding the whole JSON.
-
-**The live rewrite and the DB-read projection differ on purpose.** The projection above reshapes the card the registry stored, so it drops a GRPC or WebSocket entry the gateway cannot serve. This Lua filter rewrites the card the backend returns live, by literal string substitution, and so cannot remove an array entry without decode/re-encoding the body (which would corrupt empty arrays, as noted). It rewrites every interface url, GRPC and WebSocket included, to the HTTP gateway. A client that reads a GRPC interface from the live proxied card therefore gets the gateway address, which does not serve GRPC. Aligning the live filter with the projection is a tracked follow-up.
+**Scheme behind a TLS-terminating proxy:** the advertised URL's scheme is chosen from, in order, `X-Cloudfront-Forwarded-Proto`, then `X-Forwarded-Proto`, then `ngx.var.scheme` (only the exact values `http`/`https` are accepted). CloudFront preserves the original viewer scheme in `X-Cloudfront-Forwarded-Proto` when an intermediate ALB rewrites `X-Forwarded-Proto`.
 
 ### Invocation Flow (Per-Agent FGAC)
 

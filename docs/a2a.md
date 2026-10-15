@@ -159,8 +159,8 @@ In the default mode the registry hands a discovering agent the target's *direct*
 
 ### What changes when it is on
 
-- Each **enabled** agent gets two `auth_request`-guarded nginx locations: an exact-match agent-card route (`/agent/{path}/.well-known/agent-card.json`) and a prefix JSON-RPC/SSE route (`/agent/{path}/`).
-- At registration the registry stores your real backend in **`proxy_pass_url`** and rewrites the advertised **`url`** to the gateway (`{REGISTRY_URL}/agent/{path}/`). This mirrors the MCP-server backend/advertised split. The backend is **redacted from non-admin reads**, so discovering agents only ever get the gateway URL. A2A 1.0 `supported_interfaces` get the same treatment: each HTTP binding is projected onto the gateway URL, and bindings the gateway cannot serve (GRPC, WebSocket) are dropped.
+- Each **enabled** agent gets an authenticated agent-card location (`/agent/{path}/.well-known/agent-card.json`), an internal-only upstream-card location, and an authenticated JSON-RPC/SSE route (`/agent/{path}/`). The card handler returns HTTP 502 rather than publishing an unroutable A2A 1.0 card.
+- At registration the registry stores your real backend in **`proxy_pass_url`** and rewrites the advertised **`url`** to the gateway (`{REGISTRY_URL}/agent/{path}/`). This mirrors the MCP-server backend/advertised split. The backend is redacted from non-admin reads. A2A 1.0 `supported_interfaces` retain only declared `JSONRPC` and `HTTP+JSON` bindings at the exact registered backend URL (an optional trailing slash is equivalent); those entries advertise the gateway URL. A card with interfaces but none routable through that URL is rejected for reverse-proxy mode. Register it without proxying, or configure a compatible backend interface.
 - Invocation is gated per agent at `/validate`: the caller needs an `invoke_agent` grant for that agent path.
 - The caller's gateway token travels in **`X-Authorization`** (stripped at egress); the target agent's own credential travels in **`Authorization`** (forwarded end to end). The gateway never brokers credentials to the backend.
 
@@ -201,7 +201,7 @@ registry:
 
 ### How discovery works (card rewrite)
 
-When a client fetches an agent card through the gateway, the gateway validates access, proxies to the private backend, and rewrites the card's URLs to point back at itself so the client's follow-up JSON-RPC calls also route through the gateway.
+When a client fetches an agent card through the gateway, the gateway checks access and fetches the live card through an internal-only backend location. It advertises only `JSONRPC` and `HTTP+JSON` interfaces whose URLs match the registered backend path. If none match, the client receives HTTP 502 rather than a misleading card.
 
 ```mermaid
 sequenceDiagram
@@ -216,11 +216,11 @@ sequenceDiagram
     AS-->>GW: 200 + X-Scopes  (else 401 / 403)
     GW->>B: proxy to backend (X-Authorization + Cookie stripped)
     B-->>GW: card { url: backend, ... }
-    GW->>GW: rewrite url + interface URLs -> gateway
-    GW-->>C: card advertising https://<gateway>/agent/{path}/
+    GW->>GW: retain routable HTTP interfaces, replace their URLs with the gateway URL
+    GW-->>C: card advertising https://<gateway>/agent/{path}/ (or HTTP 502)
 ```
 
-The rewrite (a Lua `body_filter`) preserves empty-array card fields and honors `X-Cloudfront-Forwarded-Proto` so the advertised scheme is correct (`https`) even when CloudFront/ALB terminate TLS and forward over plain HTTP.
+The Lua content handler reads the card before sending response headers so it can return HTTP 502 on an unroutable card. It preserves empty-array fields and honors `X-Cloudfront-Forwarded-Proto` when CloudFront or an ALB terminates TLS.
 
 ### How invocation works (per-agent FGAC)
 

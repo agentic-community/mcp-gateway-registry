@@ -1,100 +1,155 @@
--- agent_card_rewrite.lua: rewrite A2A agent-card endpoint URLs from the backend
--- to the gateway so clients route JSON-RPC calls back through this proxy
--- Runs in the body_filter phase on the agent-card discovery route.
--- The companion header_filter clears Content-Length because the body size changes.
-local ok, cjson = pcall(require, "cjson")
-if not ok then return end
+-- Runs as content_by_lua after the gateway's auth_request, before response
+-- headers are sent. A body filter cannot turn an unroutable card into a 502.
+local cjson = require("cjson").new()
+-- The registry image ships OpenResty's lua-cjson, whose decoder can tag every
+-- array (including nested empty arrays) so re-encoding preserves JSON shape.
+cjson.decode_array_with_array_mt(true)
 
-local chunk = ngx.arg[1]
-local eof = ngx.arg[2]
+local function reject()
+    ngx.status = ngx.HTTP_BAD_GATEWAY
+    ngx.header.content_type = "application/json"
+    ngx.say('{"error":"Agent card has no gateway-routable interface"}')
+end
 
--- Buffer the upstream body across chunks; emit nothing until the final chunk.
-local buf = ngx.ctx.agent_card_buf
-if buf == nil then
-    buf = {}
-    ngx.ctx.agent_card_buf = buf
+-- The registered proxy_pass_url is provided by nginx, never by the remote card.
+-- Compare the entire backend endpoint, not just its origin: the JSON-RPC proxy
+-- routes to this URL and cannot serve another path on the same host.
+local function endpoint_parts(url)
+    if type(url) ~= "string" then return nil end
+    local scheme, authority, path = url:match("^([%a]+)://([^/?#]+)([^?#]*)$")
+    if not scheme then return nil end
+    local host, port = authority:match("^([%w.%-]+):?(%d*)$")
+    if not host then return nil end
+    scheme = scheme:lower()
+    if scheme ~= "http" and scheme ~= "https" then return nil end
+    if port == "" then port = scheme == "https" and "443" or "80" end
+    port = tonumber(port)
+    if not port or port < 1 or port > 65535 then return nil end
+    return scheme, host:lower(), port, (path == "" or path == "/") and "" or path:gsub("/$", "")
 end
-if chunk and chunk ~= "" then
-    buf[#buf + 1] = chunk
-end
-if not eof then
-    ngx.arg[1] = nil
+
+local backend_scheme, backend_host, backend_port, backend_path =
+    endpoint_parts(ngx.var.agent_backend_url)
+if not backend_scheme then
+    reject()
     return
 end
 
-local body = table.concat(buf)
-ngx.ctx.agent_card_buf = nil
+local function matches_backend(url)
+    local scheme, host, port, path = endpoint_parts(url)
+    return scheme == backend_scheme and host == backend_host
+        and port == backend_port and path == backend_path
+end
 
-local dok, card = pcall(cjson.decode, body)
-if not dok or type(card) ~= "table" then
-    -- Not an agent card we understand; pass the original body through unchanged.
-    ngx.arg[1] = body
+local function routable(binding, url)
+    return (binding == "JSONRPC" or binding == "HTTP+JSON")
+        and matches_backend(url)
+end
+
+-- This is an `internal` location; only the already-authorized outer location
+-- can fetch it. On any upstream error, never echo the backend's response body.
+local response = ngx.location.capture(ngx.var.agent_card_upstream)
+if not response or response.status ~= ngx.HTTP_OK then
+    reject()
+    return
+end
+local ok, card = pcall(cjson.decode, response.body or "")
+if not ok or type(card) ~= "table" or getmetatable(card) == cjson.array_mt then
+    reject()
     return
 end
 
--- Gateway base for this agent is the request URI minus the agent-card suffix,
--- e.g. /agent/travel/.well-known/agent-card.json -> /agent/travel
-local base = ngx.var.uri:gsub("/%.well%-known/agent%-card%.json$", "")
--- Determine the client-facing scheme when a TLS-terminating proxy fronts nginx
--- (CloudFront/ALB terminate TLS and forward over plain http, so ngx.var.scheme
--- would wrongly be "http"). Header precedence:
---   1. X-Cloudfront-Forwarded-Proto -- CloudFront's original viewer scheme; an
---      intermediate ALB does NOT overwrite this one (it rewrites X-Forwarded-Proto
---      to the CF->ALB hop scheme, i.e. http, clobbering CloudFront's value).
---   2. X-Forwarded-Proto -- honored for a single-proxy setup (ALB-only, or an
---      ingress that sets it correctly).
---   3. ngx.var.scheme -- direct-TLS deployments (local/compose) with no proxy.
--- Only exact http/https values are accepted so a spoofed header cannot inject junk.
-local function valid_proto(v)
-    return (v == "https" or v == "http") and v or nil
+-- Preserve the forwarded viewer scheme behind CloudFront/ALB, and the Host
+-- port for local/non-default-port installations.
+local function valid_proto(value)
+    return (value == "http" or value == "https") and value or nil
 end
 local scheme = valid_proto(ngx.var.http_x_cloudfront_forwarded_proto)
-    or valid_proto(ngx.var.http_x_forwarded_proto)
-    or ngx.var.scheme
--- http_host preserves a non-default port (e.g. :8443); ngx.var.host strips it.
--- Trailing slash so the advertised URL matches the JSON-RPC endpoint, which is
--- the prefix location {ROOT_PATH}/agent/<path>/ (a no-slash URL would not match).
+    or valid_proto(ngx.var.http_x_forwarded_proto) or ngx.var.scheme
+local base = ngx.var.uri:gsub("/%.well%-known/agent%-card%.json$", "")
 local gateway_url = scheme .. "://" .. ngx.var.http_host .. base .. "/"
 
--- Collect the exact backend URL strings to rewrite (top-level url + any
--- advertised interface urls across A2A versions: additionalInterfaces (0.2.x)
--- and supportedInterfaces (proto/1.0)). We use the decoded card ONLY to find
--- these values, then rewrite them by literal string substitution on the raw
--- body below. We do NOT re-encode the decoded card: cjson serializes an empty
--- array (e.g. a skill's "tags": []) as "{}", which corrupts the card and makes
--- strict A2A clients reject it. String substitution preserves the backend's
--- exact serialization and only touches the URL values.
-local originals = {}
-local function collect(u)
-    if type(u) == "string" and u ~= "" and u ~= gateway_url then
-        originals[u] = true
+-- A2A 1.x declares its bindings in supportedInterfaces; a top-level URL is
+-- not an independent 1.x binding. Keep the original entries (including
+-- protocolVersion and extensions) but drop bindings that cannot be proxied.
+if card.supportedInterfaces ~= nil or
+    (type(card.protocolVersion) == "string" and card.protocolVersion:match("^1%.")) then
+    if type(card.supportedInterfaces) ~= "table"
+        or getmetatable(card.supportedInterfaces) ~= cjson.array_mt then
+        reject()
+        return
     end
-end
-collect(card.url)
-local function collect_interfaces(list)
-    if type(list) ~= "table" then return end
-    for _, iface in ipairs(list) do
-        if type(iface) == "table" then
-            collect(iface.url)
+    local interfaces = setmetatable({}, cjson.array_mt)
+    for _, entry in ipairs(card.supportedInterfaces) do
+        if type(entry) == "table" and type(entry.protocolVersion) == "string"
+            and entry.protocolVersion ~= "" and routable(entry.protocolBinding, entry.url) then
+            interfaces[#interfaces + 1] = {
+                url = gateway_url,
+                protocolBinding = entry.protocolBinding,
+                protocolVersion = entry.protocolVersion,
+                tenant = entry.tenant,
+            }
         end
     end
+    if #interfaces == 0 then
+        reject()
+        return
+    end
+    card.supportedInterfaces = interfaces
+    -- These legacy fields are not A2A 1.0 declarations. Do not return stale
+    -- backend endpoints from a mixed-version card.
+    card.additionalInterfaces = nil
+    card.additional_interfaces = nil
+    card.supported_interfaces = nil
+    if card.url ~= nil then card.url = gateway_url end
+    if card.preferredTransport ~= nil then
+        local preferred_survives = false
+        for _, entry in ipairs(interfaces) do
+            if entry.protocolBinding == card.preferredTransport then
+                preferred_survives = true
+                break
+            end
+        end
+        if not preferred_survives then
+            card.preferredTransport = interfaces[1].protocolBinding
+        end
+    end
+else
+    -- A2A 0.x defaults the top-level URL to JSONRPC when preferredTransport
+    -- is absent. Additional interfaces can supply a usable fallback when the
+    -- preferred binding uses GRPC or another backend path.
+    local preferred_ok = routable(card.preferredTransport or "JSONRPC", card.url)
+    local interfaces = setmetatable({}, cjson.array_mt)
+    if type(card.additionalInterfaces) == "table"
+        and getmetatable(card.additionalInterfaces) == cjson.array_mt then
+        for _, entry in ipairs(card.additionalInterfaces) do
+            if type(entry) == "table" and routable(entry.transport, entry.url) then
+                interfaces[#interfaces + 1] = {
+                    url = gateway_url,
+                    transport = entry.transport,
+                }
+            end
+        end
+    end
+    if not preferred_ok and #interfaces == 0 then
+        reject()
+        return
+    end
+    if not preferred_ok then
+        card.preferredTransport = interfaces[1].transport
+    end
+    card.url = gateway_url
+    if card.additionalInterfaces ~= nil then card.additionalInterfaces = interfaces end
+    -- A mixed-version card must not leak an unfiltered binding list.
+    card.supportedInterfaces = nil
+    card.supported_interfaces = nil
+    card.additional_interfaces = nil
 end
-collect_interfaces(card.additionalInterfaces)
-collect_interfaces(card.supportedInterfaces)
 
--- Escape a string for use as a plain (non-pattern) gsub replacement: only "%"
--- is special on the replacement side.
-local function escape_repl(s)
-    return (s:gsub("%%", "%%%%"))
+local encoded, result = pcall(cjson.encode, card)
+if not encoded then
+    reject()
+    return
 end
--- Escape Lua pattern magic chars so the search string matches literally.
-local function escape_pat(s)
-    return (s:gsub("([%^%$%(%)%%%.%[%]%*%+%-%?])", "%%%1"))
-end
-
-local rewritten = body
-local gw_repl = escape_repl(gateway_url)
-for original in pairs(originals) do
-    rewritten = rewritten:gsub('"' .. escape_pat(original) .. '"', '"' .. gw_repl .. '"')
-end
-ngx.arg[1] = rewritten
+ngx.header.content_type = "application/json"
+ngx.print(result)

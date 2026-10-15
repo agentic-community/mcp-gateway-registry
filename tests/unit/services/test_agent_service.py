@@ -440,6 +440,36 @@ class TestUpdateAgent:
         assert persisted.description == "Updated description"
 
     @pytest.mark.asyncio
+    async def test_proxied_backend_repoint_rejects_unmatched_interfaces(
+        self,
+        agent_service: AgentService,
+        fake_repo: InMemoryAgentRepository,
+    ):
+        gateway = "https://gw.example.com/agent/test-agent/"
+        previous = AgentCardFactory(
+            path="/test-agent",
+            url=gateway,
+            proxy_pass_url="https://backend.example.com/a2a",
+            supportedInterfaces=[
+                {
+                    "url": "https://backend.example.com/a2a",
+                    "protocolBinding": "JSONRPC",
+                    "protocolVersion": "1.0",
+                }
+            ],
+        )
+        await fake_repo.create(previous)
+
+        with pytest.raises(ValueError, match="registered backend URL"):
+            await agent_service.update_agent(
+                "/test-agent", {"proxy_pass_url": "https://backend.example.com/other"}
+            )
+
+        assert (
+            await fake_repo.get("/test-agent")
+        ).proxy_pass_url == "https://backend.example.com/a2a"
+
+    @pytest.mark.asyncio
     async def test_update_agent_updates_timestamp(
         self,
         agent_service: AgentService,

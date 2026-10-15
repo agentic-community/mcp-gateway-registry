@@ -13,9 +13,14 @@ caller's auth context (``is_admin``, ``accessible_*`` scope lists,
 """
 
 import logging
+from collections.abc import Sequence
 from typing import Any
+from urllib.parse import urlsplit
 
 from ..core.config import DeploymentMode, settings
+from ..exceptions import UrlValidationError
+from ..schemas.agent_models import AgentInterface
+from ..utils.url_guard import normalize_url_identity
 
 logger = logging.getLogger(__name__)
 
@@ -146,39 +151,60 @@ _AGENT_BACKEND_URL_FIELDS: tuple[str, ...] = (
 )
 
 
-# Protocol bindings the gateway's HTTP reverse-proxy route cannot serve, so they
-# are omitted from a proxied agent's client-facing interfaces rather than pointed
-# at a dead gateway url. The gateway location block is a generic HTTP proxy_pass
-# (registry/core/nginx_service.py _create_agent_location_block), so every HTTP
-# transport (JSONRPC, HTTP+JSON, ...) is servable; GRPC and WebSocket are not.
-_GATEWAY_UNSERVABLE_BINDINGS: frozenset[str] = frozenset({"GRPC"})
-_WS_URL_SCHEMES: tuple[str, ...] = ("ws://", "wss://")
+# The agent nginx location forwards one HTTP backend path. It cannot translate
+# protocols or send a second binding to another path.
+_GATEWAY_AGENT_BINDINGS = frozenset({"JSONRPC", "HTTP+JSON"})
+
+
+def _gateway_backend_identity(url: str) -> tuple[str, str, str] | None:
+    """Compare HTTP targets, ignoring only a trailing path slash."""
+    try:
+        parsed = urlsplit(normalize_url_identity(url))
+    except UrlValidationError:
+        return None
+    if parsed.query:
+        return None
+    return parsed.scheme, parsed.netloc, parsed.path.rstrip("/") or "/"
+
+
+def gateway_routable_agent_interfaces(
+    interfaces: Sequence[AgentInterface | dict[str, Any]],
+    backend_url: str,
+) -> list[AgentInterface | dict[str, Any]]:
+    """Return declared HTTP bindings routed to this exact agent backend path."""
+    backend = _gateway_backend_identity(backend_url)
+    if backend is None:
+        return []
+    routable: list[AgentInterface | dict[str, Any]] = []
+    seen: set[str] = set()
+    for entry in interfaces:
+        if isinstance(entry, dict):
+            binding = entry.get("protocol_binding") or entry.get("protocolBinding")
+            url = entry.get("url")
+            version = entry.get("protocol_version") or entry.get("protocolVersion")
+        else:
+            binding, url, version = entry.protocol_binding, entry.url, entry.protocol_version
+        if (
+            binding in _GATEWAY_AGENT_BINDINGS
+            and binding not in seen
+            and isinstance(url, str)
+            and version
+            and _gateway_backend_identity(url) == backend
+        ):
+            routable.append(entry)
+            seen.add(binding)
+    return routable
 
 
 def _project_proxied_supported_interfaces(
     agent_dict: dict,
 ) -> None:
-    """Project a reverse-proxied agent's interfaces onto the gateway.
+    """Replace backend interfaces with the HTTP bindings this gateway routes.
 
-    In A2A reverse-proxy mode the split rewrites only the top-level ``url`` to the
-    gateway; each ``supported_interfaces[*].url`` still holds the registrant's
-    real backend. Dropping the list wholesale would leave an A2A 1.0 card with no
-    usable endpoint (the proto has no top-level ``url`` and marks
-    ``supportedInterfaces`` required). Instead, for a proxied agent we rewrite the
-    gateway-facing ``url`` (already on the card's top-level ``url``) onto every
-    binding the gateway can actually serve - the HTTP transports (e.g. JSONRPC,
-    HTTP+JSON), since the gateway route is a generic HTTP ``proxy_pass``. Bindings
-    the gateway cannot serve (GRPC, WebSocket) are omitted rather than pointed at a
-    dead gateway url, and the registrant's backend never appears in the result. If
-    the agent declared *only* gateway-unservable interfaces, the result is an empty
-    list: the gateway cannot front any declared transport, so fabricating a JSONRPC
-    endpoint would only advertise a dead address.
-
-    Gated on ``proxy_pass_url``: its presence marks the agent as reverse-proxied
-    (``url`` is the gateway, interfaces carry the backend). A non-proxied agent's
-    interfaces are its real, public address and stay untouched. MUST run before
-    ``proxy_pass_url`` is stripped. No-op when not proxied, when the card carries
-    no ``supported_interfaces``, or when the top-level ``url`` is missing.
+    A reverse-proxied card stores the backend in ``proxy_pass_url`` and its
+    gateway address in ``url``. Project only declared JSONRPC/HTTP+JSON entries
+    bound to that same backend path; neither a different path nor another
+    transport can be served by this agent's single nginx location.
 
     Args:
         agent_dict: An agent card dict, mutated in place.
@@ -200,29 +226,20 @@ def _project_proxied_supported_interfaces(
     version_key = "protocolVersion" if camel else "protocol_version"
 
     projected: list[dict] = []
-    seen: set[str] = set()
-    for entry in interfaces:
+    for entry in gateway_routable_agent_interfaces(
+        interfaces,
+        agent_dict.get("proxy_pass_url") or agent_dict["proxyPassUrl"],
+    ):
         if not isinstance(entry, dict):
             continue
         binding = entry.get("protocol_binding") or entry.get("protocolBinding")
-        entry_url = entry.get("url") or ""
-        if binding in _GATEWAY_UNSERVABLE_BINDINGS:
-            continue
-        if isinstance(entry_url, str) and entry_url.startswith(_WS_URL_SCHEMES):
-            continue
-        if not binding or binding in seen:
-            continue
-        seen.add(binding)
-        new_entry: dict = {"url": gateway_url, binding_key: binding}
         version = entry.get("protocol_version") or entry.get("protocolVersion")
-        if version:
-            new_entry[version_key] = version
-        projected.append(new_entry)
-
-    # When nothing gateway-servable remains (only GRPC/WS were declared), leave the
-    # list empty rather than inventing a JSONRPC endpoint: the gateway's HTTP
-    # proxy_pass cannot front those transports, so a synthetic entry would 502 and
-    # would also carry no protocol_version. An empty list is the honest projection.
+        if not version:
+            continue
+        projected_entry = {"url": gateway_url, binding_key: binding, version_key: version}
+        if entry.get("tenant") is not None:
+            projected_entry["tenant"] = entry["tenant"]
+        projected.append(projected_entry)
     agent_dict[key] = projected
     # Drop the other-cased spelling if both somehow coexist, so the backend
     # interfaces cannot survive under the alternate key.

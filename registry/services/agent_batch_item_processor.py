@@ -270,7 +270,10 @@ async def _do_register(
     # in registry-only mode). Without this a batch-registered proxied agent would
     # persist the backend as its top-level url AND never get proxy_pass_url, so
     # the read-time backend projection (keyed on proxy_pass_url) could not fire.
-    _apply_a2a_reverse_proxy_split(card, path)
+    try:
+        _apply_a2a_reverse_proxy_split(card, path)
+    except ValueError as e:
+        return _result(index, item.op, path, 422, "validation_error", str(e))
 
     await agent_service.register_agent(card)
 
@@ -332,9 +335,11 @@ async def _do_patch(
     # Re-apply the reverse-proxy split on the write path (parity with single-card
     # PATCH) so an edit that changes url cannot desync the advertised gateway url
     # from the stored backend; no-op in registry-only mode.
-    _apply_a2a_reverse_proxy_split(merged, path)
-
-    await agent_service.update_agent(path, merged.model_dump())
+    try:
+        _apply_a2a_reverse_proxy_split(merged, path)
+        await agent_service.update_agent(path, merged.model_dump())
+    except ValueError as e:
+        return _result(index, item.op, path, 422, "validation_error", str(e))
 
     updated = await agent_service.get_agent_info(path)
     _fire_webhook("update", updated.model_dump(mode="json"), submitted_by)
@@ -371,9 +376,11 @@ async def _do_replace(
 
     # Reverse-proxy split, same as the single-card PUT path; no-op in
     # registry-only mode.
-    _apply_a2a_reverse_proxy_split(card, path)
-
-    await agent_service.update_agent(path, card.model_dump())
+    try:
+        _apply_a2a_reverse_proxy_split(card, path)
+        await agent_service.update_agent(path, card.model_dump())
+    except ValueError as e:
+        return _result(index, item.op, path, 422, "validation_error", str(e))
 
     updated = await agent_service.get_agent_info(path)
     _fire_webhook("update", updated.model_dump(mode="json"), submitted_by)

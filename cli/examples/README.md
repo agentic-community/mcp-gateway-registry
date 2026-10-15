@@ -165,25 +165,37 @@ DevOps automation agent for infrastructure and deployment management.
 uv run python cli/agent_mgmt.py register cli/examples/devops_deployment_agent.json
 ```
 
+### a2a-1.0-agent-card.json
+
+This registration example shows A2A 1.0 `supportedInterfaces` and `securityRequirements`. Both declared bindings use the registered `/a2a` backend URL, which lets a gateway deployment route either one. The bearer scheme describes the agent's own authentication; the gateway does not issue that credential.
+
+Replace `agent.example.com` with a running agent that serves both JSON-RPC and HTTP+JSON at `/a2a`. If it serves only one, remove the other interface. The registry checks the endpoint on registration and does not turn one binding into another.
+
+```bash
+uv run python cli/agent_mgmt.py register cli/examples/a2a-1.0-agent-card.json
+```
+
 ## Complete A2A Schema Fields
 
-All example files include the complete A2A agent schema:
+Examples use the registry's agent registration format. `a2a-1.0-agent-card.json` shows the A2A 1.0 transport and security fields; older examples use earlier A2A versions or registry extensions.
 
-**Required Fields:**
-- `protocol_version`: A2A protocol version (e.g., "1.0")
+**Required registration fields:**
 - `name`: Agent display name
-- `description`: What the agent does
 - `url`: Agent endpoint URL
-- `path`: Registry path (must start with `/`)
+- `supportedProtocol`: `a2a` for an A2A agent
 
-**Optional A2A Fields:**
-- `version`: Semantic version
-- `provider`: Agent provider/author
-- `security_schemes`: Authentication methods (http, apiKey, oauth2, openIdConnect)
-- `security`: Security requirements array
-- `skills`: Array of capabilities with parameters
-- `streaming`: Supports streaming responses (boolean)
-- `metadata`: Additional metadata key-value pairs
+The CLI examples also supply a description, protocol version, and path. If you omit `path`, the registry derives it from `name`.
+
+**Optional A2A fields:**
+- `protocolVersion`: A2A protocol version (for example, `1.0`)
+- `supportedInterfaces`: Ordered transport bindings, each with a URL, `protocolBinding`, and `protocolVersion`
+- `version`: Agent version
+- `provider`: Agent provider
+- `securitySchemes`: Named authentication schemes
+- `securityRequirements`: A2A 1.0 scheme requirements with wrapped scope lists
+- `skills`: Agent skills
+- `capabilities`: Supported features, such as streaming
+- `metadata`: Extra registry metadata
 
 **Registry Extensions:**
 - `tags`: Array of categorization tags
