@@ -1417,7 +1417,9 @@ class Settings(BaseSettings):
         ge=1.0,
         description=(
             "Timeout (seconds) for the auth-server proxy hop's upstream MCP "
-            "request. Raise for servers with long-running tools. The generated "
+            "request, response included: an upstream that keeps the response "
+            "open is cut with a 504 when it expires. Raise for servers with "
+            "long-running tools. The generated "
             "/mcp-proxy/ nginx blocks derive their proxy_read_timeout from this "
             "value (plus a 30s buffer), so raising it lifts the whole proxy "
             "chain; no separate nginx change is needed."
