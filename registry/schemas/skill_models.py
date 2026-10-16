@@ -392,6 +392,10 @@ class SkillInfo(BaseModel):
     )
     last_checked_time: datetime | None = Field(None, description="When health was last checked")
 
+    # Timestamps
+    created_at: datetime | None = Field(None, description="When the skill was registered")
+    updated_at: datetime | None = Field(None, description="When the skill was last updated")
+
     # Registry Card fields for federation
     status: str = Field(
         default="active",
