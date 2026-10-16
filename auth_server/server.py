@@ -7984,6 +7984,44 @@ def _obo_error_response(req_id: object, detail: str):
     )
 
 
+# JSON-RPC methods that mcp_proxy answers locally instead of forwarding (#1890).
+# The proxy buffers the whole upstream response before it answers, so it cannot
+# relay a response that never ends. A ``subscriptions/listen`` response (MCP
+# 2026-07-28, SEP-2575) is an open-ended SSE stream with keep-alive events: the
+# buffered read would never finish and would hold an upstream connection, from
+# the shared egress pool on the egress path. Method-not-found lets the client
+# carry on without notifications.
+_MCP_PROXY_UNSUPPORTED_METHODS: frozenset[str] = frozenset({"subscriptions/listen"})
+_JSONRPC_METHOD_NOT_FOUND: int = -32601
+
+
+def _unsupported_method_response(
+    req_id: object,
+    method: str,
+) -> JSONResponse:
+    """JSON-RPC method-not-found for a method the buffering proxy cannot relay.
+
+    Args:
+        req_id: The ``id`` of the client's request, echoed back.
+        method: The refused method, one of ``_MCP_PROXY_UNSUPPORTED_METHODS``.
+
+    Returns:
+        A 200 JSON-RPC error response with code -32601.
+    """
+    return JSONResponse(
+        status_code=200,
+        content={
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "error": {
+                "code": _JSONRPC_METHOD_NOT_FOUND,
+                "message": f"Method not found: {method}",
+                "data": {"detail": "This method is not supported through the gateway proxy."},
+            },
+        },
+    )
+
+
 # Discovery list methods and the result key each returns. Before the user has a
 # usable egress credential, every one of them answers with an EMPTY list plus
 # ``EGRESS_CONSENT_REQUIRED_HEADER``: list methods MUST NOT error (that dead-ends
@@ -8449,6 +8487,10 @@ async def mcp_proxy(
     For methods other than "tools/list" or when filtering is disabled,
     the upstream response is returned verbatim. For "tools/list", the
     result.tools array is filtered using filter_tools_list_response.
+
+    The upstream response is buffered, and the whole exchange is bounded by
+    MCP_PROXY_TIMEOUT (504 on expiry). Streaming-only methods listed in
+    _MCP_PROXY_UNSUPPORTED_METHODS are answered locally with JSON-RPC -32601.
     """
     # verify_mcp_proxy_token (route dependency) has already verified the token
     # and stashed the claims; it raises 401 before reaching here on any failure,
@@ -8526,6 +8568,19 @@ async def mcp_proxy(
     # callers still pass here and reach the egress consent/local-answer paths
     # below (they already had these methods in scope on the connected path).
     await _authorize_forwarded_mcp_body(registered_server, request_body, user_scopes)
+
+    # A streaming-only method cannot go through the buffered path below. Answer
+    # it here, after authorization and before the egress vend and the upstream
+    # call, so it never takes an upstream connection (#1890).
+    if incoming_method in _MCP_PROXY_UNSUPPORTED_METHODS:
+        req_id = incoming_payload.get("id") if isinstance(incoming_payload, dict) else None
+        logger.info(
+            "mcp_proxy: server=%s method=%s cannot be relayed by the buffering proxy; "
+            "answering -32601 locally",
+            server_name,
+            incoming_method,
+        )
+        return _unsupported_method_response(req_id, incoming_method)
 
     # True once we inject a vaulted egress token below. An egress upstream is
     # itself an OAuth resource server: if it rejects our injected token it 401s
@@ -8819,14 +8874,22 @@ async def mcp_proxy(
         proxy_client = httpx.AsyncClient(timeout=proxy_timeout)
         close_proxy_client = True
     try:
-        async with proxy_client.stream(
-            "POST",
-            upstream_url,
-            content=request_body,
-            headers=forward_headers,
-            params=dict(request.query_params),
-            timeout=proxy_timeout,
-        ) as upstream_response:
+        # The httpx timeout applies to each read, not to the whole exchange. An
+        # upstream that keeps sending (SSE keep-alives) never trips it, so the
+        # overall deadline is what releases the connection (#1890). nginx's
+        # proxy_read_timeout is derived from the same value plus a buffer, so
+        # this hop still times out first.
+        async with (
+            asyncio.timeout(proxy_timeout),
+            proxy_client.stream(
+                "POST",
+                upstream_url,
+                content=request_body,
+                headers=forward_headers,
+                params=dict(request.query_params),
+                timeout=proxy_timeout,
+            ) as upstream_response,
+        ):
             # Buffer with the same cap whether or not we filter, so a
             # pathological upstream cannot DoS the proxy.
             body_bytes = await _read_bounded(upstream_response, max_body_bytes)
@@ -8853,6 +8916,15 @@ async def mcp_proxy(
         ) from exc
     except httpx.TimeoutException as exc:
         logger.error(f"mcp_proxy: upstream timeout for {upstream_url}: {exc}")
+        raise HTTPException(
+            status_code=504,
+            detail="Upstream MCP server timed out",
+        ) from exc
+    except TimeoutError as exc:
+        logger.error(
+            f"mcp_proxy: upstream response for {upstream_url} not complete "
+            f"after the {proxy_timeout}s overall deadline"
+        )
         raise HTTPException(
             status_code=504,
             detail="Upstream MCP server timed out",
