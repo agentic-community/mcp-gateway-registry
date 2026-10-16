@@ -1633,6 +1633,139 @@ class TestUpdateAgent:
             assert response.status_code == status.HTTP_200_OK
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("admin", [False, True])
+    async def test_proxied_get_put_preserves_backend_and_interfaces(
+        self, test_app, mock_user_context, admin
+    ):
+        from registry.api import agent_routes
+        from registry.core.config import DeploymentMode
+        from registry.schemas.agent_models import AgentInterface
+
+        gateway = "https://gw.example.com/agent/flight-booking/"
+        backend = "https://backend.example.com/a2a"
+        existing = AgentCardFactory(
+            name="Flight Booking",
+            path="/flight-booking",
+            url=gateway,
+            proxy_pass_url=backend,
+            registered_by="testuser",
+            supported_protocol="a2a",
+            supported_interfaces=[
+                AgentInterface(url=backend, protocolBinding="JSONRPC", protocolVersion="1.0"),
+                AgentInterface(url=backend, protocolBinding="GRPC", protocolVersion="1.0"),
+            ],
+        )
+        mock_user_context["is_admin"] = admin
+        with (
+            patch("registry.api.agent_routes.agent_service") as service,
+            patch("registry.utils.agent_validator.agent_validator") as validator,
+            patch.object(agent_routes.settings, "a2a_reverse_proxy_enabled", True),
+            patch.object(agent_routes.settings, "deployment_mode", DeploymentMode.WITH_GATEWAY),
+            patch.object(agent_routes.settings, "registry_url", "https://gw.example.com"),
+            patch.object(
+                agent_routes,
+                "check_registration_gate",
+                AsyncMock(return_value=MagicMock(allowed=True)),
+            ),
+        ):
+            service.get_agent_info = AsyncMock(return_value=existing)
+            service.update_agent = AsyncMock(return_value=True)
+            service.is_agent_enabled = AsyncMock(return_value=True)
+            validator.validate_agent_card = AsyncMock(return_value=MagicMock(is_valid=True))
+            read = test_app.get("/agents/flight-booking")
+            assert read.status_code == 200
+            body = read.json()
+            assert body["supported_interfaces"][0]["url"] == (backend if admin else gateway)
+            body["description"] = "Updated description"
+            update = test_app.put("/agents/flight-booking", json=body)
+
+        assert update.status_code == 200, update.json()
+        if not admin:
+            assert backend not in str(update.json())
+        written = service.update_agent.await_args.args[1]
+        assert written["proxy_pass_url"] == backend
+        assert written["url"] == gateway
+        assert written["supported_interfaces"] == [
+            iface.model_dump() for iface in existing.supported_interfaces
+        ]
+
+    @pytest.mark.asyncio
+    async def test_proxied_put_rejects_changed_gateway_interface(self, test_app, mock_user_context):
+        from registry.api import agent_routes
+        from registry.core.config import DeploymentMode
+        from registry.schemas.agent_models import AgentInterface
+
+        backend = "https://backend.example.com/a2a"
+        gateway = "https://gw.example.com/agent/flight-booking/"
+        existing = AgentCardFactory(
+            name="Flight Booking",
+            path="/flight-booking",
+            url=gateway,
+            proxy_pass_url=backend,
+            registered_by="testuser",
+            supported_protocol="a2a",
+            supported_interfaces=[
+                AgentInterface(url=backend, protocolBinding="JSONRPC", protocolVersion="1.0")
+            ],
+        )
+        with (
+            patch("registry.api.agent_routes.agent_service") as service,
+            patch("registry.utils.agent_validator.agent_validator") as validator,
+            patch.object(agent_routes.settings, "a2a_reverse_proxy_enabled", True),
+            patch.object(agent_routes.settings, "deployment_mode", DeploymentMode.WITH_GATEWAY),
+            patch.object(agent_routes.settings, "registry_url", "https://gw.example.com"),
+        ):
+            service.get_agent_info = AsyncMock(return_value=existing)
+            validator.validate_agent_card = AsyncMock(return_value=MagicMock(is_valid=True))
+            body = test_app.get("/agents/flight-booking").json()
+            body["supported_interfaces"][0]["protocol_binding"] = "HTTP+JSON"
+            update = test_app.put("/agents/flight-booking", json=body)
+
+        assert update.status_code == 422
+        service.update_agent.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_proxied_put_without_interfaces_keeps_backend(self, test_app, sample_agent_card):
+        from registry.api import agent_routes
+        from registry.core.config import DeploymentMode
+
+        gateway = "https://gw.example.com/agent/test-agent/"
+        sample_agent_card.url = gateway
+        sample_agent_card.proxy_pass_url = "https://backend.example.com/a2a"
+        with (
+            patch("registry.api.agent_routes.agent_service") as service,
+            patch("registry.utils.agent_validator.agent_validator") as validator,
+            patch.object(agent_routes.settings, "a2a_reverse_proxy_enabled", True),
+            patch.object(agent_routes.settings, "deployment_mode", DeploymentMode.WITH_GATEWAY),
+            patch.object(agent_routes.settings, "registry_url", "https://gw.example.com"),
+            patch.object(
+                agent_routes,
+                "check_registration_gate",
+                AsyncMock(return_value=MagicMock(allowed=True)),
+            ),
+        ):
+            service.get_agent_info = AsyncMock(return_value=sample_agent_card)
+            service.update_agent = AsyncMock(return_value=True)
+            service.is_agent_enabled = AsyncMock(return_value=True)
+            validator.validate_agent_card = AsyncMock(return_value=MagicMock(is_valid=True))
+            update = test_app.put(
+                "/agents/test-agent",
+                json={
+                    "name": "test-agent",
+                    "url": gateway,
+                    "version": "1.0",
+                    "status": sample_agent_card.status,
+                    "supportedProtocol": "a2a",
+                },
+            )
+
+        assert update.status_code == 200, update.json()
+        assert (
+            service.update_agent.await_args.args[1]["proxy_pass_url"]
+            == sample_agent_card.proxy_pass_url
+        )
+
+    @pytest.mark.asyncio
     async def test_update_agent_not_owner(self, test_app, mock_user_context):
         """Test updating agent as non-owner (403)."""
         # Arrange

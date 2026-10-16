@@ -486,6 +486,57 @@ class TestDoReplace:
         # Replace preserves server-managed registered_by from the existing card.
         assert captured["registered_by"] == "origowner"
 
+    async def test_proxied_replace_preserves_backend_for_gateway_echo(self):
+        from registry.api import agent_routes
+        from registry.core.config import DeploymentMode
+        from registry.schemas.agent_models import AgentInterface
+
+        gateway = "https://gw.example.com/agent/agents/existing/"
+        backend = "https://example.com/new"
+        existing = _existing()
+        existing.url = gateway
+        existing.proxy_pass_url = backend
+        existing.supported_interfaces = [
+            AgentInterface(url=backend, protocolBinding="JSONRPC", protocolVersion="1.0")
+        ]
+        item = _item(
+            {
+                "op": "replace",
+                "path": "/agents/existing",
+                "card": {
+                    **REGISTER_CARD,
+                    "url": gateway,
+                    "supportedInterfaces": [
+                        iface.model_dump() for iface in existing.supported_interfaces
+                    ],
+                },
+            }
+        )
+        captured = {}
+        with (
+            patch.object(
+                proc.agent_service, "get_agent_info", AsyncMock(side_effect=[existing, existing])
+            ),
+            patch.object(proc, "_validate", AsyncMock(return_value=(True, []))),
+            patch.object(proc, "_run_gate", AsyncMock(return_value=(True, ""))),
+            patch.object(
+                proc.agent_service,
+                "update_agent",
+                AsyncMock(side_effect=lambda p, d: captured.update(d)),
+            ),
+            patch.object(proc, "_fire_webhook"),
+            patch.object(agent_routes.settings, "a2a_reverse_proxy_enabled", True),
+            patch.object(agent_routes.settings, "deployment_mode", DeploymentMode.WITH_GATEWAY),
+            patch.object(agent_routes.settings, "registry_url", "https://gw.example.com"),
+        ):
+            result = await proc._do_replace(0, item, "alice")
+
+        assert result.status == 200
+        assert captured["proxy_pass_url"] == backend
+        assert captured["supported_interfaces"] == [
+            iface.model_dump() for iface in existing.supported_interfaces
+        ]
+
 
 @pytest.mark.unit
 class TestBuildCardFromRequest:

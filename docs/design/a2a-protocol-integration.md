@@ -30,7 +30,7 @@ The MCP Gateway Registry supports Agent-to-Agent (A2A) communication in **two mo
 **Mode 2 — Reverse-proxy mode (opt-in, `A2A_REVERSE_PROXY_ENABLED=true`).** The gateway *does* sit in the data path, proxying A2A traffic (agent-card discovery and JSON-RPC) the same way it proxies MCP servers:
 
 - Each **enabled** agent gets proxied nginx routes under `/agent/{path}`, guarded by the `auth_request /validate` subrequest
-- The agent's real backend stays private (`proxy_pass_url`); discovery advertises the gateway `url` instead
+- Discovery advertises the gateway `url` and hides `proxy_pass_url` from non-admin registry reads; other card metadata may still name the backend
 - Every call is authenticated and gated per-agent (`invoke_agent` FGAC) before it reaches the backend
 
 The two modes are not mutually exclusive per request so much as a deployment-wide choice: registry-only discovery always works; reverse-proxy mode additionally stands up proxied routes for registered agents. Reverse-proxy mode requires `with-gateway` deployment mode and is force-disabled in registry-only deployments (there is no gateway to proxy through). See [Reverse-Proxy Mode: Proxying A2A Traffic](#reverse-proxy-mode-proxying-a2a-traffic) for the full data-path design.
@@ -101,7 +101,7 @@ Agent ← [agents communicate directly, registry is out of the path] → Other A
 
 A2A data plane, Mode 2 (reverse-proxy, opt-in):
 Agent → Nginx (/agent/{path}) → Auth (/validate: invoke_agent) → Gateway Proxy → Agent Backend
-   (discovery returns the gateway URL; backend URL is stored privately in proxy_pass_url)
+   (discovery routes to the gateway; the registry stores the backend URL in proxy_pass_url)
 ```
 
 In Mode 2 the A2A data path looks just like the MCP data path: every call is authenticated and gated at the gateway before reaching the backend.
@@ -333,7 +333,7 @@ An agent card is a JSON document that describes what an agent does, how to reach
 - `name`: Human-readable agent name
 - `description`: What the agent does
 - `url`: The URL other agents use to reach this agent after discovery. In **registry-only mode** this is the agent's direct backend. In **reverse-proxy mode** the registry rewrites it at registration time to the gateway address (`{REGISTRY_URL}/agent/{path}/`) and moves the real backend to `proxy_pass_url` (see below).
-- `proxy_pass_url` (reverse-proxy mode only): the agent's real private backend that the gateway proxies to. Written by the registry at registration time, read by the nginx generator / health checker / security scanner, and **redacted from non-admin reads** (single-agent GET and discovery) — exactly like the MCP-server backend-URL split. For legacy agents registered before reverse-proxy mode existed, this is absent and consumers fall back to `url`.
+- `proxy_pass_url` (reverse-proxy mode only): the backend connection URL the registry stores for the gateway. The nginx generator, health checker, and security scanner read it. Non-admin registry reads redact it; the live card handler drops either spelling if the backend includes it. Other agent-provided metadata URLs remain visible, so this field's redaction does not guarantee backend-address secrecy. For legacy agents registered before reverse-proxy mode existed, this field is absent and consumers fall back to `url`.
 
 **Multi-transport interfaces (A2A 1.0)**:
 - `supported_interfaces`: the transports this agent accepts. Each entry is an `AgentInterface` with a `url`, a `protocol_binding`, and an optional `protocol_version`. A2A 1.0 lets one agent offer several transports (for example `JSONRPC`, `HTTP+JSON`, and `GRPC`) side by side. The registry validates the `url` against the binding: a `GRPC` entry takes a `host:port` authority or an HTTP(S) URL; the standard bindings `JSONRPC` and `HTTP+JSON` take an HTTP(S) URL only; a custom (vendor) binding also accepts `ws://` or `wss://`. A bad entry fails registration with a 422 that names the binding. In reverse-proxy mode the registry projects these onto the gateway on read (see [the reverse-proxy section](#reverse-proxy-mode-proxying-a2a-traffic)).
@@ -1122,7 +1122,7 @@ Now the agent is discoverable by other agents and will appear in semantic search
 
 ## Reverse-Proxy Mode: Proxying A2A Traffic
 
-By default the registry returns an agent's *direct* URL and steps aside (registry-only discovery, above). **Reverse-proxy mode** instead puts the gateway in the A2A data path — the same way it proxies MCP servers — so the agent backend stays private and clients reach it through a gateway path with auth on every call. It is opt-in and does not change registry-only discovery; when enabled, each **enabled** agent gets a proxied route under `/agent/{path}`.
+By default the registry returns an agent's *direct* URL and steps aside (registry-only discovery, above). **Reverse-proxy mode** puts the gateway in the A2A data path for card discovery and JSON-RPC, with access checks on each call. It is opt-in and does not change registry-only discovery; when enabled, each **enabled** agent gets a proxied route under `/agent/{path}`. The gateway rewrites routing URLs, but does not hide backend links that the agent includes in other card metadata.
 
 ### Enabling
 
@@ -1136,12 +1136,13 @@ Off by default. Set `A2A_REVERSE_PROXY_ENABLED=true` (settings field `a2a_revers
 
 ### url vs proxy_pass_url (the backend/advertised split)
 
-Reverse-proxy mode mirrors the MCP-server `url`/`proxy_pass_url` split so the agent backend stays private and discovery advertises the gateway:
+Reverse-proxy mode mirrors the MCP-server `url`/`proxy_pass_url` split: routing fields advertise the gateway, while the registry keeps the backend connection URL:
 
 - At **registration** (when `a2a_reverse_proxy_effective` and `supported_protocol == "a2a"`), the registry stores the registrant's real backend in **`proxy_pass_url`** and rewrites the advertised **`url`** to the gateway address `{REGISTRY_URL}/agent/{path}/`. The rewrite happens *after* endpoint validation, so the registration health check still probes the real backend.
 - **Discovery, the nginx generator, the health checker, and the security scanner** all read the backend from `proxy_pass_url`, falling back to `url` for legacy agents registered before the flag existed (backwards compatible).
-- **`proxy_pass_url` is redacted from non-admin reads** (single-agent GET and semantic discovery) via the shared `should_redact_backend_urls` helper — admin-only, exactly like the MCP-server backend-URL redaction. Discovery therefore returns only the gateway `url` to non-admins.
+- **`proxy_pass_url` is redacted from non-admin registry reads** (single-agent GET and semantic discovery) via the shared `should_redact_backend_urls` helper. The live gateway card also drops `proxyPassUrl` and `proxy_pass_url` if the backend supplies them. Neither path treats metadata links, such as `documentationUrl`, `iconUrl`, or `provider.url`, as private: an agent must omit backend links from those fields if it does not want readers to see them.
 - **A proxied agent's `supported_interfaces` are projected onto the gateway on the same non-admin reads.** The registration split keeps the original interfaces in storage and rewrites only the top-level `url`. `redact_agent_backend_fields` (shared by detail, search, public read, and federation export) advertises only declared `JSONRPC` and `HTTP+JSON` bindings whose URL names the registered backend path, allowing an optional trailing slash and default port. Other paths or transports cannot be served by this agent's single nginx route, so those entries are omitted rather than pointed at a dead gateway URL. New reverse-proxy registrations and updates with a nonempty interface list but no matching binding are rejected before persisting; older cards may still have an empty projected list until corrected.
+- A full PUT or batch replace that echoes the gateway `url` carries forward the stored `proxy_pass_url`. If it also echoes the exact projected interface list from a non-admin read, the registry restores the backend interface list before the routability check. A changed declaration must name the real backend and pass the same check. PUT and PATCH responses project backend fields for non-admins rather than returning the stored card.
 
 Discovering agents receive the gateway URL only when the declared interface maps to the backend the gateway actually forwards to. Admins retain the original backend interfaces for maintenance.
 
@@ -1174,7 +1175,7 @@ sequenceDiagram
     GW-->>C: card advertising https://<gateway>/agent/{path}/ (or 502)
 ```
 
-`agent_card_rewrite.lua` runs after `/validate`, fetches the live card through an internal nginx location, and returns 502 if it cannot find a routable interface. For A2A 1.0 it retains only declared `supportedInterfaces` with `JSONRPC` or `HTTP+JSON` bindings whose URL matches the registered `proxy_pass_url` (apart from a trailing slash or default port). It keeps each surviving entry's `protocolVersion`, rewrites its URL to the gateway, and never invents a binding. For A2A 0.x it checks the top-level `url` and `preferredTransport` as one binding and filters `additionalInterfaces` the same way; a usable additional interface can replace an unroutable preferred transport. The filter drops other bindings and paths rather than exposing backend URLs. OpenResty's `cjson.decode_array_with_array_mt(true)` preserves arrays, including nested empty arrays, when the card is re-encoded.
+`agent_card_rewrite.lua` runs after `/validate`, fetches the live card through an internal nginx location, and returns 502 if it cannot find a routable interface. For A2A 1.0 it retains only declared `supportedInterfaces` with `JSONRPC` or `HTTP+JSON` bindings whose URL matches the registered `proxy_pass_url` (apart from a trailing slash or default port). It keeps each surviving entry's `protocolVersion`, rewrites its URL to the gateway, and never invents a binding. For A2A 0.x it checks the top-level `url` and `preferredTransport` as one binding and filters `additionalInterfaces` the same way; a usable additional interface can replace an unroutable preferred transport. A 0.x card with an empty `supportedInterfaces` list still uses its legacy top-level URL; a 1.x card with an empty list returns 502. The filter removes unroutable binding fields and registry-internal backend pointers. Other metadata stays as supplied by the agent and may contain backend URLs. OpenResty's `cjson.decode_array_with_array_mt(true)` preserves arrays, including nested empty arrays, when the card is re-encoded.
 
 **Scheme behind a TLS-terminating proxy:** the advertised URL's scheme is chosen from, in order, `X-Cloudfront-Forwarded-Proto`, then `X-Forwarded-Proto`, then `ngx.var.scheme` (only the exact values `http`/`https` are accepted). CloudFront preserves the original viewer scheme in `X-Cloudfront-Forwarded-Proto` when an intermediate ALB rewrites `X-Forwarded-Proto`.
 
@@ -1245,7 +1246,7 @@ The JSON-RPC location sets `proxy_buffering off` and a long `proxy_read_timeout`
 
 **Two Modes**:
 - *Registry-only (default)*: the registry handles discovery and validation, not communication. Once agents find each other, they talk directly using the returned backend URL.
-- *Reverse-proxy (opt-in)*: the gateway also sits in the A2A data path — proxying agent-card discovery and JSON-RPC under `/agent/{path}`, keeping the backend private (`proxy_pass_url`), and gating every call with `invoke_agent` FGAC. Requires `with-gateway` mode; force-disabled in registry-only deployments.
+- *Reverse-proxy (opt-in)*: the gateway proxies agent-card discovery and JSON-RPC under `/agent/{path}`, stores the backend in `proxy_pass_url`, advertises the gateway in routing fields, and gates calls with `invoke_agent` FGAC. Agent-provided metadata links can still expose the backend. Requires `with-gateway` mode; disabled in registry-only deployments.
 
 **Authentication Layer**: All requests require a valid JWT token from a Keycloak service account. Tokens are validated at three points: Nginx, Auth-Server, and FastAPI. In reverse-proxy mode the caller's gateway token rides in `X-Authorization` (stripped at egress) while the target agent's own credential rides in `Authorization` (forwarded end-to-end).
 

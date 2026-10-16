@@ -79,6 +79,15 @@ assert(card.supportedInterfaces[1].tenant == "team-1")
 assert(card.supportedInterfaces[1].note == nil)
 assert(not result:find("https://backend.example/secret", 1, true))
 
+-- Registry-internal backend pointers are not part of a remote A2A card.
+-- Ordinary metadata URLs retain their meaning and must not become RPC URLs.
+code, result = rewrite([[{"protocolVersion":"1.0","url":"https://backend.example/a2a","proxyPassUrl":"https://backend.example/a2a","proxy_pass_url":"https://backend.example/a2a","documentationUrl":"https://backend.example/a2a","iconUrl":"https://backend.example/icon.png","supportedInterfaces":[{"url":"https://backend.example/a2a","protocolBinding":"JSONRPC","protocolVersion":"1.0"}]}]])
+card = check(code, result, 200)
+assert(card.url == gateway and card.supportedInterfaces[1].url == gateway)
+assert(card.proxyPassUrl == nil and card.proxy_pass_url == nil)
+assert(card.documentationUrl == "https://backend.example/a2a")
+assert(card.iconUrl == "https://backend.example/icon.png")
+
 -- Decode escaped slash and Unicode sequences before comparing addresses.
 code, result = rewrite([[{"protocolVersion":"1.0","supportedInterfaces":[{"url":"https:\/\/backend.example\/a2\u0061","protocolBinding":"JSONRPC","protocolVersion":"1.0"}],"skills":[]}]])
 card = check(code, result, 200)
@@ -88,6 +97,7 @@ assert(result:find('"skills":[]', 1, true))
 for _, bad in ipairs({
     [[{"protocolVersion":"1.0","url":"https://backend.example/a2a","supportedInterfaces":[{"url":"https://backend.example/a2a","protocolBinding":"GRPC","protocolVersion":"1.0"}]}]],
     [[{"protocolVersion":"1.0","url":"https://backend.example/a2a","supportedInterfaces":[]}]],
+    [[{"protocolVersion":"2.0","url":"https://backend.example/a2a","supportedInterfaces":[{"url":"https://backend.example/other","protocolBinding":"JSONRPC","protocolVersion":"2.0"}]}]],
     [[{"protocolVersion":"1.0","url":"https://backend.example/a2a"}]],
     [[{"protocolVersion":"1.0","supportedInterfaces":[{"url":"https://backend.example/a2a/other","protocolBinding":"JSONRPC","protocolVersion":"1.0"}]}]],
     [[{"protocolVersion":"1.0","supportedInterfaces":[{"url":"https://backend.example/a2a?mode=rpc","protocolBinding":"JSONRPC","protocolVersion":"1.0"}]}]],
@@ -121,6 +131,19 @@ code, result = rewrite([[{"protocolVersion":"0.3.0","url":"https://backend.examp
 card = check(code, result, 200)
 assert(card.additionalInterfaces[1].note == nil)
 assert(not result:find("https://backend.example/private", 1, true))
+
+-- A 0.x card may include the 1.x field when a shared card model emits its
+-- empty default. Its working top-level JSONRPC URL still defines the route.
+code, result = rewrite([[{"protocolVersion":"0.3.0","url":"https://backend.example/a2a","preferredTransport":"JSONRPC","supportedInterfaces":[],"proxyPassUrl":"https://backend.example/a2a"}]])
+card = check(code, result, 200)
+assert(card.url == gateway and card.supportedInterfaces == nil and card.proxyPassUrl == nil)
+assert(not result:find("backend.example", 1, true))
+
+-- A mixed 0.x card must not publish unrelated 1.x bindings either.
+code, result = rewrite([[{"protocolVersion":"0.3.0","url":"https://backend.example/a2a","supportedInterfaces":[{"url":"https://backend.example/other","protocolBinding":"JSONRPC","protocolVersion":"1.0"}]}]])
+card = check(code, result, 200)
+assert(card.url == gateway and card.supportedInterfaces == nil)
+assert(not result:find("backend.example", 1, true))
 
 code, result = rewrite([[{"protocolVersion":"0.3.0","url":"https://backend.example/a2a","preferredTransport":"JSONRPC","additionalInterfaces":[{"url":"https://backend.example/grpc","transport":"GRPC"}]}]])
 card = check(code, result, 200)
