@@ -5,6 +5,7 @@ Tests cover token validation, session management, scope validation,
 rate limiting, and helper functions.
 """
 
+import asyncio
 import logging
 import time
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
@@ -7297,3 +7298,189 @@ class TestMcpProxyTransportSubPath:
                 ),
             )
         assert captured["url"] == expected
+
+
+# =============================================================================
+# STREAMING-ONLY METHODS AND THE OVERALL DEADLINE (issue #1890)
+# =============================================================================
+
+
+def _patch_upstream_client(mock_upstream_response: MagicMock):
+    """Patch both upstream clients (plain and pooled egress) with one mock.
+
+    Returns (patch_cm, stream_calls, stream_cm). ``stream_calls`` counts the
+    outbound ``client.stream(...)`` calls, and ``stream_cm.__aexit__`` shows
+    whether the handler released the upstream response.
+    """
+    from contextlib import contextmanager
+
+    stream_calls = {"n": 0}
+    stream_cm = AsyncMock()
+    stream_cm.__aenter__ = AsyncMock(return_value=mock_upstream_response)
+    stream_cm.__aexit__ = AsyncMock(return_value=False)
+
+    def _stream(method, url, **kwargs):
+        stream_calls["n"] += 1
+        return stream_cm
+
+    mock_client = AsyncMock()
+    mock_client.stream = MagicMock(side_effect=_stream)
+
+    @contextmanager
+    def _patch_both():
+        with (
+            patch("auth_server.server.httpx.AsyncClient", return_value=mock_client),
+            patch(
+                "registry.utils.url_guard.shared_guarded_async_client",
+                return_value=mock_client,
+            ),
+        ):
+            yield
+
+    return _patch_both(), stream_calls, stream_cm
+
+
+def _endless_sse_upstream_response() -> MagicMock:
+    """An upstream that answers 200 SSE and sends keep-alives forever.
+
+    Each chunk arrives well within any per-read timeout, so only an overall
+    deadline can end the buffered read.
+    """
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.headers = {"content-type": "text/event-stream"}
+
+    async def _aiter(chunk_size: int = 64 * 1024):
+        while True:
+            await asyncio.sleep(0.01)
+            yield b": keep-alive\n\n"
+
+    mock_resp.aiter_bytes = _aiter
+    return mock_resp
+
+
+@pytest.mark.unit
+class TestMcpProxyUnsupportedMethods:
+    """subscriptions/listen opens a response that never ends, which the
+    buffering proxy cannot relay: it is answered locally with -32601."""
+
+    def test_subscriptions_listen_answered_locally_without_outbound_call(self):
+        import auth_server.server as server_module
+
+        vend = AsyncMock(return_value={"access_token": "vaulted-token"})
+        upstream_resp = _build_mock_upstream_response(
+            status_code=200,
+            headers={"content-type": "application/json"},
+            body=b'{"jsonrpc":"2.0","id":42,"result":{}}',
+        )
+        patch_cm, stream_calls, _ = _patch_upstream_client(upstream_resp)
+
+        with (
+            patch.object(server_module.settings, "egress_auth_enabled", True),
+            patch.object(server_module, "_vend_egress_token", vend),
+            _patch_scope_repo_allow_all(),
+            patch_cm,
+        ):
+            client = TestClient(server_module.app)
+            response = client.post(
+                "/mcp-proxy/github",
+                json={"jsonrpc": "2.0", "id": 42, "method": "subscriptions/listen", "params": {}},
+                headers=_mcp_proxy_token_headers(server_name="github"),
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["jsonrpc"] == "2.0"
+        assert body["id"] == 42
+        assert body["error"]["code"] == -32601
+        assert "result" not in body
+        assert stream_calls["n"] == 0
+        vend.assert_not_awaited()
+
+    def test_unscoped_subscriptions_listen_still_denied_403(self):
+        """Authorization runs first: the local answer does not mask a denial."""
+        import auth_server.server as server_module
+
+        with _patch_scope_repo_allow_all():
+            client = TestClient(server_module.app)
+            response = client.post(
+                "/mcp-proxy/github",
+                json={"jsonrpc": "2.0", "id": 1, "method": "subscriptions/listen"},
+                headers=_mcp_proxy_token_headers(server_name="github", scopes=[]),
+            )
+
+        assert response.status_code == 403
+
+    def test_tools_call_is_still_forwarded(self):
+        import auth_server.server as server_module
+
+        upstream_resp = _build_mock_upstream_response(
+            status_code=200,
+            headers={"content-type": "application/json"},
+            body=b'{"jsonrpc":"2.0","id":7,"result":{"content":[]}}',
+        )
+        patch_cm, stream_calls, _ = _patch_upstream_client(upstream_resp)
+
+        with (
+            patch.object(server_module.settings, "egress_auth_enabled", False),
+            patch.object(server_module, "_read_mcp_filter_enabled", return_value=False),
+            _patch_scope_repo_allow_all(),
+            patch_cm,
+        ):
+            client = TestClient(server_module.app)
+            response = client.post(
+                "/mcp-proxy/github",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 7,
+                    "method": "tools/call",
+                    "params": {"name": "search", "arguments": {}},
+                },
+                headers=_mcp_proxy_token_headers(server_name="github"),
+            )
+
+        assert response.status_code == 200
+        assert response.json() == {"jsonrpc": "2.0", "id": 7, "result": {"content": []}}
+        assert stream_calls["n"] == 1
+
+
+@pytest.mark.unit
+class TestMcpProxyOverallDeadline:
+    """MCP_PROXY_TIMEOUT bounds the whole buffered exchange, not only each read,
+    so an upstream that keeps sending cannot hold a connection forever."""
+
+    @pytest.mark.parametrize("egress", [False, True], ids=["plain-client", "egress-pool"])
+    def test_endless_upstream_stream_returns_504_in_bounded_time(self, egress):
+        import auth_server.server as server_module
+
+        patch_cm, stream_calls, stream_cm = _patch_upstream_client(_endless_sse_upstream_response())
+        vend = AsyncMock(return_value={"access_token": "vaulted-token"})
+
+        with (
+            patch.object(server_module.settings, "egress_auth_enabled", egress),
+            patch.object(server_module, "_vend_egress_token", vend),
+            patch.object(server_module, "_read_mcp_proxy_timeout", return_value=0.2),
+            patch.object(server_module, "_read_mcp_filter_enabled", return_value=False),
+            _patch_scope_repo_allow_all(),
+            patch_cm,
+        ):
+            client = TestClient(server_module.app)
+            started = time.monotonic()
+            response = client.post(
+                "/mcp-proxy/github",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 3,
+                    "method": "tools/call",
+                    "params": {"name": "search", "arguments": {}},
+                },
+                headers=_mcp_proxy_token_headers(server_name="github"),
+            )
+            elapsed = time.monotonic() - started
+
+        assert response.status_code == 504
+        assert response.json()["detail"] == "Upstream MCP server timed out"
+        assert elapsed < 5.0
+        assert stream_calls["n"] == 1
+        # Leaving the stream context is what returns the connection to the pool.
+        stream_cm.__aexit__.assert_awaited_once()
