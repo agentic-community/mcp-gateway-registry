@@ -294,6 +294,8 @@ async def list_skills(
                 rating_details=s.rating_details,
                 health_status=s.health_status,
                 last_checked_time=s.last_checked_time,
+                created_at=s.created_at,
+                updated_at=s.updated_at,
                 status=s.status,
                 # Gateway-proxy opt-in: carry through so the card badge + edit
                 # modal reflect stored state (proxy_client_url is server-derived).
