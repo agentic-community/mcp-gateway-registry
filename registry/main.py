@@ -43,6 +43,7 @@ from registry.api.log_routes import router as log_router
 from registry.api.m2m_management_routes import router as m2m_management_router
 from registry.api.management_routes import router as management_router
 from registry.api.okta_m2m_routes import router as okta_m2m_router
+from registry.api.patch_key_routes import router as patch_key_router
 from registry.api.peer_management_routes import router as peer_management_router
 from registry.api.public_record_routes import router as public_record_router
 from registry.api.rate_limit_routes import router as rate_limit_router
@@ -876,6 +877,20 @@ async def lifespan(app: FastAPI):
                     f"Failed to ensure idp_m2m_clients index (continuing with startup): {e}",
                 )
 
+        # Ensure patch_keys indexes (unique key_hash + username) for the
+        # per-user long-lived API key feature (wire-platform-v1 task 2.1).
+        # Non-fatal on error: verification still works without the index (it
+        # only backs lookup speed and mint-time collision safety).
+        if settings.patch_key_auth_enabled:
+            try:
+                from registry.services.patch_key_service import get_patch_key_service
+
+                await (await get_patch_key_service()).ensure_indexes()
+            except Exception as e:
+                logger.warning(
+                    f"Failed to ensure patch_keys index (continuing with startup): {e}",
+                )
+
         # Initialize built-in demo servers (airegistry-tools)
         # Skipped when DISABLE_AI_REGISTRY_TOOLS_SERVER=true (e.g. GitOps/production deployments)
         if not settings.disable_ai_registry_tools_server:
@@ -1274,6 +1289,12 @@ from registry.api.proxied_entities_routes import router as proxied_entities_rout
 
 app.include_router(proxied_entities_router)
 
+# Per-user long-lived API keys ("patch keys", wire-platform-v1 task 2.1). The
+# router declares its own /api/patch-keys prefix and tag. Gated by the same
+# feature flag the auth server's /validate acceptance uses, so minting and
+# verification switch on/off together.
+if settings.patch_key_auth_enabled:
+    app.include_router(patch_key_router)
 # Register Anthropic MCP Registry API (public API for MCP servers only)
 app.include_router(registry_router, prefix="/api/registry", tags=["Registry Card"])
 
