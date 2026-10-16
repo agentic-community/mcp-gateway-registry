@@ -861,6 +861,35 @@ def _classify_gateway_agent_route(
     return "nested"
 
 
+def _restore_proxied_agent_on_replace(
+    agent_card: AgentCard,
+    existing: AgentCard,
+    path: str,
+) -> None:
+    """Restore the stored backend when a PUT echoes the advertised gateway URL.
+
+    Non-admin reads project interface URLs onto the gateway. Only an exact
+    projection of the stored interfaces can be restored to backend URLs;
+    changed declarations must name the actual backend and pass validation.
+    """
+    if agent_card.url != _gateway_agent_url(path) or not existing.proxy_pass_url:
+        return
+    agent_card.proxy_pass_url = existing.proxy_pass_url
+    submitted = agent_card.supported_interfaces
+    if not submitted or not all(interface.url == agent_card.url for interface in submitted):
+        return
+    expected = gateway_routable_agent_interfaces(
+        existing.supported_interfaces, existing.proxy_pass_url
+    )
+    if len(submitted) == len(expected) and all(
+        isinstance(original, AgentInterface)
+        and (item.protocol_binding, item.protocol_version, item.tenant)
+        == (original.protocol_binding, original.protocol_version, original.tenant)
+        for item, original in zip(submitted, expected, strict=True)
+    ):
+        agent_card.supported_interfaces = existing.supported_interfaces
+
+
 def _apply_a2a_reverse_proxy_split(
     agent_card: AgentCard,
     path: str,
@@ -2547,6 +2576,7 @@ async def update_agent(
             status=request.status if request.status else existing_agent.status,
             **update_optional_kwargs,
         )
+        _restore_proxied_agent_on_replace(updated_agent, existing_agent, path)
 
         # Lifecycle status change requires change_lifecycle_status (Issue #1330).
         _check_agent_lifecycle_status_permission(existing_agent, updated_agent, user_context)
@@ -2616,7 +2646,17 @@ async def update_agent(
         f"Agent '{updated_agent.name}' ({path}) updated by user '{user_context['username']}'"
     )
 
-    return updated_agent.model_dump()
+    agent_dict = updated_agent.model_dump()
+    from ..services.visibility import (
+        redact_agent_backend_fields,
+        redact_proxy_backend_url,
+        should_redact_backend_urls,
+    )
+
+    if should_redact_backend_urls(user_context):
+        redact_agent_backend_fields(agent_dict)
+    redact_proxy_backend_url(agent_dict, user_context)
+    return agent_dict
 
 
 @router.patch("/agents/{path:path}")
@@ -2799,7 +2839,17 @@ async def patch_agent(
     )
 
     response.headers["ETag"] = _weak_etag_for(updated)
-    return updated.model_dump()
+    agent_dict = updated.model_dump()
+    from ..services.visibility import (
+        redact_agent_backend_fields,
+        redact_proxy_backend_url,
+        should_redact_backend_urls,
+    )
+
+    if should_redact_backend_urls(user_context):
+        redact_agent_backend_fields(agent_dict)
+    redact_proxy_backend_url(agent_dict, user_context)
+    return agent_dict
 
 
 @router.delete("/agents/{path:path}")

@@ -352,7 +352,11 @@ async def _do_replace(
     submitted_by: str,
 ) -> AgentBatchItemResult:
     """Fully replace an existing agent card (PUT parity)."""
-    from ..api.agent_routes import _apply_a2a_reverse_proxy_split, _normalize_path
+    from ..api.agent_routes import (
+        _apply_a2a_reverse_proxy_split,
+        _normalize_path,
+        _restore_proxied_agent_on_replace,
+    )
 
     path = _normalize_path(item.path)
     existing = await agent_service.get_agent_info(path)
@@ -361,6 +365,7 @@ async def _do_replace(
 
     try:
         card = _build_card_from_request(item.card, path, existing=existing)
+        _restore_proxied_agent_on_replace(card, existing, path)
     except Exception as e:
         return _result(index, item.op, path, 422, "validation_error", str(e))
 

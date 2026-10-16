@@ -70,10 +70,11 @@ local base = ngx.var.uri:gsub("/%.well%-known/agent%-card%.json$", "")
 local gateway_url = scheme .. "://" .. ngx.var.http_host .. base .. "/"
 
 -- A2A 1.x declares its bindings in supportedInterfaces; a top-level URL is
--- not an independent 1.x binding. Keep the original entries (including
--- protocolVersion and extensions) but drop bindings that cannot be proxied.
-if card.supportedInterfaces ~= nil or
-    (type(card.protocolVersion) == "string" and card.protocolVersion:match("^1%.")) then
+-- not an independent 1.x binding. A 0.x card can carry an empty 1.x field
+-- when serialized from a shared model, so its version takes precedence.
+-- Keep only routable bindings and their protocol fields.
+local version = type(card.protocolVersion) == "string" and card.protocolVersion or ""
+if version:match("^1%.") or (card.supportedInterfaces ~= nil and not version:match("^0%.")) then
     if type(card.supportedInterfaces) ~= "table"
         or getmetatable(card.supportedInterfaces) ~= cjson.array_mt then
         reject()
@@ -145,6 +146,11 @@ else
     card.supported_interfaces = nil
     card.additional_interfaces = nil
 end
+
+-- A backend may echo registry-only fields in its live card. Never publish
+-- these internal connection pointers through authenticated discovery.
+card.proxyPassUrl = nil
+card.proxy_pass_url = nil
 
 local encoded, result = pcall(cjson.encode, card)
 if not encoded then

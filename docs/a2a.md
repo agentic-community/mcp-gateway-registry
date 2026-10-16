@@ -24,7 +24,7 @@ This is the default and needs no extra configuration.
 The gateway sits in the data path and proxies A2A traffic the same way it proxies MCP servers:
 
 - Each **enabled** agent gets authenticated nginx routes under `/agent/{path}`.
-- The agent's real backend stays private; discovery advertises the gateway URL instead.
+- Discovery replaces routing URLs with the gateway URL. Agent-supplied metadata URLs may still point directly at the backend.
 - Every call is authenticated and gated **per-agent** before it reaches the backend.
 
 Turn it on with `A2A_REVERSE_PROXY_ENABLED=true` (requires `with-gateway` deployment mode). See [Reverse-Proxy Mode](#reverse-proxy-mode-routing-a2a-traffic-through-the-gateway) below for the full setup and how it works.
@@ -155,12 +155,13 @@ Agents also honor **visibility** (`public`, `private`, `group-restricted`) as a 
 
 ## Reverse-Proxy Mode: Routing A2A Traffic Through the Gateway
 
-In the default mode the registry hands a discovering agent the target's *direct* URL and steps aside. **Reverse-proxy mode** instead puts the gateway in the data path, so every agent-card fetch and JSON-RPC call flows through the gateway with authentication and per-agent access control, and the agent's real backend stays private.
+In the default mode the registry hands a discovering agent the target's *direct* URL and steps aside. **Reverse-proxy mode** puts the gateway in the data path for agent-card fetches and JSON-RPC calls, with authentication and per-agent access control. It keeps the backend out of routing fields, but agent-supplied metadata can still contain backend links.
 
 ### What changes when it is on
 
 - Each **enabled** agent gets an authenticated agent-card location (`/agent/{path}/.well-known/agent-card.json`), an internal-only upstream-card location, and an authenticated JSON-RPC/SSE route (`/agent/{path}/`). The card handler returns HTTP 502 rather than publishing an unroutable A2A 1.0 card.
-- At registration the registry stores your real backend in **`proxy_pass_url`** and rewrites the advertised **`url`** to the gateway (`{REGISTRY_URL}/agent/{path}/`). This mirrors the MCP-server backend/advertised split. The backend is redacted from non-admin reads. A2A 1.0 `supported_interfaces` retain only declared `JSONRPC` and `HTTP+JSON` bindings at the exact registered backend URL (an optional trailing slash is equivalent); those entries advertise the gateway URL. A card with interfaces but none routable through that URL is rejected for reverse-proxy mode. Register it without proxying, or configure a compatible backend interface.
+- At registration the registry stores your real backend in **`proxy_pass_url`** and rewrites the advertised **`url`** to the gateway (`{REGISTRY_URL}/agent/{path}/`). This mirrors the MCP-server backend/advertised split. Non-admin registry reads omit `proxy_pass_url`; the live gateway card drops that internal field too. A2A 1.0 `supported_interfaces` retain only declared `JSONRPC` and `HTTP+JSON` bindings at the exact registered backend URL (an optional trailing slash is equivalent); those entries advertise the gateway URL. A card with interfaces but none routable through that URL is rejected for reverse-proxy mode. Register it without proxying, or configure a compatible backend interface.
+- A full PUT or batch replace that sends the advertised gateway `url` keeps the stored backend. A non-admin read projects `supported_interfaces` onto the gateway; if an edit sends those projected entries back unchanged, the registry restores their stored backend bindings. To change a binding or backend, submit the real backend URL and matching interfaces. PUT and PATCH responses redact backend fields for non-admins, like agent reads.
 - Invocation is gated per agent at `/validate`: the caller needs an `invoke_agent` grant for that agent path.
 - The caller's gateway token travels in **`X-Authorization`** (stripped at egress); the target agent's own credential travels in **`Authorization`** (forwarded end to end). The gateway never brokers credentials to the backend.
 
@@ -201,7 +202,9 @@ registry:
 
 ### How discovery works (card rewrite)
 
-When a client fetches an agent card through the gateway, the gateway checks access and fetches the live card through an internal-only backend location. It advertises only `JSONRPC` and `HTTP+JSON` interfaces whose URLs match the registered backend path. If none match, the client receives HTTP 502 rather than a misleading card.
+When a client fetches an agent card through the gateway, the gateway checks access and fetches the live card through an internal-only backend location. For A2A 1.0, it advertises only `JSONRPC` and `HTTP+JSON` interfaces whose URLs match the registered backend path. For A2A 0.x, it uses a routable top-level URL or an additional HTTP interface, even if the card also has an empty `supportedInterfaces` list. If the card has no routable binding, the client receives HTTP 502.
+
+The gateway replaces routing URLs, not arbitrary metadata links such as `documentationUrl`, `iconUrl`, or provider links. Operators who need the backend address to stay undisclosed must keep it out of those fields in both registered and live cards. The live handler strips `proxyPassUrl` and `proxy_pass_url` if an upstream card includes them.
 
 ```mermaid
 sequenceDiagram
