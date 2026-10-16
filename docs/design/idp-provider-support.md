@@ -87,6 +87,7 @@ The active identity provider is determined by the `AUTH_PROVIDER` environment va
 AUTH_PROVIDER=keycloak   # Use Keycloak
 AUTH_PROVIDER=entra      # Use Microsoft Entra ID
 AUTH_PROVIDER=okta       # Use Okta
+AUTH_PROVIDER=logto      # Use Logto (self-hosted)
 ```
 
 ### Provider Factory Pattern
@@ -183,6 +184,11 @@ class IAMManager(Protocol):
 +------------------+          +------------------+          +------------------+
 ```
 
+Logto follows the same shape: `LogtoIAMManager` delegates to
+`logto_admin.py` (Logto Management API via a dedicated M2M application;
+roles are the IAM groups, since the Logto provider maps `roles` claims
+to groups).
+
 ## Provider-Specific Details
 
 ### Keycloak Provider
@@ -246,6 +252,39 @@ class IAMManager(Protocol):
 - User deletion requires deactivate-then-delete two-step flow
 - See [Okta Setup Guide](../okta-setup.md) for configuration details
 
+### Logto Provider
+
+**Authentication Flow:**
+- Uses OIDC Authorization Code flow (browser login via the first-party web application)
+- Uses OAuth2 Client Credentials flow (M2M) with a mandatory `resource` API indicator
+- Tokens issued by the self-hosted Logto instance
+- JWKS endpoint: `{logto_url}/oidc/jwks` (internal) with browser endpoints on the external URL
+- Signature algorithms: ES384 or RS256; issuer is `{logto_external_url}/oidc`
+
+**Group Identifier in Tokens:**
+- Logto role names, stored in the `roles` claim of JWT / `/oidc/me` userinfo
+- Requesting `profile`/`email` scopes requires the application to be first-party
+  (`is_third_party=false`); the reserved scope `all` is what surfaces username and
+  roles on `/oidc/me`
+
+**Key Differences from Other Providers:**
+- Three separate applications (web, M2M, management M2M) with explicitly
+  non-interchangeable credentials — an under-configured deployment refuses to
+  start instead of substituting the web secret
+- Endpoint dialect: `/oidc/auth`, `/oidc/token`, `/oidc/me`, `/oidc/jwks`,
+  `/oidc/session/end`
+- Discovery endpoints are rewritten from the internal to the external URL in
+  `authorization_server_metadata()`
+
+**IAM Operations:**
+- Uses the Logto Management API via a dedicated M2M application holding the
+  "Logto Management API access" role (`LOGTO_MANAGEMENT_M2M_*`)
+- Token requests require both `resource` and `scope=all`
+- Grants referencing a missing role raise a 404-classified error (same
+  contract as the Keycloak manager)
+- See the Logto section in `docs/unified-parameter-reference.md` (12g) and
+  the sample block in `.env.example` for all twelve parameters
+
 ## Group-to-Scope Mapping
 
 The mapping between IdP groups and registry scopes is stored in MongoDB-CE/Amazon DocumentDB (`mcp_scopes_default` collection):
@@ -305,7 +344,7 @@ groups: ["public-mcp-users"]   groups: ["5f605d68-06bc-4208-b992-bb378eee12c5"]
 
 ```bash
 # Provider Selection
-AUTH_PROVIDER=entra              # or "keycloak" or "okta"
+AUTH_PROVIDER=entra              # or "keycloak", "okta", "logto", ...
 
 # Keycloak Configuration
 KEYCLOAK_URL=https://keycloak.example.com
@@ -325,6 +364,18 @@ OKTA_CLIENT_SECRET=...
 # OKTA_M2M_CLIENT_ID=...        # Optional separate M2M credentials
 # OKTA_M2M_CLIENT_SECRET=...
 # OKTA_API_TOKEN=...             # Optional, for IAM operations
+
+# Logto Configuration (self-hosted; see .env.example for the full block)
+LOGTO_URL=http://idp-logto:3001
+LOGTO_EXTERNAL_URL=https://auth.example.com
+LOGTO_CLIENT_ID=...
+LOGTO_CLIENT_SECRET=...
+LOGTO_M2M_CLIENT_ID=...          # Required dedicated M2M application
+LOGTO_M2M_CLIENT_SECRET=...
+LOGTO_M2M_RESOURCE=...           # API resource indicator (required)
+LOGTO_MANAGEMENT_M2M_CLIENT_ID=...   # Management API access role holder
+LOGTO_MANAGEMENT_M2M_CLIENT_SECRET=...
+LOGTO_MANAGEMENT_RESOURCE=https://default.logto.app/api
 
 # Token Validation
 SECRET_KEY=...                   # For self-signed tokens

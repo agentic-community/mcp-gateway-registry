@@ -423,6 +423,27 @@ that server's Connect dialog:
 | Google client secret **(secret)** | `GOOGLE_CLIENT_SECRET` | — | — | — |
 | Google enabled | `GOOGLE_ENABLED` | — | — | — |
 
+### 12g — Logto
+
+| Parameter | Docker (`.env`) | Terraform (`.tfvars`) | Helm (`values.yaml`) | Purpose |
+|-----------|-----------------|-----------------------|----------------------|---------|
+| Enabled flag | `LOGTO_ENABLED` | — | — | Enable Logto in OAuth2 providers (`AUTH_PROVIDER=logto` selects it as the IAM provider). |
+| Internal URL | `LOGTO_URL` | — | — | Server-to-server base URL inside the container network (OIDC endpoints derive as `{LOGTO_URL}/oidc/...`). Required when Logto is enabled. |
+| External URL | `LOGTO_EXTERNAL_URL` | — | — | Browser-reachable base URL for authorization/end-session redirects; defaults to `LOGTO_URL`. The JWT issuer is `{LOGTO_EXTERNAL_URL}/oidc`. |
+| Endpoint alias | `LOGTO_ENDPOINT` | — | — | Alternate name for the management client's base URL; `LOGTO_URL` wins when both are set. |
+| Web client id | `LOGTO_CLIENT_ID` | — | — | The first-party web application's client ID; also an accepted token audience. Required. |
+| Web client secret **(secret)** | `LOGTO_CLIENT_SECRET` | — | — | Required. Never used as an M2M credential. |
+| M2M client id | `LOGTO_M2M_CLIENT_ID` | — | — | Dedicated M2M application for server-to-server tokens. Required — no fallback to the web application's credentials. |
+| M2M client secret **(secret)** | `LOGTO_M2M_CLIENT_SECRET` | — | — | Required — no fallback to the web application's secret. |
+| M2M resource indicator | `LOGTO_M2M_RESOURCE` | — | — | API resource indicator required on Logto client_credentials requests (the resulting token's `aud`). Required. |
+| Management M2M client id | `LOGTO_MANAGEMENT_M2M_CLIENT_ID` | — | — | M2M application holding the "Logto Management API access" role; used by the registry's IAM manager. Required for IAM management, no fallback to `LOGTO_M2M_*`. |
+| Management M2M client secret **(secret)** | `LOGTO_MANAGEMENT_M2M_CLIENT_SECRET` | — | — | Required for IAM management, no fallback to `LOGTO_M2M_*`. |
+| Management API resource | `LOGTO_MANAGEMENT_RESOURCE` | — | — | Resource indicator of the Management API. Default `https://default.logto.app/api` (self-hosted default tenant). |
+
+> Terraform and Helm wiring for these twelve parameters is deferred to a
+> follow-up issue (Docker Compose is the only deployment path exercised
+> against a live Logto so far).
+
 ---
 
 ## Group 13 — Session Cookie Security
