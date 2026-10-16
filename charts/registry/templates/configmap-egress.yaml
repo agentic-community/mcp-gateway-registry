@@ -92,5 +92,8 @@ data:
   {{- if .Values.egressAuth.openbao.role }}
   OPENBAO_ROLE: {{ .Values.egressAuth.openbao.role | quote }}
   {{- end }}
+  {{- if .Values.egressAuth.openbao.authMount }}
+  OPENBAO_AUTH_MOUNT: {{ .Values.egressAuth.openbao.authMount | quote }}
+  {{- end }}
   {{- end }}
 {{- end }}
