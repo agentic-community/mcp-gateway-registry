@@ -1025,6 +1025,35 @@ def _decrypt_skill_auth(
     return auth_scheme, credential, getattr(skill, "auth_header_name", None)
 
 
+async def _build_skill_fetch_request(
+    url: str,
+    skill: SkillCard,
+) -> tuple[str, dict[str, str]]:
+    """Build the fetch URL and auth headers for a request made for a skill.
+
+    ``global_credentials`` skills get the shared GitHub headers; every other
+    scheme uses only the skill's own credential.
+
+    Returns (fetch_url, headers) tuple.
+    """
+    auth_scheme, credential, auth_header_name = _decrypt_skill_auth(skill)
+    fetch_url, fetch_headers = _build_fetch_headers(
+        url,
+        auth_scheme,
+        credential,
+        auth_header_name,
+    )
+
+    if auth_scheme == "global_credentials":
+        github_headers = await _github_auth.get_auth_headers(
+            fetch_url, allow_global_credentials=True
+        )
+        return fetch_url, github_headers
+
+    # none / bearer / api_key: use only the caller-supplied credential.
+    return fetch_url, fetch_headers
+
+
 async def _fetch_authenticated_content(
     url: str,
     skill: SkillCard,
@@ -1051,23 +1080,7 @@ async def _fetch_authenticated_content(
     if not _is_safe_url(url):
         raise SkillContentSSRFError(url)
 
-    auth_scheme, credential, auth_header_name = _decrypt_skill_auth(skill)
-    fetch_url, fetch_headers = _build_fetch_headers(
-        url,
-        auth_scheme,
-        credential,
-        auth_header_name,
-    )
-
-    if auth_scheme == "none":
-        merged_headers = fetch_headers
-    elif auth_scheme == "global_credentials":
-        merged_headers = await _github_auth.get_auth_headers(
-            fetch_url, allow_global_credentials=True
-        )
-    else:
-        # bearer / api_key: use only the caller-supplied credential.
-        merged_headers = fetch_headers
+    fetch_url, merged_headers = await _build_skill_fetch_request(url, skill)
 
     try:
         async with guarded_async_client() as client:

@@ -70,7 +70,7 @@ from ..services.lifecycle_events import (
 )
 from ..services.registration_gate_service import check_registration_gate
 from ..services.skill_service import (
-    _build_fetch_headers,
+    _build_skill_fetch_request,
     _check_drift_inline,
     _decrypt_skill_auth,
     _discover_skill_resources,
@@ -865,9 +865,14 @@ async def rescan_skill(
     from ..services.skill_scanner import skill_scanner_service
 
     try:
+        fetch_url, fetch_headers = await _build_skill_fetch_request(
+            str(skill.skill_md_raw_url or skill.skill_md_url),
+            skill,
+        )
         result = await skill_scanner_service.scan_skill(
             skill_path=normalized_path,
-            skill_md_url=str(skill.skill_md_raw_url or skill.skill_md_url),
+            skill_md_url=fetch_url,
+            headers=fetch_headers or None,
         )
         return result.model_dump()
 
@@ -1638,16 +1643,10 @@ async def _perform_skill_security_scan_on_registration(
     logger.info(f"Performing security scan for skill: {skill.path}")
 
     try:
-        raw_url = str(skill.skill_md_raw_url or skill.skill_md_url)
-        auth_scheme, credential, auth_header_name = _decrypt_skill_auth(skill)
-        fetch_headers: dict[str, str] = {}
-        if credential:
-            raw_url, fetch_headers = _build_fetch_headers(
-                raw_url,
-                auth_scheme,
-                credential,
-                auth_header_name,
-            )
+        raw_url, fetch_headers = await _build_skill_fetch_request(
+            str(skill.skill_md_raw_url or skill.skill_md_url),
+            skill,
+        )
 
         result = await skill_scanner_service.scan_skill(
             skill_path=skill.path,
