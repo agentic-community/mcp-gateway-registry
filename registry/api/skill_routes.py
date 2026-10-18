@@ -159,6 +159,23 @@ def _require_admin_for_global_credentials(
         )
 
 
+def _project_skill_metadata(
+    skill: SkillInfo | SkillCard,
+    metadata_paths: list[str] | None,
+) -> None:
+    """Narrow a skill's metadata in place to the requested dot-notation paths.
+
+    Args:
+        skill: The skill whose ``metadata`` is replaced.
+        metadata_paths: Normalized paths from ``parse_and_validate_metadata_fields``,
+            or None to leave the metadata untouched.
+    """
+    if metadata_paths is None or not skill.metadata:
+        return
+    projected = project_metadata(skill.metadata.model_dump(), metadata_paths)
+    skill.metadata = SkillMetadata(**(projected or {}))
+
+
 @router.get(
     "/discovery",
     response_model=DiscoveryResponse,
@@ -276,11 +293,7 @@ async def list_skills(
                 tags=s.tags,
                 author=s.metadata.author if s.metadata else None,
                 version=s.metadata.version if s.metadata else None,
-                metadata=project_metadata(
-                    s.metadata.model_dump() if s.metadata else None, _metadata_paths
-                )
-                if _metadata_paths is not None
-                else s.metadata,
+                metadata=s.metadata,
                 compatibility=s.compatibility,
                 target_agents=s.target_agents,
                 is_enabled=s.is_enabled,
@@ -324,6 +337,9 @@ async def list_skills(
 
     scan_summaries = await skill_scanner_service.get_scan_summaries()
     for skill in page_skills:
+        # Project on every path: the fallback path returns SkillInfo objects
+        # straight from the service, so projecting inside one branch skipped it.
+        _project_skill_metadata(skill, _metadata_paths)
         skill.security_scan = scan_summaries.get(skill.path)
         # Redact the internal backend origin (proxy_target_url) for non-admins,
         # mirroring the MCP server read endpoints. is_proxied and the derived
@@ -975,12 +991,7 @@ async def get_skill(
 
     # Apply metadata projection if requested (Issue #1277)
     _metadata_paths = parse_and_validate_metadata_fields(metadata_fields)
-    if _metadata_paths is not None and skill.metadata:
-        projected = project_metadata(skill.metadata.model_dump(), _metadata_paths)
-        # Replace metadata with a projected SkillMetadata-compatible dict
-        from ..schemas.skill_models import SkillMetadata
-
-        skill.metadata = SkillMetadata(**(projected or {}))
+    _project_skill_metadata(skill, _metadata_paths)
 
     # Redact the internal backend origin for non-admins (mirrors the list path).
     redact_proxy_backend_url(skill, user_context)
