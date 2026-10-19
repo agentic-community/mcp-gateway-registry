@@ -106,7 +106,56 @@ tests:
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]
           pattern: 'kubernetes\.io/service-account-token'
-      # ...and feeds it into auth/kubernetes/config as token_reviewer_jwt.
+      # ...and feeds it into auth/<mount>/config as token_reviewer_jwt.
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]
           pattern: 'token_reviewer_jwt:\$rjwt'
+
+  - it: Job enables kubernetes auth at the default mount when authMount is unset
+    documentIndex: 3
+    set:
+      registry: {egressAuth: {enabled: true, openbao: {authMethod: kubernetes}}}
+      openbao: {enabled: true}
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AUTH_MOUNT
+            value: kubernetes
+
+  - it: Job uses the registry's authMount (slashes trimmed) for the kubernetes method
+    documentIndex: 3
+    set:
+      registry: {egressAuth: {enabled: true, openbao: {authMethod: kubernetes, authMount: "/k8s-prod/"}}}
+      openbao: {enabled: true}
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AUTH_MOUNT
+            value: k8s-prod
+      # Enable, config and role all go through the same mount.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'sys/auth/\$AUTH_MOUNT'
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'auth/\$AUTH_MOUNT/config'
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'auth/\$AUTH_MOUNT/role/\$ROLE'
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'auth/kubernetes'
+
+  - it: Job keeps the default mount when authMount belongs to another method (approle)
+    documentIndex: 3
+    set:
+      registry: {egressAuth: {enabled: true, openbao: {authMethod: approle, authMount: approle-prod}}}
+      openbao: {enabled: true}
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AUTH_MOUNT
+            value: kubernetes
