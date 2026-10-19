@@ -14,7 +14,7 @@ COPY frontend/ ./
 RUN npm run build
 
 # ===== BACKEND BUILD STAGE =====
-FROM python:3.14.7-slim AS backend-builder
+FROM python:3.14.8-slim AS backend-builder
 
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
@@ -65,7 +65,7 @@ RUN . .venv/bin/activate && uv pip install --no-deps -e .
 # arrays would serialize as {}. Build OpenResty's lua-cjson against the same
 # LuaJIT the nginx lua module (nginx-extras) uses, so `require "cjson"` at
 # runtime resolves to a cjson that honors empty_array_mt.
-FROM python:3.14.7-slim AS cjson-builder
+FROM python:3.14.8-slim AS cjson-builder
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
       git build-essential libluajit-5.1-dev lua5.1 \
@@ -86,7 +86,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 
 # ===== FINAL RUNTIME STAGE =====
-FROM python:3.14.7-slim AS runtime
+FROM python:3.14.8-slim AS runtime
 
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
