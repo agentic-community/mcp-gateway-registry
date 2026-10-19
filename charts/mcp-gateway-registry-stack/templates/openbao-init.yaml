@@ -10,8 +10,9 @@ A post-install/post-upgrade hook Job that is fully idempotent and re-runnable:
      The unseal sidecar (configured in values) consumes that key on every boot.
   3. Unseal using the stored key (no-op if already unsealed).
   4. Using the root token: ensure the KV v2 mount, write the `mcp-egress` policy,
-     enable `kubernetes` auth, and create the `registry-egress` role bound to the
-     registry-egress ServiceAccount in this namespace.
+     enable `kubernetes` auth (at egressAuth.openbao.authMount when the registry
+     logs in with it, else auth/kubernetes), and create the `registry-egress`
+     role bound to the registry-egress ServiceAccount in this namespace.
 
 Gated on the egress vault being enabled on the registry subchart AND OpenBao
 being deployed by this stack.
@@ -32,8 +33,15 @@ being deployed by this stack.
   {{- $egressPrefix = .Values.registry.egressAuth.secretsManager.pathPrefix | default "mcp/egress" }}
 {{- end }}
 {{- $role := "registry" }}
+{{- $authMount := "kubernetes" }}
 {{- if .Values.registry.egressAuth.openbao }}
   {{- $role = .Values.registry.egressAuth.openbao.role | default "registry" }}
+  {{- /* Enable kubernetes auth at the mount the registry logs in through
+         (OPENBAO_AUTH_MOUNT, trimmed the same way). Only for the kubernetes
+         method: with approle the mount belongs to approle, not to this job. */ -}}
+  {{- if eq (.Values.registry.egressAuth.openbao.authMethod | default "token") "kubernetes" }}
+    {{- $authMount = .Values.registry.egressAuth.openbao.authMount | default "" | trim | trimAll "/" | default "kubernetes" }}
+  {{- end }}
 {{- end }}
 {{- /* The registry pod runs as this ServiceAccount (registry chart's
        serviceAccount.name, default app name "registry"); the OpenBao role binds
@@ -141,6 +149,8 @@ spec:
               value: {{ $egressPrefix | quote }}
             - name: ROLE
               value: {{ $role | quote }}
+            - name: AUTH_MOUNT
+              value: {{ $authMount | quote }}
             - name: REGISTRY_SA
               value: {{ $registrySa | quote }}
             - name: OPENBAO_SA
@@ -222,9 +232,9 @@ spec:
               path \"$KV_MOUNT/metadata/$EGRESS_PREFIX\" { capabilities = [\"list\"] }"
               bao_api PUT sys/policies/acl/mcp-egress "$(jq -nc --arg p "$POLICY" '{policy:$p}')" >/dev/null
 
-              echo "enabling kubernetes auth..."
-              if ! bao_api GET sys/auth | jq -e '."kubernetes/"' >/dev/null 2>&1; then
-                bao_api POST sys/auth/kubernetes '{"type":"kubernetes"}' >/dev/null
+              echo "enabling kubernetes auth at auth/$AUTH_MOUNT..."
+              if ! bao_api GET sys/auth | jq -e --arg m "$AUTH_MOUNT/" '.data[$m] // .[$m]' >/dev/null 2>&1; then
+                bao_api POST "sys/auth/$AUTH_MOUNT" '{"type":"kubernetes"}' >/dev/null
               fi
 
               # Provision a STABLE token_reviewer_jwt. Without it, OpenBao reviews
@@ -253,12 +263,12 @@ spec:
 
               echo "configuring kubernetes auth (with stable token_reviewer_jwt)..."
               CACERT=$(cat /var/run/secrets/kubernetes.io/serviceaccount/ca.crt)
-              bao_api POST auth/kubernetes/config \
+              bao_api POST "auth/$AUTH_MOUNT/config" \
                 "$(jq -nc --arg ca "$CACERT" --arg rjwt "$REVIEWER_JWT" \
                   '{kubernetes_host:"https://kubernetes.default.svc",kubernetes_ca_cert:$ca,token_reviewer_jwt:$rjwt,disable_iss_validation:true}')" >/dev/null
 
               echo "creating role $ROLE (sa=$REGISTRY_SA ns=$NAMESPACE)..."
-              bao_api POST "auth/kubernetes/role/$ROLE" \
+              bao_api POST "auth/$AUTH_MOUNT/role/$ROLE" \
                 "$(jq -nc --arg sa "$REGISTRY_SA" --arg ns "$NAMESPACE" \
                   '{bound_service_account_names:$sa,bound_service_account_namespaces:$ns,policies:"mcp-egress",ttl:"1h"}')" >/dev/null
 
