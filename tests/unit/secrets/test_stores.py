@@ -564,6 +564,26 @@ class TestWriteVerificationReadBack:
                 purpose=keys.EGRESS_PURPOSE,
             )
 
+    async def test_read_back_that_keeps_failing_raises_after_last_attempt(self, aws_client):
+        import registry.secrets.secrets_manager.store as store_mod
+        from registry.secrets.interfaces import SecretStoreError
+
+        # The secret is created, but every read-back still finds nothing: the last
+        # read error is raised, not a verification mismatch.
+        client = _StaleReadBackClient(aws_client, stale_reads=100)
+        store = SecretsManagerStore(client=client, prefix="mcp/egress")
+
+        with pytest.raises(SecretStoreError, match="is missing"):
+            await store.put_token(
+                "oauth2",
+                "alice",
+                "github",
+                "/github",
+                _token("first"),
+                purpose=keys.EGRESS_PURPOSE,
+            )
+        assert client.stale_served == store_mod._READ_BACK_ATTEMPTS
+
 
 # --------------------------------------------------------------------------- #
 # OpenBao transient-unavailability retry (HA leader election / pod restart)
