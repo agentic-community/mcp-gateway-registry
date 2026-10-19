@@ -5,6 +5,7 @@ Tests the HealthMonitoringService and HighPerformanceWebSocketManager.
 """
 
 import asyncio
+import copy
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -17,6 +18,7 @@ from registry.health.service import (
     HealthMonitoringService,
     HighPerformanceWebSocketManager,
 )
+from registry.utils.credential_encryption import strip_credentials_from_dict
 
 # =============================================================================
 # TEST FIXTURES
@@ -673,6 +675,72 @@ async def test_health_service_update_tools_background(health_service, mock_serve
 
                 # Should have called update_server
                 mock_server_service.update_server.assert_called_once()
+
+
+class _StoredServerService:
+    """Stand-in for server_service backed by one stored card.
+
+    get_server_info strips credentials unless asked, like the real service, and
+    update_server applies the repository's write semantics: a top-level $set of
+    every field, or only of updated_fields (plus updated_at) when given.
+    """
+
+    def __init__(self, card: dict):
+        self.card = copy.deepcopy(card)
+
+    async def get_server_info(self, path: str, include_credentials: bool = False):
+        card = copy.deepcopy(self.card)
+        return card if include_credentials else strip_credentials_from_dict(card)
+
+    async def update_server(self, path: str, server_info: dict, *, updated_fields=None, **_):
+        doc = {k: v for k, v in server_info.items() if k != "path"}
+        doc["updated_at"] = "now"
+        if updated_fields is not None:
+            doc = {k: v for k, v in doc.items() if k in {*updated_fields, "updated_at"}}
+        self.card.update(copy.deepcopy(doc))
+        return True
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_tool_discovery_keeps_egress_oauth_client_secret(health_service, mock_server_info):
+    """Tool discovery must not wipe secrets nested in the server card.
+
+    The card is read without credentials, so writing it back whole replaced the
+    egress_oauth document without client_secret_encrypted, and every OAuth
+    consent for an oauth_user server failed afterwards.
+    """
+    egress_oauth = {
+        "client_id": "gateway-client",
+        "client_secret_encrypted": "gAAAA-encrypted",
+        "authorization_url": "https://glpi.example.com/api.php/authorize",
+    }
+    card = {
+        **mock_server_info,
+        "tool_list": [],
+        "num_tools": 0,
+        "egress_auth_mode": "oauth_user",
+        "egress_oauth": egress_oauth,
+    }
+    store = _StoredServerService(card)
+
+    with patch("registry.core.mcp_client.mcp_client_service") as mock_mcp:
+        mock_mcp.get_mcp_connection_result = AsyncMock(
+            return_value={
+                "tools": [{"name": "glpi_get_ticket", "description": "Read a ticket"}],
+                "server_info": {"name": "glpi", "version": "3.5.2"},
+            }
+        )
+        with (
+            patch("registry.services.server_service.server_service", store),
+            patch("registry.services.scope_service.update_server_scopes", new=AsyncMock()),
+        ):
+            await health_service._update_tools_background("/glpi", "http://glpi:8000/mcp")
+
+    assert store.card["num_tools"] == 1
+    assert store.card["tool_list"][0]["name"] == "glpi_get_ticket"
+    assert store.card["mcp_server_version"] == "3.5.2"
+    assert store.card["egress_oauth"] == egress_oauth
 
 
 @pytest.mark.unit
