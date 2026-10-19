@@ -1315,9 +1315,14 @@ class HealthMonitoringService:
                     )
 
                     if needs_update:
+                        # current_server_info was read without credentials, so a
+                        # full-card write would replace nested documents such as
+                        # egress_oauth without their secrets (client_secret_encrypted)
+                        # and wipe them. Persist only the fields discovery owns.
                         updated_server_info = current_server_info.copy()
                         updated_server_info["tool_list"] = tool_list
                         updated_server_info["num_tools"] = new_tool_count
+                        discovered_fields = ["tool_list", "num_tools"]
 
                         # Store MCP server info if available
                         if mcp_server_info:
@@ -1331,14 +1336,24 @@ class HealthMonitoringService:
                                     updated_server_info["mcp_server_version_updated_at"] = (
                                         datetime.now(UTC).isoformat()
                                     )
+                                    discovered_fields += [
+                                        "mcp_server_version_previous",
+                                        "mcp_server_version_updated_at",
+                                    ]
                                 updated_server_info["mcp_server_version"] = new_ver
+                                discovered_fields.append("mcp_server_version")
                                 logger.info(
                                     f"Storing MCP server version for {service_path}: {new_ver}"
                                 )
                             if mcp_server_info.get("name"):
                                 updated_server_info["mcp_server_name"] = mcp_server_info["name"]
+                                discovered_fields.append("mcp_server_name")
 
-                        await server_service.update_server(service_path, updated_server_info)
+                        await server_service.update_server(
+                            service_path,
+                            updated_server_info,
+                            updated_fields=discovered_fields,
+                        )
 
                         # Update scopes with newly discovered tools
                         try:
