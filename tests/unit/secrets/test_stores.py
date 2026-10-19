@@ -431,6 +431,141 @@ class TestOverflowStaleReadRetry:
 
 
 # --------------------------------------------------------------------------- #
+# Write verification against a stale read-back (issue #1875)
+# --------------------------------------------------------------------------- #
+
+
+class ResourceNotFoundException(Exception):
+    """Mirrors the boto3 error (matched by class name in the store)."""
+
+
+class _StaleReadBackClient:
+    """Wrap a Secrets Manager client so that, after each write, the next
+    ``stale_reads`` reads of that secret still return what was there before the
+    write: the previous value, or ResourceNotFoundException for a secret that was
+    just created. This is what GetSecretValue (AWSCURRENT) can return right after
+    PutSecretValue or CreateSecret, although the write succeeded.
+    """
+
+    def __init__(self, client, stale_reads: int) -> None:
+        self._client = client
+        self._stale_reads = stale_reads
+        self._pending: dict[str, list[str | None]] = {}
+        self.stale_served = 0
+
+    def _current(self, secret_id: str) -> str | None:
+        try:
+            return self._client.get_secret_value(SecretId=secret_id)["SecretString"]
+        except Exception:
+            return None
+
+    def put_secret_value(self, **kwargs):
+        previous = self._current(kwargs["SecretId"])
+        response = self._client.put_secret_value(**kwargs)
+        self._pending[kwargs["SecretId"]] = [previous] * self._stale_reads
+        return response
+
+    def create_secret(self, **kwargs):
+        response = self._client.create_secret(**kwargs)
+        self._pending[kwargs["Name"]] = [None] * self._stale_reads
+        return response
+
+    def get_secret_value(self, **kwargs):
+        pending = self._pending.get(kwargs["SecretId"])
+        if pending:
+            previous = pending.pop(0)
+            self.stale_served += 1
+            if previous is None:
+                raise ResourceNotFoundException(kwargs["SecretId"])
+            return {"SecretString": previous}
+        return self._client.get_secret_value(**kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._client, name)
+
+
+@pytest.mark.unit
+class TestWriteVerificationReadBack:
+    @pytest.fixture(autouse=True)
+    def _no_backoff(self, monkeypatch):
+        import registry.secrets.secrets_manager.store as store_mod
+
+        monkeypatch.setattr(store_mod, "_READ_BACK_BACKOFF_BASE", 0)
+
+    @pytest.fixture
+    def aws_client(self):
+        moto = pytest.importorskip("moto")
+        boto3 = pytest.importorskip("boto3")
+        with moto.mock_aws():
+            yield boto3.client("secretsmanager", region_name="us-east-1")
+
+    async def test_inline_write_survives_stale_read_back(self, aws_client):
+        client = _StaleReadBackClient(aws_client, stale_reads=2)
+        store = SecretsManagerStore(client=client, prefix="mcp/egress")
+
+        # First write creates the secret (read-back not found), second one
+        # updates it (read-back returns the previous version).
+        await store.put_token(
+            "oauth2", "alice", "github", "/github", _token("first"), purpose=keys.EGRESS_PURPOSE
+        )
+        await store.put_token(
+            "oauth2", "alice", "github", "/github", _token("second"), purpose=keys.EGRESS_PURPOSE
+        )
+
+        got = await store.get_token(
+            "oauth2", "alice", "github", "/github", purpose=keys.EGRESS_PURPOSE
+        )
+        assert got is not None and got.access_token == "second"
+        assert client.stale_served == 4
+
+    async def test_sharded_write_survives_stale_read_back(self, aws_client):
+        client = _StaleReadBackClient(aws_client, stale_reads=2)
+        # 6 KiB target: two ~4 KiB tokens overflow to shards plus a manifest.
+        store = SecretsManagerStore(client=client, prefix="mcp/egress", target_payload_bytes=6144)
+
+        await store.put_token(
+            "oauth2",
+            "alice",
+            "github",
+            "/github",
+            _token("a" + "x" * 4000),
+            purpose=keys.EGRESS_PURPOSE,
+        )
+        await store.put_token(
+            "oauth2",
+            "alice",
+            "slack",
+            "/slack",
+            _token("b" + "x" * 4000),
+            purpose=keys.EGRESS_PURPOSE,
+        )
+
+        root_name = store._secret_name("oauth2", "alice", keys.EGRESS_PURPOSE)
+        assert "_egress" in aws_client.get_secret_value(SecretId=root_name)["SecretString"]
+        pairs = sorted((p, s) for p, s, _ in await store.list_for_user("oauth2", "alice"))
+        assert pairs == [("github", "/github"), ("slack", "/slack")]
+
+    async def test_persistently_stale_read_back_still_fails(self, aws_client):
+        from registry.secrets.interfaces import SecretStoreError
+
+        store = SecretsManagerStore(client=aws_client, prefix="mcp/egress")
+        await store.put_token(
+            "oauth2", "alice", "github", "/github", _token("first"), purpose=keys.EGRESS_PURPOSE
+        )
+        store._client = _StaleReadBackClient(aws_client, stale_reads=100)
+
+        with pytest.raises(SecretStoreError, match="inline write verification failed"):
+            await store.put_token(
+                "oauth2",
+                "alice",
+                "github",
+                "/github",
+                _token("second"),
+                purpose=keys.EGRESS_PURPOSE,
+            )
+
+
+# --------------------------------------------------------------------------- #
 # OpenBao transient-unavailability retry (HA leader election / pod restart)
 # --------------------------------------------------------------------------- #
 
