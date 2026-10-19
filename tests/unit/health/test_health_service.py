@@ -745,6 +745,52 @@ async def test_tool_discovery_keeps_egress_oauth_client_secret(health_service, m
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_tool_discovery_version_change_keeps_egress_oauth_client_secret(
+    health_service, mock_server_info
+):
+    """A new MCP server version is recorded without touching nested secrets.
+
+    The version-tracking fields join the field-scoped write; a server_info
+    without a name leaves mcp_server_name as it was.
+    """
+    egress_oauth = {
+        "client_id": "gateway-client",
+        "client_secret_encrypted": "gAAAA-encrypted",
+        "authorization_url": "https://glpi.example.com/api.php/authorize",
+    }
+    card = {
+        **mock_server_info,
+        "tool_list": [],
+        "num_tools": 0,
+        "mcp_server_version": "3.5.1",
+        "mcp_server_name": "glpi",
+        "egress_auth_mode": "oauth_user",
+        "egress_oauth": egress_oauth,
+    }
+    store = _StoredServerService(card)
+
+    with patch("registry.core.mcp_client.mcp_client_service") as mock_mcp:
+        mock_mcp.get_mcp_connection_result = AsyncMock(
+            return_value={
+                "tools": [{"name": "glpi_get_ticket", "description": "Read a ticket"}],
+                "server_info": {"version": "3.5.2"},
+            }
+        )
+        with (
+            patch("registry.services.server_service.server_service", store),
+            patch("registry.services.scope_service.update_server_scopes", new=AsyncMock()),
+        ):
+            await health_service._update_tools_background("/glpi", "http://glpi:8000/mcp")
+
+    assert store.card["mcp_server_version"] == "3.5.2"
+    assert store.card["mcp_server_version_previous"] == "3.5.1"
+    assert store.card["mcp_server_version_updated_at"]
+    assert store.card["mcp_server_name"] == "glpi"
+    assert store.card["egress_oauth"] == egress_oauth
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_health_service_get_all_health_status(health_service, mock_server_info):
     """Test getting all health status."""
     with patch("registry.services.server_service.server_service") as mock_server_service:
