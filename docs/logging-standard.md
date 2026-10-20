@@ -177,6 +177,16 @@ sudo chown -R 1000:1000 /var/log/containers/ai-registry
 sudo chmod 0750 /var/log/containers/ai-registry
 ```
 
+On macOS with Docker Desktop, the directory must be owned by your macOS user instead of uid 1000. Docker Desktop reads and writes shared host directories as the user running Docker Desktop, whatever uid the container uses, so a `1000:1000` directory with mode `0750` makes the bind mount fail with `mkdir /host_mnt/private/var/log/containers/ai-registry: permission denied` (or `file exists` on a re-install). `prepare-log-dirs.sh` detects macOS and uses the invoking user automatically. To prepare the directory manually on macOS:
+
+```bash
+sudo mkdir -p /var/log/containers/ai-registry
+sudo chown -R "$(id -u):$(id -g)" /var/log/containers/ai-registry
+sudo chmod 0750 /var/log/containers/ai-registry
+```
+
+`LOG_DIR_OWNER_UID`, `LOG_DIR_OWNER_GID` and `LOG_DIR_MODE` override the owner and mode on either platform.
+
 ## Troubleshooting
 
 ### Log files are missing on the host
