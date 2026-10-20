@@ -14,6 +14,9 @@ import json
 import os
 from pathlib import Path
 
+MILESTONE_STEP: int = 100
+MILESTONE_MIN: int = 500
+
 # ============================================================================
 # Helper utilities
 # ============================================================================
@@ -86,30 +89,15 @@ def rule_milestone_install_count(
     prev = vars_.get("prev_total_instances", 0)
     if not isinstance(cur, int) or not isinstance(prev, int):
         return None
-    for milestone in (
-        2000,
-        1900,
-        1800,
-        1700,
-        1600,
-        1500,
-        1400,
-        1300,
-        1200,
-        1100,
-        1000,
-        900,
-        800,
-        700,
-        600,
-        500,
-    ):
-        if cur >= milestone > prev:
-            return (
-                f"**Crossed {milestone} unique registry installs.** "
-                f"The fleet went from {prev} to {cur} since the previous report. "
-                f"Worth marking as a milestone in any external comms."
-            )
+    # The highest 100-multiple at or below the current count. A fixed list
+    # stopped at 2000 and went silent once the fleet passed it.
+    milestone = (cur // MILESTONE_STEP) * MILESTONE_STEP
+    if milestone >= MILESTONE_MIN and milestone > prev:
+        return (
+            f"**Crossed {milestone} unique registry installs.** "
+            f"The fleet went from {prev} to {cur} since the previous report. "
+            f"Worth marking as a milestone in any external comms."
+        )
     return None
 
 
@@ -206,7 +194,7 @@ def rule_install_forecast_eta(
         gap = abs((linear_eta - recent_eta).days)
     except ValueError:
         return None
-    target_str = vars_.get("forecast_target", "2,000")
+    target_str = vars_.get("forecast_target", "5,000")
     if gap <= 2:
         return (
             f"**Forecast models converged within {gap} day{'s' if gap != 1 else ''}** "

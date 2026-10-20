@@ -23,9 +23,10 @@ import csv
 import json
 import logging
 import os
-import re
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
+
+from internal_instances import load_internal_instance_ids
 
 logging.basicConfig(
     level=logging.INFO,
@@ -41,25 +42,6 @@ STRONGER_WINDOW_DAYS: int = 14
 STRONGER_MIN_HEARTBEATS: int = 10
 LIKELY_WINDOW_DAYS: int = 7
 DORMANT_WINDOW_DAYS: int = 14
-
-
-def _parse_internal_instances(
-    path: str,
-) -> set[str]:
-    """Parse known-internal-instances.md and return a set of full registry IDs."""
-    if not path or not os.path.exists(path):
-        logger.info("No known-internal-instances file found, treating all as external")
-        return set()
-    ids = set()
-    with open(path) as f:
-        for line in f:
-            match = re.search(
-                r"`([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})`", line
-            )
-            if match:
-                ids.add(match.group(1))
-    logger.info(f"Loaded {len(ids)} known internal instance IDs from {path}")
-    return ids
 
 
 def _parse_ts(
@@ -524,7 +506,8 @@ Example usage:
 
     os.makedirs(args.output_dir, exist_ok=True)
 
-    internal_ids = _parse_internal_instances(args.internal_instances)
+    with open(args.csv, newline="") as f:
+        internal_ids = load_internal_instance_ids(args.internal_instances, csv.DictReader(f))
     heartbeats, all_events, latest_ts = _load_events(args.csv)
     info_by_id = _load_instance_info(args.metrics_json)
 
