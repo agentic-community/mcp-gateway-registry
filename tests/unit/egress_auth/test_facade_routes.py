@@ -2,7 +2,7 @@
 
 TestClient over the router with the session read, server_service, and the
 EgressAuthService stubbed. Verifies the param-free /oauth2/egress/connect front
-door (session-gated, including the no-session -> Keycloak login bounce), the
+door (session-gated, including the no-session -> provider login bounce), the
 session-cookie forwarding regression, and the resource-param parsing.
 """
 
@@ -162,7 +162,8 @@ class TestConnectRoute:
         # Uses the real session_id, never a facade-marked one (no leg-1 resume).
         assert not (c._svc.last_session_id or "").startswith("facade:")
 
-    def test_connect_no_session_bounces_to_keycloak_login(self, client):
+    def test_connect_no_session_bounces_to_keycloak_login(self, client, monkeypatch):
+        monkeypatch.setattr(facade.settings, "auth_provider", "keycloak")
         c = client(user_context=None, server=_server())
         r = c.get("/oauth2/egress/connect", params={"server": "/github"})
         assert r.status_code == 302
@@ -171,6 +172,32 @@ class TestConnectRoute:
         # returns to /connect with its query preserved (anti-phishing: the opener
         # must authenticate before consent starts)
         assert "oauth2%2Fegress%2Fconnect" in loc
+
+    @pytest.mark.parametrize("auth_provider", ["entra", "cognito", " Okta "])
+    def test_connect_no_session_bounces_to_configured_provider_login(
+        self, client, monkeypatch, auth_provider
+    ):
+        """The bounce follows AUTH_PROVIDER: a hard-coded /oauth2/login/keycloak
+        showed a blank page on deployments that sign users in with another IdP."""
+        monkeypatch.setattr(facade.settings, "auth_provider", auth_provider)
+        c = client(user_context=None, server=_server())
+        r = c.get("/oauth2/egress/connect", params={"server": "/github"})
+        assert r.status_code == 302
+        loc = r.headers["location"]
+        expected = auth_provider.strip().lower()
+        assert loc.startswith(f"{REGISTRY_URL}/oauth2/login/{expected}?redirect_uri=")
+        assert "oauth2%2Fegress%2Fconnect" in loc
+
+    @pytest.mark.parametrize("auth_provider", ["", None, "entra/../admin", "a b"])
+    def test_connect_no_session_unusable_provider_falls_back_to_keycloak(
+        self, client, monkeypatch, auth_provider
+    ):
+        """An empty or malformed AUTH_PROVIDER never reaches the login URL path."""
+        monkeypatch.setattr(facade.settings, "auth_provider", auth_provider)
+        c = client(user_context=None, server=_server())
+        r = c.get("/oauth2/egress/connect", params={"server": "/github"})
+        assert r.status_code == 302
+        assert r.headers["location"].startswith(f"{REGISTRY_URL}/oauth2/login/keycloak?")
 
     def test_unavailable_versions_is_503_temporarily_unavailable(self, client, monkeypatch):
         """An incomplete registration must not be reported as the caller's bad request.
