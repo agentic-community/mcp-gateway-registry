@@ -148,7 +148,7 @@ sequenceDiagram
     CC->>NGX: POST /airegistry-tools/mcp<br/>{tools/list}
     NGX->>AS: /validate + /mcp-proxy
     AS->>MG: forward
-    MG-->>CC: 7 tools: list_services, list_agents, list_skills,<br/>get_skill_content, search_registry,<br/>intelligent_tool_finder, healthcheck
+    MG-->>CC: 8 tools: list_services, list_agents, list_skills,<br/>get_skill_content, get_custom_entity, search_registry,<br/>intelligent_tool_finder, healthcheck
 
     Note over CC,KC: Hop 10 — tools/call list_agents
     CC->>NGX: POST /airegistry-tools/mcp<br/>{tools/call, name:list_agents}
@@ -360,6 +360,7 @@ mcpgw:
   {"name":"list_agents",   ...},
   {"name":"list_skills",   ...},
   {"name":"get_skill_content", ...},
+  {"name":"get_custom_entity", ...},
   {"name":"search_registry",   ...},
   {"name":"intelligent_tool_finder", ...},
   {"name":"healthcheck",   ...}

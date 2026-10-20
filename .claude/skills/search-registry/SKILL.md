@@ -254,6 +254,7 @@ The ai-registry-tools MCP server provides these tools:
 | `list_agents` | List all A2A agents in the registry (unfiltered) |
 | `list_skills` | List all skills in the registry (unfiltered) |
 | `get_skill_content` | Fetch full SKILL.md instructions for a skill by name |
+| `get_custom_entity` | Fetch a custom catalog record, including its attributes, by the `path` search returned |
 | `healthcheck` | Check registry health status and statistics |
 
 ## Error Handling
