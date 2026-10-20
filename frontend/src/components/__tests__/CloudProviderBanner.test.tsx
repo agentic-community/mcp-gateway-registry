@@ -48,6 +48,33 @@ describe('CloudProviderBanner', () => {
     expect(screen.getByText('Dismiss')).toBeInTheDocument();
   });
 
+  test('names the deploy-time settings that replace the banner answer', async () => {
+    mockedAxios.get.mockResolvedValueOnce({ data: visibleState });
+    render(<CloudProviderBanner />);
+
+    await waitFor(() => {
+      expect(screen.getByText('MCP_CLOUD_PROVIDER')).toBeInTheDocument();
+    });
+    expect(screen.getByText('app.mcpCloudProvider')).toBeInTheDocument();
+  });
+
+  test.each(['aws', 'azure', 'gcp'])('clicking %s sends that cloud as the hint', async (hint) => {
+    const labels: Record<string, string> = { aws: 'AWS', azure: 'Azure', gcp: 'GCP' };
+    mockedAxios.get.mockResolvedValueOnce({ data: visibleState });
+    mockedAxios.post.mockResolvedValueOnce({ status: 204 });
+    render(<CloudProviderBanner />);
+
+    await waitFor(() => screen.getByText(labels[hint]));
+    fireEvent.click(screen.getByText(labels[hint]));
+
+    await waitFor(() =>
+      expect(mockedAxios.post).toHaveBeenCalledWith(
+        '/api/registry/v0.1/cloud-provider-hint',
+        { hint }
+      )
+    );
+  });
+
   test('clicking On-premises sends hint=on_premises and hides banner', async () => {
     mockedAxios.get.mockResolvedValueOnce({ data: visibleState });
     mockedAxios.post.mockResolvedValueOnce({ status: 204 });

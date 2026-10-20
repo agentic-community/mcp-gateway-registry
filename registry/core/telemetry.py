@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import platform
+import re
 import sys
 import time
 import uuid
@@ -51,10 +52,29 @@ _DETECTION_METHOD_UNKNOWN = "unknown"
 _DETECTION_METHOD_EXPLICIT = "explicit"
 _DETECTION_METHOD_OPERATOR_DECLARED = "operator_declared"
 _DETECTION_METHOD_OPERATOR_DECLINED = "operator_declined"
+_DETECTION_METHOD_HOST_OS = "host_os"
+_DETECTION_METHOD_WSL = "wsl"
+_DETECTION_METHOD_DOCKER_DESKTOP = "docker_desktop"
+
+# Cloud label for a developer machine: a macOS or Windows host, WSL2, or
+# Docker Desktop. Checked last, so any real cloud signal wins.
+_CLOUD_LOCAL = "local"
+_KERNEL_RELEASE_PATH = "/proc/sys/kernel/osrelease"
 
 # Hint cache: avoids a DocumentDB read on every banner-state GET within 60s.
 _HINT_CACHE_TTL_SECONDS = 60
 _hint_cache: dict[str, tuple[float, str | None]] = {}
+
+# EKS Auto Mode and Karpenter name nodes after the EC2 instance ID
+# (i-0123456789abcdef0) with no .compute.internal suffix. EC2 instance IDs
+# are "i-" plus 17 hex characters (8 for instances launched before 2016).
+_AWS_INSTANCE_ID_NODE_NAME_PATTERN = re.compile(r"^i-([0-9a-f]{8}|[0-9a-f]{17})$")
+
+# Registry-card hints that name the environment outright. "declined" is
+# handled separately because it means the operator chose not to answer.
+_OPERATOR_DECLARED_HINTS: frozenset[str] = frozenset(
+    {"aws", "azure", "gcp", "on_premises", "other"}
+)
 
 # Worst-case probe budget: three providers x 300ms each = 900ms once per process.
 _IMDS_PROBE_TIMEOUT_SECONDS = 0.3
@@ -140,6 +160,10 @@ def _detect_cloud_from_k8s_heuristic() -> str | None:
     if node_name.endswith(".compute.internal") or node_name.endswith(".ec2.internal"):
         return "aws"
 
+    # EKS Auto Mode and Karpenter nodes are named after the instance ID.
+    if _AWS_INSTANCE_ID_NODE_NAME_PATTERN.match(node_name):
+        return "aws"
+
     # GKE nodes typically follow gke-<cluster>-<pool>-<hash>-<hash>.
     if node_name.startswith("gke-"):
         return "gcp"
@@ -151,16 +175,45 @@ def _detect_cloud_from_k8s_heuristic() -> str | None:
     return None
 
 
-def _should_probe_imds() -> bool:
-    """Return True iff IMDS probing should run for this process."""
+def _is_telemetry_enabled() -> bool:
+    """Return True iff telemetry is on for this process."""
     if not settings.telemetry_enabled:
-        return False
-    if getattr(settings, "telemetry_imds_probe_disabled", False):
         return False
     # Respect the env-var master switch too, in case settings was imported
     # before MCP_TELEMETRY_DISABLED was set.
     disabled_env = os.getenv("MCP_TELEMETRY_DISABLED", "").lower()
     if disabled_env in ("1", "true", "yes"):
+        return False
+    return True
+
+
+def _detect_local_environment() -> str | None:
+    """Return a detection method if this is a developer machine, else None.
+
+    Runs after every cloud tier, so an EC2 Mac instance that answers IMDS
+    is still reported as aws.
+    """
+    if platform.system() in ("Darwin", "Windows"):
+        return _DETECTION_METHOD_HOST_OS
+    try:
+        with open(_KERNEL_RELEASE_PATH) as f:
+            kernel_release = f.read().strip().lower()
+    except (FileNotFoundError, PermissionError, OSError):
+        return None
+    # WSL2 kernels carry "microsoft" in the release string.
+    if "microsoft" in kernel_release:
+        return _DETECTION_METHOD_WSL
+    # Docker Desktop runs containers in a LinuxKit VM.
+    if kernel_release.endswith("-linuxkit"):
+        return _DETECTION_METHOD_DOCKER_DESKTOP
+    return None
+
+
+def _should_probe_imds() -> bool:
+    """Return True iff IMDS probing should run for this process."""
+    if not _is_telemetry_enabled():
+        return False
+    if getattr(settings, "telemetry_imds_probe_disabled", False):
         return False
     return True
 
@@ -252,7 +305,8 @@ def _detect_cloud_provider_with_method() -> tuple[str, str]:
       3. ECS task metadata URI    -> method="ecs_meta" (always aws)
       4. Kubernetes node-name     -> method="k8s_heuristic"
       5. IMDS HTTP probe          -> method="imds"
-      6. Fallback                 -> ("unknown", "unknown")
+      6. Developer machine        -> cloud="local", method="host_os"|"wsl"|"docker_desktop"
+      7. Fallback                 -> ("unknown", "unknown")
 
     Cached for the lifetime of the process. Safe to call from any thread
     after the first call completes.
@@ -282,8 +336,30 @@ def _detect_cloud_provider_with_method() -> tuple[str, str]:
             _log_detection_result(cloud, _DETECTION_METHOD_IMDS)
             return cloud, _DETECTION_METHOD_IMDS
 
+    local_method = _detect_local_environment()
+    if local_method:
+        _log_detection_result(_CLOUD_LOCAL, local_method)
+        return _CLOUD_LOCAL, local_method
+
     _log_detection_result("unknown", _DETECTION_METHOD_UNKNOWN)
+    _warn_cloud_unknown()
     return "unknown", _DETECTION_METHOD_UNKNOWN
+
+
+def _warn_cloud_unknown() -> None:
+    """Tell the operator how to set the cloud when detection found nothing.
+
+    Called from the cached cascade, so it logs once per process. The cascade
+    only runs when neither MCP_CLOUD_PROVIDER nor an operator hint is set.
+    """
+    if not _is_telemetry_enabled():
+        return
+    logger.warning(
+        "[telemetry] Could not detect where this registry is deployed. "
+        "Set MCP_CLOUD_PROVIDER to one of aws, azure, gcp, on_premises, other "
+        "(Helm: app.mcpCloudProvider), or answer the banner in the admin UI. "
+        "See docs/TELEMETRY.md."
+    )
 
 
 def _log_detection_result(cloud: str, method: str) -> None:
@@ -313,7 +389,8 @@ def _detect_cloud_provider() -> str:
 async def _get_operator_cloud_hint() -> str | None:
     """Fetch the registry-card operator hint with a 60s TTL cache.
 
-    Returns one of 'on_premises', 'other', 'declined', or None.
+    Returns one of 'aws', 'azure', 'gcp', 'on_premises', 'other',
+    'declined', or None.
     Never raises — on any repository error returns None so the cascade proceeds.
     """
     now = time.monotonic()
@@ -347,6 +424,7 @@ async def _resolve_cloud() -> tuple[str, str]:
     Priority:
         1. MCP_CLOUD_PROVIDER env var       -> method="explicit"
         2. Registry card operator hint
+             aws / azure / gcp /
              on_premises / other            -> method="operator_declared"
              declined                       -> ("unknown", "operator_declined")
         3. Auto-detection cascade           -> existing 5-step
@@ -358,7 +436,7 @@ async def _resolve_cloud() -> tuple[str, str]:
         return explicit, _DETECTION_METHOD_EXPLICIT
 
     hint = await _get_operator_cloud_hint()
-    if hint in ("on_premises", "other"):
+    if hint in _OPERATOR_DECLARED_HINTS:
         _log_detection_result(hint, _DETECTION_METHOD_OPERATOR_DECLARED)
         return hint, _DETECTION_METHOD_OPERATOR_DECLARED
     if hint == "declined":
@@ -746,8 +824,8 @@ async def _build_startup_payload() -> dict:
         "py": f"{sys.version_info.major}.{sys.version_info.minor}",
         "os": platform.system().lower(),  # linux, darwin, windows
         "arch": platform.machine(),  # x86_64, arm64, aarch64
-        "cloud": cloud,  # aws, gcp, azure, unknown
-        "cloud_detection_method": detection_method,  # env, dmi, ecs_meta, k8s_heuristic, imds, unknown
+        "cloud": cloud,  # aws, gcp, azure, on_premises, other, local, unknown
+        "cloud_detection_method": detection_method,  # env, dmi, ecs_meta, k8s_heuristic, imds, host_os, wsl, docker_desktop, unknown
         "compute": _detect_compute_platform(),  # ecs, eks, kubernetes, docker, ec2, unknown
         "mode": settings.deployment_mode.value,  # with-gateway, registry-only
         "registry_mode": settings.registry_mode.value,  # full, skills-only, etc.
