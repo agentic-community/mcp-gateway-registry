@@ -580,6 +580,22 @@ async def test_initialize_mcp_session_notification_failure_keeps_session(health_
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_initialize_mcp_session_notification_rejected_keeps_session(health_service):
+    """A server that answers the notification with an error status still
+    yields the session ID; the ping that follows decides health."""
+    init_response = MagicMock(status_code=200, headers={"Mcp-Session-Id": "server-session-123"})
+    notify_response = MagicMock(status_code=400, headers={})
+    mock_client = _mock_stream_client([init_response, notify_response])
+
+    session_id = await health_service._initialize_mcp_session(
+        mock_client, "http://localhost:8000/mcp", {}
+    )
+
+    assert session_id == "server-session-123"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_initialize_mcp_session_failed_initialize_sends_no_notification(health_service):
     """No notification is sent when initialize itself fails."""
     mock_client = _mock_stream_client([MagicMock(status_code=500, headers={})])
