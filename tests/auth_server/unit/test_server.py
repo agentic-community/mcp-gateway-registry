@@ -4158,13 +4158,14 @@ class TestMcpProxyEndpointHeaderPassthrough:
 
         assert response.status_code == 202
 
-    def test_egress_consent_tools_list_returns_empty(self):
+    def test_egress_consent_tools_list_returns_only_the_connect_tool(self):
         """tools/list must NOT error (erroring dead-ends clients -- they mark the
         server failed and never call a tool). The upstream tool list needs the
         token, so for a tokenless egress server the gateway answers LOCALLY with
-        an EMPTY tool list. The user connects out of band via the Connected
-        Accounts UI; once the token is vaulted, the vend HITs and the real
-        upstream tools are proxied.
+        one synthetic connect tool (issue #1860): chat clients only call tools
+        they can see, so an empty list left them no way to reach consent. Once
+        the token is vaulted, the vend HITs and the real upstream tools are
+        proxied.
         """
         import auth_server.server as server_module
 
@@ -4192,7 +4193,8 @@ class TestMcpProxyEndpointHeaderPassthrough:
         assert response.status_code == 200
         body = response.json()
         assert "error" not in body
-        assert body["result"]["tools"] == []
+        assert [tool["name"] for tool in body["result"]["tools"]] == ["connect_mcpgw_github"]
+        assert response.headers[server_module.EGRESS_CONSENT_REQUIRED_HEADER] == "oauth"
 
     def test_set_cookie_and_location_dropped_end_to_end(self):
         """End-to-end regression: even if an upstream MCP server emits

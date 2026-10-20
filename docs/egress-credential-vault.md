@@ -154,7 +154,7 @@ sequenceDiagram
     K-->>S: miss
     S-->>V: consent_required + authorize_url + connect_url + request_state
     V-->>P: EgressTokenResponse(consent_required=true)
-    Note over P,C: -32042 elicitation fires only on token-requiring methods<br/>(tools/call, prompts/get, resources/read). Other methods get a plain JSON-RPC error.
+    Note over P,C: The gateway answers initialize, ping and the list methods itself.<br/>tools/list returns one connect_mcpgw_[server] tool. -32042 fires on<br/>tools/call (including the connect tool), prompts/get and resources/read.
     P-->>C: JSON-RPC -32042 URLElicitationRequiredError (mode=url, url=connect_url)
 
     Note over C,TP: User consents (browser)
@@ -700,17 +700,15 @@ which is how the gateway asks the user to open the consent page.
 
 End-user flow:
 
-1. The user invokes a tool on an egress-configured server through their IDE
-   (Cursor, Claude Code, VS Code, etc.).
-2. On the first token-requiring call (`tools/call`, `prompts/get`,
-   `resources/read`) the gateway returns a `-32042` `URLElicitationRequiredError`
-   carrying the gateway-issued **connect URL**. The client opens it in a browser.
+1. The user adds the egress-configured server to their MCP client (Cursor, Claude Code, Claude Desktop, VS Code, etc.). Until they connect their provider account, the server lists a single tool, `connect_mcpgw_<server>`. Chat clients only call tools they can see, so this tool gives them a way to start the consent step.
+2. On the first token-requiring call (`tools/call`, `prompts/get`, `resources/read`), including a call to the connect tool, the gateway returns a `-32042` `URLElicitationRequiredError` carrying the gateway-issued **connect URL**. The client opens it in a browser. With `EGRESS_CONSENT_USE_ELICITATION=false`, the gateway instead returns a tool result with `isError: true` whose text contains the URL.
 3. If the user has no live gateway session, the connect page bounces them to the
    gateway login (e.g. Keycloak) first, then continues.
 4. The user approves at the provider's consent screen. The browser shows
    "Connected — close this tab and retry."
-5. The user re-runs the tool. The gateway now vends the stored token
-   transparently; no further prompts until the refresh token dies or is revoked.
+5. The user reconnects the server in their MCP client so it reloads the real tool list, then runs the tool. The gateway now vends the stored token with no further prompts until the refresh token expires or the user revokes it.
+
+The gateway owns `connect_mcpgw_<server>` and answers every call to it itself, so the call never reaches the backend. On a direct route, a caller who can list the server's tools can call the connect tool without a separate tool grant. Virtual servers do not list it, and calling it through a virtual route needs an ordinary tool grant. Before consent the gateway answers `server/discover` with JSON-RPC `-32601` (method not found), so the client falls back to `initialize`.
 
 Users can review and revoke their connections in the UI at **Connected Accounts**
 (sidebar entry), which is backed by `GET`/`DELETE /api/egress-auth/connections`.
@@ -811,7 +809,8 @@ Users can review and revoke their connections in the UI at **Connected Accounts*
 |---------|--------------------|
 | Startup fails: "requires a Mongo-family STORAGE_BACKEND" | `EGRESS_AUTH_ENABLED=true` with `STORAGE_BACKEND=file`. Switch to a Mongo-family backend. |
 | Startup fails: "requires EGRESS_OAUTH_CALLBACK_BASE_URL" | Set the public callback base URL. |
-| Client never gets a consent prompt | The MCP client must support URL-mode elicitation (`-32042` `URLElicitationRequiredError`), and the elicitation only fires on token-requiring methods (`tools/call`, `prompts/get`, `resources/read`). Check the server's `egress_auth_mode` is `oauth_user`. |
+| Client never gets a consent prompt | The elicitation only fires on token-requiring methods (`tools/call`, `prompts/get`, `resources/read`). Ask the model to call `connect_mcpgw_<server>`, the one tool the server lists before consent. A client without URL-mode elicitation support needs `EGRESS_CONSENT_USE_ELICITATION=false`, which puts the connect URL in the tool result text. Check the server's `egress_auth_mode` is `oauth_user`. |
+| Connected, but the client still shows only the connect tool or no tools | The client cached the pre-consent tool list. Reconnect the server in the client. If the auth-server log still shows `has no token`, the account was connected under a different identity: the Registry UI session and the MCP client must sign in as the same user. |
 | Consent loops (re-asked every call) | Usually an `auth_method` mismatch between consent-write and vend-read — confirm the IdP method canonicalizes to `oauth2`. Or the stored refresh token is dead (provider revoked it) → re-consent. |
 | Connected once, but tools still show empty / vend logs "has no token" | The consent-write and vend paths keyed the vault on different `user_id`s. Since keying moved to the OIDC `sub` (see [Vault key scheme](#vault-key-scheme)), an existing connection created under the old display-name key is invisible to the new `sub`-keyed lookup. Fix: **disconnect and reconnect once** (from Connected Accounts), which re-writes the entry under the `sub`. On Entra this reconnect must follow a fresh gateway login so the session carries the persisted `subject`. |
 | Connected, but a `tools/call` asks to reconnect after a backend URL change | Destination binding: changing a server's `proxy_pass_url`, `mcp_endpoint` (or a custom provider's `custom_token_url`) invalidates credentials bound to the old destination. **Reconnect once** (from Connected Accounts) to rebind. Adding a *new version* at a URL that was not registered when you connected only requires a reconnect for calls routed to that new version; existing routes are unaffected. Promoting a version never requires a reconnect. |
