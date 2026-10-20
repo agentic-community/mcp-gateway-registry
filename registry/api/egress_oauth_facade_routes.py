@@ -20,13 +20,14 @@ SECURITY MODEL
   different user cannot bind a token to the elicited user (the provider-leg AEAD
   state binds the token write to the authenticated principal). When no session
   exists (first IDE use), it redirects the browser through the gateway's
-  Keycloak login and returns to ``/connect``.
+  login for the configured ``AUTH_PROVIDER`` and returns to ``/connect``.
 - ``/connect`` takes NO client-side OAuth parameters (no redirect_uri / PKCE /
   Dynamic Client Registration), so it works with providers (e.g. Entra) that do
   not support RFC 7591 DCR.
 """
 
 import logging
+import re
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Request
@@ -43,6 +44,26 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# Provider used for the no-session login bounce when AUTH_PROVIDER is empty or not
+# a plain provider name (the auth server's /oauth2/login/{provider} route).
+_DEFAULT_LOGIN_PROVIDER = "keycloak"
+_PROVIDER_NAME_RE = re.compile(r"^[a-z0-9_-]+$")
+
+
+def _login_provider() -> str:
+    """Return the auth-server login provider for the no-session bounce.
+
+    The gateway signs users in with ``AUTH_PROVIDER`` (``settings.auth_provider``:
+    cognito, keycloak, entra, okta, ...), so the bounce must go to
+    ``/oauth2/login/{that provider}``. A hard-coded ``keycloak`` breaks the
+    consent link on every deployment that does not run Keycloak: the browser
+    lands on a blank page instead of the IdP login.
+    """
+    provider = (settings.auth_provider or "").strip().lower()
+    if not _PROVIDER_NAME_RE.fullmatch(provider):
+        return _DEFAULT_LOGIN_PROVIDER
+    return provider
+
 
 def _gateway_origin(request: Request) -> str:
     """Return the public gateway ORIGIN (scheme://host, no ROOT_PATH path).
@@ -50,7 +71,7 @@ def _gateway_origin(request: Request) -> str:
     The browser-facing auth routes (``/oauth2/login/*``, ``/oauth2/callback/*``)
     are served by nginx at the ORIGIN ROOT in BOTH routing modes -- they are
     NOT mounted under the registry's ROOT_PATH. So a login bounce must target
-    ``{origin}/oauth2/login/keycloak``, NOT ``{registry_url}/oauth2/login/...``
+    ``{origin}/oauth2/login/{provider}``, NOT ``{registry_url}/oauth2/login/...``
     (in path mode registry_url carries ``/registry`` and the prefixed login path
     falls through nginx to the SPA -> HTML -> the login never happens, which is
     the path-mode-only egress consent failure; subdomain mode worked because
@@ -87,8 +108,9 @@ async def _optional_session(request: Request) -> dict | None:
 
 
 def _login_bootstrap_redirect(request: Request) -> RedirectResponse:
-    """302 the browser through the gateway's Keycloak login, returning to this
-    exact /connect URL (with its query) once a session is established.
+    """302 the browser through the gateway's login (configured provider),
+    returning to this exact /connect URL (with its query) once a session is
+    established.
 
     Uses the auth-server's validated same-origin redirect_uri round-trip. The
     return URL is the request's own path+query on the gateway origin."""
@@ -97,7 +119,7 @@ def _login_bootstrap_redirect(request: Request) -> RedirectResponse:
         return_to = f"{return_to}?{request.url.query}"
     # /oauth2/login/* is served at the ORIGIN root in both routing modes, so the
     # login URL must NOT carry the registry ROOT_PATH (see _gateway_origin).
-    login = f"{_gateway_origin(request)}/oauth2/login/keycloak?" + urlencode(
+    login = f"{_gateway_origin(request)}/oauth2/login/{_login_provider()}?" + urlencode(
         {"redirect_uri": return_to}
     )
     logger.info("egress connect: no session -> bounce to gateway login")
@@ -120,8 +142,8 @@ async def egress_connect(
     providers like Entra that do not support RFC 7591 DCR.
 
     Flow:
-      1. If the browser has no gateway session, bounce through Keycloak login and
-         return here (so the opener is always an authenticated principal).
+      1. If the browser has no gateway session, bounce through the gateway login
+         (configured provider) and return here (so the opener is always an authenticated principal).
       2. Verify the session principal is a per-user identity. This is the
          elicitation anti-phishing requirement: the user who OPENS the URL must
          be a real authenticated user, and the provider-leg AEAD state binds the
@@ -177,7 +199,7 @@ async def egress_connect(
             )
         oauth_cfg = server_info["egress_oauth"]
 
-    # Session bootstrap: no gateway session -> log in via Keycloak, return here.
+    # Session bootstrap: no gateway session -> log in via the configured provider, return here.
     user_context = await _optional_session(request)
     if user_context is None:
         return _login_bootstrap_redirect(request)
