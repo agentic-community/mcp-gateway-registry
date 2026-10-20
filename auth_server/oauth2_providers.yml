@@ -40,14 +40,14 @@ providers:
     display_name: "Microsoft Entra ID"
     client_id: "${ENTRA_CLIENT_ID}"
     client_secret: "${ENTRA_CLIENT_SECRET}"
-    auth_url: "https://login.microsoftonline.com/${ENTRA_TENANT_ID}/oauth2/v2.0/authorize"
-    token_url: "https://login.microsoftonline.com/${ENTRA_TENANT_ID}/oauth2/v2.0/token"
-    user_info_url: "https://graph.microsoft.com/oidc/userinfo"
-    logout_url: "https://login.microsoftonline.com/${ENTRA_TENANT_ID}/oauth2/v2.0/logout"
-    # Request only OIDC scopes for user authentication
-    # The resulting access token is for Microsoft Graph API
-    # For programmatic API access, users get JWT tokens through the /tokens/generate endpoint
-    scopes: ["openid", "email", "profile"]
+    auth_url: "${ENTRA_LOGIN_BASE_URL}/${ENTRA_TENANT_ID}/oauth2/v2.0/authorize"
+    token_url: "${ENTRA_LOGIN_BASE_URL}/${ENTRA_TENANT_ID}/oauth2/v2.0/token"
+    user_info_url: "${ENTRA_GRAPH_BASE_URL}/oidc/userinfo"
+    logout_url: "${ENTRA_LOGIN_BASE_URL}/${ENTRA_TENANT_ID}/oauth2/v2.0/logout"
+    # Request delegated Microsoft Graph User.Read for /me/transitiveMemberOf.
+    # OIDC scopes alone do not grant this permission.
+    # For programmatic API access, users get JWT tokens through /tokens/generate.
+    scopes: ["openid", "email", "profile", "User.Read"]
     response_type: "code"
     grant_type: "authorization_code"
     # Claims mapping for user info

@@ -1,11 +1,14 @@
-"""Unit tests for EntraIdProvider Graph group-overage handling (#929)."""
+"""Unit tests for Entra group resolution through Microsoft Graph."""
 
+import asyncio
+from collections import OrderedDict
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
-from auth_server.providers.entra import EntraIdProvider
+from auth_server.providers.entra import EntraIdProvider, GraphGroupLookupError
+from registry.utils.url_guard import ENTRA_GRAPH_PROFILE
 
 
 class TestHasGroupOverage:
@@ -32,8 +35,8 @@ class TestHasGroupOverage:
         assert EntraIdProvider.has_group_overage({}) is False
 
 
-def _mock_response(payload: dict, status_code: int = 200):
-    """Build a httpx.Response-shaped mock that supports raise_for_status + json."""
+def _mock_response(payload: object, status_code: int = 200):
+    """Build an HTTP response stub for Graph requests."""
     response = MagicMock()
     response.status_code = status_code
     response.json.return_value = payload
@@ -46,159 +49,314 @@ def _mock_response(payload: dict, status_code: int = 200):
     return response
 
 
+def _mock_client(*pages):
+    client = AsyncMock()
+    client.get = AsyncMock(side_effect=[_mock_response(page) for page in pages])
+    client.__aenter__.return_value = client
+    client.__aexit__.return_value = None
+    return client
+
+
 class TestFetchGroupsViaGraph:
-    """fetch_groups_via_graph paginates, filters, dedupes, and degrades safely."""
+    """Graph returns transitive group IDs or raises on lookup failure."""
 
     @pytest.mark.asyncio
-    async def test_returns_only_group_object_ids(self):
-        page = {
-            "value": [
-                {"@odata.type": "#microsoft.graph.group", "id": "g-1"},
-                {"@odata.type": "#microsoft.graph.directoryRole", "id": "role-1"},
-                {"@odata.type": "#microsoft.graph.group", "id": "g-2"},
-            ]
-        }
-        mock_client = AsyncMock()
-        mock_client.get = AsyncMock(return_value=_mock_response(page))
-        mock_client.__aenter__.return_value = mock_client
-        mock_client.__aexit__.return_value = None
+    async def test_returns_transitive_group_ids_and_filters_other_objects(self, monkeypatch):
+        monkeypatch.delenv("ENTRA_GRAPH_BASE_URL", raising=False)
+        monkeypatch.delenv("ENTRA_LOGIN_BASE_URL", raising=False)
+        client = _mock_client(
+            {
+                "value": [
+                    {"@odata.type": "#microsoft.graph.group", "id": "direct-group"},
+                    {"@odata.type": "#microsoft.graph.directoryRole", "id": "role-1"},
+                    {"@odata.type": "#microsoft.graph.group", "id": "nested-parent-group"},
+                ]
+            }
+        )
+        with patch("auth_server.providers.entra.guarded_async_client", return_value=client):
+            ids = await EntraIdProvider.fetch_groups_via_graph("token")
 
-        with patch("auth_server.providers.entra.httpx.AsyncClient", return_value=mock_client):
+        assert ids == ["direct-group", "nested-parent-group"]
+        assert "/v1.0/me/transitiveMemberOf" in client.get.call_args.args[0]
+
+    @pytest.mark.asyncio
+    async def test_pagination_combines_pages_and_dedupes(self, monkeypatch):
+        monkeypatch.delenv("ENTRA_GRAPH_BASE_URL", raising=False)
+        monkeypatch.delenv("ENTRA_LOGIN_BASE_URL", raising=False)
+        next_link = "https://graph.microsoft.com/v1.0/me/transitiveMemberOf?$skiptoken=foo"
+        client = _mock_client(
+            {
+                "value": [{"@odata.type": "#microsoft.graph.group", "id": "g-1"}],
+                "@odata.nextLink": next_link,
+            },
+            {
+                "value": [
+                    {"@odata.type": "#microsoft.graph.group", "id": "g-1"},
+                    {"@odata.type": "#microsoft.graph.group", "id": "g-2"},
+                ]
+            },
+        )
+        with patch("auth_server.providers.entra.guarded_async_client", return_value=client):
             ids = await EntraIdProvider.fetch_groups_via_graph("token")
 
         assert ids == ["g-1", "g-2"]
+        assert [call.args[0] for call in client.get.await_args_list][1] == next_link
+        assert all(
+            call.kwargs["headers"]["Authorization"] == "Bearer token"
+            for call in client.get.await_args_list
+        )
 
     @pytest.mark.asyncio
-    async def test_pagination_combines_pages(self):
-        page1 = {
-            "value": [{"@odata.type": "#microsoft.graph.group", "id": "g-1"}],
-            "@odata.nextLink": "https://graph.microsoft.com/v1.0/me/memberOf?$skiptoken=foo",
-        }
-        page2 = {"value": [{"@odata.type": "#microsoft.graph.group", "id": "g-2"}]}
-
-        responses = [_mock_response(page1), _mock_response(page2)]
-        mock_client = AsyncMock()
-        mock_client.get = AsyncMock(side_effect=responses)
-        mock_client.__aenter__.return_value = mock_client
-        mock_client.__aexit__.return_value = None
-
-        with patch("auth_server.providers.entra.httpx.AsyncClient", return_value=mock_client):
-            ids = await EntraIdProvider.fetch_groups_via_graph("token")
-
-        assert ids == ["g-1", "g-2"]
-        assert mock_client.get.await_count == 2
+    @pytest.mark.parametrize("failure", [403, httpx.ConnectError("dns failed")])
+    async def test_failed_lookup_raises_instead_of_becoming_empty_membership(self, failure):
+        client = AsyncMock()
+        if failure == 403:
+            client.get = AsyncMock(return_value=_mock_response({"error": "forbidden"}, 403))
+        else:
+            client.get = AsyncMock(side_effect=failure)
+        client.__aenter__.return_value = client
+        client.__aexit__.return_value = None
+        with patch("auth_server.providers.entra.guarded_async_client", return_value=client):
+            with pytest.raises(GraphGroupLookupError):
+                await EntraIdProvider.fetch_groups_via_graph("token")
 
     @pytest.mark.asyncio
-    async def test_dedupes_repeated_ids_across_pages(self):
-        page1 = {
-            "value": [{"@odata.type": "#microsoft.graph.group", "id": "g-1"}],
-            "@odata.nextLink": "https://graph.microsoft.com/v1.0/me/memberOf?$skiptoken=foo",
-        }
-        page2 = {
-            "value": [
-                {"@odata.type": "#microsoft.graph.group", "id": "g-1"},
-                {"@odata.type": "#microsoft.graph.group", "id": "g-2"},
-            ]
-        }
-
-        mock_client = AsyncMock()
-        mock_client.get = AsyncMock(side_effect=[_mock_response(page1), _mock_response(page2)])
-        mock_client.__aenter__.return_value = mock_client
-        mock_client.__aexit__.return_value = None
-
-        with patch("auth_server.providers.entra.httpx.AsyncClient", return_value=mock_client):
-            ids = await EntraIdProvider.fetch_groups_via_graph("token")
-
-        assert ids == ["g-1", "g-2"]
-
-    @pytest.mark.asyncio
-    async def test_403_returns_empty_list(self):
-        mock_client = AsyncMock()
-        mock_client.get = AsyncMock(return_value=_mock_response({"error": "forbidden"}, 403))
-        mock_client.__aenter__.return_value = mock_client
-        mock_client.__aexit__.return_value = None
-
-        with patch("auth_server.providers.entra.httpx.AsyncClient", return_value=mock_client):
-            ids = await EntraIdProvider.fetch_groups_via_graph("token")
-
-        assert ids == []
-
-    @pytest.mark.asyncio
-    async def test_network_error_returns_empty_list(self):
-        mock_client = AsyncMock()
-        mock_client.get = AsyncMock(side_effect=httpx.ConnectError("dns failed"))
-        mock_client.__aenter__.return_value = mock_client
-        mock_client.__aexit__.return_value = None
-
-        with patch("auth_server.providers.entra.httpx.AsyncClient", return_value=mock_client):
-            ids = await EntraIdProvider.fetch_groups_via_graph("token")
-
-        assert ids == []
-
-    @pytest.mark.asyncio
-    async def test_hard_cap_truncates(self, monkeypatch):
+    async def test_hard_cap_fails_closed_instead_of_returning_partial_groups(self, monkeypatch):
         monkeypatch.setattr(EntraIdProvider, "GROUP_FETCH_HARD_CAP", 5)
         page = {
             "value": [{"@odata.type": "#microsoft.graph.group", "id": f"g-{i}"} for i in range(10)]
         }
-        mock_client = AsyncMock()
-        mock_client.get = AsyncMock(return_value=_mock_response(page))
-        mock_client.__aenter__.return_value = mock_client
-        mock_client.__aexit__.return_value = None
-
-        with patch("auth_server.providers.entra.httpx.AsyncClient", return_value=mock_client):
-            ids = await EntraIdProvider.fetch_groups_via_graph("token")
-
-        assert len(ids) == 5
-        assert ids == [f"g-{i}" for i in range(5)]
+        client = _mock_client(page)
+        with patch("auth_server.providers.entra.guarded_async_client", return_value=client):
+            with pytest.raises(GraphGroupLookupError):
+                await EntraIdProvider.fetch_groups_via_graph("token")
 
     @pytest.mark.asyncio
-    async def test_url_inferred_from_login_base_url_us_gov(self, monkeypatch):
-        """US Gov ENTRA_LOGIN_BASE_URL → graph.microsoft.us, no extra config."""
-        monkeypatch.setenv("ENTRA_LOGIN_BASE_URL", "https://login.microsoftonline.us")
+    async def test_empty_graph_membership_is_a_successful_lookup(self):
+        client = _mock_client({"value": []})
+        with patch("auth_server.providers.entra.guarded_async_client", return_value=client):
+            assert await EntraIdProvider.fetch_groups_via_graph("token") == []
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            {},
+            [],
+            {"value": None},
+            {"value": {"id": "group"}},
+            {"value": [None]},
+            {"value": [{"@odata.type": "#microsoft.graph.group", "id": ["bad"]}]},
+            {"value": [], "@odata.nextLink": 42},
+        ],
+    )
+    async def test_malformed_graph_pages_raise(self, payload):
+        client = _mock_client(payload)
+        with patch("auth_server.providers.entra.guarded_async_client", return_value=client):
+            with pytest.raises(GraphGroupLookupError):
+                await EntraIdProvider.fetch_groups_via_graph("token")
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "next_link",
+        [
+            "https://attacker.example/v1.0/me/transitiveMemberOf?$skiptoken=leak",
+            "http://graph.microsoft.com/v1.0/me/transitiveMemberOf?$skiptoken=leak",
+            "https://graph.microsoft.com.attacker.example/v1.0/me/transitiveMemberOf",
+            "https://graph.microsoft.com@attacker.example/v1.0/me/transitiveMemberOf",
+            "https://graph.microsoft.com/v1.0/users/other/transitiveMemberOf?$skiptoken=leak",
+            "//attacker.example/v1.0/me/transitiveMemberOf?$skiptoken=leak",
+        ],
+    )
+    async def test_unsafe_pagination_never_sends_bearer_token(self, monkeypatch, next_link):
         monkeypatch.delenv("ENTRA_GRAPH_BASE_URL", raising=False)
-
-        mock_client = AsyncMock()
-        mock_client.get = AsyncMock(return_value=_mock_response({"value": []}))
-        mock_client.__aenter__.return_value = mock_client
-        mock_client.__aexit__.return_value = None
-
-        with patch("auth_server.providers.entra.httpx.AsyncClient", return_value=mock_client):
-            await EntraIdProvider.fetch_groups_via_graph("token")
-
-        url = mock_client.get.call_args[0][0]
-        assert url.startswith("https://graph.microsoft.us/")
+        monkeypatch.delenv("ENTRA_LOGIN_BASE_URL", raising=False)
+        client = _mock_client({"value": [], "@odata.nextLink": next_link})
+        with patch("auth_server.providers.entra.guarded_async_client", return_value=client):
+            with pytest.raises(GraphGroupLookupError):
+                await EntraIdProvider.fetch_groups_via_graph("token")
+        client.get.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_explicit_graph_base_url_overrides_inference(self, monkeypatch):
-        """Explicit ENTRA_GRAPH_BASE_URL beats the login-URL inference."""
-        monkeypatch.setenv("ENTRA_LOGIN_BASE_URL", "https://login.microsoftonline.com")
+    async def test_pagination_cycle_raises_without_repeating_request(self, monkeypatch):
+        monkeypatch.delenv("ENTRA_GRAPH_BASE_URL", raising=False)
+        monkeypatch.delenv("ENTRA_LOGIN_BASE_URL", raising=False)
+        initial_url = EntraIdProvider._graph_memberof_url()
+        client = _mock_client({"value": [], "@odata.nextLink": initial_url})
+        with patch("auth_server.providers.entra.guarded_async_client", return_value=client):
+            with pytest.raises(GraphGroupLookupError):
+                await EntraIdProvider.fetch_groups_via_graph("token")
+        client.get.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_page_limit_fails_without_accepting_incomplete_membership(self, monkeypatch):
+        monkeypatch.delenv("ENTRA_GRAPH_BASE_URL", raising=False)
+        monkeypatch.delenv("ENTRA_LOGIN_BASE_URL", raising=False)
+        monkeypatch.setattr(EntraIdProvider, "GROUP_FETCH_PAGE_HARD_CAP", 2)
+        base = "https://graph.microsoft.com/v1.0/me/transitiveMemberOf"
+        client = _mock_client(
+            {
+                "value": [{"@odata.type": "#microsoft.graph.group", "id": "first"}],
+                "@odata.nextLink": f"{base}?skiptoken=1",
+            },
+            {
+                "value": [{"@odata.type": "#microsoft.graph.group", "id": "second"}],
+                "@odata.nextLink": f"{base}?skiptoken=2",
+            },
+        )
+        with patch("auth_server.providers.entra.guarded_async_client", return_value=client):
+            with pytest.raises(GraphGroupLookupError):
+                await EntraIdProvider.fetch_groups_via_graph("token")
+        assert client.get.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_failure_on_later_page_does_not_return_partial_groups(self, monkeypatch):
+        monkeypatch.delenv("ENTRA_GRAPH_BASE_URL", raising=False)
+        monkeypatch.delenv("ENTRA_LOGIN_BASE_URL", raising=False)
+        next_link = "https://graph.microsoft.com/v1.0/me/transitiveMemberOf?$skiptoken=next"
+        client = _mock_client(
+            {
+                "value": [{"@odata.type": "#microsoft.graph.group", "id": "first"}],
+                "@odata.nextLink": next_link,
+            },
+            {"error": "Graph rejected continuation"},
+        )
+        with patch("auth_server.providers.entra.guarded_async_client", return_value=client):
+            with pytest.raises(GraphGroupLookupError):
+                await EntraIdProvider.fetch_groups_via_graph("token")
+        assert client.get.await_count == 2
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "login_host,expected_graph_host",
+        [
+            ("login.microsoftonline.com", "graph.microsoft.com"),
+            ("login.microsoftonline.us", "graph.microsoft.us"),
+            ("login.chinacloudapi.cn", "microsoftgraph.chinacloudapi.cn"),
+        ],
+    )
+    async def test_login_cloud_selects_matching_graph_endpoint(
+        self, monkeypatch, login_host, expected_graph_host
+    ):
+        monkeypatch.setenv("ENTRA_LOGIN_BASE_URL", f"https://{login_host}")
+        monkeypatch.delenv("ENTRA_GRAPH_BASE_URL", raising=False)
+        client = _mock_client({"value": []})
+        with patch(
+            "auth_server.providers.entra.guarded_async_client", return_value=client
+        ) as factory:
+            assert await EntraIdProvider.fetch_groups_via_graph("token") == []
+        assert client.get.await_args.args[0] == (
+            f"https://{expected_graph_host}/v1.0/me/transitiveMemberOf"
+        )
+        assert factory.call_args.kwargs["follow_redirects"] is False
+        assert factory.call_args.kwargs["profile"] is ENTRA_GRAPH_PROFILE
+
+    @pytest.mark.asyncio
+    async def test_graph_proxy_pagination_remains_on_configured_path(self, monkeypatch):
         monkeypatch.setenv("ENTRA_GRAPH_BASE_URL", "https://graph.proxy.example.com")
+        next_link = "https://graph.proxy.example.com/v1.0/me/transitiveMemberOf?$skiptoken=next"
+        client = _mock_client({"value": [], "@odata.nextLink": next_link}, {"value": []})
+        with patch("auth_server.providers.entra.guarded_async_client", return_value=client):
+            assert await EntraIdProvider.fetch_groups_via_graph("token") == []
+        assert [call.args[0] for call in client.get.await_args_list] == [
+            "https://graph.proxy.example.com/v1.0/me/transitiveMemberOf",
+            next_link,
+        ]
 
-        mock_client = AsyncMock()
-        mock_client.get = AsyncMock(return_value=_mock_response({"value": []}))
-        mock_client.__aenter__.return_value = mock_client
-        mock_client.__aexit__.return_value = None
+    @pytest.mark.asyncio
+    async def test_graph_proxy_rewrites_graph_origin_nextlink_without_leaking_token(
+        self, monkeypatch
+    ):
+        monkeypatch.setenv("ENTRA_GRAPH_BASE_URL", "https://graph.proxy.example.com")
+        next_link = "https://graph.microsoft.com/v1.0/me/transitiveMemberOf?$skiptoken=next"
+        client = _mock_client(
+            {
+                "value": [{"@odata.type": "#microsoft.graph.group", "id": "first"}],
+                "@odata.nextLink": next_link,
+            },
+            {"value": [{"@odata.type": "#microsoft.graph.group", "id": "second"}]},
+        )
+        with patch("auth_server.providers.entra.guarded_async_client", return_value=client):
+            ids = await EntraIdProvider.fetch_groups_via_graph("graph-bearer")
 
-        with patch("auth_server.providers.entra.httpx.AsyncClient", return_value=mock_client):
-            await EntraIdProvider.fetch_groups_via_graph("token")
+        assert ids == ["first", "second"]
+        assert [call.args[0] for call in client.get.await_args_list] == [
+            "https://graph.proxy.example.com/v1.0/me/transitiveMemberOf",
+            "https://graph.proxy.example.com/v1.0/me/transitiveMemberOf?$skiptoken=next",
+        ]
+        assert all(
+            call.kwargs["headers"]["Authorization"] == "Bearer graph-bearer"
+            for call in client.get.await_args_list
+        )
 
-        url = mock_client.get.call_args[0][0]
-        assert url.startswith("https://graph.proxy.example.com/")
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "next_link",
+        [
+            "https://evil.proxy.example.com/v1.0/me/transitiveMemberOf?$skiptoken=next",
+            "http://graph.proxy.example.com/v1.0/me/transitiveMemberOf?$skiptoken=next",
+            "https://graph.proxy.example.com/v1.0/users/other/transitiveMemberOf?$skiptoken=next",
+            "https://graph.proxy.example.com/v1.0/me/transitiveMemberOf/extra?$skiptoken=next",
+        ],
+    )
+    async def test_proxy_pagination_cannot_send_bearer_off_origin_or_path(
+        self, monkeypatch, next_link
+    ):
+        monkeypatch.setenv("ENTRA_GRAPH_BASE_URL", "https://graph.proxy.example.com")
+        client = _mock_client({"value": [], "@odata.nextLink": next_link})
+        with patch("auth_server.providers.entra.guarded_async_client", return_value=client):
+            with pytest.raises(GraphGroupLookupError):
+                await EntraIdProvider.fetch_groups_via_graph("token")
+        client.get.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "configured_base",
+        [
+            "http://graph.proxy.example.com",
+            "https://graph.proxy.example.com/extra",
+            "https://graph.proxy.example.com?next=1",
+            "https://user@graph.proxy.example.com",
+            "https://graph.proxy.example.com:8443",
+        ],
+    )
+    async def test_invalid_graph_base_rejected_without_sending_bearer(
+        self, monkeypatch, configured_base
+    ):
+        monkeypatch.setenv("ENTRA_GRAPH_BASE_URL", configured_base)
+        client = _mock_client({"value": []})
+        with patch("auth_server.providers.entra.guarded_async_client", return_value=client):
+            with pytest.raises(GraphGroupLookupError):
+                await EntraIdProvider.fetch_groups_via_graph("token")
+        client.get.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_graph_redirect_response_never_forwards_bearer(self, monkeypatch):
+        monkeypatch.setenv("ENTRA_GRAPH_BASE_URL", "https://graph.proxy.example.com")
+        client = AsyncMock()
+        client.get.return_value = httpx.Response(
+            302,
+            headers={"Location": "https://attacker.example/collect"},
+            request=httpx.Request(
+                "GET", "https://graph.proxy.example.com/v1.0/me/transitiveMemberOf"
+            ),
+        )
+        client.__aenter__.return_value = client
+        with patch(
+            "auth_server.providers.entra.guarded_async_client", return_value=client
+        ) as factory:
+            with pytest.raises(GraphGroupLookupError):
+                await EntraIdProvider.fetch_groups_via_graph("token")
+        assert factory.call_args.kwargs["follow_redirects"] is False
+        client.get.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_authorization_header_uses_bearer_token(self):
-        mock_client = AsyncMock()
-        mock_client.get = AsyncMock(return_value=_mock_response({"value": []}))
-        mock_client.__aenter__.return_value = mock_client
-        mock_client.__aexit__.return_value = None
-
-        with patch("auth_server.providers.entra.httpx.AsyncClient", return_value=mock_client):
+        client = _mock_client({"value": []})
+        with patch("auth_server.providers.entra.guarded_async_client", return_value=client):
             await EntraIdProvider.fetch_groups_via_graph("the-access-token")
-
-        mock_client.get.assert_awaited_once()
-        _args, kwargs = mock_client.get.call_args
-        assert kwargs["headers"]["Authorization"] == "Bearer the-access-token"
+        client.get.assert_awaited_once()
+        assert client.get.call_args.kwargs["headers"]["Authorization"] == "Bearer the-access-token"
 
 
 class TestEntraAuthorizationServerMetadata:
@@ -260,6 +418,312 @@ def _entra(monkeypatch, **kwargs):
     params = {"tenant_id": "tenant-abc", "client_id": "app-guid", "client_secret": "s"}
     params.update(kwargs)
     return EntraIdProvider(**params)
+
+
+class TestResolveGroups:
+    """Inline claims keep their behavior; missing claims consult Graph."""
+
+    @pytest.fixture(autouse=True)
+    def _isolate_cache(self, monkeypatch):
+        monkeypatch.setattr(EntraIdProvider, "_group_cache", OrderedDict())
+
+    @pytest.mark.asyncio
+    async def test_inline_groups_do_not_call_graph(self, monkeypatch):
+        provider = _entra(monkeypatch)
+        with patch.object(
+            EntraIdProvider, "fetch_groups_via_graph", new_callable=AsyncMock
+        ) as graph:
+            result = await provider.resolve_groups(
+                {"groups": ["inline-direct", "inline-parent"], "tid": "tenant", "oid": "alice"},
+                "access-token",
+            )
+        assert result == ["inline-direct", "inline-parent"]
+        graph.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_nonempty_groups_take_precedence_over_roles(self, monkeypatch):
+        provider = _entra(monkeypatch)
+        with patch.object(
+            EntraIdProvider, "fetch_groups_via_graph", new_callable=AsyncMock
+        ) as graph:
+            result = await provider.resolve_groups(
+                {"groups": ["group-id"], "roles": ["role-id"]}, "access-token"
+            )
+        assert result == ["group-id"]
+        graph.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_roles_without_groups_do_not_call_graph(self, monkeypatch):
+        provider = _entra(monkeypatch)
+        with patch.object(
+            EntraIdProvider, "fetch_groups_via_graph", new_callable=AsyncMock
+        ) as graph:
+            result = await provider.resolve_groups(
+                {"roles": ["reader", "writer"], "tid": "tenant", "oid": "alice"},
+                "access-token",
+            )
+        assert result == ["reader", "writer"]
+        graph.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "indicator",
+        [
+            {"hasgroups": True},
+            {"_claim_names": {"groups": "src1"}},
+        ],
+    )
+    async def test_overage_uses_graph_even_when_inline_groups_present(self, monkeypatch, indicator):
+        provider = _entra(monkeypatch)
+        claims = {"groups": ["stale-inline"], "tid": "tenant", "oid": "alice", **indicator}
+        with patch.object(
+            EntraIdProvider,
+            "fetch_groups_via_graph",
+            new_callable=AsyncMock,
+            return_value=["direct", "nested-parent"],
+        ) as graph:
+            result = await provider.resolve_groups(claims, "access-token")
+        assert result == ["direct", "nested-parent"]
+        graph.assert_awaited_once()
+        assert graph.call_args.args[0] == "access-token"
+
+    @pytest.mark.asyncio
+    async def test_overage_uses_roles_when_groups_missing(self, monkeypatch):
+        provider = _entra(monkeypatch)
+        with patch.object(
+            EntraIdProvider,
+            "fetch_groups_via_graph",
+            new_callable=AsyncMock,
+            return_value=["nested-parent"],
+        ) as graph:
+            result = await provider.resolve_groups(
+                {"roles": ["inline-role"], "hasgroups": True, "tid": "tenant", "oid": "alice"},
+                "access-token",
+            )
+        assert result == ["inline-role", "nested-parent"]
+        graph.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_graph_overage_deduplicates_app_role_and_ignores_stale_inline_group(
+        self, monkeypatch
+    ):
+        provider = _entra(monkeypatch)
+        with patch.object(
+            EntraIdProvider,
+            "fetch_groups_via_graph",
+            new_callable=AsyncMock,
+            return_value=["nested-parent", "role-id"],
+        ):
+            result = await provider.resolve_groups(
+                {"groups": ["stale-inline"], "roles": ["role-id"], "hasgroups": True},
+                "access-token",
+            )
+
+        assert result == ["role-id", "nested-parent"]
+
+    @pytest.mark.asyncio
+    async def test_empty_graph_overage_preserves_roles_not_stale_groups(self, monkeypatch):
+        provider = _entra(monkeypatch)
+        with patch.object(
+            EntraIdProvider, "fetch_groups_via_graph", new_callable=AsyncMock, return_value=[]
+        ):
+            result = await provider.resolve_groups(
+                {"groups": ["stale-inline"], "roles": ["role-id"], "hasgroups": True},
+                "access-token",
+            )
+
+        assert result == ["role-id"]
+
+    @pytest.mark.asyncio
+    async def test_missing_groups_and_roles_uses_graph(self, monkeypatch):
+        provider = _entra(monkeypatch)
+        with patch.object(
+            EntraIdProvider,
+            "fetch_groups_via_graph",
+            new_callable=AsyncMock,
+            return_value=["nested-parent"],
+        ) as graph:
+            result = await provider.resolve_groups(
+                {"tid": "tenant", "oid": "alice"}, "access-token"
+            )
+        assert result == ["nested-parent"]
+        graph.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_graph_failure_propagates_for_overage_and_missing_claims(self, monkeypatch):
+        provider = _entra(monkeypatch)
+        for claims in (
+            {"hasgroups": True, "groups": ["stale"], "tid": "tenant", "oid": "alice"},
+            {"tid": "tenant", "oid": "alice"},
+        ):
+            with patch.object(
+                EntraIdProvider,
+                "fetch_groups_via_graph",
+                new_callable=AsyncMock,
+                side_effect=GraphGroupLookupError("Graph failed"),
+            ):
+                with pytest.raises(GraphGroupLookupError):
+                    await provider.resolve_groups(claims, "access-token")
+
+    @pytest.mark.asyncio
+    async def test_browser_graph_lookup_timeout_refuses_incomplete_groups(self, monkeypatch):
+        from auth_server.providers import entra as entra_module
+
+        monkeypatch.setattr(entra_module, "GRAPH_GROUP_LOOKUP_TIMEOUT_SECONDS", 0.01)
+
+        async def never_returns(*_args, **_kwargs):
+            await asyncio.Event().wait()
+
+        provider = _entra(monkeypatch)
+        with patch.object(EntraIdProvider, "fetch_groups_via_graph", side_effect=never_returns):
+            with pytest.raises(GraphGroupLookupError, match="timed out"):
+                await provider.resolve_groups(
+                    {"hasgroups": True, "groups": ["stale-inline"]}, "access-token"
+                )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "claims",
+        [
+            {"groups": {"admin": True}},
+            {"groups": ["valid", 42]},
+            {"roles": {"admin": True}},
+        ],
+    )
+    async def test_invalid_inline_claim_does_not_trigger_graph(self, monkeypatch, claims):
+        provider = _entra(monkeypatch)
+        with patch.object(
+            EntraIdProvider, "fetch_groups_via_graph", new_callable=AsyncMock
+        ) as graph:
+            with pytest.raises(ValueError):
+                await provider.resolve_groups(claims, "access-token")
+        graph.assert_not_awaited()
+
+
+class TestGraphGroupCache:
+    """Successful Graph results belong to one tenant and object ID."""
+
+    @pytest.fixture(autouse=True)
+    def _isolate_cache(self, monkeypatch):
+        monkeypatch.setattr(EntraIdProvider, "_group_cache", OrderedDict())
+        monkeypatch.delenv("ENTRA_GRAPH_BASE_URL", raising=False)
+        monkeypatch.delenv("ENTRA_LOGIN_BASE_URL", raising=False)
+
+    @pytest.mark.asyncio
+    async def test_cache_keys_on_tenant_and_object_id_and_expires_at_300_seconds(self):
+        clock = [1000.0]
+        client = _mock_client(
+            {"value": [{"@odata.type": "#microsoft.graph.group", "id": "alice-t1"}]},
+            {"value": [{"@odata.type": "#microsoft.graph.group", "id": "alice-t2"}]},
+            {"value": [{"@odata.type": "#microsoft.graph.group", "id": "bob-t1"}]},
+            {"value": [{"@odata.type": "#microsoft.graph.group", "id": "alice-t1-refreshed"}]},
+        )
+        with (
+            patch("auth_server.providers.entra.time.monotonic", side_effect=lambda: clock[0]),
+            patch("auth_server.providers.entra.guarded_async_client", return_value=client),
+        ):
+            fetch = EntraIdProvider.fetch_groups_via_graph
+            assert await fetch("token", tenant_id="t1", object_id="alice") == ["alice-t1"]
+            clock[0] = 1299.0
+            assert await fetch("another-token", tenant_id="t1", object_id="alice") == ["alice-t1"]
+            assert client.get.await_count == 1
+            assert await fetch("token", tenant_id="t2", object_id="alice") == ["alice-t2"]
+            assert await fetch("token", tenant_id="t1", object_id="bob") == ["bob-t1"]
+            clock[0] = 1300.0
+            assert await fetch("token", tenant_id="t1", object_id="alice") == ["alice-t1-refreshed"]
+            assert client.get.await_count == 4
+
+    @pytest.mark.asyncio
+    async def test_cached_list_cannot_be_mutated_by_a_caller(self):
+        client = _mock_client(
+            {"value": [{"@odata.type": "#microsoft.graph.group", "id": "original"}]}
+        )
+        with patch("auth_server.providers.entra.guarded_async_client", return_value=client):
+            first = await EntraIdProvider.fetch_groups_via_graph(
+                "token", tenant_id="tenant", object_id="alice"
+            )
+            first.append("injected")
+            second = await EntraIdProvider.fetch_groups_via_graph(
+                "token", tenant_id="tenant", object_id="alice"
+            )
+        assert second == ["original"]
+        client.get.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_empty_result_is_cached_but_error_is_retried(self):
+        client = _mock_client({"value": []})
+        with patch("auth_server.providers.entra.guarded_async_client", return_value=client):
+            fetch = EntraIdProvider.fetch_groups_via_graph
+            assert await fetch("token", tenant_id="t", object_id="empty") == []
+            assert await fetch("token", tenant_id="t", object_id="empty") == []
+            assert client.get.await_count == 1
+
+        client = AsyncMock()
+        client.get = AsyncMock(
+            side_effect=[
+                _mock_response({"error": "forbidden"}, 403),
+                _mock_response(
+                    {"value": [{"@odata.type": "#microsoft.graph.group", "id": "recovered"}]}
+                ),
+            ]
+        )
+        client.__aenter__.return_value = client
+        client.__aexit__.return_value = None
+        with patch("auth_server.providers.entra.guarded_async_client", return_value=client):
+            with pytest.raises(GraphGroupLookupError):
+                await fetch("token", tenant_id="t", object_id="recover")
+            assert await fetch("token", tenant_id="t", object_id="recover") == ["recovered"]
+            assert client.get.await_count == 2
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "identity",
+        [
+            {"tenant_id": "t"},
+            {"object_id": "alice"},
+            {"tenant_id": "", "object_id": "alice"},
+            {"tenant_id": "t", "object_id": ""},
+            {"tenant_id": 42, "object_id": "alice"},
+            {"tenant_id": "t", "object_id": ["alice"]},
+        ],
+    )
+    async def test_without_valid_identity_result_is_not_cached(self, identity):
+        client = _mock_client(
+            {"value": [{"@odata.type": "#microsoft.graph.group", "id": "first"}]},
+            {"value": [{"@odata.type": "#microsoft.graph.group", "id": "second"}]},
+        )
+        with patch("auth_server.providers.entra.guarded_async_client", return_value=client):
+            fetch = EntraIdProvider.fetch_groups_via_graph
+            assert await fetch("token", **identity) == ["first"]
+            assert await fetch("token", **identity) == ["second"]
+        assert client.get.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_cache_evicts_oldest_entry_at_512(self):
+        client = AsyncMock()
+        client.get = AsyncMock(
+            side_effect=[
+                _mock_response(
+                    {"value": [{"@odata.type": "#microsoft.graph.group", "id": f"g-{i}"}]}
+                )
+                for i in range(513)
+            ]
+            + [
+                _mock_response(
+                    {"value": [{"@odata.type": "#microsoft.graph.group", "id": "refetched"}]}
+                )
+            ]
+        )
+        client.__aenter__.return_value = client
+        client.__aexit__.return_value = None
+        with patch("auth_server.providers.entra.guarded_async_client", return_value=client):
+            fetch = EntraIdProvider.fetch_groups_via_graph
+            for i in range(513):
+                assert await fetch("token", tenant_id="t", object_id=f"user-{i}") == [f"g-{i}"]
+            assert await fetch("token", tenant_id="t", object_id="user-512") == ["g-512"]
+            assert client.get.await_count == 513
+            assert await fetch("token", tenant_id="t", object_id="user-0") == ["refetched"]
+            assert client.get.await_count == 514
 
 
 class TestFormatAdvertisedScopes:

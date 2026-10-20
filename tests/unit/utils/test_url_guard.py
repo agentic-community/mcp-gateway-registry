@@ -844,6 +844,131 @@ class TestCredentialedOAuthProfile:
             transport._pin_request(httpx.Request("POST", "http://93.184.216.34/token"))
 
 
+class TestEntraGraphProfile:
+    """Only the configured Graph fetch hostname may gain private-IP trust."""
+
+    def test_default_is_public_only_https_and_credential_bearing(self, monkeypatch):
+        monkeypatch.delenv("ENTRA_GRAPH_BASE_URL", raising=False)
+        profile = url_guard.ENTRA_GRAPH_PROFILE
+        assert profile.name == "entra-graph"
+        assert profile.require_https is True
+        assert profile.credential_bearing is True
+        assert profile.allowlist_factory().hosts == frozenset()
+        assert profile.allowlist_factory().cidrs == ()
+        with patch.object(url_guard.socket, "getaddrinfo", _resolve_to("93.184.216.34")):
+            assert url_guard.validate_url(
+                "https://graph.microsoft.com/v1.0/me/transitiveMemberOf", profile=profile
+            ) == ["93.184.216.34"]
+        with patch.object(url_guard.socket, "getaddrinfo", _resolve_to("10.20.30.40")):
+            with pytest.raises(UrlValidationError):
+                url_guard.validate_url("https://graph.microsoft.com/v1.0/me", profile=profile)
+
+    def test_configured_private_literal_is_not_trusted_proxy_hostname(self, monkeypatch):
+        monkeypatch.setenv("ENTRA_GRAPH_BASE_URL", "https://10.20.30.40")
+        with pytest.raises(UrlValidationError):
+            url_guard.validate_url(
+                "https://10.20.30.40/v1.0/me", profile=url_guard.ENTRA_GRAPH_PROFILE
+            )
+
+    def test_only_exact_explicit_proxy_host_may_resolve_private(self, monkeypatch):
+        monkeypatch.setenv("ENTRA_GRAPH_BASE_URL", "https://graph.proxy.example.com")
+        with patch.object(url_guard.socket, "getaddrinfo", _resolve_to("10.20.30.40")):
+            assert url_guard.validate_url(
+                "https://graph.proxy.example.com/v1.0/me/transitiveMemberOf",
+                profile=url_guard.ENTRA_GRAPH_PROFILE,
+            ) == ["10.20.30.40"]
+            for host in (
+                "other.proxy.example.com",
+                "evil.graph.proxy.example.com",
+                "graph.proxy.example.com.evil.net",
+            ):
+                with pytest.raises(UrlValidationError):
+                    url_guard.validate_url(
+                        f"https://{host}/v1.0/me", profile=url_guard.ENTRA_GRAPH_PROFILE
+                    )
+
+        with patch.object(url_guard.socket, "getaddrinfo", _resolve_to("93.184.216.34")):
+            assert url_guard.validate_url(
+                "https://graph.microsoft.com/v1.0/me", profile=url_guard.ENTRA_GRAPH_PROFILE
+            ) == ["93.184.216.34"]
+
+    def test_wildcard_proxy_configuration_never_trusts_private_subdomains(self, monkeypatch):
+        monkeypatch.setenv("ENTRA_GRAPH_BASE_URL", "https://*.proxy.example.com")
+        with patch.object(url_guard.socket, "getaddrinfo", _resolve_to("10.20.30.40")):
+            with pytest.raises(UrlValidationError):
+                url_guard.validate_url(
+                    "https://graph.proxy.example.com/v1.0/me",
+                    profile=url_guard.ENTRA_GRAPH_PROFILE,
+                )
+
+    def test_proxy_rejects_mixed_public_and_metadata_dns_answers(self, monkeypatch):
+        monkeypatch.setenv("ENTRA_GRAPH_BASE_URL", "https://graph.proxy.example.com")
+        with patch.object(
+            url_guard.socket, "getaddrinfo", _resolve_to("10.20.30.40", "169.254.169.254")
+        ):
+            with pytest.raises(UrlValidationError):
+                url_guard.validate_url(
+                    "https://graph.proxy.example.com/v1.0/me",
+                    profile=url_guard.ENTRA_GRAPH_PROFILE,
+                )
+
+    def test_proxy_trust_never_comes_from_other_allowlists_or_cidrs(self, monkeypatch):
+        monkeypatch.delenv("ENTRA_GRAPH_BASE_URL", raising=False)
+        with patch.object(
+            url_guard,
+            "settings",
+            _settings(
+                ssrf_allowed_hosts="graph.proxy.example.com", ssrf_allowed_cidrs="10.0.0.0/8"
+            ),
+        ):
+            with patch.object(url_guard.socket, "getaddrinfo", _resolve_to("10.20.30.40")):
+                with pytest.raises(UrlValidationError):
+                    url_guard.validate_url(
+                        "https://graph.proxy.example.com/v1.0/me",
+                        profile=url_guard.ENTRA_GRAPH_PROFILE,
+                    )
+
+    def test_generic_proxy_cidr_does_not_extend_graph_private_hostname(self, monkeypatch):
+        monkeypatch.setenv("ENTRA_GRAPH_BASE_URL", "https://graph.proxy.example.com")
+        with patch.object(url_guard, "settings", _settings(ssrf_allowed_cidrs="10.0.0.0/8")):
+            with patch.object(url_guard.socket, "getaddrinfo", _resolve_to("10.20.30.40")):
+                with pytest.raises(UrlValidationError):
+                    url_guard.validate_url(
+                        "https://other.example.com/v1.0/me",
+                        profile=url_guard.ENTRA_GRAPH_PROFILE,
+                    )
+
+    @pytest.mark.parametrize(
+        "ip", ["169.254.169.254", "169.254.170.2", "100.100.100.200", "fd00:ec2::254"]
+    )
+    def test_configured_proxy_cannot_resolve_to_metadata(self, monkeypatch, ip):
+        monkeypatch.setenv("ENTRA_GRAPH_BASE_URL", "https://graph.proxy.example.com")
+        with patch.object(url_guard.socket, "getaddrinfo", _resolve_to(ip)):
+            with pytest.raises(UrlValidationError):
+                url_guard.validate_url(
+                    "https://graph.proxy.example.com/v1.0/me",
+                    profile=url_guard.ENTRA_GRAPH_PROFILE,
+                )
+
+    def test_configured_proxy_rejects_plaintext_even_when_private_trusted(self, monkeypatch):
+        monkeypatch.setenv("ENTRA_GRAPH_BASE_URL", "https://graph.proxy.example.com")
+        with patch.object(url_guard.socket, "getaddrinfo", _resolve_to("10.20.30.40")):
+            with pytest.raises(UrlValidationError):
+                url_guard.validate_url(
+                    "http://graph.proxy.example.com/v1.0/me", profile=url_guard.ENTRA_GRAPH_PROFILE
+                )
+
+    def test_configured_proxy_transport_pins_private_ip_preserving_host_and_sni(self, monkeypatch):
+        monkeypatch.setenv("ENTRA_GRAPH_BASE_URL", "https://graph.proxy.example.com")
+        with patch.object(url_guard.socket, "getaddrinfo", _resolve_to("10.20.30.40")):
+            pinned = url_guard.GuardedAsyncTransport(
+                guard_profile=url_guard.ENTRA_GRAPH_PROFILE
+            )._pin_request(httpx.Request("GET", "https://graph.proxy.example.com/v1.0/me"))
+        assert pinned.url.host == "10.20.30.40"
+        assert pinned.headers["Host"] == "graph.proxy.example.com"
+        assert pinned.extensions["sni_hostname"] == "graph.proxy.example.com"
+
+
 class TestEgressUpstreamProfile:
     """The egress-injected proxy hop pins to the resolved IP and permits private /
     hostname-private MCP upstreams, but never metadata/credential endpoints."""

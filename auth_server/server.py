@@ -4256,6 +4256,8 @@ async def validate_request(request: Request):
 
         # Initialize validation result
         validation_result = None
+        entra_bearer_provider = None
+        delegated_entra_user = False
 
         # Log which cookie names are present on the inbound /validate request.
         # Distinguishes "browser didn't send mcp_gateway_session" (cookie scope
@@ -4365,6 +4367,13 @@ async def validate_request(request: Request):
                             )
                         except TypeError:
                             validation_result = auth_provider.validate_token(access_token)
+                        from providers.entra import EntraIdProvider
+
+                        if (
+                            isinstance(auth_provider, EntraIdProvider)
+                            and validation_result.get("method") == "entra"
+                        ):
+                            entra_bearer_provider = auth_provider
                         logger.info(
                             f"Token validation successful using {auth_provider.__class__.__name__}"
                         )
@@ -4422,6 +4431,54 @@ async def validate_request(request: Request):
 
         logger.debug("Token validation successful using method: %s", validation_result["method"])
 
+        # Only a signature-verified, delegated Entra bearer can drive an OBO
+        # Graph lookup. Run before M2M enrichment so empty user claims cannot
+        # be mistaken for client-credential groups.
+        if entra_bearer_provider is not None:
+            from providers.entra import GraphGroupLookupError
+
+            try:
+                recovered_groups = await entra_bearer_provider.recover_bearer_groups(
+                    validation_result, access_token, entra_bearer_provider
+                )
+                delegated_entra_user = isinstance(
+                    (validation_result.get("data") or {}).get("scp"), str
+                ) and bool((validation_result.get("data") or {}).get("scp", "").strip())
+            except ValueError as e:
+                logger.warning("Invalid Entra bearer group claims; refusing validation")
+                raise HTTPException(
+                    status_code=401,
+                    detail="Invalid Entra group claims",
+                    headers={"WWW-Authenticate": "Bearer", "Connection": "close"},
+                ) from e
+            except GraphGroupLookupError as e:
+                logger.warning("Entra bearer group recovery failed; refusing validation")
+                raise HTTPException(
+                    status_code=503,
+                    detail="Entra group lookup unavailable",
+                    headers={"Connection": "close"},
+                ) from e
+            if recovered_groups is not None:
+                from group_filter import filter_session_groups
+
+                filtered_groups = await filter_session_groups(
+                    recovered_groups,
+                    username_hash=hash_username(validation_result.get("username") or ""),
+                )
+                # auth_request copies X-Groups alongside other headers into a
+                # finite nginx response buffer. Refuse oversized unfiltered
+                # membership sets rather than dropping arbitrary group grants.
+                from providers.entra import GRAPH_GROUP_HEADER_MAX_BYTES
+
+                if len(" ".join(filtered_groups).encode("utf-8")) > GRAPH_GROUP_HEADER_MAX_BYTES:
+                    logger.warning("Entra group header exceeds safe proxy size")
+                    raise HTTPException(
+                        status_code=503,
+                        detail="Entra group lookup unavailable",
+                        headers={"Connection": "close"},
+                    )
+                validation_result["groups"] = filtered_groups
+
         # Enrich groups from MongoDB if empty (for M2M clients)
         try:
             from mongodb_groups_enrichment import (
@@ -4431,7 +4488,9 @@ async def validate_request(request: Request):
 
             client_id = validation_result.get("client_id")
             current_groups = validation_result.get("groups", [])
-            should_enrich = should_enrich_groups(validation_result)
+            # A confirmed empty delegated-user membership must never acquire
+            # M2M client groups from the local collection.
+            should_enrich = not delegated_entra_user and should_enrich_groups(validation_result)
             logger.info(
                 f"Enrichment check: client_id={client_id}, "
                 f"groups={current_groups}, should_enrich={should_enrich}"
@@ -5181,7 +5240,10 @@ async def validate_request(request: Request):
             headers={"WWW-Authenticate": "Bearer", "Connection": "close"},
         )
     except HTTPException as e:
-        # Re-raise client error HTTPExceptions (4xx) as-is
+        # Keep the Graph-unavailable result distinct from invalid credentials
+        # and an empty, successful membership lookup.
+        if e.status_code == 503 and e.detail == "Entra group lookup unavailable":
+            raise
         if 400 <= e.status_code < 500:
             raise
         # For non-client HTTPExceptions, convert to 500
@@ -5996,6 +6058,33 @@ def load_oauth2_config():
         with open(oauth2_file) as f:
             config = yaml.safe_load(f)
 
+        # Resolve Entra browser endpoints from the same configured cloud as
+        # provider validation; the YAML templates otherwise assume public.
+        from providers.entra import (
+            _LOGIN_TO_GRAPH_HOST,
+            DEFAULT_ENTRA_GRAPH_BASE_URL,
+            _entra_login_base,
+        )
+
+        entra = config.get("providers", {}).get("entra")
+        if entra:
+            login_base = _entra_login_base()
+            graph_base = (
+                os.environ.get("ENTRA_GRAPH_BASE_URL")
+                or _LOGIN_TO_GRAPH_HOST.get(
+                    urlparse(login_base).hostname or "", DEFAULT_ENTRA_GRAPH_BASE_URL
+                )
+            ).rstrip("/")
+            for field in ("auth_url", "token_url", "logout_url"):
+                if field in entra:
+                    entra[field] = Template(entra[field]).safe_substitute(
+                        ENTRA_LOGIN_BASE_URL=login_base
+                    )
+            if "user_info_url" in entra:
+                entra["user_info_url"] = Template(entra["user_info_url"]).safe_substitute(
+                    ENTRA_GRAPH_BASE_URL=graph_base
+                )
+
         # Substitute environment variables in configuration
         processed_config = substitute_env_vars(config)
         return processed_config
@@ -6600,7 +6689,7 @@ async def oauth2_callback(
             # For Entra ID, prioritize ID token claims over userinfo endpoint
             try:
                 if "id_token" in token_data:
-                    from providers.entra import EntraIdProvider
+                    from providers.entra import EntraIdProvider, GraphGroupLookupError
 
                     # Verify signature/issuer/audience/expiry against the tenant
                     # JWKS before trusting any claim. A present but unverifiable
@@ -6613,25 +6702,21 @@ async def oauth2_callback(
                         safe_identity_summary(id_token_claims),
                     )
 
-                    # Extract user info from ID token claims
-                    # Entra ID can return groups as either 'groups' or 'roles' depending on configuration
-                    groups = id_token_claims.get("groups", [])
-                    if not groups:
-                        groups = id_token_claims.get("roles", [])
-
-                    # Group overage: when a user is a member of more groups
-                    # than will fit in the token (Entra caps inline groups
-                    # around 150-200), Entra omits them and signals via
-                    # `hasgroups` or `_claim_names.groups`. Fall back to
-                    # Microsoft Graph /me/memberOf so the user gets their
-                    # real group set instead of an empty session (#929).
-                    if EntraIdProvider.has_group_overage(id_token_claims):
-                        logger.info("Entra ID token signals group overage; resolving via Graph")
-                        graph_groups = await EntraIdProvider.fetch_groups_via_graph(
-                            token_data["access_token"]
+                    # Inline claims remain authoritative unless the token signals
+                    # overage. Recover absent claims, including nested memberships.
+                    try:
+                        groups = await EntraIdProvider.resolve_groups(
+                            id_token_claims, token_data["access_token"]
                         )
-                        if graph_groups:
-                            groups = graph_groups
+                    except GraphGroupLookupError as e:
+                        logger.warning("Entra group recovery failed; refusing login")
+                        raise HTTPException(
+                            status_code=503, detail="Entra group lookup unavailable"
+                        ) from e
+                    except ValueError as e:
+                        raise HTTPException(
+                            status_code=401, detail="Invalid Entra group claims"
+                        ) from e
 
                     mapped_user = {
                         "username": id_token_claims.get("preferred_username")
@@ -6904,6 +6989,13 @@ async def oauth2_callback(
             session_groups,
             username_hash=hash_username(mapped_user["username"]),
         )
+
+        if provider == "entra":
+            from providers.entra import GRAPH_GROUP_HEADER_MAX_BYTES
+
+            if len(" ".join(session_groups).encode("utf-8")) > GRAPH_GROUP_HEADER_MAX_BYTES:
+                logger.warning("Entra session group header exceeds safe proxy size")
+                raise HTTPException(status_code=503, detail="Entra group lookup unavailable")
 
         # Persist the full session record server-side and put only an opaque
         # session_id in the browser cookie. This prevents cookie-size failures
