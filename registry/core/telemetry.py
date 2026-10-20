@@ -175,18 +175,6 @@ def _detect_cloud_from_k8s_heuristic() -> str | None:
     return None
 
 
-def _is_telemetry_enabled() -> bool:
-    """Return True iff telemetry is on for this process."""
-    if not settings.telemetry_enabled:
-        return False
-    # Respect the env-var master switch too, in case settings was imported
-    # before MCP_TELEMETRY_DISABLED was set.
-    disabled_env = os.getenv("MCP_TELEMETRY_DISABLED", "").lower()
-    if disabled_env in ("1", "true", "yes"):
-        return False
-    return True
-
-
 def _detect_local_environment() -> str | None:
     """Return a detection method if this is a developer machine, else None.
 
