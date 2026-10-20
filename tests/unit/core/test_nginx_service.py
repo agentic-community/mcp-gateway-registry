@@ -2104,6 +2104,65 @@ class TestConfigValidationBeforePersist:
         # Last-good config is intact; the unvalidated candidate never reached disk.
         assert live.read_text() == "# last good\n"
 
+    def test_rejected_first_render_does_not_restore_raw_template(self, tmp_path):
+        """Issue #1575: the entrypoint copies the raw template into the live
+        path before the first render. When nginx -t rejects that render, the
+        raw template must not come back as last-good, because nginx then fails
+        on a placeholder and hides the real error."""
+        live = tmp_path / "nginx_rev_proxy.conf"
+        live.write_text("server {\n    {{REAL_IP_CONFIG}}\n    {{LOCATION_BLOCKS}}\n}\n")
+
+        with patch.object(
+            nginx_module,
+            "_run_nginx_config_test",
+            return_value=(False, "open() nginx-access.log failed (13: Permission denied)"),
+        ):
+            with pytest.raises(RuntimeError, match="Permission denied"):
+                _REAL_WRITE_AND_VALIDATE(live, "# rendered config\n")
+
+        assert not live.exists()
+        assert not (tmp_path / (live.name + nginx_module._LAST_GOOD_SUFFIX)).exists()
+
+    def test_accepted_first_render_replaces_raw_template(self, tmp_path):
+        """A first render that passes nginx -t replaces the raw template and
+        leaves no backup behind."""
+        live = tmp_path / "nginx_rev_proxy.conf"
+        live.write_text("server {\n    {{LOCATION_BLOCKS}}\n}\n")
+
+        with patch.object(nginx_module, "_run_nginx_config_test", return_value=(True, "")):
+            _REAL_WRITE_AND_VALIDATE(live, "# rendered config\n")
+
+        assert live.read_text() == "# rendered config\n"
+        assert not (tmp_path / (live.name + nginx_module._LAST_GOOD_SUFFIX)).exists()
+
+
+class TestUnrenderedTemplateMarkers:
+    """The marker list must match what the shipped templates and the entrypoint use."""
+
+    @pytest.mark.parametrize(
+        "template_name",
+        ["nginx_rev_proxy_http_only.conf", "nginx_rev_proxy_http_and_https.conf"],
+    )
+    def test_shipped_templates_are_detected_as_unrendered(self, template_name):
+        template = Path(__file__).parents[3] / "docker" / template_name
+
+        assert nginx_module._is_unrendered_template(template)
+
+    def test_rendered_config_is_not_detected_as_unrendered(self, tmp_path):
+        rendered = tmp_path / "nginx_rev_proxy.conf"
+        rendered.write_text("server {\n    listen 8080;\n}\n")
+
+        assert not nginx_module._is_unrendered_template(rendered)
+
+    def test_markers_match_entrypoint_wait_loop(self):
+        entrypoint = Path(__file__).parents[3] / "docker" / "registry-entrypoint.sh"
+        entrypoint_markers = re.findall(
+            r'grep -q "(\{\{[A-Z_]+\}\})" "/etc/nginx/conf\.d/nginx_rev_proxy\.conf"',
+            entrypoint.read_text(),
+        )
+
+        assert sorted(entrypoint_markers) == sorted(nginx_module._UNRENDERED_TEMPLATE_MARKERS)
+
 
 class TestRunNginxConfigTest:
     def test_returns_no_binary_sentinel_when_nginx_absent(self):
