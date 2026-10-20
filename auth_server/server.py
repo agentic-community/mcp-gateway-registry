@@ -2306,6 +2306,82 @@ async def _get_blocked_tools(server_name: str) -> set[str]:
     return await get_server_repository().get_blocked_tools(path)
 
 
+# Synthetic per-server "connect" tool (issue #1860). While a user has not yet
+# connected an oauth_user server's provider account, tools/list returns this one
+# tool so chat clients, which only call tools they can see, have a way to reach
+# the consent URL. The mcp-proxy hop answers every call to this name itself and
+# never forwards it upstream, so on a direct route it is authorized like
+# tools/list (access to the server) rather than as an individual tool.
+CONNECT_TOOL_PREFIX: str = "connect_mcpgw_"
+# MCP tool names are limited to 128 characters of [A-Za-z0-9_.-].
+_TOOL_NAME_MAX_LENGTH: int = 128
+_TOOL_NAME_UNSAFE_CHARS = re.compile(r"[^A-Za-z0-9_.-]")
+
+
+def _connect_tool_name(server_path: str) -> str:
+    """Return the synthetic connect tool's name for one registered server.
+
+    Args:
+        server_path: The registered server path, with or without slashes.
+
+    Returns:
+        ``connect_mcpgw_<server>`` with characters MCP does not allow in a tool
+        name replaced by ``_``, truncated to the MCP length limit.
+    """
+    safe_path = _TOOL_NAME_UNSAFE_CHARS.sub("_", server_path.strip("/"))
+    return (CONNECT_TOOL_PREFIX + safe_path)[:_TOOL_NAME_MAX_LENGTH]
+
+
+def _is_connect_tool_call(
+    server_path: str,
+    method: str | None,
+    tool_name: object,
+) -> bool:
+    """True when the request calls this server's synthetic connect tool.
+
+    The comparison is against the one exact name derived for ``server_path``:
+    no prefix matching, so another server's connect name or any name that only
+    starts with the prefix is an ordinary tool.
+    """
+    if method != "tools/call" or not isinstance(tool_name, str):
+        return False
+    return tool_name == _connect_tool_name(server_path)
+
+
+def _scope_check_target(
+    server_path: str,
+    method: str,
+    tool_name: str | None,
+    direct_route: bool,
+) -> tuple[str, str | None]:
+    """Return the method and tool a request must be authorized for.
+
+    A call to the server's synthetic connect tool on a DIRECT route is checked
+    as ``tools/list``: the caller still needs access to the server, but not a
+    grant for a tool the backend does not have. This is safe only because every
+    direct-route MCP request passes through the mcp-proxy hop, which answers
+    the connect tool locally. Virtual routes never get the exemption: nginx
+    proxies a virtual route's non-egress backends straight to the backend.
+
+    Args:
+        server_path: The registered server path being authorized.
+        method: The JSON-RPC method of the request.
+        tool_name: ``params.name`` of a ``tools/call``, else None.
+        direct_route: True only when nginx asserted a direct route (or the
+            signed hop token says the route is not virtual).
+
+    Returns:
+        ``(method, tool_name)`` to pass to ``validate_server_tool_access``.
+    """
+    if direct_route and _is_connect_tool_call(server_path, method, tool_name):
+        logger.info(
+            "Authorizing synthetic connect tool for server='%s' as tools/list",
+            server_path,
+        )
+        return "tools/list", None
+    return method, tool_name
+
+
 async def validate_server_tool_access(
     server_name: str,
     method: str,
@@ -4662,10 +4738,18 @@ async def validate_request(request: Request):
                     headers={"Connection": "close"},
                 )
 
-            if not await validate_server_tool_access(
+            # The synthetic connect tool is checked as tools/list, only on a
+            # direct route nginx asserted (see _scope_check_target).
+            scope_method, scope_tool_name = _scope_check_target(
                 server_name,
                 method,
                 actual_tool_name,
+                direct_route=registration["route_mode"] == "direct",
+            )
+            if not await validate_server_tool_access(
+                server_name,
+                scope_method,
+                scope_tool_name,
                 user_scopes,
                 is_http_verb=is_generic_request,
             ):
@@ -7997,6 +8081,90 @@ _PRE_CONSENT_LIST_RESULT_KEYS: dict[str, str] = {
     "prompts/list": "prompts",
 }
 EGRESS_CONSENT_REQUIRED_HEADER = "X-Egress-Consent-Required"
+# Methods the gateway reports as unsupported while consent is pending, rather
+# than answering them with the consent error. A client probes these and falls
+# back on "method not found", but treats any other error as a failure it shows
+# the user (Claude Desktop does this for server/discover).
+_PRE_CONSENT_UNSUPPORTED_METHODS: frozenset[str] = frozenset({"server/discover"})
+JSONRPC_METHOD_NOT_FOUND: int = -32601
+
+
+def _connect_tool_definition(
+    server_path: str,
+    provider: str,
+) -> dict:
+    """Build the synthetic connect tool listed while consent is pending.
+
+    Calling it reaches the normal pre-consent ``tools/call`` path, which returns
+    the connect URL (``-32042`` URL elicitation, or the ``isError`` baseline).
+
+    Args:
+        server_path: The registered server path; names the tool.
+        provider: The provider's display name for the description.
+
+    Returns:
+        An MCP tool definition with no arguments.
+    """
+    return {
+        "name": _connect_tool_name(server_path),
+        "title": f"Connect your {provider} account",
+        # The model reads this to decide when to call the tool and what to
+        # tell the user, so it names the trigger, the user's two steps, and
+        # what the tool list looks like afterwards.
+        "description": (
+            f"This server's {provider} tools stay hidden until the user connects "
+            f"a {provider} account. Call this tool when the user asks for anything "
+            f"this server handles. It takes no arguments and returns a link. Show "
+            f"the link to the user and ask them to open it in a browser and approve "
+            f"access. Then ask them to reconnect this server in their MCP client "
+            f"(or reload its tool list). The full set of {provider} tools then "
+            f"appears, and this tool is no longer listed."
+        ),
+        "inputSchema": {"type": "object", "properties": {}},
+        "annotations": {"readOnlyHint": True, "openWorldHint": False},
+    }
+
+
+def _connect_tool_local_result(
+    server_name: str,
+    req_id: object,
+    account_connected: bool,
+) -> JSONResponse:
+    """Answer a call to the synthetic connect tool when no consent is pending.
+
+    The connect tool is the gateway's own, so a call to it is never forwarded
+    upstream, even once a credential exists: an upstream tool with the same
+    name must not run with that credential on the strength of the connect
+    tool's narrower authorization.
+
+    Args:
+        server_name: The server being called, for the log line.
+        req_id: The JSON-RPC request id.
+        account_connected: True when a credential was found for this user.
+
+    Returns:
+        A successful tool result explaining what to do next.
+    """
+    if account_connected:
+        text = (
+            "Your account for this server is already connected. Reconnect this "
+            "server in your MCP client to load its tools."
+        )
+    else:
+        text = "This server does not need an account connection."
+    logger.info(
+        "mcp_proxy: answering synthetic connect tool locally for server=%s (account_connected=%s)",
+        server_name,
+        account_connected,
+    )
+    return JSONResponse(
+        status_code=200,
+        content={
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "result": {"content": [{"type": "text", "text": text}], "isError": False},
+        },
+    )
 
 
 def _pre_consent_local_response(
@@ -8006,6 +8174,7 @@ def _pre_consent_local_response(
     mode: str,
     connect_url: str = "",
     provider: str = "the provider",
+    connect_tool: dict | None = None,
 ) -> Response | None:
     """Answer the methods that never need the upstream while consent is pending.
 
@@ -8014,7 +8183,12 @@ def _pre_consent_local_response(
     - ``initialize``: answered locally, negotiating from the client's own request.
     - ``notifications/*``: 202 with no body (Streamable HTTP).
     - ``ping``: an empty result.
+    - ``server/discover``: JSON-RPC "method not found", so the client falls
+      back to ``initialize`` instead of showing an error.
     - discovery lists: an empty list marked ``EGRESS_CONSENT_REQUIRED_HEADER``.
+      When ``connect_tool`` is given, ``tools/list`` returns that one tool
+      instead (issue #1860). The header stays, so an aggregating caller still
+      sees "consent pending" and ignores the body.
 
     Returns None for every other method; the caller answers those with its
     consent/PAT instruction.
@@ -8029,12 +8203,24 @@ def _pre_consent_local_response(
         return Response(status_code=202)
     if method == "ping":
         return JSONResponse(status_code=200, content={"jsonrpc": "2.0", "id": req_id, "result": {}})
+    if method in _PRE_CONSENT_UNSUPPORTED_METHODS:
+        return JSONResponse(
+            status_code=200,
+            content={
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "error": {"code": JSONRPC_METHOD_NOT_FOUND, "message": "Method not found"},
+            },
+        )
     result_key = _PRE_CONSENT_LIST_RESULT_KEYS.get(method)
     if result_key is None:
         return None
+    items: list[dict] = []
+    if method == "tools/list" and connect_tool is not None:
+        items = [connect_tool]
     return JSONResponse(
         status_code=200,
-        content={"jsonrpc": "2.0", "id": req_id, "result": {result_key: []}},
+        content={"jsonrpc": "2.0", "id": req_id, "result": {result_key: items}},
         headers={EGRESS_CONSENT_REQUIRED_HEADER: mode},
     )
 
@@ -8135,10 +8321,13 @@ def _local_initialize_response(
         "serverInfo": {"name": "mcp-gateway-registry", "version": "1.0.0"},
     }
     if connect_url:
+        # Same next steps as the connect tool's description: the client holds
+        # the pre-consent tool list until the server is reconnected.
         result["instructions"] = (
             f"This server requires connecting your {provider} account before its "
-            f"tools can be used. Open this URL in a browser, approve access, then "
-            f"use the server's tools:\n{connect_url}"
+            f"tools can be used. Open this URL in a browser and approve access, "
+            f"then reconnect this server in your MCP client to load its "
+            f"{provider} tools:\n{connect_url}"
         )
     return JSONResponse(
         status_code=200,
@@ -8147,11 +8336,37 @@ def _local_initialize_response(
     )
 
 
+def _baseline_consent_text(
+    message: str,
+    provider: str,
+    url: str,
+    is_connect_tool: bool,
+) -> str:
+    """Text of the isError consent result that carries the connect URL.
+
+    An ordinary tool asks the user to run it again after connecting. The
+    synthetic connect tool must not: running it again only reports "already
+    connected". Its next step is reconnecting the server so the client reloads
+    the tool list, which then holds the provider's real tools.
+    """
+    if is_connect_tool:
+        return (
+            f"Open this URL in your browser and approve access:\n{url}\n\n"
+            f"Then reconnect this server in your MCP client to load its "
+            f"{provider} tools."
+        )
+    return (
+        f"{message}\n\nTo connect, open this URL in your browser, approve "
+        f"access, then run this tool again:\n{url}"
+    )
+
+
 def _egress_consent_response(
     server_name: str,
     incoming_method: str | None,
     req_id: object,
     vend: dict,
+    is_connect_tool: bool = False,
 ):
     """Build the consent-required response for an egress server with no token.
 
@@ -8172,6 +8387,9 @@ def _egress_consent_response(
     ``resultType: "input_required"``) is a DIFFERENT, later mechanism that
     replaced server-initiated requests; current clients negotiate ``2025-11-25``
     and do not understand it, so we emit ``-32042`` here.
+
+    ``is_connect_tool`` is True for a call to the synthetic connect tool, whose
+    baseline text asks the user to reconnect the server rather than retry.
     """
     connect_url = vend.get("connect_url") or vend.get("authorize_url") or ""
     provider = vend.get("provider") or "the provider"
@@ -8220,10 +8438,11 @@ def _egress_consent_response(
                     "content": [
                         {
                             "type": "text",
-                            "text": (
-                                f"{message}\n\nTo connect, open this URL in your "
-                                f"browser, approve access, then run this tool "
-                                f"again:\n{url_with_id}"
+                            "text": _baseline_consent_text(
+                                message,
+                                provider,
+                                url_with_id,
+                                is_connect_tool,
                             ),
                         }
                     ],
@@ -8317,6 +8536,7 @@ async def _authorize_forwarded_mcp_body(
     registered_server: str,
     request_body: bytes,
     user_scopes: list[str],
+    direct_route: bool = False,
 ) -> None:
     """Re-authorize the caller's scopes against the EXACT body being forwarded.
 
@@ -8344,6 +8564,9 @@ async def _authorize_forwarded_mcp_body(
             transport suffixes in the proxy route are not resource identities.
         request_body: The exact bytes being forwarded to the upstream.
         user_scopes: The scopes from the verified X-Internal-Token claims.
+        direct_route: True when the signed hop token says the route is not
+            virtual. Only then is the synthetic connect tool checked as
+            ``tools/list`` (see ``_scope_check_target``).
 
     Raises:
         HTTPException: 403 when the forwarded body is not authorized by the
@@ -8409,8 +8632,14 @@ async def _authorize_forwarded_mcp_body(
             headers={"Connection": "close"},
         )
 
+    scope_method, scope_tool_name = _scope_check_target(
+        registered_server,
+        effective_method,
+        actual_tool_name,
+        direct_route=direct_route,
+    )
     if not await validate_server_tool_access(
-        registered_server, effective_method, actual_tool_name, user_scopes
+        registered_server, scope_method, scope_tool_name, user_scopes
     ):
         logger.warning(
             "mcp_proxy: access denied to %s.%s (tool=%s) on forwarded body",
@@ -8525,7 +8754,15 @@ async def mcp_proxy(
     # "retry later" in responses, logs, and metrics. Authorized-but-not-connected
     # callers still pass here and reach the egress consent/local-answer paths
     # below (they already had these methods in scope on the connected path).
-    await _authorize_forwarded_mcp_body(registered_server, request_body, user_scopes)
+    # A token without the claim (minted before it existed) is not treated as
+    # direct: the synthetic connect tool exemption fails closed.
+    direct_route = claims.get("virtual_backend") is False
+    await _authorize_forwarded_mcp_body(
+        registered_server,
+        request_body,
+        user_scopes,
+        direct_route=direct_route,
+    )
 
     # True once we inject a vaulted egress token below. An egress upstream is
     # itself an OAuth resource server: if it rejects our injected token it 401s
@@ -8537,6 +8774,17 @@ async def mcp_proxy(
     # cross-resource "Protected resource ... does not match expected ..." error).
     # We drop the foreign header on this path (see the 401 handling below).
     egress_token_injected = False
+
+    # Whether this request calls the server's synthetic connect tool (issue
+    # #1860). The consent path words its reply for it, and the check before
+    # forwarding answers it locally.
+    incoming_params = incoming_payload.get("params") if isinstance(incoming_payload, dict) else None
+    incoming_tool_name = incoming_params.get("name") if isinstance(incoming_params, dict) else None
+    is_connect_tool_call = _is_connect_tool_call(
+        registered_server,
+        incoming_method,
+        incoming_tool_name,
+    )
 
     # Per-user egress credential vault. When the feature is on, ask the
     # registry to vend this user's third-party token for the resolved server. The
@@ -8758,28 +9006,37 @@ async def mcp_proxy(
                 #     answered locally by _pre_consent_local_response (the same
                 #     helper the PAT branch uses): initialize negotiates with the
                 #     client and carries a connect-instructions hint; lists are
-                #     empty and marked consent-required so an aggregating virtual
-                #     server can publish the mapped tools.
+                #     marked consent-required so an aggregating virtual server
+                #     can publish the mapped tools.
+                #   - tools/list on a direct route returns one synthetic connect
+                #     tool (issue #1860). Chat clients only call tools they can
+                #     see, so an empty list left them no way to reach consent.
                 #   - tools/call (and prompts/get, resources/read): need the
                 #     third-party token, so we ask the user to connect via MCP
-                #     URL-mode elicitation. The gateway is the MCP server's OAuth
-                #     client to the provider; the token never transits the MCP
-                #     client, which performs no OAuth itself (it opens the connect
-                #     URL and retries). Spec:
+                #     URL-mode elicitation. A call to the connect tool lands here
+                #     too. The gateway is the MCP server's OAuth client to the
+                #     provider; the token never transits the MCP client, which
+                #     performs no OAuth itself (it opens the connect URL and
+                #     retries). Spec:
                 #     https://modelcontextprotocol.io/specification/draft/client/elicitation
                 req_id = incoming_payload.get("id") if isinstance(incoming_payload, dict) else None
+                provider = vend.get("provider") or "the provider"
+                connect_tool = None
+                if direct_route:
+                    connect_tool = _connect_tool_definition(registered_server, provider)
                 local = _pre_consent_local_response(
                     incoming_method,
                     req_id,
                     incoming_payload,
                     "oauth",
                     connect_url=vend.get("connect_url") or vend.get("authorize_url") or "",
-                    provider=vend.get("provider") or "the provider",
+                    provider=provider,
+                    connect_tool=connect_tool,
                 )
                 if local is not None:
                     logger.info(
                         "mcp_proxy: egress server=%s has no token; answering %s locally "
-                        "(connect via the Connected Accounts page)",
+                        "(user connects via the connect tool or the Connected Accounts page)",
                         server_name,
                         incoming_method,
                     )
@@ -8789,7 +9046,15 @@ async def mcp_proxy(
                     incoming_method=incoming_method,
                     req_id=req_id,
                     vend=vend,
+                    is_connect_tool=is_connect_tool_call,
                 )
+
+    # The synthetic connect tool belongs to the gateway: answer it here on every
+    # path that would otherwise forward, so the narrower authorization it gets
+    # (see _scope_check_target) can never carry a credential upstream.
+    if is_connect_tool_call:
+        req_id = incoming_payload.get("id") if isinstance(incoming_payload, dict) else None
+        return _connect_tool_local_result(server_name, req_id, egress_token_injected)
 
     logger.info(
         f"mcp_proxy: server={server_name} method={incoming_method} filter_enabled={filter_enabled} timeout={proxy_timeout}"

@@ -1025,6 +1025,34 @@ def test_create_location_block_internal_service(nginx_service):
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize("transport", ["streamable-http", "sse", "direct"])
+@pytest.mark.parametrize("egress_mode", ["none", "oauth_user", "pat", "obo_exchange"])
+def test_direct_route_location_only_proxies_to_mcp_proxy(nginx_service, transport, egress_mode):
+    """Every proxy_pass in a direct-route location targets the mcp-proxy hop.
+
+    The auth-server authorizes the synthetic connect tool (issue #1860) as
+    tools/list on a direct route, which is safe only because the mcp-proxy hop
+    answers that tool itself and never forwards it (see _scope_check_target in
+    auth_server/server.py). A direct location that proxied straight to a backend
+    would turn that exemption into a tool-grant bypass, so this pins the nginx
+    side of the contract.
+    """
+    server_info = {
+        "proxy_pass_url": "https://api.example.com/mcp",
+        "egress_auth_mode": egress_mode,
+    }
+    block = nginx_service._create_location_block(
+        "/test", "https://api.example.com/mcp", transport, server_info
+    )
+
+    assert 'set $registered_route_mode "direct";' in block
+    proxy_passes = [
+        line.strip() for line in block.splitlines() if line.strip().startswith("proxy_pass ")
+    ]
+    assert proxy_passes == ["proxy_pass http://auth-server:8888/mcp-proxy/test/;"]
+
+
+@pytest.mark.unit
 def test_create_location_block_direct_transport(nginx_service):
     """Test creating location block for direct transport."""
     block = nginx_service._create_location_block("/test", "http://localhost:8000", "direct")

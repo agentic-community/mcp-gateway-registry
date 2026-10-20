@@ -404,6 +404,7 @@ working in those areas.
 - **Virtual MCP tools:** a backend tool's blocked override must be checked at
   every `tools/call` and `tools/list` boundary, including cached lists. Bind the
   decision to the mapped backend path and original tool name; unknown state denies.
+- **Gateway-invented MCP names:** a tool the gateway synthesizes (the pre-consent `connect_mcpgw_<server>` tool) may get a relaxed authorization check only if the gateway answers it on every path and never forwards it, the match is on the one exact name, and the relaxation applies only on routes proven to reach the answering hop (direct, never virtual).
 - **Honor the disabled/inactive flag** on every request where access is derived
   (group→scope enrichment / validate), not just login; filter it in the query AND
   re-check the doc; fail closed.
