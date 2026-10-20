@@ -577,6 +577,45 @@ _LAST_GOOD_SUFFIX: str = ".last-good"
 _NGINX_TEST_NO_BINARY: str = "__nginx_binary_missing__"
 
 
+# Placeholders that only a raw, unrendered template contains. The registry
+# entrypoint waits for these same five to disappear before it starts nginx
+# (docker/registry-entrypoint.sh), so keep the two lists in sync.
+_UNRENDERED_TEMPLATE_MARKERS: tuple[str, ...] = (
+    "{{ADDITIONAL_SERVER_NAMES}}",
+    "{{ANTHROPIC_API_VERSION}}",
+    "{{LOCATION_BLOCKS}}",
+    "{{VIRTUAL_SERVER_BLOCKS}}",
+    "{{MCP_RESOURCE_METADATA_URL}}",
+)
+
+
+def _is_unrendered_template(
+    path: Path,
+) -> bool:
+    """Return True if the file at ``path`` is a raw template, not a rendered config.
+
+    The entrypoint copies the raw template into the live config path before the
+    registry renders it for the first time. That copy is not a config nginx can
+    load, so it must never be restored as the last-known-good config.
+
+    Args:
+        path: The live nginx config path.
+
+    Returns:
+        True if the file contains any unrendered template marker. False if it
+        contains none, or if it cannot be read (the backup step then reports
+        the read error).
+    """
+    try:
+        content = path.read_text()
+    except OSError:
+        return False
+    for marker in _UNRENDERED_TEMPLATE_MARKERS:
+        if marker in content:
+            return True
+    return False
+
+
 def _run_nginx_config_test() -> tuple[bool, str]:
     """Run ``nginx -t`` against the live config tree.
 
@@ -684,6 +723,16 @@ def _write_and_validate_config(
 
     had_previous = path.exists()
     backup_path = path.with_name(path.name + _LAST_GOOD_SUFFIX)
+
+    # A raw template left by the entrypoint is not a last-good config. Treat it
+    # as no prior config, so a rejected first render removes the file instead
+    # of restoring a template nginx fails to parse (Issue #1575).
+    if had_previous and _is_unrendered_template(path):
+        logger.info(
+            "Live nginx config %s is an unrendered template; it will not be kept as last-good",
+            path,
+        )
+        had_previous = False
 
     # Back up the current live config so we can restore it on rejection.
     if had_previous:
