@@ -34,10 +34,8 @@ import argparse
 import csv
 import logging
 import os
-import re
 from collections import defaultdict
 from datetime import datetime
-from pathlib import Path
 
 import matplotlib
 
@@ -49,6 +47,7 @@ import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 
 _sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from internal_instances import load_internal_instance_ids  # noqa: E402
 from tufte_style import apply_tufte_style, tufte_axes  # noqa: E402
 
 logging.basicConfig(
@@ -87,22 +86,6 @@ def _find_csv_files(
     csv_files.sort()
     logger.info(f"Found {len(csv_files)} CSV files in {directory}")
     return csv_files
-
-
-def _load_internal_instance_ids(
-    path: str | None,
-) -> set[str]:
-    """Parse the known-internal-instances.md file into a set of full UUIDs."""
-    if not path or not Path(path).exists():
-        return set()
-    pattern = re.compile(r"`([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})`")
-    ids: set[str] = set()
-    with open(path) as f:
-        for line in f:
-            for match in pattern.findall(line):
-                ids.add(match)
-    logger.info(f"Loaded {len(ids)} known internal instance IDs from {path}")
-    return ids
 
 
 def _read_all_csvs(
@@ -321,8 +304,8 @@ def main() -> None:
         logger.error(f"No CSV files found in {args.csv_dir}")
         raise SystemExit(1)
 
-    internal_ids = _load_internal_instance_ids(args.internal_instances)
     all_rows = _read_all_csvs(csv_files)
+    internal_ids = load_internal_instance_ids(args.internal_instances, all_rows)
     unique_rows = _dedupe_by_id_ts(all_rows)
     daily = _compute_daily_counts(
         unique_rows,

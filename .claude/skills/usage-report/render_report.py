@@ -52,6 +52,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Matches DEFAULT_TARGET in generate_install_forecast.py. Used only when the
+# forecast JSON predates the "target" field.
+DEFAULT_FORECAST_TARGET: int = 5000
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
@@ -924,7 +927,7 @@ def _build_template_vars(
     linear_rate = fc_linear.get("slope_per_day", 0)
     recent_rate = fc_recent.get("daily_add_rate", 0)
     today_count = forecast.get("today", {}).get("installs", total_instances)
-    target = forecast.get("target", 2000)
+    target = forecast.get("target", DEFAULT_FORECAST_TARGET)
     remaining = target - today_count
     if recent_rate > linear_rate:
         forecast_narrative = (

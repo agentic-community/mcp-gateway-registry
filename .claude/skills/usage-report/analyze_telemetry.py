@@ -15,10 +15,12 @@ import glob
 import json
 import logging
 import os
-import re
 import statistics
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
+
+from cloud_labels import cloud_label
+from internal_instances import load_internal_instance_ids
 
 # Configure logging with basicConfig
 logging.basicConfig(
@@ -36,6 +38,8 @@ def _read_csv(
     with open(csv_path, newline="") as f:
         reader = csv.DictReader(f)
         rows = list(reader)
+    for row in rows:
+        row["cloud"] = cloud_label(row)
     logger.info(f"Read {len(rows)} rows from {csv_path}")
     return rows
 
@@ -85,31 +89,6 @@ def _format_pct(
     if total == 0:
         return "0%"
     return f"{count / total * 100:.0f}%"
-
-
-def _parse_internal_instances(
-    path: str,
-) -> set[str]:
-    """Parse known-internal-instances.md and return a set of registry IDs.
-
-    The file contains a markdown table with registry IDs in backticks.
-    Returns an empty set if the file does not exist.
-    """
-    if not path or not os.path.exists(path):
-        logger.info("No known-internal-instances file found, treating all as external")
-        return set()
-
-    ids = set()
-    with open(path) as f:
-        for line in f:
-            match = re.search(
-                r"`([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})`", line
-            )
-            if match:
-                ids.add(match.group(1))
-
-    logger.info(f"Loaded {len(ids)} known internal instance IDs from {path}")
-    return ids
 
 
 def _is_internal(
@@ -2391,12 +2370,12 @@ def main() -> None:
 
     date_str = args.date or datetime.now().strftime("%Y-%m-%d")
 
-    internal_ids = _parse_internal_instances(args.internal_instances)
-
     rows = _read_csv(args.csv)
     if not rows:
         logger.error("No data in CSV file")
         raise SystemExit(1)
+
+    internal_ids = load_internal_instance_ids(args.internal_instances, rows)
 
     metrics = _compute_key_metrics(rows)
     distributions = _compute_distributions(rows)
