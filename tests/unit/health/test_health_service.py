@@ -497,6 +497,101 @@ async def test_health_service_initialize_mcp_session_does_not_read_body_on_succe
     assert mock_client.stream.call_args.args[0] == "POST"
 
 
+def _mock_stream_client(
+    responses: list[MagicMock],
+) -> AsyncMock:
+    """Build an httpx client mock whose stream() yields one response per call."""
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    contexts = []
+    for response in responses:
+        ctx = MagicMock()
+        ctx.__aenter__.return_value = response
+        contexts.append(ctx)
+    mock_client.stream = MagicMock(side_effect=contexts)
+    return mock_client
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_initialize_mcp_session_sends_initialized_notification_with_session_id(
+    health_service,
+):
+    """The MCP lifecycle requires notifications/initialized after initialize.
+    Strict servers reject the following ping with 404 Session not found
+    without it (issue #1817)."""
+    init_response = MagicMock(status_code=200, headers={"Mcp-Session-Id": "server-session-123"})
+    notify_response = MagicMock(status_code=202, headers={})
+    mock_client = _mock_stream_client([init_response, notify_response])
+
+    session_id = await health_service._initialize_mcp_session(
+        mock_client, "http://localhost:8000/mcp", {"Authorization": "Bearer t"}
+    )
+
+    assert session_id == "server-session-123"
+    assert mock_client.stream.call_count == 2
+    notify_call = mock_client.stream.call_args_list[1]
+    assert notify_call.args == ("POST", "http://localhost:8000/mcp")
+    assert notify_call.kwargs["json"] == {
+        "jsonrpc": "2.0",
+        "method": "notifications/initialized",
+    }
+    assert notify_call.kwargs["headers"]["Mcp-Session-Id"] == "server-session-123"
+    assert notify_call.kwargs["headers"]["Authorization"] == "Bearer t"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_initialize_mcp_session_notification_omits_client_generated_session_id(
+    health_service,
+):
+    """A stateless server issued no session ID, so the notification must not
+    carry the client-generated placeholder."""
+    init_response = MagicMock(status_code=200, headers={})
+    notify_response = MagicMock(status_code=202, headers={})
+    mock_client = _mock_stream_client([init_response, notify_response])
+
+    session_id = await health_service._initialize_mcp_session(
+        mock_client, "http://localhost:8000/mcp", {}
+    )
+
+    assert session_id is not None
+    notify_call = mock_client.stream.call_args_list[1]
+    assert "Mcp-Session-Id" not in notify_call.kwargs["headers"]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_initialize_mcp_session_notification_failure_keeps_session(health_service):
+    """The notification is best effort: a server that rejects it or a network
+    error must not fail the health check on its own."""
+    init_ctx = MagicMock()
+    init_ctx.__aenter__.return_value = MagicMock(
+        status_code=200, headers={"Mcp-Session-Id": "server-session-123"}
+    )
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.stream = MagicMock(side_effect=[init_ctx, httpx.ConnectError("boom")])
+
+    session_id = await health_service._initialize_mcp_session(
+        mock_client, "http://localhost:8000/mcp", {}
+    )
+
+    assert session_id == "server-session-123"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_initialize_mcp_session_failed_initialize_sends_no_notification(health_service):
+    """No notification is sent when initialize itself fails."""
+    mock_client = _mock_stream_client([MagicMock(status_code=500, headers={})])
+
+    session_id = await health_service._initialize_mcp_session(
+        mock_client, "http://localhost:8000/mcp", {}
+    )
+
+    assert session_id is None
+    assert mock_client.stream.call_count == 1
+
+
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_health_service_initialize_mcp_session_failure(health_service):

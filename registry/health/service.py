@@ -717,22 +717,74 @@ class HealthMonitoringService:
                 server_session_id = response.headers.get("Mcp-Session-Id") or response.headers.get(
                     "mcp-session-id"
                 )
-                if server_session_id:
-                    logger.debug(f"Server returned session ID: {server_session_id}")
-                    return server_session_id
-                else:
-                    # If server doesn't return a session ID, generate one for stateless servers
-                    client_session_id = str(uuid.uuid4())
-                    logger.debug(
-                        f"Server did not return session ID, using client-generated: {client_session_id}"
-                    )
-                    return client_session_id
 
         except Exception as e:
             logger.warning(
                 f"MCP initialize failed for {redact_url(endpoint)} type={type(e).__name__}"
             )
             return None
+
+        await self._send_initialized_notification(client, endpoint, headers, server_session_id)
+
+        if server_session_id:
+            logger.debug(f"Server returned session ID: {server_session_id}")
+            return server_session_id
+
+        # If server doesn't return a session ID, generate one for stateless servers
+        client_session_id = str(uuid.uuid4())
+        logger.debug(
+            f"Server did not return session ID, using client-generated: {client_session_id}"
+        )
+        return client_session_id
+
+    async def _send_initialized_notification(
+        self,
+        client: httpx.AsyncClient,
+        endpoint: str,
+        headers: dict[str, str],
+        server_session_id: str | None,
+    ) -> None:
+        """Complete the MCP handshake by sending notifications/initialized.
+
+        The MCP lifecycle requires this notification after a successful
+        initialize. Servers that enforce it reject the following ping with
+        404 Session not found until it arrives (issue #1817).
+
+        Best effort: a server that rejects the notification or a network error
+        is logged and does not fail the check, so lenient servers keep their
+        current result and the ping that follows decides health.
+
+        Args:
+            client: httpx AsyncClient instance
+            endpoint: The MCP endpoint URL
+            headers: Headers sent with initialize
+            server_session_id: Session ID the server issued, or None for a
+                stateless server (no Mcp-Session-Id header is sent then)
+        """
+        notify_headers = headers.copy()
+        if server_session_id:
+            notify_headers["Mcp-Session-Id"] = server_session_id
+
+        try:
+            # Streamed for the same reason as initialize: only the status is needed.
+            async with client.stream(
+                "POST",
+                endpoint,
+                headers=notify_headers,
+                json={"jsonrpc": "2.0", "method": "notifications/initialized"},
+                timeout=httpx.Timeout(5.0),
+                follow_redirects=True,
+            ) as response:
+                if response.status_code >= 400:
+                    logger.debug(
+                        f"MCP initialized notification rejected endpoint={redact_url(endpoint)} "
+                        f"status={response.status_code}"
+                    )
+        except Exception as e:
+            logger.debug(
+                f"MCP initialized notification failed endpoint={redact_url(endpoint)} "
+                f"type={type(e).__name__}"
+            )
 
     async def _try_ping_without_auth(self, client: httpx.AsyncClient, endpoint: str) -> bool:
         """
