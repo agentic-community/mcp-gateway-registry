@@ -8,8 +8,16 @@ Covers issue #986 changes:
 - IMDS probe latency bound (< 1000ms worst case)
 - httpx.Client trust_env=False (no corporate-proxy interception)
 - Prometheus counter increment
+
+Covers issue #1911 changes:
+- EC2 instance-ID node names (EKS Auto Mode, Karpenter)
+- Developer-machine label (cloud=local)
+- AWS/Azure/GCP operator hints honored by _resolve_cloud
+- WARNING when detection ends at unknown
 """
 
+import io
+import logging
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -17,18 +25,29 @@ import pytest
 
 from registry.core.telemetry import (
     _DETECTION_METHOD_DMI,
+    _DETECTION_METHOD_DOCKER_DESKTOP,
     _DETECTION_METHOD_ECS_META,
     _DETECTION_METHOD_ENV,
+    _DETECTION_METHOD_EXPLICIT,
+    _DETECTION_METHOD_HOST_OS,
     _DETECTION_METHOD_IMDS,
     _DETECTION_METHOD_K8S_HEURISTIC,
+    _DETECTION_METHOD_OPERATOR_DECLARED,
+    _DETECTION_METHOD_OPERATOR_DECLINED,
     _DETECTION_METHOD_UNKNOWN,
+    _DETECTION_METHOD_WSL,
     _IMDS_PROBE_TIMEOUT_SECONDS,
+    _KERNEL_RELEASE_PATH,
     _detect_cloud_from_env,
     _detect_cloud_from_k8s_heuristic,
     _detect_cloud_provider_with_method,
+    _detect_local_environment,
     _probe_imds,
+    _resolve_cloud,
     _should_probe_imds,
 )
+
+_TELEMETRY_LOGGER = "registry.core.telemetry"
 
 
 @pytest.fixture(autouse=True)
@@ -56,6 +75,9 @@ def _clean_env(monkeypatch):
         "MCP_TELEMETRY_DISABLED",
     ):
         monkeypatch.delenv(var, raising=False)
+    # Pin the host OS so the local-machine tier behaves the same on a
+    # developer Mac as on the Linux CI runner.
+    monkeypatch.setattr("platform.system", lambda: "Linux")
 
 
 def _patch_dmi_empty():
@@ -63,6 +85,27 @@ def _patch_dmi_empty():
     return patch(
         "builtins.open",
         side_effect=FileNotFoundError("no dmi"),
+    )
+
+
+def _patch_kernel_release(
+    release: str,
+):
+    """Return a patch context where only the kernel release file is readable."""
+
+    def _fake_open(path, *args, **kwargs):
+        if path == _KERNEL_RELEASE_PATH:
+            return io.StringIO(release)
+        raise FileNotFoundError(path)
+
+    return patch("builtins.open", side_effect=_fake_open)
+
+
+def _patch_imds_off():
+    """Return a patch context that skips the IMDS tier."""
+    return patch(
+        "registry.core.telemetry._should_probe_imds",
+        return_value=False,
     )
 
 
@@ -309,3 +352,181 @@ class TestEnvHelper:
 
     def test_no_signal_returns_none(self, _clean_env):
         assert _detect_cloud_from_env() is None
+
+
+class TestInstanceIdNodeName:
+    """EKS Auto Mode and Karpenter name nodes after the EC2 instance ID (#1911)."""
+
+    @pytest.mark.parametrize(
+        "node_name",
+        [
+            "i-0123456789abcdef0",
+            "i-0123abcd",
+            "I-0123456789ABCDEF0",
+        ],
+    )
+    def test_instance_id_node_name_is_aws(self, _clean_env, monkeypatch, node_name):
+        monkeypatch.setenv("KUBERNETES_SERVICE_HOST", "10.0.0.1")
+        monkeypatch.setenv("NODE_NAME", node_name)
+        with _patch_dmi_empty():
+            cloud, method = _detect_cloud_provider_with_method()
+        assert (cloud, method) == ("aws", _DETECTION_METHOD_K8S_HEURISTIC)
+
+    @pytest.mark.parametrize(
+        "node_name",
+        [
+            "ip-10-0-1-5",
+            "i-xyz",
+            "i-0123456789abcdef0-extra",
+            "i-0123456789abcdef",
+        ],
+    )
+    def test_non_instance_id_node_name_is_not_aws(self, _clean_env, monkeypatch, node_name):
+        monkeypatch.setenv("KUBERNETES_SERVICE_HOST", "10.0.0.1")
+        monkeypatch.setenv("NODE_NAME", node_name)
+        assert _detect_cloud_from_k8s_heuristic() is None
+
+
+class TestLocalEnvironment:
+    """Developer machines report cloud=local instead of unknown (#1911)."""
+
+    @pytest.mark.parametrize("system", ["Darwin", "Windows"])
+    def test_desktop_host_os_is_local(self, _clean_env, monkeypatch, system):
+        monkeypatch.setattr("platform.system", lambda: system)
+        with _patch_dmi_empty(), _patch_imds_off():
+            cloud, method = _detect_cloud_provider_with_method()
+        assert (cloud, method) == ("local", _DETECTION_METHOD_HOST_OS)
+
+    def test_wsl_kernel_is_local(self, _clean_env):
+        with _patch_kernel_release("5.15.153.1-microsoft-standard-WSL2\n"), _patch_imds_off():
+            cloud, method = _detect_cloud_provider_with_method()
+        assert (cloud, method) == ("local", _DETECTION_METHOD_WSL)
+
+    def test_docker_desktop_kernel_is_local(self, _clean_env):
+        with _patch_kernel_release("6.10.14-linuxkit\n"), _patch_imds_off():
+            cloud, method = _detect_cloud_provider_with_method()
+        assert (cloud, method) == ("local", _DETECTION_METHOD_DOCKER_DESKTOP)
+
+    def test_plain_linux_kernel_is_not_local(self, _clean_env):
+        with _patch_kernel_release("6.8.0-1015-aws\n"):
+            assert _detect_local_environment() is None
+
+    def test_missing_kernel_release_is_not_local(self, _clean_env):
+        with _patch_dmi_empty():
+            assert _detect_local_environment() is None
+
+    def test_env_signal_beats_local(self, _clean_env, monkeypatch):
+        monkeypatch.setattr("platform.system", lambda: "Darwin")
+        monkeypatch.setenv("AWS_REGION", "us-east-1")
+        assert _detect_cloud_provider_with_method() == ("aws", _DETECTION_METHOD_ENV)
+
+    def test_imds_signal_beats_local(self, _clean_env, monkeypatch):
+        """An EC2 Mac instance answers IMDS, so it stays aws."""
+        monkeypatch.setattr("platform.system", lambda: "Darwin")
+        with (
+            _patch_dmi_empty(),
+            patch("registry.core.telemetry._should_probe_imds", return_value=True),
+            patch("registry.core.telemetry._probe_imds", return_value="aws"),
+        ):
+            cloud, method = _detect_cloud_provider_with_method()
+        assert (cloud, method) == ("aws", _DETECTION_METHOD_IMDS)
+
+
+class TestUnknownWarning:
+    """Detection that ends at unknown tells the operator how to fix it (#1911)."""
+
+    def _warnings(self, caplog) -> list[logging.LogRecord]:
+        return [
+            r
+            for r in caplog.records
+            if r.name == _TELEMETRY_LOGGER
+            and r.levelno == logging.WARNING
+            and "MCP_CLOUD_PROVIDER" in r.getMessage()
+        ]
+
+    def test_warning_logged_once_per_process(self, _clean_env, caplog):
+        caplog.set_level(logging.WARNING, logger=_TELEMETRY_LOGGER)
+        with (
+            _patch_dmi_empty(),
+            _patch_imds_off(),
+            patch("registry.core.telemetry.settings") as mock_settings,
+        ):
+            mock_settings.telemetry_enabled = True
+            _detect_cloud_provider_with_method()
+            _detect_cloud_provider_with_method()
+        assert len(self._warnings(caplog)) == 1
+
+    def test_no_warning_when_telemetry_disabled(self, _clean_env, caplog):
+        caplog.set_level(logging.WARNING, logger=_TELEMETRY_LOGGER)
+        with (
+            _patch_dmi_empty(),
+            _patch_imds_off(),
+            patch("registry.core.telemetry.settings") as mock_settings,
+        ):
+            mock_settings.telemetry_enabled = False
+            _detect_cloud_provider_with_method()
+        assert self._warnings(caplog) == []
+
+    def test_no_warning_when_cloud_detected(self, _clean_env, monkeypatch, caplog):
+        caplog.set_level(logging.WARNING, logger=_TELEMETRY_LOGGER)
+        monkeypatch.setenv("AWS_REGION", "us-east-1")
+        _detect_cloud_provider_with_method()
+        assert self._warnings(caplog) == []
+
+
+class TestResolveCloudOperatorHint:
+    """The admin-banner answer overrides auto-detection (#1120, fixed in #1911)."""
+
+    @pytest.mark.parametrize(
+        ("hint", "expected"),
+        [
+            ("aws", ("aws", _DETECTION_METHOD_OPERATOR_DECLARED)),
+            ("azure", ("azure", _DETECTION_METHOD_OPERATOR_DECLARED)),
+            ("gcp", ("gcp", _DETECTION_METHOD_OPERATOR_DECLARED)),
+            ("on_premises", ("on_premises", _DETECTION_METHOD_OPERATOR_DECLARED)),
+            ("other", ("other", _DETECTION_METHOD_OPERATOR_DECLARED)),
+            ("declined", ("unknown", _DETECTION_METHOD_OPERATOR_DECLINED)),
+        ],
+    )
+    async def test_each_hint_resolves(self, _clean_env, hint, expected):
+        with (
+            patch("registry.core.telemetry.settings") as mock_settings,
+            patch(
+                "registry.core.telemetry._get_operator_cloud_hint",
+                return_value=hint,
+            ),
+            patch("registry.core.telemetry._detect_cloud_provider_with_method") as mock_cascade,
+        ):
+            mock_settings.mcp_cloud_provider = None
+            result = await _resolve_cloud()
+        assert result == expected
+        mock_cascade.assert_not_called()
+
+    async def test_no_hint_falls_through_to_cascade(self, _clean_env):
+        with (
+            patch("registry.core.telemetry.settings") as mock_settings,
+            patch(
+                "registry.core.telemetry._get_operator_cloud_hint",
+                return_value=None,
+            ),
+            patch(
+                "registry.core.telemetry._detect_cloud_provider_with_method",
+                return_value=("unknown", _DETECTION_METHOD_UNKNOWN),
+            ),
+        ):
+            mock_settings.mcp_cloud_provider = None
+            result = await _resolve_cloud()
+        assert result == ("unknown", _DETECTION_METHOD_UNKNOWN)
+
+    async def test_explicit_setting_beats_hint(self, _clean_env):
+        with (
+            patch("registry.core.telemetry.settings") as mock_settings,
+            patch(
+                "registry.core.telemetry._get_operator_cloud_hint",
+                return_value="azure",
+            ) as mock_hint,
+        ):
+            mock_settings.mcp_cloud_provider = "aws"
+            result = await _resolve_cloud()
+        assert result == ("aws", _DETECTION_METHOD_EXPLICIT)
+        mock_hint.assert_not_called()

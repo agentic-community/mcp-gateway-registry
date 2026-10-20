@@ -48,8 +48,13 @@ export const CloudProviderBanner: React.FC = () => {
       aria-label="Deployment environment"
       className="bg-indigo-900/40 border border-indigo-700/50 rounded-lg p-3 my-3 mx-6"
     >
-      <p className="text-sm text-indigo-200 mb-2">
+      <p className="text-sm text-indigo-200 mb-1">
         Help us improve: where is this registry deployed?
+      </p>
+      <p className="text-xs text-indigo-300 mb-2">
+        Automatic detection could not identify this environment. Your answer is saved for this
+        registry. To set it at deploy time instead, use <code>MCP_CLOUD_PROVIDER</code> (Docker or
+        ECS) or <code>app.mcpCloudProvider</code> (Helm).
       </p>
       <div className="flex flex-wrap gap-2 items-center">
         <button
