@@ -126,6 +126,37 @@ List all skills (Claude Code skills, etc.) registered in the gateway.
 
 ---
 
+### get_custom_entity
+
+Fetch one record of a custom catalog type, including the `attributes` its type defines. Search results for custom records leave the attributes out, so call this with the `path` of a record that `search_registry` returned in its `custom` array.
+
+**Parameters:**
+- `path` (string, required) - The record path as `/{type}/{uuid}`, for example `/data_product/3f2b8c1e-9d4a-4b7e-8f21-6a5c0d9e7b13`
+
+The tool checks `path` against the same type and UUID rules the registry route enforces. It rejects anything else, including traversal and encoded slashes, without calling the registry. The registry applies its own per-type and per-record view checks, and a refusal comes back as `HTTP 403` or `HTTP 404` in `error`.
+
+**Returns:**
+```typescript
+{
+  path: string;                  // Record path
+  record?: {
+    path: string;
+    entity_type: string;         // Custom type name
+    name: string;
+    description: string | null;
+    tags: string[];
+    owner: string | null;
+    visibility: string;
+    attributes: Record<string, any>;  // Fields the custom type defines
+    [key: string]: any;
+  };
+  error?: string;                // Set when status is "failed"
+  status: "success" | "failed";
+}
+```
+
+---
+
 ### healthcheck
 
 Get registry health status and statistics.
