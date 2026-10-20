@@ -393,7 +393,8 @@ WAIT_TIME=0
 MAX_WAIT=120
 while [ $WAIT_TIME -lt $MAX_WAIT ]; do
     if [ -f "/etc/nginx/conf.d/nginx_rev_proxy.conf" ]; then
-        # Check if placeholders have been replaced
+        # Check if placeholders have been replaced. Keep this list in sync with
+        # _UNRENDERED_TEMPLATE_MARKERS in registry/core/nginx_service.py.
         if ! grep -q "{{ADDITIONAL_SERVER_NAMES}}" "/etc/nginx/conf.d/nginx_rev_proxy.conf" && \
            ! grep -q "{{ANTHROPIC_API_VERSION}}" "/etc/nginx/conf.d/nginx_rev_proxy.conf" && \
            ! grep -q "{{LOCATION_BLOCKS}}" "/etc/nginx/conf.d/nginx_rev_proxy.conf" && \
@@ -409,6 +410,8 @@ done
 
 if [ $WAIT_TIME -ge $MAX_WAIT ]; then
     echo "WARNING: Timeout waiting for nginx configuration. Starting nginx anyway..."
+    echo "WARNING: The registry did not produce a rendered nginx config. If nginx -t rejected it,"
+    echo "WARNING: the registry log has the reason: search it for 'Rejected nginx config candidate'."
 fi
 
 # Resolve METRICS_SERVICE_URL hostname to IPv4 before nginx starts.
