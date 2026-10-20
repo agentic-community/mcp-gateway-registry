@@ -60,6 +60,11 @@ Validation profiles separate the registry's distinct outbound trust surfaces:
   inherit the proxy profile's internal-target bypass: it reads only its own
   setting, and an ``ssrf_allowed_hosts``/``github_extra_hosts`` entry cannot
   re-permit a token endpoint.
+- **Entra Graph memberships** (``ENTRA_GRAPH_PROFILE``): HTTPS-only and
+  public-only by default. An explicit ``ENTRA_GRAPH_BASE_URL`` can trust its
+  exact private reverse-proxy hostname; every answer is still classified and
+  pinned, and metadata/link-local/reserved endpoints remain forbidden. No
+  registry target or OAuth token-endpoint allowlist can relax this policy.
 
 Request lifecycle (validate -> resolve -> pin -> re-validate per redirect)::
 
@@ -1102,6 +1107,37 @@ def _credentialed_oauth_allowlist() -> _Allowlist:
     return _Allowlist(hosts=_parse_hosts(_get_settings().egress_oauth_trusted_idp_hosts))
 
 
+def _entra_graph_allowlist() -> _Allowlist:
+    """Trust only the explicitly configured Graph reverse proxy's hostname.
+
+    The auth-server reads ENTRA_GRAPH_BASE_URL directly; it cannot depend on
+    registry Settings. Microsoft-hosted Graph names stay public-only even
+    when set explicitly, so an unexpected private DNS answer fails closed.
+    """
+    override = os.environ.get("ENTRA_GRAPH_BASE_URL", "")
+    if not override:
+        return _Allowlist()
+    normalized = normalize_url_identity(override)
+    parsed = urlsplit(normalized)
+    if (
+        parsed.scheme != "https"
+        or parsed.path != "/"
+        or parsed.query
+        or parsed.port not in (None, 443)
+    ):
+        raise UrlValidationError(override, "Graph base URL must be an HTTPS origin")
+    host = parsed.hostname
+    if not host or coerce_ip_literal(host) is not None:
+        return _Allowlist()
+    if host in {
+        "graph.microsoft.com",
+        "graph.microsoft.us",
+        "microsoftgraph.chinacloudapi.cn",
+    }:
+        return _Allowlist()
+    return _Allowlist(hosts=frozenset({host}))
+
+
 def _egress_upstream_allowlist() -> _Allowlist:
     """Empty allowlist for the egress-injected proxy hop.
 
@@ -1165,6 +1201,12 @@ CREDENTIALED_OAUTH_PROFILE = _Profile(
     allowlist_factory=_credentialed_oauth_allowlist,
     require_https=True,
     credential_bearing=True,  # belt and braces: require_https already denies http
+)
+ENTRA_GRAPH_PROFILE = _Profile(
+    name="entra-graph",
+    allowlist_factory=_entra_graph_allowlist,
+    require_https=True,
+    credential_bearing=True,  # delegated bearer token, including through a proxy
 )
 EGRESS_UPSTREAM_PROFILE = _Profile(
     name="egress-upstream",

@@ -2873,6 +2873,186 @@ class TestOAuth2CallbackIdTokenVerification:
         assert captured["username"] == "alice"
 
 
+class TestEntraCallbackGroups:
+    """The callback stores verified transitive memberships and denies Graph failures."""
+
+    def _callback(self, claims, graph_result=None, graph_error=None):
+        from providers.entra import EntraIdProvider
+
+        graph = (
+            AsyncMock(side_effect=graph_error)
+            if graph_error
+            else AsyncMock(return_value=graph_result)
+        )
+
+        async def keep_groups(groups, **_kwargs):
+            return groups
+
+        with (
+            patch.object(EntraIdProvider, "fetch_groups_via_graph", graph),
+            patch("group_filter.filter_session_groups", keep_groups),
+            patch("mongodb_groups_enrichment.should_enrich_user_groups", return_value=False),
+        ):
+            response, create_called, session = (
+                TestOAuth2CallbackIdTokenVerification()._drive_callback(
+                    "entra", lambda _token, expected_nonce=None: claims
+                )
+            )
+        return response, create_called, session, graph
+
+    @pytest.mark.parametrize(
+        "claims",
+        [
+            {"sub": "alice", "tid": "tenant", "oid": "alice", "hasgroups": True},
+            {"sub": "alice", "tid": "tenant", "oid": "alice"},
+            {"sub": "alice", "tid": "tenant", "oid": "alice", "groups": [], "roles": []},
+        ],
+    )
+    def test_verified_overage_or_missing_claims_store_transitive_group_ids(self, claims):
+        response, created, session, graph = self._callback(
+            claims, graph_result=["direct-id", "nested-parent-id"]
+        )
+        assert response.status_code == 302
+        assert created is True
+        assert session["groups"] == ["direct-id", "nested-parent-id"]
+        graph.assert_awaited_once()
+        assert graph.call_args.args[0] == "mock-access-token-value"
+        assert graph.call_args.kwargs == {"tenant_id": "tenant", "object_id": "alice"}
+
+    def test_inline_claims_create_session_without_graph_lookup(self):
+        claims = {"sub": "alice", "groups": ["inline-id"], "tid": "tenant", "oid": "alice"}
+        response, created, session, graph = self._callback(claims)
+        assert response.status_code == 302
+        assert created is True
+        assert session["groups"] == ["inline-id"]
+        graph.assert_not_awaited()
+
+    def test_role_claims_create_session_without_graph_lookup(self):
+        claims = {"sub": "alice", "roles": ["reader-role"], "tid": "tenant", "oid": "alice"}
+        response, created, session, graph = self._callback(claims)
+        assert response.status_code == 302
+        assert created is True
+        assert session["groups"] == ["reader-role"]
+        graph.assert_not_awaited()
+
+    def test_overage_session_refuses_unfiltered_group_header_overflow(self):
+        from providers.entra import GRAPH_GROUP_HEADER_MAX_BYTES
+
+        claims = {"sub": "alice", "tid": "tenant", "oid": "alice", "hasgroups": True}
+        response, created, session, graph = self._callback(
+            claims, graph_result=["x" * (GRAPH_GROUP_HEADER_MAX_BYTES + 1)]
+        )
+
+        assert response.status_code == 503
+        assert created is False
+        assert session == {}
+        graph.assert_awaited_once()
+
+    def test_empty_graph_result_creates_session_with_no_groups(self):
+        claims = {"sub": "alice", "hasgroups": True, "tid": "tenant", "oid": "alice"}
+        response, created, session, graph = self._callback(claims, graph_result=[])
+        assert response.status_code == 302
+        assert created is True
+        assert session["groups"] == []
+        graph.assert_awaited_once()
+
+    @pytest.mark.parametrize(
+        "claims",
+        [
+            {
+                "sub": "alice",
+                "hasgroups": True,
+                "groups": ["stale-inline"],
+                "tid": "tenant",
+                "oid": "alice",
+            },
+            {"sub": "alice", "tid": "tenant", "oid": "alice"},
+        ],
+    )
+    def test_graph_error_denies_login_without_storing_stale_claims(self, claims):
+        from providers.entra import GraphGroupLookupError
+
+        response, created, session, graph = self._callback(
+            claims, graph_error=GraphGroupLookupError("Graph unavailable")
+        )
+        assert response.status_code == 503
+        assert created is False
+        assert session == {}
+        graph.assert_awaited_once()
+
+    def test_invalid_inline_group_claim_denies_login(self):
+        response, created, session, graph = self._callback(
+            {"sub": "alice", "groups": {"admin": True}, "tid": "tenant", "oid": "alice"}
+        )
+        assert response.status_code == 401
+        assert created is False
+        assert session == {}
+        graph.assert_not_awaited()
+
+
+class TestEntraBrowserOAuthCloudEndpoints:
+    @pytest.mark.parametrize(
+        "login,graph",
+        [
+            ("https://login.microsoftonline.com", "https://graph.microsoft.com"),
+            ("https://login.microsoftonline.us", "https://graph.microsoft.us"),
+            ("https://login.chinacloudapi.cn", "https://microsoftgraph.chinacloudapi.cn"),
+        ],
+    )
+    def test_browser_auth_and_userinfo_use_the_same_enrolled_cloud(self, monkeypatch, login, graph):
+        from auth_server.server import load_oauth2_config
+
+        monkeypatch.setenv("ENTRA_LOGIN_BASE_URL", login)
+        monkeypatch.setenv("ENTRA_TENANT_ID", "test-tenant")
+        monkeypatch.delenv("ENTRA_GRAPH_BASE_URL", raising=False)
+        configured = load_oauth2_config()["providers"]["entra"]
+
+        assert configured["auth_url"] == f"{login}/test-tenant/oauth2/v2.0/authorize"
+        assert configured["token_url"] == f"{login}/test-tenant/oauth2/v2.0/token"
+        assert configured["user_info_url"] == f"{graph}/oidc/userinfo"
+
+    @pytest.mark.parametrize("login", ["", "https://login.microsoftonline.com/"])
+    def test_blank_or_slash_login_origin_matches_provider_and_browser(self, monkeypatch, login):
+        from providers.entra import EntraIdProvider
+
+        from auth_server.server import load_oauth2_config
+
+        monkeypatch.setenv("ENTRA_LOGIN_BASE_URL", login)
+        monkeypatch.setenv("ENTRA_TENANT_ID", "test-tenant")
+        monkeypatch.delenv("ENTRA_GRAPH_BASE_URL", raising=False)
+        browser = load_oauth2_config()["providers"]["entra"]
+        provider = EntraIdProvider("test-tenant", "test-client", "test-secret")
+
+        assert browser["auth_url"] == provider.auth_url
+        assert browser["user_info_url"] == provider.userinfo_url
+
+    def test_trailing_slash_graph_proxy_matches_provider_userinfo(self, monkeypatch):
+        from providers.entra import EntraIdProvider
+
+        from auth_server.server import load_oauth2_config
+
+        monkeypatch.setenv("ENTRA_TENANT_ID", "test-tenant")
+        monkeypatch.setenv("ENTRA_GRAPH_BASE_URL", "https://graph.proxy.example.com/")
+        browser = load_oauth2_config()["providers"]["entra"]
+        provider = EntraIdProvider("test-tenant", "test-client", "test-secret")
+
+        assert browser["user_info_url"] == provider.userinfo_url
+
+    def test_custom_oauth_config_without_entra_keeps_other_providers(self, monkeypatch):
+        from auth_server import server
+
+        monkeypatch.setattr(
+            server.yaml,
+            "safe_load",
+            lambda _stream: {
+                "providers": {"keycloak": {"enabled": True, "auth_url": "https://idp.example"}}
+            },
+        )
+        config = server.load_oauth2_config()
+
+        assert config["providers"]["keycloak"]["enabled"] is True
+
+
 class TestOAuth2PkceAndNonce:
     """The OAuth2 flow must use PKCE (S256) and an OIDC nonce.
 

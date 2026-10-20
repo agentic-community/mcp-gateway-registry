@@ -182,6 +182,15 @@ sanitizer that isn't called) is equivalent to no check.
   time.** A pre-fetch check followed by a separate client call re-resolves DNS =
   TOCTOU / DNS-rebinding. Pin the validated public IP into the transport
   (preserve Host header + TLS SNI) and re-validate on every redirect hop.
+- **A delegated Microsoft Graph token needs a Graph-specific egress profile.**
+  The bearer fetch must require HTTPS and use the pinned guarded transport,
+  not a peer-federation policy whose name hides a different trust boundary.
+  When an operator sets `ENTRA_GRAPH_BASE_URL` to a private reverse proxy,
+  allow only that exact hostname to resolve private; never inherit server
+  proxy CIDRs or OAuth IdP allowlists. Check every DNS answer, refuse cloud
+  metadata and link-local addresses, and keep Graph page links on the same
+  HTTPS origin and path. Obtain the token for the login cloud's Graph resource,
+  not the private proxy hostname.
 - **Re-validate the destination through the SSRF guard at the moment a stored
   credential is attached.** Registration-time validation is not enough when the
   destination is mutable — a `proxy_pass_url`/endpoint changed after registration
@@ -491,6 +500,16 @@ sanitizer that isn't called) is equivalent to no check.
   missing, honor the record's disabled flag in the query AND on the returned doc,
   and emit a WARNING-level audit line whenever enrichment adds a privileged
   group so a write to the collection is attributable.
+- **Keep delegated-user group recovery ahead of machine-client enrichment.**
+  Entra access tokens can omit `groups` with or without an overage marker.
+  Recover user membership only after signature, issuer and audience checks,
+  using a delegated Graph token for `/me/transitiveMemberOf`. On a confirmed
+  empty Graph result, keep verified app roles but never restore stale inline
+  groups, and never consult `idp_m2m_clients` for a user token with `scp`,
+  even if the token also has a `client_id`. On any lookup or consent failure,
+  stop authorization instead of using partial groups. Filter recovered groups
+  before writing the login session or building `X-Groups`, and deny an
+  oversized header rather than truncating grants.
 - **Protect the admin population from lockout and self-harm.** Admin user-mgmt
   must refuse self-deletion, refuse removing/demoting the LAST admin (count
   remaining admins first, fail closed if the population can't be enumerated), and
