@@ -1132,6 +1132,7 @@ def _entra_graph_allowlist() -> _Allowlist:
     if host in {
         "graph.microsoft.com",
         "graph.microsoft.us",
+        "dod-graph.microsoft.us",
         "microsoftgraph.chinacloudapi.cn",
     }:
         return _Allowlist()

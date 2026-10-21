@@ -20,16 +20,21 @@ Precedence (see .scratchpad/idp-group-filter-fix/lld.md):
   auto-derivation is skipped.
 - Design C (default) runs only when the allowlist is unset: the user's groups
   are intersected with every group mapped to any scope.
-- Fail-open applies ONLY when Design C cannot run at all (repository error or no
-  scope mappings seeded): the full group list is stored and a warning is logged.
-  A successful Design C run that yields an empty set for a particular user means
-  that user is genuinely no-access; we store the empty set rather than chaining
-  to the allowlist.
+- Login fails open when Design C cannot run at all (repository error or no
+  scope mappings seeded), preserving the original group list with a warning.
+  Bearer group recovery opts into fail-closed behavior and reports unavailable
+  mappings distinctly from a successful empty intersection.
+- Concurrent scope-mapping misses share one in-flight repository read per
+  process. Successful nonempty mappings are cached for 30 seconds; changes
+  become visible after the TTL. Errors and empty sets are never cached. A
+  successful intersection yielding no groups is genuinely no-access.
 """
 
+import asyncio
 import logging
 import os
 import re
+import time
 
 # Configure logging with basicConfig
 logging.basicConfig(
@@ -56,36 +61,103 @@ if ALLOWED_IDP_GROUPS_RAW:
             )
     logger.info("ALLOWED_IDP_GROUPS allowlist active: %d entries", len(ALLOWED_IDP_GROUPS))
 
+# One process-local entry: authorization mapping changes become visible after at
+# most this many seconds without scanning the scopes collection on every validate.
+MAPPED_GROUP_NAMES_CACHE_TTL_SECONDS = 30
+_mapped_group_names_cache: tuple[float, frozenset[str]] | None = None
+_mapped_group_names_inflight: asyncio.Task[frozenset[str]] | None = None
+
+
+class ScopeGroupMappingsUnavailable(RuntimeError):
+    """Scope mappings cannot safely filter recovered bearer groups."""
+
+
+def _clear_mapped_group_names_cache() -> None:
+    """Reset the mapping snapshot and detach any unfinished lookup."""
+    global _mapped_group_names_cache, _mapped_group_names_inflight
+
+    _mapped_group_names_cache = None
+    _mapped_group_names_inflight = None
+
+
+async def _load_mapped_group_names() -> frozenset[str]:
+    """Fetch mappings once and publish only a successful nonempty result."""
+    global _mapped_group_names_cache, _mapped_group_names_inflight
+
+    try:
+        from registry.repositories.factory import get_scope_repository
+
+        mapped = await get_scope_repository().get_all_mapped_group_names()
+        if not mapped:
+            return frozenset()
+
+        names = frozenset(mapped)
+        # A cache reset may detach this lookup while its original callers wait.
+        if _mapped_group_names_inflight is asyncio.current_task():
+            _mapped_group_names_cache = (
+                time.monotonic() + MAPPED_GROUP_NAMES_CACHE_TTL_SECONDS,
+                names,
+            )
+        return names
+    finally:
+        if _mapped_group_names_inflight is asyncio.current_task():
+            _mapped_group_names_inflight = None
+
+
+def _observe_mapped_group_names_lookup(task: asyncio.Task[frozenset[str]]) -> None:
+    """Retrieve errors when every waiting request has been cancelled."""
+    if not task.cancelled():
+        task.exception()
+
+
+async def _get_mapped_group_names() -> frozenset[str]:
+    """Share cold misses; cache only nonempty, successful scope mappings."""
+    global _mapped_group_names_cache, _mapped_group_names_inflight
+
+    cached = _mapped_group_names_cache
+    if cached is not None and time.monotonic() < cached[0]:
+        return cached[1]
+
+    _mapped_group_names_cache = None
+    if _mapped_group_names_inflight is None:
+        task = asyncio.create_task(_load_mapped_group_names())
+        _mapped_group_names_inflight = task
+        task.add_done_callback(_observe_mapped_group_names_lookup)
+    return await asyncio.shield(_mapped_group_names_inflight)
+
 
 async def _filter_by_scope_mappings(
     groups: list[str],
     username_hash: str,
+    fail_closed: bool,
 ) -> list[str]:
     """Design C: intersect the user's groups with all scope-mapped groups.
 
-    Fails open (returns the original list) only when the mapped-group set cannot
-    be determined (repository error) or is empty (no scope mappings seeded yet).
+    Login preserves its existing fail-open behavior when mappings cannot be
+    determined; recovered bearer groups instead fail closed.
     """
     try:
-        from registry.repositories.factory import get_scope_repository
-
-        scope_repo = get_scope_repository()
-        mapped = await scope_repo.get_all_mapped_group_names()
+        mapped = await _get_mapped_group_names()
     except Exception as e:
         logger.warning(
-            "Group filter could not derive scope-mapped groups (%s); storing "
-            "full group list for user=%s (fail-open)",
-            e,
+            "Group filter could not derive scope-mapped groups (%s); user=%s (fail-%s)",
+            type(e).__name__,
             username_hash,
+            "closed" if fail_closed else "open",
         )
+        if fail_closed:
+            raise ScopeGroupMappingsUnavailable("Scope group mappings lookup failed") from e
         return groups
 
     if not mapped:
         logger.warning(
-            "Group filter: no scope mappings found; storing full group list for "
-            "user=%s (fail-open). Set ALLOWED_IDP_GROUPS to override.",
+            "Group filter: no scope mappings found for user=%s (fail-%s). "
+            "Set ALLOWED_IDP_GROUPS to override.",
             username_hash,
+            "closed" if fail_closed else "open",
         )
+        if fail_closed:
+            raise ScopeGroupMappingsUnavailable("No scope group mappings available")
         return groups
 
     filtered = [g for g in groups if g in mapped]
@@ -101,16 +173,23 @@ async def _filter_by_scope_mappings(
 async def filter_session_groups(
     groups: list[str],
     username_hash: str,
+    fail_closed: bool = False,
 ) -> list[str]:
     """Filter IdP groups to the scope-relevant subset for session storage.
 
     Args:
         groups: The user's full IdP group list (names or Object IDs).
         username_hash: Hashed username for safe logging.
+        fail_closed: When True, raise if mappings cannot be read or are empty.
+            Use for recovered bearer groups; login retains fail-open behavior.
 
     Returns:
         The filtered group list. See the module docstring for precedence and
         fail-open semantics.
+
+    Raises:
+        ScopeGroupMappingsUnavailable: Mapping lookup fails or yields no mappings
+            when ``fail_closed`` is True.
     """
     if not isinstance(groups, list) or not all(isinstance(group, str) for group in groups):
         logger.warning(
@@ -137,4 +216,4 @@ async def filter_session_groups(
         return filtered
 
     # Design C (default).
-    return await _filter_by_scope_mappings(groups, username_hash)
+    return await _filter_by_scope_mappings(groups, username_hash, fail_closed)

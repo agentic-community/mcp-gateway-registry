@@ -193,6 +193,115 @@ class TestMintResourceBoundToken:
         assert claims["egress_user"] == "oidc-sub-uuid"
         assert claims["sub"] == "alice"
 
+    def test_graph_confirmed_empty_session_token_keeps_empty_groups(self, auth_env_vars):
+        import asyncio
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+
+        from fastapi.testclient import TestClient
+
+        import auth_server.server as server_module
+        from auth_server.mongodb_groups_enrichment import should_enrich_user_groups
+        from registry.auth.dependencies import _context_from_internal_token
+        from registry.auth.proxied_token import verify_registry_ui_token
+
+        server_module.user_token_generation_counts.clear()
+        session = {
+            "username": "alice",
+            "provider": "entra",
+            "groups": [],
+            "entra_graph_groups_resolved": True,
+            "subject": "oidc-sub-alice",
+        }
+        body = {
+            "user_context": {
+                "username": "alice",
+                "groups": [],
+                "scopes": [],
+                "auth_method": "oauth2",
+                "provider": "entra",
+                "session_id": "s1",
+            },
+            "requested_scopes": [],
+            "expires_in_hours": 1,
+        }
+        with (
+            patch("session_store.resolve_session", AsyncMock(return_value=session)),
+            patch.object(server_module, "IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS", ["entra"]),
+            patch(
+                "mongodb_groups_enrichment.should_enrich_user_groups",
+                wraps=should_enrich_user_groups,
+            ),
+            patch(
+                "mongodb_groups_enrichment.enrich_user_groups_from_mongodb",
+                AsyncMock(return_value=["stale-admin"]),
+            ) as fallback,
+            patch(
+                "registry.repositories.factory.get_scope_repository",
+                return_value=AsyncMock(
+                    get_all_group_mappings=AsyncMock(
+                        return_value={"mcp-registry-admin": ["stale-admin"]}
+                    ),
+                    get_server_scopes_bulk=AsyncMock(return_value={}),
+                    get_ui_scopes_bulk=AsyncMock(return_value={}),
+                ),
+            ),
+        ):
+            client = TestClient(server_module.app)
+            minted = client.post("/internal/tokens", json=body, headers=_internal_auth_headers())
+            assert minted.status_code == 200, minted.text
+            token = minted.json()["access_token"]
+            validated = client.get(
+                "/validate",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "X-Original-URL": "https://example.com/api/servers",
+                    "X-Registry-Api-Auth": "1",
+                },
+            )
+
+            internal_token = validated.headers["X-Internal-Token-Registry"]
+            claims = verify_registry_ui_token(internal_token)
+            request = SimpleNamespace(state=SimpleNamespace())
+            context = asyncio.run(_context_from_internal_token(request, internal_token))
+        assert validated.status_code == 200, validated.text
+        assert validated.json()["groups"] == []
+        assert claims["groups"] == []
+        assert context["groups"] == []
+        assert context["scopes"] == []
+        assert context["is_admin"] is False
+        fallback.assert_not_awaited()
+
+    def test_unbacked_mint_cannot_assert_graph_group_provenance(self, auth_env_vars):
+        from fastapi.testclient import TestClient
+
+        import auth_server.server as server_module
+
+        server_module.user_token_generation_counts.clear()
+        body = {
+            "user_context": {
+                "username": "alice",
+                "groups": [],
+                "scopes": [],
+                "auth_method": "oauth2",
+                "provider": "entra",
+                "entra_graph_groups_resolved": True,
+            },
+            "requested_scopes": [],
+            "expires_in_hours": 1,
+        }
+        minted = TestClient(server_module.app).post(
+            "/internal/tokens", json=body, headers=_internal_auth_headers()
+        )
+        assert minted.status_code == 200, minted.text
+        claims = jwt.decode(
+            minted.json()["access_token"],
+            server_module.SECRET_KEY,
+            algorithms=["HS256"],
+            audience="mcp-registry",
+        )
+        assert "entra_graph_groups_resolved" not in claims
+
     def test_resource_token_has_claims(self, auth_env_vars):
         response, secret = self._mint(
             resource={"type": "server", "id": "/cloudflare-docs"},
@@ -307,9 +416,14 @@ class TestValidateEdgeEnforcement:
         ``auth_env_vars`` would try to reach JWKS in the real Cognito
         service, which is not what these tests are exercising.
         """
+        from auth_server.providers.base import AuthProvider
+
         validator = module.SimplifiedCognitoValidator()
 
         class _SelfSignedOnlyProvider:
+            recover_bearer_groups = AuthProvider.recover_bearer_groups
+            is_delegated_user = AuthProvider.is_delegated_user
+
             def validate_token(self, token: str) -> dict:
                 return validator.validate_self_signed_token(token)
 
@@ -547,8 +661,13 @@ class TestValidateEdgeEnforcement:
 
         client, _, module = self._client_and_secret(auth_env_vars)
 
+        from auth_server.providers.base import AuthProvider
+
         class _AudienceCheckingProvider:
-            """Accepts the token only when its aud is an accepted audience, like Entra."""
+            """Accept the token only for its expected audience, like Entra."""
+
+            recover_bearer_groups = AuthProvider.recover_bearer_groups
+            is_delegated_user = AuthProvider.is_delegated_user
 
             def validate_token(self, token: str, extra_audiences=None) -> dict:
                 if token_audience not in (extra_audiences or []):
@@ -749,7 +868,12 @@ class TestValidateEdgeEnforcement:
             "data": {"cognito:username": "alice", "sub": "alice"},
         }
 
+        from auth_server.providers.base import AuthProvider
+
         class _ExternalProvider:
+            recover_bearer_groups = AuthProvider.recover_bearer_groups
+            is_delegated_user = AuthProvider.is_delegated_user
+
             def validate_token(self, _token):
                 return validation_result
 

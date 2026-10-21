@@ -44,10 +44,7 @@ providers:
     token_url: "${ENTRA_LOGIN_BASE_URL}/${ENTRA_TENANT_ID}/oauth2/v2.0/token"
     user_info_url: "${ENTRA_GRAPH_BASE_URL}/oidc/userinfo"
     logout_url: "${ENTRA_LOGIN_BASE_URL}/${ENTRA_TENANT_ID}/oauth2/v2.0/logout"
-    # Request delegated Microsoft Graph User.Read for /me/transitiveMemberOf.
-    # OIDC scopes alone do not grant this permission.
-    # For programmatic API access, users get JWT tokens through /tokens/generate.
-    scopes: ["openid", "email", "profile", "User.Read"]
+    scopes: ["openid", "email", "profile"]
     response_type: "code"
     grant_type: "authorization_code"
     # Claims mapping for user info

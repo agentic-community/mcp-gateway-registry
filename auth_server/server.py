@@ -4256,8 +4256,11 @@ async def validate_request(request: Request):
 
         # Initialize validation result
         validation_result = None
-        entra_bearer_provider = None
-        delegated_entra_user = False
+        auth_provider = None
+        delegated_provider_user = False
+        # A successful Graph lookup (including zero memberships) is authoritative;
+        # local idp_user_groups mappings must not replace it.
+        entra_graph_groups_resolved = False
 
         # Log which cookie names are present on the inbound /validate request.
         # Distinguishes "browser didn't send mcp_gateway_session" (cookie scope
@@ -4367,13 +4370,8 @@ async def validate_request(request: Request):
                             )
                         except TypeError:
                             validation_result = auth_provider.validate_token(access_token)
-                        from providers.entra import EntraIdProvider
-
-                        if (
-                            isinstance(auth_provider, EntraIdProvider)
-                            and validation_result.get("method") == "entra"
-                        ):
-                            entra_bearer_provider = auth_provider
+                        # Every supported provider implements the optional
+                        # recovery contract; the default leaves claims unchanged.
                         logger.info(
                             f"Token validation successful using {auth_provider.__class__.__name__}"
                         )
@@ -4431,19 +4429,16 @@ async def validate_request(request: Request):
 
         logger.debug("Token validation successful using method: %s", validation_result["method"])
 
-        # Only a signature-verified, delegated Entra bearer can drive an OBO
-        # Graph lookup. Run before M2M enrichment so empty user claims cannot
-        # be mistaken for client-credential groups.
-        if entra_bearer_provider is not None:
+        # Ask the provider that verified the bearer whether it needs delegated
+        # group recovery before machine-client enrichment runs.
+        if auth_provider is not None:
             from providers.entra import GraphGroupLookupError
 
             try:
-                recovered_groups = await entra_bearer_provider.recover_bearer_groups(
-                    validation_result, access_token, entra_bearer_provider
+                recovered_groups = await auth_provider.recover_bearer_groups(
+                    validation_result, access_token
                 )
-                delegated_entra_user = isinstance(
-                    (validation_result.get("data") or {}).get("scp"), str
-                ) and bool((validation_result.get("data") or {}).get("scp", "").strip())
+                delegated_provider_user = auth_provider.is_delegated_user(validation_result)
             except ValueError as e:
                 logger.warning("Invalid Entra bearer group claims; refusing validation")
                 raise HTTPException(
@@ -4452,19 +4447,31 @@ async def validate_request(request: Request):
                     headers={"WWW-Authenticate": "Bearer", "Connection": "close"},
                 ) from e
             except GraphGroupLookupError as e:
-                logger.warning("Entra bearer group recovery failed; refusing validation")
+                logger.warning("Entra bearer group recovery failed; reason=%s", e.reason)
                 raise HTTPException(
                     status_code=503,
                     detail="Entra group lookup unavailable",
-                    headers={"Connection": "close"},
+                    headers={"Connection": "close", "X-Entra-Group-Lookup-Unavailable": "1"},
                 ) from e
             if recovered_groups is not None:
-                from group_filter import filter_session_groups
+                from group_filter import ScopeGroupMappingsUnavailable, filter_session_groups
 
-                filtered_groups = await filter_session_groups(
-                    recovered_groups,
-                    username_hash=hash_username(validation_result.get("username") or ""),
-                )
+                try:
+                    filtered_groups = await filter_session_groups(
+                        recovered_groups,
+                        username_hash=hash_username(validation_result.get("username") or ""),
+                        fail_closed=True,
+                    )
+                except ScopeGroupMappingsUnavailable as e:
+                    logger.warning(
+                        "Entra bearer group mappings unavailable; reason=%s",
+                        "storage" if e.__cause__ else "empty",
+                    )
+                    raise HTTPException(
+                        status_code=503,
+                        detail="Entra group mappings unavailable",
+                        headers={"Connection": "close", "X-Entra-Group-Lookup-Unavailable": "1"},
+                    ) from e
                 # auth_request copies X-Groups alongside other headers into a
                 # finite nginx response buffer. Refuse oversized unfiltered
                 # membership sets rather than dropping arbitrary group grants.
@@ -4475,9 +4482,14 @@ async def validate_request(request: Request):
                     raise HTTPException(
                         status_code=503,
                         detail="Entra group lookup unavailable",
-                        headers={"Connection": "close"},
+                        headers={"Connection": "close", "X-Entra-Group-Lookup-Unavailable": "1"},
                     )
                 validation_result["groups"] = filtered_groups
+                # recover_bearer_groups also returns [] when recovery is disabled;
+                # only an enabled delegated lookup establishes Graph membership.
+                from providers.entra import _group_recovery_enabled
+
+                entra_graph_groups_resolved = delegated_provider_user and _group_recovery_enabled()
 
         # Enrich groups from MongoDB if empty (for M2M clients)
         try:
@@ -4490,10 +4502,12 @@ async def validate_request(request: Request):
             current_groups = validation_result.get("groups", [])
             # A confirmed empty delegated-user membership must never acquire
             # M2M client groups from the local collection.
-            should_enrich = not delegated_entra_user and should_enrich_groups(validation_result)
+            should_enrich = not delegated_provider_user and should_enrich_groups(validation_result)
             logger.info(
-                f"Enrichment check: client_id={client_id}, "
-                f"groups={current_groups}, should_enrich={should_enrich}"
+                "Enrichment check: client_id=%s, group_count=%d, should_enrich=%s",
+                client_id,
+                len(current_groups),
+                should_enrich,
             )
 
             if should_enrich:
@@ -4534,7 +4548,15 @@ async def validate_request(request: Request):
             username_for_lookup = data.get("username") or validation_result.get("username", "")
             current_user_groups = validation_result.get("groups", [])
 
-            if should_enrich_user_groups(
+            if not (
+                entra_graph_groups_resolved
+                or (
+                    user_provider == "entra"
+                    and data.get("entra_graph_groups_resolved") is True
+                    and validation_result.get("method")
+                    in {"session_cookie", AUTH_METHOD_SELF_SIGNED}
+                )
+            ) and should_enrich_user_groups(
                 username_for_lookup,
                 current_user_groups,
                 user_provider,
@@ -4611,6 +4633,10 @@ async def validate_request(request: Request):
                 len(user_groups),
                 len(user_scopes),
             )
+            if auth_method == "entra" and existing_scopes:
+                # Both claims were validated by Entra's JWT verifier. Group
+                # mapping must not discard a direct delegated grant.
+                user_scopes = list(dict.fromkeys([*existing_scopes, *user_scopes]))
         elif (
             user_groups
             and not existing_scopes
@@ -5242,7 +5268,10 @@ async def validate_request(request: Request):
     except HTTPException as e:
         # Keep the Graph-unavailable result distinct from invalid credentials
         # and an empty, successful membership lookup.
-        if e.status_code == 503 and e.detail == "Entra group lookup unavailable":
+        if e.status_code == 503 and e.detail in {
+            "Entra group lookup unavailable",
+            "Entra group mappings unavailable",
+        }:
             raise
         if 400 <= e.status_code < 500:
             raise
@@ -5505,7 +5534,7 @@ def _validate_context_group_scope_shape(
 
 async def _reconcile_context_against_session(
     user_context: dict[str, Any],
-) -> tuple[list[str], list[str], str]:
+) -> tuple[list[str], list[str], str, bool]:
     """Reconcile a mint request's groups/scopes against the authoritative session.
 
     The mint endpoint receives the caller-supplied ``user_context`` in the
@@ -5524,12 +5553,10 @@ async def _reconcile_context_against_session(
     internal signing key.
 
     Returns:
-        Tuple ``(groups, scopes, subject)`` to stamp into the token. ``subject``
-        is the session's canonical OIDC ``sub`` (persisted at login), stamped as
-        the token's ``egress_user`` claim so the vend keys the egress vault on the
-        SAME id the browser-consent path wrote (see ``_canonical_egress_user``).
-        Empty when there is no session-backed source or the session predates
-        subject persistence.
+        Tuple ``(groups, scopes, subject, entra_graph_groups_resolved)``.
+        The subject is the session's canonical OIDC ``sub`` for the egress
+        vault. The Graph marker comes only from a resolved Entra session;
+        a caller-supplied context cannot assert it.
 
     Raises:
         HTTPException: 403 if the body claims a privileged group the resolved
@@ -5545,7 +5572,7 @@ async def _reconcile_context_against_session(
         # A non-session caller may still assert its canonical egress id in the
         # body (explicit trust boundary); absent that there is no OIDC sub to key.
         body_subject = user_context.get("egress_user") or user_context.get("subject") or ""
-        return body_groups, body_scopes, body_subject
+        return body_groups, body_scopes, body_subject, False
 
     from session_store import resolve_session
 
@@ -5586,7 +5613,13 @@ async def _reconcile_context_against_session(
     # The session's OIDC sub is the authoritative canonical egress id; the vend
     # and the browser-consent path must key the vault on this one value.
     session_subject = session_data.get("subject") or ""
-    return reconciled_groups, reconciled_scopes, session_subject
+    return (
+        reconciled_groups,
+        reconciled_scopes,
+        session_subject,
+        session_data.get("provider") == "entra"
+        and session_data.get("entra_graph_groups_resolved") is True,
+    )
 
 
 @internal_router.post("/tokens", response_model=GenerateTokenResponse)
@@ -5714,9 +5747,12 @@ async def generate_user_token(
         # session store when a session_id is present, so a forged body cannot
         # inject groups/scopes the session never granted. When no session_id is
         # present the body is used as-is (explicit, documented trust boundary).
-        user_groups, reconciled_scopes, egress_user = await _reconcile_context_against_session(
-            user_context
-        )
+        (
+            user_groups,
+            reconciled_scopes,
+            egress_user,
+            entra_graph_groups_resolved,
+        ) = await _reconcile_context_against_session(user_context)
         # Re-narrow the requested scopes to what the reconciled context allows so
         # a session-backed mint can never exceed the session's granted scopes.
         requested_scopes = [s for s in requested_scopes if s in set(reconciled_scopes)]
@@ -5773,6 +5809,8 @@ async def generate_user_token(
                     TokenKind.RESOURCE.value if request.resource else TokenKind.USER.value
                 ),
             }
+            if entra_graph_groups_resolved:
+                jwt_claims["entra_graph_groups_resolved"] = True
 
             # Canonical egress vault id (the session's OIDC sub). This token's
             # ``sub`` is the login username, which is NOT what the egress vault
@@ -6053,44 +6091,58 @@ if __name__ == "__main__":
 # Load OAuth2 providers configuration
 def load_oauth2_config():
     """Load the OAuth2 providers configuration from oauth2_providers.yml"""
-    try:
-        oauth2_file = Path(__file__).parent / "oauth2_providers.yml"
-        with open(oauth2_file) as f:
-            config = yaml.safe_load(f)
+    oauth2_file = Path(__file__).parent / "oauth2_providers.yml"
+    with open(oauth2_file) as f:
+        config = yaml.safe_load(f)
 
-        # Resolve Entra browser endpoints from the same configured cloud as
-        # provider validation; the YAML templates otherwise assume public.
+    # Resolve only an active Entra provider; disabled settings cannot break
+    # another IdP's login. Active Entra misconfiguration fails at startup.
+    entra = config.get("providers", {}).get("entra")
+    entra_enabled = os.environ.get("ENTRA_ENABLED", "false").lower()
+    if entra_enabled not in {"true", "false"}:
+        raise ValueError("ENTRA_ENABLED must be true or false")
+    if entra and entra_enabled == "true":
         from providers.entra import (
-            _LOGIN_TO_GRAPH_HOST,
-            DEFAULT_ENTRA_GRAPH_BASE_URL,
             _entra_login_base,
+            _group_cache_ttl_seconds,
+            _group_recovery_enabled,
+            _infer_graph_base_url,
+            _validated_graph_override,
+            _validated_graph_resource_url,
         )
 
-        entra = config.get("providers", {}).get("entra")
-        if entra:
-            login_base = _entra_login_base()
-            graph_base = (
-                os.environ.get("ENTRA_GRAPH_BASE_URL")
-                or _LOGIN_TO_GRAPH_HOST.get(
-                    urlparse(login_base).hostname or "", DEFAULT_ENTRA_GRAPH_BASE_URL
+        _group_recovery_enabled()
+        _group_cache_ttl_seconds()
+        browser_read = os.environ.get("ENTRA_BROWSER_USER_READ_ENABLED", "false").lower()
+        if browser_read not in {"true", "false"}:
+            raise ValueError("ENTRA_BROWSER_USER_READ_ENABLED must be true or false")
+        if browser_read == "true" and "User.Read" not in entra["scopes"]:
+            entra["scopes"].append("User.Read")
+        # Resolve Entra browser endpoints from the selected Graph cloud.
+        login_base = _entra_login_base()
+        login_resource = _infer_graph_base_url(login_base)
+        graph_resource = _validated_graph_resource_url(login_resource)
+        graph_override = _validated_graph_override(graph_resource)
+        if login_resource is None and graph_override is None:
+            raise ValueError("ENTRA_GRAPH_BASE_URL required for custom Entra login origin")
+        if (
+            login_resource is None
+            and graph_resource is None
+            and (_group_recovery_enabled() or browser_read == "true")
+        ):
+            raise ValueError("ENTRA_GRAPH_RESOURCE_URL required for Entra Graph scopes")
+        graph_base = graph_override or graph_resource
+        for field in ("auth_url", "token_url", "logout_url"):
+            if field in entra:
+                entra[field] = Template(entra[field]).safe_substitute(
+                    ENTRA_LOGIN_BASE_URL=login_base
                 )
-            ).rstrip("/")
-            for field in ("auth_url", "token_url", "logout_url"):
-                if field in entra:
-                    entra[field] = Template(entra[field]).safe_substitute(
-                        ENTRA_LOGIN_BASE_URL=login_base
-                    )
-            if "user_info_url" in entra:
-                entra["user_info_url"] = Template(entra["user_info_url"]).safe_substitute(
-                    ENTRA_GRAPH_BASE_URL=graph_base
-                )
+        if "user_info_url" in entra:
+            entra["user_info_url"] = Template(entra["user_info_url"]).safe_substitute(
+                ENTRA_GRAPH_BASE_URL=graph_base
+            )
 
-        # Substitute environment variables in configuration
-        processed_config = substitute_env_vars(config)
-        return processed_config
-    except Exception as e:
-        logger.error(f"Failed to load OAuth2 configuration: {e}")
-        return {"providers": {}, "session": {}, "registry": {}}
+    return substitute_env_vars(config)
 
 
 def auto_derive_cognito_domain(user_pool_id: str) -> str:
@@ -6388,6 +6440,9 @@ async def oauth2_login(provider: str, request: Request, redirect_uri: str = None
             "nonce": nonce,  # Bind the returned id_token to this login
             "code_verifier": code_verifier,  # PKCE: sent on token exchange
         }
+        requested_scope = " ".join(provider_config["scopes"])
+        if provider == "entra":
+            session_data["requested_scopes"] = requested_scope
 
         # Create temporary session for OAuth2 flow
         temp_session = signer.dumps(session_data)
@@ -6395,7 +6450,7 @@ async def oauth2_login(provider: str, request: Request, redirect_uri: str = None
         auth_params = {
             "client_id": provider_config["client_id"],
             "response_type": provider_config["response_type"],
-            "scope": " ".join(provider_config["scopes"]),
+            "scope": requested_scope,
             "state": state,
             "redirect_uri": callback_uri,
             "nonce": nonce,
@@ -6415,6 +6470,8 @@ async def oauth2_login(provider: str, request: Request, redirect_uri: str = None
                 status_code=400,
                 detail="Invalid OAuth2 provider configuration",
             )
+        if provider == "entra" and parsed_auth_url.scheme != "https":
+            raise HTTPException(status_code=400, detail="Entra authorization URL must use HTTPS")
 
         # Create response with temporary session cookie
         response = RedirectResponse(url=auth_url, status_code=302)
@@ -6586,6 +6643,7 @@ async def oauth2_callback(
             provider, code, provider_config, auth_server_url, code_verifier=code_verifier
         )
         logger.info(f"Token data keys: {list(token_data.keys())}")
+        entra_graph_groups_resolved = False
 
         # For Cognito and Keycloak, try to extract user info from JWT tokens
         if provider in ["cognito", "keycloak"]:
@@ -6686,7 +6744,8 @@ async def oauth2_callback(
                     safe_identity_summary(mapped_user),
                 )
         elif provider == "entra":
-            # For Entra ID, prioritize ID token claims over userinfo endpoint
+            # Entra login requires an ID token; a userinfo-only response cannot
+            # supply this flow's verified nonce and group claims.
             try:
                 if "id_token" in token_data:
                     from providers.entra import EntraIdProvider, GraphGroupLookupError
@@ -6705,11 +6764,33 @@ async def oauth2_callback(
                     # Inline claims remain authoritative unless the token signals
                     # overage. Recover absent claims, including nested memberships.
                     try:
+                        requested_scopes = temp_session_data.get("requested_scopes")
+                        graph_requested = (
+                            isinstance(requested_scopes, str)
+                            and "User.Read" in requested_scopes.split()
+                        )
                         groups = await EntraIdProvider.resolve_groups(
-                            id_token_claims, token_data["access_token"]
+                            id_token_claims,
+                            token_data["access_token"],
+                            graph_requested=graph_requested,
+                        )
+                        # resolve_groups returns only a list. Distinguish a Graph
+                        # result from an inline claim or disabled recovery before
+                        # allowing the local user-group fallback below.
+                        from providers.entra import _group_recovery_enabled
+
+                        entra_graph_groups_resolved = (
+                            graph_requested
+                            and _group_recovery_enabled()
+                            and (
+                                EntraIdProvider.has_group_overage(id_token_claims)
+                                or not (
+                                    id_token_claims.get("groups") or id_token_claims.get("roles")
+                                )
+                            )
                         )
                     except GraphGroupLookupError as e:
-                        logger.warning("Entra group recovery failed; refusing login")
+                        logger.warning("Entra login group recovery failed; reason=%s", e.reason)
                         raise HTTPException(
                             status_code=503, detail="Entra group lookup unavailable"
                         ) from e
@@ -6734,28 +6815,14 @@ async def oauth2_callback(
                         safe_identity_summary(mapped_user),
                     )
                 else:
-                    logger.warning("No ID token found in Entra response, falling back to userInfo")
-                    raise ValueError("Missing ID token")
+                    raise HTTPException(status_code=401, detail="Missing Entra ID token")
 
             except HTTPException:
                 raise
             except Exception as e:
-                logger.warning(
-                    f"Entra ID token parsing failed: {e}, falling back to userInfo endpoint"
-                )
-                # Fallback to userInfo endpoint (only when no id_token present).
-                user_info = await get_user_info(token_data["access_token"], provider_config)
-                logger.info(
-                    "User info fetched from %s userInfo: %s",
-                    provider,
-                    safe_identity_summary(user_info),
-                )
-                mapped_user = map_user_info(user_info, provider_config)
-                logger.info(
-                    "User mapped from %s userInfo: %s",
-                    provider,
-                    safe_identity_summary(mapped_user),
-                )
+                logger.warning("Entra ID token processing failed; type=%s", type(e).__name__)
+                raise HTTPException(status_code=401, detail="Invalid Entra ID token") from e
+
         elif provider == "okta":
             # For Okta, verify the ID token to get groups (userinfo doesn't include groups)
             try:
@@ -6949,7 +7016,7 @@ async def oauth2_callback(
                 should_enrich_user_groups,
             )
 
-            if should_enrich_user_groups(
+            if not entra_graph_groups_resolved and should_enrich_user_groups(
                 mapped_user["username"],
                 session_groups,
                 provider,
@@ -7023,6 +7090,7 @@ async def oauth2_callback(
             max_age_seconds=session_max_age,
             id_token=token_data.get("id_token"),
             subject=mapped_user.get("subject"),
+            entra_graph_groups_resolved=entra_graph_groups_resolved,
         )
         registry_session = signer.dumps(session_id)
 
@@ -7138,16 +7206,19 @@ async def exchange_code_for_token(
             os.environ.get("AUTH_SERVER_URL", "http://localhost:8888").rstrip("/") + ROOT_PATH
         )
 
-    # The login token exchange targets the operator-configured IdP from
-    # oauth2_providers.yml. For Keycloak/PingFederate that is the in-cluster
-    # ${KEYCLOAK_URL}/${PINGFEDERATE_BASE_URL} base, which defaults to http:// -- so
-    # this uses the pooled PLAIN client, NOT the HTTPS-only credentialed-OAuth guard
-    # (which would reject an http:// in-cluster token endpoint and break login).
-    # The target is static config, never request-derived; timeout preserved at
-    # httpx's historic 5s default.
-    from registry.utils.url_guard import shared_plain_async_client
+    # Entra sends a client secret and code to an HTTPS token endpoint. Use the
+    # credentialed OAuth guard to pin its public DNS answer or an explicitly
+    # trusted IdP proxy host. In-cluster IdPs keep their existing plain client.
+    from registry.utils.url_guard import (
+        CREDENTIALED_OAUTH_PROFILE,
+        shared_guarded_async_client,
+        shared_plain_async_client,
+    )
 
-    client = shared_plain_async_client()
+    if provider == "entra":
+        client = shared_guarded_async_client(profile=CREDENTIALED_OAUTH_PROFILE)
+    else:
+        client = shared_plain_async_client()
     token_data = {
         "grant_type": provider_config["grant_type"],
         "client_id": provider_config["client_id"],

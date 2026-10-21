@@ -95,6 +95,69 @@ tests:
       - failedTemplate:
           errorPattern: "\"AUTH_PROVIDER\" is a reserved variable"
 
+  - it: forwards default-off browser User.Read to auth-server only
+    templates:
+      - charts/auth-server/templates/deployment.yaml
+    set:
+      global:
+        authProvider:
+          type: entra
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ENTRA_BROWSER_USER_READ_ENABLED
+            value: "false"
+
+  - it: forwards explicit browser User.Read opt-in without changing group recovery
+    templates:
+      - charts/auth-server/templates/deployment.yaml
+    set:
+      global:
+        authProvider:
+          type: entra
+      auth-server:
+        entra:
+          browserUserReadEnabled: true
+          groupRecoveryEnabled: false
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ENTRA_BROWSER_USER_READ_ENABLED
+            value: "true"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ENTRA_GROUP_RECOVERY_ENABLED
+            value: "false"
+
+  - it: rejects nonboolean stack browser User.Read value
+    templates:
+      - charts/auth-server/templates/deployment.yaml
+    set:
+      global:
+        authProvider:
+          type: entra
+      auth-server:
+        entra:
+          browserUserReadEnabled: "true"
+    asserts:
+      - failedTemplate:
+          errorPattern: "browserUserReadEnabled must be a boolean"
+
+  - it: rejects stack browser User.Read via auth-server.extraEnv
+    templates:
+      - charts/auth-server/templates/deployment.yaml
+    set:
+      auth-server:
+        extraEnv:
+          - name: ENTRA_BROWSER_USER_READ_ENABLED
+            value: "true"
+    asserts:
+      - failedTemplate:
+          errorPattern: "\"ENTRA_BROWSER_USER_READ_ENABLED\" is a reserved variable"
+
   # mcpgw forwarding
   - it: forwards mcpgw.extraEnv to the mcpgw deployment
     templates:

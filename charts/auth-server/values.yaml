@@ -188,8 +188,12 @@ entra:
   clientSecretExistingSecret: "" # If set, read ENTRA_CLIENT_SECRET from this K8s secret instead of clientSecret
   clientSecretExistingSecretKey: "ENTRA_CLIENT_SECRET" # Key within the existing secret
   tenantId: ""
-  loginBaseUrl: "" # Custom Entra login base URL for sovereign/national clouds (default: https://login.microsoftonline.com)
-  graphBaseUrl: "" # Optional override for Microsoft Graph base URL. Leave unset on standard deployments — auto-inferred from loginBaseUrl. Set only for proxied or air-gapped deployments.
+  loginBaseUrl: "" # Custom Entra login base URL for sovereign/national clouds (default: https://login.microsoftonline.com). A custom proxy also needs graphBaseUrl.
+  graphBaseUrl: "" # Optional on known Entra clouds; required for a custom login proxy. Network fetch URL, not the native OAuth resource.
+  graphResourceUrl: "" # Native Microsoft Graph OAuth resource. A custom login proxy needs it if groupRecoveryEnabled or browserUserReadEnabled is true; login.microsoftonline.us infers US Gov; set DoD explicitly.
+  browserUserReadEnabled: false # Request User.Read on browser login. Default false keeps OIDC-only login; Graph lookup also requires groupRecoveryEnabled.
+  groupRecoveryEnabled: true # Recover overage groups via Graph for eligible bearer tokens and browser sessions consented to User.Read. False disables Graph recovery.
+  groupCacheTtlSeconds: 300 # Positive Graph group-result cache lifetime (30..3600 seconds); removals can remain cached until expiration.
   scopeFormat: "" # Entra PRM scope form: "v1" (api://<app-id>/<scope>) or "v2" (bare, default). Set "v1" only if your app exposes v1-style api:// scopes (issue #990).
   applicationIdUri: "" # Application ID URI (e.g. api://<app-id>). Used as the v1 scope prefix and accepted as a token audience. Defaults to api://<clientId>.
 # Okta integration (used when authProvider.type = "okta")
