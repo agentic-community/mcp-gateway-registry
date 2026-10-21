@@ -10,6 +10,14 @@ from pydantic import Field, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from registry.common.secret_key import validate_secret_key
+from registry.constants import (
+    MAX_EMBEDDINGS_EXTRA_HEADERS,
+    REGISTRY_MANAGED_EMBEDDINGS_HEADERS,
+)
+from registry.utils.header_validation import (
+    validate_header_name,
+    validate_header_value,
+)
 
 
 def _normalize_cors_origin(value: str) -> str | None:
@@ -492,6 +500,25 @@ class Settings(BaseSettings):
     #                  litellm cannot parse that, so the registry calls the endpoint
     #                  directly and extracts the vectors itself. Opt-in only.
     embeddings_response_format: str = "openai"  # "openai" | "raw_array"
+
+    # Operator-configured extra headers for the embeddings endpoint (issue #1819).
+    # Ten separate scalar slots rather than one structured value, so every config
+    # serializer and every deployment surface keeps treating these as plain
+    # strings. Each slot holds one header in HTTP syntax: "Name: value".
+    # Only sent when embeddings_provider='litellm'; validated in __init__.
+    #
+    # NOT a credential store: values are plain config, never encrypted, never
+    # masked. A bearer token belongs in EMBEDDINGS_API_KEY or the IdP auth mode.
+    embeddings_extra_header_1: str = ""
+    embeddings_extra_header_2: str = ""
+    embeddings_extra_header_3: str = ""
+    embeddings_extra_header_4: str = ""
+    embeddings_extra_header_5: str = ""
+    embeddings_extra_header_6: str = ""
+    embeddings_extra_header_7: str = ""
+    embeddings_extra_header_8: str = ""
+    embeddings_extra_header_9: str = ""
+    embeddings_extra_header_10: str = ""
 
     # IdP client-credentials auth for the litellm embeddings provider.
     # When embeddings_auth_mode == "idp", a bearer token is fetched from the IdP
@@ -2420,6 +2447,73 @@ class Settings(BaseSettings):
             self.egress_credential_encryption_key
         )
         self._validate_egress_auth_config()
+        self._validate_embeddings_extra_header_slots()
+
+    def _raw_embeddings_extra_header_slots(self) -> list[tuple[int, str]]:
+        """Return (slot number, stripped value) for every populated header slot."""
+        populated: list[tuple[int, str]] = []
+        for index in range(1, MAX_EMBEDDINGS_EXTRA_HEADERS + 1):
+            raw = getattr(self, f"embeddings_extra_header_{index}", "") or ""
+            if raw.strip():
+                populated.append((index, raw.strip()))
+        return populated
+
+    def _validate_embeddings_extra_header_slots(self) -> None:
+        """Validate every populated EMBEDDINGS_EXTRA_HEADER_<N> slot.
+
+        Runs in __init__ rather than as a @field_validator because a field
+        validator sees one slot at a time and cannot detect the same header name
+        set in two slots. Fails at process start rather than on the first
+        embedding call: a bad header breaks every search query, so a loud
+        startup failure beats a 400 from the endpoint discovered hours later.
+
+        Raises:
+            ValueError: If a slot is malformed, names a registry-managed header,
+                or repeats a header name already set in another slot.
+        """
+        seen: dict[str, int] = {}
+        for index, raw in self._raw_embeddings_extra_header_slots():
+            env_name = f"EMBEDDINGS_EXTRA_HEADER_{index}"
+            if ":" not in raw:
+                raise ValueError(
+                    f"{env_name} must be in 'Name: value' form, e.g. "
+                    "'X-Tenant-Id: research'. Got a value with no colon."
+                )
+            name, _, value = raw.partition(":")
+            name = name.strip()
+            value = value.strip()
+            validate_header_name(name, context=env_name)
+            validate_header_value(value, context=env_name)
+
+            lower_name = name.lower()
+            if lower_name in REGISTRY_MANAGED_EMBEDDINGS_HEADERS:
+                raise ValueError(
+                    f"{env_name} cannot set '{name}': the registry manages this "
+                    "header. For a credential use EMBEDDINGS_API_KEY or "
+                    "EMBEDDINGS_AUTH_MODE=idp."
+                )
+            if lower_name in seen:
+                raise ValueError(
+                    f"{env_name} sets header '{name}', already set by "
+                    f"EMBEDDINGS_EXTRA_HEADER_{seen[lower_name]}. Remove one."
+                )
+            seen[lower_name] = index
+
+    @property
+    def embeddings_extra_headers(self) -> dict[str, str]:
+        """Collapse the EMBEDDINGS_EXTRA_HEADER_<N> slots into a header map.
+
+        Slots may be sparse: setting only _3 is valid. Blank slots are skipped
+        rather than treated as the end of the list, so a gap cannot silently
+        drop the headers after it. Splits on the first colon only, so a value
+        containing a colon (a URL, a timestamp) survives intact. Validation
+        already ran in __init__, so this does not re-check.
+        """
+        headers: dict[str, str] = {}
+        for _index, raw in self._raw_embeddings_extra_header_slots():
+            name, _, value = raw.partition(":")
+            headers[name.strip()] = value.strip()
+        return headers
 
     @staticmethod
     def _validate_credential_encryption_key(value: str | None) -> str:
@@ -2751,6 +2845,40 @@ mode there is no gateway to proxy through, so agent routing is DISABLED:
   - /agent/* paths return the registry-only 503
 
 Set DEPLOYMENT_MODE=with-gateway to actually enable A2A reverse-proxy routing.
+================================================================================
+"""
+    logger.warning(banner)
+    print(banner)
+
+
+def print_embeddings_extra_headers_inert_banner(s: Settings) -> None:
+    """Loudly warn when EMBEDDINGS_EXTRA_HEADER_<N> slots are set but never sent.
+
+    Only the 'litellm' provider makes an HTTP request. 'sentence-transformers'
+    runs the model in-process, so there is no request to attach headers to. An
+    operator who configured headers to reach their endpoint while the provider
+    is sentence-transformers has a bigger problem than the headers: embeddings
+    are not going to that endpoint at all. Header names and values are left out
+    of the banner on purpose; the count shows the slots were read.
+    """
+    header_count = len(s.embeddings_extra_headers)
+    if header_count == 0:
+        return
+    if s.embeddings_provider.lower() == "litellm":
+        return
+    banner = f"""
+================================================================================
+WARNING: EMBEDDINGS_EXTRA_HEADER_<N> is set but will NEVER be sent.
+
+EMBEDDINGS_PROVIDER={s.embeddings_provider} runs the embedding model in-process
+and makes no HTTP request, so there is no request to add headers to.
+{header_count} configured header(s) are being IGNORED.
+
+This usually means the whole endpoint configuration is inert, not just the
+headers: embeddings are being computed locally, not by your endpoint.
+
+Set EMBEDDINGS_PROVIDER=litellm (with EMBEDDINGS_API_BASE) to use your endpoint
+and send these headers.
 ================================================================================
 """
     logger.warning(banner)

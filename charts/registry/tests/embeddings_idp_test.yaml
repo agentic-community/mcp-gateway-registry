@@ -104,3 +104,60 @@ tests:
           path: spec.template.spec.containers[0].env
           content:
             name: EMBEDDINGS_AUTH_MODE
+
+  - it: emits no EMBEDDINGS_EXTRA_HEADER_* entries when extraHeaders is unset (issue #1819)
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: EMBEDDINGS_EXTRA_HEADER_1
+
+  - it: emits one EMBEDDINGS_EXTRA_HEADER_<N> per extraHeaders entry, in order
+    set:
+      embeddings:
+        extraHeaders:
+          - "X-Tenant-Id: research"
+          - "X-Route: embeddings-v2"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: EMBEDDINGS_EXTRA_HEADER_1
+            value: "X-Tenant-Id: research"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: EMBEDDINGS_EXTRA_HEADER_2
+            value: "X-Route: embeddings-v2"
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: EMBEDDINGS_EXTRA_HEADER_3
+
+  - it: fails when extraHeaders has more than 10 entries
+    set:
+      embeddings:
+        extraHeaders:
+          - "X-H1: 1"
+          - "X-H2: 2"
+          - "X-H3: 3"
+          - "X-H4: 4"
+          - "X-H5: 5"
+          - "X-H6: 6"
+          - "X-H7: 7"
+          - "X-H8: 8"
+          - "X-H9: 9"
+          - "X-H10: 10"
+          - "X-H11: 11"
+    asserts:
+      - failedTemplate:
+          errorPattern: "embeddings.extraHeaders supports at most 10 entries"
+
+  - it: rejects EMBEDDINGS_EXTRA_HEADER_1 in extraEnv (reserved name)
+    set:
+      extraEnv:
+        - name: EMBEDDINGS_EXTRA_HEADER_1
+          value: "X-Sneaky: 1"
+    asserts:
+      - failedTemplate:
+          errorPattern: "\"EMBEDDINGS_EXTRA_HEADER_1\" is a reserved variable"

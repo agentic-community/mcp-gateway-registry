@@ -190,6 +190,18 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             ("embeddings_idp_client_secret", "IdP Client Secret", True),
             ("embeddings_idp_scope", "IdP Scope", False),
             ("embeddings_idp_timeout_seconds", "IdP Timeout (s)", False),
+            # Raw slots, not the embeddings_extra_headers property: every
+            # CONFIG_GROUPS value must stay a scalar for the exporters (issue #1819).
+            ("embeddings_extra_header_1", "Extra Header 1", False),
+            ("embeddings_extra_header_2", "Extra Header 2", False),
+            ("embeddings_extra_header_3", "Extra Header 3", False),
+            ("embeddings_extra_header_4", "Extra Header 4", False),
+            ("embeddings_extra_header_5", "Extra Header 5", False),
+            ("embeddings_extra_header_6", "Extra Header 6", False),
+            ("embeddings_extra_header_7", "Extra Header 7", False),
+            ("embeddings_extra_header_8", "Extra Header 8", False),
+            ("embeddings_extra_header_9", "Extra Header 9", False),
+            ("embeddings_extra_header_10", "Extra Header 10", False),
         ],
     },
     "health_check": {

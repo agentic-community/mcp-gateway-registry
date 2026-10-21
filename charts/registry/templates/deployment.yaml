@@ -486,6 +486,15 @@ spec:
             - name: EMBEDDINGS_RESPONSE_FORMAT
               value: {{ .Values.embeddings.responseFormat | quote }}
             {{- end }}
+            # Extra embeddings request headers (issue #1819). Only populated
+            # entries render, so an unset list emits no variables at all.
+            {{- if gt (len (.Values.embeddings.extraHeaders | default list)) 10 }}
+            {{- fail "embeddings.extraHeaders supports at most 10 entries (EMBEDDINGS_EXTRA_HEADER_1..10)" }}
+            {{- end }}
+            {{- range $index, $header := (.Values.embeddings.extraHeaders | default list) }}
+            - name: EMBEDDINGS_EXTRA_HEADER_{{ add1 $index }}
+              value: {{ $header | quote }}
+            {{- end }}
             # Forward-proxy egress for the SSRF-guarded clients (issue #1832).
             # OFF by default; see values.yaml for the security trade-off. The CA
             # bundle path is DERIVED from the caBundle block so an operator never

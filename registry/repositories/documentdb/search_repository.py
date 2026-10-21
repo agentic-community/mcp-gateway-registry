@@ -837,6 +837,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                 embedding_dimension=settings.embeddings_model_dimensions,
                 token_provider=token_provider,
                 response_format=settings.embeddings_response_format,
+                extra_headers=settings.embeddings_extra_headers,
             )
         return self._embedding_model
 
