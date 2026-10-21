@@ -1,6 +1,10 @@
 <!-- Budget: 350 lines max (CI-enforced). Feature announcements -> docs/overview/feature-release-highlights.md (top 3 mirrored here). Structure rationale -> docs/design/theory-of-the-system.md#6-how-to-change-this-system-without-breaking-its-theory -->
 <div align="center">
-<img src="docs/img/mcp_gateway_horizontal_white_logo.png" alt="MCP Gateway & Registry Logo" width="100%">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/logo/png/lockup-horizontal-on-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="docs/logo/png/lockup-horizontal-on-light.png">
+  <img src="docs/logo/png/lockup-horizontal-neutral.png" alt="AI Gateway & Registry" width="480">
+</picture>
 
 **Unified Agent & MCP Server Registry – Gateway for AI Development Tools**
 

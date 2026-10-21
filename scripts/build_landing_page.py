@@ -34,35 +34,50 @@ def _rewrite_links(
         return f"[{text}]({GH_BLOB}{url.lstrip('./')})"
 
     text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", fix_link, markdown_text)
-    text = text.replace('src="docs/img/', f'src="{GH_RAW}docs/img/')
+    text = text.replace('src="docs/', f'src="{GH_RAW}docs/')
+    text = text.replace('srcset="docs/', f'srcset="{GH_RAW}docs/')
     return text
+
+
+def _absolute_image_url(
+    url: str,
+) -> str:
+    """Point a repo-relative image path at raw.githubusercontent.com."""
+    if url.startswith("docs/"):
+        return GH_RAW + url
+    return url
 
 
 def _split_hero(
     markdown_text: str,
-) -> tuple[str, str, str]:
-    """Split the README into (logo_src, tagline, body).
+) -> tuple[str, str, str, str]:
+    """Split the README into (logo_src, logo_dark_src, tagline, body).
 
     The README opens with a centered hero block (logo, bold tagline, shields.io badges, and a
     quick-links bar) wrapped in a raw ``<div align="center">`` that Markdown renders as literal
     text, and which duplicates the page header/sidebar. We drop that whole block (everything up
     to the first ``---`` rule), extract the logo and tagline to render a clean hero, and return
-    the remaining body for normal Markdown rendering.
+    the remaining body for normal Markdown rendering. When the logo sits in a ``<picture>``,
+    the light-theme ``<source>`` becomes logo_src and the dark-theme ``<source>`` becomes
+    logo_dark_src; logo_dark_src is empty when there is no dark source.
     """
     text = re.sub(r"^<!--.*?-->\n", "", markdown_text, flags=re.DOTALL, count=1)
 
     parts = text.split("\n---\n", 1)
     hero, body = (parts[0], parts[1]) if len(parts) == 2 else ("", text)
 
-    logo_match = re.search(r'<img[^>]*src="([^"]+)"', hero)
-    logo_src = logo_match.group(1) if logo_match else ""
-    if logo_src.startswith("docs/img/"):
-        logo_src = GH_RAW + logo_src
+    # The page has its own light/dark theme, so prefer the theme-specific sources over
+    # the README's neutral fallback <img>.
+    light_match = re.search(r'<source[^>]*light\)"[^>]*srcset="([^"]+)"', hero)
+    logo_match = light_match or re.search(r'<img[^>]*src="([^"]+)"', hero)
+    logo_src = _absolute_image_url(logo_match.group(1)) if logo_match else ""
+    dark_match = re.search(r'<source[^>]*dark\)"[^>]*srcset="([^"]+)"', hero)
+    logo_dark_src = _absolute_image_url(dark_match.group(1)) if dark_match else ""
 
     tag_match = re.search(r"\*\*(.+?)\*\*", hero)
     tagline = tag_match.group(1).strip() if tag_match else ""
 
-    return logo_src, tagline, body.lstrip()
+    return logo_src, logo_dark_src, tagline, body.lstrip()
 
 
 def _build_sidebar(
@@ -80,7 +95,7 @@ def _render(
     """Render the full landing page HTML from README + template."""
     import markdown
 
-    logo_src, tagline, body = _split_hero(readme_path.read_text())
+    logo_src, logo_dark_src, tagline, body = _split_hero(readme_path.read_text())
     body = _rewrite_links(body)
     html_body = markdown.markdown(
         body,
@@ -88,8 +103,15 @@ def _render(
     )
 
     hero = ""
-    if logo_src:
-        hero += f'<img class="hero-logo" src="{logo_src}" alt="MCP Gateway &amp; Registry">\n'
+    logo_img = f'<img class="hero-logo" src="{logo_src}" alt="AI Gateway &amp; Registry">'
+    if logo_src and logo_dark_src:
+        hero += (
+            "<picture>\n"
+            f'<source media="(prefers-color-scheme: dark)" srcset="{logo_dark_src}">\n'
+            f"{logo_img}\n</picture>\n"
+        )
+    elif logo_src:
+        hero += f"{logo_img}\n"
     if tagline:
         hero += f'<p class="hero-tagline">{tagline}</p>\n'
 

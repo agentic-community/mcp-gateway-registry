@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <g transform="translate(-58.47 -58.47) scale(1.22838)">
+    <polygon points="378.00,198.00 428.23,227.00 428.23,285.00 378.00,314.00 327.77,285.00 327.77,227.00" fill="#ffffff" stroke="#ffffff" stroke-width="14" stroke-linejoin="round"/>
+    <polygon points="317.00,303.65 367.23,332.65 367.23,390.65 317.00,419.65 266.77,390.65 266.77,332.65" fill="#ffffff" stroke="#ffffff" stroke-width="14" stroke-linejoin="round"/>
+    <polygon points="195.00,303.65 245.23,332.65 245.23,390.65 195.00,419.65 144.77,390.65 144.77,332.65" fill="#ffffff" stroke="#ffffff" stroke-width="14" stroke-linejoin="round"/>
+    <polygon points="134.00,198.00 184.23,227.00 184.23,285.00 134.00,314.00 83.77,285.00 83.77,227.00" fill="#ffffff" stroke="#ffffff" stroke-width="14" stroke-linejoin="round"/>
+    <polygon points="195.00,92.35 245.23,121.35 245.23,179.35 195.00,208.35 144.77,179.35 144.77,121.35" fill="#ffffff" stroke="#ffffff" stroke-width="14" stroke-linejoin="round"/>
+    <polygon points="317.00,94.35 365.50,122.35 365.50,178.35 317.00,206.35 268.50,178.35 268.50,122.35" fill="none" stroke="#ffffff" stroke-width="18" stroke-linejoin="round"/>
+    <mask id="hole-i-mono-white">
+      <rect width="512" height="512" fill="#ffffff"/>
+      <circle cx="256" cy="256" r="20" fill="#000000"/>
+    </mask>
+    <polygon points="256.00,198.00 306.23,227.00 306.23,285.00 256.00,314.00 205.77,285.00 205.77,227.00" fill="#ffffff" stroke="#ffffff" stroke-width="14" stroke-linejoin="round" mask="url(#hole-i-mono-white)"/>
+  </g>
+</svg>

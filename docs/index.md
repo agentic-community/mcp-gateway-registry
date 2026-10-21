@@ -1,5 +1,9 @@
 <div align="center">
-<img src="img/mcp_gateway_horizontal_white_logo.png" alt="MCP Gateway Logo" width="100%">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="logo/png/lockup-horizontal-on-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="logo/png/lockup-horizontal-on-light.png">
+  <img src="logo/png/lockup-horizontal-neutral.png" alt="AI Gateway & Registry" width="480">
+</picture>
 
 **Gateway for AI Development Tools**
 
