@@ -488,8 +488,8 @@ spec:
             {{- end }}
             # Extra embeddings request headers (issue #1819). Only populated
             # entries render, so an unset list emits no variables at all.
-            {{- if gt (len (.Values.embeddings.extraHeaders | default list)) 10 }}
-            {{- fail "embeddings.extraHeaders supports at most 10 entries (EMBEDDINGS_EXTRA_HEADER_1..10)" }}
+            {{- if gt (len (.Values.embeddings.extraHeaders | default list)) 5 }}
+            {{- fail "embeddings.extraHeaders supports at most 5 entries (EMBEDDINGS_EXTRA_HEADER_1..5)" }}
             {{- end }}
             {{- range $index, $header := (.Values.embeddings.extraHeaders | default list) }}
             - name: EMBEDDINGS_EXTRA_HEADER_{{ add1 $index }}

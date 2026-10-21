@@ -134,7 +134,7 @@ tests:
           content:
             name: EMBEDDINGS_EXTRA_HEADER_3
 
-  - it: fails when extraHeaders has more than 10 entries
+  - it: fails when extraHeaders has more than 5 entries
     set:
       embeddings:
         extraHeaders:
@@ -144,14 +144,9 @@ tests:
           - "X-H4: 4"
           - "X-H5: 5"
           - "X-H6: 6"
-          - "X-H7: 7"
-          - "X-H8: 8"
-          - "X-H9: 9"
-          - "X-H10: 10"
-          - "X-H11: 11"
     asserts:
       - failedTemplate:
-          errorPattern: "embeddings.extraHeaders supports at most 10 entries"
+          errorPattern: "embeddings.extraHeaders supports at most 5 entries"
 
   - it: rejects EMBEDDINGS_EXTRA_HEADER_1 in extraEnv (reserved name)
     set:
