@@ -2055,6 +2055,9 @@ module "ecs_service_registry" {
             value = var.registry_rum_allowed_hosts
           }
         ] : [],
+        # Issue #1819: extra embeddings request headers. Empty list when the
+        # map is unset, so a default deployment gets no new variables.
+        local.embeddings_extra_header_env,
         # Extra environment variables from user (Issue #1000)
         var.registry_extra_env
       )

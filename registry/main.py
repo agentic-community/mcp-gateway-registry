@@ -79,6 +79,7 @@ from registry.core.config import (
     _validate_mode_combination,
     log_tab_visibility_warnings,
     print_a2a_reverse_proxy_mode_banner,
+    print_embeddings_extra_headers_inert_banner,
     settings,
 )
 from registry.core.metrics import DEPLOYMENT_MODE_INFO
@@ -514,6 +515,7 @@ async def lifespan(app: FastAPI):
     # deployment mode force-disables it (registry-only). Called after mode
     # correction so it reflects the effective deployment_mode.
     print_a2a_reverse_proxy_mode_banner(settings)
+    print_embeddings_extra_headers_inert_banner(settings)
 
     # Log startup configuration
     _log_startup_configuration()

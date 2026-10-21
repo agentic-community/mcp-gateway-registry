@@ -17,6 +17,8 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+from ..constants import REGISTRY_MANAGED_EMBEDDINGS_HEADERS
+
 if TYPE_CHECKING:
     from sentence_transformers import SentenceTransformer
 
@@ -239,6 +241,7 @@ class LiteLLMClient(EmbeddingsClient):
         token_provider: Callable[[], str] | None = None,
         response_format: str = "openai",
         request_timeout_seconds: int = RAW_ARRAY_REQUEST_TIMEOUT_SECONDS,
+        extra_headers: dict[str, str] | None = None,
     ):
         """
         Initialize the LiteLLM client.
@@ -257,6 +260,9 @@ class LiteLLMClient(EmbeddingsClient):
                 litellm to parse the standard envelope; "raw_array" bypasses litellm
                 and reads a bare array-of-vectors response directly.
             request_timeout_seconds: Timeout for the direct raw_array HTTP call.
+            extra_headers: Optional operator-configured headers sent on every
+                embeddings request (EMBEDDINGS_EXTRA_HEADER_<N>). The registry's own
+                Content-Type, Accept, and Authorization always take precedence.
 
         Note:
             For AWS Bedrock, this client uses the standard AWS credential chain
@@ -272,6 +278,15 @@ class LiteLLMClient(EmbeddingsClient):
         self.token_provider = token_provider
         self.response_format = response_format.lower()
         self._request_timeout_seconds = request_timeout_seconds
+        # Copied so a later change to the caller's dict cannot change what this
+        # client sends mid-process.
+        self.extra_headers: dict[str, str] = dict(extra_headers or {})
+        if self.extra_headers:
+            # Count only: header names and values stay out of INFO logs.
+            logger.info(
+                "Embeddings client configured with %d extra header(s)",
+                len(self.extra_headers),
+            )
 
         # Only set a static API key env var when NOT using a dynamic token provider.
         if self.api_key and self.token_provider is None:
@@ -338,7 +353,17 @@ class LiteLLMClient(EmbeddingsClient):
         url = self.api_base.rstrip("/") + "/embeddings"
         # Endpoints expect the bare model name, not litellm's 'provider/model' form.
         model = self.model_name.split("/", 1)[-1]
-        headers = {"Content-Type": "application/json", "Accept": "application/json"}
+        # Operator headers first, minus any registry-managed name in any casing,
+        # so the managed ones below always win. HTTP header names ignore case,
+        # but dict keys do not: without the lowercase check, "content-type" would
+        # be sent alongside "Content-Type". Config load already rejects managed
+        # names, so this is a backstop rather than the primary guard.
+        headers: dict[str, str] = {}
+        for name, value in self.extra_headers.items():
+            if name.lower() not in REGISTRY_MANAGED_EMBEDDINGS_HEADERS:
+                headers[name] = value
+        headers["Content-Type"] = "application/json"
+        headers["Accept"] = "application/json"
         token = self.token_provider() if self.token_provider is not None else self.api_key
         if token:
             headers["Authorization"] = f"Bearer {token}"
@@ -407,6 +432,15 @@ class LiteLLMClient(EmbeddingsClient):
             if self.token_provider is not None:
                 kwargs["api_key"] = self.token_provider()
 
+            # Passed via kwargs, not a named arg: litellm.embedding() has no
+            # extra_headers parameter and reads the key out of **kwargs. An unknown
+            # kwarg is silently ignored, so tests/unit/embeddings/
+            # test_extra_headers.py asserts on the wire, not on this call. Only set
+            # when non-empty so the default deployment's call is unchanged.
+            if self.extra_headers:
+                kwargs["extra_headers"] = dict(self.extra_headers)
+                logger.debug("Sending extra embeddings headers: %s", sorted(self.extra_headers))
+
             logger.debug(f"Calling LiteLLM embedding API with model: {self.model_name}")
             response = embedding(**kwargs)
 
@@ -467,6 +501,7 @@ def create_embeddings_client(
     embedding_dimension: int | None = None,
     token_provider: Callable[[], str] | None = None,
     response_format: str = "openai",
+    extra_headers: dict[str, str] | None = None,
 ) -> EmbeddingsClient:
     """
     Factory function to create an embeddings client based on provider.
@@ -482,6 +517,8 @@ def create_embeddings_client(
         embedding_dimension: Optional embedding dimension
         token_provider: Optional callable returning a fresh bearer token (litellm only)
         response_format: Endpoint response shape, "openai" or "raw_array" (litellm only)
+        extra_headers: Optional extra request headers (litellm only). Ignored with a
+            warning for sentence-transformers, which makes no HTTP call.
 
     Returns:
         EmbeddingsClient instance
@@ -496,6 +533,13 @@ def create_embeddings_client(
     provider_lower = provider.lower()
 
     if provider_lower == "sentence-transformers":
+        if extra_headers:
+            logger.warning(
+                "EMBEDDINGS_EXTRA_HEADER_<N> is set (%d header(s)) but is ignored for "
+                "provider 'sentence-transformers', which makes no HTTP call. Set "
+                "EMBEDDINGS_PROVIDER=litellm to use them.",
+                len(extra_headers),
+            )
         logger.info(f"Creating SentenceTransformersClient with model: {model_name}")
         return SentenceTransformersClient(
             model_name=model_name,
@@ -523,6 +567,7 @@ def create_embeddings_client(
             embedding_dimension=embedding_dimension,
             token_provider=token_provider,
             response_format=response_format,
+            extra_headers=extra_headers,
         )
 
     else:
