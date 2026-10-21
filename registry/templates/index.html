@@ -541,15 +541,10 @@
             opacity: 0.5;
         }
 
-        /* --- Logo Dark Mode Styling --- */
+        /* --- Logo sizing (the colored icon is used as-is in both themes) --- */
         .main-header .logo img {
-            transition: filter 0.3s ease; /* Smooth transition for filter */
             height: 3.5rem; /* Match toggle button effective size using root em */
             width: auto; /* Maintain aspect ratio */
-        }
-        html.dark-mode .main-header .logo img {
-            /* filter: grayscale(100%) brightness(0) invert(100%) brightness(1.5); <<< Old filter */
-            filter: grayscale(100%) brightness(0) invert(100%) brightness(1.5); /* Restore: Force to white and brighten */
         }
 
         /* --- Style the logo container --- */
@@ -2179,7 +2174,7 @@
              {# Button Moved Back To Header #}
              <button id="sidebar-toggle" class="sidebar-toggle-button" title="Toggle Sidebar">☰</button>
             <div class="logo">
-                <img src="{{ url_for('static', path='/logo.png') }}" alt="MCP Gateway Logo"> <!-- Logo Image - Removed height attribute -->
+                <img src="{{ url_for('static', path='/logo.png') }}" alt="AI Gateway & Registry logo">
                 <span>MCP Gateway</span>
             </div>
         </div>

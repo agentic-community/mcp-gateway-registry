@@ -3,7 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>MCP Gateway &amp; Registry</title>
+<title>AI Gateway &amp; Registry</title>
+<link rel="icon" type="image/png" href="https://raw.githubusercontent.com/agentic-community/mcp-gateway-registry/main/docs/logo/png/favicon-48.png">
 <meta name="description" content="A single, governed control plane for every AI asset: MCP servers, AI agents, skills, and custom entities.">
 <style>
   :root {
@@ -22,8 +23,7 @@
          color:var(--ink); line-height:1.65; background:var(--bg); }
   header.top { display:flex; align-items:center; gap:.7rem; padding:.85rem 1.5rem;
                border-bottom:1px solid var(--line); position:sticky; top:0; background:var(--bg); z-index:20; }
-  header.top .mark { width:34px; height:34px; border-radius:8px; background:var(--brand);
-                     display:flex; align-items:center; justify-content:center; color:#fff; font-weight:800; }
+  header.top .mark { width:34px; height:34px; display:block; }
   header.top h1 { font-size:1.12rem; margin:0; font-weight:700; }
   header.top .links { margin-left:auto; display:flex; gap:1.1rem; align-items:center; }
   header.top .links a { color:var(--brand); text-decoration:none; font-weight:600; font-size:.9rem; }
@@ -36,7 +36,7 @@
   nav.side a:hover { background:var(--sidebar); color:var(--ink); }
   main { padding:2.2rem 3.2rem; max-width:840px; min-width:0; }
   main .hero { margin-bottom:1.5rem; }
-  main .hero-logo { width:100%; max-width:720px; border-radius:12px; display:block; }
+  main .hero-logo { width:100%; max-width:480px; display:block; }
   main .hero-tagline { font-size:1.15rem; color:var(--muted); font-weight:500; margin:.9rem 0 0; }
   main h1 { font-size:2rem; }
   main h2 { margin-top:2.6rem; font-size:1.5rem; scroll-margin-top:80px; }
@@ -64,8 +64,11 @@
 </head>
 <body>
 <header class="top">
-  <span class="mark">M</span>
-  <h1>MCP Gateway &amp; Registry</h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/agentic-community/mcp-gateway-registry/main/docs/logo/png/icon-on-dark.png">
+    <img class="mark" src="https://raw.githubusercontent.com/agentic-community/mcp-gateway-registry/main/docs/logo/png/icon-on-light.png" alt="">
+  </picture>
+  <h1>AI Gateway &amp; Registry</h1>
   <div class="links">
     <a href="https://github.com/agentic-community/mcp-gateway-registry" target="_blank" rel="noopener">GitHub</a>
     <a href="https://github.com/agentic-community/mcp-gateway-registry/tree/main/docs" target="_blank" rel="noopener">Docs</a>
