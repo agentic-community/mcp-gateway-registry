@@ -184,7 +184,7 @@ class TestSettingsInstantiation:
             "session_cookie_name": "test_cookie",
             "session_max_age_seconds": 3600,
             "embeddings_provider": "litellm",
-            "embeddings_model_name": "text-embedding-3-small",
+            "embeddings_model_name": "openai/text-embedding-3-small",
             "embeddings_model_dimensions": 1024,
             "health_check_interval_seconds": 600,
         }
@@ -657,7 +657,7 @@ class TestSettingsEmbeddingsProviders:
         # Act
         settings = Settings(
             embeddings_provider="litellm",
-            embeddings_model_name="text-embedding-3-small",
+            embeddings_model_name="openai/text-embedding-3-small",
             embeddings_model_dimensions=1536,
             embeddings_api_key="test-api-key",
             embeddings_api_base="https://api.openai.com/v1",
@@ -665,7 +665,7 @@ class TestSettingsEmbeddingsProviders:
 
         # Assert
         assert settings.embeddings_provider == "litellm"
-        assert settings.embeddings_model_name == "text-embedding-3-small"
+        assert settings.embeddings_model_name == "openai/text-embedding-3-small"
         assert settings.embeddings_model_dimensions == 1536
         assert settings.embeddings_api_key == "test-api-key"
         assert settings.embeddings_api_base == "https://api.openai.com/v1"

@@ -253,6 +253,9 @@ EMBEDDINGS_IDP_TIMEOUT_SECONDS
 EMBEDDINGS_IDP_ALLOW_INSECURE
 # Rendered from embeddings.responseFormat when set (independent of authMode; #1415 follow-up).
 EMBEDDINGS_RESPONSE_FORMAT
+# Rendered from embeddings.requestTimeoutSeconds / maxRetries when set (issue #1826).
+EMBEDDINGS_REQUEST_TIMEOUT_SECONDS
+EMBEDDINGS_MAX_RETRIES
 # Rendered from embeddings.extraHeaders, one per list entry (issue #1819).
 EMBEDDINGS_EXTRA_HEADER_1
 EMBEDDINGS_EXTRA_HEADER_2

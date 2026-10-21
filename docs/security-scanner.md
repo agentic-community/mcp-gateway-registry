@@ -106,7 +106,7 @@ uv run python api/registry_management.py --token-file .oauth-tokens/ingress.json
 - `SECURITY_SCAN_ENABLED=true` - Enable/disable security scanning (default: true)
 - `SECURITY_SCAN_ON_REGISTRATION=true` - Scan during registration (default: true)
 - `SECURITY_SCAN_BLOCK_UNSAFE_SERVERS=true` - Auto-disable unsafe servers (default: true)
-- `SECURITY_ANALYZERS=yara` - Comma-separated list of analyzers (default: yara)
+- `SECURITY_ANALYZERS=yara` - Comma-separated list of analyzers (default: yara). The `llm` analyzer is currently unavailable; see [LLM Analyzer](#llm-analyzer).
 - `SECURITY_SCAN_TIMEOUT=60` - Scan timeout in seconds (default: 60)
 - `MCP_SCANNER_LLM_API_KEY=<key>` - API key for LLM analyzer (optional)
 
@@ -488,7 +488,7 @@ uv run python api/registry_management.py --token-file .oauth-tokens/ingress.json
 - `AGENT_SECURITY_SCAN_ENABLED=true` - Enable/disable agent security scanning (default: true)
 - `AGENT_SECURITY_SCAN_ON_REGISTRATION=true` - Scan during registration (default: true)
 - `AGENT_SECURITY_BLOCK_UNSAFE_AGENTS=true` - Auto-disable unsafe agents (default: true)
-- `AGENT_SECURITY_ANALYZERS=yara,spec` - Comma-separated list of analyzers (default: yara,spec)
+- `AGENT_SECURITY_ANALYZERS=yara,spec` - Comma-separated list of analyzers (default: yara,spec). The `llm` analyzer is currently unavailable; see [LLM Analyzer](#llm-analyzer).
 - `AGENT_SECURITY_SCAN_TIMEOUT=60` - Scan timeout in seconds (default: 60)
 - `AGENT_SECURITY_ADD_PENDING_TAG=true` - Add security-pending tag to unsafe agents (default: true)
 
@@ -650,7 +650,7 @@ When registering a new Agent Skill, security scanning is automatically performed
 - `SKILL_SECURITY_SCAN_ENABLED=true` - Enable/disable skill security scanning (default: true)
 - `SKILL_SECURITY_SCAN_ON_REGISTRATION=true` - Scan during registration (default: true)
 - `SKILL_SECURITY_BLOCK_UNSAFE_SKILLS=true` - Auto-disable unsafe skills (default: true)
-- `SKILL_SECURITY_ANALYZERS=static` - Comma-separated list of analyzers (default: static)
+- `SKILL_SECURITY_ANALYZERS=static` - Comma-separated list of analyzers (default: static). The `llm` analyzer is currently unavailable; see [LLM Analyzer](#llm-analyzer).
 - `SKILL_SECURITY_SCAN_TIMEOUT=120` - Scan timeout in seconds (default: 120)
 - `SKILL_SECURITY_ADD_PENDING_TAG=true` - Add security-pending tag to unsafe skills (default: true)
 - `SKILL_SECURITY_LLM_API_KEY=<key>` - API key for LLM analyzer (optional)
@@ -926,6 +926,8 @@ The YARA analyzer uses signature-based detection rules to identify known securit
 YARA scanning is ideal for automated workflows and continuous integration pipelines due to its speed and zero-configuration requirements.
 
 ### LLM Analyzer
+
+> **Currently unavailable.** The `llm` analyzer needs the LiteLLM library, which the registry no longer installs (issue #1826). A scan configured with `llm` in `SECURITY_ANALYZERS`, `AGENT_SECURITY_ANALYZERS` or `SKILL_SECURITY_ANALYZERS` fails before the scanner starts, the entity is recorded as unsafe, and the registry prints a warning at startup naming the setting. Use `yara` (MCP servers), `yara,spec` (agents) or `static` (skills). The analyzer returns once `cisco-ai-mcp-scanner` makes LiteLLM an optional dependency ([mcp-scanner#285](https://github.com/cisco-ai-defense/mcp-scanner/issues/285)); the YARA, spec, heuristic, endpoint, static and behavioral analyzers are unaffected.
 
 **Type:** AI-powered semantic analysis
 **Speed:** Slower (requires API calls)

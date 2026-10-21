@@ -1,8 +1,11 @@
 """
 Embeddings client abstraction for vendor-agnostic embeddings generation.
 
-This module provides a unified interface for generating embeddings from multiple
-providers including local sentence-transformers models and cloud-based APIs via LiteLLM.
+Two providers: local sentence-transformers models, and remote APIs
+(OpenAI-compatible endpoints, Azure OpenAI, Amazon Bedrock) called through the
+small adapters in adapters.py. The remote provider is still selected with
+EMBEDDINGS_PROVIDER=litellm for backward compatibility; LiteLLM itself was
+removed in issue #1826.
 """
 
 import logging
@@ -13,68 +16,47 @@ from abc import (
 )
 from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import numpy as np
 
-from ..constants import REGISTRY_MANAGED_EMBEDDINGS_HEADERS
+from ..utils.embeddings_provider import (
+    PROVIDER_AZURE,
+    PROVIDER_BEDROCK_COHERE,
+    PROVIDER_BEDROCK_TITAN,
+    PROVIDER_OPENAI,
+    RemoteModel,
+    resolve_remote_model,
+)
+from .adapters import (
+    AZURE_DEFAULT_API_VERSION,
+    _extract_raw_array,
+    embed_azure,
+    embed_bedrock_cohere,
+    embed_bedrock_titan,
+    embed_openai,
+)
 
 if TYPE_CHECKING:
     from sentence_transformers import SentenceTransformer
 
 logger = logging.getLogger(__name__)
 
-# Default timeout for the direct raw_array HTTP call (litellm handles its own).
-RAW_ARRAY_REQUEST_TIMEOUT_SECONDS: int = 30
-# Top-level keys a raw_array endpoint might wrap its list of vectors under.
-_RAW_ARRAY_KEYS: tuple[str, ...] = ("embeddings", "data", "vectors")
+# Defaults for every remote embeddings call (issue #1826). Settings passes the
+# operator's EMBEDDINGS_REQUEST_TIMEOUT_SECONDS and EMBEDDINGS_MAX_RETRIES.
+DEFAULT_REQUEST_TIMEOUT_SECONDS: int = 30
+DEFAULT_MAX_RETRIES: int = 2
+# Kept for backward compatibility with callers of the pre-#1826 name.
+RAW_ARRAY_REQUEST_TIMEOUT_SECONDS: int = DEFAULT_REQUEST_TIMEOUT_SECONDS
 
-
-def _extract_raw_array(
-    payload: Any,
-) -> list[list[float]]:
-    """Extract a list of embedding vectors from a non-OpenAI "raw array" response.
-
-    Some OpenAI-compatible endpoints return the vectors as a bare JSON array of
-    arrays (``[[0.1, ...], [0.2, ...]]``) instead of the standard
-    ``{"data": [{"embedding": [...]}]}`` envelope that litellm parses. A few wrap
-    the same bare array under a top-level key. This helper accepts:
-
-      - a bare list of vectors: ``[[...], [...]]``
-      - a dict with the list of vectors under "embeddings", "data", or "vectors"
-
-    Args:
-        payload: Parsed JSON body returned by the embeddings endpoint.
-
-    Returns:
-        List of embedding vectors (list of lists of floats).
-
-    Raises:
-        ValueError: If no list of numeric vectors can be found.
-    """
-    vectors = payload
-    if isinstance(payload, dict):
-        vectors = None
-        for key in _RAW_ARRAY_KEYS:
-            if isinstance(payload.get(key), list):
-                vectors = payload[key]
-                break
-        if vectors is None:
-            raise ValueError(
-                "raw_array response is a dict without an "
-                "'embeddings'/'data'/'vectors' list; "
-                f"got keys {sorted(payload.keys())}"
-            )
-
-    if not isinstance(vectors, list) or not vectors:
-        raise ValueError("raw_array response did not contain a non-empty list of vectors")
-    if not all(isinstance(vector, list) for vector in vectors):
-        raise ValueError(
-            "raw_array response must be a list of vectors (list of lists); "
-            "got a flat or malformed structure. If your endpoint returns the "
-            "OpenAI envelope, set EMBEDDINGS_RESPONSE_FORMAT=openai instead."
-        )
-    return vectors
+__all__ = [
+    "EmbeddingsClient",
+    "LiteLLMClient",
+    "RemoteEmbeddingsClient",
+    "SentenceTransformersClient",
+    "_extract_raw_array",
+    "create_embeddings_client",
+]
 
 
 class EmbeddingsClient(ABC):
@@ -228,8 +210,23 @@ class SentenceTransformersClient(EmbeddingsClient):
         return self._dimension
 
 
-class LiteLLMClient(EmbeddingsClient):
-    """Client for cloud-based embeddings via LiteLLM."""
+def _raw_array_model(
+    model_name: str,
+) -> RemoteModel:
+    """Treat any model name as OpenAI-compatible for the raw_array response format.
+
+    Before #1826 the raw_array path POSTed to EMBEDDINGS_API_BASE with the bare
+    model name whatever the prefix was, so a custom prefix keeps working there.
+    """
+    return RemoteModel(PROVIDER_OPENAI, model_name.split("/", 1)[-1])
+
+
+class RemoteEmbeddingsClient(EmbeddingsClient):
+    """Client for remote embeddings APIs: OpenAI-compatible, Azure OpenAI, Amazon Bedrock.
+
+    Selected with EMBEDDINGS_PROVIDER=litellm. The model-name prefix picks the
+    adapter: 'openai/', 'azure/', or 'bedrock/'. See utils/embeddings_provider.py.
+    """
 
     def __init__(
         self,
@@ -240,44 +237,54 @@ class LiteLLMClient(EmbeddingsClient):
         embedding_dimension: int | None = None,
         token_provider: Callable[[], str] | None = None,
         response_format: str = "openai",
-        request_timeout_seconds: int = RAW_ARRAY_REQUEST_TIMEOUT_SECONDS,
+        request_timeout_seconds: int = DEFAULT_REQUEST_TIMEOUT_SECONDS,
+        max_retries: int = DEFAULT_MAX_RETRIES,
         extra_headers: dict[str, str] | None = None,
     ):
         """
-        Initialize the LiteLLM client.
+        Initialize the remote embeddings client.
 
         Args:
-            model_name: LiteLLM model identifier (e.g., 'bedrock/amazon.titan-embed-text-v1',
-                       'openai/text-embedding-3-small', 'cohere/embed-english-v3.0')
-            api_key: Optional API key for the provider
-            api_base: Optional API base URL for the provider
-            aws_region: Optional AWS region for Bedrock
-            embedding_dimension: Expected embedding dimension (will be validated)
-            token_provider: Optional callable that returns a fresh bearer token.
-                When provided, the token is injected per-call via api_key instead
-                of setting a static environment variable.
-            response_format: Response shape of the endpoint. "openai" (default) uses
-                litellm to parse the standard envelope; "raw_array" bypasses litellm
-                and reads a bare array-of-vectors response directly.
-            request_timeout_seconds: Timeout for the direct raw_array HTTP call.
-            extra_headers: Optional operator-configured headers sent on every
-                embeddings request (EMBEDDINGS_EXTRA_HEADER_<N>). The registry's own
-                Content-Type, Accept, and Authorization always take precedence.
+            model_name: Provider-prefixed model name, for example
+                'openai/text-embedding-3-small', 'azure/<deployment>',
+                'bedrock/amazon.titan-embed-text-v2:0', 'bedrock/cohere.embed-english-v3'.
+            api_key: Static API key (OpenAI-compatible and Azure). Falls back to
+                OPENAI_API_KEY or AZURE_API_KEY when unset, as LiteLLM did.
+            api_base: Base URL. OpenAI defaults to api.openai.com; Azure requires it
+                (or AZURE_API_BASE).
+            aws_region: AWS region for Amazon Bedrock.
+            embedding_dimension: Expected embedding dimension (validated on first call).
+            token_provider: Optional callable returning a fresh bearer token per call
+                (EMBEDDINGS_AUTH_MODE=idp). Takes precedence over api_key.
+            response_format: "openai" (standard envelope) or "raw_array" (bare array
+                of vectors from an OpenAI-compatible endpoint).
+            request_timeout_seconds: Timeout for each remote request.
+            max_retries: Retries for transient failures (429, 5xx, connection errors).
+            extra_headers: Operator-configured headers sent on every OpenAI-compatible
+                and Azure request (EMBEDDINGS_EXTRA_HEADER_<N>). The registry's own
+                Content-Type, Accept, and credential header always take precedence.
+
+        Raises:
+            ValueError: If no adapter supports the model name.
 
         Note:
-            For AWS Bedrock, this client uses the standard AWS credential chain
-            (IAM roles, ~/.aws/credentials, environment variables). The api_key
-            parameter is not used for Bedrock authentication.
+            Amazon Bedrock uses the standard AWS credential chain (IAM roles,
+            ~/.aws/credentials, environment variables). api_key is not used for it.
         """
         self.model_name = model_name
+        self.response_format = response_format.lower()
+        if self.response_format == "raw_array":
+            self.remote_model = _raw_array_model(model_name)
+        else:
+            self.remote_model = resolve_remote_model(model_name)
         self.api_key = api_key
         self.api_base = api_base
         self.aws_region = aws_region
         self._embedding_dimension = embedding_dimension
         self._validated_dimension: int | None = None
         self.token_provider = token_provider
-        self.response_format = response_format.lower()
         self._request_timeout_seconds = request_timeout_seconds
+        self._max_retries = max_retries
         # Copied so a later change to the caller's dict cannot change what this
         # client sends mid-process.
         self.extra_headers: dict[str, str] = dict(extra_headers or {})
@@ -287,35 +294,20 @@ class LiteLLMClient(EmbeddingsClient):
                 "Embeddings client configured with %d extra header(s)",
                 len(self.extra_headers),
             )
+        logger.info(
+            "Remote embeddings client: provider=%s model=%s",
+            self.remote_model.provider,
+            self.remote_model.model_id,
+        )
 
-        # Only set a static API key env var when NOT using a dynamic token provider.
-        if self.api_key and self.token_provider is None:
-            self._set_api_key_env()
-        if self.aws_region:
-            os.environ["AWS_REGION_NAME"] = self.aws_region
-
-    def _set_api_key_env(self) -> None:
-        """Set the appropriate API key environment variable based on provider."""
-        provider = self.model_name.split("/")[0].lower()
-
-        # AWS Bedrock uses standard AWS credential chain (IAM roles, env vars, ~/.aws/credentials)
-        # No need to set API key environment variable for Bedrock
-        if provider == "bedrock":
-            logger.info("Using standard AWS credential chain for Bedrock authentication")
-            return
-
-        # Handle other providers with API keys
-        env_var_mapping = {
-            "openai": "OPENAI_API_KEY",
-            "cohere": "COHERE_API_KEY",
-            "azure": "AZURE_API_KEY",
-            "anthropic": "ANTHROPIC_API_KEY",
-        }
-
-        env_var = env_var_mapping.get(provider)
-        if env_var and self.api_key:
-            os.environ[env_var] = self.api_key
-            logger.debug(f"Set {env_var} environment variable for {provider}")
+    def _credential(
+        self,
+        env_fallback: str,
+    ) -> str | None:
+        """Return the IdP token, the static key, or the provider's env var, in that order."""
+        if self.token_provider is not None:
+            return self.token_provider()
+        return self.api_key or os.environ.get(env_fallback) or None
 
     def _record_dimension(
         self,
@@ -331,133 +323,113 @@ class LiteLLMClient(EmbeddingsClient):
                 f"got {self._validated_dimension}"
             )
 
-    def _encode_raw_array(
+    def _embed_openai(
         self,
         texts: list[str],
-    ) -> np.ndarray:
-        """Call the endpoint directly and read a bare array-of-vectors response.
-
-        Used when response_format == "raw_array". litellm cannot parse a
-        non-envelope response, so we POST the OpenAI-style request ourselves and
-        extract the vectors via _extract_raw_array. The token (IdP bearer or
-        static api_key) is injected exactly as in the litellm path. api_base is
-        operator-configured trusted config, not user input.
-        """
-        import httpx
-
-        if not self.api_base:
+    ) -> list[list[float]]:
+        """Call an OpenAI-compatible endpoint (also used for raw_array)."""
+        api_base = (
+            self.api_base or os.environ.get("OPENAI_BASE_URL") or os.environ.get("OPENAI_API_BASE")
+        )
+        if self.response_format == "raw_array" and not api_base:
             raise RuntimeError(
                 "EMBEDDINGS_RESPONSE_FORMAT=raw_array requires EMBEDDINGS_API_BASE "
                 "(the OpenAI-compatible endpoint to call directly)."
             )
-        url = self.api_base.rstrip("/") + "/embeddings"
-        # Endpoints expect the bare model name, not litellm's 'provider/model' form.
-        model = self.model_name.split("/", 1)[-1]
-        # Operator headers first, minus any registry-managed name in any casing,
-        # so the managed ones below always win. HTTP header names ignore case,
-        # but dict keys do not: without the lowercase check, "content-type" would
-        # be sent alongside "Content-Type". Config load already rejects managed
-        # names, so this is a backstop rather than the primary guard.
-        headers: dict[str, str] = {}
-        for name, value in self.extra_headers.items():
-            if name.lower() not in REGISTRY_MANAGED_EMBEDDINGS_HEADERS:
-                headers[name] = value
-        headers["Content-Type"] = "application/json"
-        headers["Accept"] = "application/json"
-        token = self.token_provider() if self.token_provider is not None else self.api_key
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
+        return embed_openai(
+            texts=texts,
+            model_id=self.remote_model.model_id,
+            api_base=api_base,
+            api_key=self._credential("OPENAI_API_KEY"),
+            extra_headers=self.extra_headers,
+            response_format=self.response_format,
+            timeout_seconds=self._request_timeout_seconds,
+            max_retries=self._max_retries,
+        )
 
-        try:
-            logger.debug("Calling raw_array embeddings endpoint: %s", url)
-            response = httpx.post(
-                url,
-                json={"input": texts, "model": model},
-                headers=headers,
-                timeout=self._request_timeout_seconds,
-            )
-            response.raise_for_status()
-            vectors = _extract_raw_array(response.json())
-            embeddings_array = np.array(vectors, dtype=np.float32)
-        except httpx.HTTPStatusError as e:
-            logger.error(
-                "raw_array embeddings endpoint returned status %s",
-                e.response.status_code,
-                exc_info=True,
-            )
+    def _embed_azure(
+        self,
+        texts: list[str],
+    ) -> list[list[float]]:
+        """Call an Azure OpenAI deployment."""
+        api_base = self.api_base or os.environ.get("AZURE_API_BASE")
+        if not api_base:
             raise RuntimeError(
-                f"raw_array embeddings request failed with status {e.response.status_code}"
-            ) from e
-        except Exception as e:
-            logger.error(
-                f"Failed to generate embeddings via raw_array endpoint: {e}", exc_info=True
+                "Azure OpenAI embeddings require EMBEDDINGS_API_BASE (or AZURE_API_BASE), "
+                "for example https://<resource>.openai.azure.com"
             )
-            raise RuntimeError(f"Failed to generate embeddings via raw_array endpoint: {e}") from e
+        return embed_azure(
+            texts=texts,
+            deployment=self.remote_model.model_id,
+            api_base=api_base,
+            api_key=self._credential("AZURE_API_KEY"),
+            api_version=os.environ.get("AZURE_API_VERSION") or AZURE_DEFAULT_API_VERSION,
+            extra_headers=self.extra_headers,
+            timeout_seconds=self._request_timeout_seconds,
+            max_retries=self._max_retries,
+        )
 
-        self._record_dimension(embeddings_array)
-        return embeddings_array
+    def _embed_bedrock(
+        self,
+        texts: list[str],
+    ) -> list[list[float]]:
+        """Call Amazon Bedrock with the request shape the model family expects."""
+        adapter = (
+            embed_bedrock_titan
+            if self.remote_model.provider == PROVIDER_BEDROCK_TITAN
+            else embed_bedrock_cohere
+        )
+        return adapter(
+            texts=texts,
+            model_id=self.remote_model.model_id,
+            region=self.aws_region,
+            timeout_seconds=self._request_timeout_seconds,
+            max_retries=self._max_retries,
+        )
 
     def encode(
         self,
         texts: list[str],
     ) -> np.ndarray:
         """
-        Generate embeddings using LiteLLM.
+        Generate embeddings with the remote API for this model.
 
         Args:
             texts: List of text strings to encode
 
         Returns:
-            NumPy array of embeddings
+            NumPy array of embeddings, one row per input text
 
         Raises:
-            RuntimeError: If encoding fails or LiteLLM is not installed
+            RuntimeError: If the request fails or the response cannot be parsed
         """
-        if self.response_format == "raw_array":
-            return self._encode_raw_array(texts)
-
+        provider = self.remote_model.provider
         try:
-            from litellm import embedding
-        except ImportError as e:
-            logger.error("LiteLLM is not installed. Install it with: uv add litellm")
-            raise RuntimeError("LiteLLM is not installed. Install it with: uv add litellm") from e
-
-        try:
-            # LiteLLM expects 'input' parameter
-            kwargs: dict[str, Any] = {"model": self.model_name, "input": texts}
-
-            if self.api_base:
-                kwargs["api_base"] = self.api_base
-
-            if self.token_provider is not None:
-                kwargs["api_key"] = self.token_provider()
-
-            # Passed via kwargs, not a named arg: litellm.embedding() has no
-            # extra_headers parameter and reads the key out of **kwargs. An unknown
-            # kwarg is silently ignored, so tests/unit/embeddings/
-            # test_extra_headers.py asserts on the wire, not on this call. Only set
-            # when non-empty so the default deployment's call is unchanged.
-            if self.extra_headers:
-                kwargs["extra_headers"] = dict(self.extra_headers)
-                logger.debug("Sending extra embeddings headers: %s", sorted(self.extra_headers))
-
-            logger.debug(f"Calling LiteLLM embedding API with model: {self.model_name}")
-            response = embedding(**kwargs)
-
-            # Extract embeddings from response
-            embeddings_list = [item["embedding"] for item in response["data"]]
-            embeddings_array = np.array(embeddings_list, dtype=np.float32)
-
-            self._record_dimension(embeddings_array)
-
-            logger.debug(
-                f"Generated {len(embeddings_list)} embeddings with dimension {self._validated_dimension}"
-            )
-            return embeddings_array
-
+            if provider == PROVIDER_OPENAI:
+                vectors = self._embed_openai(texts)
+            elif provider == PROVIDER_AZURE:
+                vectors = self._embed_azure(texts)
+            elif provider in (PROVIDER_BEDROCK_TITAN, PROVIDER_BEDROCK_COHERE):
+                vectors = self._embed_bedrock(texts)
+            else:
+                raise RuntimeError(f"No embeddings adapter for provider {provider!r}")
+            embeddings_array = np.array(vectors, dtype=np.float32)
         except Exception as e:
-            logger.error(f"Failed to generate embeddings via LiteLLM: {e}", exc_info=True)
-            raise RuntimeError(f"Failed to generate embeddings via LiteLLM: {e}") from e
+            logger.error(
+                "Failed to generate embeddings via %s (%s): %s",
+                provider,
+                self.remote_model.model_id,
+                e,
+            )
+            raise RuntimeError(f"Failed to generate embeddings via {provider}: {e}") from e
+
+        self._record_dimension(embeddings_array)
+        logger.debug(
+            "Generated %d embeddings with dimension %s",
+            len(vectors),
+            self._validated_dimension,
+        )
+        return embeddings_array
 
     def get_embedding_dimension(self) -> int:
         """
@@ -469,15 +441,12 @@ class LiteLLMClient(EmbeddingsClient):
         Raises:
             RuntimeError: If dimension cannot be determined
         """
-        # If we have a validated dimension from actual API calls, use that
         if self._validated_dimension is not None:
             return self._validated_dimension
 
-        # Otherwise, use the configured dimension if provided
         if self._embedding_dimension is not None:
             return self._embedding_dimension
 
-        # As a last resort, make a test call with a simple string
         logger.info("Embedding dimension not known, making test call to determine dimension")
         try:
             test_embedding = self.encode(["test"])
@@ -488,6 +457,10 @@ class LiteLLMClient(EmbeddingsClient):
                 f"Failed to determine embedding dimension: {e}. "
                 "Consider setting EMBEDDINGS_DIMENSION in configuration."
             ) from e
+
+
+# Pre-#1826 name. Kept so existing imports keep working.
+LiteLLMClient = RemoteEmbeddingsClient
 
 
 def create_embeddings_client(
@@ -502,33 +475,38 @@ def create_embeddings_client(
     token_provider: Callable[[], str] | None = None,
     response_format: str = "openai",
     extra_headers: dict[str, str] | None = None,
+    request_timeout_seconds: int = DEFAULT_REQUEST_TIMEOUT_SECONDS,
+    max_retries: int = DEFAULT_MAX_RETRIES,
 ) -> EmbeddingsClient:
     """
     Factory function to create an embeddings client based on provider.
 
     Args:
-        provider: Provider type ('sentence-transformers' or 'litellm')
+        provider: Provider type: 'sentence-transformers' (local) or 'litellm' (remote
+            API; the value predates the removal of LiteLLM in issue #1826)
         model_name: Model identifier
         model_dir: Optional local model directory (sentence-transformers only)
         cache_dir: Optional cache directory (sentence-transformers only)
-        api_key: Optional API key (litellm only)
-        api_base: Optional API base URL (litellm only)
-        aws_region: Optional AWS region (litellm with Bedrock only)
+        api_key: Optional API key (remote only)
+        api_base: Optional API base URL (remote only)
+        aws_region: Optional AWS region (remote, Amazon Bedrock only)
         embedding_dimension: Optional embedding dimension
         token_provider: Optional callable returning a fresh bearer token (litellm only)
         response_format: Endpoint response shape, "openai" or "raw_array" (litellm only)
-        extra_headers: Optional extra request headers (litellm only). Ignored with a
+        extra_headers: Optional extra request headers (remote only). Ignored with a
             warning for sentence-transformers, which makes no HTTP call.
+        request_timeout_seconds: Timeout for each remote request
+        max_retries: Retries for transient remote failures
 
     Returns:
         EmbeddingsClient instance
 
     Raises:
-        ValueError: If provider is not supported
+        ValueError: If the provider or the remote model name is not supported
 
     Note:
-        For AWS Bedrock, AWS credentials should be configured via standard AWS
-        credential chain (IAM roles, environment variables, ~/.aws/credentials).
+        For Amazon Bedrock, AWS credentials come from the standard AWS credential
+        chain (IAM roles, environment variables, ~/.aws/credentials).
     """
     provider_lower = provider.lower()
 
@@ -548,18 +526,8 @@ def create_embeddings_client(
         )
 
     elif provider_lower == "litellm":
-        # Validate that model name has provider prefix
-        if "/" not in model_name:
-            raise ValueError(
-                f"Invalid model name for LiteLLM provider: '{model_name}'. "
-                f"LiteLLM requires provider-prefixed model names. "
-                f"Examples: 'openai/text-embedding-3-small', 'bedrock/amazon.titan-embed-text-v1', "
-                f"'cohere/embed-english-v3.0'. "
-                f"If you want to use '{model_name}', set EMBEDDINGS_PROVIDER=sentence-transformers"
-            )
-
-        logger.info(f"Creating LiteLLMClient with model: {model_name}")
-        return LiteLLMClient(
+        logger.info(f"Creating RemoteEmbeddingsClient with model: {model_name}")
+        return RemoteEmbeddingsClient(
             model_name=model_name,
             api_key=api_key,
             api_base=api_base,
@@ -567,6 +535,8 @@ def create_embeddings_client(
             embedding_dimension=embedding_dimension,
             token_provider=token_provider,
             response_format=response_format,
+            request_timeout_seconds=request_timeout_seconds,
+            max_retries=max_retries,
             extra_headers=extra_headers,
         )
 

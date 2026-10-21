@@ -103,20 +103,22 @@ module "mcp_gateway" {
   alarm_email       = var.alarm_email
 
   # Embeddings configuration
-  embeddings_provider            = var.embeddings_provider
-  embeddings_model_name          = var.embeddings_model_name
-  embeddings_model_dimensions    = var.embeddings_model_dimensions
-  embeddings_aws_region          = var.embeddings_aws_region
-  embeddings_api_key             = var.embeddings_api_key
-  embeddings_auth_mode           = var.embeddings_auth_mode
-  embeddings_idp_token_endpoint  = var.embeddings_idp_token_endpoint
-  embeddings_idp_client_id       = var.embeddings_idp_client_id
-  embeddings_idp_client_secret   = var.embeddings_idp_client_secret
-  embeddings_idp_scope           = var.embeddings_idp_scope
-  embeddings_idp_timeout_seconds = var.embeddings_idp_timeout_seconds
-  embeddings_idp_allow_insecure  = var.embeddings_idp_allow_insecure
-  embeddings_response_format     = var.embeddings_response_format
-  embeddings_extra_headers       = var.embeddings_extra_headers
+  embeddings_provider                = var.embeddings_provider
+  embeddings_model_name              = var.embeddings_model_name
+  embeddings_model_dimensions        = var.embeddings_model_dimensions
+  embeddings_aws_region              = var.embeddings_aws_region
+  embeddings_api_key                 = var.embeddings_api_key
+  embeddings_auth_mode               = var.embeddings_auth_mode
+  embeddings_idp_token_endpoint      = var.embeddings_idp_token_endpoint
+  embeddings_idp_client_id           = var.embeddings_idp_client_id
+  embeddings_idp_client_secret       = var.embeddings_idp_client_secret
+  embeddings_idp_scope               = var.embeddings_idp_scope
+  embeddings_idp_timeout_seconds     = var.embeddings_idp_timeout_seconds
+  embeddings_idp_allow_insecure      = var.embeddings_idp_allow_insecure
+  embeddings_response_format         = var.embeddings_response_format
+  embeddings_request_timeout_seconds = var.embeddings_request_timeout_seconds
+  embeddings_max_retries             = var.embeddings_max_retries
+  embeddings_extra_headers           = var.embeddings_extra_headers
 
   # Registration deduplication
   dedup_registration_hint_enabled = var.dedup_registration_hint_enabled

@@ -22,6 +22,11 @@ from ..core.config import settings
 from ..core.endpoint_utils import get_endpoint_url
 from ..repositories.factory import get_security_scan_repository
 from ..schemas.security import SecurityScanConfig, SecurityScanResult
+from .scanner_llm_analyzer import (
+    MCP_SCANNER_LITELLM_STANDIN,
+    LLMAnalyzerUnavailableError,
+    ensure_llm_analyzer_available,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +42,9 @@ _SCANNER_BEARER_ENV = "MCP_GATEWAY_SCAN_BEARER"  # nosec B105 - env var name, no
 # shim pops it from the environment and re-attaches mcp-scanner's own flag inside the
 # child, then hands off to the same entry point the console script uses. Popping it also
 # keeps it out of the environment the scanner might pass to anything it spawns.
-_SCANNER_SHIM = (
+# MCP_SCANNER_LITELLM_STANDIN runs first: mcp-scanner imports litellm at module
+# load even for a YARA-only scan, and the registry no longer installs it (#1826).
+_SCANNER_SHIM = MCP_SCANNER_LITELLM_STANDIN + (
     "import os,sys;"
     "from mcpscanner.cli import cli_entry_point;"
     f"_t=os.environ.pop({_SCANNER_BEARER_ENV!r},None);"
@@ -64,6 +71,10 @@ def _scan_failure_message(exc: BaseException, headers: str | None) -> str:
     list and the catch-all -- because a message written into only one of them is a
     message half the failures will not carry.
     """
+    # The 'llm' analyzer error already says what to change; a credential hint
+    # would send the operator the wrong way.
+    if isinstance(exc, LLMAnalyzerUnavailableError):
+        return str(exc)
     message = f"security scan failed ({type(exc).__name__})"
     if not headers:
         message += (
@@ -303,6 +314,7 @@ class SecurityScannerService:
             # never spawned). Same profile as the pre-resolution check so the
             # built-in server's exact-identity endpoint (/mcp) is admitted.
             validate_url(server_url, profile=scan_profile)
+            ensure_llm_analyzer_available(analyzers, "SECURITY_ANALYZERS")
 
             # Run the scan in a thread pool to avoid blocking
             raw_output = await asyncio.to_thread(
