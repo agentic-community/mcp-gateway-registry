@@ -295,7 +295,7 @@ if [ "$EMBEDDINGS_PROVIDER" = "sentence-transformers" ]; then
         echo "Embeddings model found at $EMBEDDINGS_MODEL_DIR"
     fi
 elif [ "$EMBEDDINGS_PROVIDER" = "litellm" ]; then
-    echo "Using LiteLLM provider - no local model download required"
+    echo "Using remote embeddings API provider - no local model download required"
     echo "Model: $EMBEDDINGS_MODEL_NAME"
     if [[ "$EMBEDDINGS_MODEL_NAME" == bedrock/* ]]; then
         echo "Bedrock model will use AWS credential chain for authentication"

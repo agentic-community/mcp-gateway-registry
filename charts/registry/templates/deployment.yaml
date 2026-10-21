@@ -486,6 +486,20 @@ spec:
             - name: EMBEDDINGS_RESPONSE_FORMAT
               value: {{ .Values.embeddings.responseFormat | quote }}
             {{- end }}
+            # Remote embeddings timeout and retries (issue #1826). Rendered only
+            # when set; the code defaults apply otherwise.
+            {{- if not (kindIs "invalid" .Values.embeddings.requestTimeoutSeconds) }}
+            {{- if ne (toString .Values.embeddings.requestTimeoutSeconds) "" }}
+            - name: EMBEDDINGS_REQUEST_TIMEOUT_SECONDS
+              value: {{ .Values.embeddings.requestTimeoutSeconds | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if not (kindIs "invalid" .Values.embeddings.maxRetries) }}
+            {{- if ne (toString .Values.embeddings.maxRetries) "" }}
+            - name: EMBEDDINGS_MAX_RETRIES
+              value: {{ .Values.embeddings.maxRetries | quote }}
+            {{- end }}
+            {{- end }}
             # Extra embeddings request headers (issue #1819). Only populated
             # entries render, so an unset list emits no variables at all.
             {{- if gt (len (.Values.embeddings.extraHeaders | default list)) 5 }}

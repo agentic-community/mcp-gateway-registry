@@ -57,7 +57,6 @@ dependencies = [
     "motor>=3.3.0",
     "pymongo>=4.6.3",
     "dnspython>=2.4.0",
-    "litellm>=1.93.2",
     "cryptography>=48.0.1",
     "prometheus-client>=0.20.0",
     "opentelemetry-api>=1.41.1",
@@ -189,6 +188,13 @@ directory = "htmlcov"
 title = "MCP Registry Coverage Report"
 
 [tool.uv]
+# LiteLLM is not installed (issue #1826). The registry calls embeddings APIs with
+# its own adapters, and the Cisco scanners need LiteLLM only for their 'llm'
+# analyzer. cisco-ai-mcp-scanner still declares it as a hard dependency, so this
+# override keeps it out; registry/services/scanner_llm_analyzer.py supplies the
+# stand-in mcp-scanner needs at import. Remove this line and the stand-in once
+# mcp-scanner makes LiteLLM optional: https://github.com/cisco-ai-defense/mcp-scanner/issues/285
+override-dependencies = ["litellm; sys_platform == 'never'"]
 # Local-only project - never resolve from PyPI
 package = false
 

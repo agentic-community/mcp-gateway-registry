@@ -4,18 +4,19 @@ Flexible, vendor-agnostic embeddings generation for MCP Gateway Registry's seman
 
 ## Overview
 
-The MCP Gateway Registry provides semantic search capabilities across MCP servers, tools, and AI agents. You can choose from three embedding provider options to power this search:
+The MCP Gateway Registry provides semantic search capabilities across MCP servers, tools, and AI agents. Embeddings come from one of two providers:
 
-1. **Sentence Transformers** (Default) - Local models
-2. **OpenAI** - Cloud embeddings via API
-3. **Any LiteLLM-supported provider** - Amazon Bedrock Titan, Cohere, and 100+ other models
+1. **Sentence Transformers** (default, `EMBEDDINGS_PROVIDER=sentence-transformers`): a local model, no network calls.
+2. **A remote embeddings API** (`EMBEDDINGS_PROVIDER=litellm`): any OpenAI-compatible endpoint, Azure OpenAI, or Amazon Bedrock (Titan and Cohere embed models).
+
+The remote provider keeps the setting value `litellm` for backward compatibility. The registry now calls these APIs with its own small adapters (`registry/embeddings/adapters.py`) instead of the LiteLLM library, and LiteLLM is no longer installed (issue #1826).
 
 Switch between providers with simple configuration changes - no code modifications required.
 
 ## Features
 
 - **Vendor-agnostic**: Switch between embeddings providers with configuration changes
-- **Local & Cloud Support**: Use local models or cloud APIs (OpenAI, Cohere, Amazon Bedrock, etc.)
+- **Local & Cloud Support**: Use a local model or a cloud API (OpenAI-compatible endpoints, Azure OpenAI, Amazon Bedrock)
 - **Backward Compatible**: Works seamlessly with existing DocumentDB vector search
 - **Easy Configuration**: Simple environment variable setup
 - **Extensible**: Easy to add new providers
@@ -64,7 +65,7 @@ EMBEDDINGS_API_KEY=sk-your-openai-api-key
 
 ### Option 3: Amazon Bedrock Titan
 
-Cloud-based embedding service via AWS Bedrock.
+Cloud-based embedding service via Amazon Bedrock.
 
 ```bash
 # In .env
@@ -92,11 +93,19 @@ EMBEDDINGS_AWS_REGION=us-east-1
 | `EMBEDDINGS_PROVIDER` | Provider type: `sentence-transformers` or `litellm` | `sentence-transformers` | No |
 | `EMBEDDINGS_MODEL_NAME` | Model identifier | `all-MiniLM-L6-v2` | Yes |
 | `EMBEDDINGS_MODEL_DIMENSIONS` | Embedding dimension | `384` | Yes |
-| `EMBEDDINGS_API_KEY` | API key for cloud provider (OpenAI, Cohere, etc.) | - | For cloud* |
-| `EMBEDDINGS_API_BASE` | Custom API endpoint (LiteLLM only) | - | No |
-| `EMBEDDINGS_AWS_REGION` | AWS region for Bedrock (LiteLLM only) | - | For Bedrock |
+| `EMBEDDINGS_API_KEY` | API key for an OpenAI-compatible endpoint or Azure OpenAI. Falls back to `OPENAI_API_KEY` or `AZURE_API_KEY` when unset | - | For cloud* |
+| `EMBEDDINGS_API_BASE` | Base URL of the endpoint. OpenAI defaults to `https://api.openai.com/v1`; Azure requires it (or `AZURE_API_BASE`) | - | For Azure and custom endpoints |
+| `EMBEDDINGS_AWS_REGION` | AWS region for Amazon Bedrock | `us-east-1` | For Bedrock |
+| `EMBEDDINGS_RESPONSE_FORMAT` | `openai` (standard envelope) or `raw_array` (bare array of vectors) | `openai` | No |
+| `EMBEDDINGS_REQUEST_TIMEOUT_SECONDS` | Timeout for each remote request | `30` | No |
+| `EMBEDDINGS_MAX_RETRIES` | Retries on HTTP 429, 5xx and connection errors, with exponential backoff. On Amazon Bedrock this maps to botocore's standard retry mode | `2` | No |
+| `EMBEDDINGS_EXTRA_HEADER_1` to `_5` | Extra request headers as `Name: value` (see the [IdP embeddings FAQ](faq/idp-authenticated-embeddings-endpoint.md#extra-request-headers)) | - | No |
 
-*Not required for AWS Bedrock - use standard AWS credential chain (IAM roles, environment variables, ~/.aws/credentials)
+*Not required for Amazon Bedrock, which uses the standard AWS credential chain (IAM roles, environment variables, ~/.aws/credentials).
+
+Azure OpenAI uses `AZURE_API_VERSION` when set and `2025-02-01-preview` otherwise.
+
+The registry checks the model name at startup. An unsupported name stops the registry with an error that names the fix, rather than leaving search to fall back to keywords on the first query.
 
 ### Terraform Configuration
 
@@ -142,30 +151,24 @@ See [terraform/aws-ecs/terraform.tfvars.example](../terraform/aws-ecs/terraform.
 
 Any model from [Hugging Face sentence-transformers](https://huggingface.co/models?library=sentence-transformers) is supported.
 
-### LiteLLM (Cloud-based)
+### Remote embeddings APIs
 
-LiteLLM supports 100+ embedding models from various providers:
+The model-name prefix picks the API:
 
-#### OpenAI
-- `openai/text-embedding-3-small` (1536 dimensions)
-- `openai/text-embedding-3-large` (3072 dimensions)
-- `openai/text-embedding-ada-002` (1536 dimensions)
+| Prefix | API | Example | Dimensions |
+|--------|-----|---------|-----------:|
+| `openai/` | OpenAI, or any OpenAI-compatible `/embeddings` endpoint via `EMBEDDINGS_API_BASE` | `openai/text-embedding-3-small` | 1536 |
+| `openai/` | | `openai/text-embedding-3-large` | 3072 |
+| `openai/` | | `openai/text-embedding-ada-002` | 1536 |
+| `azure/` | Azure OpenAI; the name after the prefix is the deployment name | `azure/my-embeddings-deployment` | model dependent |
+| `bedrock/` | Amazon Bedrock Titan text embeddings | `bedrock/amazon.titan-embed-text-v1` | 1536 |
+| `bedrock/` | | `bedrock/amazon.titan-embed-text-v2:0` | 1024 |
+| `bedrock/` | Cohere on Amazon Bedrock | `bedrock/cohere.embed-english-v3` | 1024 |
+| `bedrock/` | | `bedrock/cohere.embed-multilingual-v3` | 1024 |
 
-#### Cohere
-- `cohere/embed-english-v3.0` (1024 dimensions)
-- `cohere/embed-multilingual-v3.0` (1024 dimensions)
+Self-hosted servers (vLLM, Ollama, Text Embeddings Inference) and most hosted APIs (Mistral, Together, a corporate AI gateway) expose an OpenAI-compatible endpoint. Use `openai/<model>` with `EMBEDDINGS_API_BASE` set to its base URL.
 
-#### Amazon Bedrock
-- `bedrock/amazon.titan-embed-text-v1` (1536 dimensions)
-- `bedrock/cohere.embed-english-v3` (1024 dimensions)
-- `bedrock/cohere.embed-multilingual-v3` (1024 dimensions)
-
-#### Other Providers
-- Azure OpenAI
-- Anthropic (Claude)
-- Google Vertex AI
-- Hugging Face Inference API
-- And 100+ more via [LiteLLM](https://docs.litellm.ai/docs/embedding/supported_embedding)
+**Removed with LiteLLM (issue #1826):** `cohere/` (Cohere's own API; use Cohere on Amazon Bedrock), `voyage/`, and any other LiteLLM-only prefix. A registry configured with one refuses to start and names the replacement.
 
 ## Migration Between Providers
 
@@ -207,7 +210,7 @@ EMBEDDINGS_API_KEY=sk-your-key
 
 Restart the service and the index will be automatically rebuilt.
 
-## AWS Bedrock Setup
+## Amazon Bedrock Setup
 
 ### IAM Permissions
 
@@ -223,7 +226,9 @@ For Amazon Bedrock embeddings, ensure your ECS task role has the following permi
         "bedrock:InvokeModel"
       ],
       "Resource": [
-        "arn:aws:bedrock:*::foundation-model/amazon.titan-embed-text-v1"
+        "arn:aws:bedrock:*::foundation-model/amazon.titan-embed-text-v1",
+        "arn:aws:bedrock:*::foundation-model/amazon.titan-embed-text-v2:0",
+        "arn:aws:bedrock:*::foundation-model/cohere.embed-english-v3"
       ]
     }
   ]
@@ -245,7 +250,8 @@ For Amazon Bedrock embeddings, ensure your ECS task role has the following permi
 ```
 EmbeddingsClient (Abstract Base Class)
 ├── SentenceTransformersClient (Local models)
-└── LiteLLMClient (Cloud APIs via LiteLLM)
+└── RemoteEmbeddingsClient (remote APIs; LiteLLMClient is an alias)
+      └── adapters.py: embed_openai, embed_azure, embed_bedrock_titan, embed_bedrock_cohere
 ```
 
 ### Integration with Search Service
@@ -276,7 +282,7 @@ class SearchService:
 - Model files stored locally
 - Network-independent operation
 
-### Cloud APIs (LiteLLM)
+### Remote APIs
 - Runs on provider infrastructure
 - Requires network connectivity
 - API costs apply (varies by provider)
@@ -320,16 +326,13 @@ and is not a valid model identifier listed on 'https://huggingface.co/models'
 
 **Solution:** Verify the model name in `EMBEDDINGS_MODEL_NAME` is correct. Check the [Hugging Face model hub](https://huggingface.co/models?library=sentence-transformers) for valid names. The system will continue operating with lexical-only search until the model is fixed.
 
-### LiteLLM Not Installed
+### Unsupported Model Name
 
 ```
-RuntimeError: LiteLLM is not installed. Install it with: uv add litellm
+ValueError: EMBEDDINGS_MODEL_NAME='cohere/embed-english-v3.0' is not supported: the 'cohere/' provider was removed with LiteLLM; use bedrock/cohere.embed-english-v3 (Cohere on Amazon Bedrock).
 ```
 
-**Solution:**
-```bash
-uv add litellm
-```
+**Solution:** Use one of the prefixes in [Remote embeddings APIs](#remote-embeddings-apis). For any other provider with an OpenAI-compatible endpoint, set `EMBEDDINGS_MODEL_NAME=openai/<model>` and `EMBEDDINGS_API_BASE` to its base URL.
 
 ### Dimension Mismatch
 
@@ -374,11 +377,14 @@ If using AWS ECS and Bedrock, ensure the task execution role has access to the e
 from registry.embeddings import create_embeddings_client
 
 client = create_embeddings_client(
-    provider: str,                    # "sentence-transformers" or "litellm"
-    model_name: str,                  # Model identifier
-    api_key: Optional[str] = None,    # API key (litellm only)
-    aws_region: Optional[str] = None, # AWS region (Bedrock only)
-    embedding_dimension: Optional[int] = None,
+    provider: str,                    # "sentence-transformers" or "litellm" (remote API)
+    model_name: str,                  # Model identifier, prefixed for remote APIs
+    api_key: str | None = None,       # API key (remote only)
+    api_base: str | None = None,      # Endpoint base URL (remote only)
+    aws_region: str | None = None,    # AWS region (Amazon Bedrock only)
+    embedding_dimension: int | None = None,
+    request_timeout_seconds: int = 30,
+    max_retries: int = 2,
 )
 ```
 
@@ -406,7 +412,6 @@ dim = client.get_embedding_dimension()
 
 ## Further Reading
 
-- [LiteLLM Documentation](https://docs.litellm.ai/docs/)
 - [OpenAI Embeddings Guide](https://platform.openai.com/docs/guides/embeddings)
 - [Amazon Bedrock Embeddings](https://docs.aws.amazon.com/bedrock/latest/userguide/embeddings.html)
 - [Sentence Transformers Models](https://www.sbert.net/docs/pretrained_models.html)

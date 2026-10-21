@@ -506,10 +506,10 @@ Matches:
    - Dimensions: 384
    - Runs locally, no API costs
 
-2. **LiteLLM** (Cloud, via API)
+2. **Remote API** (`EMBEDDINGS_PROVIDER=litellm`; the registry's own adapters since #1826)
    - OpenAI: `text-embedding-ada-002` (1536 dims)
    - Amazon Bedrock Titan: `amazon.titan-embed-text-v1` (1536 dims)
-   - Cohere: `embed-english-v3.0` (1024 dims)
+   - Cohere on Amazon Bedrock: `cohere.embed-english-v3` (1024 dims)
 
 **Configuration:**
 

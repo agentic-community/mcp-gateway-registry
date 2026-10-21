@@ -4,7 +4,7 @@ Unit tests for registry.embeddings.client module.
 This module tests the embeddings client abstraction including:
 - EmbeddingsClient abstract base class
 - SentenceTransformersClient implementation
-- LiteLLMClient implementation
+- RemoteEmbeddingsClient factory wiring (adapter behavior: test_remote_client.py)
 - create_embeddings_client() factory function
 """
 
@@ -43,22 +43,6 @@ def mock_sentence_transformer():
     mock_model.encode.return_value = np.array([[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]], dtype=np.float32)
     mock_model.get_sentence_embedding_dimension.return_value = 384
     return mock_model
-
-
-@pytest.fixture
-def mock_litellm_response():
-    """
-    Create a mock LiteLLM embedding response.
-
-    Returns:
-        Mock response dictionary
-    """
-    return {
-        "data": [
-            {"embedding": [0.1, 0.2, 0.3, 0.4], "index": 0},
-            {"embedding": [0.5, 0.6, 0.7, 0.8], "index": 1},
-        ]
-    }
 
 
 @pytest.fixture
@@ -457,330 +441,7 @@ class TestSentenceTransformersClient:
 
 
 # =============================================================================
-# TESTS: LiteLLMClient
-# =============================================================================
-
-
-@pytest.mark.unit
-@pytest.mark.search
-class TestLiteLLMClient:
-    """Tests for LiteLLMClient implementation."""
-
-    def test_initialization_minimal(self):
-        """Test LiteLLMClient initialization with minimal parameters."""
-        # Arrange & Act
-        client = LiteLLMClient(model_name="openai/text-embedding-3-small")
-
-        # Assert
-        assert client.model_name == "openai/text-embedding-3-small"
-        assert client.api_key is None
-        assert client.api_base is None
-        assert client.aws_region is None
-        assert client._embedding_dimension is None
-        assert client._validated_dimension is None
-
-    def test_initialization_with_all_parameters(self):
-        """Test LiteLLMClient initialization with all parameters."""
-        # Arrange & Act
-        client = LiteLLMClient(
-            model_name="openai/text-embedding-3-small",
-            api_key="test-api-key",
-            api_base="https://api.test.com",
-            aws_region="us-west-2",
-            embedding_dimension=1536,
-        )
-
-        # Assert
-        assert client.model_name == "openai/text-embedding-3-small"
-        assert client.api_key == "test-api-key"
-        assert client.api_base == "https://api.test.com"
-        assert client.aws_region == "us-west-2"
-        assert client._embedding_dimension == 1536
-
-    def test_initialization_sets_aws_region_env_var(self):
-        """Test that AWS region is set as environment variable."""
-        # Arrange
-        original_value = os.environ.get("AWS_REGION_NAME")
-
-        try:
-            # Act
-            LiteLLMClient(
-                model_name="bedrock/amazon.titan-embed-text-v1",
-                aws_region="us-east-1",
-            )
-
-            # Assert
-            assert os.environ.get("AWS_REGION_NAME") == "us-east-1"
-        finally:
-            # Cleanup
-            if original_value:
-                os.environ["AWS_REGION_NAME"] = original_value
-            elif "AWS_REGION_NAME" in os.environ:
-                del os.environ["AWS_REGION_NAME"]
-
-    def test_set_api_key_env_openai(self):
-        """Test setting OpenAI API key environment variable."""
-        # Arrange
-        original_value = os.environ.get("OPENAI_API_KEY")
-
-        try:
-            client = LiteLLMClient(
-                model_name="openai/text-embedding-3-small",
-                api_key="test-openai-key",
-            )
-
-            # Act
-            client._set_api_key_env()
-
-            # Assert
-            assert os.environ.get("OPENAI_API_KEY") == "test-openai-key"
-        finally:
-            # Cleanup
-            if original_value:
-                os.environ["OPENAI_API_KEY"] = original_value
-            elif "OPENAI_API_KEY" in os.environ:
-                del os.environ["OPENAI_API_KEY"]
-
-    def test_set_api_key_env_cohere(self):
-        """Test setting Cohere API key environment variable."""
-        # Arrange
-        original_value = os.environ.get("COHERE_API_KEY")
-
-        try:
-            client = LiteLLMClient(
-                model_name="cohere/embed-english-v3.0",
-                api_key="test-cohere-key",
-            )
-
-            # Act
-            client._set_api_key_env()
-
-            # Assert
-            assert os.environ.get("COHERE_API_KEY") == "test-cohere-key"
-        finally:
-            # Cleanup
-            if original_value:
-                os.environ["COHERE_API_KEY"] = original_value
-            elif "COHERE_API_KEY" in os.environ:
-                del os.environ["COHERE_API_KEY"]
-
-    def test_set_api_key_env_azure(self):
-        """Test setting Azure API key environment variable."""
-        # Arrange
-        original_value = os.environ.get("AZURE_API_KEY")
-
-        try:
-            client = LiteLLMClient(
-                model_name="azure/deployment-name",
-                api_key="test-azure-key",
-            )
-
-            # Act
-            client._set_api_key_env()
-
-            # Assert
-            assert os.environ.get("AZURE_API_KEY") == "test-azure-key"
-        finally:
-            # Cleanup
-            if original_value:
-                os.environ["AZURE_API_KEY"] = original_value
-            elif "AZURE_API_KEY" in os.environ:
-                del os.environ["AZURE_API_KEY"]
-
-    def test_set_api_key_env_bedrock_skips(self):
-        """Test that Bedrock does not set API key (uses AWS credential chain)."""
-        # Arrange
-        client = LiteLLMClient(
-            model_name="bedrock/amazon.titan-embed-text-v1",
-            api_key="should-not-be-used",
-        )
-
-        # Act
-        client._set_api_key_env()
-
-        # Assert
-        # No BEDROCK_API_KEY should be set
-        assert "BEDROCK_API_KEY" not in os.environ
-
-    def test_encode_single_text(self, mock_litellm_response):
-        """Test encoding a single text with LiteLLM."""
-        # Arrange
-        with patch("litellm.embedding") as mock_embedding:
-            mock_embedding.return_value = mock_litellm_response
-            client = LiteLLMClient(model_name="openai/text-embedding-3-small")
-
-            # Act
-            result = client.encode(["test text"])
-
-            # Assert
-            assert isinstance(result, np.ndarray)
-            assert result.shape == (2, 4)  # 2 embeddings from mock response
-            assert result.dtype == np.float32
-            mock_embedding.assert_called_once_with(
-                model="openai/text-embedding-3-small",
-                input=["test text"],
-            )
-
-    def test_encode_multiple_texts(self, mock_litellm_response):
-        """Test encoding multiple texts with LiteLLM."""
-        # Arrange
-        with patch("litellm.embedding") as mock_embedding:
-            mock_embedding.return_value = mock_litellm_response
-            client = LiteLLMClient(model_name="openai/text-embedding-3-small")
-            texts = ["first text", "second text"]
-
-            # Act
-            result = client.encode(texts)
-
-            # Assert
-            assert isinstance(result, np.ndarray)
-            assert result.dtype == np.float32
-            mock_embedding.assert_called_once_with(
-                model="openai/text-embedding-3-small",
-                input=texts,
-            )
-
-    def test_encode_with_api_base(self, mock_litellm_response):
-        """Test encoding with custom API base URL."""
-        # Arrange
-        with patch("litellm.embedding") as mock_embedding:
-            mock_embedding.return_value = mock_litellm_response
-            client = LiteLLMClient(
-                model_name="openai/text-embedding-3-small",
-                api_base="https://custom.api.com",
-            )
-
-            # Act
-            client.encode(["test"])
-
-            # Assert
-            mock_embedding.assert_called_once_with(
-                model="openai/text-embedding-3-small",
-                input=["test"],
-                api_base="https://custom.api.com",
-            )
-
-    def test_encode_validates_dimension(self, mock_litellm_response):
-        """Test that encode validates embedding dimension on first call."""
-        # Arrange
-        with patch("litellm.embedding") as mock_embedding:
-            mock_embedding.return_value = mock_litellm_response
-            client = LiteLLMClient(
-                model_name="openai/text-embedding-3-small",
-                embedding_dimension=4,  # Matches mock response
-            )
-
-            # Act
-            client.encode(["test"])
-
-            # Assert
-            assert client._validated_dimension == 4
-
-    def test_encode_warns_on_dimension_mismatch(self, mock_litellm_response, caplog):
-        """Test warning when dimension doesn't match expected."""
-        # Arrange
-        with patch("litellm.embedding") as mock_embedding:
-            mock_embedding.return_value = mock_litellm_response
-            client = LiteLLMClient(
-                model_name="openai/text-embedding-3-small",
-                embedding_dimension=1536,  # Doesn't match mock response (4)
-            )
-
-            # Act
-            with caplog.at_level(logging.WARNING):
-                client.encode(["test"])
-
-            # Assert
-            assert "Embedding dimension mismatch" in caplog.text
-
-    def test_encode_caches_validated_dimension(self, mock_litellm_response):
-        """Test that validated dimension is cached after first call."""
-        # Arrange
-        with patch("litellm.embedding") as mock_embedding:
-            mock_embedding.return_value = mock_litellm_response
-            client = LiteLLMClient(model_name="openai/text-embedding-3-small")
-
-            # Act
-            client.encode(["first"])
-            first_dimension = client._validated_dimension
-
-            client.encode(["second"])
-            second_dimension = client._validated_dimension
-
-            # Assert
-            assert first_dimension == 4
-            assert second_dimension == 4
-
-    def test_encode_handles_api_error(self):
-        """Test handling of API errors during encoding."""
-        # Arrange
-        with patch("litellm.embedding") as mock_embedding:
-            mock_embedding.side_effect = Exception("API error")
-            client = LiteLLMClient(model_name="openai/text-embedding-3-small")
-
-            # Act & Assert
-            with pytest.raises(RuntimeError, match="Failed to generate embeddings via LiteLLM"):
-                client.encode(["test"])
-
-    def test_get_embedding_dimension_from_validated(self, mock_litellm_response):
-        """Test getting dimension from validated dimension (after encode)."""
-        # Arrange
-        with patch("litellm.embedding") as mock_embedding:
-            mock_embedding.return_value = mock_litellm_response
-            client = LiteLLMClient(model_name="openai/text-embedding-3-small")
-            client.encode(["test"])  # Validates dimension
-
-            # Act
-            dimension = client.get_embedding_dimension()
-
-            # Assert
-            assert dimension == 4
-
-    def test_get_embedding_dimension_from_config(self):
-        """Test getting dimension from configured value."""
-        # Arrange
-        client = LiteLLMClient(
-            model_name="openai/text-embedding-3-small",
-            embedding_dimension=1536,
-        )
-
-        # Act
-        dimension = client.get_embedding_dimension()
-
-        # Assert
-        assert dimension == 1536
-
-    def test_get_embedding_dimension_makes_test_call(self, mock_litellm_response):
-        """Test that dimension is determined via test call if not known."""
-        # Arrange
-        with patch("litellm.embedding") as mock_embedding:
-            mock_embedding.return_value = mock_litellm_response
-            client = LiteLLMClient(model_name="openai/text-embedding-3-small")
-
-            # Act
-            dimension = client.get_embedding_dimension()
-
-            # Assert
-            assert dimension == 4
-            mock_embedding.assert_called_once_with(
-                model="openai/text-embedding-3-small",
-                input=["test"],
-            )
-
-    def test_get_embedding_dimension_test_call_failure(self):
-        """Test error handling when test call fails."""
-        # Arrange
-        with patch("litellm.embedding") as mock_embedding:
-            mock_embedding.side_effect = Exception("API error")
-            client = LiteLLMClient(model_name="openai/text-embedding-3-small")
-
-            # Act & Assert
-            with pytest.raises(RuntimeError, match="Failed to determine embedding dimension"):
-                client.get_embedding_dimension()
-
-
-# =============================================================================
-# TESTS: create_embeddings_client Factory Function
+# TESTS: create_embeddings_client
 # =============================================================================
 
 
@@ -886,18 +547,16 @@ class TestCreateEmbeddingsClient:
         assert client.aws_region == "us-west-2"
         assert client._embedding_dimension == 1536
 
-    def test_create_litellm_client_requires_provider_prefix(self):
-        """Test that LiteLLM requires provider prefix in model name."""
-        # Arrange & Act & Assert
-        with pytest.raises(ValueError, match="Invalid model name for LiteLLM provider"):
+    def test_create_remote_client_rejects_bare_model_name(self):
+        """A bare model name has no provider prefix and is rejected."""
+        with pytest.raises(ValueError, match="no provider prefix"):
             create_embeddings_client(
                 provider="litellm",
-                model_name="text-embedding-3-small",  # Missing "openai/" prefix
+                model_name="text-embedding-3-small",
             )
 
-    def test_create_litellm_client_error_message_helpful(self):
-        """Test that error message provides helpful examples."""
-        # Arrange & Act & Assert
+    def test_bare_name_error_points_to_sentence_transformers(self):
+        """The error suggests the local provider for a sentence-transformers model name."""
         with pytest.raises(ValueError) as exc_info:
             create_embeddings_client(
                 provider="litellm",
@@ -906,8 +565,7 @@ class TestCreateEmbeddingsClient:
 
         error_message = str(exc_info.value)
         assert "openai/text-embedding-3-small" in error_message
-        assert "bedrock/amazon.titan-embed-text-v1" in error_message
-        assert "cohere/embed-english-v3.0" in error_message
+        assert "bedrock/amazon.titan-embed-text-v2:0" in error_message
         assert "EMBEDDINGS_PROVIDER=sentence-transformers" in error_message
 
     def test_create_unsupported_provider(self):

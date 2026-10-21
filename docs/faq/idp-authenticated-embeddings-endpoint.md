@@ -17,8 +17,8 @@ bearer token rather than a fixed API key. The registry handles the token lifecyc
 
 ## Requirement: the endpoint must return the OpenAI embeddings *envelope*
 
-The registry uses LiteLLM's OpenAI-compatible client, so your endpoint must accept
-the standard request and return the standard **response envelope**:
+The registry sends a standard OpenAI embeddings request, so your endpoint must accept
+it and return the standard **response envelope**:
 
 ```jsonc
 // request  (what the registry sends)
@@ -34,7 +34,7 @@ the standard request and return the standard **response envelope**:
 ```
 
 If your endpoint instead returns a **bare array of vectors** (`[[0.12, ...], ...]`)
-rather than the envelope, LiteLLM cannot parse it (it reads `data[i].embedding`). For
+rather than the envelope, the standard parser cannot read it (it reads `data[i].embedding`). For
 that case set `EMBEDDINGS_RESPONSE_FORMAT=raw_array`: the registry then calls the
 endpoint directly and reads the bare array (it also accepts the same array wrapped
 under a top-level `embeddings`, `data`, or `vectors` key). Leave the variable unset

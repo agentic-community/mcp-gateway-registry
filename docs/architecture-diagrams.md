@@ -163,7 +163,7 @@ with built-in security, discovery, and governance.
 |  |  - mcp_servers_*          |    |    (local, free)          |   |
 |  |  - mcp_agents_*           |    | OpenAI text-embedding    |   |
 |  |  - agent_skills_*         |    | Amazon Bedrock Titan     |   |
-|  |  - mcp_scopes_*           |    | Any LiteLLM provider     |   |
+|  |  - mcp_scopes_*           |    | OpenAI-compatible, Azure |   |
 |  |  - mcp_embeddings_{dim}   |    |                           |   |
 |  |  - mcp_security_scans_*   |    | HNSW vector index        |   |
 |  |  - audit_events_*         |    |   (DocumentDB native)    |   |

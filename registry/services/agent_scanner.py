@@ -19,6 +19,9 @@ from pathlib import Path
 from ..core.config import settings
 from ..repositories.factory import get_security_scan_repository
 from ..schemas.agent_security import AgentSecurityScanConfig, AgentSecurityScanResult
+from .scanner_llm_analyzer import (
+    ensure_llm_analyzer_available,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +93,9 @@ class AgentScannerService:
         logger.info(f"Starting agent security scan for {agent_path} with analyzers: {analyzers}")
 
         try:
+            # Fails the scan before the scanner starts if 'llm' is requested but
+            # LiteLLM is absent; the A2A scanner would otherwise skip it silently.
+            ensure_llm_analyzer_available(analyzers, "AGENT_SECURITY_ANALYZERS")
             # Run the scan in a thread pool to avoid blocking
             raw_output = await asyncio.to_thread(
                 self._run_a2a_scanner,

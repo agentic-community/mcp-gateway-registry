@@ -838,6 +838,8 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                 token_provider=token_provider,
                 response_format=settings.embeddings_response_format,
                 extra_headers=settings.embeddings_extra_headers,
+                request_timeout_seconds=settings.embeddings_request_timeout_seconds,
+                max_retries=settings.embeddings_max_retries,
             )
         return self._embedding_model
 

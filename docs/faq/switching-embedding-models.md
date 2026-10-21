@@ -101,8 +101,8 @@ curl -s -X POST \
 ## Performance expectations
 
 - Local sentence-transformers (all-MiniLM-L6-v2): ~100 documents in 5-10 seconds
-- LiteLLM via Amazon Bedrock: ~100 documents in 15-30 seconds (API rate limited)
-- LiteLLM via OpenAI: ~100 documents in 10-20 seconds (API rate limited)
+- Remote API via Amazon Bedrock: ~100 documents in 15-30 seconds (API rate limited)
+- Remote API via OpenAI: ~100 documents in 10-20 seconds (API rate limited)
 - The registry remains fully operational during re-indexing
 - Documents not yet re-indexed are findable via keyword search only
 
@@ -113,6 +113,6 @@ curl -s -X POST \
 | `EMBEDDINGS_PROVIDER` | `sentence-transformers` | Provider: `sentence-transformers` or `litellm` |
 | `EMBEDDINGS_MODEL_NAME` | `all-MiniLM-L6-v2` | Model identifier |
 | `EMBEDDINGS_MODEL_DIMENSIONS` | `384` | Vector dimensions (must match model output) |
-| `EMBEDDINGS_API_KEY` | (none) | API key for LiteLLM providers |
+| `EMBEDDINGS_API_KEY` | (none) | API key for remote providers (OpenAI-compatible, Azure OpenAI) |
 | `EMBEDDINGS_API_BASE` | (none) | Custom API base URL |
 | `EMBEDDINGS_AWS_REGION` | `us-east-1` | AWS region for Bedrock models |

@@ -101,6 +101,9 @@ from registry.repositories.factory import get_search_repository
 from registry.services.agent_service import agent_service
 from registry.services.peer_federation_service import get_peer_federation_service
 from registry.services.peer_sync_scheduler import get_peer_sync_scheduler
+from registry.services.scanner_llm_analyzer import (
+    print_llm_analyzer_unavailable_banner,
+)
 
 # Import services for initialization
 from registry.services.server_service import server_service
@@ -516,6 +519,13 @@ async def lifespan(app: FastAPI):
     # correction so it reflects the effective deployment_mode.
     print_a2a_reverse_proxy_mode_banner(settings)
     print_embeddings_extra_headers_inert_banner(settings)
+    print_llm_analyzer_unavailable_banner(
+        {
+            "SECURITY_ANALYZERS": settings.security_analyzers,
+            "AGENT_SECURITY_ANALYZERS": settings.agent_security_analyzers,
+            "SKILL_SECURITY_ANALYZERS": settings.skill_security_analyzers,
+        }
+    )
 
     # Log startup configuration
     _log_startup_configuration()

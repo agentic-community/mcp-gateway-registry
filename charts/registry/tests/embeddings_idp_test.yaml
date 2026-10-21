@@ -156,3 +156,42 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: "\"EMBEDDINGS_EXTRA_HEADER_1\" is a reserved variable"
+
+  - it: emits no embeddings timeout or retry env when unset (issue #1826)
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: EMBEDDINGS_REQUEST_TIMEOUT_SECONDS
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: EMBEDDINGS_MAX_RETRIES
+
+  - it: emits embeddings timeout and retries when set
+    set:
+      embeddings:
+        requestTimeoutSeconds: 45
+        maxRetries: 4
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: EMBEDDINGS_REQUEST_TIMEOUT_SECONDS
+            value: "45"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: EMBEDDINGS_MAX_RETRIES
+            value: "4"
+
+  - it: emits maxRetries 0 rather than dropping it as falsy
+    set:
+      embeddings:
+        maxRetries: 0
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: EMBEDDINGS_MAX_RETRIES
+            value: "0"

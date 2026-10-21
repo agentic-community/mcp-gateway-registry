@@ -14,6 +14,9 @@ from registry.constants import (
     MAX_EMBEDDINGS_EXTRA_HEADERS,
     REGISTRY_MANAGED_EMBEDDINGS_HEADERS,
 )
+from registry.utils.embeddings_provider import (
+    resolve_remote_model,
+)
 from registry.utils.header_validation import (
     validate_header_name,
     validate_header_value,
@@ -500,6 +503,13 @@ class Settings(BaseSettings):
     #                  litellm cannot parse that, so the registry calls the endpoint
     #                  directly and extracts the vectors itself. Opt-in only.
     embeddings_response_format: str = "openai"  # "openai" | "raw_array"
+
+    # Timeout and retries for every remote embeddings call (issue #1826). Before
+    # LiteLLM was removed these were LiteLLM's own defaults; now they are ours.
+    # Retries cover 429, 5xx and connection errors; on Amazon Bedrock they map to
+    # botocore's standard retry mode (max_attempts = retries + 1).
+    embeddings_request_timeout_seconds: int = Field(default=30, ge=1, le=600)
+    embeddings_max_retries: int = Field(default=2, ge=0, le=10)
 
     # Operator-configured extra headers for the embeddings endpoint (issue #1819).
     # Five separate scalar slots rather than one structured value, so every config
@@ -2443,6 +2453,7 @@ class Settings(BaseSettings):
         )
         self._validate_egress_auth_config()
         self._validate_embeddings_extra_header_slots()
+        self._validate_embeddings_model_name()
 
     def _raw_embeddings_extra_header_slots(self) -> list[tuple[int, str]]:
         """Return (slot number, stripped value) for every populated header slot."""
@@ -2452,6 +2463,24 @@ class Settings(BaseSettings):
             if raw.strip():
                 populated.append((index, raw.strip()))
         return populated
+
+    def _validate_embeddings_model_name(self) -> None:
+        """Reject a remote embeddings model name no adapter can serve, at startup.
+
+        Without this, an unsupported name (for example a cohere/ or voyage/ model
+        LiteLLM used to accept, issue #1826) only fails on the first embedding call
+        and search silently degrades to keyword-only. raw_array posts to
+        EMBEDDINGS_API_BASE whatever the prefix, so it is not checked.
+
+        Raises:
+            ValueError: If the provider is the remote one and the model name has no
+                supported prefix. The message names the replacement.
+        """
+        if self.embeddings_provider.lower() != "litellm":
+            return
+        if self.embeddings_response_format.lower() == "raw_array":
+            return
+        resolve_remote_model(self.embeddings_model_name)
 
     def _validate_embeddings_extra_header_slots(self) -> None:
         """Validate every populated EMBEDDINGS_EXTRA_HEADER_<N> slot.

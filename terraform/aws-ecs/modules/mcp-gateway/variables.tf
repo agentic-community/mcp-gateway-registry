@@ -395,6 +395,28 @@ variable "embeddings_response_format" {
   default     = ""
 }
 
+variable "embeddings_request_timeout_seconds" {
+  description = "Timeout in seconds for each remote embeddings request (litellm provider only)."
+  type        = number
+  default     = 30
+
+  validation {
+    condition     = var.embeddings_request_timeout_seconds >= 1 && var.embeddings_request_timeout_seconds <= 600
+    error_message = "embeddings_request_timeout_seconds must be between 1 and 600."
+  }
+}
+
+variable "embeddings_max_retries" {
+  description = "Retries for transient remote embeddings failures (HTTP 429, 5xx, connection errors)."
+  type        = number
+  default     = 2
+
+  validation {
+    condition     = var.embeddings_max_retries >= 0 && var.embeddings_max_retries <= 10
+    error_message = "embeddings_max_retries must be between 0 and 10."
+  }
+}
+
 variable "embeddings_extra_headers" {
   description = "Extra HTTP headers sent on every embeddings request (litellm provider only), as a map of header name to value. Expanded into the EMBEDDINGS_EXTRA_HEADER_1..5 env vars. Stored in clear text: never put a credential here."
   type        = map(string)
