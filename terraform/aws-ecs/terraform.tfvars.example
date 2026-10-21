@@ -942,9 +942,10 @@ registry_api_token = "m3zT65wREARMVDToKosg_DgNkKqS_434hNxy3sslGPY"
 # Entra ID Login Base URL (optional - defaults to Azure Public Cloud)
 # Change only if using a sovereign cloud:
 #   - Azure Public Cloud (default): https://login.microsoftonline.com
-#   - Azure Government: https://login.microsoftonline.us
+#   - Azure Government (US Gov or DoD): https://login.microsoftonline.us
 #   - Azure China: https://login.chinacloudapi.cn
-#   - Azure Germany: https://login.microsoftonline.de
+#   - Custom login proxies always need entra_graph_base_url and need
+#     entra_graph_resource_url if recovery or browser User.Read is enabled.
 # entra_login_base_url = "https://login.microsoftonline.com"
 
 # Microsoft Graph Base URL (optional)
@@ -952,6 +953,29 @@ registry_api_token = "m3zT65wREARMVDToKosg_DgNkKqS_434hNxy3sslGPY"
 # via the documented sovereign-cloud mapping. Set explicitly only for proxied or
 # air-gapped deployments.
 # entra_graph_base_url = "https://graph.microsoft.com"
+
+# Native Microsoft Graph OAuth resource (optional for known login clouds).
+# Custom login proxies need the official resource for their target cloud when
+# group recovery or browser User.Read is enabled. Do not use the fetch proxy.
+# login.microsoftonline.us infers US Gov Graph; set DoD explicitly.
+# Public: https://graph.microsoft.com; China: https://microsoftgraph.chinacloudapi.cn
+# US Gov: https://graph.microsoft.us; DoD: https://dod-graph.microsoft.us
+# entra_graph_resource_url = "https://dod-graph.microsoft.us"
+
+# Request User.Read consent during Entra browser login to allow browser group
+# overage lookup. Default false keeps OIDC-only login; group recovery must also
+# be enabled for lookup. Does not affect delegated bearer token recovery.
+# entra_browser_user_read_enabled = false
+
+# Recover full Entra group membership through Microsoft Graph for overage
+# tokens. Defaults to true for eligible bearer tokens; browser login requires
+# User.Read consent as well. False disables Graph recovery and never trusts
+# stale inline group claims on an overage token.
+# entra_group_recovery_enabled = true
+
+# Positive Graph group-result cache lifetime in seconds (30..3600, default 300).
+# Group removals can remain cached until the TTL expires.
+# entra_group_cache_ttl_seconds = 300
 
 # IdP Group Filter Prefix (optional, comma-separated, applies to all identity providers)
 # Only groups whose name starts with any of these prefixes are shown in IAM > Groups

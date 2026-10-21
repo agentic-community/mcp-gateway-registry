@@ -2765,7 +2765,9 @@ class TestOAuth2CallbackIdTokenVerification:
     and never persists attacker-controlled identity or group claims.
     """
 
-    def _drive_callback(self, provider: str, validate_side_effect):
+    def _drive_callback(
+        self, provider: str, validate_side_effect, requested_scopes=None, id_token=True
+    ):
         """Drive the callback for a JWKS provider with a mocked provider whose
         validate_id_token exhibits the given behaviour. Returns
         (response, create_session_called, captured_kwargs).
@@ -2777,6 +2779,8 @@ class TestOAuth2CallbackIdTokenVerification:
             "access_token": "mock-access-token-value",
             "id_token": "attacker-supplied-id-token",
         }
+        if not id_token:
+            mock_token_data.pop("id_token")
         temp_session_data = {
             "state": "test-state",
             "provider": provider,
@@ -2784,6 +2788,8 @@ class TestOAuth2CallbackIdTokenVerification:
             "nonce": "test-nonce",
             "code_verifier": "test-code-verifier",
         }
+        if requested_scopes is not None:
+            temp_session_data["requested_scopes"] = requested_scopes
         temp_cookie = signer.dumps(temp_session_data)
 
         captured: dict = {}
@@ -2855,6 +2861,16 @@ class TestOAuth2CallbackIdTokenVerification:
         assert create_called is False
         assert captured == {}
 
+    def test_entra_requires_id_token_instead_of_falling_back_to_userinfo(self):
+        with patch("auth_server.server.get_user_info", new_callable=AsyncMock) as userinfo:
+            response, created, session = self._drive_callback(
+                "entra", lambda _token, expected_nonce=None: {}, id_token=False
+            )
+        assert response.status_code == 401
+        assert created is False
+        assert session == {}
+        userinfo.assert_not_awaited()
+
     def test_verified_id_token_allows_login(self):
         """A verified id_token proceeds to session creation with its claims."""
         verified = {
@@ -2876,8 +2892,17 @@ class TestOAuth2CallbackIdTokenVerification:
 class TestEntraCallbackGroups:
     """The callback stores verified transitive memberships and denies Graph failures."""
 
-    def _callback(self, claims, graph_result=None, graph_error=None):
+    def _callback(
+        self,
+        claims,
+        graph_result=None,
+        graph_error=None,
+        requested_scopes="openid email profile User.Read",
+        allow_local_fallback=False,
+    ):
         from providers.entra import EntraIdProvider
+
+        from auth_server.mongodb_groups_enrichment import should_enrich_user_groups
 
         graph = (
             AsyncMock(side_effect=graph_error)
@@ -2888,17 +2913,72 @@ class TestEntraCallbackGroups:
         async def keep_groups(groups, **_kwargs):
             return groups
 
+        fallback_gate = (
+            patch(
+                "mongodb_groups_enrichment.should_enrich_user_groups",
+                wraps=should_enrich_user_groups,
+            )
+            if allow_local_fallback
+            else patch("mongodb_groups_enrichment.should_enrich_user_groups", return_value=False)
+        )
+
         with (
             patch.object(EntraIdProvider, "fetch_groups_via_graph", graph),
             patch("group_filter.filter_session_groups", keep_groups),
-            patch("mongodb_groups_enrichment.should_enrich_user_groups", return_value=False),
+            fallback_gate,
         ):
             response, create_called, session = (
                 TestOAuth2CallbackIdTokenVerification()._drive_callback(
-                    "entra", lambda _token, expected_nonce=None: claims
+                    "entra",
+                    lambda _token, expected_nonce=None: claims,
+                    requested_scopes=requested_scopes,
                 )
             )
         return response, create_called, session, graph
+
+    @pytest.mark.parametrize(
+        "claims,expected",
+        [
+            ({"groups": ["inline-id"]}, ["inline-id"]),
+            ({"roles": ["role-id"], "hasgroups": True}, ["role-id"]),
+            ({"groups": ["stale-inline"], "hasgroups": True}, []),
+            ({}, []),
+        ],
+    )
+    def test_login_without_user_read_drops_overage_groups_without_graph(self, claims, expected):
+        token_claims = {"sub": "alice", "tid": "tenant", "oid": "alice", **claims}
+        response, created, session, graph = self._callback(
+            token_claims, requested_scopes="openid email profile"
+        )
+        assert response.status_code == 302
+        assert created is True
+        assert session["groups"] == expected
+        graph.assert_not_awaited()
+
+    def test_disabled_recovery_ignores_stale_overage_groups_even_with_user_read(self, monkeypatch):
+        monkeypatch.setenv("ENTRA_GROUP_RECOVERY_ENABLED", "false")
+        claims = {
+            "sub": "alice",
+            "tid": "tenant",
+            "oid": "alice",
+            "hasgroups": True,
+            "groups": ["stale-admin"],
+            "roles": ["reader-role"],
+        }
+        response, created, session, graph = self._callback(claims)
+        assert response.status_code == 302
+        assert created is True
+        assert session["groups"] == ["reader-role"]
+        graph.assert_not_awaited()
+
+    def test_missing_signed_scope_snapshot_does_not_enable_graph(self):
+        response, created, session, graph = self._callback(
+            {"sub": "alice", "tid": "tenant", "oid": "alice"}, requested_scopes=None
+        )
+        assert response.status_code == 302
+        assert created is True
+        assert session["groups"] == []
+        graph.assert_not_awaited()
 
     @pytest.mark.parametrize(
         "claims",
@@ -2956,6 +3036,133 @@ class TestEntraCallbackGroups:
         assert session["groups"] == []
         graph.assert_awaited_once()
 
+    @pytest.mark.parametrize("graph_result", [[], ["nested-parent-id"]])
+    def test_graph_memberships_override_configured_stale_local_groups(self, graph_result):
+        from auth_server import server
+
+        claims = {"sub": "alice", "hasgroups": True, "tid": "tenant", "oid": "alice"}
+        with (
+            patch.object(server, "IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS", ["entra"]),
+            patch(
+                "mongodb_groups_enrichment.enrich_user_groups_from_mongodb",
+                new_callable=AsyncMock,
+                return_value=["stale-admin"],
+            ) as local_fallback,
+        ):
+            response, created, session, graph = self._callback(
+                claims, graph_result=graph_result, allow_local_fallback=True
+            )
+        assert response.status_code == 302
+        assert created is True
+        assert session["groups"] == graph_result
+        graph.assert_awaited_once()
+        assert session["entra_graph_groups_resolved"] is True
+        local_fallback.assert_not_awaited()
+
+    def test_no_graph_request_preserves_configured_local_fallback(self):
+        from auth_server import server
+
+        with (
+            patch.object(server, "IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS", ["entra"]),
+            patch(
+                "mongodb_groups_enrichment.enrich_user_groups_from_mongodb",
+                new_callable=AsyncMock,
+                return_value=["stale-admin"],
+            ) as local_fallback,
+        ):
+            response, created, session, graph = self._callback(
+                {"sub": "alice", "tid": "tenant", "oid": "alice"},
+                requested_scopes="openid email profile",
+                allow_local_fallback=True,
+            )
+        assert response.status_code == 302
+        assert created is True
+        assert session["groups"] == ["stale-admin"]
+        assert session["entra_graph_groups_resolved"] is False
+        graph.assert_not_awaited()
+        local_fallback.assert_awaited_once_with("alice", [], "entra")
+
+    def test_confirmed_empty_graph_session_cannot_reacquire_local_scope(
+        self, auth_env_vars, mock_scope_repository_with_data, mock_scopes_config
+    ):
+        from itsdangerous import URLSafeTimedSerializer
+
+        from auth_server import server
+        from auth_server.mongodb_groups_enrichment import should_enrich_user_groups
+
+        claims = {"sub": "alice", "hasgroups": True, "tid": "tenant", "oid": "alice"}
+        repo = mock_scope_repository_with_data
+        mock_scopes_config["group_mappings"]["stale-admin"] = ["read:servers"]
+        mock_scopes_config["read:servers"][0]["methods"].append("mcp")
+        with patch.object(server, "IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS", ["entra"]):
+            response, created, captured, graph = self._callback(
+                claims, graph_result=[], allow_local_fallback=True
+            )
+            assert response.status_code == 302
+            assert created is True
+            assert captured["groups"] == []
+            assert captured["entra_graph_groups_resolved"] is True
+            graph.assert_awaited_once()
+
+            async def resolve_session(_session_id):
+                return {"session_id": _session_id, **captured}
+
+            with (
+                patch.object(server, "signer", URLSafeTimedSerializer(auth_env_vars["SECRET_KEY"])),
+                patch.object(server, "get_scope_repository", return_value=repo),
+                patch("session_store.resolve_session", resolve_session),
+                patch(
+                    "mongodb_groups_enrichment.should_enrich_user_groups",
+                    wraps=should_enrich_user_groups,
+                ),
+                patch(
+                    "mongodb_groups_enrichment.enrich_user_groups_from_mongodb",
+                    new_callable=AsyncMock,
+                    return_value=["stale-admin"],
+                ) as local_fallback,
+            ):
+                cookie = server.signer.dumps("confirmed-graph-session")
+                validated = TestClient(server.app).get(
+                    "/validate",
+                    headers={
+                        "Cookie": f"mcp_gateway_session={cookie}",
+                        "X-Original-URL": "https://example.com/test-server/mcp",
+                    },
+                )
+
+        assert validated.status_code == 403, validated.text
+        assert "X-Groups" not in validated.headers
+        local_fallback.assert_not_awaited()
+
+    def test_non_entra_callback_preserves_configured_local_fallback(self):
+        from auth_server import server
+        from auth_server.mongodb_groups_enrichment import should_enrich_user_groups
+
+        async def keep_groups(groups, **_kwargs):
+            return groups
+
+        with (
+            patch.object(server, "IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS", ["keycloak"]),
+            patch(
+                "mongodb_groups_enrichment.should_enrich_user_groups",
+                wraps=should_enrich_user_groups,
+            ),
+            patch(
+                "mongodb_groups_enrichment.enrich_user_groups_from_mongodb",
+                new_callable=AsyncMock,
+                return_value=["local-membership"],
+            ) as local_fallback,
+            patch("group_filter.filter_session_groups", keep_groups),
+        ):
+            response, created, session = TestOAuth2CallbackIdTokenVerification()._drive_callback(
+                "keycloak", lambda _token, expected_nonce=None: {"sub": "alice", "groups": []}
+            )
+
+        assert response.status_code == 302
+        assert created is True
+        assert session["groups"] == ["local-membership"]
+        local_fallback.assert_awaited_once_with("alice", [], "keycloak")
+
     @pytest.mark.parametrize(
         "claims",
         [
@@ -3002,6 +3209,7 @@ class TestEntraBrowserOAuthCloudEndpoints:
     def test_browser_auth_and_userinfo_use_the_same_enrolled_cloud(self, monkeypatch, login, graph):
         from auth_server.server import load_oauth2_config
 
+        monkeypatch.setenv("ENTRA_ENABLED", "true")
         monkeypatch.setenv("ENTRA_LOGIN_BASE_URL", login)
         monkeypatch.setenv("ENTRA_TENANT_ID", "test-tenant")
         monkeypatch.delenv("ENTRA_GRAPH_BASE_URL", raising=False)
@@ -3011,11 +3219,173 @@ class TestEntraBrowserOAuthCloudEndpoints:
         assert configured["token_url"] == f"{login}/test-tenant/oauth2/v2.0/token"
         assert configured["user_info_url"] == f"{graph}/oidc/userinfo"
 
+    def test_default_login_scopes_do_not_require_graph_consent(self, monkeypatch):
+        from auth_server.server import load_oauth2_config
+
+        monkeypatch.setenv("ENTRA_ENABLED", "true")
+
+        monkeypatch.delenv("ENTRA_LOGIN_BASE_URL", raising=False)
+        monkeypatch.delenv("ENTRA_GRAPH_BASE_URL", raising=False)
+        assert load_oauth2_config()["providers"]["entra"]["scopes"] == [
+            "openid",
+            "email",
+            "profile",
+        ]
+
+    def test_login_snapshots_exact_requested_scopes_for_callback(self):
+        import urllib.parse
+
+        from auth_server import server as srv
+
+        configured = dict(srv.OAUTH2_CONFIG)
+        configured["providers"] = dict(configured.get("providers", {}))
+        configured["providers"]["entra"] = {
+            "enabled": True,
+            "client_id": "gateway-web",
+            "response_type": "code",
+            "scopes": ["openid", "email", "profile", "User.Read"],
+            "auth_url": "https://login.microsoftonline.com/tenant/oauth2/v2.0/authorize",
+        }
+        with patch.object(srv, "OAUTH2_CONFIG", configured):
+            response = TestClient(srv.app).get("/oauth2/login/entra", follow_redirects=False)
+
+        assert response.status_code == 302
+        requested = urllib.parse.parse_qs(
+            urllib.parse.urlsplit(response.headers["location"]).query
+        )["scope"][0]
+        assert (
+            srv.signer.loads(response.cookies["oauth2_temp_session"])["requested_scopes"]
+            == requested
+        )
+
+    def test_browser_user_read_flag_adds_exact_scope_once(self, monkeypatch):
+        from auth_server.server import load_oauth2_config
+
+        monkeypatch.setenv("ENTRA_ENABLED", "true")
+        monkeypatch.setenv("ENTRA_BROWSER_USER_READ_ENABLED", "true")
+        assert load_oauth2_config()["providers"]["entra"]["scopes"] == [
+            "openid",
+            "email",
+            "profile",
+            "User.Read",
+        ]
+
+    def test_bad_disabled_entra_config_preserves_other_providers(self, monkeypatch):
+        from auth_server.server import load_oauth2_config
+
+        monkeypatch.setenv("ENTRA_ENABLED", "false")
+        monkeypatch.setenv("ENTRA_LOGIN_BASE_URL", "https://login.private.example.com")
+        monkeypatch.setenv("ENTRA_GROUP_CACHE_TTL_SECONDS", "invalid")
+        assert "github" in load_oauth2_config()["providers"]
+
+    @pytest.mark.parametrize(
+        "setting,value",
+        [
+            ("ENTRA_BROWSER_USER_READ_ENABLED", "maybe"),
+            ("ENTRA_GROUP_RECOVERY_ENABLED", "maybe"),
+            ("ENTRA_GROUP_CACHE_TTL_SECONDS", "29"),
+        ],
+    )
+    def test_bad_active_entra_settings_fail_config_loading(self, monkeypatch, setting, value):
+        from auth_server.server import load_oauth2_config
+
+        monkeypatch.setenv("ENTRA_ENABLED", "true")
+        monkeypatch.setenv(setting, value)
+        with pytest.raises(ValueError, match=setting):
+            load_oauth2_config()
+
+    def test_bad_entra_enabled_flag_fails_config_loading(self, monkeypatch):
+        from auth_server.server import load_oauth2_config
+
+        monkeypatch.setenv("ENTRA_ENABLED", "maybe")
+        with pytest.raises(ValueError, match="ENTRA_ENABLED"):
+            load_oauth2_config()
+
+    def test_unknown_login_proxy_requires_native_graph_audience(self, monkeypatch):
+        from auth_server.server import load_oauth2_config
+
+        monkeypatch.setenv("ENTRA_ENABLED", "true")
+        monkeypatch.setenv("ENTRA_LOGIN_BASE_URL", "https://login.private.example.com")
+        monkeypatch.setenv("ENTRA_GRAPH_BASE_URL", "https://graph.proxy.example.com")
+        monkeypatch.delenv("ENTRA_GRAPH_RESOURCE_URL", raising=False)
+        with pytest.raises(ValueError, match="ENTRA_GRAPH_RESOURCE_URL"):
+            load_oauth2_config()
+
+    def test_unknown_login_without_graph_proxy_fails_active_entra_configuration(self, monkeypatch):
+        from auth_server.server import load_oauth2_config
+
+        monkeypatch.setenv("ENTRA_ENABLED", "true")
+        monkeypatch.setenv("ENTRA_LOGIN_BASE_URL", "https://login.private.example.com")
+        monkeypatch.delenv("ENTRA_GRAPH_BASE_URL", raising=False)
+        with pytest.raises(ValueError, match="ENTRA_GRAPH_BASE_URL"):
+            load_oauth2_config()
+
+    def test_unknown_login_resource_without_fetch_proxy_fails_at_startup(self, monkeypatch):
+        from auth_server.server import load_oauth2_config
+
+        monkeypatch.setenv("ENTRA_ENABLED", "true")
+        monkeypatch.setenv("ENTRA_LOGIN_BASE_URL", "https://login.private.example.com")
+        monkeypatch.setenv("ENTRA_GRAPH_RESOURCE_URL", "https://graph.microsoft.com")
+        monkeypatch.delenv("ENTRA_GRAPH_BASE_URL", raising=False)
+
+        with pytest.raises(ValueError, match="ENTRA_GRAPH_BASE_URL"):
+            load_oauth2_config()
+
+    def test_unknown_login_proxy_without_resource_allows_disabled_recovery(self, monkeypatch):
+        from auth_server.server import load_oauth2_config
+
+        monkeypatch.setenv("ENTRA_ENABLED", "true")
+        monkeypatch.setenv("ENTRA_GROUP_RECOVERY_ENABLED", "false")
+        monkeypatch.setenv("ENTRA_LOGIN_BASE_URL", "https://login.private.example.com")
+        monkeypatch.setenv("ENTRA_GRAPH_BASE_URL", "https://graph.proxy.example.com")
+        monkeypatch.delenv("ENTRA_GRAPH_RESOURCE_URL", raising=False)
+
+        configured = load_oauth2_config()["providers"]["entra"]
+        assert configured["user_info_url"] == "https://graph.proxy.example.com/oidc/userinfo"
+
+    def test_unknown_login_browser_graph_request_requires_native_resource(self, monkeypatch):
+        from auth_server.server import load_oauth2_config
+
+        monkeypatch.setenv("ENTRA_ENABLED", "true")
+        monkeypatch.setenv("ENTRA_GROUP_RECOVERY_ENABLED", "false")
+        monkeypatch.setenv("ENTRA_BROWSER_USER_READ_ENABLED", "true")
+        monkeypatch.setenv("ENTRA_LOGIN_BASE_URL", "https://login.private.example.com")
+        monkeypatch.setenv("ENTRA_GRAPH_BASE_URL", "https://graph.proxy.example.com")
+        monkeypatch.delenv("ENTRA_GRAPH_RESOURCE_URL", raising=False)
+
+        with pytest.raises(ValueError, match="ENTRA_GRAPH_RESOURCE_URL"):
+            load_oauth2_config()
+
+    def test_unknown_login_with_native_graph_resource_uses_only_configured_proxy(self, monkeypatch):
+        from auth_server.server import load_oauth2_config
+
+        monkeypatch.setenv("ENTRA_ENABLED", "true")
+
+        monkeypatch.setenv("ENTRA_LOGIN_BASE_URL", "https://login.private.example.com")
+        monkeypatch.setenv("ENTRA_GRAPH_BASE_URL", "https://graph.proxy.example.com")
+        monkeypatch.setenv("ENTRA_GRAPH_RESOURCE_URL", "https://graph.microsoft.us")
+        configured = load_oauth2_config()["providers"]["entra"]
+        assert configured["auth_url"].startswith("https://login.private.example.com/")
+        assert configured["user_info_url"] == "https://graph.proxy.example.com/oidc/userinfo"
+
+    def test_dod_graph_resource_selects_native_graph_userinfo(self, monkeypatch):
+        from auth_server.server import load_oauth2_config
+
+        monkeypatch.setenv("ENTRA_ENABLED", "true")
+
+        monkeypatch.setenv("ENTRA_LOGIN_BASE_URL", "https://login.microsoftonline.us")
+        monkeypatch.setenv("ENTRA_GRAPH_RESOURCE_URL", "https://dod-graph.microsoft.us")
+        monkeypatch.delenv("ENTRA_GRAPH_BASE_URL", raising=False)
+        configured = load_oauth2_config()["providers"]["entra"]
+        assert configured["user_info_url"] == "https://dod-graph.microsoft.us/oidc/userinfo"
+
     @pytest.mark.parametrize("login", ["", "https://login.microsoftonline.com/"])
     def test_blank_or_slash_login_origin_matches_provider_and_browser(self, monkeypatch, login):
         from providers.entra import EntraIdProvider
 
         from auth_server.server import load_oauth2_config
+
+        monkeypatch.setenv("ENTRA_ENABLED", "true")
 
         monkeypatch.setenv("ENTRA_LOGIN_BASE_URL", login)
         monkeypatch.setenv("ENTRA_TENANT_ID", "test-tenant")
@@ -3030,6 +3400,8 @@ class TestEntraBrowserOAuthCloudEndpoints:
         from providers.entra import EntraIdProvider
 
         from auth_server.server import load_oauth2_config
+
+        monkeypatch.setenv("ENTRA_ENABLED", "true")
 
         monkeypatch.setenv("ENTRA_TENANT_ID", "test-tenant")
         monkeypatch.setenv("ENTRA_GRAPH_BASE_URL", "https://graph.proxy.example.com/")
@@ -7202,6 +7574,33 @@ class TestToolsListFilterDiagnostics:
             kept = asyncio.run(filter_tools_list_response("office-docs", ["grp"], [{"name": "t1"}]))
 
         assert [t["name"] for t in kept] == ["t1"]
+
+
+@pytest.mark.asyncio
+async def test_entra_code_exchange_uses_credentialed_guard():
+    from auth_server.server import exchange_code_for_token
+    from registry.utils.url_guard import CREDENTIALED_OAUTH_PROFILE
+
+    config = {
+        "grant_type": "authorization_code",
+        "client_id": "gateway-web",
+        "client_secret": "secret",
+        "token_url": "https://login.microsoftonline.com/tenant/oauth2/v2.0/token",
+    }
+    client = MagicMock()
+    client.post = AsyncMock(return_value=MagicMock(json=lambda: {"access_token": "token"}))
+    with (
+        patch("registry.utils.url_guard.shared_guarded_async_client", return_value=client) as guard,
+        patch("registry.utils.url_guard.shared_plain_async_client") as plain,
+    ):
+        token = await exchange_code_for_token(
+            "entra", "code", config, auth_server_url="https://gateway.example.com"
+        )
+
+    assert token == {"access_token": "token"}
+    guard.assert_called_once_with(profile=CREDENTIALED_OAUTH_PROFILE)
+    plain.assert_not_called()
+    client.post.assert_awaited_once()
 
 
 async def test_callback_uses_pooled_plain_client_not_closed(monkeypatch):

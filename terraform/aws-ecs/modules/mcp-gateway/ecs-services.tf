@@ -194,6 +194,22 @@ module "ecs_service_auth" {
           value = var.entra_graph_base_url
         },
         {
+          name  = "ENTRA_GRAPH_RESOURCE_URL"
+          value = var.entra_graph_resource_url
+        },
+        {
+          name  = "ENTRA_BROWSER_USER_READ_ENABLED"
+          value = tostring(var.entra_browser_user_read_enabled)
+        },
+        {
+          name  = "ENTRA_GROUP_RECOVERY_ENABLED"
+          value = tostring(var.entra_group_recovery_enabled)
+        },
+        {
+          name  = "ENTRA_GROUP_CACHE_TTL_SECONDS"
+          value = tostring(var.entra_group_cache_ttl_seconds)
+        },
+        {
           name  = "ENTRA_SCOPE_FORMAT"
           value = var.entra_scope_format
         },

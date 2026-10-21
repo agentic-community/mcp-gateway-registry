@@ -11,6 +11,19 @@
 {{- /* Fail-fast validation of user-supplied extraEnv and proxy egress policy. */ -}}
 {{- include "auth-server.validateExtraEnv" . -}}
 {{- include "auth-server.validateGenericProxyEgress" . -}}
+{{- if eq $authProviderType "entra" -}}
+  {{- /* Validate before rendering so invalid cache lifetimes never reach auth-server. */ -}}
+  {{- $groupCacheTtl := .Values.entra.groupCacheTtlSeconds | toString -}}
+  {{- if or (not (regexMatch "^[0-9]+$" $groupCacheTtl)) (lt (int64 $groupCacheTtl) 30) (gt (int64 $groupCacheTtl) 3600) -}}
+    {{- fail "auth-server.entra.groupCacheTtlSeconds must be a whole number between 30 and 3600" -}}
+  {{- end -}}
+  {{- if not (kindIs "bool" .Values.entra.groupRecoveryEnabled) -}}
+    {{- fail "auth-server.entra.groupRecoveryEnabled must be a boolean" -}}
+  {{- end -}}
+  {{- if not (kindIs "bool" .Values.entra.browserUserReadEnabled) -}}
+    {{- fail "auth-server.entra.browserUserReadEnabled must be a boolean" -}}
+  {{- end -}}
+{{- end -}}
 {{- /* Forward proxy: NO_PROXY must exclude the cloud credential endpoints.
        Mirrors the startup check in registry/utils/url_guard.py so a bad config
        fails at `helm install` rather than as a CrashLoopBackOff. Setting
@@ -135,6 +148,14 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.entra.clientSecretExistingSecret }}
                   key: {{ .Values.entra.clientSecretExistingSecretKey }}
+            {{- end }}
+            {{- if eq $authProviderType "entra" }}
+            - name: ENTRA_BROWSER_USER_READ_ENABLED
+              value: {{ .Values.entra.browserUserReadEnabled | toString | quote }}
+            - name: ENTRA_GROUP_RECOVERY_ENABLED
+              value: {{ .Values.entra.groupRecoveryEnabled | toString | quote }}
+            - name: ENTRA_GROUP_CACHE_TTL_SECONDS
+              value: {{ .Values.entra.groupCacheTtlSeconds | int64 | quote }}
             {{- end }}
             {{- if .Values.okta.clientSecretExistingSecret }}
             - name: OKTA_CLIENT_SECRET

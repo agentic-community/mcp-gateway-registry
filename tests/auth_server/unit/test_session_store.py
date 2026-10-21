@@ -133,6 +133,24 @@ class TestCreateSession:
         assert "id_token_encrypted" not in doc
 
     @pytest.mark.asyncio
+    async def test_graph_confirmed_empty_membership_persists_authority(self, fake_collection):
+        sid = await session_store.create_session(
+            username="alice",
+            email=None,
+            name=None,
+            groups=[],
+            provider="entra",
+            auth_method="oauth2",
+            max_age_seconds=60,
+            entra_graph_groups_resolved=True,
+        )
+
+        assert fake_collection[sid]["entra_graph_groups_resolved"] is True
+        resolved = await session_store.resolve_session(sid)
+        assert resolved["groups"] == []
+        assert resolved["entra_graph_groups_resolved"] is True
+
+    @pytest.mark.asyncio
     async def test_create_with_id_token_stores_encrypted_blob(self, fake_collection):
         sid = await session_store.create_session(
             username="bob",

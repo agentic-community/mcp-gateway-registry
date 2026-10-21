@@ -1119,6 +1119,11 @@ class NginxConfigService:
 
         # Authenticate request via auth server (validates JWT Bearer tokens)
         auth_request /validate;
+        auth_request_set $auth_subrequest_status $upstream_status;
+        auth_request_set $auth_entra_outage_marker $upstream_http_x_entra_group_lookup_unavailable;
+        error_page 403 = @forbidden_error;
+        error_page 502 /502.html;
+        error_page 500 = @auth_internal_error;
 
         # Capture auth server response headers
         auth_request_set $auth_user $upstream_http_x_user;
@@ -1980,6 +1985,9 @@ class NginxConfigService:
         # config can name internal locations this config no longer has.
         set $vs_config_generation "{VS_CONFIG_GENERATION_PLACEHOLDER}";
         auth_request /validate;
+        auth_request_set $auth_subrequest_status $upstream_status;
+        auth_request_set $auth_entra_outage_marker $upstream_http_x_entra_group_lookup_unavailable;
+        error_page 500 = @auth_internal_error;
         auth_request_set $auth_scopes $upstream_http_x_scopes;
         auth_request_set $auth_user $upstream_http_x_user;
         auth_request_set $auth_username $upstream_http_x_username;
@@ -2124,6 +2132,9 @@ class NginxConfigService:
     location {{{{ROOT_PATH}}}}{location_path} {{
         client_max_body_size {body_size};
         auth_request /validate;
+        auth_request_set $auth_subrequest_status $upstream_status;
+        auth_request_set $auth_entra_outage_marker $upstream_http_x_entra_group_lookup_unavailable;
+        error_page 500 = @auth_internal_error;
         auth_request_set $auth_internal_token_generic $upstream_http_x_internal_token_generic;
         auth_request_set $auth_user $upstream_http_x_user;
         auth_request_set $auth_scopes $upstream_http_x_scopes;
@@ -2895,6 +2906,9 @@ class NginxConfigService:
         resolver {dns_resolver} valid=10s;
         resolver_timeout {dns_resolver_timeout}s;
         auth_request /validate;
+        auth_request_set $auth_subrequest_status $upstream_status;
+        auth_request_set $auth_entra_outage_marker $upstream_http_x_entra_group_lookup_unavailable;
+        error_page 500 = @auth_internal_error;
         auth_request_set $auth_scopes $upstream_http_x_scopes;
         set $agent_backend_url "{safe_backend_url}";
         set $agent_card_upstream "{card_internal_uri}";
@@ -2931,6 +2945,9 @@ class NginxConfigService:
         resolver {dns_resolver} valid=10s;
         resolver_timeout {dns_resolver_timeout}s;
         auth_request /validate;
+        auth_request_set $auth_subrequest_status $upstream_status;
+        auth_request_set $auth_entra_outage_marker $upstream_http_x_entra_group_lookup_unavailable;
+        error_page 500 = @auth_internal_error;
         auth_request_set $auth_user $upstream_http_x_user;
         auth_request_set $auth_username $upstream_http_x_username;
         auth_request_set $auth_scopes $upstream_http_x_scopes;
@@ -3227,6 +3244,9 @@ class NginxConfigService:
 
         # Authenticate request - pass entire request to auth server
         auth_request /validate;
+        auth_request_set $auth_subrequest_status $upstream_status;
+        auth_request_set $auth_entra_outage_marker $upstream_http_x_entra_group_lookup_unavailable;
+        error_page 500 = @auth_internal_error;
 
         # Capture auth server response headers for forwarding
         auth_request_set $auth_user $upstream_http_x_user;

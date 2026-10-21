@@ -807,6 +807,35 @@ variable "entra_graph_base_url" {
   default     = ""
 }
 
+variable "entra_graph_resource_url" {
+  description = "Native Microsoft Graph OAuth resource URL. Leave empty for known Entra clouds; set to the official Graph resource for the target cloud when entra_login_base_url uses a custom proxy. This is not the Graph fetch proxy URL."
+  type        = string
+  default     = ""
+}
+
+variable "entra_browser_user_read_enabled" {
+  description = "Request Microsoft Graph User.Read on Entra browser login. Graph lookup also requires entra_group_recovery_enabled."
+  type        = bool
+  default     = false
+}
+
+variable "entra_group_recovery_enabled" {
+  description = "Enable Microsoft Graph recovery for Entra group overage (eligible bearer tokens and browser sessions consented to User.Read)."
+  type        = bool
+  default     = true
+}
+
+variable "entra_group_cache_ttl_seconds" {
+  description = "Positive Microsoft Graph group-result cache lifetime in seconds."
+  type        = number
+  default     = 300
+
+  validation {
+    condition     = var.entra_group_cache_ttl_seconds >= 30 && var.entra_group_cache_ttl_seconds <= 3600 && floor(var.entra_group_cache_ttl_seconds) == var.entra_group_cache_ttl_seconds
+    error_message = "entra_group_cache_ttl_seconds must be a whole number between 30 and 3600."
+  }
+}
+
 variable "entra_scope_format" {
   description = "Entra PRM scope form: 'v1' (api://<app-id>/<scope>) or 'v2' (bare, default). Set 'v1' only if the Entra app exposes v1-style api:// scopes (issue #990). Empty uses the app default (v2)."
   type        = string

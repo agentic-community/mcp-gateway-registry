@@ -112,6 +112,8 @@ AUTH_PROVIDER=okta       # Use Okta
     +-------------------+  +-----------------------+  +-----------------------+
 ```
 
+The auth server calls `AuthProvider.recover_bearer_groups` after a provider validates an access token. The base method returns `None`, so providers without external membership lookup keep their verified claims. Entra overrides it to recover delegated group IDs from Graph. A returned empty list means Graph confirmed no memberships; it must not trigger local group fallback. Entra also overrides `is_delegated_user` so an empty user group set never picks up M2M client groups.
+
 ## IAM Manager Interface
 
 For administrative operations (user/group CRUD), the system uses the IAM Manager abstraction:
@@ -230,7 +232,7 @@ class IAMManager(Protocol):
 - JWKS endpoint: `https://{okta_domain}/oauth2/v1/keys`
 
 **Group Identifier in Tokens:**
-- Group names (e.g., `mcp-admin`, `mcp-user`) — similar to Keycloak
+- Group names (e.g., `mcp-admin`, `mcp-user`) similar to Keycloak
 - Stored in `groups` claim of JWT
 - Requires groups claim to be configured in the Okta Authorization Server
 

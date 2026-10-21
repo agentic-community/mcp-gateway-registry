@@ -101,6 +101,8 @@ class TestFetchGroupsViaGraph:
 
         assert ids == ["g-1", "g-2"]
         assert [call.args[0] for call in client.get.await_args_list][1] == next_link
+        assert client.get.await_args_list[0].kwargs["params"] == {"$top": 999}
+        assert client.get.await_args_list[1].kwargs["params"] is None
         assert all(
             call.kwargs["headers"]["Authorization"] == "Bearer token"
             for call in client.get.await_args_list
@@ -117,8 +119,9 @@ class TestFetchGroupsViaGraph:
         client.__aenter__.return_value = client
         client.__aexit__.return_value = None
         with patch("auth_server.providers.entra.guarded_async_client", return_value=client):
-            with pytest.raises(GraphGroupLookupError):
+            with pytest.raises(GraphGroupLookupError) as error:
                 await EntraIdProvider.fetch_groups_via_graph("token")
+        assert error.value.reason == ("authorization" if failure == 403 else "transport")
 
     @pytest.mark.asyncio
     async def test_hard_cap_fails_closed_instead_of_returning_partial_groups(self, monkeypatch):
@@ -128,8 +131,9 @@ class TestFetchGroupsViaGraph:
         }
         client = _mock_client(page)
         with patch("auth_server.providers.entra.guarded_async_client", return_value=client):
-            with pytest.raises(GraphGroupLookupError):
+            with pytest.raises(GraphGroupLookupError) as error:
                 await EntraIdProvider.fetch_groups_via_graph("token")
+        assert error.value.reason == "limit"
 
     @pytest.mark.asyncio
     async def test_empty_graph_membership_is_a_successful_lookup(self):
@@ -252,6 +256,100 @@ class TestFetchGroupsViaGraph:
         assert factory.call_args.kwargs["profile"] is ENTRA_GRAPH_PROFILE
 
     @pytest.mark.asyncio
+    async def test_unknown_login_with_explicit_resource_rewrites_native_graph_continuation(
+        self, monkeypatch
+    ):
+        monkeypatch.setenv("ENTRA_LOGIN_BASE_URL", "https://login.private.example.com")
+        monkeypatch.setenv("ENTRA_GRAPH_BASE_URL", "https://graph.proxy.example.com/")
+        monkeypatch.setenv("ENTRA_GRAPH_RESOURCE_URL", "https://graph.microsoft.com")
+        next_link = "https://graph.microsoft.com/v1.0/me/transitiveMemberOf?$skiptoken=next"
+        client = _mock_client(
+            {
+                "value": [{"@odata.type": "#microsoft.graph.group", "id": "first"}],
+                "@odata.nextLink": next_link,
+            },
+            {"value": [{"@odata.type": "#microsoft.graph.group", "id": "second"}]},
+        )
+        with patch("auth_server.providers.entra.guarded_async_client", return_value=client):
+            ids = await EntraIdProvider.fetch_groups_via_graph("delegated-token")
+
+        assert ids == ["first", "second"]
+        assert [call.args[0] for call in client.get.await_args_list] == [
+            "https://graph.proxy.example.com/v1.0/me/transitiveMemberOf",
+            "https://graph.proxy.example.com/v1.0/me/transitiveMemberOf?$skiptoken=next",
+        ]
+        assert all(
+            call.kwargs["headers"]["Authorization"] == "Bearer delegated-token"
+            for call in client.get.await_args_list
+        )
+
+    @pytest.mark.asyncio
+    async def test_unknown_login_without_resource_rejects_native_graph_continuation(
+        self, monkeypatch
+    ):
+        monkeypatch.setenv("ENTRA_LOGIN_BASE_URL", "https://login.private.example.com")
+        monkeypatch.setenv("ENTRA_GRAPH_BASE_URL", "https://graph.proxy.example.com")
+        monkeypatch.delenv("ENTRA_GRAPH_RESOURCE_URL", raising=False)
+        client = _mock_client(
+            {
+                "value": [],
+                "@odata.nextLink": "https://graph.microsoft.com/v1.0/me/transitiveMemberOf?$skiptoken=next",
+            }
+        )
+        with patch("auth_server.providers.entra.guarded_async_client", return_value=client):
+            with pytest.raises(GraphGroupLookupError, match="pagination") as error:
+                await EntraIdProvider.fetch_groups_via_graph("delegated-token")
+        assert error.value.reason == "pagination"
+        client.get.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_unknown_login_rejects_other_native_graph_continuation(self, monkeypatch):
+        monkeypatch.setenv("ENTRA_LOGIN_BASE_URL", "https://login.private.example.com")
+        monkeypatch.setenv("ENTRA_GRAPH_BASE_URL", "https://graph.proxy.example.com")
+        monkeypatch.setenv("ENTRA_GRAPH_RESOURCE_URL", "https://dod-graph.microsoft.us")
+        client = _mock_client(
+            {
+                "value": [],
+                "@odata.nextLink": "https://graph.microsoft.us/v1.0/me/transitiveMemberOf?$skiptoken=x",
+            }
+        )
+        with patch("auth_server.providers.entra.guarded_async_client", return_value=client):
+            with pytest.raises(GraphGroupLookupError) as error:
+                await EntraIdProvider.fetch_groups_via_graph("token")
+        assert error.value.reason == "pagination"
+        client.get.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_unknown_login_without_proxy_fails_before_graph_request(self, monkeypatch):
+        monkeypatch.setenv("ENTRA_LOGIN_BASE_URL", "https://login.private.example.com")
+        monkeypatch.delenv("ENTRA_GRAPH_BASE_URL", raising=False)
+        client = _mock_client({"value": []})
+        with patch("auth_server.providers.entra.guarded_async_client", return_value=client):
+            with pytest.raises(GraphGroupLookupError, match="Unknown Entra cloud"):
+                await EntraIdProvider.fetch_groups_via_graph("delegated-token")
+        client.get.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "login_host,graph_host",
+        [
+            ("login.microsoftonline.com", "graph.microsoft.us"),
+            ("login.microsoftonline.us", "graph.microsoft.com"),
+            ("login.private.example.com", "graph.microsoft.com"),
+        ],
+    )
+    async def test_known_graph_endpoint_must_match_login_cloud(
+        self, monkeypatch, login_host, graph_host
+    ):
+        monkeypatch.setenv("ENTRA_LOGIN_BASE_URL", f"https://{login_host}")
+        monkeypatch.setenv("ENTRA_GRAPH_BASE_URL", f"https://{graph_host}")
+        client = _mock_client({"value": []})
+        with patch("auth_server.providers.entra.guarded_async_client", return_value=client):
+            with pytest.raises(GraphGroupLookupError, match="Graph endpoint does not match"):
+                await EntraIdProvider.fetch_groups_via_graph("delegated-token")
+        client.get.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_graph_proxy_pagination_remains_on_configured_path(self, monkeypatch):
         monkeypatch.setenv("ENTRA_GRAPH_BASE_URL", "https://graph.proxy.example.com")
         next_link = "https://graph.proxy.example.com/v1.0/me/transitiveMemberOf?$skiptoken=next"
@@ -359,6 +457,248 @@ class TestFetchGroupsViaGraph:
         assert client.get.call_args.kwargs["headers"]["Authorization"] == "Bearer the-access-token"
 
 
+class TestGraphProxyBearerRecovery:
+    """A Graph reverse proxy is not an OAuth audience for bearer OBO."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "login_host,graph_resource",
+        [
+            ("login.microsoftonline.com", "https://graph.microsoft.com"),
+            ("login.microsoftonline.us", "https://graph.microsoft.us"),
+        ],
+    )
+    async def test_known_cloud_obo_requests_native_graph_resource(
+        self, monkeypatch, login_host, graph_resource
+    ):
+        monkeypatch.setattr(EntraIdProvider, "_group_cache", OrderedDict())
+        monkeypatch.setenv("ENTRA_LOGIN_BASE_URL", f"https://{login_host}")
+        monkeypatch.setenv("ENTRA_GRAPH_BASE_URL", "https://graph.proxy.example.com")
+        provider = EntraIdProvider("tenant", "app", "secret")
+        client = _mock_client({"value": [{"@odata.type": "#microsoft.graph.group", "id": "group"}]})
+        with (
+            patch(
+                "auth_server.providers.entra.obo_exchange",
+                new_callable=AsyncMock,
+                return_value="graph-token",
+            ) as exchange,
+            patch("auth_server.providers.entra.guarded_async_client", return_value=client),
+        ):
+            groups = await EntraIdProvider._lookup_bearer_groups(
+                (EntraIdProvider._graph_memberof_url(), "tenant", "object"),
+                "ingress-token",
+                provider,
+            )
+
+        assert groups == ["group"]
+        exchange.assert_awaited_once_with(
+            provider,
+            subject_token="ingress-token",
+            target_audience=graph_resource,
+            scopes=[f"{graph_resource}/User.Read"],
+        )
+        assert client.get.await_args.args[0] == (
+            "https://graph.proxy.example.com/v1.0/me/transitiveMemberOf"
+        )
+        assert client.get.await_args.kwargs["headers"] == {"Authorization": "Bearer graph-token"}
+
+    @pytest.mark.asyncio
+    async def test_unknown_cloud_proxy_cannot_be_implicit_obo_resource(self, monkeypatch):
+        monkeypatch.setenv("ENTRA_LOGIN_BASE_URL", "https://login.private.example.com")
+        monkeypatch.setenv("ENTRA_GRAPH_BASE_URL", "https://graph.proxy.example.com")
+        monkeypatch.delenv("ENTRA_GRAPH_RESOURCE_URL", raising=False)
+        provider = EntraIdProvider("tenant", "app", "secret")
+        with patch("auth_server.providers.entra.obo_exchange", new_callable=AsyncMock) as exchange:
+            with pytest.raises(
+                GraphGroupLookupError, match="cannot determine Graph token resource"
+            ) as error:
+                await provider.recover_bearer_groups(
+                    {
+                        "valid": True,
+                        "method": "entra",
+                        "data": {"scp": "mcp.read", "tid": "tenant", "oid": "object"},
+                    },
+                    "ingress-token",
+                )
+        assert error.value.reason == "configuration"
+        exchange.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_unknown_cloud_explicit_resource_obo_uses_native_audience_and_proxy_fetch(
+        self, monkeypatch
+    ):
+        monkeypatch.setattr(EntraIdProvider, "_group_cache", OrderedDict())
+        monkeypatch.setenv("ENTRA_LOGIN_BASE_URL", "https://login.private.example.com")
+        monkeypatch.setenv("ENTRA_GRAPH_BASE_URL", "https://graph.proxy.example.com")
+        monkeypatch.setenv("ENTRA_GRAPH_RESOURCE_URL", "https://dod-graph.microsoft.us")
+        provider = EntraIdProvider("tenant", "app", "secret")
+        client = _mock_client({"value": [{"@odata.type": "#microsoft.graph.group", "id": "group"}]})
+        with (
+            patch(
+                "auth_server.providers.entra.obo_exchange",
+                new_callable=AsyncMock,
+                return_value="graph-token",
+            ) as exchange,
+            patch("auth_server.providers.entra.guarded_async_client", return_value=client),
+        ):
+            groups = await provider.recover_bearer_groups(
+                {
+                    "valid": True,
+                    "method": "entra",
+                    "data": {"scp": "mcp.read", "tid": "tenant", "oid": "object"},
+                },
+                "ingress-token",
+            )
+        assert groups == ["group"]
+        exchange.assert_awaited_once_with(
+            provider,
+            subject_token="ingress-token",
+            target_audience="https://dod-graph.microsoft.us",
+            scopes=["https://dod-graph.microsoft.us/User.Read"],
+        )
+        assert client.get.await_args.args[0] == (
+            "https://graph.proxy.example.com/v1.0/me/transitiveMemberOf"
+        )
+        assert client.get.await_args.kwargs["headers"] == {"Authorization": "Bearer graph-token"}
+
+    @pytest.mark.asyncio
+    async def test_dod_explicit_resource_uses_dod_for_obo_and_native_pagination(self, monkeypatch):
+        monkeypatch.setattr(EntraIdProvider, "_group_cache", OrderedDict())
+        monkeypatch.setenv("ENTRA_LOGIN_BASE_URL", "https://login.microsoftonline.us")
+        monkeypatch.setenv("ENTRA_GRAPH_BASE_URL", "https://graph.proxy.example.com")
+        monkeypatch.setenv("ENTRA_GRAPH_RESOURCE_URL", "https://dod-graph.microsoft.us")
+        provider = EntraIdProvider("tenant", "app", "secret")
+        client = _mock_client(
+            {
+                "value": [],
+                "@odata.nextLink": "https://dod-graph.microsoft.us/v1.0/me/transitiveMemberOf?$skiptoken=next",
+            },
+            {"value": [{"@odata.type": "#microsoft.graph.group", "id": "dod-group"}]},
+        )
+        with (
+            patch(
+                "auth_server.providers.entra.obo_exchange",
+                new_callable=AsyncMock,
+                return_value="dod-token",
+            ) as exchange,
+            patch("auth_server.providers.entra.guarded_async_client", return_value=client),
+        ):
+            result = await provider.recover_bearer_groups(
+                {
+                    "valid": True,
+                    "method": "entra",
+                    "data": {"scp": "mcp.read", "tid": "tenant", "oid": "dod-user"},
+                },
+                "ingress-token",
+            )
+        assert result == ["dod-group"]
+        assert exchange.await_args.kwargs["target_audience"] == "https://dod-graph.microsoft.us"
+        assert [call.args[0] for call in client.get.await_args_list] == [
+            "https://graph.proxy.example.com/v1.0/me/transitiveMemberOf",
+            "https://graph.proxy.example.com/v1.0/me/transitiveMemberOf?$skiptoken=next",
+        ]
+
+    @pytest.mark.parametrize(
+        "login_host,resource",
+        [
+            ("login.microsoftonline.com", "https://graph.microsoft.us"),
+            ("login.microsoftonline.com", "https://dod-graph.microsoft.us"),
+            ("login.microsoftonline.us", "https://graph.microsoft.com"),
+            ("login.chinacloudapi.cn", "https://graph.microsoft.com"),
+        ],
+    )
+    def test_wrong_cloud_resource_rejected_before_provider_setup(
+        self, monkeypatch, login_host, resource
+    ):
+        monkeypatch.setenv("ENTRA_LOGIN_BASE_URL", f"https://{login_host}")
+        monkeypatch.setenv("ENTRA_GRAPH_BASE_URL", "https://graph.proxy.example.com")
+        monkeypatch.setenv("ENTRA_GRAPH_RESOURCE_URL", resource)
+        with pytest.raises(GraphGroupLookupError, match="resource does not match") as error:
+            EntraIdProvider("tenant", "app", "secret")
+        assert error.value.reason == "configuration"
+
+    @pytest.mark.parametrize(
+        "resource",
+        [
+            "http://graph.microsoft.com",
+            "https://graph.proxy.example.com",
+            "https://graph.microsoft.com.attacker.example",
+            "https://graph.microsoft.com@attacker.example",
+            "https://user@graph.microsoft.com",
+            "https://graph.microsoft.com:8443",
+            "https://graph.microsoft.com/v1.0",
+            "https://graph.microsoft.com?next=1",
+            "https://graph.microsoft.com#fragment",
+            "https://graph.microsoft.com ",
+        ],
+    )
+    def test_invalid_resource_rejected_before_token_exchange(self, monkeypatch, resource):
+        monkeypatch.setenv("ENTRA_LOGIN_BASE_URL", "https://login.private.example.com")
+        monkeypatch.setenv("ENTRA_GRAPH_BASE_URL", "https://graph.proxy.example.com")
+        monkeypatch.setenv("ENTRA_GRAPH_RESOURCE_URL", resource)
+        with pytest.raises(GraphGroupLookupError) as error:
+            EntraIdProvider("tenant", "app", "secret")
+        assert error.value.reason == "configuration"
+
+    def test_empty_resource_setting_keeps_known_default_but_not_unknown_proxy(self, monkeypatch):
+        monkeypatch.setenv("ENTRA_GRAPH_RESOURCE_URL", "")
+        monkeypatch.setenv("ENTRA_LOGIN_BASE_URL", "https://login.microsoftonline.us")
+        monkeypatch.delenv("ENTRA_GRAPH_BASE_URL", raising=False)
+        assert EntraIdProvider._graph_memberof_url().startswith("https://graph.microsoft.us/")
+        monkeypatch.setenv("ENTRA_LOGIN_BASE_URL", "https://login.private.example.com")
+        monkeypatch.setenv("ENTRA_GRAPH_BASE_URL", "https://graph.proxy.example.com")
+        from auth_server.providers.entra import _graph_resource_url
+
+        with pytest.raises(GraphGroupLookupError, match="cannot determine Graph token resource"):
+            _graph_resource_url()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "error_type,reason",
+        [
+            ("OboConsentRequired", "consent"),
+            ("OboConfigError", "configuration"),
+            ("OboExchangeError", "token_exchange"),
+        ],
+    )
+    async def test_obo_failures_report_safe_reason(self, monkeypatch, error_type, reason):
+        from auth_server.providers import entra as entra_module
+
+        monkeypatch.setenv("ENTRA_LOGIN_BASE_URL", "https://login.microsoftonline.com")
+        monkeypatch.delenv("ENTRA_GRAPH_BASE_URL", raising=False)
+        monkeypatch.delenv("ENTRA_GRAPH_RESOURCE_URL", raising=False)
+        provider = EntraIdProvider("tenant", "app", "secret")
+        error = getattr(entra_module, error_type)("secret assertion never belongs in reason")
+        with patch("auth_server.providers.entra.obo_exchange", new_callable=AsyncMock) as exchange:
+            exchange.side_effect = error
+            with pytest.raises(GraphGroupLookupError) as failure:
+                await EntraIdProvider._lookup_bearer_groups(
+                    (EntraIdProvider._graph_memberof_url(), "tenant", "object"),
+                    "ingress-token",
+                    provider,
+                )
+        assert failure.value.reason == reason
+        assert "secret" not in failure.value.reason
+
+    def test_reason_cannot_be_overridden_with_sensitive_text(self):
+        assert GraphGroupLookupError("failure", reason="secret assertion").reason == "unknown"
+
+    @pytest.mark.parametrize(
+        "result,expected",
+        [
+            ({"method": "entra", "valid": True, "data": {"scp": "read"}}, True),
+            ({"method": "entra", "valid": True, "data": {"scope": "read"}}, True),
+            ({"method": "entra", "valid": True, "data": {"scope": "   "}}, False),
+            ({"method": "entra", "valid": True, "data": {"scp": "  "}}, False),
+            ({"method": "entra", "valid": True, "data": {"roles": ["app"]}}, False),
+            ({"method": "entra", "valid": False, "data": {"scp": "read"}}, False),
+            ({"method": "other", "valid": True, "data": {"scp": "read"}}, False),
+        ],
+    )
+    def test_only_verified_delegated_entra_users_qualify(self, result, expected):
+        assert EntraIdProvider.is_delegated_user(result) is expected
+
+
 class TestEntraAuthorizationServerMetadata:
     """Tests for RFC 8414 metadata exposure via authorization_server_metadata()."""
 
@@ -413,11 +753,180 @@ def _entra(monkeypatch, **kwargs):
         "ENTRA_GRAPH_BASE_URL",
         "ENTRA_SCOPE_FORMAT",
         "ENTRA_APPLICATION_ID_URI",
+        "ENTRA_GRAPH_RESOURCE_URL",
     ):
         monkeypatch.delenv(var, raising=False)
     params = {"tenant_id": "tenant-abc", "client_id": "app-guid", "client_secret": "s"}
     params.update(kwargs)
     return EntraIdProvider(**params)
+
+
+class TestGuardedUserInfo:
+    """Graph userinfo keeps the bearer on the selected HTTPS Graph origin."""
+
+    @pytest.fixture(autouse=True)
+    def direct_guarded_egress(self, monkeypatch):
+        from registry.utils import url_guard
+
+        monkeypatch.setattr(
+            url_guard, "_forward_proxy_config", lambda: url_guard._ForwardProxyConfig()
+        )
+
+    @staticmethod
+    def dns_answer(address):
+        return [(2, 1, 6, "", (address, 443))]
+
+    def test_native_graph_userinfo_resolves_and_pins_bearer(self, monkeypatch):
+        provider = _entra(monkeypatch)
+        payload = {"preferred_username": "alice@example.com", "email": "alice@example.com"}
+
+        def respond(_transport, request):
+            return httpx.Response(200, json=payload, request=request)
+
+        with (
+            patch(
+                "registry.utils.url_guard.socket.getaddrinfo",
+                return_value=self.dns_answer("8.8.8.8"),
+            ) as dns,
+            patch(
+                "httpx.HTTPTransport.handle_request", autospec=True, side_effect=respond
+            ) as delegate,
+            patch("auth_server.providers.entra.requests.get") as unguarded,
+        ):
+            assert provider.get_user_info("private-bearer") == payload
+
+        dns.assert_called_once_with("graph.microsoft.com", 443, proto=6)
+        outbound = delegate.call_args.args[1]
+        assert outbound.url == httpx.URL("https://8.8.8.8/oidc/userinfo")
+        assert outbound.headers["Host"] == "graph.microsoft.com"
+        assert outbound.extensions["sni_hostname"] == "graph.microsoft.com"
+        assert outbound.headers["Authorization"] == "Bearer private-bearer"
+        unguarded.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "http://graph.microsoft.com/oidc/userinfo",
+            "https://169.254.169.254/oidc/userinfo",
+            "https://127.0.0.1/oidc/userinfo",
+            "https://graph.microsoft.com.attacker.example/oidc/userinfo",
+        ],
+    )
+    def test_invalid_userinfo_destination_never_receives_bearer(self, monkeypatch, url, caplog):
+        provider = _entra(monkeypatch)
+        provider.userinfo_url = url
+        with (
+            patch("registry.utils.url_guard.socket.getaddrinfo") as dns,
+            patch("httpx.HTTPTransport.handle_request", autospec=True) as delegate,
+            pytest.raises(ValueError, match="User info retrieval failed") as error,
+        ):
+            provider.get_user_info("private-bearer")
+        dns.assert_not_called()
+        delegate.assert_not_called()
+        assert "private-bearer" not in str(error.value)
+        assert "private-bearer" not in caplog.text
+
+    @pytest.mark.parametrize(
+        "invalid_origin",
+        [
+            "http://graph.proxy.example.com",
+            "https://169.254.169.254",
+            "https://graph.microsoft.com.attacker.example/extra",
+        ],
+    )
+    def test_changed_invalid_graph_origin_never_receives_bearer(self, monkeypatch, invalid_origin):
+        provider = _entra(monkeypatch)
+        monkeypatch.setenv("ENTRA_GRAPH_BASE_URL", invalid_origin)
+        with (
+            patch("registry.utils.url_guard.socket.getaddrinfo") as dns,
+            patch("httpx.HTTPTransport.handle_request", autospec=True) as delegate,
+            pytest.raises(ValueError, match="User info retrieval failed"),
+        ):
+            provider.get_user_info("private-bearer")
+        dns.assert_not_called()
+        delegate.assert_not_called()
+
+    def test_exact_graph_proxy_can_pin_private_host_but_metadata_is_forbidden(self, monkeypatch):
+        monkeypatch.setenv("ENTRA_GRAPH_BASE_URL", "https://graph.proxy.example.com")
+        provider = EntraIdProvider("tenant", "app", "secret")
+        addresses = [self.dns_answer("10.12.34.5"), self.dns_answer("169.254.169.254")]
+
+        def respond(_transport, request):
+            return httpx.Response(200, json={"sub": "alice"}, request=request)
+
+        with (
+            patch("registry.utils.url_guard.socket.getaddrinfo", side_effect=addresses) as dns,
+            patch(
+                "httpx.HTTPTransport.handle_request", autospec=True, side_effect=respond
+            ) as delegate,
+        ):
+            assert provider.get_user_info("private-bearer") == {"sub": "alice"}
+            with pytest.raises(ValueError, match="User info retrieval failed"):
+                provider.get_user_info("private-bearer")
+        assert dns.call_count == 2
+        delegate.assert_called_once()
+        outbound = delegate.call_args.args[1]
+        assert outbound.url == httpx.URL("https://10.12.34.5/oidc/userinfo")
+        assert outbound.headers["Host"] == "graph.proxy.example.com"
+        assert outbound.extensions["sni_hostname"] == "graph.proxy.example.com"
+
+    def test_graph_redirect_does_not_follow_with_bearer(self, monkeypatch, caplog):
+        provider = _entra(monkeypatch)
+
+        def redirect(_transport, request):
+            return httpx.Response(
+                302,
+                headers={"Location": "https://attacker.example/collect"},
+                request=request,
+            )
+
+        with (
+            patch(
+                "registry.utils.url_guard.socket.getaddrinfo",
+                return_value=self.dns_answer("8.8.8.8"),
+            ) as dns,
+            patch(
+                "httpx.HTTPTransport.handle_request", autospec=True, side_effect=redirect
+            ) as delegate,
+            pytest.raises(ValueError, match="User info retrieval failed") as error,
+        ):
+            provider.get_user_info("private-bearer")
+        dns.assert_called_once()
+        delegate.assert_called_once()
+        assert "private-bearer" not in str(error.value)
+        assert "private-bearer" not in caplog.text
+
+    def test_http_status_does_not_expose_bearer_in_error_or_log(self, monkeypatch, caplog):
+        provider = _entra(monkeypatch)
+
+        def forbidden(_transport, request):
+            return httpx.Response(403, json={"error": "forbidden"}, request=request)
+
+        with (
+            patch(
+                "registry.utils.url_guard.socket.getaddrinfo",
+                return_value=self.dns_answer("8.8.8.8"),
+            ),
+            patch("httpx.HTTPTransport.handle_request", autospec=True, side_effect=forbidden),
+            pytest.raises(ValueError, match="User info retrieval failed") as error,
+        ):
+            provider.get_user_info("private-bearer")
+        assert "private-bearer" not in str(error.value)
+        assert "private-bearer" not in caplog.text
+
+    def test_native_graph_rebinding_to_private_address_is_denied(self, monkeypatch):
+        provider = _entra(monkeypatch)
+        with (
+            patch(
+                "registry.utils.url_guard.socket.getaddrinfo",
+                return_value=self.dns_answer("10.12.34.5"),
+            ) as dns,
+            patch("httpx.HTTPTransport.handle_request", autospec=True) as delegate,
+            pytest.raises(ValueError, match="User info retrieval failed"),
+        ):
+            provider.get_user_info("private-bearer")
+        dns.assert_called_once()
+        delegate.assert_not_called()
 
 
 class TestResolveGroups:
@@ -466,6 +975,22 @@ class TestResolveGroups:
         graph.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_overage_without_graph_consent_drops_stale_inline_groups(self, monkeypatch):
+        provider = _entra(monkeypatch)
+        claims = {
+            "groups": ["stale-inline"],
+            "roles": ["verified-role"],
+            "hasgroups": True,
+        }
+        with patch.object(
+            EntraIdProvider, "fetch_groups_via_graph", new_callable=AsyncMock
+        ) as graph:
+            result = await provider.resolve_groups(claims, "access-token")
+
+        assert result == ["verified-role"]
+        graph.assert_not_awaited()
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "indicator",
         [
@@ -482,7 +1007,7 @@ class TestResolveGroups:
             new_callable=AsyncMock,
             return_value=["direct", "nested-parent"],
         ) as graph:
-            result = await provider.resolve_groups(claims, "access-token")
+            result = await provider.resolve_groups(claims, "access-token", graph_requested=True)
         assert result == ["direct", "nested-parent"]
         graph.assert_awaited_once()
         assert graph.call_args.args[0] == "access-token"
@@ -499,6 +1024,7 @@ class TestResolveGroups:
             result = await provider.resolve_groups(
                 {"roles": ["inline-role"], "hasgroups": True, "tid": "tenant", "oid": "alice"},
                 "access-token",
+                graph_requested=True,
             )
         assert result == ["inline-role", "nested-parent"]
         graph.assert_awaited_once()
@@ -517,6 +1043,7 @@ class TestResolveGroups:
             result = await provider.resolve_groups(
                 {"groups": ["stale-inline"], "roles": ["role-id"], "hasgroups": True},
                 "access-token",
+                graph_requested=True,
             )
 
         assert result == ["role-id", "nested-parent"]
@@ -530,6 +1057,7 @@ class TestResolveGroups:
             result = await provider.resolve_groups(
                 {"groups": ["stale-inline"], "roles": ["role-id"], "hasgroups": True},
                 "access-token",
+                graph_requested=True,
             )
 
         assert result == ["role-id"]
@@ -544,7 +1072,7 @@ class TestResolveGroups:
             return_value=["nested-parent"],
         ) as graph:
             result = await provider.resolve_groups(
-                {"tid": "tenant", "oid": "alice"}, "access-token"
+                {"tid": "tenant", "oid": "alice"}, "access-token", graph_requested=True
             )
         assert result == ["nested-parent"]
         graph.assert_awaited_once()
@@ -563,7 +1091,7 @@ class TestResolveGroups:
                 side_effect=GraphGroupLookupError("Graph failed"),
             ):
                 with pytest.raises(GraphGroupLookupError):
-                    await provider.resolve_groups(claims, "access-token")
+                    await provider.resolve_groups(claims, "access-token", graph_requested=True)
 
     @pytest.mark.asyncio
     async def test_browser_graph_lookup_timeout_refuses_incomplete_groups(self, monkeypatch):
@@ -578,7 +1106,9 @@ class TestResolveGroups:
         with patch.object(EntraIdProvider, "fetch_groups_via_graph", side_effect=never_returns):
             with pytest.raises(GraphGroupLookupError, match="timed out"):
                 await provider.resolve_groups(
-                    {"hasgroups": True, "groups": ["stale-inline"]}, "access-token"
+                    {"hasgroups": True, "groups": ["stale-inline"]},
+                    "access-token",
+                    graph_requested=True,
                 )
 
     @pytest.mark.asyncio
@@ -606,11 +1136,51 @@ class TestGraphGroupCache:
     @pytest.fixture(autouse=True)
     def _isolate_cache(self, monkeypatch):
         monkeypatch.setattr(EntraIdProvider, "_group_cache", OrderedDict())
+        monkeypatch.setattr(EntraIdProvider, "_group_denials", OrderedDict())
+        monkeypatch.delenv("ENTRA_GROUP_RECOVERY_ENABLED", raising=False)
+        monkeypatch.delenv("ENTRA_GROUP_CACHE_TTL_SECONDS", raising=False)
         monkeypatch.delenv("ENTRA_GRAPH_BASE_URL", raising=False)
         monkeypatch.delenv("ENTRA_LOGIN_BASE_URL", raising=False)
+        monkeypatch.delenv("ENTRA_GRAPH_RESOURCE_URL", raising=False)
 
     @pytest.mark.asyncio
-    async def test_cache_keys_on_tenant_and_object_id_and_expires_at_300_seconds(self):
+    @pytest.mark.parametrize("ttl", ["0", "29", "3601", "not-a-number"])
+    async def test_invalid_ttl_cannot_serve_cached_memberships(self, monkeypatch, ttl):
+        client = _mock_client({"value": [{"@odata.type": "#microsoft.graph.group", "id": "id"}]})
+        with patch("auth_server.providers.entra.guarded_async_client", return_value=client):
+            assert await EntraIdProvider.fetch_groups_via_graph(
+                "token", tenant_id="tenant", object_id="user"
+            ) == ["id"]
+            monkeypatch.setenv("ENTRA_GROUP_CACHE_TTL_SECONDS", ttl)
+            with pytest.raises(ValueError, match="ENTRA_GROUP_CACHE_TTL_SECONDS"):
+                await EntraIdProvider.fetch_groups_via_graph(
+                    "token", tenant_id="tenant", object_id="user"
+                )
+        client.get.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_audience_change_cannot_reuse_graph_membership_cache(self, monkeypatch):
+        monkeypatch.setenv("ENTRA_LOGIN_BASE_URL", "https://login.microsoftonline.us")
+        monkeypatch.setenv("ENTRA_GRAPH_BASE_URL", "https://graph.proxy.example.com")
+        client = _mock_client(
+            {"value": [{"@odata.type": "#microsoft.graph.group", "id": "gov"}]},
+            {"value": [{"@odata.type": "#microsoft.graph.group", "id": "dod"}]},
+        )
+        with patch("auth_server.providers.entra.guarded_async_client", return_value=client):
+            assert await EntraIdProvider.fetch_groups_via_graph(
+                "gov-token", tenant_id="tenant", object_id="user"
+            ) == ["gov"]
+            monkeypatch.setenv("ENTRA_GRAPH_RESOURCE_URL", "https://dod-graph.microsoft.us")
+            assert await EntraIdProvider.fetch_groups_via_graph(
+                "dod-token", tenant_id="tenant", object_id="user"
+            ) == ["dod"]
+        assert client.get.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_cache_keys_on_tenant_and_object_id_and_expires_at_configured_ttl(
+        self, monkeypatch
+    ):
+        monkeypatch.setenv("ENTRA_GROUP_CACHE_TTL_SECONDS", "600")
         clock = [1000.0]
         client = _mock_client(
             {"value": [{"@odata.type": "#microsoft.graph.group", "id": "alice-t1"}]},
@@ -624,12 +1194,12 @@ class TestGraphGroupCache:
         ):
             fetch = EntraIdProvider.fetch_groups_via_graph
             assert await fetch("token", tenant_id="t1", object_id="alice") == ["alice-t1"]
-            clock[0] = 1299.0
+            clock[0] = 1599.0
             assert await fetch("another-token", tenant_id="t1", object_id="alice") == ["alice-t1"]
             assert client.get.await_count == 1
             assert await fetch("token", tenant_id="t2", object_id="alice") == ["alice-t2"]
             assert await fetch("token", tenant_id="t1", object_id="bob") == ["bob-t1"]
-            clock[0] = 1300.0
+            clock[0] = 1600.0
             assert await fetch("token", tenant_id="t1", object_id="alice") == ["alice-t1-refreshed"]
             assert client.get.await_count == 4
 
@@ -648,6 +1218,18 @@ class TestGraphGroupCache:
             )
         assert second == ["original"]
         client.get.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_graph_forbidden_reports_authorization_without_result_cache(self):
+        client = _mock_client({"value": []})
+        client.get.side_effect = [_mock_response({"error": "forbidden"}, 403)]
+        with patch("auth_server.providers.entra.guarded_async_client", return_value=client):
+            with pytest.raises(GraphGroupLookupError) as denied:
+                await EntraIdProvider.fetch_groups_via_graph(
+                    "token", tenant_id="tenant", object_id="alice"
+                )
+        assert denied.value.reason == "authorization"
+        assert not EntraIdProvider._group_cache
 
     @pytest.mark.asyncio
     async def test_empty_result_is_cached_but_error_is_retried(self):
@@ -903,6 +1485,121 @@ class TestAcceptedAudiences:
         auds = provider.accepted_audiences()
         assert auds.count("api://app-guid") == 1
         assert auds == ["app-guid", "api://app-guid"]
+
+
+class TestCredentialedTokenTransport:
+    """Provider token methods cannot send secrets to an unsafe destination."""
+
+    def test_m2m_token_secret_uses_pinned_credentialed_client(self, monkeypatch):
+        from registry.utils import url_guard
+
+        monkeypatch.setattr(
+            url_guard, "_forward_proxy_config", lambda: url_guard._ForwardProxyConfig()
+        )
+        provider = _entra(monkeypatch)
+
+        def respond(_transport, request):
+            assert request.url == httpx.URL("https://8.8.8.8/tenant-abc/oauth2/v2.0/token")
+            assert request.headers["Host"] == "login.microsoftonline.com"
+            assert request.extensions["sni_hostname"] == "login.microsoftonline.com"
+            assert b"client_secret=s" in request.content
+            return httpx.Response(200, json={"access_token": "issued"}, request=request)
+
+        with (
+            patch(
+                "registry.utils.url_guard.socket.getaddrinfo",
+                return_value=[(2, 1, 6, "", ("8.8.8.8", 443))],
+            ),
+            patch("httpx.HTTPTransport.handle_request", autospec=True, side_effect=respond) as send,
+            patch("auth_server.providers.entra.requests.post") as unguarded,
+        ):
+            result = provider.get_m2m_token()
+
+        assert result == {"access_token": "issued"}
+        send.assert_called_once()
+        unguarded.assert_not_called()
+
+    def test_private_m2m_destination_never_receives_client_secret(self, monkeypatch):
+        provider = _entra(monkeypatch)
+        provider.token_url = "https://169.254.169.254/token"
+        with patch("httpx.HTTPTransport.handle_request", autospec=True) as send:
+            with pytest.raises(ValueError, match="M2M token generation failed"):
+                provider.get_m2m_token()
+        send.assert_not_called()
+
+
+class TestValidatedDelegatedScopes:
+    """Only signed Entra access-token scopes reach authorization."""
+
+    @pytest.mark.parametrize(
+        "claim,expected",
+        [
+            ({"scp": "read:servers write:servers"}, ["read:servers", "write:servers"]),
+            ({"scope": "read:servers"}, ["read:servers"]),
+            ({"scp": "read:servers", "scope": "write:servers"}, ["read:servers"]),
+        ],
+    )
+    def test_signed_delegated_scope_precedes_legacy_scope(self, monkeypatch, claim, expected):
+        import json
+        import time
+
+        import jwt
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        from jwt.algorithms import RSAAlgorithm
+
+        provider = _entra(monkeypatch)
+        private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        jwk = json.loads(RSAAlgorithm.to_jwk(private_key.public_key()))
+        jwk["kid"] = "test-key"
+        now = int(time.time())
+        token = jwt.encode(
+            {
+                "iss": provider.issuer_v2,
+                "aud": provider.client_id,
+                "sub": "alice",
+                "tid": "tenant-abc",
+                "oid": "object-alice",
+                "iat": now,
+                "exp": now + 3600,
+                **claim,
+            },
+            private_key,
+            algorithm="RS256",
+            headers={"kid": "test-key"},
+        )
+        with patch.object(provider, "get_jwks", return_value={"keys": [jwk]}):
+            result = provider.validate_token(token)
+        assert result["scopes"] == expected
+
+    def test_signed_non_string_scp_denied(self, monkeypatch):
+        import json
+        import time
+
+        import jwt
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        from jwt.algorithms import RSAAlgorithm
+
+        provider = _entra(monkeypatch)
+        private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        jwk = json.loads(RSAAlgorithm.to_jwk(private_key.public_key()))
+        jwk["kid"] = "test-key"
+        now = int(time.time())
+        token = jwt.encode(
+            {
+                "iss": provider.issuer_v2,
+                "aud": provider.client_id,
+                "sub": "alice",
+                "scp": ["read:servers"],
+                "iat": now,
+                "exp": now + 3600,
+            },
+            private_key,
+            algorithm="RS256",
+            headers={"kid": "test-key"},
+        )
+        with patch.object(provider, "get_jwks", return_value={"keys": [jwk]}):
+            with pytest.raises(ValueError, match="scp claim must be a string"):
+                provider.validate_token(token)
 
 
 class TestRejectNonAccessToken:

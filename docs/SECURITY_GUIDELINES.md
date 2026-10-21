@@ -505,11 +505,55 @@ sanitizer that isn't called) is equivalent to no check.
   Recover user membership only after signature, issuer and audience checks,
   using a delegated Graph token for `/me/transitiveMemberOf`. On a confirmed
   empty Graph result, keep verified app roles but never restore stale inline
-  groups, and never consult `idp_m2m_clients` for a user token with `scp`,
-  even if the token also has a `client_id`. On any lookup or consent failure,
-  stop authorization instead of using partial groups. Filter recovered groups
-  before writing the login session or building `X-Groups`, and deny an
-  oversized header rather than truncating grants.
+  groups, and never consult `idp_m2m_clients` for a user token with signed
+  `scp` or legacy `scope`, even if the token also has a `client_id`. Use the
+  same validated scope classifier for token projection and user detection.
+  Preserve signed direct scopes when combining them with group-derived scopes.
+  On any lookup or consent failure, stop authorization instead of using partial
+  groups. Filter recovered groups before writing the login session or building
+  `X-Groups`, and deny an oversized header rather than truncating grants.
+- **Group recovery controls must not resurrect stale grants.** When Entra
+  Graph recovery is disabled, discard overage-marked inline groups and keep
+  only verified roles. Bound the positive group cache TTL because it delays
+  revocation. A retry-suppression cache may store only a short denial for
+  proven consent, configuration, or Graph 403 failures, keyed by the exact
+  incoming token's digest plus tenant, object and Graph resource. New tokens
+  must bypass stale denials; transient failures must retry. Never turn a
+  cached failure into an empty membership result or retain token bytes.
+- **An authoritative group result cannot be enriched from stale local data.**
+  A successful Entra Graph lookup, including an empty list, outranks local
+  `idp_user_groups` fallback at callback, bearer validation and later cookie
+  validation. When a session mints a user token, derive its Graph provenance
+  from the resolved server-side session, sign it into the token and honor it
+  at later validation. Ignore client-supplied provenance without a resolved
+  session; do not infer authority from an empty list alone.
+- **Do not share an OBO exchange across different assertions.** A process-local
+  single-flight key must include the exact incoming token's digest, even when
+  the successful membership cache is keyed by tenant and object ID. A new
+  token must never inherit another token's failed consent or successful Graph
+  result before its own exchange. Check token-specific denials and require a
+  successful exchange for the exact token before using warm memberships. A
+  browser lookup or a different bearer token can populate group IDs, but
+  neither proves this token has Graph consent. Bound proof entries by the
+  membership cache expiry and capacity. Entra browser login requires a
+  verified ID token; reject a missing one instead of falling back to userinfo.
+  Any other Entra Graph userinfo bearer fetch must use the guarded Graph client
+  with connect-time DNS pinning, not a plain HTTP client.
+- **Guard every Entra token POST that carries a client secret or assertion.**
+  Browser code exchange, provider M2M, refresh, and device token requests
+  use the HTTPS-only credentialed OAuth profile with connect-time DNS pinning.
+  Reject invalid endpoints before attaching credentials; do not log tokens or
+  raw provider error bodies.
+- **A Graph fetch proxy is not a Graph OAuth audience.** Entra OBO must request
+  `User.Read` for a validated native Graph resource, separate from the HTTPS
+  fetch proxy. An unknown login host needs an explicit Graph fetch URL, and
+  enabled group recovery or a browser `User.Read` request also needs an explicit
+  native resource. With both controls off, no Graph audience is requested.
+  Never infer public Graph or request a token for the proxy. Bind cache entries
+  and pagination rewrites to that resource. Reject cross-cloud endpoints and
+  keep native Graph hostnames public-only under the outbound URL guard. nginx
+  may identify a group-lookup outage only from the auth-server's `/validate`
+  response status and marker, never from an inbound client header.
 - **Protect the admin population from lockout and self-harm.** Admin user-mgmt
   must refuse self-deletion, refuse removing/demoting the LAST admin (count
   remaining admins first, fail closed if the population can't be enumerated), and

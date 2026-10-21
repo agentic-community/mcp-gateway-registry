@@ -22,6 +22,8 @@ def _isolated_memberships(monkeypatch):
     for provider_type in (EntraIdProvider, RuntimeEntraIdProvider):
         monkeypatch.setattr(provider_type, "_group_cache", OrderedDict())
         monkeypatch.setattr(provider_type, "_group_inflight", {})
+        monkeypatch.setattr(provider_type, "_group_denials", OrderedDict())
+        monkeypatch.setattr(provider_type, "_group_verified", OrderedDict())
 
 
 @pytest.fixture
@@ -74,6 +76,8 @@ def bearer_client(
 ):
     import group_filter
 
+    group_filter._clear_mapped_group_names_cache()
+
     from auth_server import server
 
     repo = mock_scope_repository_with_data
@@ -100,6 +104,145 @@ def bearer_client(
         patch("mongodb_groups_enrichment.should_enrich_user_groups", return_value=False),
     ):
         yield TestClient(server.app), runtime_entra_provider, repo
+        group_filter._clear_mapped_group_names_cache()
+
+
+def test_signed_entra_scp_authorizes_direct_request_without_graph(bearer_client, monkeypatch):
+    import json
+
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from jwt.algorithms import RSAAlgorithm
+
+    client, provider, _repo = bearer_client
+    monkeypatch.setenv("ENTRA_GROUP_RECOVERY_ENABLED", "false")
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    jwk = json.loads(RSAAlgorithm.to_jwk(private_key.public_key()))
+    jwk["kid"] = "test-key"
+    now = int(time.time())
+    token = jwt.encode(
+        {
+            **_delegated(),
+            "iss": provider.issuer_v2,
+            "aud": provider.client_id,
+            "scp": "read:servers",
+            "iat": now,
+            "exp": now + 3600,
+        },
+        private_key,
+        algorithm="RS256",
+        headers={"kid": "test-key"},
+    )
+    with (
+        patch.object(provider, "get_jwks", return_value={"keys": [jwk]}),
+        patch("providers.entra.obo_exchange", new_callable=AsyncMock) as exchange,
+    ):
+        response = _validate(client, token)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["scopes"] == ["read:servers"]
+    assert response.json()["groups"] == []
+    exchange.assert_not_awaited()
+
+
+def test_signed_scope_only_user_never_inherits_m2m_client_groups(bearer_client, monkeypatch):
+    import json
+
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from jwt.algorithms import RSAAlgorithm
+
+    from auth_server.mongodb_groups_enrichment import should_enrich_groups
+
+    client, provider, _repo = bearer_client
+    monkeypatch.setenv("ENTRA_GROUP_RECOVERY_ENABLED", "false")
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    jwk = json.loads(RSAAlgorithm.to_jwk(private_key.public_key()))
+    jwk["kid"] = "test-key"
+    now = int(time.time())
+    token = jwt.encode(
+        {
+            "sub": "alice",
+            "tid": "tenant-one",
+            "oid": "object-alice",
+            "iss": provider.issuer_v2,
+            "aud": provider.client_id,
+            "scope": "read:servers",
+            "iat": now,
+            "exp": now + 3600,
+        },
+        private_key,
+        algorithm="RS256",
+        headers={"kid": "test-key"},
+    )
+    with (
+        patch.object(provider, "get_jwks", return_value={"keys": [jwk]}),
+        patch("providers.entra.obo_exchange", new_callable=AsyncMock) as exchange,
+        patch(
+            "mongodb_groups_enrichment.should_enrich_groups",
+            wraps=should_enrich_groups,
+        ),
+        patch(
+            "mongodb_groups_enrichment.enrich_groups_from_mongodb",
+            new_callable=AsyncMock,
+            return_value=["m2m-role"],
+        ) as m2m,
+    ):
+        response = _validate(client, token)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["groups"] == []
+    assert response.json()["scopes"] == ["read:servers"]
+    m2m.assert_not_awaited()
+    exchange.assert_not_awaited()
+
+
+@pytest.mark.parametrize("recovered", [False, True], ids=["inline", "graph"])
+def test_signed_direct_scope_survives_group_mapping(bearer_client, recovered):
+    import json
+
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from jwt.algorithms import RSAAlgorithm
+
+    client, provider, _repo = bearer_client
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    jwk = json.loads(RSAAlgorithm.to_jwk(private_key.public_key()))
+    jwk["kid"] = "test-key"
+    now = int(time.time())
+    token = jwt.encode(
+        {
+            **_delegated(**({"hasgroups": True} if recovered else {"groups": ["nested-parent"]})),
+            "iss": provider.issuer_v2,
+            "aud": provider.client_id,
+            "scp": "direct:scope read:servers",
+            "iat": now,
+            "exp": now + 3600,
+        },
+        private_key,
+        algorithm="RS256",
+        headers={"kid": "test-key"},
+    )
+    with (
+        patch.object(provider, "get_jwks", return_value={"keys": [jwk]}),
+        patch(
+            "providers.entra.obo_exchange", new_callable=AsyncMock, return_value="graph-token"
+        ) as exchange,
+        patch.object(
+            type(provider),
+            "fetch_groups_via_graph",
+            new_callable=AsyncMock,
+            return_value=["nested-parent"],
+        ) as graph,
+    ):
+        response = _validate(client, token)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["scopes"] == ["direct:scope", "read:servers"]
+    assert response.json()["groups"] == ["nested-parent"]
+    if recovered:
+        exchange.assert_awaited_once()
+        graph.assert_awaited_once()
+    else:
+        exchange.assert_not_awaited()
+        graph.assert_not_awaited()
 
 
 @pytest.mark.parametrize(
@@ -236,6 +379,125 @@ def test_empty_graph_membership_never_uses_m2m_enrichment(bearer_client):
     repo.get_group_mappings_bulk.assert_not_awaited()
 
 
+@pytest.mark.parametrize("graph_result", [[], ["nested-parent"]])
+def test_graph_memberships_override_configured_stale_user_fallback(bearer_client, graph_result):
+    from auth_server import server
+    from auth_server.mongodb_groups_enrichment import should_enrich_user_groups
+
+    client, provider, repo = bearer_client
+    provider.validate_token = MagicMock(return_value=_verified_result(_delegated(hasgroups=True)))
+    with (
+        patch.object(server, "IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS", ["entra"]),
+        patch(
+            "mongodb_groups_enrichment.should_enrich_user_groups", wraps=should_enrich_user_groups
+        ),
+        patch(
+            "mongodb_groups_enrichment.enrich_user_groups_from_mongodb",
+            new_callable=AsyncMock,
+            return_value=["m2m-role"],
+        ) as local_fallback,
+        patch("providers.entra.obo_exchange", new_callable=AsyncMock, return_value="graph-token"),
+        patch.object(
+            type(provider),
+            "fetch_groups_via_graph",
+            new_callable=AsyncMock,
+            return_value=graph_result,
+        ) as graph,
+    ):
+        response = _validate(client)
+
+    graph.assert_awaited_once()
+    local_fallback.assert_not_awaited()
+    if graph_result:
+        assert response.status_code == 200, response.text
+        assert response.json()["groups"] == graph_result
+        assert response.json()["scopes"] == ["read:servers"]
+        assert response.headers["X-Groups"] == "nested-parent"
+    else:
+        assert response.status_code == 403, response.text
+        assert "X-Groups" not in response.headers
+        repo.get_group_mappings_bulk.assert_not_awaited()
+
+
+def test_disabled_graph_recovery_preserves_configured_user_fallback(bearer_client, monkeypatch):
+    from auth_server import server
+    from auth_server.mongodb_groups_enrichment import should_enrich_user_groups
+
+    monkeypatch.setenv("ENTRA_GROUP_RECOVERY_ENABLED", "false")
+    client, provider, _repo = bearer_client
+    provider.validate_token = MagicMock(return_value=_verified_result(_delegated(hasgroups=True)))
+    with (
+        patch.object(server, "IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS", ["entra"]),
+        patch(
+            "mongodb_groups_enrichment.should_enrich_user_groups", wraps=should_enrich_user_groups
+        ),
+        patch(
+            "mongodb_groups_enrichment.enrich_user_groups_from_mongodb",
+            new_callable=AsyncMock,
+            return_value=["m2m-role"],
+        ) as local_fallback,
+        patch("providers.entra.obo_exchange", new_callable=AsyncMock) as obo,
+    ):
+        response = _validate(client)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["groups"] == ["m2m-role"]
+    assert response.json()["scopes"] == ["read:servers"]
+    local_fallback.assert_awaited_once_with("alice@example.com", [], "entra")
+    obo.assert_not_awaited()
+
+
+@pytest.mark.parametrize("missing", [False, True])
+def test_validate_denies_recovered_groups_when_scope_mappings_unavailable(bearer_client, missing):
+    client, provider, repo = bearer_client
+    provider.validate_token = MagicMock(return_value=_verified_result(_delegated()))
+    if missing:
+        repo.get_all_mapped_group_names.return_value = set()
+    else:
+        repo.get_all_mapped_group_names.side_effect = RuntimeError("database unavailable")
+    with (
+        patch("providers.entra.obo_exchange", new_callable=AsyncMock, return_value="graph-token"),
+        patch.object(
+            type(provider),
+            "fetch_groups_via_graph",
+            new_callable=AsyncMock,
+            return_value=["nested-parent"],
+        ),
+    ):
+        response = _validate(client)
+    assert response.status_code == 503
+    assert response.headers["X-Entra-Group-Lookup-Unavailable"] == "1"
+    assert "X-Groups" not in response.headers
+    repo.get_group_mappings_bulk.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "claims,expected",
+    [
+        (_delegated(hasgroups=True, groups=["stale-admin"], roles=["m2m-role"]), ["m2m-role"]),
+        (_delegated(), []),
+    ],
+)
+def test_disabled_recovery_never_uses_stale_group_claims(
+    bearer_client, monkeypatch, claims, expected
+):
+    monkeypatch.setenv("ENTRA_GROUP_RECOVERY_ENABLED", "false")
+    client, provider, _repo = bearer_client
+    provider.validate_token = MagicMock(return_value=_verified_result(claims))
+    with (
+        patch("providers.entra.obo_exchange", new_callable=AsyncMock) as obo,
+        patch.object(type(provider), "fetch_groups_via_graph", new_callable=AsyncMock) as graph,
+    ):
+        response = _validate(client)
+    assert response.status_code == (200 if expected else 403)
+    if expected:
+        assert response.json()["groups"] == expected
+    else:
+        assert "X-Groups" not in response.headers
+    obo.assert_not_awaited()
+    graph.assert_not_awaited()
+
+
 @pytest.mark.parametrize(
     "claims,method",
     [
@@ -297,6 +559,34 @@ def test_validate_self_signed_token_never_enters_graph_path(bearer_client):
     provider.validate_token.assert_not_called()
 
 
+def test_consent_failure_retries_only_after_short_cache_or_new_token(bearer_client, monkeypatch):
+    from egress_obo import OboConsentRequired
+
+    client, provider, _repo = bearer_client
+    provider.validate_token = MagicMock(return_value=_verified_result(_delegated(hasgroups=True)))
+    clock = [1000.0]
+    exchange = AsyncMock(side_effect=OboConsentRequired("consent missing"))
+    with (
+        patch("providers.entra.time.monotonic", side_effect=lambda: clock[0]),
+        patch("providers.entra.obo_exchange", exchange),
+    ):
+        first = _validate(client, "token-one")
+        second = _validate(client, "token-one")
+        new_token = _validate(client, "token-two")
+        clock[0] += 30
+        after_ttl = _validate(client, "token-one")
+    assert [response.status_code for response in (first, second, new_token, after_ttl)] == [
+        503,
+        503,
+        503,
+        503,
+    ]
+    assert exchange.await_count == 3
+    assert all(
+        "X-Groups" not in response.headers for response in (first, second, new_token, after_ttl)
+    )
+
+
 @pytest.mark.parametrize("failure", ["obo", "graph"])
 @pytest.mark.parametrize(
     "claims",
@@ -324,9 +614,11 @@ def test_validate_denies_failed_recovery_and_retries_next_request(bearer_client,
         accepted = _validate(client)
 
     assert denied.status_code == 503, denied.text
+    assert denied.headers["X-Entra-Group-Lookup-Unavailable"] == "1"
     assert "X-Scopes" not in denied.headers
     assert "X-Groups" not in denied.headers
     assert accepted.status_code == 200, accepted.text
+    assert "X-Entra-Group-Lookup-Unavailable" not in accepted.headers
     assert accepted.json()["scopes"] == ["read:servers"]
     assert accepted.headers["X-Groups"] == "nested-parent"
     assert obo.await_count == 2
@@ -376,10 +668,7 @@ async def test_recovery_skips_non_delegated_claims(entra_provider, result):
         patch("auth_server.providers.entra.obo_exchange", new_callable=AsyncMock) as obo,
         patch.object(EntraIdProvider, "fetch_groups_via_graph", new_callable=AsyncMock) as graph,
     ):
-        assert (
-            await EntraIdProvider.recover_bearer_groups(result, "subject-token", entra_provider)
-            is None
-        )
+        assert await entra_provider.recover_bearer_groups(result, "subject-token") is None
 
     obo.assert_not_awaited()
     graph.assert_not_awaited()
@@ -408,14 +697,14 @@ async def test_recovery_refuses_to_exchange_without_verified_identity(entra_prov
         patch.object(EntraIdProvider, "fetch_groups_via_graph", new_callable=AsyncMock) as graph,
     ):
         with pytest.raises(GraphGroupLookupError):
-            await EntraIdProvider.recover_bearer_groups(result, "subject-token", entra_provider)
+            await entra_provider.recover_bearer_groups(result, "subject-token")
 
     obo.assert_not_awaited()
     graph.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_concurrent_misses_share_one_obo_and_graph_lookup(entra_provider):
+async def test_concurrent_same_token_misses_share_one_obo_and_graph_lookup(entra_provider):
     ready = asyncio.Event()
     release = asyncio.Event()
 
@@ -439,11 +728,11 @@ async def test_concurrent_misses_share_one_obo_and_graph_lookup(entra_provider):
     ):
         calls = [
             asyncio.create_task(
-                EntraIdProvider.recover_bearer_groups(
-                    _verified_result(_delegated(hasgroups=True)), f"token-{i}", entra_provider
+                entra_provider.recover_bearer_groups(
+                    _verified_result(_delegated(hasgroups=True)), "same-token"
                 )
             )
-            for i in range(12)
+            for _ in range(12)
         ]
         await ready.wait()
         # Let the other calls register their wait on the same in-flight lookup.
@@ -454,6 +743,43 @@ async def test_concurrent_misses_share_one_obo_and_graph_lookup(entra_provider):
     assert result == [["nested-parent"] for _ in calls]
     obo.assert_awaited_once()
     graph.assert_awaited_once_with("graph-token", tenant_id="tenant-one", object_id="object-alice")
+
+
+@pytest.mark.asyncio
+async def test_concurrent_distinct_tokens_do_not_share_obo_failure(entra_provider):
+    from egress_obo import OboConsentRequired
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+    result = _verified_result(_delegated(hasgroups=True))
+
+    async def exchange(*_args, subject_token, **_kwargs):
+        started.set()
+        await release.wait()
+        if subject_token == "old-token":
+            raise OboConsentRequired("consent required")
+        return "graph-token"
+
+    with (
+        patch(
+            "auth_server.providers.entra.obo_exchange", new_callable=AsyncMock, side_effect=exchange
+        ) as obo,
+        patch.object(
+            EntraIdProvider,
+            "fetch_groups_via_graph",
+            new_callable=AsyncMock,
+            return_value=["nested-parent"],
+        ),
+    ):
+        old = asyncio.create_task(entra_provider.recover_bearer_groups(result, "old-token"))
+        await started.wait()
+        new = asyncio.create_task(entra_provider.recover_bearer_groups(result, "new-token"))
+        await asyncio.sleep(0)
+        release.set()
+        with pytest.raises(GraphGroupLookupError, match="token exchange failed"):
+            await old
+        assert await new == ["nested-parent"]
+    assert obo.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -492,10 +818,8 @@ async def test_stalled_graph_exchange_times_out_without_caching_failure(
         ),
     ):
         with pytest.raises(GraphGroupLookupError, match="timed out"):
-            await EntraIdProvider.recover_bearer_groups(result, "token", entra_provider)
-        assert await EntraIdProvider.recover_bearer_groups(result, "token", entra_provider) == [
-            "nested-parent"
-        ]
+            await entra_provider.recover_bearer_groups(result, "token")
+        assert await entra_provider.recover_bearer_groups(result, "token") == ["nested-parent"]
         assert obo.await_count == 2
 
 
@@ -516,17 +840,92 @@ async def test_cached_graph_memberships_keep_each_token_app_roles(entra_provider
             return_value=["nested-parent"],
         ) as graph,
     ):
-        initial = await EntraIdProvider.recover_bearer_groups(first, "first-token", entra_provider)
+        initial = await entra_provider.recover_bearer_groups(first, "first-token")
         # The network stub doesn't populate the provider's normal Graph cache.
         EntraIdProvider._group_cache[
-            (EntraIdProvider._graph_memberof_url(), "tenant-one", "object-alice")
+            (
+                EntraIdProvider._graph_memberof_url(),
+                "tenant-one",
+                "object-alice",
+                "https://graph.microsoft.com",
+            )
         ] = (time.monotonic() + 300, ("nested-parent",))
-        cached = await EntraIdProvider.recover_bearer_groups(second, "second-token", entra_provider)
+        cached = await entra_provider.recover_bearer_groups(second, "second-token")
 
     assert initial == ["first-role", "nested-parent"]
     assert cached == ["second-role", "nested-parent"]
-    exchange.assert_awaited_once()
-    graph.assert_awaited_once()
+    assert exchange.await_count == 2
+    assert graph.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_denied_token_cannot_borrow_other_tokens_cached_memberships(entra_provider):
+    from egress_obo import OboConsentRequired
+
+    result = _verified_result(_delegated(hasgroups=True))
+
+    async def exchange(*_args, subject_token, **_kwargs):
+        if subject_token == "denied-token":
+            raise OboConsentRequired("consent required")
+        return "graph-token"
+
+    with (
+        patch(
+            "auth_server.providers.entra.obo_exchange", new_callable=AsyncMock, side_effect=exchange
+        ) as obo,
+        patch.object(
+            EntraIdProvider,
+            "fetch_groups_via_graph",
+            new_callable=AsyncMock,
+            return_value=["nested-parent"],
+        ),
+    ):
+        with pytest.raises(GraphGroupLookupError) as denied:
+            await entra_provider.recover_bearer_groups(result, "denied-token")
+        assert denied.value.reason == "consent"
+        await entra_provider.recover_bearer_groups(result, "allowed-token")
+        with pytest.raises(GraphGroupLookupError) as still_denied:
+            await entra_provider.recover_bearer_groups(result, "denied-token")
+
+    assert still_denied.value.reason == "consent"
+    assert obo.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_browser_cached_membership_requires_each_bearer_token_obo(entra_provider):
+    key = (
+        EntraIdProvider._graph_memberof_url(),
+        "tenant-one",
+        "object-alice",
+        "https://graph.microsoft.com",
+    )
+    EntraIdProvider._group_cache[key] = (time.monotonic() + 300, ("nested-parent",))
+    result = _verified_result(_delegated(hasgroups=True))
+    with (
+        patch(
+            "auth_server.providers.entra.obo_exchange",
+            new_callable=AsyncMock,
+            return_value="graph-token",
+        ) as obo,
+        patch.object(
+            EntraIdProvider,
+            "fetch_groups_via_graph",
+            new_callable=AsyncMock,
+            return_value=["nested-parent"],
+        ) as graph,
+    ):
+        assert await entra_provider.recover_bearer_groups(result, "first-token") == [
+            "nested-parent"
+        ]
+        assert await entra_provider.recover_bearer_groups(result, "first-token") == [
+            "nested-parent"
+        ]
+        assert await entra_provider.recover_bearer_groups(result, "second-token") == [
+            "nested-parent"
+        ]
+
+    assert obo.await_count == 2
+    assert graph.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -545,9 +944,7 @@ async def test_graph_proxy_does_not_change_obo_resource(monkeypatch):
             EntraIdProvider, "fetch_groups_via_graph", new_callable=AsyncMock, return_value=[]
         ),
     ):
-        await EntraIdProvider.recover_bearer_groups(
-            _verified_result(_delegated()), "ingress-token", provider
-        )
+        await provider.recover_bearer_groups(_verified_result(_delegated()), "ingress-token")
 
     exchange.assert_awaited_once_with(
         provider,
@@ -583,9 +980,7 @@ async def test_graph_proxy_obo_uses_sovereign_login_resource(
             EntraIdProvider, "fetch_groups_via_graph", new_callable=AsyncMock, return_value=[]
         ),
     ):
-        await EntraIdProvider.recover_bearer_groups(
-            _verified_result(_delegated()), "ingress-token", provider
-        )
+        await provider.recover_bearer_groups(_verified_result(_delegated()), "ingress-token")
 
     exchange.assert_awaited_once_with(
         provider,
@@ -615,7 +1010,7 @@ async def test_membership_cache_isolated_by_verified_tenant_and_object(entra_pro
         ) as obo,
         patch("auth_server.providers.entra.guarded_async_client", return_value=graph_client),
     ):
-        recover = EntraIdProvider.recover_bearer_groups
+        recover = entra_provider.recover_bearer_groups
         for tid, oid, expected in (
             ("tenant-one", "object-alice", ["alice-t1"]),
             ("tenant-two", "object-alice", ["alice-t2"]),
@@ -623,7 +1018,7 @@ async def test_membership_cache_isolated_by_verified_tenant_and_object(entra_pro
             ("tenant-one", "object-alice", ["alice-t1"]),
         ):
             result = _verified_result(_delegated(tid=tid, oid=oid))
-            assert await recover(result, "new-subject-token", entra_provider) == expected
+            assert await recover(result, "new-subject-token") == expected
 
     assert obo.await_count == 3
     assert graph_client.get.await_count == 3
@@ -631,7 +1026,7 @@ async def test_membership_cache_isolated_by_verified_tenant_and_object(entra_pro
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ["obo", "graph"])
-async def test_failed_recovery_is_not_cached(entra_provider, failure):
+async def test_transient_failed_recovery_is_not_cached(entra_provider, failure):
     from egress_obo import OboExchangeError
 
     obo = AsyncMock(return_value="graph-token")
@@ -641,7 +1036,7 @@ async def test_failed_recovery_is_not_cached(entra_provider, failure):
     graph_client.get.side_effect = (
         [
             httpx.Response(
-                403,
+                500,
                 request=httpx.Request(
                     "GET", "https://graph.microsoft.com/v1.0/me/transitiveMemberOf"
                 ),
@@ -657,15 +1052,15 @@ async def test_failed_recovery_is_not_cached(entra_provider, failure):
         )
     ]
     graph_client.__aenter__.return_value = graph_client
-    recover = EntraIdProvider.recover_bearer_groups
+    recover = entra_provider.recover_bearer_groups
     result = _verified_result(_delegated())
     with (
         patch("auth_server.providers.entra.obo_exchange", obo),
         patch("auth_server.providers.entra.guarded_async_client", return_value=graph_client),
     ):
         with pytest.raises(GraphGroupLookupError):
-            await recover(result, "subject-token", entra_provider)
-        assert await recover(result, "subject-token", entra_provider) == ["nested-parent"]
+            await recover(result, "subject-token")
+        assert await recover(result, "subject-token") == ["nested-parent"]
 
     assert obo.await_count == 2
     assert graph_client.get.await_count == (1 if failure == "obo" else 2)

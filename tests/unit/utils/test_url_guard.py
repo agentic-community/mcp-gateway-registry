@@ -892,6 +892,17 @@ class TestEntraGraphProfile:
                 "https://graph.microsoft.com/v1.0/me", profile=url_guard.ENTRA_GRAPH_PROFILE
             ) == ["93.184.216.34"]
 
+    def test_dod_graph_native_fetch_remains_public_only(self, monkeypatch):
+        monkeypatch.setenv("ENTRA_GRAPH_BASE_URL", "https://dod-graph.microsoft.us")
+        profile = url_guard.ENTRA_GRAPH_PROFILE
+        with patch.object(url_guard.socket, "getaddrinfo", _resolve_to("93.184.216.34")):
+            assert url_guard.validate_url(
+                "https://dod-graph.microsoft.us/v1.0/me", profile=profile
+            ) == ["93.184.216.34"]
+        with patch.object(url_guard.socket, "getaddrinfo", _resolve_to("10.20.30.40")):
+            with pytest.raises(UrlValidationError):
+                url_guard.validate_url("https://dod-graph.microsoft.us/v1.0/me", profile=profile)
+
     def test_wildcard_proxy_configuration_never_trusts_private_subdomains(self, monkeypatch):
         monkeypatch.setenv("ENTRA_GRAPH_BASE_URL", "https://*.proxy.example.com")
         with patch.object(url_guard.socket, "getaddrinfo", _resolve_to("10.20.30.40")):

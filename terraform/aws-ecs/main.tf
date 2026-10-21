@@ -196,6 +196,10 @@ module "mcp_gateway" {
   entra_client_secret                       = var.entra_client_secret
   entra_login_base_url                      = var.entra_login_base_url
   entra_graph_base_url                      = var.entra_graph_base_url
+  entra_graph_resource_url                  = var.entra_graph_resource_url
+  entra_browser_user_read_enabled           = var.entra_browser_user_read_enabled
+  entra_group_recovery_enabled              = var.entra_group_recovery_enabled
+  entra_group_cache_ttl_seconds              = var.entra_group_cache_ttl_seconds
   entra_scope_format                        = var.entra_scope_format
   entra_application_id_uri                  = var.entra_application_id_uri
   idp_group_filter_prefix                   = var.idp_group_filter_prefix

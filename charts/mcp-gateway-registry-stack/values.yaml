@@ -693,8 +693,12 @@ auth-server:
     clientId: ""
     clientSecret: ""
     tenantId: ""
-    loginBaseUrl: "" # Custom Entra login base URL for sovereign clouds
-    graphBaseUrl: "" # Optional Microsoft Graph base URL override (auto-inferred from loginBaseUrl)
+    loginBaseUrl: "" # Sovereign Entra login base URL; a custom login proxy also needs graphBaseUrl.
+    graphBaseUrl: "" # Optional on known Entra clouds; required for a custom login proxy. This is the network fetch URL.
+    graphResourceUrl: "" # Native Microsoft Graph OAuth resource, required for custom login proxies when groupRecoveryEnabled or browserUserReadEnabled is true. Set DoD explicitly.
+    browserUserReadEnabled: false # Request User.Read on browser login. Default false keeps OIDC-only login; Graph lookup also requires groupRecoveryEnabled.
+    groupRecoveryEnabled: true # Recover overage groups via Graph for eligible bearer tokens and browser sessions consented to User.Read. False disables Graph recovery.
+    groupCacheTtlSeconds: 300 # Positive Graph group-result cache lifetime (30..3600 seconds); removals can remain cached until expiration.
     scopeFormat: "" # Entra PRM scope form: "v1" (api://<app-id>/<scope>) or "v2" (bare, default). Set "v1" only if your app exposes v1-style api:// scopes (issue #990).
     applicationIdUri: "" # Application ID URI (e.g. api://<app-id>). Used as the v1 scope prefix and accepted as a token audience. Defaults to api://<clientId>.
   # Okta settings (used when global.authProvider.type = "okta")

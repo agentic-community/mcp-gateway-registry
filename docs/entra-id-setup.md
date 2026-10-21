@@ -75,11 +75,14 @@ After creating the app registration, note the following values (you'll need them
 
 ### Step 5: Add API Permissions
 
-For the signed-in user's group lookup at login, add Microsoft Graph **Delegated** `User.Read`. The callback requests
-`User.Read` to get a Microsoft Graph access token. `openid`, `email`, and `profile` alone do not grant this Graph
-permission. Microsoft lists `User.Read` as the least-privileged delegated permission for [
+The Entra browser login requests `openid`, `email`, and `profile` by default. Set `ENTRA_BROWSER_USER_READ_ENABLED=true`
+in Docker or Terraform, or `auth-server.entra.browserUserReadEnabled: true` in Helm, to append exactly `User.Read` to
+the login request. The callback records the requested scopes in the signed login state and uses Graph when claims are
+missing or overage-marked, provided group recovery is enabled. The default avoids a new consent requirement; without
+`User.Read`, missing claims yield no group-derived scopes. Microsoft lists delegated `User.Read` as the least-privileged
+permission for [
 `/me/transitiveMemberOf`](https://learn.microsoft.com/en-us/graph/api/user-list-transitivememberof?view=graph-rest-1.0).
-Delegated `GroupMember.Read.All` is not needed for this login lookup.
+Delegated `GroupMember.Read.All` is not needed.
 
 1. Click **API permissions** in the left menu
 2. Click **Add a permission** and select **Microsoft Graph**
@@ -87,9 +90,8 @@ Delegated `GroupMember.Read.All` is not needed for this login lookup.
 4. Add `User.Read` (it may already appear in the app registration)
 5. Click **Add permissions**
 
-Before deploying an auth server that requests `User.Read` on every Entra browser login, confirm that users may grant
-this permission or grant tenant-wide administrator consent. Otherwise Entra can refuse even logins with inline group
-claims before the callback runs.
+Before adding `User.Read` to the login scopes, confirm that users can grant it or grant tenant-wide administrator
+consent. Otherwise Entra can refuse a login before the callback runs, including one with inline group claims.
 
 The callback calls Graph as the signed-in user with an access token issued for the Microsoft Graph resource (
 `https://graph.microsoft.com` in the public cloud), not an ID token or a token for the registry. Entra access tokens may
@@ -104,14 +106,29 @@ callback's Graph token cannot replace this exchange for a bearer request.
 Neither lookup uses Graph **Application permissions**. Entra M2M `roles`
 tokens do not use the on-behalf-of exchange.
 
-`ENTRA_GRAPH_BASE_URL` selects the Graph fetch origin. Public, US Government GCC High, and China deployments use
-`https://graph.microsoft.com`, `https://graph.microsoft.us`, and `https://microsoftgraph.chinacloudapi.cn` respectively;
-the public endpoints need no added allowlist. With an operator-configured HTTPS reverse proxy, only its exact configured
-hostname may resolve to a private address. The guarded transport checks every DNS answer and pins the destination;
-metadata and link-local addresses remain blocked. The proxy must terminate TLS with a certificate the auth server trusts
-and forward to the correct sovereign Graph service. The on-behalf-of exchange still requests `User.Read` for the Graph
-resource selected by `ENTRA_LOGIN_BASE_URL`, not for the proxy hostname. Do not point an `ENTRA_GRAPH_BASE_URL` proxy at
-a different cloud.
+`ENTRA_GRAPH_BASE_URL` selects the HTTPS Graph fetch endpoint. Leave it unset for a recognized Entra login cloud to use
+that cloud's Graph host. To use a private reverse proxy, set it to the proxy's HTTPS origin. The guarded transport pins
+DNS answers and blocks metadata and link-local addresses. Only the configured proxy hostname may resolve to a private
+address; Microsoft Graph hostnames must remain public. The proxy must present a certificate the auth server trusts and
+forward to the selected cloud's Graph service.
+
+`ENTRA_GRAPH_RESOURCE_URL` selects the native Microsoft Graph OAuth audience and its delegated `User.Read` scope. It
+does not route network traffic through that hostname. The auth server infers this resource for public, US Government,
+and China login origins. An unrecognized HTTPS `ENTRA_LOGIN_BASE_URL` proxy always needs `ENTRA_GRAPH_BASE_URL` for the
+Graph fetch endpoint. It also needs an official `ENTRA_GRAPH_RESOURCE_URL` when group recovery or the browser
+`User.Read` request is enabled. With both off, the auth server requests no Graph audience. Only
+`https://graph.microsoft.com`, `https://graph.microsoft.us`, `https://dod-graph.microsoft.us`, and
+`https://microsoftgraph.chinacloudapi.cn` are valid resources. The configured resource must match a known login cloud;
+`login.microsoftonline.us` also accepts the DoD resource.
+
+With a proxy, the auth server rewrites Graph pagination links only from the configured native resource to the configured
+fetch endpoint. Links to other clouds, hosts, or paths fail without forwarding the token. A login proxy must forward OBO
+exchanges to the same Entra cloud that issued the incoming token. The auth server cannot prove which cloud an arbitrary
+proxy serves, so the operator must supply the correct native resource and trusted proxy routing.
+
+Entra browser code exchange sends the client secret through the HTTPS-only credentialed OAuth URL guard. If the login
+proxy resolves to a private IP, add its exact hostname to `EGRESS_OAUTH_TRUSTED_IDP_HOSTS`; this opt-in does not apply
+to Graph's fetch proxy. Leave the list empty for public login hosts.
 
 #### Consent for the login lookup
 
@@ -336,28 +353,46 @@ Replace the group Object IDs with your actual group IDs from Azure Portal, then 
 
 ### Group membership at sign-in
 
-The Entra callback uses inline `groups` or `roles` claims when the ID token supplies them. If Entra marks group overage
-with `hasgroups` or `_claim_names.groups`, or supplies neither `groups` nor `roles`, the callback calls Microsoft Graph
-`GET https://graph.microsoft.com/v1.0/me/transitiveMemberOf` with the signed-in user's delegated token. Graph returns
-direct and nested memberships; the callback uses the returned group IDs for scope mappings.
+The Entra callback uses verified inline `groups` or `roles` claims. If that login requested delegated `User.Read` and
+the ID token marks group overage with `hasgroups` or `_claim_names.groups`, or supplies neither `groups` nor `roles`,
+the callback calls Microsoft Graph `/me/transitiveMemberOf` with the signed-in user's Graph access token. Graph returns
+direct and nested group IDs for scope mappings.
 See [Microsoft's transitive membership API](https://learn.microsoft.com/en-us/graph/api/user-list-transitivememberof?view=graph-rest-1.0).
+
+The callback requires a signed Entra ID token and verifies its nonce before reading group claims. It rejects a token
+response without an ID token instead of calling Graph userinfo with an unverified bearer assertion.
+
+Without a signed `User.Read` request, the callback does not call Graph. It uses verified inline claims when there is no
+overage marker. On overage, it discards unreliable inline groups and keeps only verified app roles.
+`ENTRA_GROUP_RECOVERY_ENABLED=false` applies the same rule even after a `User.Read` request. A missing group claim
+remains empty.
 
 When recovery runs, the callback preserves verified app roles alongside Graph group IDs and ignores inline group IDs
 marked unreliable by overage, even when Graph confirms no memberships.
 
-The Graph lookup cache keeps successful results for 300 seconds per auth-server process. It holds at most 512 entries
-keyed by the verified tenant ID (`tid`) and user object ID (`oid`); without both IDs, the callback does not cache the
-result. Graph failures never enter the cache. A failed lookup refuses login with HTTP 503 and creates no session; a
+The Graph lookup cache keeps successful results for `ENTRA_GROUP_CACHE_TTL_SECONDS` (default 300, allowed 30 to 3600)
+per auth-server process. It holds at most 512 entries keyed by the Graph fetch URL, native Graph resource, verified
+tenant ID (`tid`), and user object ID (`oid`); without both IDs, the callback does not cache the result. Graph failures
+never become successful empty memberships. A failed lookup refuses login with HTTP 503 and creates no session; a
 confirmed empty membership list creates a session without group-derived scopes unless verified app roles grant access.
 
-The lookup follows Graph pages on the same HTTPS path. If a configured Graph reverse proxy leaves Microsoft's Graph
-hostname in `@odata.nextLink`, the auth server rewrites that link to the configured proxy before sending the bearer
-token. It rejects links to other hosts or paths. Results above 100 pages or 1,000 distinct groups fail rather than
-granting scopes from a partial list.
+A confirmed Graph result, including zero groups, takes precedence over `IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS` local
+user-group mappings. The session store records this Graph provenance so later session-cookie validations cannot restore
+a removed Entra group. If Graph did not run, the configured local fallback retains its existing behavior.
+
+When the session mints a user token, the auth server copies Graph-result provenance from the resolved session into its
+signed token. A later `/validate` request keeps a confirmed empty membership authoritative instead of restoring groups
+from local fallback. Tokens minted without a resolved session cannot assert that provenance.
+
+The first Graph request asks for up to 999 memberships, Graph's maximum page size. The auth server follows subsequent
+`@odata.nextLink` pages without changing their query. If a configured Graph proxy receives a continuation link on the
+selected native Graph resource, the auth server rewrites it to the proxy before sending the bearer token. Links to other
+hosts or paths fail. Results above 100 pages or 1,000 distinct groups fail rather than granting scopes from a partial
+list.
 
 Group-based access in an existing login session reflects the membership snapshot taken at sign-in. Removing someone from
-a group may leave their current session authorized until they sign in again or the session expires. A new login can also
-reuse group IDs from before the change for up to 300 seconds while the Graph cache entry remains valid.
+a group may leave their current session authorized until they sign in again or the session expires. A new login can
+reuse group IDs until the configured positive cache TTL expires.
 
 ### Group membership for user-delegated bearer tokens
 
@@ -369,18 +404,50 @@ and nested group IDs from `/me/transitiveMemberOf`. Entra M2M tokens that use
 `roles` do not trigger this recovery. The auth server filters recovered IDs
 with `filter_session_groups` before scope mapping and the `X-Groups` header.
 
+Bearer recovery is enabled by default. Even a verified token with direct `scp` access needs a working Graph OBO exchange
+when its group claims are absent; a consent or Graph outage returns 503 before direct-scope authorization. Grant
+delegated Graph `User.Read` consent for the gateway's OBO exchange before rollout. Set
+`ENTRA_GROUP_RECOVERY_ENABLED=false` to keep direct-scope bearer requests independent of Graph, at the cost of missing
+group-derived scopes for users with absent or overage claims.
+
+`ENTRA_GROUP_RECOVERY_ENABLED` defaults to `true`. Set it to `false` to stop Graph calls from browser and bearer
+recovery. Inline verified groups remain usable when there is no overage marker. For a delegated bearer with missing
+claims, validation has no group-derived scopes; when overage is marked, it discards unreliable inline groups but keeps
+verified app roles. This may restore a 403 for users who need Graph memberships.
+
+Entra reads bearer scopes from signed `scp` or, for older tokens, signed `scope`. Both classify a delegated user token,
+so neither can inherit M2M client-group mappings. When recovery is disabled, direct scopes still authorize requests
+without group membership. When inline or Graph-recovered groups yield mapped scopes, `/validate` combines them with
+signed direct scopes and removes duplicates. A successful Graph result, including zero groups, takes precedence over
+local `idp_user_groups` fallback.
+
+The scope-derived group mapping set has a 30-second per-process cache. Changes to the registry's group-to-scope mappings
+can take up to 30 seconds to affect recovered bearer groups; lookup errors or absent mappings deny validation rather
+than forwarding unfiltered groups. An explicit `ALLOWED_IDP_GROUPS` allowlist takes precedence.
+
 If the filtered `X-Groups` value still exceeds 4 KiB, `/validate` refuses the request instead of filling nginx's 16 KiB
 auth-subrequest header buffer. Registry API requests also carry an internal token encoding those groups, so the smaller
 limit leaves room for both headers. Map only the groups that grant scopes, or set `ALLOWED_IDP_GROUPS` to the exact IDs
 the gateway needs.
 
-Successful lookups remain in a per-process cache for 300 seconds, with at most 512 entries keyed by verified
-`(tid, oid)`. Concurrent bearer requests for the same key share one in-flight lookup; failures are not cached and can be
-retried on the next request. The OBO exchange and all Graph pages share an eight-second deadline so they finish before
-nginx's ten-second `/validate` timeout. On exchange, consent or Graph failure, the internal `/validate` endpoint
-responds 503 and denies forwarding. nginx `auth_request` can surface this non-401/403 subrequest status as 500 to the
-external client. No browser session is created. Group removals can take up to 300 seconds to reach a bearer request
-using cached membership. Existing browser sessions still reflect the sign-in snapshot until sign-in or expiry.
+Successful lookups stay in a per-process cache for `ENTRA_GROUP_CACHE_TTL_SECONDS` (default 300 seconds, allowed 30 to
+3600), with at most 512 entries keyed by Graph fetch URL, native Graph resource, and verified `(tid, oid)`. Concurrent
+requests with the same exact bearer token share one in-flight OBO exchange; different tokens run their own exchanges
+before they can use a successful membership result. A failed consent or configuration exchange, or a Graph 403, is
+cached as a denial for 30 seconds per exact incoming token and identity; a new token can retry at once. Transient
+failures and Graph 401 responses are retried on the next request. Denials never become empty successful memberships, are
+not stored with the token bytes, and occupy at most 512 process-local entries. The OBO exchange and all Graph pages
+share an eight-second deadline before nginx's ten-second `/validate` timeout.
+
+Each bearer token's successful Graph exchange has a bounded process-local proof entry. The entry expires with the
+positive membership result and never overrides a denial for that token. A browser lookup can fill the membership cache,
+but it cannot authorize a bearer token's first OBO exchange.
+
+Graph, consent, pagination, and mapping failures produce a 503 on `/validate`. nginx returns a public 503 only when that
+internal response has the auth-server's Graph-outage marker; unrelated auth failures remain 500 and no denied request
+reaches the backend. The auth-server log records a finite reason label such as `timeout`, `consent`, `pagination`, or
+`transport` without recording group IDs or tokens. Group removals can take up to the configured positive cache TTL to
+reach a bearer request. Existing browser sessions reflect the sign-in snapshot until sign-in or expiry.
 
 ### Understanding Scope Mappings
 
@@ -528,11 +595,11 @@ The IAM management features (listing users, creating users/groups, managing M2M 
 ### Issue: Missing email or group claims
 
 If the email claim is absent, check [optional claims](#step-6-configure-optional-claims). For group-based scopes, the
-callback uses inline `groups` or `roles` when present and queries Graph when both are missing.
-Check [group membership at sign-in](#group-membership-at-sign-in), confirm delegated `User.Read` has consent under your
-tenant's policy, and verify that the signed-in user's Graph access token has the Graph audience. Configure group claims
-in [Step 7](#step-7-configure-group-claims) if you want inline group IDs. A Graph lookup failure grants no group-derived
-access; a successful empty group result means Graph found no group IDs.
+callback uses verified inline `groups` or `roles`. For overage or missing claims, add `User.Read` to the Entra login
+scopes and confirm delegated consent before expecting Graph recovery.
+Check [group membership at sign-in](#group-membership-at-sign-in) and the signed-in token's Graph audience. Configure
+group claims in [Step 7](#step-7-configure-group-claims) if you want inline group IDs. A Graph lookup failure denies
+login; a confirmed empty result yields no group-derived scopes.
 
 ### Issue: Token validation fails with "Invalid issuer"
 
@@ -578,10 +645,11 @@ AADSTS50011: The redirect URI 'http://localhost/auth/callback' does not match th
 ### Issue: Group overage or missing group claims
 
 Entra may include `hasgroups` or `_claim_names.groups` instead of inline group IDs when a token exceeds its group limit.
-Even without an overage marker, a token that has neither `groups` nor `roles` triggers Graph recovery. The callback
-calls `/me/transitiveMemberOf` for direct and nested group IDs. Verify delegated `User.Read` consent and the Graph token
-audience as described in [Step 5](#step-5-add-api-permissions). Graph errors fail closed; they are not an empty
-membership result. See [group membership at sign-in](#group-membership-at-sign-in) for cache and session behavior.
+A browser login that requests `User.Read` fetches direct and nested memberships through `/me/transitiveMemberOf` for
+overage or missing claims. Without that requested scope, login uses inline claims only when there is no overage marker.
+It drops overage-marked inline groups and makes no Graph request. Check consent and token audience
+in [Step 5](#step-5-add-api-permissions). Graph failures deny the opted-in login; they are not empty membership results.
+See [group membership at sign-in](#group-membership-at-sign-in) for cache and session behavior.
 
 For user-delegated bearer requests, `/validate` also recovers missing or
 overage group claims using an on-behalf-of Graph `User.Read` token. If it
