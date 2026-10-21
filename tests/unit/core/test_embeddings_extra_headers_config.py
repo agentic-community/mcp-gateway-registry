@@ -1,6 +1,6 @@
 """Settings tests for the EMBEDDINGS_EXTRA_HEADER_<N> slots (issue #1819).
 
-Covers how the ten scalar slots collapse into the embeddings_extra_headers map,
+Covers how the five scalar slots collapse into the embeddings_extra_headers map,
 every rejection rule enforced in Settings.__init__, and the startup banner that
 fires when the headers can never be sent.
 """
@@ -15,7 +15,7 @@ from registry.core.config import (
 )
 from registry.utils.header_validation import validate_header_name
 
-SLOT_COUNT: int = 10
+SLOT_COUNT: int = 5
 
 
 @pytest.fixture(autouse=True)
@@ -64,8 +64,8 @@ class TestSlotAssembly:
         assert s.embeddings_extra_headers == {"X-A": "1"}
 
     def test_sparse_slots_allowed(self):
-        s = _settings(slot_4="X-Four: 4", slot_9="X-Nine: 9")
-        assert s.embeddings_extra_headers == {"X-Four": "4", "X-Nine": "9"}
+        s = _settings(slot_2="X-Two: 2", slot_5="X-Five: 5")
+        assert s.embeddings_extra_headers == {"X-Two": "2", "X-Five": "5"}
 
     def test_gap_does_not_truncate(self):
         s = _settings(slot_1="X-One: 1", slot_3="X-Three: 3")
@@ -79,12 +79,13 @@ class TestSlotAssembly:
         s = _settings(slot_1="X-Ctx: two words")
         assert s.embeddings_extra_headers == {"X-Ctx": "two words"}
 
-    def test_slot_10_is_read(self):
-        s = _settings(slot_10="X-Ten: 10")
-        assert s.embeddings_extra_headers == {"X-Ten": "10"}
+    def test_slot_5_is_read(self):
+        s = _settings(slot_5="X-Five: 5")
+        assert s.embeddings_extra_headers == {"X-Five": "5"}
 
-    def test_slot_11_is_ignored(self, monkeypatch):
-        monkeypatch.setenv("EMBEDDINGS_EXTRA_HEADER_11", "X-Eleven: 11")
+    def test_slot_6_is_ignored(self, monkeypatch):
+        # Slot 6 existed before the limit dropped from 10 to 5; it must now be inert.
+        monkeypatch.setenv("EMBEDDINGS_EXTRA_HEADER_6", "X-Six: 6")
         assert Settings().embeddings_extra_headers == {}
 
     def test_slot_read_from_environment(self, monkeypatch):
@@ -153,8 +154,8 @@ class TestSlotRejections:
 
     def test_error_message_names_the_slot(self):
         with pytest.raises(ValueError) as exc:
-            _settings(slot_7="X Bad: v")
-        assert "EMBEDDINGS_EXTRA_HEADER_7" in str(exc.value)
+            _settings(slot_4="X Bad: v")
+        assert "EMBEDDINGS_EXTRA_HEADER_4" in str(exc.value)
         assert "custom_headers entry" not in str(exc.value)
 
 

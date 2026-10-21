@@ -481,7 +481,7 @@ ard:
 embeddings:
   responseFormat: "" # "" (openai envelope, default) or "raw_array" (endpoint returns a bare [[float]] array)
   # Extra HTTP headers sent on every embeddings request (litellm provider only),
-  # at most 10, each as "Name: value". Rendered as EMBEDDINGS_EXTRA_HEADER_1..N.
+  # at most 5, each as "Name: value". Rendered as EMBEDDINGS_EXTRA_HEADER_1..N.
   # Stored in CLEAR TEXT and shown unmasked on the System Config page: never put
   # a credential here (use the API key or authMode: idp). Example:
   #   extraHeaders:

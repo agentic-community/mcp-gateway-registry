@@ -122,8 +122,8 @@ MAX_CUSTOM_HEADERS_PER_SERVER: int = 10
 # Number of EMBEDDINGS_EXTRA_HEADER_<N> slots the config layer reads (issue #1819).
 # Raising it means adding both the Settings fields and the matching entries on
 # all three deployment surfaces, so it is deliberately a code change, not a
-# config knob. Equal to MAX_CUSTOM_HEADERS_PER_SERVER by coincidence only.
-MAX_EMBEDDINGS_EXTRA_HEADERS: int = 10
+# config knob. Real deployments need one or two headers, so five leaves room.
+MAX_EMBEDDINGS_EXTRA_HEADERS: int = 5
 
 # Headers the embeddings client sets itself. An operator naming one of these in
 # an EMBEDDINGS_EXTRA_HEADER_<N> slot is rejected at config load: the managed

@@ -375,13 +375,13 @@ variable "embeddings_response_format" {
 }
 
 variable "embeddings_extra_headers" {
-  description = "Extra HTTP headers sent on every embeddings request (litellm provider only), as a map of header name to value. Expanded into the EMBEDDINGS_EXTRA_HEADER_1..10 env vars. Stored in clear text: never put a credential here."
+  description = "Extra HTTP headers sent on every embeddings request (litellm provider only), as a map of header name to value. Expanded into the EMBEDDINGS_EXTRA_HEADER_1..5 env vars. Stored in clear text: never put a credential here."
   type        = map(string)
   default     = {}
 
   validation {
-    condition     = length(var.embeddings_extra_headers) <= 10
-    error_message = "embeddings_extra_headers supports at most 10 entries (EMBEDDINGS_EXTRA_HEADER_1..10)."
+    condition     = length(var.embeddings_extra_headers) <= 5
+    error_message = "embeddings_extra_headers supports at most 5 entries (EMBEDDINGS_EXTRA_HEADER_1..5)."
   }
 }
 

@@ -502,7 +502,7 @@ class Settings(BaseSettings):
     embeddings_response_format: str = "openai"  # "openai" | "raw_array"
 
     # Operator-configured extra headers for the embeddings endpoint (issue #1819).
-    # Ten separate scalar slots rather than one structured value, so every config
+    # Five separate scalar slots rather than one structured value, so every config
     # serializer and every deployment surface keeps treating these as plain
     # strings. Each slot holds one header in HTTP syntax: "Name: value".
     # Only sent when embeddings_provider='litellm'; validated in __init__.
@@ -514,11 +514,6 @@ class Settings(BaseSettings):
     embeddings_extra_header_3: str = ""
     embeddings_extra_header_4: str = ""
     embeddings_extra_header_5: str = ""
-    embeddings_extra_header_6: str = ""
-    embeddings_extra_header_7: str = ""
-    embeddings_extra_header_8: str = ""
-    embeddings_extra_header_9: str = ""
-    embeddings_extra_header_10: str = ""
 
     # IdP client-credentials auth for the litellm embeddings provider.
     # When embeddings_auth_mode == "idp", a bearer token is fetched from the IdP

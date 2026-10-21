@@ -42,7 +42,7 @@ under a top-level `embeddings`, `data`, or `vectors` key). Leave the variable un
 
 ## Extra request headers
 
-Some endpoints sit behind a gateway that routes or authorizes on a header other than `Authorization`, such as a tenant or module ID. Set one header per slot in `EMBEDDINGS_EXTRA_HEADER_1` through `EMBEDDINGS_EXTRA_HEADER_10`, in `Name: value` form:
+Some endpoints sit behind a gateway that routes or authorizes on a header other than `Authorization`, such as a tenant or module ID. Set one header per slot in `EMBEDDINGS_EXTRA_HEADER_1` through `EMBEDDINGS_EXTRA_HEADER_5`, in `Name: value` form:
 
 ```bash
 EMBEDDINGS_EXTRA_HEADER_1=X-Tenant-Id: research
@@ -71,7 +71,7 @@ With `EMBEDDINGS_PROVIDER=sentence-transformers` the registry makes no HTTP call
 | `EMBEDDINGS_IDP_TIMEOUT_SECONDS` | No | Token request timeout (default `30`). |
 | `EMBEDDINGS_IDP_ALLOW_INSECURE` | No | Local dev only: permit an `http://` **loopback** token endpoint. Default `false` (https required). A remote `http://` endpoint is always rejected. |
 | `EMBEDDINGS_RESPONSE_FORMAT` | No | Endpoint response shape: `openai` (default, standard envelope) or `raw_array` (endpoint returns a bare `[[float]]` array). Independent of auth mode. |
-| `EMBEDDINGS_EXTRA_HEADER_1` to `_10` | No | One extra request header per slot, as `Name: value`. Clear text, never a credential. See [Extra request headers](#extra-request-headers). |
+| `EMBEDDINGS_EXTRA_HEADER_1` to `_5` | No | One extra request header per slot, as `Name: value`. Clear text, never a credential. See [Extra request headers](#extra-request-headers). |
 
 The full cross-surface reference (Docker / Terraform / Helm) is in
 [docs/unified-parameter-reference.md](../unified-parameter-reference.md).
