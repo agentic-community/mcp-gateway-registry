@@ -5,6 +5,7 @@ description = "Centralized metrics collection service for MCP Gateway Registry"
 authors = [{name = "MCP Gateway Registry", email = "noreply@example.com"}]
 requires-python = ">=3.14"
 dependencies = [
+    "certifi>=2026.10.19",
     "fastapi>=0.104.0",
     "uvicorn[standard]>=0.24.0",
     "pydantic>=2.5.0",
@@ -73,3 +74,5 @@ asyncio_default_fixture_loop_scope = "function"
 [tool.uv]
 # Local-only project - never resolve from PyPI
 package = false
+# Bumping certifi exclusion date to bypass 7-day window due to eMudhra certificate compromise
+exclude-newer-package = { certifi = "2026-10-22T00:00:00Z" }
