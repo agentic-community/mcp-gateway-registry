@@ -10,7 +10,6 @@ from unittest.mock import (
 
 import pytest
 
-from registry.embeddings.text_budget import EmbeddingText
 from registry.repositories.documentdb.search_repository import DocumentDBSearchRepository
 from registry.schemas.agent_models import (
     AgentCard,
@@ -20,6 +19,7 @@ from registry.schemas.virtual_server_models import (
     ToolMapping,
     VirtualServerConfig,
 )
+from registry.utils.embedding_text import EmbeddingText
 
 TARGET: int = 2000
 SETTINGS_PATH: str = "registry.repositories.documentdb.search_repository.settings"

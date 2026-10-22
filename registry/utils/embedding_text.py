@@ -10,6 +10,10 @@ description) items, and trailing parts. full() rebuilds today's string byte
 for byte, so content hashes do not change and nothing re-embeds. trimmed() is
 used only after a failed embedding call, for a retry: it keeps every item name
 and shortens the longest descriptions first.
+
+This module lives in registry/utils, not registry/embeddings, on purpose: the
+registry.embeddings package imports numpy, and the auth server imports
+search_repository without having numpy installed. Keep it free of heavy imports.
 """
 
 from dataclasses import (

@@ -2,7 +2,7 @@
 
 import pytest
 
-from registry.embeddings.text_budget import (
+from registry.utils.embedding_text import (
     EmbeddingText,
     _cut_at_word,
 )
