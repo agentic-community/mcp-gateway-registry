@@ -77,6 +77,19 @@ MAX_TOP_N: int = 50
 # trailing newline, which would let "validname\n" slip through.
 _SKILL_NAME_PATTERN = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*\Z")
 
+# A custom record path is /{type}/{uuid}, and both segments are interpolated
+# into an outbound URL path, so both get the same fail-closed treatment as a
+# skill name. Each group mirrors the registry route's own Path() constraint
+# (TYPE_PARAM and UUID_PARAM in registry/api/custom_entity_routes.py), so a
+# value accepted here is exactly a value the route accepts. The leading and
+# trailing slashes are optional so a path copied from a search result, with or
+# without them, still matches.
+_CUSTOM_RECORD_PATH_PATTERN = re.compile(
+    r"^/?(?P<type>[a-z0-9_-]{1,64})"
+    r"/(?P<uuid>[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"
+    r"/?\Z"
+)
+
 # Max number of withheld candidates itemized in a discovery receipt. The full
 # count is always reported; this caps the listed near-miss items so the receipt
 # stays compact and low-token for eval/agent-dev callers.
@@ -784,6 +797,82 @@ async def get_skill_content(
 
 @mcp.tool()
 @track_tool()
+async def get_custom_entity(
+    path: str,
+    ctx: Context | None = None,
+) -> dict[str, Any]:
+    """
+    Retrieve the full record for a custom catalog entry. Call this after
+    search_registry returns a result in its custom array to get the record's
+    attributes, which search results leave out.
+
+    Custom records belong to catalog types the registry administrator defined
+    (for example datasets or data products). Their attributes hold the fields
+    that type defines, so they are usually what a question about the record
+    needs.
+
+    Args:
+        path: The record's path exactly as search_registry returned it,
+              in the form /{type}/{uuid}
+              (e.g. "/data_product/3f2b8c1e-9d4a-4b7e-8f21-6a5c0d9e7b13")
+
+    Returns:
+        Dictionary containing the path, the record (including entity_type,
+        name, description, tags, owner, visibility and attributes), and status
+    """
+    logger.info("get_custom_entity called: path=%s", path)
+
+    path = (path or "").strip()
+
+    # Both segments are interpolated into an outbound URL path below, so the
+    # whole value must match the strict pattern before the URL is built. This
+    # blocks traversal ("..", extra "/"), encoded forms ("%2f"), query strings
+    # and whitespace because none of them match. The URL is rebuilt from the
+    # validated groups rather than from the raw input. Fail closed rather than
+    # trust downstream URL normalization.
+    match = _CUSTOM_RECORD_PATH_PATTERN.match(path)
+    if not match:
+        return {
+            "path": path,
+            "error": (
+                "path must be /{type}/{uuid}: type matching ^[a-z0-9_-]{1,64}$ "
+                "and uuid in canonical 8-4-4-4-12 hex form"
+            ),
+            "status": "failed",
+        }
+
+    entity_type = match.group("type")
+    record_uuid = match.group("uuid")
+
+    try:
+        headers = await _get_registry_headers(ctx)
+        url = f"{REGISTRY_URL}/api/custom/{entity_type}/{record_uuid}"
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(url, headers=headers)
+            response.raise_for_status()
+            record = response.json()
+
+        return {
+            "path": f"/{entity_type}/{record_uuid}",
+            "record": record,
+            "status": "success",
+        }
+
+    except httpx.HTTPStatusError as e:
+        logger.error("HTTP error fetching custom entity: %s", e.response.status_code)
+        return {
+            "path": path,
+            "error": f"HTTP {e.response.status_code}",
+            "status": "failed",
+        }
+    except Exception as e:
+        logger.error("Failed to get custom entity: %s", e)
+        return {"path": path, "error": str(e), "status": "failed"}
+
+
+@mcp.tool()
+@track_tool()
 async def search_registry(
     query: str,
     max_results: int = 10,
@@ -804,10 +893,9 @@ async def search_registry(
     - Skills: workflow instructions (use get_skill_content to fetch the full markdown)
     - Custom: records of a catalog type the registry administrator defined, each
       naming its type in entity_type. These are catalogued assets rather than
-      endpoints, and there is no tool to fetch one: the search result below is
-      the whole picture available here, carrying name, description, tags, owner
-      and visibility. The path identifies the record for a caller that can reach
-      the registry's HTTP API directly.
+      endpoints. The search result carries name, description, tags, owner and
+      visibility; pass its path to get_custom_entity to fetch the full record,
+      including the attributes its type defines.
 
     When a useful MCP server is found, use the endpoint_url to add it to
     the AI assistant's MCP configuration so its tools become available.
