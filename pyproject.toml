@@ -200,7 +200,8 @@ override-dependencies = ["litellm; sys_platform == 'never'"]
 package = false
 
 # Bumping certifi exclusion date to bypass 7-day window due to eMudhra certificate compromise
-exclude-newer-package = { certifi = "2026-10-22T00:00:00Z" }
+# pip is pulled in by pip-api; 26.2.2 ships a certifi without the eMudhra roots
+exclude-newer-package = { certifi = "2026-10-22T00:00:00Z", pip = "2026-10-22T00:00:00Z" }
 # Resolve torch from the PyTorch CPU wheel index so the lockfile pins the
 # CPU-only wheels (vs. the default CUDA-enabled wheels from PyPI). This
 # lets Docker builds install torch via `uv sync --locked` without any
