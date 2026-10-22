@@ -1016,7 +1016,7 @@ services:
   # graphical trace UI" section of docs/OBSERVABILITY.md for the small
   # config additions you can drop in.
   otel-collector:
-    image: otel/opentelemetry-collector-contrib:0.153.0
+    image: otel/opentelemetry-collector-contrib:0.163.2
     command: ["--config=/etc/otelcol-contrib/config.yaml"]
     volumes:
       - ./config/otel/collector.yaml:/etc/otelcol-contrib/config.yaml:ro
@@ -1047,7 +1047,7 @@ services:
 
   # Prometheus for metrics collection
   prometheus:
-    image: prom/prometheus:v3.11.3
+    image: prom/prometheus:v3.15.1
     # Operator dashboard: published on loopback only (no auth on Prometheus).
     ports:
       # Loopback-only: Prometheus UI is a local-dev convenience, not a public surface.
