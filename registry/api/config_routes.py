@@ -192,6 +192,7 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             ("embeddings_idp_timeout_seconds", "IdP Timeout (s)", False),
             ("embeddings_request_timeout_seconds", "Request Timeout (s)", False),
             ("embeddings_max_retries", "Max Retries", False),
+            ("embeddings_retry_max_input_chars", "Retry Trim Target (chars)", False),
             # Raw slots, not the embeddings_extra_headers property: every
             # CONFIG_GROUPS value must stay a scalar for the exporters (issue #1819).
             ("embeddings_extra_header_1", "Extra Header 1", False),

@@ -99,6 +99,7 @@ EMBEDDINGS_AWS_REGION=us-east-1
 | `EMBEDDINGS_RESPONSE_FORMAT` | `openai` (standard envelope) or `raw_array` (bare array of vectors) | `openai` | No |
 | `EMBEDDINGS_REQUEST_TIMEOUT_SECONDS` | Timeout for each remote request | `30` | No |
 | `EMBEDDINGS_MAX_RETRIES` | Retries on HTTP 429, 5xx and connection errors, with exponential backoff. On Amazon Bedrock this maps to botocore's standard retry mode | `2` | No |
+| `EMBEDDINGS_RETRY_MAX_INPUT_CHARS` | Trim target for the one retry after a failed embedding. See [Long entries](#long-entries) | per model | No |
 | `EMBEDDINGS_EXTRA_HEADER_1` to `_5` | Extra request headers as `Name: value` (see the [IdP embeddings FAQ](faq/idp-authenticated-embeddings-endpoint.md#extra-request-headers)) | - | No |
 
 *Not required for Amazon Bedrock, which uses the standard AWS credential chain (IAM roles, environment variables, ~/.aws/credentials).
@@ -169,6 +170,16 @@ The model-name prefix picks the API:
 Self-hosted servers (vLLM, Ollama, Text Embeddings Inference) and most hosted APIs (Mistral, Together, a corporate AI gateway) expose an OpenAI-compatible endpoint. Use `openai/<model>` with `EMBEDDINGS_API_BASE` set to its base URL.
 
 **Removed with LiteLLM (issue #1826):** `cohere/` (Cohere's own API; use Cohere on Amazon Bedrock), `voyage/`, and any other LiteLLM-only prefix. A registry configured with one refuses to start and names the replacement.
+
+## Long entries
+
+Some entries produce more text than a model accepts: a server with dozens of long tool descriptions can exceed OpenAI's and Titan's 8,192-token limit, and Cohere on Amazon Bedrock rejects any text over 2,048 characters. The provider then rejects the request and the entry gets no vector.
+
+The registry always sends the full text first, so every entry that fits is unchanged. If the call fails and the text is longer than the trim target, it retries once with the text trimmed: every tool or skill name is kept, and the longest descriptions are shortened first, at word boundaries. A failure on shorter text is not retried, because length cannot be the cause. The retry logs one WARNING with the original and trimmed length.
+
+The trim target is `EMBEDDINGS_RETRY_MAX_INPUT_CHARS`. Unset, it is 2,048 characters for Cohere on Amazon Bedrock and 28,000 for other models (about 6,100 to 6,700 tokens of English text). Lower it for a model with a smaller input limit, or for text that uses more tokens per character, such as code or non-English text.
+
+The registry re-indexes every entry at startup, so an entry that needs trimming costs one rejected request and one trimmed request each time it is indexed. Its stored content hash is that of the full text, the same as before.
 
 ## Migration Between Providers
 

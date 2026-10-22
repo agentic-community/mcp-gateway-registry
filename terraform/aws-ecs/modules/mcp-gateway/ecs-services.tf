@@ -1247,6 +1247,11 @@ module "ecs_service_registry" {
           name  = "EMBEDDINGS_MAX_RETRIES"
           value = tostring(var.embeddings_max_retries)
         },
+        {
+          # Empty when unset: the registry then uses the per-model default.
+          name  = "EMBEDDINGS_RETRY_MAX_INPUT_CHARS"
+          value = var.embeddings_retry_max_input_chars == null ? "" : tostring(var.embeddings_retry_max_input_chars)
+        },
         # Registration deduplication. Advisory check; never blocks
         # registration. Reuses the embeddings model above.
         {

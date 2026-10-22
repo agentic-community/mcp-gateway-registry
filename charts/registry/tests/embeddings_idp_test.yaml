@@ -195,3 +195,21 @@ tests:
           content:
             name: EMBEDDINGS_MAX_RETRIES
             value: "0"
+
+  - it: emits no EMBEDDINGS_RETRY_MAX_INPUT_CHARS when unset (issue #1917)
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: EMBEDDINGS_RETRY_MAX_INPUT_CHARS
+
+  - it: emits EMBEDDINGS_RETRY_MAX_INPUT_CHARS when set
+    set:
+      embeddings:
+        retryMaxInputChars: 8000
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: EMBEDDINGS_RETRY_MAX_INPUT_CHARS
+            value: "8000"

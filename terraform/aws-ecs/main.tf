@@ -118,6 +118,7 @@ module "mcp_gateway" {
   embeddings_response_format         = var.embeddings_response_format
   embeddings_request_timeout_seconds = var.embeddings_request_timeout_seconds
   embeddings_max_retries             = var.embeddings_max_retries
+  embeddings_retry_max_input_chars   = var.embeddings_retry_max_input_chars
   embeddings_extra_headers           = var.embeddings_extra_headers
 
   # Registration deduplication

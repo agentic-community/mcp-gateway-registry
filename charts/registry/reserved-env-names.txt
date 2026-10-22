@@ -256,6 +256,8 @@ EMBEDDINGS_RESPONSE_FORMAT
 # Rendered from embeddings.requestTimeoutSeconds / maxRetries when set (issue #1826).
 EMBEDDINGS_REQUEST_TIMEOUT_SECONDS
 EMBEDDINGS_MAX_RETRIES
+# Rendered from embeddings.retryMaxInputChars when set (issue #1917).
+EMBEDDINGS_RETRY_MAX_INPUT_CHARS
 # Rendered from embeddings.extraHeaders, one per list entry (issue #1819).
 EMBEDDINGS_EXTRA_HEADER_1
 EMBEDDINGS_EXTRA_HEADER_2
