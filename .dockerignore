@@ -89,4 +89,8 @@ credentials-provider/
 !**/.env.template
 .token*
 .scratchpad/
+# Agent tooling. Git tracks only .claude/skills/, but Docker does not read
+# .gitignore, so worktrees (full repo copies with their own secrets) would be
+# sent as build context. No image needs anything under .claude/.
+.claude/
 # frontend/build/ - KEEP THIS, needed by registry service
