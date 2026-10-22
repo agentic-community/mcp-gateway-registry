@@ -508,7 +508,9 @@ sanitizer that isn't called) is equivalent to no check.
   groups, and never consult `idp_m2m_clients` for a user token with signed
   `scp` or legacy `scope`, even if the token also has a `client_id`. Use the
   same validated scope classifier for token projection and user detection.
-  Preserve signed direct scopes when combining them with group-derived scopes.
+  When the user has groups, derive registry scopes only from group mappings:
+  never add signed delegated `scp` values on top, because an app registration
+  names those and users grant them by consent, outside administrator control.
   On any lookup or consent failure, stop authorization instead of using partial
   groups. Filter recovered groups before writing the login session or building
   `X-Groups`, and deny an oversized header rather than truncating grants.

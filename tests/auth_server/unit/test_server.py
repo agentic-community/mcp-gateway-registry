@@ -3294,12 +3294,44 @@ class TestEntraBrowserOAuthCloudEndpoints:
         with pytest.raises(ValueError, match=setting):
             load_oauth2_config()
 
-    def test_bad_entra_enabled_flag_fails_config_loading(self, monkeypatch):
+    def test_unrecognized_entra_enabled_disables_entra_and_keeps_other_providers(
+        self,
+        monkeypatch,
+        caplog,
+    ):
+        """A malformed ENTRA_ENABLED must not stop login for other providers."""
         from auth_server.server import load_oauth2_config
 
         monkeypatch.setenv("ENTRA_ENABLED", "maybe")
-        with pytest.raises(ValueError, match="ENTRA_ENABLED"):
-            load_oauth2_config()
+        with caplog.at_level("ERROR"):
+            providers = load_oauth2_config()["providers"]
+
+        assert providers["entra"]["enabled"] is False
+        assert "github" in providers
+        assert "ENTRA_ENABLED" in caplog.text
+
+    @pytest.mark.parametrize(
+        "value,expected",
+        [
+            ("true", True),
+            ("1", True),
+            ("yes", True),
+            ("false", False),
+            ("0", False),
+            ("no", False),
+        ],
+    )
+    def test_entra_enabled_accepts_registry_boolean_spellings(
+        self,
+        monkeypatch,
+        value,
+        expected,
+    ):
+        """The provider flag matches the registry's bool parsing, so "0" is off."""
+        from auth_server.server import load_oauth2_config
+
+        monkeypatch.setenv("ENTRA_ENABLED", value)
+        assert load_oauth2_config()["providers"]["entra"]["enabled"] is expected
 
     def test_unknown_login_proxy_requires_native_graph_audience(self, monkeypatch):
         from auth_server.server import load_oauth2_config

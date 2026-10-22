@@ -152,6 +152,11 @@ from registry.auth.internal import validate_internal_auth
 # registry.auth.internal._INTERNAL_JWT_AUDIENCE ("mcp-internal").
 _USER_JWT_AUDIENCE: str = "mcp-registry"
 
+# Spellings accepted for ENTRA_ENABLED, matching the registry's Pydantic bool
+# parsing so both services agree on whether Entra is active.
+_ENTRA_ENABLED_TRUE: frozenset[str] = frozenset({"true", "1", "yes", "on", "t", "y"})
+_ENTRA_ENABLED_FALSE: frozenset[str] = frozenset({"false", "0", "no", "off", "f", "n", ""})
+
 # MCP access-token lifetimes are operator-configurable via the registry Settings
 # (MCP_TOKEN_MAX_TTL_HOURS / MCP_TOKEN_DEFAULT_TTL_HOURS), defaulting to 24h max
 # and 8h default. `settings` already clamps the max to a hardcoded 7-day absolute
@@ -4633,10 +4638,10 @@ async def validate_request(request: Request):
                 len(user_groups),
                 len(user_scopes),
             )
-            if auth_method == "entra" and existing_scopes:
-                # Both claims were validated by Entra's JWT verifier. Group
-                # mapping must not discard a direct delegated grant.
-                user_scopes = list(dict.fromkeys([*existing_scopes, *user_scopes]))
+            # Group mappings are the only source of registry scopes here. A
+            # delegated Entra `scp` value must not add to them: scp names are
+            # defined by an app registration and granted by user consent, not
+            # by the group membership an admin controls.
         elif (
             user_groups
             and not existing_scopes
@@ -6088,6 +6093,29 @@ if __name__ == "__main__":
     main()
 
 
+def _entra_enabled() -> bool:
+    """Read ENTRA_ENABLED without letting a malformed value stop other providers.
+
+    This runs at import time for every deployment, including ones that use
+    Keycloak, Okta or another provider. An unrecognized value is logged and
+    treated as disabled, so Entra logins stay unavailable (closed) while the
+    other providers keep working.
+
+    Returns:
+        True when Entra is enabled.
+    """
+    raw = os.environ.get("ENTRA_ENABLED", "false").strip().lower()
+    if raw in _ENTRA_ENABLED_TRUE:
+        return True
+    if raw not in _ENTRA_ENABLED_FALSE:
+        logger.error(
+            "ENTRA_ENABLED=%r is not a recognized boolean; treating Entra as disabled. "
+            "Use true or false.",
+            raw,
+        )
+    return False
+
+
 # Load OAuth2 providers configuration
 def load_oauth2_config():
     """Load the OAuth2 providers configuration from oauth2_providers.yml"""
@@ -6098,10 +6126,8 @@ def load_oauth2_config():
     # Resolve only an active Entra provider; disabled settings cannot break
     # another IdP's login. Active Entra misconfiguration fails at startup.
     entra = config.get("providers", {}).get("entra")
-    entra_enabled = os.environ.get("ENTRA_ENABLED", "false").lower()
-    if entra_enabled not in {"true", "false"}:
-        raise ValueError("ENTRA_ENABLED must be true or false")
-    if entra and entra_enabled == "true":
+    entra_on = _entra_enabled()
+    if entra and entra_on:
         from providers.entra import (
             _entra_login_base,
             _group_cache_ttl_seconds,
@@ -6142,7 +6168,13 @@ def load_oauth2_config():
                 ENTRA_GRAPH_BASE_URL=graph_base
             )
 
-    return substitute_env_vars(config)
+    resolved = substitute_env_vars(config)
+    # substitute_env_vars turns only "true"/"false" into booleans, so a value
+    # such as "0" would stay a truthy string and enable Entra. Use the parsed
+    # value so the provider flag always matches the resolution above.
+    if entra:
+        resolved["providers"]["entra"]["enabled"] = entra_on
+    return resolved
 
 
 def auto_derive_cognito_domain(user_pool_id: str) -> str:
