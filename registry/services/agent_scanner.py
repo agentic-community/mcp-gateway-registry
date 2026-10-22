@@ -15,6 +15,7 @@ import subprocess  # nosec B404
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from ..core.config import settings
 from ..repositories.factory import get_security_scan_repository
@@ -28,6 +29,29 @@ logger = logging.getLogger(__name__)
 # Constants
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 OUTPUT_DIR = PROJECT_ROOT / "agent_security_scans"
+
+
+def _drop_none_values(
+    value: Any,
+) -> Any:
+    """Return a copy of a JSON-like value with every None removed, at any depth.
+
+    The registry builds the scan card with AgentCard.model_dump(), which writes
+    every unset optional field as null ("signature": null, "signatures": null,
+    and "examples": null on each skill). The agent never sent those. The A2A
+    scanner's YARA rule UnauthorizedNetworkAccess_UnsignedMessages flags
+    '"signature": null' as a missing signature (HIGH), and the spec analyzer
+    flags a null skill 'examples' as invalid, so every unsigned agent was marked
+    unsafe and, by default, disabled (issue #1921). In the A2A card format a
+    null field means the same as an absent one, so dropping it loses nothing;
+    real values such as "verify_signature": false or an empty-string signature
+    are kept and still scanned.
+    """
+    if isinstance(value, dict):
+        return {key: _drop_none_values(item) for key, item in value.items() if item is not None}
+    if isinstance(value, list):
+        return [_drop_none_values(item) for item in value if item is not None]
+    return value
 
 
 class AgentScannerService:
@@ -199,8 +223,9 @@ class AgentScannerService:
         # address, so scan the real backend instead: point the scanned card's url
         # at proxy_pass_url when present. Fall back to url for agents registered
         # before the flag was on (proxy_pass_url absent) -- backwards compatible.
-        # Copy the card so we never mutate the caller's dict.
-        scan_card = dict(agent_card)
+        # Copy the card so we never mutate the caller's dict, without the null
+        # fields model_dump() adds (see _drop_none_values, issue #1921).
+        scan_card = _drop_none_values(agent_card)
         backend_url = scan_card.get("proxy_pass_url") or scan_card.get("proxyPassUrl")
         if backend_url:
             scan_card["url"] = backend_url
