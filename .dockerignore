@@ -79,5 +79,14 @@ agent_security_scans/
 skill_security_scans/
 credentials-provider/
 .oauth-tokens/
+# Local secrets: deployment env files and bearer-token files. No Dockerfile
+# copies them, but without these lines they are still sent to the Docker daemon
+# as build context. Example and template env files stay included.
+**/.env
+**/.env.*
+!**/.env.example
+!**/.env.*.example
+!**/.env.template
+.token*
 .scratchpad/
 # frontend/build/ - KEEP THIS, needed by registry service
