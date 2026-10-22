@@ -12,9 +12,18 @@ import pytest
 
 from registry.embeddings.text_budget import EmbeddingText
 from registry.repositories.documentdb.search_repository import DocumentDBSearchRepository
+from registry.schemas.agent_models import (
+    AgentCard,
+    Skill,
+)
+from registry.schemas.virtual_server_models import (
+    ToolMapping,
+    VirtualServerConfig,
+)
 
 TARGET: int = 2000
 SETTINGS_PATH: str = "registry.repositories.documentdb.search_repository.settings"
+SERVER_INFO_PATH: str = "registry.services.server_service.server_service.get_server_info"
 
 
 def _repo() -> tuple[DocumentDBSearchRepository, MagicMock]:
@@ -149,3 +158,86 @@ class TestIndexServerKeepsFullTextHash:
         with patch.object(repo, "_embed_texts", second), patch(SETTINGS_PATH, _settings(TARGET)):
             await repo.index_server("/big", server, is_enabled=True, skip_if_unchanged=True)
         second.assert_not_awaited()
+
+
+@pytest.mark.unit
+class TestFullTextMatchesThePreTrimText:
+    """full() must equal the text built before #1917, or every stored hash changes.
+
+    A changed hash makes the next reindex re-embed the whole catalog, so each
+    expected string below is built the way the old indexer built it.
+    """
+
+    @pytest.mark.asyncio
+    async def test_agent_text_is_unchanged(self):
+        repo, collection = _repo()
+        agent = AgentCard(
+            name="Travel Agent",
+            description="Books trips.",
+            url="https://agent.example.com",
+            path="/travel",
+            version="1.0",
+            tags=["travel", "booking"],
+            capabilities={"streaming": True, "pushNotifications": False},
+            skills=[
+                Skill(id="book", name="book_flight", description="Books a flight.", tags=[]),
+                Skill(id="hotel", name="find_hotel", description="", tags=[]),
+            ],
+        )
+        old_parts = [
+            "Travel Agent",
+            "Books trips.",
+            "Tags: travel, booking",
+            "Capabilities: streaming, pushNotifications",
+            "book_flight",
+            "Books a flight.",
+            "find_hotel",
+        ]
+        embed = AsyncMock(return_value=[[0.1]])
+        with patch.object(repo, "_embed_texts", embed), patch(SETTINGS_PATH, _settings(TARGET)):
+            await repo.index_agent("/travel", agent, is_enabled=True)
+        stored = collection.replace_one.await_args.args[1]
+        assert stored["text_for_embedding"] == " ".join(old_parts)
+
+    @pytest.mark.asyncio
+    async def test_virtual_server_text_is_unchanged(self):
+        repo, collection = _repo()
+        virtual_server = VirtualServerConfig(
+            path="/virtual/dev",
+            server_name="Dev Tools",
+            description="Everyday development tools.",
+            tags=["dev"],
+            tool_mappings=[
+                ToolMapping(tool_name="search", backend_server_path="/github"),
+                ToolMapping(tool_name="list_repos", backend_server_path="/github"),
+                ToolMapping(
+                    tool_name="create_issue",
+                    alias="jira_create",
+                    backend_server_path="/jira",
+                    description_override="Creates a ticket.",
+                ),
+            ],
+        )
+        backend = {
+            "tool_list": [
+                {"name": "search", "description": "Searches code."},
+                {"name": "list_repos", "description": ""},
+            ]
+        }
+        old_parts = [
+            "Dev Tools",
+            "Everyday development tools.",
+            "Tags: dev",
+            "Searches code.",
+            "Creates a ticket.",
+            "Tools: search, list_repos, jira_create",
+        ]
+        embed = AsyncMock(return_value=[[0.1]])
+        with (
+            patch.object(repo, "_embed_texts", embed),
+            patch(SETTINGS_PATH, _settings(TARGET)),
+            patch(SERVER_INFO_PATH, AsyncMock(return_value=backend)),
+        ):
+            await repo.index_virtual_server("/virtual/dev", virtual_server, is_enabled=True)
+        stored = collection.replace_one.await_args.args[1]
+        assert stored["text_for_embedding"] == " ".join(old_parts)
