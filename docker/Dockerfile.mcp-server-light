@@ -38,7 +38,7 @@ RUN chown appuser:appuser /app
 USER appuser
 
 # Setup Python environment as appuser
-RUN uv venv .venv --python 3.14
+RUN uv venv .venv --python 3.15
 
 # Switch back to root for COPY operations
 USER root

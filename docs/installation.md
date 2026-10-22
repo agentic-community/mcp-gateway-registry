@@ -251,7 +251,7 @@ Scope it to the rows above with specific ARNs, and set `http-tokens=required` so
    # Install uv (Python package manager)
    curl -LsSf https://astral.sh/uv/install.sh | sh
    source $HOME/.local/bin/env
-   uv venv --python 3.14 && source .venv/bin/activate
+   uv venv --python 3.15 && source .venv/bin/activate
 
    # Install Docker
    sudo apt-get update

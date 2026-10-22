@@ -14,7 +14,7 @@ RUN apt-get update && apt-get upgrade -y && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv and create venv
-RUN pip install uv==0.13.5 && uv venv .venv --python 3.14
+RUN pip install uv==0.13.5 && uv venv .venv --python 3.15
 
 # Copy dependency manifests first so the install layer is cached on the
 # (pyproject, lock) pair, not on source changes.
