@@ -782,7 +782,7 @@ services:
   # Prometheus for metrics collection
   prometheus:
     # Pinned (not :latest) to match the main compose stack.
-    image: prom/prometheus:v3.11.3
+    image: prom/prometheus:v3.15.1
     ports:
       # Loopback-only: Prometheus UI is a local-dev convenience, not a public surface.
       - "${HOST_BIND_IP:-127.0.0.1}:9090:9090"

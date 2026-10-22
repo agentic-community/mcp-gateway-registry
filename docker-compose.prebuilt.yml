@@ -705,7 +705,7 @@ services:
 
   # Prometheus for metrics collection - using canonical upstream image
   prometheus:
-    image: prom/prometheus:${PROMETHEUS_VERSION:-v3.11.3}
+    image: prom/prometheus:${PROMETHEUS_VERSION:-v3.15.1}
     # Operator dashboard: published on loopback only (no auth on Prometheus).
     ports:
       # Loopback-only: Prometheus UI is a local-dev convenience, not a public surface.
