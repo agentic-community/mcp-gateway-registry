@@ -1036,7 +1036,7 @@ async def intelligent_tool_finder(
     ctx: Context | None = None,
 ) -> dict[str, Any]:
     """
-    DEPRECATED: Use search_registry instead. This tool will be removed in v1.26.0.
+    DEPRECATED: Use search_registry instead. This tool will be removed in a future release.
 
     Search for tools using natural language semantic search.
 
@@ -1065,7 +1065,7 @@ async def intelligent_tool_finder(
                     "query": query,
                     # No virtual_server here: this tool reads only servers[], so asking
                     # for virtual servers would spend max_results slots on results it
-                    # discards. It is deprecated for removal in v1.26.0, so it gets the
+                    # discards. It is deprecated for removal, so it gets the
                     # narrower request rather than the search_registry treatment (#1752).
                     "entity_types": ["mcp_server", "tool", "a2a_agent", "skill"],
                     "max_results": top_n,
