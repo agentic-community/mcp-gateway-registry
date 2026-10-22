@@ -9,8 +9,8 @@ from typing import Any
 from motor.motor_asyncio import AsyncIOMotorCollection
 
 from ...core.config import embedding_config, settings
-from ...embeddings.text_budget import EmbeddingText
 from ...schemas.agent_models import AgentCard
+from ...utils.embedding_text import EmbeddingText
 from ...utils.embeddings_provider import default_retry_max_input_chars
 from ...utils.metadata import flatten_metadata_to_text
 from ...utils.vector import cosine_similarity
