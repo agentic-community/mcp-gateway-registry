@@ -196,7 +196,8 @@ def test_signed_scope_only_user_never_inherits_m2m_client_groups(bearer_client, 
 
 
 @pytest.mark.parametrize("recovered", [False, True], ids=["inline", "graph"])
-def test_signed_direct_scope_survives_group_mapping(bearer_client, recovered):
+def test_signed_scp_does_not_add_scopes_when_groups_map(bearer_client, recovered):
+    """Registry scopes come only from group mappings when the user has groups."""
     import json
 
     from cryptography.hazmat.primitives.asymmetric import rsa
@@ -235,7 +236,9 @@ def test_signed_direct_scope_survives_group_mapping(bearer_client, recovered):
         response = _validate(client, token)
 
     assert response.status_code == 200, response.text
-    assert response.json()["scopes"] == ["direct:scope", "read:servers"]
+    # nested-parent maps to read:servers; the token's scp ("direct:scope
+    # read:servers") must not add direct:scope on top of that mapping.
+    assert response.json()["scopes"] == ["read:servers"]
     assert response.json()["groups"] == ["nested-parent"]
     if recovered:
         exchange.assert_awaited_once()

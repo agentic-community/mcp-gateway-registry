@@ -332,10 +332,10 @@ resource "aws_ecs_task_definition" "keycloak" {
         # cut attack surface), so a curl-based check can never succeed and the task
         # never reports healthy. bash's /dev/tcp redirection is the check documented
         # by the Keycloak health guide.
-        command     = ["CMD", "/bin/bash", "-c", "{ printf 'HEAD /health/ready HTTP/1.0\\r\\n\\r\\n' >&0; grep 'HTTP/1.[01] 200'; } 0<>/dev/tcp/localhost/9000"]
-        interval    = 30
-        timeout     = 5
-        retries     = 3
+        command  = ["CMD", "/bin/bash", "-c", "{ printf 'HEAD /health/ready HTTP/1.0\\r\\n\\r\\n' >&0; grep 'HTTP/1.[01] 200'; } 0<>/dev/tcp/localhost/9000"]
+        interval = 30
+        timeout  = 5
+        retries  = 3
         # Covers the Keycloak DB schema migration on first boot.
         startPeriod = 120
       }

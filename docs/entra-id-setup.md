@@ -416,10 +416,11 @@ claims, validation has no group-derived scopes; when overage is marked, it disca
 verified app roles. This may restore a 403 for users who need Graph memberships.
 
 Entra reads bearer scopes from signed `scp` or, for older tokens, signed `scope`. Both classify a delegated user token,
-so neither can inherit M2M client-group mappings. When recovery is disabled, direct scopes still authorize requests
-without group membership. When inline or Graph-recovered groups yield mapped scopes, `/validate` combines them with
-signed direct scopes and removes duplicates. A successful Graph result, including zero groups, takes precedence over
-local `idp_user_groups` fallback.
+so neither can inherit M2M client-group mappings. A token with no groups is authorized by its signed direct scopes.
+When the user has inline or Graph-recovered groups, registry scopes come only from the group mappings, and the token's
+`scp` values do not add to them. An app registration defines `scp` names and users grant them by consent, so they must
+not stand in for the group membership an administrator controls. A successful Graph result, including zero groups,
+takes precedence over local `idp_user_groups` fallback.
 
 The scope-derived group mapping set has a 30-second per-process cache. Changes to the registry's group-to-scope mappings
 can take up to 30 seconds to affect recovered bearer groups; lookup errors or absent mappings deny validation rather
