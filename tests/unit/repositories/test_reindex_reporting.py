@@ -16,6 +16,7 @@ from unittest.mock import (
 import pytest
 
 from registry.repositories.documentdb.search_repository import (
+    HAS_VECTOR_FILTER,
     REINDEX_NO_EMBEDDING_ERROR,
     DocumentDBSearchRepository,
     _reindex_detail,
@@ -148,3 +149,51 @@ class TestReindexPathsCounts:
         assert by_path["/too-long"]["status"] == "failed"
         assert by_path["/too-long"]["error"] == REINDEX_NO_EMBEDDING_ERROR
         assert by_path["/missing"]["error"] == "Not found in any source collection"
+
+
+def _cursor(
+    docs: list[dict],
+) -> MagicMock:
+    """Build a motor-style cursor whose to_list returns the given documents."""
+    cursor = MagicMock()
+    cursor.to_list = AsyncMock(return_value=docs)
+    return cursor
+
+
+@pytest.mark.unit
+class TestFindMissingEmbeddings:
+    """A record stored with an empty vector counts as missing, so reindex retries it."""
+
+    def test_filter_excludes_empty_null_and_absent_vectors(self):
+        assert HAS_VECTOR_FILTER == {"embedding": {"$nin": [None, []]}}
+
+    @pytest.mark.asyncio
+    async def test_record_without_a_vector_is_listed_as_missing(self):
+        repo, collection = _repo_with_collection()
+        # The has-vector query returns only /ok; /empty-vector has a record with
+        # embedding [] that the filter leaves out.
+        collection.find = MagicMock(return_value=_cursor([{"_id": "/ok"}]))
+        servers = MagicMock()
+        servers.find = MagicMock(
+            return_value=_cursor(
+                [
+                    {"_id": "/ok", "server_name": "OK", "is_enabled": True},
+                    {"_id": "/empty-vector", "server_name": "Long", "is_enabled": True},
+                ]
+            )
+        )
+        empty = MagicMock()
+        empty.find = MagicMock(return_value=_cursor([]))
+        db = MagicMock()
+        db.__getitem__.side_effect = lambda name: servers if "mcp_servers" in name else empty
+
+        with patch(
+            "registry.repositories.documentdb.search_repository.get_documentdb_client",
+            AsyncMock(return_value=db),
+        ):
+            result = await repo.find_missing_embeddings()
+
+        assert collection.find.call_args.args[0] == HAS_VECTOR_FILTER
+        assert [m["path"] for m in result["missing"]] == ["/empty-vector"]
+        assert result["total_indexed"] == 1
+        assert result["total_source"] == 2

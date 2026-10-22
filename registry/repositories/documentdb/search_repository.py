@@ -78,6 +78,12 @@ REINDEX_NO_EMBEDDING_ERROR: str = (
 )
 
 
+# Matches an embeddings-collection record that actually has a vector. A record whose
+# embedding call failed is stored with an empty list (still found by keyword search),
+# so the record existing is not enough. $nin with None also excludes a missing field.
+HAS_VECTOR_FILTER: dict[str, Any] = {"embedding": {"$nin": [None, []]}}
+
+
 def _reindex_detail(
     path: str,
     entity_type: str,
@@ -1634,7 +1640,9 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
         """Find documents in source collections that have no embedding indexed.
 
         Compares _id values across mcp_servers, mcp_agents, and agent_skills
-        collections against the embeddings collection.
+        collections against the embeddings collection. A record stored with an
+        empty vector (its embedding call failed) counts as missing, so a reindex
+        driven by this list retries it.
 
         Returns:
             Dictionary with missing list, counts, and summary.
@@ -1648,7 +1656,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
         ]
 
         embeddings_collection = await self._get_collection()
-        indexed_cursor = embeddings_collection.find({}, {"_id": 1})
+        indexed_cursor = embeddings_collection.find(HAS_VECTOR_FILTER, {"_id": 1})
         indexed_docs = await indexed_cursor.to_list(length=None)
         indexed_ids = {doc["_id"] for doc in indexed_docs}
 
