@@ -69,6 +69,31 @@ _STOPWORDS: set[str] = {
 }
 
 
+# Reported for a path whose entry was stored without a vector. The entry is still
+# found by keyword search; the registry log has the provider's error for the path.
+REINDEX_NO_EMBEDDING_ERROR: str = (
+    "Stored without an embedding: the embeddings provider rejected or failed the "
+    "request. The entry is still found by keyword search; see the registry log for "
+    "the provider's error."
+)
+
+
+def _reindex_detail(
+    path: str,
+    entity_type: str,
+    embedded: bool,
+) -> dict[str, Any]:
+    """Build one reindex result, failing a path that was stored without a vector."""
+    if embedded:
+        return {"path": path, "entity_type": entity_type, "status": "success"}
+    return {
+        "path": path,
+        "entity_type": entity_type,
+        "status": "failed",
+        "error": REINDEX_NO_EMBEDDING_ERROR,
+    }
+
+
 def _tokenize_query(query: str) -> list[str]:
     """Tokenize a query string into meaningful keywords.
 
@@ -951,13 +976,19 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
         server_info: dict[str, Any],
         is_enabled: bool = False,
         skip_if_unchanged: bool = False,
-    ) -> None:
+    ) -> bool:
         """Index a server for search.
 
         Args:
             skip_if_unchanged: When True (used during startup), skip embedding
                 generation if the existing document has the same content hash.
                 This avoids redundant embedding API calls on every boot.
+
+        Returns:
+            True if the entry is stored with an embedding. False if the embedding
+            call failed (the entry is stored without a vector, so it is still found
+            by keyword search) or the write failed. Callers that only index can
+            ignore this; reindex_paths uses it to report failures honestly.
         """
         import hashlib
 
@@ -1002,7 +1033,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                 # Content unchanged and embedding exists; just update is_enabled if needed
                 if existing.get("is_enabled") != is_enabled:
                     await collection.update_one({"_id": path}, {"$set": {"is_enabled": is_enabled}})
-                return
+                return True
 
         # Flatten metadata into a searchable text field for keyword matching
         metadata_text = flatten_metadata_to_text(metadata)
@@ -1046,8 +1077,10 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
         try:
             await collection.replace_one({"_id": path}, doc, upsert=True)
             logger.info(f"Indexed server '{server_info.get('server_name')}' for search")
+            return bool(embedding)
         except Exception as e:
             logger.error(f"Failed to index server in search: {e}", exc_info=True)
+            return False
 
     async def index_agent(
         self,
@@ -1055,8 +1088,15 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
         agent_card: AgentCard,
         is_enabled: bool = False,
         skip_if_unchanged: bool = False,
-    ) -> None:
-        """Index an agent for search."""
+    ) -> bool:
+        """Index an agent for search.
+
+        Returns:
+            True if the entry is stored with an embedding. False if the embedding
+            call failed (the entry is stored without a vector, so it is still found
+            by keyword search) or the write failed. Callers that only index can
+            ignore this; reindex_paths uses it to report failures honestly.
+        """
         import hashlib
 
         collection = await self._get_collection()
@@ -1096,7 +1136,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             ):
                 if existing.get("is_enabled") != is_enabled:
                     await collection.update_one({"_id": path}, {"$set": {"is_enabled": is_enabled}})
-                return
+                return True
 
         vectors = await self._embed_texts(
             [text_for_embedding],
@@ -1131,8 +1171,10 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
         try:
             await collection.replace_one({"_id": path}, doc, upsert=True)
             logger.info(f"Indexed agent '{agent_card.name}' for search")
+            return bool(embedding)
         except Exception as e:
             logger.error(f"Failed to index agent in search: {e}", exc_info=True)
+            return False
 
     async def index_skill(
         self,
@@ -1140,7 +1182,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
         skill: Any,
         is_enabled: bool = False,
         skip_if_unchanged: bool = False,
-    ) -> None:
+    ) -> bool:
         """Index a skill for semantic search.
 
         Args:
@@ -1148,6 +1190,12 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             skill: SkillCard object
             is_enabled: Whether skill is enabled
             skip_if_unchanged: Skip embedding if content hash matches existing doc
+
+        Returns:
+            True if the entry is stored with an embedding. False if the embedding
+            call failed (the entry is stored without a vector, so it is still found
+            by keyword search) or the write failed. Callers that only index can
+            ignore this; reindex_paths uses it to report failures honestly.
         """
         import hashlib
 
@@ -1191,7 +1239,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             ):
                 if existing.get("is_enabled") != is_enabled:
                     await collection.update_one({"_id": path}, {"$set": {"is_enabled": is_enabled}})
-                return
+                return True
 
         vectors = await self._embed_texts(
             [text_for_embedding],
@@ -1257,8 +1305,10 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
         try:
             await collection.replace_one({"_id": path}, search_doc, upsert=True)
             logger.info(f"Indexed skill for search: {path}")
+            return bool(embedding)
         except Exception as e:
             logger.error(f"Failed to index skill in search: {e}", exc_info=True)
+            return False
 
     async def index_custom_entity(
         self,
@@ -1776,7 +1826,8 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             paths: List of document paths to re-index (max 100).
 
         Returns:
-            Dictionary with success/failed counts and per-path details.
+            Dictionary with success/failed counts and per-path details. A path whose
+            entry was stored without an embedding counts as failed.
         """
         db = await get_documentdb_client()
 
@@ -1790,35 +1841,23 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             try:
                 server_doc = await servers_col.find_one({"_id": path})
                 if server_doc:
-                    await self.index_server(
+                    embedded = await self.index_server(
                         path,
                         server_doc,
                         is_enabled=server_doc.get("is_enabled", True),
                     )
-                    details.append(
-                        {
-                            "path": path,
-                            "entity_type": "mcp_server",
-                            "status": "success",
-                        }
-                    )
+                    details.append(_reindex_detail(path, "mcp_server", embedded))
                     continue
 
                 agent_doc = await agents_col.find_one({"_id": path})
                 if agent_doc:
                     agent_card = AgentCard(**agent_doc)
-                    await self.index_agent(
+                    embedded = await self.index_agent(
                         path,
                         agent_card,
                         is_enabled=agent_doc.get("is_enabled", True),
                     )
-                    details.append(
-                        {
-                            "path": path,
-                            "entity_type": "a2a_agent",
-                            "status": "success",
-                        }
-                    )
+                    details.append(_reindex_detail(path, "a2a_agent", embedded))
                     continue
 
                 skill_doc = await skills_col.find_one({"_id": path})
@@ -1826,18 +1865,12 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                     from ...schemas.skill_models import SkillCard
 
                     skill_card = SkillCard(**skill_doc)
-                    await self.index_skill(
+                    embedded = await self.index_skill(
                         path,
                         skill_card,
                         is_enabled=skill_doc.get("is_enabled", True),
                     )
-                    details.append(
-                        {
-                            "path": path,
-                            "entity_type": "skill",
-                            "status": "success",
-                        }
-                    )
+                    details.append(_reindex_detail(path, "skill", embedded))
                     continue
 
                 details.append(

@@ -59,9 +59,14 @@ def _bedrock_response(
 
 @pytest.fixture(autouse=True)
 def _no_backoff_sleep():
-    """Retries must not slow the suite down."""
-    with patch("registry.embeddings.adapters.time.sleep") as sleep:
-        yield sleep
+    """Retries must not slow the suite down.
+
+    Replaces only the adapters module's own reference to ``time``. Patching
+    ``time.sleep`` itself would patch the global module, so any other code
+    sleeping in the same worker process would count as a call here.
+    """
+    with patch.object(adapters, "time") as fake_time:
+        yield fake_time.sleep
 
 
 @pytest.fixture(autouse=True)
