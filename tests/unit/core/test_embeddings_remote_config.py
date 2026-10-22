@@ -90,3 +90,28 @@ class TestTimeoutAndRetries:
     def test_out_of_range_rejected(self, field, value):
         with pytest.raises(ValueError):
             Settings(**{field: value})
+
+
+@pytest.mark.unit
+@pytest.mark.core
+class TestRetryMaxInputChars:
+    """EMBEDDINGS_RETRY_MAX_INPUT_CHARS is optional and bounded (#1917)."""
+
+    def test_unset_by_default(self, monkeypatch):
+        monkeypatch.delenv("EMBEDDINGS_RETRY_MAX_INPUT_CHARS", raising=False)
+        assert Settings().embeddings_retry_max_input_chars is None
+
+    @pytest.mark.parametrize("blank", ["", "   "])
+    def test_blank_value_means_unset(self, monkeypatch, blank):
+        # Compose (${VAR:-}) and Terraform (null -> "") pass an empty string.
+        monkeypatch.setenv("EMBEDDINGS_RETRY_MAX_INPUT_CHARS", blank)
+        assert Settings().embeddings_retry_max_input_chars is None
+
+    def test_read_from_environment(self, monkeypatch):
+        monkeypatch.setenv("EMBEDDINGS_RETRY_MAX_INPUT_CHARS", "8000")
+        assert Settings().embeddings_retry_max_input_chars == 8000
+
+    @pytest.mark.parametrize("value", [255, 200001])
+    def test_out_of_range_rejected(self, value):
+        with pytest.raises(ValueError):
+            Settings(embeddings_retry_max_input_chars=value)

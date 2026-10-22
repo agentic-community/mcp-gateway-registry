@@ -417,6 +417,17 @@ variable "embeddings_max_retries" {
   }
 }
 
+variable "embeddings_retry_max_input_chars" {
+  description = "Trim target in characters for the one retry after a failed embedding call. null uses the per-model default (2048 for Cohere on Amazon Bedrock, 28000 otherwise)."
+  type        = number
+  default     = null
+
+  validation {
+    condition     = var.embeddings_retry_max_input_chars == null ? true : (var.embeddings_retry_max_input_chars >= 256 && var.embeddings_retry_max_input_chars <= 200000)
+    error_message = "embeddings_retry_max_input_chars must be null or between 256 and 200000."
+  }
+}
+
 variable "embeddings_extra_headers" {
   description = "Extra HTTP headers sent on every embeddings request (litellm provider only), as a map of header name to value. Expanded into the EMBEDDINGS_EXTRA_HEADER_1..5 env vars. Stored in clear text: never put a credential here."
   type        = map(string)

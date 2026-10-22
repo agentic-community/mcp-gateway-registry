@@ -482,6 +482,7 @@ embeddings:
   responseFormat: "" # "" (openai envelope, default) or "raw_array" (endpoint returns a bare [[float]] array)
   requestTimeoutSeconds: "" # "" uses the code default (30). Per remote embeddings request (litellm only).
   maxRetries: "" # "" uses the code default (2). Retries on 429/5xx/connection errors.
+  retryMaxInputChars: "" # "" uses the per-model default (2048 Cohere on Bedrock, 28000 otherwise). Trim target for the one retry after a failed embedding.
   # Extra HTTP headers sent on every embeddings request (litellm provider only),
   # at most 5, each as "Name: value". Rendered as EMBEDDINGS_EXTRA_HEADER_1..N.
   # Stored in CLEAR TEXT and shown unmasked on the System Config page: never put

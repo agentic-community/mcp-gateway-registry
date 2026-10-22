@@ -511,6 +511,27 @@ class Settings(BaseSettings):
     embeddings_request_timeout_seconds: int = Field(default=30, ge=1, le=600)
     embeddings_max_retries: int = Field(default=2, ge=0, le=10)
 
+    # Trim target for the single retry after a failed embedding call (#1917). The
+    # first attempt always sends the full text. Only when it fails and the text is
+    # longer than this does the registry retry once with the text trimmed: every
+    # tool/skill name kept, the longest descriptions shortened first. Unset uses a
+    # per-model default: 2048 for Cohere on Amazon Bedrock (its hard limit), 28000
+    # otherwise. Lower it for a model with a smaller input limit.
+    embeddings_retry_max_input_chars: int | None = Field(default=None, ge=256, le=200000)
+
+    @field_validator("embeddings_retry_max_input_chars", mode="before")
+    @classmethod
+    def _empty_retry_max_input_chars_is_unset(cls, v: object) -> object:
+        """Treat a blank value as unset rather than as a parse error.
+
+        Compose passes ``${EMBEDDINGS_RETRY_MAX_INPUT_CHARS:-}`` and Terraform
+        passes an empty string for null, so "not configured" arrives as "".
+        Without this the registry refuses to start on those surfaces.
+        """
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
+
     # Operator-configured extra headers for the embeddings endpoint (issue #1819).
     # Five separate scalar slots rather than one structured value, so every config
     # serializer and every deployment surface keeps treating these as plain

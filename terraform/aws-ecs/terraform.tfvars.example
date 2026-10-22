@@ -358,6 +358,7 @@ oauth2_allowed_redirect_uris = ""
 # embeddings_idp_allow_insecure    = false  # local dev only: permit http:// loopback token endpoint
 # embeddings_request_timeout_seconds = 30  # per remote embeddings request (litellm only)
 # embeddings_max_retries             = 2   # retries on 429/5xx/connection errors
+# embeddings_retry_max_input_chars   = 28000  # trim target for the one retry after a failure; null = per-model default
 # embeddings_response_format       = "openai"  # default; use "raw_array" only if your endpoint returns a bare [[float]] array instead of the OpenAI envelope
 # Extra headers on every embeddings request (litellm only), at most 5. Stored in
 # clear text; never put a credential here (use embeddings_api_key or IdP mode).

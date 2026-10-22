@@ -33,6 +33,14 @@ REMOVED_PREFIX_REPLACEMENTS: dict[str, str] = {
     "voyage-": "an OpenAI-compatible endpoint: openai/<model> with EMBEDDINGS_API_BASE",
 }
 
+# Trim target for the one retry after a failed embedding call (#1917), used when
+# EMBEDDINGS_RETRY_MAX_INPUT_CHARS is unset. 28000 characters is about 6100 to
+# 6700 tokens for English text, under the 8192-token limit of OpenAI and Titan
+# embedding models. Cohere on Amazon Bedrock rejects any text over 2048
+# characters ("expected maxLength: 2048"), so it gets its own default.
+DEFAULT_RETRY_MAX_INPUT_CHARS: int = 28000
+BEDROCK_COHERE_RETRY_MAX_INPUT_CHARS: int = 2048
+
 SUPPORTED_MODEL_EXAMPLES: str = (
     "openai/text-embedding-3-small, azure/<deployment-name>, "
     "bedrock/amazon.titan-embed-text-v2:0, bedrock/cohere.embed-english-v3"
@@ -115,3 +123,24 @@ def resolve_remote_model(
             "sentence-transformers model, set EMBEDDINGS_PROVIDER=sentence-transformers.",
         )
     raise _unsupported_error(name, "the model name has no supported provider prefix.")
+
+
+def default_retry_max_input_chars(
+    model_name: str,
+) -> int:
+    """Return the default trim target for a retry, by model.
+
+    Args:
+        model_name: EMBEDDINGS_MODEL_NAME.
+
+    Returns:
+        2048 for Cohere embed models on Amazon Bedrock, 28000 for anything else,
+        including names that do not resolve (the retry never runs for those).
+    """
+    try:
+        provider = resolve_remote_model(model_name).provider
+    except ValueError:
+        return DEFAULT_RETRY_MAX_INPUT_CHARS
+    if provider == PROVIDER_BEDROCK_COHERE:
+        return BEDROCK_COHERE_RETRY_MAX_INPUT_CHARS
+    return DEFAULT_RETRY_MAX_INPUT_CHARS
