@@ -179,7 +179,7 @@ The registry always sends the full text first, so every entry that fits is uncha
 
 The trim target is `EMBEDDINGS_RETRY_MAX_INPUT_CHARS`. Unset, it is 2,048 characters for Cohere on Amazon Bedrock and 28,000 for other models (about 6,100 to 6,700 tokens of English text). Lower it for a model with a smaller input limit, or for text that uses more tokens per character, such as code or non-English text.
 
-The registry re-indexes every entry at startup, so an entry that needs trimming costs one rejected request and one trimmed request each time it is indexed. Its stored content hash is that of the full text, the same as before.
+An entry that needs trimming costs one rejected request and one trimmed request each time it is indexed: when it is registered or updated, when a reindex runs, and, for the built-in AI Registry tools server, at each startup. Startup does not re-index the rest of the catalog. The stored content hash is that of the full text, the same as before.
 
 ## Migration Between Providers
 

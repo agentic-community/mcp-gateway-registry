@@ -116,12 +116,7 @@ class TestEmbedWithTrimRetry:
 
 @pytest.mark.unit
 class TestIndexServerKeepsFullTextHash:
-    """A trimmed entry stores the full text's hash, so skip_if_unchanged skips it.
-
-    Startup does not pass skip_if_unchanged today, so in practice a trimmed entry
-    is re-embedded (one rejected and one trimmed request) on each startup; this
-    test pins that the stored hash would let the skip work.
-    """
+    """A trimmed entry stores the full text's hash, so skip_if_unchanged skips it."""
 
     @pytest.mark.asyncio
     async def test_trimmed_entry_is_skipped_when_unchanged(self):
