@@ -653,7 +653,7 @@ A manual decision is recorded with `source="admin"` and survives later security 
 
 > **Not publicly reachable.** The public gateway listeners (8080/8443) return
 > `404` for the `/api/internal/` prefix. These are legacy service-to-service
-> routes; operator tooling (e.g. `cli/service_mgmt.sh`) now uses the public,
+> routes; operator tooling (e.g. `api/registry_management.py`) uses the public,
 > user-authenticated `/api/servers/*` siblings (e.g. `POST /api/servers/toggle`)
 > with a gateway JWT. The two subsets that are still called machine-to-machine
 > keep their own dedicated internal paths: the egress-token vend on the internal

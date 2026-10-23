@@ -248,33 +248,26 @@ uv run python agents/agent.py --scopes "read:tools" "execute:tools" \
 
 ## Service Management Testing
 
-Use the `service_mgmt.sh` script for comprehensive server lifecycle management:
+Use `api/registry_management.py` for server lifecycle management. Every command takes `--registry-url` and `--token-file`; the examples use a local gateway and the token in `.token`.
 
 ### Add a Service
 ```bash
-# Add service from config file
-./cli/service_mgmt.sh add cli/examples/example-server-config.json
+uv run python api/registry_management.py --registry-url http://localhost --token-file .token register --config cli/examples/example-server-config.json
 ```
 
-### Monitor Services
+### Check Service Health
 ```bash
-# Monitor all services
-./cli/service_mgmt.sh monitor
-
-# Monitor specific service
-./cli/service_mgmt.sh monitor cli/examples/example-server-config.json
+uv run python api/registry_management.py --registry-url http://localhost --token-file .token healthcheck
 ```
 
 ### Test Service Searchability
 ```bash
-# Test if service is discoverable
-./cli/service_mgmt.sh test cli/examples/example-server-config.json
+uv run python api/registry_management.py --registry-url http://localhost --token-file .token server-search --query "example server"
 ```
 
 ### Delete a Service
 ```bash
-# Remove service
-./cli/service_mgmt.sh delete cli/examples/example-server-config.json
+uv run python api/registry_management.py --registry-url http://localhost --token-file .token remove --path /example-server
 ```
 
 ## Troubleshooting
@@ -432,5 +425,5 @@ uv run python cli/mcp_client.py call \
 - All examples assume you're running from the project root directory
 - The CLI client (`mcp_client.py`) automatically handles authentication via environment variables or ingress tokens
 - The Python agent (`agent.py`) provides more advanced AI capabilities for complex interactions
-- Use `service_mgmt.sh` for comprehensive server lifecycle management
+- Use `api/registry_management.py` for server lifecycle management
 - For production testing, always use proper authentication and secure connections

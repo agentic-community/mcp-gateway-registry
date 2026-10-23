@@ -3,7 +3,7 @@
 MCP Security Scanner CLI Tool
 
 Scans MCP servers for security vulnerabilities using cisco-ai-mcp-scanner.
-Integrates with service_mgmt.sh to provide security analysis during server registration.
+With --auto-disable it disables a server that fails its scan through the registry API.
 """
 
 import argparse
@@ -37,6 +37,13 @@ BEARER_TOKEN_ENV = "MCP_SCAN_BEARER_TOKEN"  # nosec B105 - env var name, not a s
 # Use absolute path relative to project root
 PROJECT_ROOT = Path(__file__).parent.parent
 OUTPUT_DIR = PROJECT_ROOT / "security_scans"
+# Registry used by --auto-disable to disable a server that fails its scan.
+REGISTRY_URL_ENV = "REGISTRY_URL"
+DEFAULT_REGISTRY_URL = "http://localhost"
+DEFAULT_REGISTRY_TOKEN_FILE = ".token"  # nosec B105 - file path, not a secret value
+
+sys.path.insert(0, str(PROJECT_ROOT / "api"))
+from registry_client import RegistryClient  # noqa: E402
 
 
 class SecurityScanResult(BaseModel):
@@ -351,35 +358,65 @@ def _save_scan_output(server_url: str, raw_output: dict) -> str:
     return str(latest_file)
 
 
-def _disable_unsafe_server(server_path: str) -> bool:
-    """Disable a server that failed security scan.
+def _load_registry_token(
+    token_file: str,
+) -> str:
+    """Read the registry access token from a token file.
+
+    Accepts both layouts the repo's token files use: a top-level
+    ``access_token`` and the nested ``tokens.access_token``.
+
+    Args:
+        token_file: Path to the JSON token file
+
+    Returns:
+        The access token
+
+    Raises:
+        ValueError: If the file holds no access token
+    """
+    with open(token_file) as f:
+        data = json.load(f)
+    token = data.get("access_token") or (data.get("tokens") or {}).get("access_token")
+    if not token:
+        raise ValueError(f"No access_token found in {token_file}")
+    return token
+
+
+def _disable_unsafe_server(
+    server_path: str,
+    registry_url: str,
+    token_file: str,
+) -> bool:
+    """Disable a server that failed its security scan, via the registry API.
+
+    Reads the current state first: the toggle endpoint flips state, so calling
+    it on an already-disabled server would enable it.
 
     Args:
         server_path: Path of the server to disable (e.g., /mcpgw)
+        registry_url: Base URL of the registry
+        token_file: Path to a token file for a registry admin
 
     Returns:
-        True if server was disabled successfully, False otherwise
+        True if the server is disabled afterwards, False otherwise
     """
     logger.info(f"Disabling unsafe server: {server_path}")
 
     try:
-        # Call service_mgmt.sh to disable the server
-        cmd = [str(PROJECT_ROOT / "cli" / "service_mgmt.sh"), "disable", server_path]
-
-        result = subprocess.run(  # nosec B603 - hardcoded internal script, server_path from URL parsing
-            cmd, capture_output=True, text=True, check=True
-        )
-
+        client = RegistryClient(registry_url=registry_url, token=_load_registry_token(token_file))
+        if not client.get_server(server_path).is_enabled:
+            logger.info(f"Server {server_path} is already disabled")
+            return True
+        result = client.toggle_service(server_path)
+        if result.is_enabled:
+            logger.error(f"Registry reports {server_path} still enabled after toggle")
+            return False
         logger.info(f"Server {server_path} disabled successfully")
-        logger.debug(f"Output: {result.stdout}")
         return True
 
-    except subprocess.CalledProcessError as e:
-        logger.error(f"Failed to disable server {server_path}: {e}")
-        logger.error(f"stderr: {e.stderr}")
-        return False
     except Exception as e:
-        logger.error(f"Unexpected error disabling server {server_path}: {e}")
+        logger.error(f"Failed to disable server {server_path}: {e}")
         return False
 
 
@@ -420,6 +457,8 @@ def scan_server(
     output_json: bool = False,
     auto_disable: bool = False,
     bearer_token: str | None = None,
+    registry_url: str = DEFAULT_REGISTRY_URL,
+    registry_token_file: str = DEFAULT_REGISTRY_TOKEN_FILE,
 ) -> SecurityScanResult:
     """Scan an MCP server for security vulnerabilities.
 
@@ -430,6 +469,8 @@ def scan_server(
         output_json: If True, output raw mcp-scanner JSON directly
         auto_disable: If True, automatically disable servers that fail security scan
         bearer_token: Bearer token for authenticating to the scanned server
+        registry_url: Registry base URL used by auto_disable
+        registry_token_file: Registry admin token file used by auto_disable
 
     Returns:
         SecurityScanResult containing scan results
@@ -487,11 +528,13 @@ def scan_server(
     output_file = _save_scan_output(server_url, raw_output)
 
     # Auto-disable server if unsafe
+    disabled = False
     if auto_disable and not is_safe:
         logger.warning("Server marked as UNSAFE - attempting to disable")
         server_path = _extract_server_path_from_url(server_url)
         if server_path:
-            if _disable_unsafe_server(server_path):
+            disabled = _disable_unsafe_server(server_path, registry_url, registry_token_file)
+            if disabled:
                 logger.info(f"✓ Server {server_path} has been disabled for security reasons")
             else:
                 logger.error(f"✗ Failed to disable server {server_path}")
@@ -531,7 +574,7 @@ def scan_server(
         # Show auto-disable status if applicable
         if auto_disable and not result.is_safe:
             server_path = _extract_server_path_from_url(server_url)
-            if server_path:
+            if disabled:
                 print(
                     f"\n⚠️  ACTION TAKEN: Server {server_path} has been DISABLED due to security issues"
                 )
@@ -590,7 +633,23 @@ Example usage:
     parser.add_argument(
         "--auto-disable",
         action="store_true",
-        help="Automatically disable servers that fail security scan (is_safe: false)",
+        help=(
+            "Disable a server that fails its scan (is_safe: false) through the registry "
+            "API. Needs a registry admin token (see --registry-url and --registry-token-file)"
+        ),
+    )
+
+    parser.add_argument(
+        "--registry-url",
+        default=os.environ.get(REGISTRY_URL_ENV, DEFAULT_REGISTRY_URL),
+        help=f"Registry base URL for --auto-disable (default: ${REGISTRY_URL_ENV} or "
+        f"{DEFAULT_REGISTRY_URL})",
+    )
+
+    parser.add_argument(
+        "--registry-token-file",
+        default=DEFAULT_REGISTRY_TOKEN_FILE,
+        help=f"Registry admin token file for --auto-disable (default: {DEFAULT_REGISTRY_TOKEN_FILE})",
     )
 
     parser.add_argument(
@@ -626,6 +685,8 @@ Example usage:
             output_json=args.json,
             auto_disable=args.auto_disable,
             bearer_token=bearer_token,
+            registry_url=args.registry_url,
+            registry_token_file=args.registry_token_file,
         )
 
         # Exit with non-zero code if unsafe

@@ -4,323 +4,118 @@ This guide explains how to import MCP servers from [Anthropic's official MCP Reg
 
 ## Overview
 
-The Anthropic MCP Registry is an open, collaboratively governed directory of Model Context Protocol (MCP) servers. It is maintained by Anthropic in partnership with GitHub and the wider community through an open-source contribution model. This registry provides a curated catalog of publicly available and community-contributed MCP servers. Its API enables MCP clients and gateways to discover and import server configurations automatically, simplifying integration and discovery workflows for developers.
+The Anthropic MCP Registry is an open, collaboratively governed directory of Model Context Protocol (MCP) servers. It is maintained by Anthropic in partnership with GitHub and the wider community through an open-source contribution model. Its API lets MCP clients and gateways discover and import server configurations.
 
-The import functionality allows you to quickly add these servers to your gateway without manual configuration.
+The gateway imports these servers through federation. You add a server name to the Anthropic section of the federation configuration, then run a federation sync, and the registry fetches the server's definition and registers it. Imported servers carry the `ANTHROPIC` badge in the UI.
+
+> **Changed in 1.34.0:** the shell script `cli/import_from_anthropic_registry.sh` and its list file `cli/import_server_list.txt` were removed, along with `cli/service_mgmt.sh`. Use the commands below instead.
 
 ## Prerequisites
 
 - MCP Gateway up and running
-- Access to the registry container or CLI tools
-- Environment variables configured in `.env` file (for authenticated servers)
+- The Anthropic federation source enabled, as described in the [Federation Guide](federation.md#anthropic-mcp-registry-integration) (`ANTHROPIC_REGISTRY_ENABLED=true` and an `anthropic` block in the federation configuration)
+- A token for a user with federation management rights, for example `.token` on a local deployment
 
-> **Note**: The Anthropic API version is defined in `registry/constants.py` as `ANTHROPIC_API_VERSION` for easy version management.
+> **Note**: The Anthropic API version is defined in `registry/constants.py` as `ANTHROPIC_API_VERSION`.
 
 ## Quick Start
 
 ### Import a Single Server
 
 ```bash
-cd /home/ubuntu/repos/mcp-gateway-registry
-./cli/import_from_anthropic_registry.sh ai.smithery/smithery-ai-github
+uv run python api/registry_management.py --registry-url http://localhost --token-file .token \
+  federation-add-anthropic-server --server-name ai.smithery/smithery-ai-github
+
+uv run python api/registry_management.py --registry-url http://localhost --token-file .token \
+  federation-sync --source anthropic
 ```
 
-### Import Multiple Servers from a List
+The first command adds the server to the federation configuration. The second fetches it from the Anthropic registry and registers it.
 
-Create or edit `cli/import_server_list.txt`:
-
-```text
-# Popular MCP Servers
-ai.smithery/smithery-ai-github
-io.github.jgador/websharp
-ai.smithery/Hint-Services-obsidian-github-mcp
-```
-
-Then import all servers in the list:
+The interactive CLI does both in one step with its **Anthropic import** task, or directly:
 
 ```bash
-./cli/import_from_anthropic_registry.sh --import-list cli/import_server_list.txt
+uv run python cli/registry_cli_wrapper.py --base-url http://localhost --token-file .token \
+  anthropic import ai.smithery/smithery-ai-github
 ```
 
-## Import Script Features
+### Import Several Servers
 
-### Automatic Environment Variable Substitution
-
-The import script automatically:
-- Loads environment variables from `.env` file
-- Substitutes authentication header placeholders with actual values
-- Stores the final configuration with real credentials in JSON files
-
-**Example:**
-```json
-// Before substitution (from Anthropic registry):
-{
-  "headers": [
-    {
-      "Authorization": "Bearer {smithery_api_key}"
-    }
-  ]
-}
-
-// After import (stored in gateway):
-{
-  "headers": [
-    {
-      "Authorization": "Bearer 3899299d-b7a2-471d-a185-200b9e9adcb2"
-    }
-  ]
-}
-```
-
-### Server Name Transformation
-
-Server names from the Anthropic registry are automatically transformed to work with the gateway:
-
-- Slashes (`/`) are replaced with hyphens (`-`)
-- Example: `ai.smithery/github` becomes `ai.smithery-github`
-- The path is set to `/ai.smithery-github`
-
-### Automatic Configuration
-
-The import script automatically configures:
-- **Server name** and **description** from registry
-- **Proxy URL** to the remote server
-- **Authentication type** (oauth, api-key, or none)
-- **Authentication provider** (Keycloak for oauth servers)
-- **Transport type** (streamable-http)
-- **Tags** for discovery and organization
-- **Headers** with substituted credentials
-
-## Command Reference
-
-### Basic Usage
+Add each server, then sync once:
 
 ```bash
-./cli/import_from_anthropic_registry.sh [OPTIONS] [SERVER_NAME]
+for server in ai.smithery/smithery-ai-github io.github.jgador/websharp; do
+  uv run python api/registry_management.py --registry-url http://localhost --token-file .token \
+    federation-add-anthropic-server --server-name "$server"
+done
+
+uv run python api/registry_management.py --registry-url http://localhost --token-file .token \
+  federation-sync --source anthropic
 ```
 
-### Options
+The [Federation Guide](federation.md#import-specific-servers-for-anthropic) also shows how to list the servers directly in the federation configuration.
 
-- `--import-list <file>` - Import servers from a file (one server name per line)
-- `--dry-run` - Show what would be imported without actually importing
-- `--gateway-url <url>` - Override gateway URL (default: http://localhost)
-- `--base-port <port>` - Override base port for local servers (default: 8100)
+### Remove an Imported Server
 
-### Examples
-
-**Import with dry run:**
 ```bash
-./cli/import_from_anthropic_registry.sh --dry-run ai.smithery/smithery-ai-github
+uv run python api/registry_management.py --registry-url http://localhost --token-file .token \
+  federation-remove-anthropic-server --server-name ai.smithery/smithery-ai-github
 ```
 
-**Import from custom list:**
-```bash
-./cli/import_from_anthropic_registry.sh --import-list my-servers.txt
-```
-
-**Import to remote gateway:**
-```bash
-GATEWAY_URL="https://mcpgateway.example.com" ./cli/import_from_anthropic_registry.sh ai.smithery/smithery-ai-github
-```
-
-## Server List File Format
-
-Create a text file with one server name per line:
-
-```text
-# Lines starting with # are comments
-# Empty lines are ignored
-
-# GitHub API access
-ai.smithery/smithery-ai-github
-
-# Web search and article extraction
-io.github.jgador/websharp
-
-# Obsidian vault integration
-ai.smithery/Hint-Services-obsidian-github-mcp
-```
-
-## Authentication Setup
-
-### For Servers Requiring Authentication
-
-1. **Get API Keys**: Obtain API keys from the service provider
-   - Smithery servers: Visit [smithery.ai](https://smithery.ai)
-   - Other services: Check their documentation
-
-2. **Add to .env file**:
-```bash
-# Smithery API Key
-SMITHERY_API_KEY=your-api-key-here
-
-# Other service keys
-OTHER_SERVICE_API_KEY=your-other-key
-```
-
-3. **Import servers**: The script automatically substitutes the keys
-
-### Supported Authentication Types
-
-The import script recognizes and configures:
-
-- **OAuth/Bearer tokens**: `Authorization: Bearer {api_key}`
-- **API keys**: `X-API-Key: {api_key}` or `API-Key: {api_key}`
-- **Custom headers**: Other authentication header formats
+Removing a server from the federation configuration also removes the server it imported.
 
 ## Finding Servers to Import
 
-### Browse Anthropic's MCP Registry
-
-Visit [registry.modelcontextprotocol.io](https://registry.modelcontextprotocol.io/) to:
-- Browse available servers
-- View server capabilities and tools
-- Check authentication requirements
-- Read documentation
-
-### List Servers via API
+Visit [registry.modelcontextprotocol.io](https://registry.modelcontextprotocol.io/) to browse servers, their tools and their authentication requirements, or query its API:
 
 ```bash
-# List all available servers
+# List available servers
 curl https://registry.modelcontextprotocol.io/v0.1/servers | jq '.servers[] | .name'
 
-# Get details for a specific server
+# Details for one server
 curl https://registry.modelcontextprotocol.io/v0.1/servers/ai.smithery%2Fsmithery-ai-github/versions/latest | jq '.'
 ```
 
-### Test Server Before Importing
+## Authentication for Imported Servers
 
-Use the test script to verify server details:
-
-```bash
-./cli/test_anthropic_api.py ai.smithery/smithery-ai-github
-```
+The import never copies credentials from a remote server definition: imported servers are registered with no authentication headers and marked read-only. A server that needs an API key or token reports unhealthy, and its tools fail until it receives credentials, so import servers that work without them, or register servers that need credentials yourself with `register --config`.
 
 ## Verifying Imported Servers
 
-### Check Server Status
-
-After importing, verify the server was registered:
-
 ```bash
-# Via CLI
-./cli/service_mgmt.sh list
+# Find the imported server
+uv run python api/registry_management.py --registry-url http://localhost --token-file .token \
+  list --query smithery
 
-# Via API
-curl http://localhost/mcpgw/mcp -X POST \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer YOUR_TOKEN" \
-  -d '{"jsonrpc": "2.0", "id": 1, "method": "tools/list"}'
+# Check health
+uv run python api/registry_management.py --registry-url http://localhost --token-file .token \
+  healthcheck
 ```
 
-### View Server in UI
-
-Navigate to the gateway UI to see imported servers:
-- http://localhost/
-
-### Check Health Status
-
-The health check service automatically monitors imported servers:
-
-```bash
-docker compose logs registry | grep -i "health"
-```
+An imported server's registry path is its Anthropic name with `/` replaced by `-`, so `ai.smithery/smithery-ai-github` becomes `/ai.smithery-smithery-ai-github`. In the web UI, imported servers appear on the MCP Servers tab with the `ANTHROPIC` badge.
 
 ## Troubleshooting
 
-### Import Fails with Authentication Error
+### The server is not imported after a sync
 
-**Problem**: Server requires authentication but key is missing
-
-**Solution**:
-1. Check if the server requires an API key
-2. Add the key to your `.env` file with the correct name
-3. Re-run the import
-
-### Server Shows as Unhealthy
-
-**Problem**: Imported server shows unhealthy in health checks
-
-**Possible causes**:
-- Invalid or expired API key
-- Network connectivity issues
-- Server is temporarily down
-
-**Check logs**:
-```bash
-docker compose logs registry --tail 100 | grep -i "server-name"
-```
-
-### Environment Variable Not Substituted
-
-**Problem**: Server JSON still shows `${VAR_NAME}` instead of actual value
-
-**Solution**:
-1. Ensure the variable is defined in `.env`
-2. Variable names are case-sensitive
-3. Re-run the import after updating `.env`
-
-### Server Name Conflicts
-
-**Problem**: Server already exists with same path
-
-**Solution**:
-```bash
-# Delete existing server
-./cli/service_mgmt.sh delete /server-path "server-name"
-
-# Re-import
-./cli/import_from_anthropic_registry.sh server-name
-```
-
-## Advanced Usage
-
-### Custom Transformation
-
-To customize how servers are imported, edit `cli/anthropic_transformer.py`:
-
-- Modify tag generation
-- Change path formatting
-- Adjust authentication handling
-- Add custom metadata
-
-### Batch Import with Filtering
+Check the registry logs for the federation sync:
 
 ```bash
-# Import only servers matching a pattern
-curl -s https://registry.modelcontextprotocol.io/v0.1/servers | \
-  jq -r '.servers[] | select(.name | contains("smithery")) | .name' > smithery-servers.txt
-
-./cli/import_from_anthropic_registry.sh --import-list smithery-servers.txt
+docker compose logs registry | grep -i anthropic
 ```
 
-### Automated Imports
+Confirm the Anthropic source is enabled (see Prerequisites) and that the server name matches the Anthropic registry exactly, including the namespace before the `/`.
 
-Add to cron or systemd timer for automatic updates:
+### "already exists in configuration"
 
-```bash
-# Daily import of curated server list
-0 2 * * * cd /path/to/repo && ./cli/import_from_anthropic_registry.sh --import-list cli/import_server_list.txt
-```
+The server is already in the federation configuration. Run `federation-sync --source anthropic` to refresh it, or remove and add it again.
 
-## Best Practices
+### The server shows as unhealthy
 
-1. **Curate your server list**: Only import servers you need and trust
-2. **Review before importing**: Use `--dry-run` to preview changes
-3. **Secure API keys**: Never commit `.env` to version control
-4. **Monitor health**: Regularly check imported server health status
-5. **Update regularly**: Re-import servers to get latest configurations
-6. **Test thoroughly**: Verify each server works after importing
+A server that needs credentials fails its health checks, because the import does not copy any (see Authentication for Imported Servers). Otherwise, check that the server's URL is reachable from the registry.
 
 ## Related Documentation
 
-- [Anthropic MCP Registry API](anthropic_registry_api.md)
-- [Service Management](service-management.md)
-- [Authentication Setup](../README.md#authentication)
-- [Health Monitoring](OBSERVABILITY.md)
-
-## Support
-
-For issues or questions:
-- GitHub Issues: [mcp-gateway-registry/issues](https://github.com/agentic-community/mcp-gateway-registry/issues)
-- Anthropic Registry: [modelcontextprotocol.io](https://modelcontextprotocol.io/)
+- [Federation Guide](federation.md)
+- [Federation Operational Guide](federation-operational-guide.md)
+- [Security Scanner](security-scanner.md)
