@@ -443,14 +443,25 @@ sanitizer that isn't called) is equivalent to no check.
   couples a read scope with a management scope on the same static token.
 - **Never forward the caller's inbound credential to a proxied/untrusted
   destination.** When the gateway proxies to a registrant-controlled upstream (or
-  an agent calls a discovered remote agent), strip `Authorization`/`Cookie` from
-  the forwarded request — the upstream is authenticated by the gateway's own
-  mechanism, not by relaying the caller's registry token. nginx subrequests
-  inherit the parent request's headers, so `Cookie`/`Authorization` must be
-  explicitly cleared (`proxy_set_header ... "";`) on any location that proxies
-  directly to a registrant-controlled backend. For outbound service-to-service
-  calls, mint an audience-restricted, short-lived delegation token rather than
+  an agent calls a discovered remote agent), strip every caller and gateway
+  credential from the forwarded request. The upstream is authenticated by the
+  gateway's own mechanism, not by relaying the caller's registry token. Clearing
+  only `Authorization`/`Cookie` is not enough: this gateway's clients carry the
+  bearer in `X-Authorization`, and `Proxy-Authorization` and the signed
+  `X-Internal-Token*` headers are credentials too. nginx subrequests inherit the
+  parent request's headers, so each one must be cleared explicitly
+  (`proxy_set_header ... "";`) on any location that proxies directly to a
+  registrant-controlled backend. Derive that list from
+  `RESERVED_CUSTOM_HEADER_NAMES` rather than writing it by hand, so a newly
+  reserved header is stripped automatically (see `_VS_BACKEND_STRIPPED_HEADERS`
+  in `registry/core/nginx_service.py`). For outbound service-to-service calls,
+  mint an audience-restricted, short-lived delegation token rather than
   re-sending the inbound one.
+- **A virtual server must not route around a backend's enable state.** The
+  direct route only exists for an enabled, healthy server, and a failed security
+  scan disables the server. Any other path to the same backend (virtual-server
+  locations and tool mappings) must apply the same gate, or disabling a server
+  leaves it reachable through every virtual server that maps it.
 - **Never accept a credential as a URL query parameter.** Query strings land in
   access logs, the audit trail, and browser history. Take secrets via a request
   header or POST body; a credential that arrives in the query string should be
