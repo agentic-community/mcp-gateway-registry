@@ -16,7 +16,12 @@ import httpx
 
 from registry.auth.resource_binding import INVALID_VERSION_SENTINEL
 from registry.common.log_redaction import redact_url
-from registry.constants import REGISTRY_CONSTANTS, DeploymentType, HealthStatus
+from registry.constants import (
+    REGISTRY_CONSTANTS,
+    RESERVED_CUSTOM_HEADER_NAMES,
+    DeploymentType,
+    HealthStatus,
+)
 from registry.egress_auth.upstream_binding import registered_versions, selected_upstream
 from registry.exceptions import UrlValidationError
 from registry.schemas.proxy_mixin import _assert_egress_allowed, build_proxy_client_path
@@ -124,6 +129,40 @@ _NGINX_AGENT_PATH_SAFE = re.compile(r"^[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*$")
 # newlines) remain excluded because they are not hex digits.
 _NGINX_AGENT_URL_SAFE = re.compile(
     r"^https?://[A-Za-z0-9.\-]+(?::\d+)?(?:/(?:[A-Za-z0-9._~\-/]|%[0-9A-Fa-f]{2})*)?$"
+)
+
+
+# Directory virtual_router.lua reads the per-virtual-server mapping JSON from.
+VIRTUAL_MAPPINGS_DIR: Path = Path("/etc/nginx/lua/virtual_mappings")
+
+
+# Request headers the /_vs_backend location must not relay to a
+# registrant-controlled backend. The set is derived from the canonical
+# RESERVED_CUSTOM_HEADER_NAMES denylist, so a header added there is stripped
+# here too. Two groups are carved out:
+#   - framing headers that nginx manages or the location sets itself
+#     (Host, Accept, Content-Type); clearing them would break the request.
+#   - X-User / X-Username, which the location re-sets from the values
+#     virtual_router.lua copied from the validated identity.
+# Everything else (ingress credentials, the gateway's signed internal tokens,
+# internal routing/identity headers, client-IP/forwarding headers) is cleared.
+_VS_BACKEND_FRAMING_HEADERS: frozenset[str] = frozenset(
+    {
+        "content-type",
+        "content-length",
+        "accept",
+        "host",
+        "connection",
+        "keep-alive",
+        "te",
+        "trailer",
+        "transfer-encoding",
+        "upgrade",
+    }
+)
+_VS_BACKEND_RESET_IDENTITY_HEADERS: frozenset[str] = frozenset({"x-user", "x-username"})
+_VS_BACKEND_STRIPPED_HEADERS: frozenset[str] = (
+    RESERVED_CUSTOM_HEADER_NAMES - _VS_BACKEND_FRAMING_HEADERS - _VS_BACKEND_RESET_IDENTITY_HEADERS
 )
 
 
@@ -472,9 +511,62 @@ def _render_real_ip_config() -> str:
     return "\n".join(lines)
 
 
+def _vs_backend_header_clears(
+    indent: str = "        ",
+) -> str:
+    """Return the nginx directives that clear every stripped header.
+
+    Args:
+        indent: Leading whitespace for each directive inside the location block.
+
+    Returns:
+        One ``proxy_set_header <Name> "";`` line per header in
+        ``_VS_BACKEND_STRIPPED_HEADERS``, sorted so the rendered config is stable.
+    """
+    lines = []
+    for name in sorted(_VS_BACKEND_STRIPPED_HEADERS):
+        canonical = "-".join(part.capitalize() for part in name.split("-"))
+        lines.append(f'{indent}proxy_set_header {canonical} "";')
+    return "\n".join(lines)
+
+
+def _virtual_backend_is_routable(
+    active: dict[str, Any],
+    base_path: str,
+) -> bool:
+    """Return True when a virtual server may route to this backend.
+
+    Applies the same gate as the direct route: the server must be enabled and
+    healthy. A security scan that fails disables the server, so this also drops
+    quarantined backends. Without it, a virtual server would keep routing to a
+    backend whose direct route has been removed.
+
+    Args:
+        active: The backend's active server document.
+        base_path: The active server path, used when the document has no path.
+
+    Returns:
+        True only when the backend is enabled and its health status is healthy.
+    """
+    if not active.get("is_enabled", False):
+        return False
+    health_key = active.get("path") or base_path
+    return HealthStatus.is_healthy(_server_health_status(health_key))
+
+
+def _server_health_status(
+    server_path: str,
+) -> str:
+    """Return the cached health status for a server path, UNKNOWN if never checked."""
+    from ..health.service import health_service
+
+    return health_service.server_health_status.get(server_path, HealthStatus.UNKNOWN)
+
+
 def _atomic_write_text(
     path: Path,
     content: str,
+    record_metric: bool = True,
 ) -> None:
     """Write content to path atomically (issue #1044).
 
@@ -496,6 +588,9 @@ def _atomic_write_text(
     Args:
         path: Destination path.
         content: Text content to write.
+        record_metric: Count this write in ``NGINX_CONFIG_WRITES``. Pass False
+            for files that are not the nginx config, such as the virtual-server
+            mapping files, so the metric keeps counting config writes only.
 
     Raises:
         OSError: If the temp file cannot be created, written, or replaced.
@@ -523,9 +618,11 @@ def _atomic_write_text(
         tmp.close()
         os.chmod(tmp_path, target_mode)
         os.replace(tmp_path, path)
-        NGINX_CONFIG_WRITES.labels(status="success").inc()
+        if record_metric:
+            NGINX_CONFIG_WRITES.labels(status="success").inc()
     except Exception:
-        NGINX_CONFIG_WRITES.labels(status="failure").inc()
+        if record_metric:
+            NGINX_CONFIG_WRITES.labels(status="failure").inc()
         try:
             tmp.close()
         except Exception:  # nosec B110 - best-effort cleanup of temp file on write failure
@@ -2337,6 +2434,9 @@ class NginxConfigService:
         if not active:
             logger.warning("Active server not found for virtual backend %s", backend_path)
             return None
+        if not _virtual_backend_is_routable(active, base_path):
+            logger.warning("Skipping disabled or unhealthy virtual backend %s", backend_path)
+            return None
         egress_mode = active.get("egress_auth_mode", "none")
         if egress_mode not in ("none", "pat", "oauth_user", "obo_exchange"):
             logger.warning("Invalid egress auth mode for virtual backend %s", backend_path)
@@ -2564,23 +2664,13 @@ class NginxConfigService:
         proxy_ssl_server_name on;
         proxy_set_header Host {safe_upstream_host};
         # SECURITY: this location proxies directly to a registrant-controlled
-        # (not fully trusted) MCP backend. Never relay the caller's registry
-        # credential here -- clearing Authorization AND Cookie prevents a
-        # malicious registered upstream from capturing and replaying the
-        # caller's gateway bearer token or registry session cookie against the
-        # registry API. This location is reached via a Lua subrequest that
-        # inherits the parent request's headers, so Cookie must be explicitly
-        # cleared or the user's session cookie would be forwarded verbatim.
-        # The gateway authenticates the upstream via its own mechanism, not by
-        # forwarding the caller's credential.
-        proxy_set_header Authorization "";
-        proxy_set_header Cookie "";
-        proxy_set_header X-Authorization "";
-        proxy_set_header X-Internal-Token "";
-        proxy_set_header X-Internal-Token-Generic "";
-        proxy_set_header X-Internal-Token-Registry "";
-        proxy_set_header X-Body "";
-        proxy_set_header X-Body-Uninspectable "";
+        # (not fully trusted) MCP backend. It is reached via a Lua subrequest
+        # that inherits the parent request's headers, so every reserved header
+        # is cleared explicitly: the caller's credentials (Authorization,
+        # X-Authorization, Proxy-Authorization, Cookie), the gateway's signed
+        # internal tokens, and the internal routing/identity headers. The list
+        # comes from RESERVED_CUSTOM_HEADER_NAMES (_VS_BACKEND_STRIPPED_HEADERS).
+{_vs_backend_header_clears()}
         # Forward the validated caller identity so backends can attribute
         # write operations to the authenticated user.  These are set as
         # request headers by virtual_router.lua (ngx.req.set_header) before
@@ -2623,7 +2713,7 @@ class NginxConfigService:
 
             server_repo = get_server_repository()
 
-            mappings_dir = Path("/etc/nginx/lua/virtual_mappings")
+            mappings_dir = VIRTUAL_MAPPINGS_DIR
             mappings_dir.mkdir(parents=True, exist_ok=True)
 
             for vs in virtual_servers:
@@ -2701,9 +2791,13 @@ class NginxConfigService:
                     "tool_backend_map": tool_backend_map,
                 }
 
+                # Atomic, so virtual_router.lua never reads a half-written file.
                 mapping_path = mappings_dir / f"{server_id}.json"
-                with open(mapping_path, "w") as f:
-                    json.dump(mapping_data, f, indent=2, default=str)
+                _atomic_write_text(
+                    mapping_path,
+                    json.dumps(mapping_data, indent=2, default=str),
+                    record_metric=False,
+                )
 
                 logger.debug(f"Wrote virtual server mapping: {mapping_path}")
 
