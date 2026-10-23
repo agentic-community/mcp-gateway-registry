@@ -252,7 +252,7 @@ Use `api/registry_management.py` for server lifecycle management. Every command 
 
 ### Add a Service
 ```bash
-uv run python api/registry_management.py --registry-url http://localhost --token-file .token register --config cli/examples/example-server-config.json
+uv run python api/registry_management.py --registry-url http://localhost --token-file .token register --config cli/examples/complete-server-example.json
 ```
 
 ### Check Service Health
@@ -262,12 +262,12 @@ uv run python api/registry_management.py --registry-url http://localhost --token
 
 ### Test Service Searchability
 ```bash
-uv run python api/registry_management.py --registry-url http://localhost --token-file .token server-search --query "example server"
+uv run python api/registry_management.py --registry-url http://localhost --token-file .token server-search --query "complete server example"
 ```
 
 ### Delete a Service
 ```bash
-uv run python api/registry_management.py --registry-url http://localhost --token-file .token remove --path /example-server
+uv run python api/registry_management.py --registry-url http://localhost --token-file .token remove --path /complete-example
 ```
 
 ## Troubleshooting

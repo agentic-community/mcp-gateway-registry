@@ -78,7 +78,7 @@ curl https://registry.modelcontextprotocol.io/v0.1/servers/ai.smithery%2Fsmither
 
 ## Authentication for Imported Servers
 
-The import never copies credentials from a remote server definition: imported servers are registered with no authentication headers and marked read-only. A server that needs an API key or token reports unhealthy, and its tools fail until it receives credentials, so import servers that work without them, or register servers that need credentials yourself with `register --config`.
+The import never copies credentials from a remote server definition: imported servers are registered with no authentication headers. A server that needs an API key or token reports unhealthy, and its tools fail until it receives credentials, so import servers that work without them, or register servers that need credentials yourself with `register --config`.
 
 ## Verifying Imported Servers
 

@@ -35,6 +35,10 @@ def _load_token_from_file(
 ) -> str:
     """Load access token from JSON file.
 
+    Accepts both layouts the repo's token files use: a top-level
+    ``access_token`` and the nested ``tokens.access_token`` (for example the
+    ``.token`` file the registry UI downloads).
+
     Args:
         token_file: Path to token file containing access_token field
 
@@ -43,9 +47,11 @@ def _load_token_from_file(
     """
     with open(token_file) as f:
         token_data = json.load(f)
-        access_token = token_data.get("access_token")
-        if not access_token:
-            raise ValueError(f"No access_token found in {token_file}")
+    access_token = token_data.get("access_token") or (token_data.get("tokens") or {}).get(
+        "access_token"
+    )
+    if not access_token:
+        raise ValueError(f"No access_token found in {token_file}")
     return access_token
 
 
