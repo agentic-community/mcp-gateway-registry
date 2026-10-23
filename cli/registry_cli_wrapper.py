@@ -227,6 +227,22 @@ def _handle_anthropic_get(
     _print_json_response(result.model_dump())
 
 
+def _handle_anthropic_import(
+    args: argparse.Namespace,
+) -> None:
+    """Import one Anthropic registry server through the federation API.
+
+    Adds the server to the federation config, then syncs the Anthropic source so
+    the registry fetches and registers it. Replaces the removed
+    import_from_anthropic_registry.sh.
+    """
+    client = _get_registry_client(args.base_url, args.token_file)
+
+    added = client.add_anthropic_server(server_name=args.server_name, config_id=args.config_id)
+    synced = client.sync_federation(config_id=args.config_id, source="anthropic")
+    _print_json_response({"added": added, "sync": synced})
+
+
 def _handle_agent_list(
     args: argparse.Namespace,
 ) -> None:
@@ -349,6 +365,15 @@ def main() -> None:
     get_parser = anthropic_subparsers.add_parser("get", help="Get server details (Anthropic API)")
     get_parser.add_argument("server_name", help="Server name")
 
+    # Anthropic import (federation add + sync)
+    import_parser = anthropic_subparsers.add_parser(
+        "import", help="Import a server from the Anthropic registry via federation"
+    )
+    import_parser.add_argument("server_name", help="Anthropic server name, e.g. io.github.org/name")
+    import_parser.add_argument(
+        "--config-id", default="default", help="Federation configuration ID (default: default)"
+    )
+
     # Agent management commands
     agent_parser = subparsers.add_parser("agent", help="Agent management commands")
     agent_subparsers = agent_parser.add_subparsers(dest="subcommand")
@@ -418,6 +443,8 @@ def main() -> None:
                 _handle_anthropic_list(args)
             elif args.subcommand == "get":
                 _handle_anthropic_get(args)
+            elif args.subcommand == "import":
+                _handle_anthropic_import(args)
             else:
                 anthropic_parser.print_help()
                 sys.exit(1)

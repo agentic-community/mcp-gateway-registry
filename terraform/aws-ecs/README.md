@@ -1404,7 +1404,6 @@ terraform/aws-ecs/
     ├── ecs-ssh.sh                     # SSH into ECS tasks
     ├── view-cloudwatch-logs.sh        # View/follow CloudWatch logs
     ├── user_mgmt.sh                   # Keycloak user management
-    ├── service_mgmt.sh                # Service management utilities
     ├── rotate-keycloak-web-client-secret.sh  # Rotate OAuth2 secrets
     ├── save-terraform-outputs.sh      # Export terraform outputs as JSON
     └── pre-destroy-cleanup.sh         # Run before terraform destroy
