@@ -35,8 +35,13 @@ module "mcp_gateway" {
   # Internal auth-server URL (override for Cloud Map / Service Connect FQDNs)
   auth_server_url = var.auth_server_url
 
-  # ALB logging
-  alb_logs_bucket = aws_s3_bucket.alb_logs.id
+  # Make ALB logging wait for the bucket policy while keeping unrelated data
+  # source reads available during planning.
+  # Older state has no wait triggers, so refresh-only runs need the bucket fallback.
+  alb_logs_bucket = try(
+    time_sleep.wait_for_bucket_policy.triggers.alb_logs_bucket,
+    aws_s3_bucket.alb_logs.id,
+  )
 
   # ECS configuration
   ecs_cluster_arn         = module.ecs_cluster.arn
@@ -471,10 +476,6 @@ module "mcp_gateway" {
   egress_secrets_manager_kms_key_id         = var.egress_secrets_manager_kms_key_id
   egress_secrets_manager_path_prefix        = var.egress_secrets_manager_path_prefix
   egress_credential_encryption_key          = var.egress_credential_encryption_key
-
-  # Wait for S3 bucket policy to propagate (30s delay)
-  # This prevents "Access Denied" errors when ALB tests write permissions
-  depends_on = [time_sleep.wait_for_bucket_policy]
 }
 
 # When storage_backend is a non-documentdb MongoDB variant (mongodb-ce,
@@ -508,12 +509,14 @@ resource "terraform_data" "mongodb_backend_uri_required" {
 # CloudFront Configuration Warnings
 # =============================================================================
 
-# Warning for dual ingress configuration (both CloudFront and custom domain)
+# Print Mode 3 access information for CloudFront with a custom domain.
+# Use the domain as the trigger to rerun the notice when its URL changes
+# and avoid replacing this resource on unchanged plans.
 resource "null_resource" "dual_ingress_warning" {
   count = var.enable_cloudfront && var.enable_route53_dns ? 1 : 0
 
   triggers = {
-    always_run = timestamp()
+    root_domain = local.root_domain
   }
 
   provisioner "local-exec" {
