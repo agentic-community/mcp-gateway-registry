@@ -4,6 +4,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from ..utils.metadata_limits import validate_metadata_limits
 from .agent_models import AgentProvider
 
 
@@ -49,7 +50,6 @@ SERVER_REGISTRANT_ONLY_FIELDS: frozenset[str] = frozenset(
 )
 
 
-_MAX_METADATA_BYTES: int = 64 * 1024
 _MAX_TAGS: int = 50
 _MAX_TAG_LEN: int = 64
 _MAX_DESCRIPTION_LEN: int = 4096
@@ -71,16 +71,8 @@ def _validate_tag_list(v: list[str] | str | None) -> list[str] | None:
 
 
 def _validate_metadata_size(v: dict[str, Any] | None) -> dict[str, Any] | None:
-    """Reject metadata blobs that serialise to more than _MAX_METADATA_BYTES."""
-    if v is None:
-        return None
-    import json
-
-    encoded = json.dumps(v, default=str).encode("utf-8")
-    if len(encoded) > _MAX_METADATA_BYTES:
-        raise ValueError(
-            f"metadata must serialise to at most {_MAX_METADATA_BYTES} bytes (got {len(encoded)})"
-        )
+    """Reject metadata over the shared size or nesting limit (issue #1811)."""
+    validate_metadata_limits(v)
     return v
 
 
@@ -95,11 +87,12 @@ class ServerUpdateRequest(BaseModel):
         - description <= 4096 chars
         - tags <= 50 entries, each <= 64 chars
         - external_tags <= 50 entries, each <= 64 chars
-        - metadata <= 64 KB serialised JSON
+        - metadata <= 10,240 bytes as compact UTF-8 JSON, nested at
+          most 8 levels deep (registry/utils/metadata_limits.py)
         These caps protect downstream code (DocumentDB document size,
-        embedding text budget, UI rendering). NOTE: POST /register
-        does not currently enforce these caps; a follow-up issue
-        will add them there for consistency.
+        embedding text budget, UI rendering, model context). The
+        metadata caps are shared with every server, agent and skill
+        registration path (issue #1811).
 
     Visibility & access control:
         `visibility` and `allowed_groups` are deliberately mutable. The
