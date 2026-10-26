@@ -35,6 +35,7 @@ from registry.schemas.proxy_mixin import (
     assert_proxy_target_resolvable,
     egress_guard_validator,
 )
+from registry.utils.metadata_limits import validate_metadata_limits
 
 # Configure logging
 logging.basicConfig(
@@ -530,6 +531,53 @@ class SkillRegistrationRequest(ProxyableMixin):
             },
         )  # read_safe defaults False -> raises at the edge
         return self
+
+    @model_validator(mode="after")
+    def _cap_metadata(self) -> "SkillRegistrationRequest":
+        """Enforce the shared metadata limits on the document that gets stored.
+
+        A skill's flat ``metadata`` is stored wrapped as
+        ``{"author", "version", "extra": {...}}``, with an explicit ``version``
+        field taking precedence over ``metadata.version`` on registration. The
+        wrapper adds bytes and one level of nesting, so the limits are checked
+        against that stored shape rather than the flat request (issue #1811).
+        """
+        validate_metadata_limits(
+            skill_metadata_storage_shape(self.metadata, self.version),
+            subject="metadata (as stored: author, version and extra)",
+        )
+        return self
+
+
+def skill_metadata_storage_shape(
+    metadata: dict[str, Any] | None,
+    version: str | None = None,
+) -> dict[str, Any] | None:
+    """Return the skill metadata document as it is persisted.
+
+    Mirrors the conversion in ``skill_service`` (registration) and
+    ``skill_routes.update_skill``: ``author`` and ``version`` lift out of the
+    flat dict and every other key moves under ``extra``. An explicit
+    ``version`` wins over ``metadata["version"]``, as on registration.
+
+    Args:
+        metadata: The flat metadata dict from the request, or None.
+        version: The request's explicit ``version`` field, if any.
+
+    Returns:
+        The stored metadata document, or None when nothing would be stored.
+    """
+    if not metadata and not version:
+        return None
+    flat = metadata or {}
+    # A plain dict in SkillMetadata's field order rather than SkillMetadata
+    # itself: this runs inside a request validator, where a type error on
+    # author or version would surface as a confusing nested validation error.
+    return {
+        "author": flat.get("author"),
+        "version": version or flat.get("version"),
+        "extra": {k: v for k, v in flat.items() if k not in ("author", "version")},
+    }
 
 
 class SkillSearchResult(BaseModel):

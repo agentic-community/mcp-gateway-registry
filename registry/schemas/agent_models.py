@@ -29,6 +29,7 @@ from registry.schemas.proxy_mixin import (
     assert_proxy_target_resolvable,
     egress_guard_validator,
 )
+from registry.utils.metadata_limits import validate_metadata_limits
 
 # Configure logging with basicConfig
 logging.basicConfig(
@@ -1558,6 +1559,20 @@ class AgentRegistrationRequest(ProxyableMixin):
         valid_values = ["unverified", "community", "verified", "trusted"]
         if v not in valid_values:
             raise ValueError(f"trust_level must be one of: {', '.join(valid_values)}")
+        return v
+
+    @field_validator("metadata")
+    @classmethod
+    def _cap_metadata_request(
+        cls,
+        v: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Enforce the shared metadata size and nesting limits (issue #1811).
+
+        Checked on the request model only, not on AgentCard, so agents stored
+        before the limits existed still load.
+        """
+        validate_metadata_limits(v)
         return v
 
     @field_validator("proxy_target_url")

@@ -199,19 +199,27 @@ class TestServerUpdateRequest:
             )
 
     def test_metadata_size_cap(self):
-        """metadata over 64 KB serialised JSON rejected; just-under accepted."""
-        # Just under cap (the JSON envelope adds a few bytes; subtract margin).
+        """metadata of exactly 10,240 compact bytes is accepted; one more is not (#1811)."""
+        # '{"k":""}' is 8 bytes, so a 10,232-char value lands exactly on the cap.
         ServerUpdateRequest(
             server_name="srv",
             description="d",
-            metadata={"k": "x" * (64 * 1024 - 16)},
+            metadata={"k": "x" * 10232},
         )
-        with pytest.raises(ValidationError, match="at most 65536 bytes"):
+        with pytest.raises(ValidationError, match="over the limit of 10240 bytes"):
             ServerUpdateRequest(
                 server_name="srv",
                 description="d",
-                metadata={"k": "x" * (64 * 1024 + 1)},
+                metadata={"k": "x" * 10233},
             )
+
+    def test_metadata_depth_cap(self):
+        """metadata nested more than 8 levels deep is rejected (#1811)."""
+        too_deep: dict = {"leaf": 1}
+        for _ in range(8):
+            too_deep = {"n": too_deep}
+        with pytest.raises(ValidationError, match="nests 9 levels deep"):
+            ServerUpdateRequest(server_name="srv", description="d", metadata=too_deep)
 
     def test_provider_structured(self):
         """provider parses to AgentProvider; bad structure raises ValidationError."""
@@ -316,10 +324,18 @@ class TestServerCardPatch:
             ServerCardPatch(external_tags=["x" * 65])
 
     def test_metadata_size_cap(self):
-        """metadata over 64 KB serialised JSON rejected; just-under accepted."""
-        ServerCardPatch(metadata={"k": "x" * (64 * 1024 - 16)})
-        with pytest.raises(ValidationError, match="at most 65536 bytes"):
-            ServerCardPatch(metadata={"k": "x" * (64 * 1024 + 1)})
+        """metadata of exactly 10,240 compact bytes is accepted; one more is not (#1811)."""
+        ServerCardPatch(metadata={"k": "x" * 10232})
+        with pytest.raises(ValidationError, match="over the limit of 10240 bytes"):
+            ServerCardPatch(metadata={"k": "x" * 10233})
+
+    def test_metadata_depth_cap(self):
+        """metadata nested more than 8 levels deep is rejected (#1811)."""
+        too_deep: dict = {"leaf": 1}
+        for _ in range(8):
+            too_deep = {"n": too_deep}
+        with pytest.raises(ValidationError, match="nests 9 levels deep"):
+            ServerCardPatch(metadata=too_deep)
 
     def test_provider_structured(self):
         """provider parses to AgentProvider; bad structure raises ValidationError."""

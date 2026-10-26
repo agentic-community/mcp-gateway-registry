@@ -79,6 +79,10 @@ from ..utils.metadata import (
     parse_and_validate_metadata_fields,
     project_metadata,
 )
+from ..utils.metadata_limits import (
+    MetadataLimitError,
+    validate_metadata_limits,
+)
 from ._etag_utils import parse_if_match, updated_ms, weak_etag_for_timestamp
 
 logger = logging.getLogger(__name__)
@@ -366,6 +370,31 @@ def _coerce_metadata_to_dict(parsed_metadata: Any, path: str) -> dict[str, Any]:
         type(parsed_metadata).__name__,
     )
     return {}
+
+
+def _metadata_limit_violation(
+    metadata: dict[str, Any],
+    path: str,
+) -> str | None:
+    """Return why ``metadata`` breaks the shared limits, or None if it fits.
+
+    The form-based registration and edit routes parse metadata from a JSON
+    string, so no Pydantic model sees it. Each calls this and answers 422 with
+    the returned message (issue #1811).
+
+    Args:
+        metadata: The parsed metadata document.
+        path: Server path, for the log line.
+
+    Returns:
+        The error message naming the broken limit, or None.
+    """
+    try:
+        validate_metadata_limits(metadata)
+    except MetadataLimitError as e:
+        logger.warning("metadata for %s rejected: %s", path, e)
+        return str(e)
+    return None
 
 
 async def _apply_tool_visibility(
@@ -1874,6 +1903,12 @@ async def register_service(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid JSON in metadata field",
             )
+        limit_error = _metadata_limit_violation(server_entry["metadata"], path)
+        if limit_error:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=limit_error,
+            )
 
     # Registration gate check (admission control, issue #809)
     # Called BEFORE credential encryption so sanitize() can strip plaintext fields
@@ -2184,6 +2219,12 @@ async def internal_register_service(
             return JSONResponse(
                 status_code=400,
                 content={"error": "Invalid metadata", "reason": "metadata must be valid JSON"},
+            )
+        limit_error = _metadata_limit_violation(server_entry["metadata"], path)
+        if limit_error:
+            return JSONResponse(
+                status_code=422,
+                content={"error": "Invalid metadata", "reason": limit_error},
             )
 
     # Registration gate check (admission control, issue #809)
@@ -2904,6 +2945,15 @@ async def edit_server_submit(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid JSON in metadata field",
+            )
+        limit_error = _metadata_limit_violation(
+            updated_server_entry["metadata"],
+            service_path,
+        )
+        if limit_error:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=limit_error,
             )
 
     # Registration gate check (admission control, issue #809)
@@ -4623,6 +4673,16 @@ async def register_service_api(
                     "error": "Invalid metadata",
                     "reason": "metadata must be valid JSON",
                     "detail": "Provide metadata as a JSON string",
+                },
+            )
+        limit_error = _metadata_limit_violation(server_entry["metadata"], path)
+        if limit_error:
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "error": "Invalid metadata",
+                    "reason": limit_error,
+                    "detail": "Reduce the metadata to fit the limit and register again",
                 },
             )
 

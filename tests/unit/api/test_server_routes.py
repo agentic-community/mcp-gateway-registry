@@ -4140,3 +4140,208 @@ class TestScanFailureDoesNotDisableServer:
         )
 
         service.toggle_service.assert_awaited_once_with("/test-server", False)
+
+
+# =============================================================================
+# TESTS — Metadata size and nesting limits on every form route (Issue #1811)
+# =============================================================================
+
+
+def _metadata_of_size(total_bytes: int) -> dict[str, str]:
+    """Return metadata whose compact UTF-8 JSON is exactly ``total_bytes``."""
+    # '{"k":""}' is 8 bytes of envelope around the value.
+    return {"k": "x" * (total_bytes - 8)}
+
+
+def _metadata_of_depth(depth: int) -> dict[str, Any]:
+    """Return metadata nested exactly ``depth`` containers deep."""
+    doc: dict[str, Any] = {"leaf": "value"}
+    for _ in range(depth - 1):
+        doc = {"n": doc}
+    return doc
+
+
+_AT_SIZE_LIMIT = _metadata_of_size(10240)
+_OVER_SIZE_LIMIT = _metadata_of_size(10241)
+_AT_DEPTH_LIMIT = _metadata_of_depth(8)
+_OVER_DEPTH_LIMIT = _metadata_of_depth(9)
+
+
+@pytest.mark.unit
+@pytest.mark.api
+@pytest.mark.servers
+class TestFormRouteMetadataLimits:
+    """Every form route that writes server metadata enforces the #1811 limits.
+
+    These routes parse metadata from a JSON string, so no Pydantic model sees
+    it; each one must check the limits itself and answer 422 before the
+    registration gate runs or anything is persisted.
+    """
+
+    _BASE_FORM = {
+        "name": "Limits Server",
+        "description": "Metadata limits test",
+        "path": "/limits-server",
+        "proxy_pass_url": "http://localhost:9000",
+    }
+
+    @staticmethod
+    def _stored(mock_server_service):
+        call_args = mock_server_service.register_server.call_args
+        return call_args.args[0] if call_args.args else call_args.kwargs.get("server_entry")
+
+    def _post_servers_register(self, client, metadata):
+        return client.post(
+            "/api/servers/register",
+            data={**self._BASE_FORM, "metadata": json.dumps(metadata)},
+        )
+
+    def _post_legacy_register(self, client, metadata):
+        with patch(
+            "registry.auth.dependencies.user_has_ui_permission_for_service",
+            return_value=True,
+        ):
+            return client.post(
+                "/api/register",
+                data={**self._BASE_FORM, "metadata": json.dumps(metadata)},
+            )
+
+    def _post_internal_register(self, client, metadata):
+        with (
+            patch.dict("os.environ", {"SECRET_KEY": "testpass"}),
+            patch("registry.utils.scopes_manager.update_server_scopes", new_callable=AsyncMock),
+        ):
+            token = generate_internal_token(subject="test-service", purpose="test")
+            return client.post(
+                "/api/internal/register",
+                data={**self._BASE_FORM, "metadata": json.dumps(metadata)},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+    @pytest.mark.parametrize(
+        "metadata",
+        [_AT_SIZE_LIMIT, _AT_DEPTH_LIMIT],
+        ids=["exactly-10240-bytes", "exactly-8-levels"],
+    )
+    def test_servers_register_accepts_metadata_at_the_limit(
+        self, test_client_admin, mock_server_service, metadata
+    ):
+        response = self._post_servers_register(test_client_admin, metadata)
+
+        assert response.status_code == 201
+        assert self._stored(mock_server_service)["metadata"] == metadata
+
+    @pytest.mark.parametrize(
+        ("metadata", "message"),
+        [
+            (_OVER_SIZE_LIMIT, "10241 bytes"),
+            (_OVER_DEPTH_LIMIT, "nests 9 levels deep"),
+        ],
+        ids=["one-byte-over", "nine-levels"],
+    )
+    def test_servers_register_rejects_metadata_over_the_limit(
+        self, test_client_admin, mock_server_service, metadata, message
+    ):
+        with patch("registry.api.server_routes.check_registration_gate") as gate:
+            response = self._post_servers_register(test_client_admin, metadata)
+
+        assert response.status_code == 422
+        assert message in response.json()["reason"]
+        gate.assert_not_called()
+        mock_server_service.register_server.assert_not_called()
+
+    def test_legacy_register_accepts_metadata_at_the_limit(
+        self, test_client_admin, mock_server_service
+    ):
+        response = self._post_legacy_register(test_client_admin, _AT_SIZE_LIMIT)
+
+        assert response.status_code == 201
+        assert self._stored(mock_server_service)["metadata"] == _AT_SIZE_LIMIT
+
+    @pytest.mark.parametrize(
+        ("metadata", "message"),
+        [
+            (_OVER_SIZE_LIMIT, "over the limit of 10240 bytes"),
+            (_OVER_DEPTH_LIMIT, "over the limit of 8"),
+        ],
+        ids=["one-byte-over", "nine-levels"],
+    )
+    def test_legacy_register_rejects_metadata_over_the_limit(
+        self, test_client_admin, mock_server_service, metadata, message
+    ):
+        response = self._post_legacy_register(test_client_admin, metadata)
+
+        assert response.status_code == 422
+        assert message in response.json()["detail"]
+        mock_server_service.register_server.assert_not_called()
+
+    def test_internal_register_accepts_metadata_at_the_limit(
+        self, test_client_no_auth, mock_server_service
+    ):
+        response = self._post_internal_register(test_client_no_auth, _AT_DEPTH_LIMIT)
+
+        assert response.status_code == 201
+        assert self._stored(mock_server_service)["metadata"] == _AT_DEPTH_LIMIT
+
+    def test_internal_register_rejects_metadata_over_the_limit(
+        self, test_client_no_auth, mock_server_service
+    ):
+        response = self._post_internal_register(test_client_no_auth, _OVER_SIZE_LIMIT)
+
+        assert response.status_code == 422
+        assert "over the limit of 10240 bytes" in response.json()["reason"]
+        mock_server_service.register_server.assert_not_called()
+
+    def test_edit_rejects_metadata_over_the_limit(self, test_client_admin, mock_server_service):
+        mock_server_service.get_server_info.return_value = {
+            "server_name": "Existing Remote",
+            "description": "http",
+            "path": "/remote-srv",
+            "deployment": "remote",
+            "proxy_pass_url": "http://upstream:9000",
+            "tags": [],
+            "auth_scheme": "none",
+            "registered_by": "admin",
+        }
+
+        response = test_client_admin.post(
+            "/api/edit/remote-srv",
+            headers={"accept": "application/json"},
+            data={
+                "name": "Existing Remote",
+                "description": "updated",
+                "proxy_pass_url": "http://upstream:9000",
+                "metadata": json.dumps(_OVER_DEPTH_LIMIT),
+            },
+        )
+
+        assert response.status_code == 422
+        assert "nests 9 levels deep" in response.json()["detail"]
+        mock_server_service.update_server.assert_not_called()
+
+    def test_edit_accepts_metadata_at_the_limit(self, test_client_admin, mock_server_service):
+        mock_server_service.get_server_info.return_value = {
+            "server_name": "Existing Remote",
+            "description": "http",
+            "path": "/remote-srv",
+            "deployment": "remote",
+            "proxy_pass_url": "http://upstream:9000",
+            "tags": [],
+            "auth_scheme": "none",
+            "registered_by": "admin",
+        }
+        mock_server_service.is_service_enabled.return_value = True
+
+        response = test_client_admin.post(
+            "/api/edit/remote-srv",
+            headers={"accept": "application/json"},
+            data={
+                "name": "Existing Remote",
+                "description": "updated",
+                "proxy_pass_url": "http://upstream:9000",
+                "metadata": json.dumps(_AT_SIZE_LIMIT),
+            },
+        )
+
+        assert response.status_code == 200
+        assert mock_server_service.update_server.call_args[0][1]["metadata"] == _AT_SIZE_LIMIT
