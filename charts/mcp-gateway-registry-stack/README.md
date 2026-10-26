@@ -783,23 +783,29 @@ version). The `helm diff` plugin has the same caveat.
 
 
 Existing clusters have a `keycloak-client-secret` that was written by the Job
-with `kubectl`, so it carries no Helm ownership metadata. `helm upgrade` (and
-ArgoCD's server-side apply) will refuse to adopt it:
+with `kubectl`, so it carries no Helm ownership metadata. The chart detects
+this and stops the upgrade before anything is applied, printing the commands
+to run with your release name and namespace filled in:
 
 ```
-Error: ... invalid ownership metadata; label validation error:
-missing key "app.kubernetes.io/managed-by": must be set to "Helm"
+Error: UPGRADE FAILED: execution error at (.../keycloak-client-secret.yaml):
+Secret keycloak-client-secret already exists in namespace <ns> but is not owned
+by a Helm release. ... Adopt it into release <release> (this keeps the current
+client secrets, so nobody has to log in again), then re-run the upgrade:
+  kubectl -n <ns> label secret keycloak-client-secret app.kubernetes.io/managed-by=Helm --overwrite
+  kubectl -n <ns> annotate secret keycloak-client-secret meta.helm.sh/release-name=<release> meta.helm.sh/release-namespace=<ns> --overwrite
 ```
 
-Adopt the existing Secret before upgrading — this keeps the current client
-secrets, so no re-login and no realm change:
+The running deployment is untouched while the upgrade is refused. Adopting the
+Secret keeps the current client secrets, so there is no re-login and no realm
+change:
 
 ```bash
 NS=mcp-gateway-registry
 RELEASE=mcp-gateway-registry
-kubectl -n "$NS" label secret keycloak-client-secret app.kubernetes.io/managed-by=Helm
+kubectl -n "$NS" label secret keycloak-client-secret app.kubernetes.io/managed-by=Helm --overwrite
 kubectl -n "$NS" annotate secret keycloak-client-secret \
-  meta.helm.sh/release-name="$RELEASE" meta.helm.sh/release-namespace="$NS"
+  meta.helm.sh/release-name="$RELEASE" meta.helm.sh/release-namespace="$NS" --overwrite
 ```
 
 With Helm (which can read the cluster), the chart then preserves the adopted
