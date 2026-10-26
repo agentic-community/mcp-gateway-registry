@@ -1,6 +1,7 @@
 """DocumentDB-based repository for hybrid search (text + vector)."""
 
 import asyncio
+import json
 import logging
 import math
 import re
@@ -13,6 +14,7 @@ from ...schemas.agent_models import AgentCard
 from ...utils.embedding_text import EmbeddingText
 from ...utils.embeddings_provider import default_retry_max_input_chars
 from ...utils.metadata import flatten_metadata_to_text
+from ...utils.metadata_security import metadata_for_index
 from ...utils.vector import cosine_similarity
 from ..interfaces import SearchRepositoryBase
 from .client import get_collection_name, get_documentdb_client
@@ -522,6 +524,43 @@ def _grade_matching_tools(
         )
 
     return graded
+
+
+def _as_stored(
+    value: Any,
+) -> str:
+    """Canonical JSON for comparing an index copy with the one about to be written."""
+    return json.dumps(value, sort_keys=True, default=str)
+
+
+async def _refresh_unchanged_entry(
+    collection: Any,
+    path: str,
+    existing: dict[str, Any],
+    is_enabled: bool,
+    metadata_text: str,
+    stored_copy: dict[str, Any],
+) -> None:
+    """Update an entry whose embedding is current but whose other fields may not be.
+
+    ``content_hash`` covers only the embedding text, and agent metadata is not
+    part of that text. Without this, an unchanged hash would keep an old
+    ``metadata_text`` and stored record copy in the index after the metadata
+    changed or a key was flagged (issue #1811). The copy is compared on its
+    own, because different metadata can flatten to the same text
+    (``["platform", "west"]`` and ``"platform west"``), and a skill's copy
+    holds fields that are in neither the hash nor the text.
+    """
+    refresh: dict[str, Any] = {}
+    if existing.get("is_enabled") != is_enabled:
+        refresh["is_enabled"] = is_enabled
+    if existing.get("metadata_text") != metadata_text or _as_stored(
+        existing.get("metadata")
+    ) != _as_stored(stored_copy):
+        refresh["metadata_text"] = metadata_text
+        refresh["metadata"] = stored_copy
+    if refresh:
+        await collection.update_one({"_id": path}, {"$set": refresh})
 
 
 def _build_status_filter(
@@ -1070,11 +1109,15 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
         for tool in server_info.get("tool_list") or []:
             embedding_text.items.append((tool.get("name") or "", tool.get("description") or ""))
 
-        # Include custom metadata key-value pairs in embedding text
-        metadata = server_info.get("metadata", {})
-        if isinstance(metadata, dict) and metadata:
+        # Include custom metadata key-value pairs in embedding text. Only keys a
+        # fresh YARA scan did not flag; none when the scan failed (#1811).
+        metadata = metadata_for_index(server_info.get("metadata"), "server") or {}
+        if metadata:
             for key, value in metadata.items():
                 embedding_text.tail.append(f"{key}: {value}")
+        metadata_text = flatten_metadata_to_text(metadata)
+        stored_copy = {**server_info, "metadata": metadata}
+        stored_copy.pop("metadata_scan", None)
 
         text_for_embedding = embedding_text.full()
         content_hash = hashlib.sha256(text_for_embedding.encode()).hexdigest()[:16]
@@ -1083,20 +1126,24 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
         if skip_if_unchanged:
             existing = await collection.find_one(
                 {"_id": path},
-                {"content_hash": 1, "is_enabled": 1, "embedding": 1},
+                {
+                    "content_hash": 1,
+                    "is_enabled": 1,
+                    "embedding": 1,
+                    "metadata_text": 1,
+                    "metadata": 1,
+                },
             )
             if (
                 existing
                 and existing.get("content_hash") == content_hash
                 and existing.get("embedding")
             ):
-                # Content unchanged and embedding exists; just update is_enabled if needed
-                if existing.get("is_enabled") != is_enabled:
-                    await collection.update_one({"_id": path}, {"$set": {"is_enabled": is_enabled}})
+                # Content unchanged and embedding exists; refresh the rest if needed
+                await _refresh_unchanged_entry(
+                    collection, path, existing, is_enabled, metadata_text, stored_copy
+                )
                 return True
-
-        # Flatten metadata into a searchable text field for keyword matching
-        metadata_text = flatten_metadata_to_text(metadata)
 
         embedding = await self._embed_with_trim_retry(
             embedding_text,
@@ -1126,7 +1173,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
                 }
                 for t in server_info.get("tool_list") or []
             ],
-            "metadata": server_info,
+            "metadata": stored_copy,
             "indexed_at": server_info.get("updated_at", server_info.get("registered_at")),
         }
 
@@ -1175,28 +1222,39 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
         text_for_embedding = embedding_text.full()
         content_hash = hashlib.sha256(text_for_embedding.encode()).hexdigest()[:16]
 
+        # Flatten agent metadata for keyword search: only keys a fresh YARA scan
+        # did not flag, and none when the scan failed (#1811).
+        agent_metadata = metadata_for_index(getattr(agent_card, "metadata", None), "agent") or {}
+        agent_metadata_text = flatten_metadata_to_text(agent_metadata)
+        stored_card = agent_card.model_dump(mode="json")
+        stored_card["metadata"] = agent_metadata
+        stored_card.pop("metadata_scan", None)
+
         if skip_if_unchanged:
             existing = await collection.find_one(
                 {"_id": path},
-                {"content_hash": 1, "is_enabled": 1, "embedding": 1},
+                {
+                    "content_hash": 1,
+                    "is_enabled": 1,
+                    "embedding": 1,
+                    "metadata_text": 1,
+                    "metadata": 1,
+                },
             )
             if (
                 existing
                 and existing.get("content_hash") == content_hash
                 and existing.get("embedding")
             ):
-                if existing.get("is_enabled") != is_enabled:
-                    await collection.update_one({"_id": path}, {"$set": {"is_enabled": is_enabled}})
+                await _refresh_unchanged_entry(
+                    collection, path, existing, is_enabled, agent_metadata_text, stored_card
+                )
                 return True
 
         embedding = await self._embed_with_trim_retry(
             embedding_text,
             context=f"agent {agent_card.name!r}",
         )
-
-        # Flatten agent metadata for keyword search
-        agent_metadata = getattr(agent_card, "metadata", None) or {}
-        agent_metadata_text = flatten_metadata_to_text(agent_metadata)
 
         doc = {
             "_id": path,
@@ -1213,7 +1271,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             "embedding": embedding,
             "embedding_metadata": embedding_config.get_embedding_metadata(),
             "capabilities": agent_card.capabilities or [],
-            "metadata": agent_card.model_dump(mode="json"),
+            "metadata": stored_card,
             "indexed_at": agent_card.updated_at or agent_card.registered_at,
         }
 
@@ -1250,6 +1308,12 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
 
         collection = await self._get_collection()
 
+        # Only metadata a fresh YARA scan did not flag; none when it failed (#1811).
+        safe_metadata = metadata_for_index(skill.metadata, "skill") or {}
+        meta_author = safe_metadata.get("author")
+        meta_version = safe_metadata.get("version")
+        meta_extra = safe_metadata.get("extra") or {}
+
         # Compose text for embedding
         text_parts = [
             skill.name,
@@ -1265,11 +1329,11 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
         if skill.target_agents:
             text_parts.append(f"For: {', '.join(skill.target_agents)}")
 
-        if skill.metadata and skill.metadata.author:
-            text_parts.append(f"Author: {skill.metadata.author}")
+        if meta_author:
+            text_parts.append(f"Author: {meta_author}")
 
-        if skill.metadata and skill.metadata.extra:
-            extra_text = flatten_metadata_to_text(skill.metadata.extra)
+        if meta_extra:
+            extra_text = flatten_metadata_to_text(meta_extra)
             if extra_text:
                 text_parts.append(extra_text)
 
@@ -1278,18 +1342,48 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
         text_for_embedding = embedding_text.full()
         content_hash = hashlib.sha256(text_for_embedding.encode()).hexdigest()[:16]
 
+        # Flatten skill metadata for keyword search
+        skill_metadata_parts = []
+        if meta_author:
+            skill_metadata_parts.append(f"author {meta_author}")
+        if meta_version:
+            skill_metadata_parts.append(f"version {meta_version}")
+        if meta_extra:
+            extra_text = flatten_metadata_to_text(meta_extra)
+            if extra_text:
+                skill_metadata_parts.append(extra_text)
+        if skill.registry_name:
+            skill_metadata_parts.append(f"registry {skill.registry_name}")
+        skill_metadata_text = " ".join(skill_metadata_parts)
+        stored_metadata = {
+            "skill_md_url": str(skill.skill_md_url),
+            "skill_md_raw_url": str(skill.skill_md_raw_url) if skill.skill_md_raw_url else None,
+            "author": meta_author,
+            "version": meta_version,
+            "compatibility": skill.compatibility,
+            "target_agents": skill.target_agents or [],
+            "registry_name": skill.registry_name,
+        }
+
         if skip_if_unchanged:
             existing = await collection.find_one(
                 {"_id": path},
-                {"content_hash": 1, "is_enabled": 1, "embedding": 1},
+                {
+                    "content_hash": 1,
+                    "is_enabled": 1,
+                    "embedding": 1,
+                    "metadata_text": 1,
+                    "metadata": 1,
+                },
             )
             if (
                 existing
                 and existing.get("content_hash") == content_hash
                 and existing.get("embedding")
             ):
-                if existing.get("is_enabled") != is_enabled:
-                    await collection.update_one({"_id": path}, {"$set": {"is_enabled": is_enabled}})
+                await _refresh_unchanged_entry(
+                    collection, path, existing, is_enabled, skill_metadata_text, stored_metadata
+                )
                 return True
 
         embedding = await self._embed_with_trim_retry(
@@ -1301,20 +1395,6 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
         visibility_value = skill.visibility
         if hasattr(visibility_value, "value"):
             visibility_value = visibility_value.value
-
-        # Flatten skill metadata for keyword search
-        skill_metadata_parts = []
-        if skill.metadata and skill.metadata.author:
-            skill_metadata_parts.append(f"author {skill.metadata.author}")
-        if skill.metadata and skill.metadata.version:
-            skill_metadata_parts.append(f"version {skill.metadata.version}")
-        if skill.metadata and skill.metadata.extra:
-            extra_text = flatten_metadata_to_text(skill.metadata.extra)
-            if extra_text:
-                skill_metadata_parts.append(extra_text)
-        if skill.registry_name:
-            skill_metadata_parts.append(f"registry {skill.registry_name}")
-        skill_metadata_text = " ".join(skill_metadata_parts)
 
         # Build search document
         search_doc = {
@@ -1338,15 +1418,7 @@ class DocumentDBSearchRepository(SearchRepositoryBase):
             "content_hash": content_hash,
             "embedding": embedding,
             "embedding_metadata": embedding_config.get_embedding_metadata(),
-            "metadata": {
-                "skill_md_url": str(skill.skill_md_url),
-                "skill_md_raw_url": str(skill.skill_md_raw_url) if skill.skill_md_raw_url else None,
-                "author": skill.metadata.author if skill.metadata else None,
-                "version": skill.metadata.version if skill.metadata else None,
-                "compatibility": skill.compatibility,
-                "target_agents": skill.target_agents or [],
-                "registry_name": skill.registry_name,
-            },
+            "metadata": stored_metadata,
             "indexed_at": skill.updated_at or skill.created_at,
         }
 
