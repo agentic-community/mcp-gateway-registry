@@ -85,6 +85,7 @@ from ..utils.metadata import (
     parse_and_validate_metadata_fields,
     project_metadata,
 )
+from ..utils.metadata_security import operator_metadata_security
 from ..utils.path_utils import normalize_skill_path
 
 # Configure logging
@@ -294,6 +295,9 @@ async def list_skills(
                 author=s.metadata.author if s.metadata else None,
                 version=s.metadata.version if s.metadata else None,
                 metadata=s.metadata,
+                metadata_security=operator_metadata_security(
+                    s.metadata, getattr(s, "metadata_scan", None), "skill"
+                ),
                 compatibility=s.compatibility,
                 target_agents=s.target_agents,
                 is_enabled=s.is_enabled,

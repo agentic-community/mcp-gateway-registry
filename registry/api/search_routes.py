@@ -23,6 +23,10 @@ from ..services.server_service import server_service
 from ..services.tool_blocks import blocked_names_for, hide_blocked_tools
 from ..services.virtual_server_service import get_virtual_server_service
 from ..utils.metadata import parse_and_validate_metadata_fields, project_metadata
+from ..utils.metadata_security import (
+    model_facing_metadata,
+    sanitize_agent_card_for_model,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -866,8 +870,15 @@ async def semantic_search(
                 local_runtime=server_local_runtime,
                 record_kind=(server_full_info or {}).get("record_kind"),
                 ard_source_url=(server_full_info or {}).get("ard_source_url"),
+                # Search is model-facing: flagged keys are withheld even when
+                # named, and all metadata without a current verdict (#1811).
                 metadata=(
-                    project_metadata((server_full_info or {}).get("metadata"), _metadata_paths)
+                    model_facing_metadata(
+                        project_metadata((server_full_info or {}).get("metadata"), _metadata_paths),
+                        (server_full_info or {}).get("metadata"),
+                        (server_full_info or {}).get("metadata_scan"),
+                        "server",
+                    )
                     if _metadata_paths is not None
                     else None
                 ),
@@ -966,9 +977,17 @@ async def semantic_search(
         trust_verified = _compute_trust_verified(ans_meta)
 
         # Apply metadata projection to the agent_card if requested (Issue #1277)
+        stored_agent_metadata = agent_card_dict.get("metadata") if agent_card_dict else None
+        stored_agent_verdict = agent_card_dict.get("metadata_scan") if agent_card_dict else None
         if _metadata_paths is not None and agent_card_dict:
             agent_card_dict["metadata"] = project_metadata(
                 agent_card_dict.get("metadata"), _metadata_paths
+            )
+        # Model-facing: withhold flagged keys, and all of them without a
+        # current verdict; drop the operator-only verdict itself (#1811).
+        if agent_card_dict:
+            sanitize_agent_card_for_model(
+                agent_card_dict, stored_agent_metadata, stored_agent_verdict
             )
 
         filtered_agents.append(
@@ -1046,7 +1065,12 @@ async def semantic_search(
                 raw_meta = full_doc.get("metadata", {})
                 # SkillMetadata is stored as {"author":..,"version":..,"extra":{..}}
                 if isinstance(raw_meta, dict):
-                    skill_result.metadata = project_metadata(raw_meta, _metadata_paths)
+                    skill_result.metadata = model_facing_metadata(
+                        project_metadata(raw_meta, _metadata_paths),
+                        raw_meta,
+                        full_doc.get("metadata_scan"),
+                        "skill",
+                    )
                 else:
                     skill_result.metadata = project_metadata({}, _metadata_paths)
             else:

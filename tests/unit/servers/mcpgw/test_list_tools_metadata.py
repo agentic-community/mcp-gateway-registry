@@ -47,6 +47,9 @@ from servers.mcpgw.server import (  # noqa: E402
 
 OWNERSHIP = {"owner_person": "someone@example.com", "owner_team": "platform"}
 
+# The registry's operator-facing verdict for a record with clean metadata (#1811).
+CLEAN_VERDICT = {"status": "clean", "flagged_keys": [], "findings": []}
+
 # Registrant-controlled text written to steer a model that reads the listing.
 INJECTED_METADATA = {
     "owner_team": "platform",
@@ -101,6 +104,7 @@ async def test_list_services_keeps_requested_server_metadata():
                 "description": "Billing tools",
                 "is_enabled": True,
                 "metadata": OWNERSHIP,
+                "metadata_security": CLEAN_VERDICT,
             }
         ]
     }
@@ -115,7 +119,16 @@ async def test_list_services_keeps_requested_server_metadata():
 
 @pytest.mark.asyncio
 async def test_list_agents_keeps_requested_agent_metadata():
-    payload = {"agents": [{"name": "sre", "description": "SRE agent", "metadata": OWNERSHIP}]}
+    payload = {
+        "agents": [
+            {
+                "name": "sre",
+                "description": "SRE agent",
+                "metadata": OWNERSHIP,
+                "metadata_security": CLEAN_VERDICT,
+            }
+        ]
+    }
 
     result = await _call_with_mocked_get(
         list_agents, payload, metadata_fields="owner_person,owner_team"
@@ -135,6 +148,7 @@ async def test_list_skills_keeps_requested_skill_metadata():
                 "name": "deploy",
                 "description": "Deploy a service",
                 "metadata": skill_metadata,
+                "metadata_security": CLEAN_VERDICT,
             }
         ]
     }
@@ -443,3 +457,119 @@ async def test_search_registry_keeps_requested_agent_card_metadata():
 
     assert capture["json"]["metadata_fields"] == "owner_team"
     assert result["agents"][0]["agent_card"]["metadata"] == {"owner_team": "platform"}
+
+
+# ---------------------------------------------------------------------------
+# Requested metadata still obeys the registry's YARA verdict (issue #1811)
+# ---------------------------------------------------------------------------
+
+
+def _server_with_security(metadata, security):
+    record = _server_record(metadata)
+    if security is not None:
+        record["metadata_security"] = security
+    return record
+
+
+@pytest.mark.asyncio
+async def test_flagged_key_is_removed_even_when_requested():
+    metadata = {**OWNERSHIP, "note": INJECTED_METADATA["note"]}
+    security = {"status": "flagged", "flagged_keys": [["note"]]}
+    payload = {"servers": [_server_with_security(metadata, security)]}
+
+    result = await _call_with_mocked_get(
+        list_services, payload, metadata_fields="note,owner_team,owner_person"
+    )
+
+    assert result["services"][0]["metadata"] == OWNERSHIP
+    assert "IGNORE ALL PREVIOUS INSTRUCTIONS" not in json.dumps(result)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "security",
+    [
+        None,
+        {"status": "unscanned"},
+        {"status": "stale", "flagged_keys": []},
+        {"status": "failed"},
+        {"status": "something-new"},
+        {"status": "flagged", "flagged_keys": "note"},
+        {"status": "flagged", "flagged_keys": [[]]},
+        "clean",
+    ],
+    ids=[
+        "missing",
+        "unscanned",
+        "stale",
+        "failed",
+        "unknown-status",
+        "malformed-keys",
+        "empty-key-path",
+        "not-an-object",
+    ],
+)
+async def test_unverified_metadata_is_withheld(security):
+    """Fail closed: no current verdict means no metadata reaches the model."""
+    payload = {"servers": [_server_with_security(OWNERSHIP, security)]}
+
+    result = await _call_with_mocked_get(list_services, payload, metadata_fields="owner_team")
+
+    assert result["status"] == "success"
+    assert result["services"][0]["metadata"] is None
+    assert result["services"][0]["path"] == "/billing"
+
+
+@pytest.mark.asyncio
+async def test_scanning_disabled_returns_requested_metadata():
+    payload = {"servers": [_server_with_security(OWNERSHIP, {"status": "disabled"})]}
+
+    result = await _call_with_mocked_get(list_services, payload, metadata_fields="owner_team")
+
+    assert result["services"][0]["metadata"] == OWNERSHIP
+
+
+@pytest.mark.asyncio
+async def test_flagged_skill_extra_key_is_removed():
+    payload = {
+        "skills": [
+            {
+                "path": "/skills/deploy",
+                "name": "deploy",
+                "metadata": {"author": "a", "extra": {"team": "x", "setup": "bad"}},
+                "metadata_security": {"status": "flagged", "flagged_keys": [["extra", "setup"]]},
+            }
+        ]
+    }
+
+    result = await _call_with_mocked_get(list_skills, payload, metadata_fields="author,extra")
+
+    assert result["skills"][0]["metadata"] == {"author": "a", "extra": {"team": "x"}}
+
+
+@pytest.mark.asyncio
+async def test_flagged_agent_key_is_removed():
+    payload = {
+        "agents": [
+            {
+                "name": "sre",
+                "metadata": {**OWNERSHIP, "note": "bad"},
+                "metadata_security": {"status": "flagged", "flagged_keys": [["note"]]},
+            }
+        ]
+    }
+
+    result = await _call_with_mocked_get(list_agents, payload, metadata_fields="note,owner_team")
+
+    assert result["agents"][0]["metadata"] == OWNERSHIP
+
+
+@pytest.mark.asyncio
+async def test_verdict_details_never_reach_the_model():
+    security = {"status": "flagged", "flagged_keys": [["note"]], "findings": [{"rule": "x"}]}
+    payload = {"servers": [_server_with_security({"note": "bad", "a": "b"}, security)]}
+
+    result = await _call_with_mocked_get(list_services, payload, metadata_fields="a")
+
+    assert "metadata_security" not in result["services"][0]
+    assert "findings" not in json.dumps(result)

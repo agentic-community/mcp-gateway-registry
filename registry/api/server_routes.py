@@ -84,6 +84,7 @@ from ..utils.metadata_limits import (
     parse_metadata_json,
     validate_metadata_limits,
 )
+from ..utils.metadata_security import operator_metadata_security
 from ._etag_utils import parse_if_match, updated_ms, weak_etag_for_timestamp
 
 logger = logging.getLogger(__name__)
@@ -1143,6 +1144,13 @@ async def get_servers_json(
                     "last_checked_iso": health_data["last_checked_iso"],
                     "mcp_endpoint": server_info.get("mcp_endpoint"),
                     "metadata": project_metadata(server_info.get("metadata", {}), _metadata_paths),
+                    # Operator-facing: all metadata plus its YARA verdict (#1811).
+                    # Model-facing callers (mcpgw) use this to drop flagged keys.
+                    "metadata_security": operator_metadata_security(
+                        server_info.get("metadata"),
+                        server_info.get("metadata_scan"),
+                        "server",
+                    ),
                     "version": current_version,
                     "versions": versions if len(versions) > 1 else None,
                     "default_version": current_version,
@@ -3253,6 +3261,13 @@ async def get_server_details(
     # access but a restricted tool set must not see tool names outside that
     # set. filter_tools_for_user fails closed and passes through admin/wildcard.
     await _apply_tool_visibility(server_info, service_path, user_context, endpoint="server_details")
+
+    # Operator-facing YARA verdict for the full metadata, before projection (#1811).
+    server_info["metadata_security"] = operator_metadata_security(
+        server_info.get("metadata"),
+        server_info.get("metadata_scan"),
+        "server",
+    )
 
     # Apply metadata projection if requested (Issue #1277)
     _metadata_paths = parse_and_validate_metadata_fields(metadata_fields)
