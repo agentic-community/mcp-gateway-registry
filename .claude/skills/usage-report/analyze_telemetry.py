@@ -21,6 +21,7 @@ from datetime import datetime, timedelta
 
 from cloud_labels import cloud_label
 from internal_instances import load_internal_instance_ids
+from version_labels import is_release_version
 
 # Configure logging with basicConfig
 logging.basicConfig(
@@ -59,12 +60,12 @@ def _safe_int(
 def _classify_version(
     version: str,
 ) -> str:
-    """Classify a version string as release or dev."""
+    """Classify a version string as release or dev (see version_labels.py)."""
     if not version:
         return "unknown"
-    if version.startswith("v1.0.17") or version.startswith("v0."):
-        return "dev"
-    return "release"
+    if is_release_version(version):
+        return "release"
+    return "dev"
 
 
 def _extract_version_branch(
@@ -79,6 +80,22 @@ def _extract_version_branch(
         # Skip version, count, hash -- rest is branch
         return "-".join(parts[3:])
     return version
+
+
+def _version_type_label(
+    version: str,
+    vtype: str,
+) -> str:
+    """Return the Type cell for the Version Adoption table."""
+    if vtype == "release":
+        return "**Release**"
+    if vtype == "unknown":
+        return "Unknown"
+    branch = _extract_version_branch(version)
+    # A bare commit hash has no branch part, so repeating it adds nothing.
+    if branch == version:
+        return "Build"
+    return f"Build ({branch})"
 
 
 def _format_pct(
@@ -1748,13 +1765,12 @@ def _compute_version_table(
     result = []
     for version, count in version_events.most_common():
         vtype = _classify_version(version)
-        branch = _extract_version_branch(version) if vtype == "dev" else "--"
         instance_count = len(version_instances.get(version, set()))
 
         result.append(
             {
                 "version": version,
-                "type": "**Release**" if vtype == "release" else f"Dev ({branch})",
+                "type": _version_type_label(version, vtype),
                 "events": count,
                 "percentage": _format_pct(count, total_events),
                 "instances": instance_count,
@@ -1914,50 +1930,66 @@ def _compute_search_stats(
     }
 
 
+def _group_rows_by_instance(
+    rows: list[dict[str, str]],
+) -> dict[str, list[dict[str, str]]]:
+    """Group rows by registry_id, each group sorted by timestamp ascending."""
+    groups: dict[str, list[dict[str, str]]] = defaultdict(list)
+    for row in rows:
+        rid = (row.get("registry_id") or "").strip()
+        if rid:
+            groups[rid].append(row)
+    for events in groups.values():
+        events.sort(key=lambda e: e.get("ts", ""))
+    return groups
+
+
+def _feature_row(
+    feature: str,
+    enabled: int,
+    total: int,
+) -> dict:
+    """Build one Feature Adoption row from instance counts."""
+    return {
+        "feature": feature,
+        "enabled": enabled,
+        "disabled": total - enabled,
+        "rate": _format_pct(enabled, total),
+    }
+
+
 def _compute_feature_adoption(
     rows: list[dict[str, str]],
 ) -> list[dict]:
-    """Compute feature adoption rates."""
-    total = len(rows)
+    """Compute feature adoption as a share of unique instances.
 
-    fed_enabled = sum(1 for r in rows if r.get("federation", "").strip().lower() == "true")
-    with_gw = sum(1 for r in rows if r.get("mode") == "with-gateway")
-    reg_only = sum(1 for r in rows if r.get("mode") == "registry-only")
+    Each instance counts once, using its latest non-empty value for the field.
+    Counting events instead let long-running instances that restart often
+    dominate the totals, and showed federation at 0% of the fleet.
+    """
+    groups = _group_rows_by_instance(rows)
+    total = len(groups)
+
+    fed_enabled = 0
+    with_gw = 0
+    reg_only = 0
+    heartbeat_instances = 0
+    for events in groups.values():
+        if _latest_nonempty(events, "federation").lower() == "true":
+            fed_enabled += 1
+        mode = _latest_nonempty(events, "mode")
+        if mode == "with-gateway":
+            with_gw += 1
+        elif mode == "registry-only":
+            reg_only += 1
+        if any(e.get("event") == "heartbeat" for e in events):
+            heartbeat_instances += 1
 
     return [
-        {
-            "feature": "Federation",
-            "enabled": fed_enabled,
-            "disabled": total - fed_enabled,
-            "rate": _format_pct(fed_enabled, total),
-        },
-        {
-            "feature": "with-gateway mode",
-            "enabled": with_gw,
-            "disabled": total - with_gw,
-            "rate": _format_pct(with_gw, total),
-        },
-        {
-            "feature": "registry-only mode",
-            "enabled": reg_only,
-            "disabled": total - reg_only,
-            "rate": _format_pct(reg_only, total),
-        },
-        {
-            "feature": "Heartbeat (opt-out, on by default)",
-            "enabled": len(
-                {
-                    r.get("registry_id", "").strip()
-                    for r in rows
-                    if r.get("event") == "heartbeat" and r.get("registry_id", "").strip()
-                }
-            ),
-            "disabled": total - sum(1 for r in rows if r.get("event") == "heartbeat"),
-            "rate": _format_pct(
-                sum(1 for r in rows if r.get("event") == "heartbeat"),
-                total,
-            ),
-        },
+        _feature_row("Federation", fed_enabled, total),
+        _feature_row("with-gateway mode", with_gw, total),
+        _feature_row("registry-only mode", reg_only, total),
+        _feature_row("Heartbeat (opt-out, on by default)", heartbeat_instances, total),
     ]
 
 

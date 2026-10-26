@@ -25,7 +25,6 @@ import csv
 import json
 import logging
 import os
-import re
 from collections import defaultdict
 from datetime import datetime
 
@@ -42,6 +41,7 @@ import seaborn as sns  # noqa: E402
 _sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from internal_instances import load_internal_instance_ids  # noqa: E402
 from tufte_style import apply_tufte_style, tufte_axes  # noqa: E402
+from version_labels import is_release_version  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -55,10 +55,6 @@ FIGURE_WIDTH: int = 14
 FIGURE_HEIGHT: int = 7
 LINE_PALETTE: str = "Set2"
 
-# A clean release tag: optional leading v, MAJOR.MINOR.PATCH, optional -pN suffix.
-# Anything else (git-describe, commit hashes, dev, branch-suffixed) is internal.
-_RELEASE_RE = re.compile(r"^v?\d+\.\d+\.\d+(-p\d+)?$")
-
 CLASS_COMMUNITY: str = "community"
 CLASS_INTERNAL: str = "internal"
 CLASS_UNKNOWN: str = "unknown"
@@ -71,7 +67,7 @@ def _classify_version(
     v = (version or "").strip()
     if not v:
         return CLASS_UNKNOWN
-    if _RELEASE_RE.match(v):
+    if is_release_version(v):
         return CLASS_COMMUNITY
     return CLASS_INTERNAL
 
