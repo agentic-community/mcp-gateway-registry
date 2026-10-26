@@ -24,6 +24,7 @@ from ...exceptions import (
     SkillServiceError,
 )
 from ...schemas.skill_models import SkillCard
+from ...utils.metadata_security import stamp_metadata_scan
 from ...utils.url_normalize import (
     ENTITY_TYPE_SKILL,
     NORMALIZED_IDENTITY_URL_FIELD,
@@ -63,6 +64,10 @@ def _skill_to_document(
     """
     doc = skill.model_dump(mode="json")
     doc["_id"] = skill.path
+    # The verdict is computed from the metadata being written, never taken
+    # from the caller (issue #1811).
+    stamp_metadata_scan(doc, "skill")
+    skill.metadata_scan = doc.get("metadata_scan")
     normalized = derive_normalized_identity_url(doc, ENTITY_TYPE_SKILL)
     if normalized is not None:
         doc[NORMALIZED_IDENTITY_URL_FIELD] = normalized
@@ -410,6 +415,7 @@ class DocumentDBSkillRepository(SkillRepositoryBase):
         await self.ensure_indexes()
         collection = await self._get_collection()
         updates["updated_at"] = datetime.utcnow().isoformat()
+        stamp_metadata_scan(updates, "skill")
 
         # Keep the normalized sidecar in sync when this update touches
         # skill_md_url. If skill_md_url isn't in the patch we leave the
@@ -519,6 +525,7 @@ class DocumentDBSkillRepository(SkillRepositoryBase):
         count = 0
         for path, update_data in updates.items():
             update_data["updated_at"] = datetime.utcnow().isoformat()
+            stamp_metadata_scan(update_data, "skill")
             result = await collection.update_one({"_id": path}, {"$set": update_data}, upsert=True)
             if result.modified_count > 0 or result.upserted_id:
                 count += 1

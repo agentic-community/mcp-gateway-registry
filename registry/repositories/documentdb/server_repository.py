@@ -11,6 +11,11 @@ from pymongo.errors import DuplicateKeyError
 
 from ...exceptions import AssetIdConflictError
 from ...utils.metadata import build_metadata_set_stage, project_metadata
+from ...utils.metadata_security import (
+    metadata_field_unset,
+    metadata_field_update,
+    stamp_metadata_scan,
+)
 from ...utils.url_normalize import ENTITY_TYPE_SERVER, NORMALIZED_IDENTITY_URL_FIELD
 from ..interfaces import ServerRepositoryBase
 from ._identity_url_sidecar import (
@@ -375,6 +380,9 @@ class DocumentDBServerRepository(ServerRepositoryBase):
         server_info["registered_at"] = datetime.utcnow().isoformat()
         server_info["updated_at"] = datetime.utcnow().isoformat()
         server_info.setdefault("is_enabled", False)
+        # The verdict is computed from the metadata being written, never taken
+        # from the caller (issue #1811).
+        stamp_metadata_scan(server_info, "server")
 
         try:
             doc = {**server_info}
@@ -456,7 +464,13 @@ class DocumentDBServerRepository(ServerRepositoryBase):
             doc.pop("path", None)
             if updated_fields is not None:
                 field_set = set(updated_fields) | {"updated_at"}
+                # A metadata write always carries its verdict (issue #1811).
+                if "metadata" in field_set:
+                    field_set.add("metadata_scan")
                 doc = {k: v for k, v in doc.items() if k in field_set}
+            stamp_metadata_scan(doc, "server")
+            if "metadata_scan" in doc:
+                server_info["metadata_scan"] = doc["metadata_scan"]
             populate_normalized_identity_url(doc, ENTITY_TYPE_SERVER)
             unset_ops: dict[str, str] = {}
             # update() may carry no proxy_pass_url at all (a partial
@@ -720,7 +734,13 @@ class DocumentDBServerRepository(ServerRepositoryBase):
         field: str,
         value: Any,
     ) -> bool:
-        """Update a single field on a document."""
+        """Update a single field on a document.
+
+        Raises:
+            ValueError: If ``field`` is ``metadata_scan`` (set or unset), which
+                is only ever written together with the metadata it was
+                computed for.
+        """
         collection = await self._get_collection()
         # Match either slash variant, like get()/update().
         path_filter = {"_id": {"$in": self._path_variants(path)}}
@@ -728,12 +748,12 @@ class DocumentDBServerRepository(ServerRepositoryBase):
         if value is None:
             result = await collection.update_one(
                 path_filter,
-                {"$unset": {field: ""}},
+                {"$unset": metadata_field_unset(field)},
             )
         else:
             result = await collection.update_one(
                 path_filter,
-                {"$set": {field: value}},
+                {"$set": metadata_field_update(field, value, "server")},
             )
 
         return result.modified_count > 0
