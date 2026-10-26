@@ -455,6 +455,10 @@ spec:
             # filter, for the same reason as above: false must reach the pod.
             - name: SECURITY_BLOCK_ON_SCAN_FAILURE
               value: {{ .Values.app.securityBlockOnScanFailure | toString | quote }}
+            # Registrant metadata scanning (issue #1811). No `default` filter, so
+            # false reaches the pod.
+            - name: METADATA_SCAN_ENABLED
+              value: {{ .Values.app.metadataScanEnabled | toString | quote }}
             # Embeddings IdP auth (issue #1415). Rendered only when authMode is set,
             # so default deployments are unchanged. EMBEDDINGS_IDP_CLIENT_SECRET is
             # sourced from a pre-created Secret (embeddings.idpClientSecretExistingSecret).
