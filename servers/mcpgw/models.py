@@ -26,8 +26,8 @@ class ServerInfo(BaseModel):
         None,
         description=(
             "Free-form metadata the registrant attached to the server, e.g. ownership "
-            "or provenance. Returned in full by the list API unless the caller narrows "
-            "it with metadata_fields"
+            "or provenance. Null unless the caller names the keys to return with "
+            "metadata_fields"
         ),
     )
 
