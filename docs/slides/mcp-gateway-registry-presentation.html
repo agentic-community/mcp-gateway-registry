@@ -279,43 +279,6 @@
         .feature-card.blue { border-left-color: #64748b; }
         .feature-card.teal { border-left-color: #94a3b8; }
 
-        /* === ARCHITECTURE DIAGRAM === */
-        .arch-diagram {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: clamp(0.5rem, 2vw, 1.5rem);
-            flex-wrap: wrap;
-        }
-        .arch-box {
-            background: #f8f9fa;
-            border: 2px solid #e2e8f0;
-            padding: clamp(0.5rem, 1.5vw, 1rem);
-            border-radius: 8px;
-            text-align: center;
-            min-width: clamp(80px, 12vw, 140px);
-        }
-        .arch-box.highlight {
-            border-color: #1a1a1a;
-            background: #f1f5f9;
-        }
-        .arch-box .box-label {
-            font-size: var(--small-size);
-            color: #94a3b8;
-            display: block;
-        }
-        .arch-box .box-title {
-            font-size: clamp(0.7rem, 1.3vw, 0.95rem);
-            font-weight: 600;
-            color: #1a1a1a;
-            display: block;
-        }
-        .arch-arrow {
-            font-size: clamp(1.2rem, 2.5vw, 2rem);
-            color: #475569;
-            font-weight: 700;
-        }
-
         /* === HIGHLIGHT BOX === */
         .highlight-box {
             background: #f1f5f9;
@@ -601,7 +564,7 @@
                     <a class="link-btn" href="https://github.com/agentic-community/mcp-gateway-registry" target="_blank">GitHub Repository</a>
                     <a class="link-btn outline" href="https://catalog.us-east-1.prod.workshops.aws/workshops/0c3265a6-1a4a-467b-ae56-e4d019184b0e/en-US" target="_blank" style="margin-left: clamp(0.4rem, 1vw, 0.75rem);">AWS Workshop</a>
                 </div>
-                <p class="reveal" style="margin-top: var(--content-gap); font-size: var(--small-size); color: #94a3b8;">Last updated: September 23, 2026</p>
+                <p class="reveal" style="margin-top: var(--content-gap); font-size: var(--small-size); color: #94a3b8;">Last updated: October 26, 2026</p>
             </div>
         </div>
         <div class="slide-number">1 / 29</div>
@@ -725,29 +688,7 @@
                     A registry, a gateway, and identity for authn and authz, working as one.
                 </p>
                 <div class="reveal" style="max-width: min(95vw, 820px); margin: 0 auto;">
-                    <svg viewBox="0 0 760 250" style="width: 100%; height: auto;" xmlns="http://www.w3.org/2000/svg">
-                        <defs>
-                            <marker id="arrPlat" markerWidth="8" markerHeight="8" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#94a3b8"/></marker>
-                        </defs>
-                        <!-- converging arrows -->
-                        <line x1="150" y1="88" x2="250" y2="150" stroke="#94a3b8" stroke-width="1.8" marker-end="url(#arrPlat)"/>
-                        <line x1="380" y1="88" x2="380" y2="150" stroke="#94a3b8" stroke-width="1.8" marker-end="url(#arrPlat)"/>
-                        <line x1="610" y1="88" x2="510" y2="150" stroke="#94a3b8" stroke-width="1.8" marker-end="url(#arrPlat)"/>
-                        <!-- three pillars -->
-                        <rect x="60" y="20" width="180" height="66" rx="6" fill="#1a1a1a"/>
-                        <text x="150" y="52" text-anchor="middle" fill="#ffffff" font-size="19" font-weight="700">Registry</text>
-                        <text x="150" y="72" text-anchor="middle" fill="#cbd5e1" font-size="11">control plane</text>
-                        <rect x="290" y="20" width="180" height="66" rx="6" fill="#334155"/>
-                        <text x="380" y="52" text-anchor="middle" fill="#ffffff" font-size="19" font-weight="700">Gateway</text>
-                        <text x="380" y="72" text-anchor="middle" fill="#cbd5e1" font-size="11">data plane</text>
-                        <rect x="520" y="20" width="180" height="66" rx="6" fill="#475569"/>
-                        <text x="610" y="52" text-anchor="middle" fill="#ffffff" font-size="19" font-weight="700">Identity</text>
-                        <text x="610" y="72" text-anchor="middle" fill="#cbd5e1" font-size="11">authn / authz</text>
-                        <!-- unified platform bar -->
-                        <rect x="110" y="152" width="540" height="76" rx="8" fill="#f1f5f9" stroke="#1a1a1a" stroke-width="2"/>
-                        <text x="380" y="188" text-anchor="middle" fill="#1a1a1a" font-size="21" font-weight="700">One AI Registry Platform</text>
-                        <text x="380" y="210" text-anchor="middle" fill="#4a5568" font-size="12">unified discovery, governance, and secure connectivity</text>
-                    </svg>
+                    <svg viewBox='0 0 760 246' style='width: 100%; height: auto;' role='img' aria-label='A registry, a gateway, and identity combine into one AI registry platform' xmlns='http://www.w3.org/2000/svg'><defs><marker id='dgPlat' viewBox='0 0 10 10' refX='9' refY='5' markerWidth='6' markerHeight='6' orient='auto-start-reverse'><path d='M0 0L10 5L0 10z' fill='#52615f'/></marker></defs><path d='M150 82L250 148' fill='none' stroke='#52615f' stroke-width='1.25' marker-end='url(#dgPlat)'/><path d='M380 82V148' fill='none' stroke='#52615f' stroke-width='1.25' marker-end='url(#dgPlat)'/><path d='M610 82L510 148' fill='none' stroke='#52615f' stroke-width='1.25' marker-end='url(#dgPlat)'/><rect x='60' y='20' width='180' height='62' rx='7' fill='#ffffff' stroke='#52615f' stroke-width='1.25'/><text x='150.0' y='47.1' text-anchor='middle' font-size='15' font-weight='600' fill='#1d2b2a'>Registry</text><text x='150.0' y='66.0' text-anchor='middle' font-size='12.5' fill='#52615f'>control plane</text><rect x='290' y='20' width='180' height='62' rx='7' fill='#ffffff' stroke='#52615f' stroke-width='1.25'/><text x='380.0' y='47.1' text-anchor='middle' font-size='15' font-weight='600' fill='#1d2b2a'>Gateway</text><text x='380.0' y='66.0' text-anchor='middle' font-size='12.5' fill='#52615f'>data plane</text><rect x='520' y='20' width='180' height='62' rx='7' fill='#ffffff' stroke='#52615f' stroke-width='1.25'/><text x='610.0' y='47.1' text-anchor='middle' font-size='15' font-weight='600' fill='#1d2b2a'>Identity</text><text x='610.0' y='66.0' text-anchor='middle' font-size='12.5' fill='#52615f'>authn / authz</text><rect x='110' y='150' width='540' height='80' rx='7' fill='#0f766e' fill-opacity='0.12' stroke='#0f766e' stroke-width='2'/><text x='380.0' y='187.1' text-anchor='middle' font-size='19' font-weight='600' fill='#1d2b2a'>One AI Registry Platform</text><text x='380.0' y='207.7' text-anchor='middle' font-size='13' fill='#52615f'>unified discovery, governance, and secure connectivity</text></svg>
                 </div>
                 <div class="reveal" style="display: grid; grid-template-columns: repeat(3, 1fr); gap: clamp(0.5rem, 1.5vw, 1.25rem); margin-top: var(--element-gap);">
                     <div class="feature-card">
@@ -855,25 +796,7 @@
         <div class="slide-content">
             <div class="content-wrapper" style="text-align: center;">
                 <h2 class="reveal">Platform <span class="accent">Architecture</span></h2>
-                <div class="arch-diagram reveal">
-                    <div style="display: flex; flex-direction: column; gap: clamp(0.25rem, 0.5vh, 0.5rem); align-items: center;">
-                        <div class="arch-box"><span class="box-label">Human</span><span class="box-title">Developers</span></div>
-                        <div class="arch-box"><span class="box-label">Autonomous</span><span class="box-title">AI Agents</span></div>
-                        <div class="arch-box"><span class="box-label">Coding</span><span class="box-title">Assistants</span></div>
-                    </div>
-                    <div class="arch-arrow">--></div>
-                    <div class="arch-box highlight" style="padding: clamp(0.75rem, 2vw, 1.5rem);">
-                        <span class="box-label">Unified</span>
-                        <span class="box-title" style="font-size: clamp(0.85rem, 1.5vw, 1.1rem);">MCP Gateway<br>& Registry</span>
-                        <div style="font-size: var(--small-size); color: #4a5568; margin-top: 4px;">Nginx + Auth + Registry</div>
-                    </div>
-                    <div class="arch-arrow">--></div>
-                    <div style="display: flex; flex-direction: column; gap: clamp(0.25rem, 0.5vh, 0.5rem); align-items: center;">
-                        <div class="arch-box"><span class="box-label">Registered</span><span class="box-title">MCP Servers</span></div>
-                        <div class="arch-box"><span class="box-label">Registered</span><span class="box-title">Agents</span></div>
-                        <div class="arch-box"><span class="box-label">Registered</span><span class="box-title">Skills</span></div>
-                    </div>
-                </div>
+                <div class="reveal" style="max-width: min(95vw, 820px); margin: 0 auto;"><svg viewBox='0 0 760 240' style='width: 100%; height: auto;' role='img' aria-label='Developers, AI agents, and coding assistants reach registered MCP servers, agents, and skills through one gateway and registry' xmlns='http://www.w3.org/2000/svg'><defs><marker id='dgArch' viewBox='0 0 10 10' refX='9' refY='5' markerWidth='6' markerHeight='6' orient='auto-start-reverse'><path d='M0 0L10 5L0 10z' fill='#52615f'/></marker></defs><path d='M190 44L288 100' fill='none' stroke='#52615f' stroke-width='1.25' marker-end='url(#dgArch)'/><path d='M190 120H288' fill='none' stroke='#52615f' stroke-width='1.25' marker-end='url(#dgArch)'/><path d='M190 196L288 140' fill='none' stroke='#52615f' stroke-width='1.25' marker-end='url(#dgArch)'/><path d='M470 100L568 44' fill='none' stroke='#52615f' stroke-width='1.25' marker-end='url(#dgArch)'/><path d='M470 120H568' fill='none' stroke='#52615f' stroke-width='1.25' marker-end='url(#dgArch)'/><path d='M470 140L568 196' fill='none' stroke='#52615f' stroke-width='1.25' marker-end='url(#dgArch)'/><rect x='20' y='20' width='170' height='48' rx='7' fill='#ffffff' stroke='#52615f' stroke-width='1.25'/><text x='105.0' y='40.1' text-anchor='middle' font-size='15' font-weight='600' fill='#1d2b2a'>Developers</text><text x='105.0' y='59.0' text-anchor='middle' font-size='12.5' fill='#52615f'>human</text><rect x='20' y='96' width='170' height='48' rx='7' fill='#ffffff' stroke='#52615f' stroke-width='1.25'/><text x='105.0' y='116.1' text-anchor='middle' font-size='15' font-weight='600' fill='#1d2b2a'>AI Agents</text><text x='105.0' y='135.0' text-anchor='middle' font-size='12.5' fill='#52615f'>autonomous</text><rect x='20' y='172' width='170' height='48' rx='7' fill='#ffffff' stroke='#52615f' stroke-width='1.25'/><text x='105.0' y='192.1' text-anchor='middle' font-size='15' font-weight='600' fill='#1d2b2a'>Coding Assistants</text><text x='105.0' y='211.0' text-anchor='middle' font-size='12.5' fill='#52615f'>IDE and CLI</text><rect x='290' y='70' width='180' height='100' rx='7' fill='#0f766e' fill-opacity='0.12' stroke='#0f766e' stroke-width='2'/><text x='380.0' y='106.8' text-anchor='middle' font-size='15' font-weight='600' fill='#1d2b2a'>MCP Gateway</text><text x='380.0' y='125.5' text-anchor='middle' font-size='15' font-weight='600' fill='#1d2b2a'>&amp; Registry</text><text x='380.0' y='144.4' text-anchor='middle' font-size='12.5' fill='#52615f'>nginx + auth + registry</text><rect x='570' y='20' width='170' height='48' rx='7' fill='#ffffff' stroke='#52615f' stroke-width='1.25'/><text x='655.0' y='40.1' text-anchor='middle' font-size='15' font-weight='600' fill='#1d2b2a'>MCP Servers</text><text x='655.0' y='59.0' text-anchor='middle' font-size='12.5' fill='#52615f'>registered</text><rect x='570' y='96' width='170' height='48' rx='7' fill='#ffffff' stroke='#52615f' stroke-width='1.25'/><text x='655.0' y='116.1' text-anchor='middle' font-size='15' font-weight='600' fill='#1d2b2a'>Agents</text><text x='655.0' y='135.0' text-anchor='middle' font-size='12.5' fill='#52615f'>registered</text><rect x='570' y='172' width='170' height='48' rx='7' fill='#ffffff' stroke='#52615f' stroke-width='1.25'/><text x='655.0' y='192.1' text-anchor='middle' font-size='15' font-weight='600' fill='#1d2b2a'>Skills</text><text x='655.0' y='211.0' text-anchor='middle' font-size='12.5' fill='#52615f'>registered</text></svg></div>
                 <div class="reveal" style="max-width: min(90vw, 750px); margin: var(--element-gap) auto 0; text-align: center;">
                     <p style="margin-bottom: clamp(0.3rem, 0.6vh, 0.5rem);">
                         Servers and agents can be hosted <strong class="accent">anywhere</strong>:
@@ -895,6 +818,23 @@
         </div>
         <div class="slide-number">7 / 29</div>
     </section>
+    <section class="slide" data-slide="4i">
+        <div class="slide-content">
+            <div class="content-wrapper">
+                <h2 class="reveal">Inside the <span class="accent">Gateway</span></h2>
+                <p class="reveal" style="font-size: var(--body-size); color: #4a5568; margin: var(--element-gap) 0;">
+                    The registry is the control plane and nginx is the data plane. Every MCP call is checked and proxied by the auth server.
+                </p>
+                <div class="reveal" style="max-width: min(95vw, 1000px); margin: 0 auto;">
+                    <svg viewBox='0 0 960 300' style='width: 100%; height: auto;' role='img' aria-label='Clients call the nginx gateway, which checks each request with the auth server; the auth server proxies MCP calls to backends with egress credentials' xmlns='http://www.w3.org/2000/svg'><defs><marker id='dgInside' viewBox='0 0 10 10' refX='9' refY='5' markerWidth='6' markerHeight='6' orient='auto-start-reverse'><path d='M0 0L10 5L0 10z' fill='#52615f'/></marker></defs><path d='M170 70L228 132' fill='none' stroke='#52615f' stroke-width='1.25' marker-end='url(#dgInside)'/><path d='M170 150H228' fill='none' stroke='#52615f' stroke-width='1.25' marker-end='url(#dgInside)'/><path d='M170 230L228 168' fill='none' stroke='#52615f' stroke-width='1.25' marker-end='url(#dgInside)'/><path d='M290 118V74' fill='none' stroke='#52615f' stroke-width='1.25' marker-end='url(#dgInside)'/><path d='M340 72V116' fill='none' stroke='#52615f' stroke-width='1.25' marker-end='url(#dgInside)'/><path d='M400 44H494' fill='none' stroke='#52615f' stroke-width='1.25' marker-end='url(#dgInside)'/><path d='M400 150H494' fill='none' stroke='#52615f' stroke-width='1.25' marker-end='url(#dgInside)'/><path d='M696 150H778' fill='none' stroke='#52615f' stroke-width='1.25' marker-end='url(#dgInside)'/><path d='M596 118V74' fill='none' stroke='#52615f' stroke-width='1.25' marker-end='url(#dgInside)'/><path d='M596 182V234' fill='none' stroke='#52615f' stroke-width='1.25' stroke-dasharray='4 4' marker-end='url(#dgInside)'/><rect x='20' y='52' width='150' height='36' rx='7' fill='#ffffff' stroke='#52615f' stroke-width='1.25'/><text x='95.0' y='74.2' text-anchor='middle' font-size='13' font-weight='600' fill='#1d2b2a'>Human users</text><rect x='20' y='132' width='150' height='36' rx='7' fill='#ffffff' stroke='#52615f' stroke-width='1.25'/><text x='95.0' y='154.2' text-anchor='middle' font-size='13' font-weight='600' fill='#1d2b2a'>AI agents</text><rect x='20' y='212' width='150' height='36' rx='7' fill='#ffffff' stroke='#52615f' stroke-width='1.25'/><text x='95.0' y='234.2' text-anchor='middle' font-size='13' font-weight='600' fill='#1d2b2a'>Coding assistants</text><rect x='230' y='16' width='170' height='56' rx='7' fill='#ffffff' stroke='#52615f' stroke-width='1.25'/><text x='315.0' y='40.2' text-anchor='middle' font-size='13' font-weight='600' fill='#1d2b2a'>Registry API + UI</text><text x='315.0' y='57.3' text-anchor='middle' font-size='11.5' fill='#52615f'>control plane</text><rect x='230' y='118' width='170' height='64' rx='7' fill='#0f766e' fill-opacity='0.12' stroke='#0f766e' stroke-width='2'/><text x='315.0' y='146.2' text-anchor='middle' font-size='13' font-weight='600' fill='#1d2b2a'>nginx gateway</text><text x='315.0' y='163.3' text-anchor='middle' font-size='11.5' fill='#52615f'>data plane: TLS, routing</text><rect x='496' y='16' width='200' height='56' rx='7' fill='#ffffff' stroke='#52615f' stroke-width='1.25'/><text x='596.0' y='40.2' text-anchor='middle' font-size='13' font-weight='600' fill='#1d2b2a'>MongoDB / DocumentDB</text><text x='596.0' y='57.3' text-anchor='middle' font-size='11.5' fill='#52615f'>inventory, scopes, audit</text><rect x='496' y='118' width='200' height='64' rx='7' fill='#ffffff' stroke='#52615f' stroke-width='1.25'/><text x='596.0' y='146.2' text-anchor='middle' font-size='13' font-weight='600' fill='#1d2b2a'>Auth server</text><text x='596.0' y='163.3' text-anchor='middle' font-size='11.5' fill='#52615f'>/validate, MCP proxy</text><rect x='496' y='236' width='200' height='56' rx='7' fill='#ffffff' stroke='#52615f' stroke-width='1.25'/><text x='596.0' y='260.2' text-anchor='middle' font-size='13' font-weight='600' fill='#1d2b2a'>Identity provider</text><text x='596.0' y='277.3' text-anchor='middle' font-size='11.5' fill='#52615f'>Keycloak, Entra ID, Okta, ...</text><rect x='780' y='108' width='160' height='84' rx='7' fill='#ffffff' stroke='#52615f' stroke-width='1.25'/><text x='860.0' y='138.0' text-anchor='middle' font-size='13' font-weight='600' fill='#1d2b2a'>MCP servers</text><text x='860.0' y='154.3' text-anchor='middle' font-size='13' font-weight='600' fill='#1d2b2a'>&amp; agents</text><text x='860.0' y='171.4' text-anchor='middle' font-size='11.5' fill='#52615f'>EKS, ECS, Lambda, SaaS</text><text x='282' y='100' text-anchor='end' font-size='11.5' fill='#52615f'>UI, /api</text><text x='348' y='100' text-anchor='start' font-size='11.5' fill='#52615f'>config + reload</text><text x='447' y='140' text-anchor='middle' font-size='11.5' fill='#52615f'>auth_request</text><text x='737' y='140' text-anchor='middle' font-size='11.5' fill='#52615f'>egress creds</text><text x='604' y='100' text-anchor='start' font-size='11.5' fill='#52615f'>scopes</text><text x='604' y='214' text-anchor='start' font-size='11.5' fill='#52615f'>OIDC</text></svg>
+                </div>
+                <div class="highlight-box reveal" style="margin-top: var(--element-gap);">
+                    <p style="margin: 0; font-size: var(--small-size); color: #1e293b;"><strong>The registry decides what nginx may route to.</strong> nginx and the auth server enforce it on every call, and per-user egress tokens stay in the vault instead of on laptops.</p>
+                </div>
+            </div>
+        </div>
+        <div class="slide-number"></div>
+    </section>
     <!-- ===========================================
          SECTION BREAK 02
          =========================================== -->
@@ -915,27 +855,7 @@
                 <h2 class="reveal">One Gateway for <span class="accent">Any Resource</span></h2>
                 <p class="reveal" style="text-align: center; color: #4a5568; font-size: var(--small-size); margin-bottom: var(--element-gap);">New in 1.30.0: the gateway fronts any HTTP backend, not only MCP servers. One token and one URL shape cover four kinds of traffic.</p>
 
-                <div class="arch-diagram reveal" style="margin-bottom: var(--element-gap);">
-                    <div class="arch-box">
-                        <span class="box-label">any caller</span>
-                        <span class="box-title">One Gateway Token</span>
-                    </div>
-                    <span class="arch-arrow">&rarr;</span>
-                    <div class="arch-box highlight">
-                        <span class="box-label">authn &middot; authz &middot; audit</span>
-                        <span class="box-title">Gateway</span>
-                    </div>
-                    <span class="arch-arrow">&rarr;</span>
-                    <div style="display: flex; flex-direction: column; gap: clamp(0.15rem, 0.5vh, 0.35rem);">
-                        <div class="arch-box">
-                            <span class="box-title">Model Inference</span>
-                            <span class="box-label">OpenAI &middot; Amazon Bedrock &middot; any OpenAI-compatible</span>
-                        </div>
-                        <div class="arch-box"><span class="box-title">MCP Servers</span></div>
-                        <div class="arch-box"><span class="box-title">A2A Agents</span></div>
-                        <div class="arch-box"><span class="box-title">REST Endpoints</span></div>
-                    </div>
-                </div>
+                <div class="reveal" style="max-width: min(95vw, 820px); margin: 0 auto var(--element-gap);"><svg viewBox='0 0 760 218' style='width: 100%; height: auto;' role='img' aria-label='One gateway token reaches model inference, MCP servers, A2A agents, and REST endpoints through the gateway' xmlns='http://www.w3.org/2000/svg'><defs><marker id='dgAny' viewBox='0 0 10 10' refX='9' refY='5' markerWidth='6' markerHeight='6' orient='auto-start-reverse'><path d='M0 0L10 5L0 10z' fill='#52615f'/></marker></defs><path d='M190 115H238' fill='none' stroke='#52615f' stroke-width='1.25' marker-end='url(#dgAny)'/><path d='M390 105L458 35' fill='none' stroke='#52615f' stroke-width='1.25' marker-end='url(#dgAny)'/><path d='M390 112L458 90' fill='none' stroke='#52615f' stroke-width='1.25' marker-end='url(#dgAny)'/><path d='M390 118L458 140' fill='none' stroke='#52615f' stroke-width='1.25' marker-end='url(#dgAny)'/><path d='M390 125L458 190' fill='none' stroke='#52615f' stroke-width='1.25' marker-end='url(#dgAny)'/><rect x='20' y='89' width='170' height='52' rx='7' fill='#ffffff' stroke='#52615f' stroke-width='1.25'/><text x='105.0' y='111.1' text-anchor='middle' font-size='15' font-weight='600' fill='#1d2b2a'>One Gateway Token</text><text x='105.0' y='130.0' text-anchor='middle' font-size='12.5' fill='#52615f'>any caller</text><rect x='240' y='85' width='150' height='60' rx='7' fill='#0f766e' fill-opacity='0.12' stroke='#0f766e' stroke-width='2'/><text x='315.0' y='111.1' text-anchor='middle' font-size='15' font-weight='600' fill='#1d2b2a'>Gateway</text><text x='315.0' y='130.0' text-anchor='middle' font-size='12.5' fill='#52615f'>authn &#183; authz &#183; audit</text><rect x='460' y='8' width='280' height='54' rx='7' fill='#ffffff' stroke='#52615f' stroke-width='1.25'/><text x='600.0' y='32.2' text-anchor='middle' font-size='15' font-weight='600' fill='#1d2b2a'>Model Inference</text><text x='600.0' y='49.3' text-anchor='middle' font-size='11' fill='#52615f'>OpenAI &#183; Amazon Bedrock &#183; any OpenAI-compatible</text><rect x='460' y='70' width='280' height='40' rx='7' fill='#ffffff' stroke='#52615f' stroke-width='1.25'/><text x='600.0' y='94.9' text-anchor='middle' font-size='15' font-weight='600' fill='#1d2b2a'>MCP Servers</text><rect x='460' y='120' width='280' height='40' rx='7' fill='#ffffff' stroke='#52615f' stroke-width='1.25'/><text x='600.0' y='144.9' text-anchor='middle' font-size='15' font-weight='600' fill='#1d2b2a'>A2A Agents</text><rect x='460' y='170' width='280' height='40' rx='7' fill='#ffffff' stroke='#52615f' stroke-width='1.25'/><text x='600.0' y='194.9' text-anchor='middle' font-size='15' font-weight='600' fill='#1d2b2a'>REST Endpoints</text></svg></div>
 
                 <div class="reveal" style="display: grid; grid-template-columns: repeat(3, 1fr); gap: clamp(0.5rem, 1.5vw, 1rem);">
                     <div class="feature-card">
@@ -1373,54 +1293,13 @@
                     <!-- Scenario 1: Within a Single Enterprise -->
                     <div style="background: #f8f9fa; padding: clamp(0.75rem, 2vw, 1.25rem); border-top: 4px solid #1a1a1a;">
                         <h3 style="color: #1a1a1a; margin-bottom: clamp(0.3rem, 0.8vh, 0.5rem);">Within a Single Enterprise</h3>
-                        <svg viewBox="0 0 380 250" style="width: 100%; height: auto;" xmlns="http://www.w3.org/2000/svg">
-                            <defs>
-                                <marker id="arrIntra" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#94a3b8"/></marker>
-                            </defs>
-                            <!-- aggregation arrows (LOB + SaaS up to Central IT) -->
-                            <line x1="72" y1="104" x2="150" y2="52" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#arrIntra)"/>
-                            <line x1="307" y1="104" x2="230" y2="52" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#arrIntra)"/>
-                            <line x1="190" y1="196" x2="190" y2="52" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#arrIntra)"/>
-                            <!-- Central IT hub -->
-                            <rect x="110" y="8" width="160" height="40" rx="4" fill="#1a1a1a"/>
-                            <text x="190" y="26" text-anchor="middle" fill="#ffffff" font-size="13" font-weight="600">Central IT Registry</text>
-                            <text x="190" y="40" text-anchor="middle" fill="#cbd5e1" font-size="9">one governed view across all</text>
-                            <!-- LOB registries -->
-                            <rect x="15" y="104" width="115" height="40" rx="4" fill="#ffffff" stroke="#cbd5e1"/>
-                            <text x="72" y="121" text-anchor="middle" fill="#1a1a1a" font-size="11" font-weight="600">LOB A Registry</text>
-                            <text x="72" y="134" text-anchor="middle" fill="#64748b" font-size="8">this solution / AWS / 3P</text>
-                            <rect x="250" y="104" width="115" height="40" rx="4" fill="#ffffff" stroke="#cbd5e1"/>
-                            <text x="307" y="121" text-anchor="middle" fill="#1a1a1a" font-size="11" font-weight="600">LOB B Registry</text>
-                            <text x="307" y="134" text-anchor="middle" fill="#64748b" font-size="8">instance / OSS registry</text>
-                            <!-- SaaS agent registries -->
-                            <rect x="90" y="196" width="200" height="46" rx="4" fill="#f1f5f9" stroke="#cbd5e1"/>
-                            <text x="190" y="214" text-anchor="middle" fill="#334155" font-size="10" font-weight="600">SaaS Agent Registries (external)</text>
-                            <text x="190" y="229" text-anchor="middle" fill="#64748b" font-size="8.5">Salesforce &middot; ServiceNow &middot; SAP &middot; Workday</text>
-                        </svg>
+                        <svg viewBox='0 0 380 250' style='width: 100%; height: auto;' role='img' aria-label='Line-of-business and SaaS agent registries federate into one central IT registry' xmlns='http://www.w3.org/2000/svg'><defs><marker id='dgIntra' viewBox='0 0 10 10' refX='9' refY='5' markerWidth='6' markerHeight='6' orient='auto-start-reverse'><path d='M0 0L10 5L0 10z' fill='#52615f'/></marker></defs><path d='M75 104L150 56' fill='none' stroke='#52615f' stroke-width='1.25' marker-end='url(#dgIntra)'/><path d='M305 104L230 56' fill='none' stroke='#52615f' stroke-width='1.25' marker-end='url(#dgIntra)'/><path d='M190 196V56' fill='none' stroke='#52615f' stroke-width='1.25' marker-end='url(#dgIntra)'/><rect x='105' y='8' width='170' height='46' rx='7' fill='#0f766e' fill-opacity='0.12' stroke='#0f766e' stroke-width='2'/><text x='190.0' y='28.4' text-anchor='middle' font-size='12.5' font-weight='600' fill='#1d2b2a'>Central IT Registry</text><text x='190.0' y='43.1' text-anchor='middle' font-size='9.5' fill='#52615f'>one governed view across all</text><rect x='15' y='104' width='120' height='44' rx='7' fill='#ffffff' stroke='#52615f' stroke-width='1.25'/><text x='75.0' y='123.4' text-anchor='middle' font-size='12.5' font-weight='600' fill='#1d2b2a'>LOB A Registry</text><text x='75.0' y='138.1' text-anchor='middle' font-size='9.5' fill='#52615f'>this solution / AWS / 3P</text><rect x='245' y='104' width='120' height='44' rx='7' fill='#ffffff' stroke='#52615f' stroke-width='1.25'/><text x='305.0' y='123.4' text-anchor='middle' font-size='12.5' font-weight='600' fill='#1d2b2a'>LOB B Registry</text><text x='305.0' y='138.1' text-anchor='middle' font-size='9.5' fill='#52615f'>instance / OSS registry</text><rect x='80' y='196' width='220' height='46' rx='7' fill='#ffffff' stroke='#52615f' stroke-width='1.25'/><text x='190.0' y='216.1' text-anchor='middle' font-size='11.5' font-weight='600' fill='#1d2b2a'>SaaS Agent Registries (external)</text><text x='190.0' y='230.5' text-anchor='middle' font-size='9.5' fill='#52615f'>Salesforce &#183; ServiceNow &#183; SAP &#183; Workday</text></svg>
                         <p style="font-size: var(--small-size); color: #4a5568; margin-top: clamp(0.3rem, 0.6vh, 0.5rem);">Central IT gains one governed view across line-of-business registries and SaaS agent systems of record.</p>
                     </div>
                     <!-- Scenario 2: Across Enterprises -->
                     <div style="background: #f8f9fa; padding: clamp(0.75rem, 2vw, 1.25rem); border-top: 4px solid #475569;">
                         <h3 style="color: #2d3748; margin-bottom: clamp(0.3rem, 0.8vh, 0.5rem);">Across Enterprises</h3>
-                        <svg viewBox="0 0 380 250" style="width: 100%; height: auto;" xmlns="http://www.w3.org/2000/svg">
-                            <defs>
-                                <marker id="arrCross" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#475569"/></marker>
-                            </defs>
-                            <!-- Enterprise A -->
-                            <rect x="15" y="58" width="150" height="120" rx="6" fill="#f8fafc" stroke="#cbd5e1" stroke-dasharray="4 3"/>
-                            <text x="90" y="76" text-anchor="middle" fill="#334155" font-size="11" font-weight="600">Enterprise A</text>
-                            <rect x="40" y="100" width="100" height="42" rx="4" fill="#1a1a1a"/>
-                            <text x="90" y="126" text-anchor="middle" fill="#ffffff" font-size="12" font-weight="600">Registry</text>
-                            <!-- Enterprise B -->
-                            <rect x="215" y="58" width="150" height="120" rx="6" fill="#f8fafc" stroke="#cbd5e1" stroke-dasharray="4 3"/>
-                            <text x="290" y="76" text-anchor="middle" fill="#334155" font-size="11" font-weight="600">Enterprise B</text>
-                            <rect x="240" y="100" width="100" height="42" rx="4" fill="#475569"/>
-                            <text x="290" y="126" text-anchor="middle" fill="#ffffff" font-size="12" font-weight="600">Registry</text>
-                            <!-- ARD link (bidirectional) -->
-                            <line x1="142" y1="121" x2="238" y2="121" stroke="#475569" stroke-width="1.8" marker-start="url(#arrCross)" marker-end="url(#arrCross)"/>
-                            <text x="190" y="112" text-anchor="middle" fill="#1a1a1a" font-size="11" font-weight="700">ARD</text>
-                            <text x="190" y="205" text-anchor="middle" fill="#64748b" font-size="9">any ARD-compliant registry participates</text>
-                        </svg>
+                        <svg viewBox='0 0 380 250' style='width: 100%; height: auto;' role='img' aria-label='Registries in two enterprises discover each other over ARD' xmlns='http://www.w3.org/2000/svg'><defs><marker id='dgCross' viewBox='0 0 10 10' refX='9' refY='5' markerWidth='6' markerHeight='6' orient='auto-start-reverse'><path d='M0 0L10 5L0 10z' fill='#52615f'/></marker></defs><rect x='15' y='58' width='150' height='120' rx='7' fill='none' stroke='#cbd5e1' stroke-width='1.25' stroke-dasharray='4 4'/><text x='90.0' y='122.9' text-anchor='middle' font-size='15' font-weight='600' fill='#1d2b2a'></text><rect x='215' y='58' width='150' height='120' rx='7' fill='none' stroke='#cbd5e1' stroke-width='1.25' stroke-dasharray='4 4'/><text x='290.0' y='122.9' text-anchor='middle' font-size='15' font-weight='600' fill='#1d2b2a'></text><text x='90' y='80' text-anchor='middle' font-size='11.5' font-weight='600' fill='#52615f'>Enterprise A</text><text x='290' y='80' text-anchor='middle' font-size='11.5' font-weight='600' fill='#52615f'>Enterprise B</text><rect x='40' y='100' width='100' height='42' rx='7' fill='#ffffff' stroke='#52615f' stroke-width='1.25'/><text x='90.0' y='125.1' text-anchor='middle' font-size='12.5' font-weight='600' fill='#1d2b2a'>Registry</text><rect x='240' y='100' width='100' height='42' rx='7' fill='#ffffff' stroke='#52615f' stroke-width='1.25'/><text x='290.0' y='125.1' text-anchor='middle' font-size='12.5' font-weight='600' fill='#1d2b2a'>Registry</text><path d='M142 121H238' fill='none' stroke='#0f766e' stroke-width='2' marker-start='url(#dgCross)' marker-end='url(#dgCross)'/><text x='190' y='112' text-anchor='middle' font-size='11.5' font-weight='700' fill='#0f766e'>ARD</text><text x='190' y='205' text-anchor='middle' font-size='9.5' fill='#52615f'>any ARD-compliant registry participates</text></svg>
                         <p style="font-size: var(--small-size); color: #4a5568; margin-top: clamp(0.3rem, 0.6vh, 0.5rem);">Two organizations discover each other's AI assets over ARD, with no shared infrastructure required.</p>
                     </div>
                 </div>
