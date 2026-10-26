@@ -107,6 +107,17 @@ def _document_to_skill(
     return SkillCard(**doc_copy)
 
 
+def document_to_skill_card(
+    doc: dict[str, Any],
+) -> SkillCard:
+    """Build a SkillCard from a raw skill document, normalizing legacy metadata.
+
+    Public so the metadata rescan (issue #1811) can index a skill from the exact
+    document it compares against, instead of from a separate read.
+    """
+    return _document_to_skill(doc)
+
+
 class DocumentDBSkillRepository(SkillRepositoryBase):
     """MongoDB implementation for skill storage."""
 
