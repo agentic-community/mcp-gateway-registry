@@ -120,6 +120,9 @@ app:
   # tagged security-pending. Endpoints that cannot be scanned anonymously (e.g.
   # per-user egress OAuth) fail on every registration and will want false.
   securityBlockOnScanFailure: true
+  # Scan registrant metadata with mcp-scanner's YARA rules and withhold flagged
+  # keys from model-facing reads and the search index (METADATA_SCAN_ENABLED).
+  metadataScanEnabled: true
   # Skill security scanning configuration
   skillSecurityScanEnabled: true # Enable/disable skill security scanning
   skillSecurityAnalyzers: "static" # Comma-separated: static, behavioral, llm, meta, virustotal, ai-defense

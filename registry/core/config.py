@@ -719,6 +719,21 @@ class Settings(BaseSettings):
         ),
     )
 
+    # Registrant metadata scanning (issue #1811). YARA-scans the metadata of
+    # servers, agents and skills on every write and keeps flagged keys out of
+    # model-facing reads and the search index. Never disables an asset.
+    metadata_scan_enabled: bool = Field(
+        default=True,
+        description=(
+            "Scan registrant-supplied metadata with mcp-scanner's prompt_injection, "
+            "tool_poisoning and credential_harvesting YARA rules. Flagged keys are "
+            "withheld from model-facing reads (mcpgw tools, semantic search, "
+            "discovery) and the search index; metadata with no current verdict is "
+            "withheld until POST /api/admin/metadata-security/rescan runs. Operators still "
+            "see all metadata. Turning this off returns metadata unfiltered."
+        ),
+    )
+
     # Agent security scanning settings (A2A Agents)
     agent_security_scan_enabled: bool = True
     agent_security_scan_on_registration: bool = True
