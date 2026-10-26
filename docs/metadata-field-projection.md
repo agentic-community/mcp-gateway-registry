@@ -139,6 +139,8 @@ Every path that writes registrant-supplied metadata rejects a document that brea
 
 There is no separate cap on the number of keys; the size limit bounds it.
 
+Two malformed inputs are also rejected with a 422 on the form-based server routes: text that is not valid Unicode (an unpaired UTF-16 surrogate such as `"\ud800"`, which JSON allows but UTF-8 and MongoDB cannot store), and a metadata string nested so deeply that the JSON decoder cannot read it.
+
 The limits apply on server registration (`POST /api/servers/register`, `POST /api/register`, `POST /api/internal/register`), server edits (`PUT` and `PATCH /api/servers/{path}`, `POST /api/edit/{path}`), agent registration and replacement (`POST /api/agents/register`, `PUT /api/agents/{path}`, and register and replace items in `POST /api/agents/batch`), and skill registration and replacement (`POST /api/skills`, `PUT /api/skills/{path}`). `PATCH /api/agents/{path}` does not accept metadata at all.
 
 A skill's metadata is checked as it is stored: `author` and `version` lift out of the flat request and every other key moves under `extra`, which adds one level of nesting and a few bytes, and an explicit `version` field counts in place of `metadata.version`.
