@@ -412,5 +412,139 @@ class TestExitZeroVerdictIsUnchanged:
         assert result.high_severity == 0
 
 
+@pytest.mark.unit
+class TestExitOneWithMalformedResults:
+    """Exit 1 results whose shape the registry cannot trust."""
+
+    def test_positive_count_with_no_findings_is_accepted(self):
+        completed = _completed_process(1, stdout=_scanner_stdout([], high_severity_count=1))
+
+        raw_output = _run_scanner(completed)
+
+        assert raw_output["analysis_results"] == {}
+        assert raw_output["scan_results"]["high_severity_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_positive_count_with_no_findings_is_still_unsafe(self):
+        completed = _completed_process(1, stdout=_scanner_stdout([], high_severity_count=1))
+
+        result, _ = await _scan_agent(completed)
+
+        assert result.is_safe is False
+        assert result.scan_failed is False
+        assert result.high_severity == 1
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("findings", [None, "none", 3])
+    async def test_positive_count_with_non_list_findings_is_recorded_as_a_failed_scan(
+        self, findings
+    ):
+        stdout = json.dumps({"high_severity_count": 1, "findings": findings})
+        completed = _completed_process(1, stdout=stdout)
+
+        result, _ = await _scan_agent(completed)
+
+        assert result.scan_failed is True
+        assert result.is_safe is False
+
+    @pytest.mark.parametrize("findings", [None, "none", {"severity": "HIGH"}])
+    def test_non_list_findings_without_a_count_raise(self, findings):
+        stdout = json.dumps({"target_name": "Weather Agent", "findings": findings})
+        completed = _completed_process(1, stdout=stdout, stderr="boom")
+
+        with pytest.raises(RuntimeError, match=SCANNER_FAILED_MESSAGE):
+            _run_scanner(completed)
+
+    def test_non_integer_count_falls_back_to_printed_severities(self):
+        stdout = json.dumps({"high_severity_count": "1", "findings": [_finding("MEDIUM")]})
+        completed = _completed_process(1, stdout=stdout, stderr="boom")
+
+        with pytest.raises(RuntimeError, match=SCANNER_FAILED_MESSAGE):
+            _run_scanner(completed)
+
+    def test_non_dict_findings_entries_are_ignored_by_the_fallback(self):
+        stdout = json.dumps({"findings": ["HIGH", None]})
+        completed = _completed_process(1, stdout=stdout, stderr="boom")
+
+        with pytest.raises(RuntimeError, match=SCANNER_FAILED_MESSAGE):
+            _run_scanner(completed)
+
+
+@pytest.mark.unit
+class TestScannerOutputParsing:
+    """How the scanner's stdout becomes raw_output."""
+
+    def test_findings_from_one_analyzer_are_grouped_together(self):
+        first = _finding("MEDIUM", threat_name="FIRST")
+        second = _finding("LOW", threat_name="SECOND")
+        completed = _completed_process(0, stdout=_scanner_stdout([first, second]))
+
+        raw_output = _run_scanner(completed)
+
+        assert raw_output["analysis_results"] == {"yara": {"findings": [first, second]}}
+
+    def test_findings_from_different_analyzers_are_kept_apart(self):
+        yara = _finding("MEDIUM", analyzer="yara")
+        spec = _finding("LOW", analyzer="spec")
+        completed = _completed_process(0, stdout=_scanner_stdout([yara, spec]))
+
+        raw_output = _run_scanner(completed)
+
+        assert raw_output["analysis_results"] == {
+            "yara": {"findings": [yara]},
+            "spec": {"findings": [spec]},
+        }
+
+    def test_finding_without_an_analyzer_is_filed_under_unknown(self):
+        finding = {"severity": "LOW", "threat_name": "NO ANALYZER"}
+        stdout = json.dumps({"findings": [finding]})
+        completed = _completed_process(0, stdout=stdout)
+
+        raw_output = _run_scanner(completed)
+
+        assert raw_output["analysis_results"] == {"unknown": {"findings": [finding]}}
+
+    def test_json_array_output_is_returned_without_grouping(self):
+        completed = _completed_process(0, stdout='[{"severity": "HIGH"}]')
+
+        raw_output = _run_scanner(completed)
+
+        assert raw_output == {
+            "analysis_results": {},
+            "scan_results": [{"severity": "HIGH"}],
+        }
+
+    def test_json_array_after_log_lines_is_found(self):
+        completed = _completed_process(0, stdout='scanning card\n[{"severity": "LOW"}]')
+
+        raw_output = _run_scanner(completed)
+
+        assert raw_output["scan_results"] == [{"severity": "LOW"}]
+
+    def test_json_object_after_log_lines_is_found(self):
+        finding = _finding("LOW")
+        completed = _completed_process(0, stdout="scanning card\n" + _scanner_stdout([finding]))
+
+        raw_output = _run_scanner(completed)
+
+        assert raw_output["analysis_results"] == {"yara": {"findings": [finding]}}
+
+    def test_log_lines_around_unparseable_json_raise_value_error(self):
+        completed = _completed_process(0, stdout="scanning card\n{not json")
+
+        with pytest.raises(ValueError):
+            _run_scanner(completed)
+
+    @pytest.mark.asyncio
+    async def test_array_output_from_a_clean_exit_is_recorded_as_safe_with_no_findings(self):
+        completed = _completed_process(0, stdout="[]")
+
+        result, _ = await _scan_agent(completed)
+
+        assert result.is_safe is True
+        assert result.scan_failed is False
+        assert result.high_severity == 0
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
