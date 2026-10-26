@@ -20,6 +20,16 @@ Size is measured on compact JSON (``separators=(",", ":")``) with
 ``ensure_ascii=False``, so a non-ASCII character counts as its real UTF-8 width
 (an accented letter is 2 bytes, most emoji 4) rather than as a 6-byte ``\\uXXXX``
 escape. Whitespace a client happens to send does not count against the limit.
+
+Two malformed inputs are reported as limit errors rather than crashing the
+caller:
+
+- Text that is not valid Unicode. JSON lets a client send an unpaired UTF-16
+  surrogate (``"\\ud800"``), which Python decodes into a string that cannot be
+  encoded as UTF-8, so it can be neither measured nor stored.
+- A JSON string nested so deeply that the decoder itself gives up with
+  ``RecursionError`` before any depth check can run. ``parse_metadata_json``
+  turns that into the depth error.
 """
 
 import json
@@ -58,6 +68,10 @@ def metadata_serialized_size(
 
     Returns:
         Number of bytes the compact JSON encoding takes.
+
+    Raises:
+        UnicodeEncodeError: If a key or value holds an unpaired surrogate.
+            ``validate_metadata_limits`` reports this as a MetadataLimitError.
 
     Example:
         >>> metadata_serialized_size({"team": "é"})
@@ -100,6 +114,36 @@ def metadata_depth(
     return max_depth
 
 
+def parse_metadata_json(
+    raw: str,
+) -> Any:
+    """Decode a metadata JSON string, reporting runaway nesting as a limit error.
+
+    The form-based registration routes receive metadata as a JSON string.
+    ``json.loads`` recurses, so a document nested tens of thousands of levels
+    deep raises ``RecursionError`` inside the decoder, before the depth limit
+    could be checked. That is still a depth violation, so it is reported as one.
+
+    Args:
+        raw: The metadata JSON text.
+
+    Returns:
+        The decoded value. Callers still run ``validate_metadata_limits`` on it.
+
+    Raises:
+        json.JSONDecodeError: If ``raw`` is not valid JSON, unchanged so callers
+            keep their existing invalid-JSON response.
+        MetadataLimitError: If ``raw`` nests too deeply for the decoder to read.
+    """
+    try:
+        return json.loads(raw)
+    except RecursionError as e:
+        raise MetadataLimitError(
+            f"metadata nests too deeply to decode, over the limit of "
+            f"{MAX_METADATA_DEPTH}. Flatten the nested objects or lists."
+        ) from e
+
+
 def validate_metadata_limits(
     metadata: Any,
     *,
@@ -117,7 +161,8 @@ def validate_metadata_limits(
 
     Raises:
         MetadataLimitError: Naming the limit that was broken, the limit and the
-            measured value.
+            measured value, or saying the text is not valid Unicode. The message
+            never echoes the offending text.
     """
     if not metadata:
         return
@@ -129,7 +174,13 @@ def validate_metadata_limits(
             f"{MAX_METADATA_DEPTH}. Flatten the nested objects or lists."
         )
 
-    size = metadata_serialized_size(metadata)
+    try:
+        size = metadata_serialized_size(metadata)
+    except UnicodeEncodeError as e:
+        raise MetadataLimitError(
+            f"{subject} contains text that is not valid Unicode (an unpaired "
+            "UTF-16 surrogate such as \\ud800). Remove or correct it."
+        ) from e
     if size > MAX_METADATA_BYTES:
         raise MetadataLimitError(
             f"{subject} is {size} bytes serialized as compact UTF-8 JSON, over the "

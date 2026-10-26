@@ -7,6 +7,7 @@ PUT /api/skills/{path}. The stored models (AgentCard, SkillCard) are left
 unchecked on purpose, so records saved before the limits existed still load.
 """
 
+import json
 from typing import Any
 
 import pytest
@@ -215,3 +216,29 @@ class TestSkillRegistrationRequestLimits:
         )
 
         assert request.metadata["owner_team"] == "platform"
+
+
+@pytest.mark.unit
+class TestInvalidUnicodeInRequestModels:
+    """An unpaired surrogate is a clean validation error on every request model."""
+
+    _SURROGATE_METADATA = json.loads('{"k": "\\ud800"}')
+
+    def test_agent_request(self):
+        with pytest.raises(ValidationError, match="not valid Unicode"):
+            _agent(metadata=self._SURROGATE_METADATA)
+
+    def test_skill_request(self):
+        with pytest.raises(ValidationError, match="not valid Unicode"):
+            _skill(metadata=self._SURROGATE_METADATA)
+
+    def test_server_put_and_patch(self):
+        from registry.schemas.server_update_models import (
+            ServerCardPatch,
+            ServerUpdateRequest,
+        )
+
+        with pytest.raises(ValidationError, match="not valid Unicode"):
+            ServerUpdateRequest(server_name="s", description="d", metadata=self._SURROGATE_METADATA)
+        with pytest.raises(ValidationError, match="not valid Unicode"):
+            ServerCardPatch(metadata=self._SURROGATE_METADATA)

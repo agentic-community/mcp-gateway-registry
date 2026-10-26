@@ -14,6 +14,7 @@ from registry.utils.metadata_limits import (
     MetadataLimitError,
     metadata_depth,
     metadata_serialized_size,
+    parse_metadata_json,
     validate_metadata_limits,
 )
 
@@ -161,3 +162,58 @@ class TestValidateMetadataLimits:
     def test_error_is_a_value_error_for_pydantic(self):
         """Pydantic turns a ValueError raised in a validator into a 422."""
         assert issubclass(MetadataLimitError, ValueError)
+
+
+@pytest.mark.unit
+class TestMalformedInput:
+    """Malformed input is a clear limit error, never an uncaught exception."""
+
+    @pytest.mark.parametrize(
+        "raw",
+        ['{"k": "\\ud800"}', '{"\\udfff": "v"}', '{"a": {"b": ["ok", "\\udbff"]}}'],
+        ids=["value", "key", "nested-value"],
+    )
+    def test_unpaired_surrogate_is_a_limit_error(self, raw):
+        """JSON accepts "\\ud800"; Python decodes it to text UTF-8 cannot encode."""
+        metadata = json.loads(raw)
+
+        with pytest.raises(MetadataLimitError, match="not valid Unicode") as exc_info:
+            validate_metadata_limits(metadata)
+
+        message = str(exc_info.value)
+        message.encode("utf-8")  # the message itself must be renderable
+        assert not any(0xD800 <= ord(c) <= 0xDFFF for c in message)
+
+    def test_valid_surrogate_pair_is_fine(self):
+        """A correctly paired surrogate escape is an ordinary emoji."""
+        metadata = json.loads('{"k": "\\ud83d\\udd12"}')
+
+        assert metadata == {"k": "🔒"}
+        validate_metadata_limits(metadata)
+
+    def test_parse_decodes_ordinary_json(self):
+        assert parse_metadata_json('{"team": "platform", "n": [1, 2]}') == {
+            "team": "platform",
+            "n": [1, 2],
+        }
+
+    def test_parse_leaves_invalid_json_to_the_caller(self):
+        """Invalid JSON keeps raising JSONDecodeError so routes keep their 400."""
+        with pytest.raises(json.JSONDecodeError):
+            parse_metadata_json("{not json")
+
+    def test_parse_reports_decoder_recursion_as_a_depth_error(self):
+        """100,000 levels overflows json.loads itself, before the depth check runs."""
+        raw = '{"a": ' + "[" * 100_000 + "]" * 100_000 + "}"
+        with pytest.raises(RecursionError):
+            json.loads(raw)
+
+        with pytest.raises(MetadataLimitError, match="over the limit of 8"):
+            parse_metadata_json(raw)
+
+    def test_parse_does_not_mask_depth_the_decoder_can_read(self):
+        """Moderately deep JSON decodes; the depth limit then reports the real depth."""
+        metadata = parse_metadata_json("[" * 50 + "]" * 50)
+
+        with pytest.raises(MetadataLimitError, match="nests 50 levels deep"):
+            validate_metadata_limits(metadata)

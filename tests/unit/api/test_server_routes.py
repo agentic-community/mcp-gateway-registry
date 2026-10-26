@@ -4292,6 +4292,125 @@ class TestFormRouteMetadataLimits:
         assert "over the limit of 10240 bytes" in response.json()["reason"]
         mock_server_service.register_server.assert_not_called()
 
+    # Raw form strings, not dicts: these must reach the route as the client sent them.
+    _SURROGATE_RAW = '{"k": "\\ud800"}'
+    _UNDECODABLE_DEPTH_RAW = '{"a": ' + "[" * 100_000 + "]" * 100_000 + "}"
+
+    def _post_raw(self, client, url, raw, **kwargs):
+        return client.post(url, data={**self._BASE_FORM, "metadata": raw}, **kwargs)
+
+    @pytest.mark.parametrize(
+        ("raw", "message"),
+        [
+            (_SURROGATE_RAW, "not valid Unicode"),
+            (_UNDECODABLE_DEPTH_RAW, "too deeply to decode"),
+        ],
+        ids=["unpaired-surrogate", "decoder-recursion"],
+    )
+    def test_servers_register_rejects_malformed_metadata_with_422(
+        self, test_client_admin, mock_server_service, raw, message
+    ):
+        response = self._post_raw(test_client_admin, "/api/servers/register", raw)
+
+        assert response.status_code == 422
+        assert message in response.json()["reason"]
+        mock_server_service.register_server.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("raw", "message"),
+        [
+            (_SURROGATE_RAW, "not valid Unicode"),
+            (_UNDECODABLE_DEPTH_RAW, "too deeply to decode"),
+        ],
+        ids=["unpaired-surrogate", "decoder-recursion"],
+    )
+    def test_legacy_register_rejects_malformed_metadata_with_422(
+        self, test_client_admin, mock_server_service, raw, message
+    ):
+        with patch(
+            "registry.auth.dependencies.user_has_ui_permission_for_service",
+            return_value=True,
+        ):
+            response = self._post_raw(test_client_admin, "/api/register", raw)
+
+        assert response.status_code == 422
+        assert message in response.json()["detail"]
+        mock_server_service.register_server.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("raw", "message"),
+        [
+            (_SURROGATE_RAW, "not valid Unicode"),
+            (_UNDECODABLE_DEPTH_RAW, "too deeply to decode"),
+        ],
+        ids=["unpaired-surrogate", "decoder-recursion"],
+    )
+    def test_internal_register_rejects_malformed_metadata_with_422(
+        self, test_client_no_auth, mock_server_service, raw, message
+    ):
+        with (
+            patch.dict("os.environ", {"SECRET_KEY": "testpass"}),
+            patch("registry.utils.scopes_manager.update_server_scopes", new_callable=AsyncMock),
+        ):
+            token = generate_internal_token(subject="test-service", purpose="test")
+            response = self._post_raw(
+                test_client_no_auth,
+                "/api/internal/register",
+                raw,
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+        assert response.status_code == 422
+        assert message in response.json()["reason"]
+        mock_server_service.register_server.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("raw", "message"),
+        [
+            (_SURROGATE_RAW, "not valid Unicode"),
+            (_UNDECODABLE_DEPTH_RAW, "too deeply to decode"),
+        ],
+        ids=["unpaired-surrogate", "decoder-recursion"],
+    )
+    def test_edit_rejects_malformed_metadata_with_422(
+        self, test_client_admin, mock_server_service, raw, message
+    ):
+        mock_server_service.get_server_info.return_value = {
+            "server_name": "Existing Remote",
+            "description": "http",
+            "path": "/remote-srv",
+            "deployment": "remote",
+            "proxy_pass_url": "http://upstream:9000",
+            "tags": [],
+            "auth_scheme": "none",
+            "registered_by": "admin",
+        }
+
+        response = test_client_admin.post(
+            "/api/edit/remote-srv",
+            headers={"accept": "application/json"},
+            data={
+                "name": "Existing Remote",
+                "description": "updated",
+                "proxy_pass_url": "http://upstream:9000",
+                "metadata": raw,
+            },
+        )
+
+        assert response.status_code == 422
+        assert message in response.json()["detail"]
+        mock_server_service.update_server.assert_not_called()
+
+    def test_servers_register_keeps_400_for_invalid_json(
+        self, test_client_admin, mock_server_service
+    ):
+        """Decoding through the new helper must not change the invalid-JSON response."""
+        response = self._post_raw(test_client_admin, "/api/servers/register", "{not json")
+
+        assert response.status_code == 400
+        assert response.json()["reason"] == "metadata must be valid JSON"
+        mock_server_service.register_server.assert_not_called()
+
     def test_edit_rejects_metadata_over_the_limit(self, test_client_admin, mock_server_service):
         mock_server_service.get_server_info.return_value = {
             "server_name": "Existing Remote",
