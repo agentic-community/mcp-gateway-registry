@@ -322,6 +322,56 @@ def _list_params(
     return params
 
 
+def _without_unrequested_metadata(
+    record: dict[str, Any],
+    metadata_fields: str | None,
+) -> dict[str, Any]:
+    """Drop a listing record's metadata unless the caller named keys to keep.
+
+    Metadata is free-form text the registrant controls, and these tools put it
+    straight into a model's context, so it is opt-in: a caller that does not pass
+    metadata_fields gets no metadata, the same as search_registry (issue #1811).
+    The REST API keeps returning full metadata, because the edit forms read it.
+
+    Args:
+        record: One server, agent or skill record from the registry list API.
+        metadata_fields: The caller's metadata_fields argument.
+
+    Returns:
+        The record, without its ``metadata`` key when none was requested.
+    """
+    if metadata_fields or not isinstance(record, dict):
+        return record
+    return {k: v for k, v in record.items() if k != "metadata"}
+
+
+def _without_unrequested_agent_card_metadata(
+    agent: dict[str, Any],
+    metadata_fields: str | None,
+) -> dict[str, Any]:
+    """Drop ``agent_card.metadata`` from a search hit unless keys were requested.
+
+    The semantic search API leaves server and skill hits without metadata when
+    no metadata_fields is sent, but returns each agent hit's full agent card,
+    metadata included. Strip it here so search_registry keeps the same opt-in
+    rule for agents as for every other asset type (issue #1811).
+
+    Args:
+        agent: One agent hit from the semantic search API.
+        metadata_fields: The caller's metadata_fields argument.
+
+    Returns:
+        The hit, with its agent card's ``metadata`` removed when none was requested.
+    """
+    if metadata_fields or not isinstance(agent, dict):
+        return agent
+    card = agent.get("agent_card")
+    if not isinstance(card, dict) or "metadata" not in card:
+        return agent
+    stripped_card = {k: v for k, v in card.items() if k != "metadata"}
+    return {**agent, "agent_card": stripped_card}
+
+
 def _dedupe_candidates(
     candidates: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -461,11 +511,10 @@ async def list_services(
     Args:
         metadata_fields: Comma-separated metadata keys to keep on each server,
             in dot-notation for nested keys (e.g. "owner_team,config.region").
-            Servers carry whatever metadata their registrant attached, which can
-            be large, so narrow it to the keys you need when you only need a few.
-            Omit to get every key. Each key must be a single word of letters,
-            digits, "_" or "-"; a key containing a space or other punctuation is
-            rejected and fails the whole call.
+            Servers carry whatever metadata their registrant attached. Omit to
+            get no metadata: each server's metadata is then null. Each key must
+            be a single word of letters, digits, "_" or "-"; a key containing a
+            space or other punctuation is rejected and fails the whole call.
 
     Returns:
         Dictionary containing services, total_count, enabled_count, and status
@@ -494,6 +543,7 @@ async def list_services(
         services = []
         for s in servers:
             try:
+                s = _without_unrequested_metadata(s, metadata_fields)
                 services.append(ServerInfo(**s).model_dump())
             except Exception as e:
                 logger.warning(f"Failed to parse server {s.get('path', 'unknown')}: {e}")
@@ -548,11 +598,10 @@ async def list_agents(
     Args:
         metadata_fields: Comma-separated metadata keys to keep on each agent,
             in dot-notation for nested keys (e.g. "owner_team,config.region").
-            Agents carry whatever metadata their registrant attached, which can
-            be large, so narrow it to the keys you need when you only need a few.
-            Omit to get every key. Each key must be a single word of letters,
-            digits, "_" or "-"; a key containing a space or other punctuation is
-            rejected and fails the whole call.
+            Agents carry whatever metadata their registrant attached. Omit to
+            get no metadata: each agent's metadata is then null. Each key must
+            be a single word of letters, digits, "_" or "-"; a key containing a
+            space or other punctuation is rejected and fails the whole call.
 
     Returns:
         Dictionary containing agents, total_count, and status
@@ -577,6 +626,7 @@ async def list_agents(
         agent_list = []
         for a in agents:
             try:
+                a = _without_unrequested_metadata(a, metadata_fields)
                 agent_list.append(AgentInfo(**a).model_dump())
             except Exception as e:
                 logger.warning(f"Failed to parse agent {a.get('path', 'unknown')}: {e}")
@@ -615,7 +665,10 @@ async def list_agents(
 
 @mcp.tool()
 @track_tool()
-async def list_skills(ctx: Context | None = None) -> dict[str, Any]:
+async def list_skills(
+    metadata_fields: str | None = None,
+    ctx: Context | None = None,
+) -> dict[str, Any]:
     """
     List all skills registered in the registry. Use search_registry
     instead if you know what workflow you need (faster, ranked results).
@@ -624,23 +677,30 @@ async def list_skills(ctx: Context | None = None) -> dict[str, Any]:
     you can load and execute. Use get_skill_content to retrieve the full
     markdown instructions for a discovered skill.
 
+    Args:
+        metadata_fields: Comma-separated metadata keys to keep on each skill,
+            in dot-notation for nested keys. A skill's metadata holds "author",
+            "version" and "extra", with free-form keys under extra (e.g.
+            "author,extra.owner_team"). Omit to get no metadata: each skill's
+            metadata is then null. Each key must be a single word of letters,
+            digits, "_" or "-"; a key containing a space or other punctuation is
+            rejected and fails the whole call.
+
     Returns:
         Dictionary containing skills, total_count, and status
     """
-    logger.info("list_skills called")
+    logger.info(f"list_skills called: metadata_fields={metadata_fields!r}")
 
     try:
         headers = await _get_registry_headers(ctx)
 
         async with httpx.AsyncClient(timeout=30.0) as client:
-            # No metadata_fields argument on this tool yet, unlike list_services
-            # and list_agents. GET /api/skills accepts the parameter but ignores
-            # it for nearly every caller (its projection sits inside a fast path
-            # that needs an admin passing include_disabled=true), so exposing the
-            # argument here would document a narrowing that does not happen. Add
-            # it once issue #1809 lands.
+            # GET /api/skills applies metadata_fields on every list path since
+            # issue #1809, so forward it the same way list_services does.
             response = await client.get(
-                f"{REGISTRY_URL}/api/skills", headers=headers, params=_list_params()
+                f"{REGISTRY_URL}/api/skills",
+                headers=headers,
+                params=_list_params(metadata_fields),
             )
             response.raise_for_status()
             data = response.json()
@@ -651,6 +711,7 @@ async def list_skills(ctx: Context | None = None) -> dict[str, Any]:
         skill_list = []
         for s in skills:
             try:
+                s = _without_unrequested_metadata(s, metadata_fields)
                 skill_list.append(SkillInfo(**s).model_dump())
             except Exception as e:
                 logger.warning(f"Failed to parse skill {s.get('path', 'unknown')}: {e}")
@@ -915,6 +976,7 @@ async def search_registry(
         servers = data.get("servers", []) if isinstance(data, dict) else []
         tools = data.get("tools", []) if isinstance(data, dict) else []
         agents = data.get("agents", []) if isinstance(data, dict) else []
+        agents = [_without_unrequested_agent_card_metadata(a, metadata_fields) for a in agents]
         skills = data.get("skills", []) if isinstance(data, dict) else []
         # Virtual servers and custom entity records are both in the scope the registry
         # searches, so it matches them, scores them and counts them against
