@@ -29,28 +29,9 @@ Without a control plane, every team wires its own MCP servers and agents by hand
 
 This platform replaces that with **one governed entry point for every AI asset**. Register a server, agent, skill, or custom entity once; discover it by natural-language search; reach it through a single authenticated gateway that enforces access and records every call. One control plane, one access model, one audit trail, across all asset types.
 
-```
-┌─────────────────────────────────────┐     ┌──────────────────────────────────────────────────────┐
-│          BEFORE: Chaos              │     │    AFTER: MCP Gateway & Registry                     │
-├─────────────────────────────────────┤     ├──────────────────────────────────────────────────────┤
-│                                     │     │                                                      │
-│  Developer 1 ──┬──► MCP Server A    │     │  Developer 1 ──┐                  ┌─ MCP Server A    │
-│                ├──► MCP Server B    │     │                │                  ├─ MCP Server B    │
-│                └──► MCP Server C    │     │  Developer 2 ──┼──► MCP Gateway   │                  │
-│                                     │     │                │    & Registry ───┼─ MCP Server C    │
-│  Developer 2 ──┬──► MCP Server A    │ ──► │  AI Agent 1 ───┘         │        │                  │
-│                ├──► MCP Server D    │     │                          │        ├─ AI Agent 1      │
-│                └──► MCP Server E    │     │  AI Agent 2 ──────────────┤        ├─ AI Agent 2     │
-│                                     │     │                          │        │                  │
-│  AI Agent 1 ───┬──► MCP Server B    │     │  AI Agent 3 ──────────────┘        └─ AI Agent 3     │
-│                ├──► MCP Server C    │     │                                                      │
-│                └──► MCP Server F    │     │              Single Connection Point                 │
-│                                     │     │                                                      │
-│  ❌ Multiple connections per user  │     │         ✅ One gateway for all                      │
-│  ❌ No centralized control         │     │         ✅ Unified server & agent access            │
-│  ❌ Credential sprawl              │     │         ✅ Unified governance & audit trails        │
-└─────────────────────────────────────┘     └──────────────────────────────────────────────────────┘
-```
+<p align="center">
+  <img src="docs/img/gateway-before-after.svg" alt="Without a gateway, every developer and agent wires every MCP server with its own credentials. With the MCP Gateway and Registry, each client connects once to one entry point that authorizes, routes, and audits calls to MCP servers, A2A agents, and skills." width="100%">
+</p>
 
 **Onboard third-party OAuth MCP servers, the enterprise way.** Because the gateway provides [per-user egress authentication](docs/design/egress-auth-design.md), you can connect OAuth-protected SaaS MCP servers such as Slack, Atlassian, and GitHub without every user setting up network access to those services or storing credentials on their laptop. Each user connects their account once; the gateway runs the OAuth (3LO) flow, vaults the per-user token in a secrets manager, and injects it on egress. That collapses onboarding to a single, auditable choke point, so a team can adopt a new SaaS MCP server across the enterprise without per-laptop plumbing or scattered long-lived tokens.
 
@@ -58,18 +39,9 @@ This platform replaces that with **one governed entry point for every AI asset**
 
 The gateway is the **data plane** (a generic nginx reverse proxy: TLS, auth validation, routing to backends) and the registry is the **control plane** (a FastAPI service that owns the inventory, access model, and audit trail, and decides what the gateway may route to). An **auth server** integrates your identity provider (Keycloak, Entra ID, Okta, Auth0, Cognito, PingFederate) for OAuth2/OIDC, and **MongoDB / DocumentDB** stores configuration, embeddings, sessions, and audit records.
 
-```mermaid
-flowchart LR
-    Users["Human Users"] -->|HTTPS| GW
-    Agents["AI Agents"] -->|MCP / auth| GW
-    Assistants["Coding Assistants"] -->|MCP / OAuth| GW
-    subgraph GWBOX["MCP Gateway & Registry"]
-        GW["nginx reverse proxy<br/>(data plane)"] -->|auth_request| Auth["Auth Server"]
-        GW --> Reg["Registry API + UI<br/>(control plane)"]
-    end
-    Auth -.->|validate| IdP["Identity Provider"]
-    GW -->|routes to| Servers["MCP Servers, Agents, Skills<br/>(anywhere: EKS / ECS / Lambda / SaaS)"]
-```
+<p align="center">
+  <img src="docs/img/gateway-architecture.svg" alt="Users, AI agents, and coding assistants call the nginx gateway. nginx checks each request with the auth server, which proxies MCP calls to backend servers and agents with per-user egress credentials. The registry writes nginx config and stores inventory, scopes, and audit records in MongoDB or DocumentDB. The auth server reads scopes from the database and verifies identity with the identity provider." width="100%">
+</p>
 
 By default, the registry handles A2A discovery, authentication, and access control, and agents then communicate directly (peer-to-peer) rather than routing every call through the gateway. For the full design and its invariants, read the [Theory of the System](docs/design/theory-of-the-system.md); for layered diagrams, see [Architecture Diagrams](docs/architecture-diagrams.md).
 

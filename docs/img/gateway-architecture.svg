@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 336" role="img" aria-labelledby="arch-title arch-desc">
+<title id="arch-title">MCP Gateway and Registry architecture</title>
+<desc id="arch-desc">Human users, AI agents, and coding assistants call the nginx gateway. nginx checks every request with the auth server through auth_request, and the auth server proxies MCP calls to the backend servers and agents, adding per-user egress credentials. The registry writes nginx config and keeps the inventory, scopes, and audit records in MongoDB or DocumentDB. The auth server reads scopes from the database and verifies identity with the identity provider.</desc>
+<style>
+  .box { fill: none; stroke: #52615f; stroke-width: 1.25; }
+  .hub { fill: #0f766e; fill-opacity: 0.12; stroke: #0f766e; stroke-width: 2; }
+  .ln { fill: none; stroke: #52615f; stroke-width: 1.25; }
+  .dash { stroke-dasharray: 4 4; }
+  .tip { fill: #52615f; }
+  text { font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, system-ui, sans-serif; }
+  .t { font-size: 13px; font-weight: 600; fill: #1d2b2a; }
+  .s { font-size: 11.5px; fill: #52615f; }
+  .note { font-size: 12.5px; fill: #38494a; }
+  @media (prefers-color-scheme: dark) {
+    .box, .ln { stroke: #9fb2b0; }
+    .tip, .s { fill: #9fb2b0; }
+    .hub { fill: #4fd1c1; stroke: #4fd1c1; }
+    .t { fill: #e8efee; }
+    .note { fill: #c3d1cf; }
+  }
+</style>
+<defs>
+  <marker id="arch-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+    <path class="tip" d="M0 0L10 5L0 10z"/>
+  </marker>
+</defs>
+
+<g class="ln">
+  <!-- Clients to nginx -->
+  <path d="M170 70L228 132" marker-end="url(#arch-arrow)"/>
+  <path d="M170 150H228" marker-end="url(#arch-arrow)"/>
+  <path d="M170 230L228 168" marker-end="url(#arch-arrow)"/>
+  <!-- nginx and the registry -->
+  <path d="M290 118V74" marker-end="url(#arch-arrow)"/>
+  <path d="M340 72V116" marker-end="url(#arch-arrow)"/>
+  <!-- Registry to the database -->
+  <path d="M400 44H494" marker-end="url(#arch-arrow)"/>
+  <!-- nginx to auth server to backends -->
+  <path d="M400 150H494" marker-end="url(#arch-arrow)"/>
+  <path d="M696 150H778" marker-end="url(#arch-arrow)"/>
+  <!-- Auth server reads scopes, verifies identity -->
+  <path d="M596 118V74" marker-end="url(#arch-arrow)"/>
+  <path class="dash" d="M596 182V234" marker-end="url(#arch-arrow)"/>
+</g>
+
+<rect class="box" x="20" y="52" width="150" height="36" rx="7"/>
+<text class="t" x="95" y="74.5" text-anchor="middle">Human users</text>
+<rect class="box" x="20" y="132" width="150" height="36" rx="7"/>
+<text class="t" x="95" y="154.5" text-anchor="middle">AI agents</text>
+<rect class="box" x="20" y="212" width="150" height="36" rx="7"/>
+<text class="t" x="95" y="234.5" text-anchor="middle">Coding assistants</text>
+
+<rect class="box" x="230" y="16" width="170" height="56" rx="7"/>
+<text class="t" x="315" y="40" text-anchor="middle">Registry API + UI</text>
+<text class="s" x="315" y="57" text-anchor="middle">control plane</text>
+
+<rect class="hub" x="230" y="118" width="170" height="64" rx="7"/>
+<text class="t" x="315" y="146" text-anchor="middle">nginx gateway</text>
+<text class="s" x="315" y="163" text-anchor="middle">data plane: TLS, routing</text>
+
+<rect class="box" x="496" y="16" width="200" height="56" rx="7"/>
+<text class="t" x="596" y="40" text-anchor="middle">MongoDB / DocumentDB</text>
+<text class="s" x="596" y="57" text-anchor="middle">inventory, scopes, audit</text>
+
+<rect class="box" x="496" y="118" width="200" height="64" rx="7"/>
+<text class="t" x="596" y="146" text-anchor="middle">Auth server</text>
+<text class="s" x="596" y="163" text-anchor="middle">/validate, MCP proxy</text>
+
+<rect class="box" x="496" y="236" width="200" height="56" rx="7"/>
+<text class="t" x="596" y="260" text-anchor="middle">Identity provider</text>
+<text class="s" x="596" y="277" text-anchor="middle">Keycloak, Entra ID, Okta, ...</text>
+
+<rect class="box" x="780" y="108" width="160" height="84" rx="7"/>
+<text class="t" x="860" y="138" text-anchor="middle">MCP servers</text>
+<text class="t" x="860" y="155" text-anchor="middle">&amp; agents</text>
+<text class="s" x="860" y="175" text-anchor="middle">EKS, ECS, Lambda, SaaS</text>
+
+<text class="s" x="282" y="100" text-anchor="end">UI, /api</text>
+<text class="s" x="348" y="100" text-anchor="start">config + reload</text>
+<text class="s" x="447" y="140" text-anchor="middle">auth_request</text>
+<text class="s" x="737" y="140" text-anchor="middle">egress creds</text>
+<text class="s" x="604" y="100" text-anchor="start">scopes</text>
+<text class="s" x="604" y="214" text-anchor="start">OIDC</text>
+
+<text class="note" x="20" y="322">The registry decides what nginx may route to. nginx and the auth server enforce it on every call.</text>
+</svg>
