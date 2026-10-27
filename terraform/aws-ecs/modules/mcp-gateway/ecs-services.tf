@@ -338,6 +338,16 @@ module "ecs_service_auth" {
           name  = "OAUTH2_ALLOWED_REDIRECT_URIS"
           value = var.oauth2_allowed_redirect_uris
         },
+        # The auth server mints MCP access tokens, so it reads the same TTL
+        # settings as the registry (auth_server/server.py).
+        {
+          name  = "MCP_TOKEN_DEFAULT_TTL_HOURS"
+          value = tostring(var.mcp_token_default_ttl_hours)
+        },
+        {
+          name  = "MCP_TOKEN_MAX_TTL_HOURS"
+          value = tostring(var.mcp_token_max_ttl_hours)
+        },
         {
           name  = "TRUSTED_PROXY_HOPS"
           value = tostring(var.trusted_proxy_hops)
@@ -2025,14 +2035,6 @@ module "ecs_service_registry" {
         {
           name  = "SECRETS_MANAGER_PATH_PREFIX"
           value = var.egress_secrets_manager_path_prefix
-        },
-        {
-          name  = "MCP_TOKEN_DEFAULT_TTL_HOURS"
-          value = tostring(var.mcp_token_default_ttl_hours)
-        },
-        {
-          name  = "MCP_TOKEN_MAX_TTL_HOURS"
-          value = tostring(var.mcp_token_max_ttl_hours)
         },
         # Prevent AWS SDKs from falling back to EC2 IMDS. ECS delivers task-role
         # credentials through the container-credentials provider
