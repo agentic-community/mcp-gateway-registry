@@ -961,6 +961,31 @@ class TestGenerateVirtualBackendLocations:
         assert "proxy_set_header X-Authorization $http_x_authorization;" in block
 
     @pytest.mark.asyncio
+    async def test_backend_auth_capture_fits_large_validate_response(self, mock_server_repository):
+        """Issue #1939: the Lua router calls /_vs_auth_* with ngx.location.capture,
+        and that location proxies straight to the auth server's /validate. It never
+        passes through the template's shared `location = /validate` block, so it
+        does not inherit that block's 64k header buffer and must set its own. It
+        must also not request the group-bearing registry token."""
+        mock_server_repository.get.return_value = {
+            "is_enabled": True,
+            "proxy_pass_url": "https://backend.example.com/mcp",
+        }
+        from registry.core.nginx_service import NginxConfigService
+
+        result = await NginxConfigService()._generate_virtual_backend_locations([_make_vs_config()])
+        block = _location_block(result, "/_vs_auth_github")
+
+        for directive in (
+            "proxy_buffer_size 64k;",
+            "proxy_buffers 2 64k;",
+            "proxy_busy_buffers_size 64k;",
+            "error_page 500 502 504 = @auth_subrequest_failed;",
+            'proxy_set_header X-Registry-Api-Auth "";',
+        ):
+            assert directive in block, directive
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "backend_doc",
         [

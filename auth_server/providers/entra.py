@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+import json
 import logging
 import os
 import time
@@ -95,10 +96,27 @@ def _group_cache_ttl_seconds() -> int:
     return ttl
 
 
-# nginx's 16 KiB auth_request response contains both X-Groups and a registry
-# token that base64-encodes the same list, plus other auth headers. Keep the
-# group portion under 4 KiB so the combined headers have headroom.
-GRAPH_GROUP_HEADER_MAX_BYTES = 4096
+# Budget for Entra memberships recovered from Microsoft Graph, measured as the
+# JSON list a registry token encodes. Graph can return thousands of groups, and
+# at login the filtered list is stored in the session and resolved on every
+# request, so a runaway membership is refused rather than truncated (which would
+# drop arbitrary grants). 8 KiB is about 200 GUIDs after the scope-mapping filter,
+# the same count Entra itself places inline in a token, so a recovered set gets
+# the same room as an inline one; either fits well inside the 64 KiB /validate
+# buffer and the auth server's 40 KiB token cap.
+GRAPH_GROUP_MAX_BYTES: int = 8 * 1024
+
+
+def graph_group_bytes(groups: list[str]) -> int:
+    """Size of ``groups`` as the JSON list a registry token encodes.
+
+    Args:
+        groups: Group IDs recovered from Microsoft Graph.
+
+    Returns:
+        The UTF-8 byte length of ``json.dumps(groups)``.
+    """
+    return len(json.dumps(groups).encode("utf-8"))
 
 
 class GraphGroupLookupError(Exception):

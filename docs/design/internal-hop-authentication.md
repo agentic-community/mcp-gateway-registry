@@ -182,10 +182,10 @@ sequenceDiagram
     participant SM as Scope map mcp_scopes in DocumentDB plus cache
 
     C->>N: GET api with cookie or Bearer or static token
-    N->>A: auth_request validate plus X-Registry-Api-Auth
-    A->>A: authenticate caller
+    N->>A: auth_request validate plus X-Registry-Api-Auth and the marker secret
+    A->>A: authenticate caller, check the marker secret
     A-->>N: 200 plus X-Internal-Token-Registry
-    Note over A,N: token aud is mcp-registry-ui and carries sub, session_id, groups, auth_method, client_id but NO scopes
+    Note over A,N: token aud is mcp-registry-ui and carries sub, session_id, groups (bearer callers only), auth_method, client_id but NO scopes
     N->>R: GET api plus X-Internal-Token-Registry
     R->>R: verify token then ignore X-User X-Scopes X-Groups
     alt session_id present
@@ -206,9 +206,12 @@ sequenceDiagram
 
 The `/mcp-proxy` token embeds scopes; the registry token deliberately does **not**. Two reasons:
 
-1. **Constant size.** A user in many groups would otherwise produce a large token, and the token
-   rides in an HTTP header with a size ceiling. Carrying only identity keeps it a fixed, small size
-   regardless of group count (there is a dedicated `tests/integration/test_registry_token_size.py`).
+1. **Bounded size.** Scopes would add a second group-sized list to a token that rides in an HTTP
+   header. A session-backed caller's token carries no groups at all, so it stays small however many
+   groups the user has. A bearer caller's token carries the groups once, so it grows with them;
+   the auth server refuses any internal token over 40 KiB (`INTERNAL_TOKEN_MAX_BYTES`) so it always
+   fits the 64 KiB `/validate` header buffer in nginx (issue #1939). See
+   `tests/integration/test_registry_token_size.py`.
 2. **One authorization code path.** The registry already derives `groups -> scopes -> permissions`
    server-side for the cookie flow. Reusing that exact derivation for the signed-token path means
    there is a single source of truth for authorization, instead of a second one embedded in a token.

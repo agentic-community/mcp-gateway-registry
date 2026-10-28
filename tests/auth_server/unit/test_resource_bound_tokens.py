@@ -257,6 +257,7 @@ class TestMintResourceBoundToken:
                     "Authorization": f"Bearer {token}",
                     "X-Original-URL": "https://example.com/api/servers",
                     "X-Registry-Api-Auth": "1",
+                    "X-Validate-Source-Secret": server_module.settings.auth_server_nginx_marker_secret,
                 },
             )
 

@@ -1,17 +1,14 @@
 """JWT-size guard for the registry-UI internal token (kiro review item #2).
 
 Binding groups into the token reintroduces the large-group-membership pressure that
-#971 (server-side OAuth session store) solved for cookies. This test pins the two
-regimes:
-
-- Session-backed callers (the large-group Entra population) carry NO groups in the
-  token -- only an opaque session_id -- so the token is constant-size regardless of
-  group count. This is the path that would otherwise overflow the header.
-- Bearer/static-token callers carry groups in the claim, so their token grows with
-  group count. These are machine identities with small group sets in practice; this
-  test records the size at 50/200/500 groups so a regression (or an unexpectedly
-  large machine identity) is visible, and documents that the nginx
-  large_client_header_buffers must accommodate the upper bound.
+#971 (server-side OAuth session store) solved for cookies. Session-backed callers
+carry no groups in the token (``_attach_registry_ui_token`` drops them because the
+registry resolves them from the session store; see
+tests/auth_server/unit/test_registry_ui_token_attach.py). Bearer/static-token
+callers carry groups in the claim, so their token grows with group count. This
+test records the size at 50/200/500 groups so a regression (or an unexpectedly
+large machine identity) is visible, and documents that the /validate
+proxy_buffer_size in the nginx templates must accommodate the upper bound.
 """
 
 import os
@@ -19,15 +16,20 @@ from unittest.mock import patch
 
 import pytest
 
-from auth_server.internal_request_token import mint_registry_ui_token
+from auth_server.internal_request_token import (
+    INTERNAL_TOKEN_MAX_BYTES,
+    mint_registry_ui_token,
+)
 
 _SECRET = "size-benchmark-secret-key"
 
-# The static nginx confs set `large_client_header_buffers 4 32k` (well above the
-# 8k default), so a single header value up to ~32k is accepted. Keep the test
-# ceiling at that buffer size as the contract: a token exceeding it would be
-# rejected by nginx before reaching the registry.
-_HEADER_BUFFER_CEILING = 32 * 1024
+# Two different numbers bound this token. nginx reads the /validate response into
+# the 64 KiB `location = /validate` proxy_buffer_size, and the auth server refuses
+# to mint above INTERNAL_TOKEN_MAX_BYTES (40 KiB) to leave room for the other
+# auth headers. Separately, a bearer whose groups arrive inline is limited by the
+# 32 KiB inbound header cap, which yields a registry token near 32 KiB at most;
+# 500 realistic groups should stay under that inline bound.
+_INLINE_BEARER_TOKEN_BOUND = 32 * 1024
 
 
 @pytest.fixture(autouse=True)
@@ -39,24 +41,6 @@ def _secret_env():
 def _groups(n: int) -> list[str]:
     # Realistic-ish group names (IdP groups are often long DN-like strings).
     return [f"group-{i:04d}-some-realistic-org-unit-name" for i in range(n)]
-
-
-class TestSessionBackedTokenIsSizeIndependent:
-    def test_groups_do_not_inflate_session_backed_token(self) -> None:
-        # The session-backed token carries session_id, NOT groups -- so passing a
-        # huge group list (which a caller never would here) still yields a small,
-        # constant-size token because mint ignores groups when... actually mint
-        # encodes whatever is passed; the POINT is /validate passes groups=[] for
-        # session callers. Assert that the session-backed shape /validate uses
-        # (groups=[]) is tiny and independent of the user's real group count.
-        small = mint_registry_ui_token(
-            subject="entra-user@example.com",
-            session_id="opaque-session-id-1234567890",
-            groups=[],  # /validate passes [] for session callers
-            auth_method="session_cookie",
-            client_id="",
-        )
-        assert len(small) < 1024, "session-backed token must stay small"
 
 
 class TestBearerTokenSizeBounds:
@@ -73,13 +57,14 @@ class TestBearerTokenSizeBounds:
         # Record the size so a regression is visible in the assertion message.
         assert size < expected_under, (
             f"{n}-group bearer token is {size} bytes (expected < {expected_under}). "
-            f"If real machine identities approach this many groups, raise nginx "
-            f"large_client_header_buffers and this bound."
+            f"If real machine identities approach this many groups, raise the "
+            f"`location = /validate` proxy_buffer_size in the nginx templates, "
+            f"INTERNAL_TOKEN_MAX_BYTES, and this bound."
         )
 
     def test_500_groups_documents_upper_bound(self) -> None:
         # 500 groups is well beyond a realistic machine identity; this asserts the
-        # token still fits the bumped header buffer ceiling, documenting the wall.
+        # token stays under the inline-bearer bound, below the mint cap.
         token = mint_registry_ui_token(
             subject="svc-account",
             session_id="",
@@ -87,8 +72,9 @@ class TestBearerTokenSizeBounds:
             auth_method="network-trusted",
             client_id="key-1",
         )
-        assert len(token) < _HEADER_BUFFER_CEILING, (
-            f"500-group token is {len(token)} bytes, exceeding the {_HEADER_BUFFER_CEILING}-byte "
-            f"header-buffer ceiling. A bearer/static caller with this many groups needs either a "
-            f"larger nginx large_client_header_buffers or the #971 server-side claim-store pattern."
+        assert len(token) < _INLINE_BEARER_TOKEN_BOUND < INTERNAL_TOKEN_MAX_BYTES, (
+            f"500-group token is {len(token)} bytes, over the {_INLINE_BEARER_TOKEN_BOUND}-byte "
+            f"inline-bearer bound. A bearer/static caller with this many groups needs either a "
+            f"larger `location = /validate` proxy_buffer_size and INTERNAL_TOKEN_MAX_BYTES, "
+            f"or the #971 server-side claim-store pattern."
         )

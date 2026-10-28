@@ -1,17 +1,19 @@
 """Registry-side verifier for the /validate-minted registry-UI internal token.
 
 The auth-server ``/validate`` endpoint mints a short-lived HS256 JWT (audience
-``mcp-registry-ui``) signed with the shared ``SECRET_KEY`` whenever nginx forwards
-the ``X-Registry-Api-Auth`` marker on a registry ``/api/`` request. nginx forwards
-the token to the registry on the ``X-Internal-Token-Registry`` header. The registry
-verifies it here and treats the verified claims as the source of truth for identity,
-ignoring the forgeable inbound ``X-User`` / ``X-Scopes`` / ``X-Groups`` headers.
+``mcp-registry-ui``) signed with the shared ``SECRET_KEY`` when nginx forwards the
+``X-Registry-Api-Auth`` marker on a registry ``/api/`` request together with the
+matching ``X-Validate-Source-Secret``. nginx forwards the token to the registry on the
+``X-Internal-Token-Registry`` header. The registry verifies it here and treats the
+verified claims as the source of truth for identity, ignoring the forgeable inbound
+``X-User`` / ``X-Scopes`` / ``X-Groups`` headers.
 
 The token is a *thin identity assertion*: it binds who the caller is
 (``sub``/``session_id``/``groups``/``auth_method``/``client_id``), NOT their resolved
 entitlements. ``nginx_proxied_auth`` derives groups->scopes->permissions server-side
-(mirroring the cookie path), so the token stays a constant size regardless of how many
-groups a user has.
+(mirroring the cookie path). A session-backed caller's token carries no groups (they
+come from the session store), so it stays small; a bearer caller's token carries the
+groups once and grows with them, up to the auth server's 40 KiB mint limit.
 
 This module is the registry's own verifier (mirroring ``registry/auth/internal.py``);
 it deliberately does NOT import from ``auth_server/`` -- the two are separate services

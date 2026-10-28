@@ -806,6 +806,29 @@ class TestSettingsSecretKey:
                 auth_server_nginx_marker_secret="short",
             )
 
+    @pytest.mark.parametrize("bad", ["$", "\n", "\r", " ", "\t", "\x00"])
+    def test_marker_secret_nginx_cannot_carry_rejected(self, monkeypatch, tmp_path, bad) -> None:
+        """A marker the nginx header round trip would alter fails at startup, not with
+        a 401 per request."""
+        monkeypatch.chdir(tmp_path)
+        with pytest.raises(RuntimeError, match="must not contain"):
+            Settings(
+                secret_key="a-valid-secret-key-of-at-least-32-bytes",
+                auth_server_nginx_marker_secret=f"0123456789abcdef{bad}0123456789abcdef",
+            )
+
+    def test_marker_secret_surrounding_whitespace_is_stripped(self, monkeypatch, tmp_path) -> None:
+        """A trailing newline from a secret file must not reach the comparison."""
+        monkeypatch.chdir(tmp_path)
+        marker = "0123456789abcdef0123456789abcdef"
+
+        settings = Settings(
+            secret_key="a-valid-secret-key-of-at-least-32-bytes",
+            auth_server_nginx_marker_secret=f"  {marker}\n",
+        )
+
+        assert settings.auth_server_nginx_marker_secret == marker
+
 
 # =============================================================================
 # TEST CLASS: Session Cookie Configuration

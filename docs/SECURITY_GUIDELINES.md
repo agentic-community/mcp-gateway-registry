@@ -523,8 +523,8 @@ sanitizer that isn't called) is equivalent to no check.
   never add signed delegated `scp` values on top, because an app registration
   names those and users grant them by consent, outside administrator control.
   On any lookup or consent failure, stop authorization instead of using partial
-  groups. Filter recovered groups before writing the login session or building
-  `X-Groups`, and deny an oversized header rather than truncating grants.
+  groups. Filter recovered groups before writing the login session or minting
+  the registry token, and deny an oversized group set rather than truncating grants.
 - **Group recovery controls must not resurrect stale grants.** When Entra
   Graph recovery is disabled, discard overage-marked inline groups and keep
   only verified roles. Bound the positive group cache TTL because it delays
@@ -786,6 +786,12 @@ sanitizer that isn't called) is equivalent to no check.
   never set (`X-Validate-Binding-Secret`) -- and treat them as absent otherwise.
   The existing marker proves "came through nginx", not "came through this
   version of the template".
+- **Every internal token `/validate` mints needs the nginx marker, not just its
+  routing header.** `X-Resolved-Upstream`, `X-Resolved-Generic-Upstream` and
+  `X-Registry-Api-Auth` choose which token `/validate` mints, and each is a plain
+  header a direct auth-server caller can send. Gate every mint on the matching
+  `X-Validate-Source-Secret`, including a token that only asserts the caller's
+  own identity: a later consumer may come to trust it for more.
 - **Validate the type of any claim that drives authorization, and reject rather
   than coerce.** A `groups` claim arrives as a JSON array of strings. Six
   readings of it had each guessed differently at what to do with other shapes:

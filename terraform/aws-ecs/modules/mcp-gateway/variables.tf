@@ -2109,10 +2109,15 @@ variable "egress_registry_internal_url" {
 }
 
 variable "egress_nginx_marker_secret" {
-  description = "Optional override for the nginx marker secret shared by registry + auth-server. Empty auto-generates a strong value (stored in Secrets Manager). The marker is required unconditionally -- both services refuse to start without it."
+  description = "Optional override for the nginx marker secret shared by registry + auth-server. Empty auto-generates a strong value (stored in Secrets Manager). The marker is required unconditionally; both services refuse to start without it. It must not contain '$', whitespace or control characters, because the registry renders it into the nginx config."
   type        = string
   default     = ""
   sensitive   = true
+
+  validation {
+    condition     = !can(regex("[$\\s\\x00-\\x1f\\x7f]", var.egress_nginx_marker_secret))
+    error_message = "egress_nginx_marker_secret must not contain '$', whitespace or control characters: the registry renders it into the nginx config and nginx sends it as a header."
+  }
 }
 
 variable "egress_secrets_manager_kms_key_id" {
