@@ -103,9 +103,11 @@ resource "aws_secretsmanager_secret_version" "secret_key" {
 
 # nginx marker secret. Required unconditionally by both auth-server and registry
 # (they refuse to start without it): nginx force-sets it as X-Validate-Source-Secret
-# on the /validate subrequest, and the auth-server only mints an mcp-proxy token
-# when it matches -- so a direct :8888 /validate with a forged X-Resolved-Upstream
-# cannot obtain one. Generated like secret_key (not gated on egress). special=false
+# on the /validate subrequest, and the auth-server mints its internal tokens
+# (registry API, mcp-proxy, generic proxy) only when it matches, so a direct
+# :8888 /validate with a forged routing header cannot obtain one, and a mismatch
+# between the two services 401s every registry API request.
+# Generated like secret_key (not gated on egress). special=false
 # because the registry substitutes the value verbatim into the generated nginx conf,
 # where quotes/backslashes/$ would break parsing.
 resource "random_password" "nginx_marker_secret" {
@@ -116,7 +118,7 @@ resource "random_password" "nginx_marker_secret" {
 resource "aws_secretsmanager_secret" "nginx_marker_secret" {
   #checkov:skip=CKV2_AWS_57:Application-generated marker secret - rotation requires coordinated service restart
   name_prefix             = "${local.name_prefix}-nginx-marker-"
-  description             = "nginx marker secret shared by auth-server and registry (guards mcp-proxy token minting)"
+  description             = "nginx marker secret shared by auth-server and registry (guards internal-token minting)"
   recovery_window_in_days = 0
   kms_key_id              = aws_kms_key.secrets.id
   tags                    = local.common_tags

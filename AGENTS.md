@@ -415,6 +415,10 @@ working in those areas.
   explicit-list default-empty (fail closed); keep Terraform+CDK in parity.
 - **Internal tokens:** short TTL isn't enough: add `jti` + single-use via a
   shared store (unless the token is legitimately verified twice per flow).
+- **Internal-token mints:** gate every token `/validate` mints on the nginx
+  marker (`X-Validate-Source-Secret`), never on its routing header alone
+  (`X-Registry-Api-Auth`, `X-Resolved-Upstream`, `X-Resolved-Generic-Upstream`);
+  each is a plain header a direct auth-server caller can send.
 - **DoS:** rate-limit at the inbound edge (nginx `limit_req`), never the shared
   `/validate` subrequest; cover all deploy modes. **Audit:** durable-by-default
   (fail closed), attributable to a specific actor.

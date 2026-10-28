@@ -675,14 +675,17 @@ _NGINX_TEST_NO_BINARY: str = "__nginx_binary_missing__"
 
 
 # Placeholders that only a raw, unrendered template contains. The registry
-# entrypoint waits for these same five to disappear before it starts nginx
-# (docker/registry-entrypoint.sh), so keep the two lists in sync.
+# entrypoint waits for these same six to disappear before it starts nginx
+# (docker/registry-entrypoint.sh), so keep the two lists in sync. An unrendered
+# marker secret makes the auth server refuse every internal-token mint, which
+# 401s every registry API request.
 _UNRENDERED_TEMPLATE_MARKERS: tuple[str, ...] = (
     "{{ADDITIONAL_SERVER_NAMES}}",
     "{{ANTHROPIC_API_VERSION}}",
     "{{LOCATION_BLOCKS}}",
     "{{VIRTUAL_SERVER_BLOCKS}}",
     "{{MCP_RESOURCE_METADATA_URL}}",
+    "{{NGINX_MARKER_SECRET}}",
 )
 
 
@@ -1206,6 +1209,15 @@ class NginxConfigService:
                 "yes",
                 "on",
             ):
+                # KNOWN ISSUE (tracked separately from #1939): this literal no
+                # longer matches the /api/ location in either template (they gained
+                # rate limits, reworded comments and extra headers), so the
+                # replacement below never fires and this flag leaves nginx running
+                # auth_request. Do not just fix the matcher: unprotected_api_block is
+                # stale too. It lacks `proxy_set_header X-Internal-Secret "";` (the
+                # templates clear it, and /api/internal/sessions/* falls through to
+                # /api/), uses $scheme where the templates use $forwarded_proto /
+                # $real_scheme, and has no `error_page 502 = @upstream_unavailable;`.
                 protected_api_block = """    # Protected API endpoints - require authentication
     location {{ROOT_PATH}}/api/ {
         # Mark this as a registry-API request (rewrite phase) so the shared
@@ -1219,7 +1231,7 @@ class NginxConfigService:
         auth_request_set $auth_subrequest_status $upstream_status;
         auth_request_set $auth_entra_outage_marker $upstream_http_x_entra_group_lookup_unavailable;
         error_page 403 = @forbidden_error;
-        error_page 502 /502.html;
+        error_page 502 = @upstream_unavailable;
         error_page 500 = @auth_internal_error;
 
         # Capture auth server response headers
@@ -1462,12 +1474,15 @@ class NginxConfigService:
                 "{{ADDITIONAL_SERVER_NAMES}}", additional_server_names
             )
             config_content = config_content.replace("{{ANTHROPIC_API_VERSION}}", api_version)
-            # egress marker: force-set on the /validate subrequest so a direct
-            # :8888 caller cannot supply it. Empty default leaves the header empty
-            # (marker disabled), matching auth_server's empty-secret pass-through.
+            # Marker secret: force-set on every /validate subrequest so the auth
+            # server mints internal tokens only for requests that came through
+            # nginx. Read from the same Settings object that refuses to start
+            # without it (and that the generated /_vs_auth_* blocks use), so a
+            # value supplied only through .env cannot render as an empty marker,
+            # which would make the auth server refuse every mint.
             config_content = config_content.replace(
                 "{{NGINX_MARKER_SECRET}}",
-                os.environ.get("AUTH_SERVER_NGINX_MARKER_SECRET", ""),
+                self._sanitize_for_nginx_set(settings.auth_server_nginx_marker_secret),
             )
             config_content = config_content.replace("{{KEYCLOAK_SCHEME}}", keycloak_scheme)
             config_content = config_content.replace("{{KEYCLOAK_HOST}}", keycloak_host)
@@ -2085,6 +2100,7 @@ class NginxConfigService:
         auth_request_set $auth_subrequest_status $upstream_status;
         auth_request_set $auth_entra_outage_marker $upstream_http_x_entra_group_lookup_unavailable;
         error_page 500 = @auth_internal_error;
+        error_page 502 = @upstream_unavailable_jsonrpc;
         auth_request_set $auth_scopes $upstream_http_x_scopes;
         auth_request_set $auth_user $upstream_http_x_user;
         auth_request_set $auth_username $upstream_http_x_username;
@@ -2232,6 +2248,7 @@ class NginxConfigService:
         auth_request_set $auth_subrequest_status $upstream_status;
         auth_request_set $auth_entra_outage_marker $upstream_http_x_entra_group_lookup_unavailable;
         error_page 500 = @auth_internal_error;
+        error_page 502 = @upstream_unavailable;
         auth_request_set $auth_internal_token_generic $upstream_http_x_internal_token_generic;
         auth_request_set $auth_user $upstream_http_x_user;
         auth_request_set $auth_scopes $upstream_http_x_scopes;
@@ -2559,6 +2576,21 @@ class NginxConfigService:
         proxy_read_timeout 10s;
         proxy_send_timeout 10s;
         proxy_http_version 1.1;
+        # This location proxies straight to the auth server's /validate; it never
+        # passes through the template's shared `location = /validate` block, so
+        # it repeats that block's header buffers here (issue #1939). The response
+        # carries the scope-bearing X-Internal-Token minted for the backend
+        # (X-Resolved-Upstream is set below) but no registry token, because
+        # X-Registry-Api-Auth is cleared below, so it never carries the groups.
+        proxy_buffer_size 64k;
+        proxy_buffers 2 64k;
+        proxy_busy_buffers_size 64k;
+        # The Lua router treats any non-200, or a 200 without a signed
+        # X-Internal-Token, as a failed backend authorization. In an
+        # ngx.location.capture the error_page below did not rewrite the status
+        # (an oversized auth response reached Lua as 502); it is kept to stop a
+        # server-level error_page such as /502.html from answering here.
+        error_page 500 502 504 = @auth_subrequest_failed;
         proxy_set_header Host $host;
         proxy_set_header X-Original-URL $scheme://$host{{{{ROOT_PATH}}}}{safe_backend_path}/mcp;
         # The parent URI is the only source of a virtual-resource token's
@@ -3003,6 +3035,7 @@ class NginxConfigService:
         auth_request_set $auth_subrequest_status $upstream_status;
         auth_request_set $auth_entra_outage_marker $upstream_http_x_entra_group_lookup_unavailable;
         error_page 500 = @auth_internal_error;
+        error_page 502 = @upstream_unavailable;
         auth_request_set $auth_scopes $upstream_http_x_scopes;
         set $agent_backend_url "{safe_backend_url}";
         set $agent_card_upstream "{card_internal_uri}";
@@ -3042,6 +3075,7 @@ class NginxConfigService:
         auth_request_set $auth_subrequest_status $upstream_status;
         auth_request_set $auth_entra_outage_marker $upstream_http_x_entra_group_lookup_unavailable;
         error_page 500 = @auth_internal_error;
+        error_page 502 = @upstream_unavailable_jsonrpc;
         auth_request_set $auth_user $upstream_http_x_user;
         auth_request_set $auth_username $upstream_http_x_username;
         auth_request_set $auth_scopes $upstream_http_x_scopes;
@@ -3341,6 +3375,7 @@ class NginxConfigService:
         auth_request_set $auth_subrequest_status $upstream_status;
         auth_request_set $auth_entra_outage_marker $upstream_http_x_entra_group_lookup_unavailable;
         error_page 500 = @auth_internal_error;
+        error_page 502 = @upstream_unavailable_jsonrpc;
 
         # Capture auth server response headers for forwarding
         auth_request_set $auth_user $upstream_http_x_user;

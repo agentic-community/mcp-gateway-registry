@@ -768,7 +768,6 @@ async def nginx_proxied_auth(
         str | None, Header(alias="X-Auth-Method", include_in_schema=False)
     ] = None,
     x_client_id: Annotated[str | None, Header(alias="X-Client-Id", include_in_schema=False)] = None,
-    x_groups: Annotated[str | None, Header(alias="X-Groups", include_in_schema=False)] = None,
     x_internal_token: Annotated[
         str | None, Header(alias="X-Internal-Token-Registry", include_in_schema=False)
     ] = None,
@@ -833,8 +832,11 @@ async def nginx_proxied_auth(
     if _api_auth_request_enabled() and (x_user or x_username):
         logger.warning(
             "nginx-proxied auth: identity headers present without a valid "
-            "X-Internal-Token-Registry while auth_request is enabled; rejecting "
-            "(forged-header attempt or misconfigured nginx)."
+            "X-Internal-Token-Registry while auth_request is enabled; rejecting. "
+            "Causes: a forged-header attempt, a misconfigured nginx, an "
+            "AUTH_SERVER_NGINX_MARKER_SECRET mismatch between registry and auth_server "
+            "(auth_server logs 'nginx marker missing/mismatched'), or a token too large "
+            "to mint (auth_server logs 'over the ...-byte limit')."
         )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

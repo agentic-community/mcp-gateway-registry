@@ -1,17 +1,18 @@
 """IdP group filtering applied at login, before the session store write.
 
 Users with very large IdP group memberships (e.g. Entra ID accounts that belong
-to hundreds or thousands of AD groups) cause two failures that scale with the
-group count, on every authenticated request:
+to hundreds or thousands of AD groups) make every session-backed request carry
+and resolve the whole list: the session record grows and ``map_groups_to_scopes``
+looks up every group.
 
-1. The ``X-Groups`` response header from ``/validate`` overflows nginx buffers,
-   producing 500 errors on ``/scan`` and ``/ratings``.
-2. ``map_groups_to_scopes`` issues one DocumentDB query per group.
-
-This module filters the group list down to the groups the registry actually
-grants access through, BEFORE it is persisted in the session. Because scopes are
-only ever derived from groups that appear in a scope's ``group_mappings``,
-dropping the other groups is lossless for authorization.
+This module filters the group list down to the groups the registry grants scopes
+through, BEFORE it is persisted in the session. Scopes come only from groups that
+appear in a scope's ``group_mappings``, so the filter never changes a user's
+scopes. It is NOT lossless for every check: group-restricted visibility
+(``allowed_groups``) matches the session's groups directly, so a group that grants
+visibility but no scope is dropped for browser sessions. ``/validate`` does not
+filter a bearer token's inline groups (issue #1939), so the two paths can disagree
+for the same user.
 
 Precedence (see .scratchpad/idp-group-filter-fix/lld.md):
 

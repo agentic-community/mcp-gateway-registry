@@ -36,6 +36,16 @@ MCP_PROXY_TOKEN_USE: str = "mcp-proxy"
 MCP_REGISTRY_UI_AUDIENCE: str = "mcp-registry-ui"
 MCP_REGISTRY_UI_TOKEN_USE: str = "mcp-registry-ui"
 
+# Ceiling on every internal token /validate mints. nginx reads the /validate
+# response that carries these tokens into the 64 KiB proxy_buffer_size of
+# ``location = /validate`` (issue #1939); 40 KiB leaves 24 KiB for the other auth
+# headers. A bearer's inline groups stay under it, because nginx caps one inbound
+# header at 32 KiB and re-encoding those groups yields a token near 32 KiB at
+# most. Nothing else bounds the groups that come from server-side sources:
+# ``REGISTRY_API_KEYS`` entries, the MongoDB ``idp_m2m_clients`` and
+# ``idp_user_groups`` enrichment, or a large scope catalog in the scopes claim.
+INTERNAL_TOKEN_MAX_BYTES: int = 40 * 1024
+
 # Audience for the generic reverse-proxy hop (/proxy/{entity_type}/{path}), used
 # for non-MCP proxied entities (skills, agents, custom). Distinct from every
 # audience above so a generic-proxy token can't be replayed at /mcp-proxy (which
@@ -96,6 +106,16 @@ def _leeway_seconds() -> int:
         return 5
 
 
+class InternalTokenTooLargeError(RuntimeError):
+    """A minted internal token is too large to carry through nginx's /validate buffer.
+
+    Distinct from the ``ValueError`` an empty subject raises: that one means "no
+    token for this caller" and /validate still answers 200, while this one is a
+    server-side configuration limit that /validate reports as a 500 so it is not
+    mistaken for a credential failure.
+    """
+
+
 def _get_secret_key() -> str:
     secret_key = os.environ.get("SECRET_KEY")
     if not secret_key:
@@ -125,6 +145,10 @@ def _mint_internal_token(
 
     Raises:
         ValueError: If ``SECRET_KEY`` is unset or ``subject`` is empty.
+        InternalTokenTooLargeError: If the encoded token exceeds
+            ``INTERNAL_TOKEN_MAX_BYTES``. An oversized token would overflow nginx's
+            /validate header buffer, so refusing here fails closed with a clear log
+            line instead of an opaque nginx 500.
     """
     if not subject:
         # An empty subject would mint an anonymous-but-valid token. Refuse, so
@@ -145,7 +169,16 @@ def _mint_internal_token(
     # a reserved base claim (aud/exp/iss/sub/...). Callers pass server-derived
     # constants today, but this makes the invariant structural, not a convention.
     claims: dict = {**(extra_claims or {}), **base_claims}
-    return pyjwt.encode(claims, secret_key, algorithm="HS256")
+    token = pyjwt.encode(claims, secret_key, algorithm="HS256")
+    if len(token) > INTERNAL_TOKEN_MAX_BYTES:
+        groups = claims.get("groups")
+        raise InternalTokenTooLargeError(
+            f"{audience} token is {len(token)} bytes ({len(claims['scopes'])} scopes, "
+            f"{len(groups) if isinstance(groups, list) else 0} groups), over the "
+            f"{INTERNAL_TOKEN_MAX_BYTES}-byte limit; reduce this identity's groups or "
+            "scopes (map fewer IdP groups, or trim the REGISTRY_API_KEYS entry)"
+        )
+    return token
 
 
 def _decode_internal_token(
@@ -319,14 +352,14 @@ def mint_registry_ui_token(
 
     A thin identity assertion: it binds *who* the caller is, NOT their resolved
     entitlements. The registry derives groups->scopes->permissions server-side
-    (mirroring its cookie path), so no scopes are encoded and the token stays a
-    constant size regardless of group count.
+    (mirroring its cookie path), so no scopes are encoded.
 
     ``session_id`` is the opaque server-side session identifier for browser/
     session-backed callers (the registry resolves live groups via the session
     store); it is empty for bearer/IdP-JWT and static-token callers, which have
     no session row and instead rely on the ``groups`` claim. ``groups`` is the
-    fallback for those non-session callers (small, machine-identity group sets).
+    fallback for those non-session callers, so the token grows with their group
+    count.
 
     ``egress_user`` is the CANONICAL per-user egress vault id (OIDC ``sub``). The
     registry's consent-write path keys the vault on this; it must match the value
@@ -335,6 +368,11 @@ def mint_registry_ui_token(
     ``_mint_internal_token`` refuses an empty subject (fail-closed): if minting
     raises, /validate attaches no token and the registry rejects the request
     rather than trusting unsigned headers.
+
+    Raises:
+        ValueError: The subject is empty.
+        InternalTokenTooLargeError: The minted token exceeds
+            ``INTERNAL_TOKEN_MAX_BYTES`` (see ``_mint_internal_token``).
     """
     return _mint_internal_token(
         audience=MCP_REGISTRY_UI_AUDIENCE,

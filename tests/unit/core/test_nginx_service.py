@@ -76,6 +76,9 @@ def nginx_service():
             mock_settings.deployment_mode.value = "with-gateway"
             mock_settings.nginx_config_path = "/etc/nginx/conf.d/nginx_rev_proxy.conf"
             mock_settings.auth_server_url = "http://auth-server:8888"
+            mock_settings.auth_server_nginx_marker_secret = (
+                "test-nginx-marker-secret-0123456789abcdef"
+            )
 
             service = NginxConfigService()
             yield service
@@ -520,6 +523,7 @@ async def test_a2a_blocks_emitted_when_flag_enabled(
         mock_settings.a2a_reverse_proxy_effective = True
         mock_settings.nginx_config_path = "/etc/nginx/conf.d/nginx_rev_proxy.conf"
         mock_settings.auth_server_url = "http://auth-server:8888"
+        mock_settings.auth_server_nginx_marker_secret = "test-nginx-marker-secret-0123456789abcdef"
         with patch.object(nginx_service.nginx_template_path, "exists", return_value=True):
             with patch("builtins.open", mock_open(read_data=template_content)):
                 with patch("registry.health.service.health_service", mock_health_service):
@@ -554,6 +558,7 @@ async def test_a2a_blocks_skipped_when_flag_disabled(
         mock_settings.a2a_reverse_proxy_effective = False
         mock_settings.nginx_config_path = "/etc/nginx/conf.d/nginx_rev_proxy.conf"
         mock_settings.auth_server_url = "http://auth-server:8888"
+        mock_settings.auth_server_nginx_marker_secret = "test-nginx-marker-secret-0123456789abcdef"
         with patch.object(nginx_service.nginx_template_path, "exists", return_value=True):
             with patch("builtins.open", mock_open(read_data=template_content)):
                 with patch("registry.health.service.health_service", mock_health_service):
@@ -604,6 +609,9 @@ async def test_enabling_agent_changes_rendered_config_hash(
             mock_settings.a2a_reverse_proxy_enabled = True
             mock_settings.nginx_config_path = "/etc/nginx/conf.d/nginx_rev_proxy.conf"
             mock_settings.auth_server_url = "http://auth-server:8888"
+            mock_settings.auth_server_nginx_marker_secret = (
+                "test-nginx-marker-secret-0123456789abcdef"
+            )
             with patch.object(nginx_service.nginx_template_path, "exists", return_value=True):
                 with patch("builtins.open", mock_open(read_data=template_content)):
                     with patch("registry.health.service.health_service", mock_health_service):
@@ -1870,6 +1878,54 @@ def test_registry_api_locations_forward_internal_token():
         assert "proxy_set_header X-Registry-Api-Auth $registry_api_auth;" in text, conf.name
 
 
+# Room the /validate response needs beyond the registry token: X-User, X-Scopes,
+# X-Internal-Token (scopes) and the other auth headers.
+_VALIDATE_OTHER_HEADERS_BUDGET = 16 * 1024
+
+
+def _nginx_size(value: str) -> int:
+    """Bytes for an nginx size such as `64k`."""
+    return int(value[:-1]) * 1024 if value.endswith("k") else int(value)
+
+
+def test_validate_locations_fit_the_registry_token():
+    """Issue #1939: every `location = /validate` block reads the auth_request
+    response into a buffer that fits the largest registry token the auth server
+    will mint, with buffer directives nginx -t accepts; pins its own failure
+    handling (so a server-level error_page can never decide the auth verdict);
+    and no location captures the removed X-Groups header (a second copy of the
+    groups overflowed 16k), while every location that forwards the registry
+    token clears a client-sent X-Groups instead of passing it through.
+    """
+    from auth_server.internal_request_token import INTERNAL_TOKEN_MAX_BYTES
+
+    for conf_path in (_HTTP_AND_HTTPS_CONF, _HTTP_ONLY_CONF):
+        name = conf_path.name
+        text = conf_path.read_text()
+        blocks = [
+            chunk.split("\n    }", 1)[0] for chunk in text.split("location = /validate {")[1:]
+        ]
+        assert blocks, f"{name}: no `location = /validate` block"
+        for block in blocks:
+            size = _nginx_size(re.search(r"proxy_buffer_size (\w+);", block).group(1))
+            count, each = re.search(r"proxy_buffers (\d+) (\w+);", block).groups()
+            busy = _nginx_size(re.search(r"proxy_busy_buffers_size (\w+);", block).group(1))
+            each_bytes = _nginx_size(each)
+
+            assert size >= INTERNAL_TOKEN_MAX_BYTES + _VALIDATE_OTHER_HEADERS_BUDGET, name
+            assert max(size, each_bytes) <= busy <= (int(count) - 1) * each_bytes, name
+            assert "error_page 500 502 504 = @auth_subrequest_failed;" in block, name
+        assert "upstream_http_x_groups" not in text, name
+        for chunk in text.split("\n    location ")[1:]:
+            location = chunk.split("\n    }", 1)[0]
+            forwards = (
+                "proxy_set_header X-Internal-Token-Registry $auth_internal_token_registry;"
+                in location
+            )
+            clears = 'proxy_set_header X-Groups "";' in location
+            assert forwards == clears, f"{name}: {location.splitlines()[0]}"
+
+
 def test_generated_protected_api_block_carries_internal_token():
     """The generated /api/ block (protected) carries the marker + token forward;
     the unprotected variant (NGINX_DISABLE_API_AUTH_REQUEST) carries none.
@@ -2879,3 +2935,162 @@ async def test_one_unroutable_server_does_not_drop_the_others(
     assert result is True, "one unroutable server must not fail the whole render"
     rendered = mock_atomic_write.call_args_list[0][0][1]
     assert "/test-server-2" in rendered, "the healthy sibling's location was dropped"
+
+
+_GENERATED_BLOCK_PLACEHOLDERS: tuple[str, ...] = (
+    "{{LOCATION_BLOCKS}}",
+    "{{AGENT_LOCATION_BLOCKS}}",
+    "{{VIRTUAL_SERVER_BLOCKS}}",
+)
+
+
+def _nginx_code(text: str) -> str:
+    """Drop comments and quoted-string contents so braces and `@` are structural."""
+    out: list[str] = []
+    quote = ""
+    in_comment = False
+    for ch in text:
+        if in_comment:
+            if ch == "\n":
+                in_comment = False
+                out.append(ch)
+        elif quote:
+            if ch == quote:
+                quote = ""
+                out.append(ch)
+        elif ch == "#":
+            in_comment = True
+        elif ch in "'\"":
+            quote = ch
+            out.append(ch)
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+def _server_blocks(text: str) -> list[str]:
+    """Return the body of every top-level `server { ... }` block."""
+    code = _nginx_code(text)
+    blocks: list[str] = []
+    for match in re.finditer(r"^server\s*\{", code, re.MULTILINE):
+        depth = 0
+        for end in range(match.end() - 1, len(code)):
+            depth += {"{": 1, "}": -1}.get(code[end], 0)
+            if depth == 0:
+                blocks.append(code[match.end() : end])
+                break
+    return blocks
+
+
+def _unresolved_named_locations(server_block: str) -> set[str]:
+    """Named locations a server block references but does not define.
+
+    Only `error_page ... =@name` / `error_page ... @name` and `try_files ... @name`
+    can name a location, so only those count; a userinfo `@` in a URL does not.
+    """
+    defined = set(re.findall(r"location\s+@(\w+)", server_block))
+    referenced = set(re.findall(r"error_page[^;]*?=?\s*@(\w+)\s*;", server_block))
+    referenced |= set(re.findall(r"try_files[^;]*\s@(\w+)\s*;", server_block))
+    return referenced - defined
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+@pytest.mark.parametrize("conf_path", [_HTTP_ONLY_CONF, _HTTP_AND_HTTPS_CONF])
+async def test_rendered_named_locations_resolve_in_their_server_block(
+    conf_path, nginx_service, sample_servers, mock_health_service, mock_atomic_write
+):
+    """nginx -t does not check that `error_page ... = @name` resolves: a missing
+    named location only fails at request time, with a 500. Render the real
+    template with healthy MCP servers and require every named location a server
+    block references, including those in generated locations, to be defined in
+    that same server block.
+    """
+    mock_health_service.server_health_status = dict.fromkeys(sample_servers, HealthStatus.HEALTHY)
+    env_values = {
+        "AUTH_PROVIDER": "keycloak",
+        "KEYCLOAK_URL": "http://keycloak:8080",
+        "NGINX_DISABLE_API_AUTH_REQUEST": "false",
+    }
+    with patch.object(nginx_service.nginx_template_path, "exists", return_value=True):
+        with patch("builtins.open", mock_open(read_data=conf_path.read_text())):
+            with patch("registry.health.service.health_service", mock_health_service):
+                with patch.object(nginx_service, "get_additional_server_names", return_value=""):
+                    with patch.object(nginx_service, "reload_nginx", return_value=True):
+                        with patch(
+                            "os.environ.get",
+                            side_effect=lambda key, default=None: env_values.get(key, default),
+                        ):
+                            assert await nginx_service.generate_config_async(sample_servers)
+    rendered = mock_atomic_write.call_args_list[0][0][1]
+    hosting = [block for block in _server_blocks(rendered) if "/test-server-2/" in block]
+
+    assert hosting, f"{conf_path.name}: no server block carries the generated MCP locations"
+    for block in _server_blocks(rendered):
+        assert not _unresolved_named_locations(block), conf_path.name
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("conf_path", [_HTTP_ONLY_CONF, _HTTP_AND_HTTPS_CONF])
+def test_generated_block_named_locations_exist_where_blocks_land(conf_path):
+    """Agent, virtual-server and generic-proxy locations only render with live
+    repositories, so check them by source: every named location the generator
+    can emit must be defined in each template server block that hosts generated
+    locations.
+    """
+    import registry.core.nginx_service as generator
+
+    emitted = set(re.findall(r"= @(\w+)", Path(generator.__file__).read_text()))
+    hosting = [
+        block
+        for block in _server_blocks(conf_path.read_text())
+        if any(placeholder in block for placeholder in _GENERATED_BLOCK_PLACEHOLDERS)
+    ]
+
+    assert hosting, f"{conf_path.name}: no server block hosts generated locations"
+    for block in hosting:
+        defined = set(re.findall(r"location\s+@(\w+)", block))
+        assert emitted <= defined, f"{conf_path.name}: missing {sorted(emitted - defined)}"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("conf_path", [_HTTP_ONLY_CONF, _HTTP_AND_HTTPS_CONF])
+def test_cors_502_handler_only_serves_locations_that_already_send_cors(conf_path):
+    """`@upstream_unavailable_cors` adds `Access-Control-Allow-Origin *`. Using it
+    from a location that sends no CORS header would let any website read that
+    route's 502, and a CORS location without it would answer its own browser
+    clients' 502 with an unreadable body. So the handler and the header must
+    appear together in every location.
+    """
+    for chunk in conf_path.read_text().split("\n    location ")[1:]:
+        location = chunk.split("\n    }", 1)[0]
+        if location.startswith("@"):
+            continue
+        sends_cors = "add_header 'Access-Control-Allow-Origin'" in location
+        uses_cors_handler = "error_page 502 = @upstream_unavailable_cors;" in location
+        assert uses_cors_handler == sends_cors, location.splitlines()[0]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_marker_secret_renders_from_settings_not_process_env(
+    nginx_service, sample_servers, mock_health_service, mock_atomic_write
+):
+    """Settings can load the marker from .env without it reaching os.environ.
+    Rendering it from os.environ would then emit an empty marker, and the auth
+    server, which refuses to mint without a matching marker, would 401 every
+    registry API request.
+    """
+    rendered = await _render_real_conf(
+        nginx_service,
+        sample_servers,
+        mock_health_service,
+        mock_atomic_write,
+        _HTTP_ONLY_CONF,
+        {"AUTH_PROVIDER": "cognito", "NGINX_DISABLE_API_AUTH_REQUEST": "false"},
+    )
+
+    assert (
+        'proxy_set_header X-Validate-Source-Secret "test-nginx-marker-secret-0123456789abcdef";'
+        in rendered
+    )

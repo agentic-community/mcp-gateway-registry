@@ -43,6 +43,7 @@ from fastapi.responses import JSONResponse, RedirectResponse, Response, Streamin
 
 # Import metrics middleware
 from internal_request_token import (
+    InternalTokenTooLargeError,
     mint_generic_proxy_token,
     mint_mcp_proxy_token,
     mint_registry_ui_token,
@@ -788,6 +789,64 @@ def _nginx_registration(request: "Request") -> dict[str, str]:
     }
 
 
+# A marker mismatch (for example during a rotation where only one service has the
+# new value) refuses every mint, so the warning would otherwise fire on every
+# request. Log each token kind at most once per interval, with a suppressed count.
+_MARKER_MISMATCH_LOG_INTERVAL_SECONDS: float = 60.0
+_marker_mismatch_log_state: dict[str, tuple[float, int]] = {}
+
+
+def _warn_marker_mismatch(
+    routing_header: str,
+    token_kind: str,
+) -> None:
+    """Log a refused mint for a missing or mismatched nginx marker, rate-limited.
+
+    Args:
+        routing_header: The header that asked for the token (e.g. X-Registry-Api-Auth).
+        token_kind: The token that was refused (e.g. "registry-ui").
+    """
+    now = time.monotonic()
+    last, suppressed = _marker_mismatch_log_state.get(token_kind, (0.0, 0))
+    if last and now - last < _MARKER_MISMATCH_LOG_INTERVAL_SECONDS:
+        _marker_mismatch_log_state[token_kind] = (last, suppressed + 1)
+        return
+    _marker_mismatch_log_state[token_kind] = (now, 0)
+    logger.warning(
+        "/validate: %s present but nginx marker missing/mismatched; refusing to mint "
+        "%s token (possible direct-:8888 bypass, or AUTH_SERVER_NGINX_MARKER_SECRET "
+        "differs between registry and auth_server). %d similar refusals suppressed "
+        "in the last %.0f s.",
+        routing_header,
+        token_kind,
+        suppressed,
+        _MARKER_MISMATCH_LOG_INTERVAL_SECONDS,
+    )
+
+
+def _token_too_large(
+    exc: InternalTokenTooLargeError,
+) -> HTTPException:
+    """Log an oversized internal token and build the 500 /validate returns for it.
+
+    A 500 (not a missing token, which the registry reports as 401) tells the
+    operator this is a server-side size limit, not a bad credential. The message
+    carries only sizes and counts.
+
+    Args:
+        exc: The error ``_mint_internal_token`` raised.
+
+    Returns:
+        The HTTPException for the caller to raise.
+    """
+    logger.error(f"/validate: refusing an oversized internal token: {exc}")
+    return HTTPException(
+        status_code=500,
+        detail="Authorization token too large",
+        headers={"Connection": "close"},
+    )
+
+
 def _attach_mcp_proxy_token(
     request: "Request",
     response: "JSONResponse",
@@ -817,24 +876,21 @@ def _attach_mcp_proxy_token(
     ingress header. Omitted by the static-credential callers (federation-static /
     network-trusted), which authenticate a machine credential with no IdP claims.
 
-    When ``AUTH_SERVER_NGINX_MARKER_SECRET`` is configured, the token is
-    minted ONLY if nginx force-set the matching ``X-Validate-Source-Secret`` on
-    this subrequest. An empty marker mints unconditionally; this is rejected at
-    startup when egress is enabled (see Settings._validate_egress_auth_config),
-    so the empty-marker branch only remains reachable when egress is disabled.
+    The token is minted ONLY if nginx force-set the matching
+    ``X-Validate-Source-Secret`` on this subrequest, and never when no marker is
+    configured (Settings refuses to start without one, so that branch only
+    guards against a misconfigured test or embedding). This is the same gate the
+    generic-proxy and registry-UI tokens use.
     """
     resolved_upstream = request.headers.get("X-Resolved-Upstream", "")
     if not resolved_upstream:
         return
 
     marker = settings.auth_server_nginx_marker_secret
-    if marker and not secrets.compare_digest(
+    if not marker or not secrets.compare_digest(
         request.headers.get("X-Validate-Source-Secret", ""), marker
     ):
-        logger.warning(
-            "/validate: X-Resolved-Upstream present but nginx marker missing/mismatched; "
-            "refusing to mint mcp-proxy token (possible direct-:8888 bypass)"
-        )
+        _warn_marker_mismatch("X-Resolved-Upstream", "mcp-proxy")
         return
     registration = _nginx_registration(request)
     registered_path = registration["registered_path"]
@@ -846,13 +902,9 @@ def _attach_mcp_proxy_token(
         # Generated nginx auth locations force-set these two headers, and the
         # shared /validate location clears client-supplied copies; both are
         # honored only behind a current template (see _nginx_registration).
-        if (
-            not marker
-            or not _registered_proxy_url_matches(
-                request.headers.get("X-Original-URL", ""), registered_path, route_mode
-            )
-            or server_name != registered_path.strip("/")
-        ):
+        if not _registered_proxy_url_matches(
+            request.headers.get("X-Original-URL", ""), registered_path, route_mode
+        ) or server_name != registered_path.strip("/"):
             logger.warning("/validate: registered path differs from authorized scope")
             return
     if not server_name:
@@ -880,6 +932,8 @@ def _attach_mcp_proxy_token(
         )
     except ValueError as exc:
         logger.error(f"/validate: could not mint mcp-proxy token: {exc}")
+    except InternalTokenTooLargeError as exc:
+        raise _token_too_large(exc) from exc
 
 
 def _attach_generic_proxy_token(
@@ -941,10 +995,7 @@ def _attach_generic_proxy_token(
     if not marker or not secrets.compare_digest(
         request.headers.get("X-Validate-Source-Secret", ""), marker
     ):
-        logger.warning(
-            "/validate: X-Resolved-Generic-Upstream present but nginx marker missing/mismatched; "
-            "refusing to mint generic-proxy token (possible direct-:8888 bypass)"
-        )
+        _warn_marker_mismatch("X-Resolved-Generic-Upstream", "generic-proxy")
         return
     try:
         response.headers["X-Internal-Token-Generic"] = mint_generic_proxy_token(
@@ -958,7 +1009,9 @@ def _attach_generic_proxy_token(
             has_upstream_auth=has_upstream_auth,
         )
     except ValueError as exc:
-        logger.error("/validate: could not mint generic-proxy token (%s)", type(exc).__name__)
+        logger.error(f"/validate: could not mint generic-proxy token: {exc}")
+    except InternalTokenTooLargeError as exc:
+        raise _token_too_large(exc) from exc
 
 
 def _attach_registry_ui_token(
@@ -982,20 +1035,78 @@ def _attach_registry_ui_token(
     resolves entitlements server-side. If minting fails (e.g. empty subject), no
     token is attached: the registry then rejects (fail-closed) rather than trusting
     unsigned headers.
+
+    ``X-Registry-Api-Auth`` alone is a plain header, so the token is minted ONLY
+    when nginx also force-set the matching ``X-Validate-Source-Secret``, the same
+    gate the generic-proxy token uses. A direct auth-server caller gets no token.
+
+    A session-backed caller's token carries no groups: the registry resolves
+    them from the session store whenever ``session_id`` is set and never reads
+    the claim, so encoding them would only grow the auth_request response.
     """
     if not request.headers.get("X-Registry-Api-Auth"):
+        return
+    marker = settings.auth_server_nginx_marker_secret
+    if not marker or not secrets.compare_digest(
+        request.headers.get("X-Validate-Source-Secret", ""), marker
+    ):
+        _warn_marker_mismatch("X-Registry-Api-Auth", "registry-ui")
         return
     try:
         response.headers["X-Internal-Token-Registry"] = mint_registry_ui_token(
             subject=subject,
             session_id=session_id,
-            groups=groups,
+            groups=[] if session_id else groups,
             auth_method=auth_method,
             client_id=client_id,
             egress_user=egress_user,
         )
     except ValueError as exc:
         logger.error(f"/validate: could not mint registry-ui token: {exc}")
+    except InternalTokenTooLargeError as exc:
+        raise _token_too_large(exc) from exc
+
+
+# Ceiling on the headers of a /validate response. nginx reads them into the 64 KiB
+# proxy_buffer_size of `location = /validate` (issue #1939); a larger response is
+# an opaque "upstream sent too big header" 500 there. Each minted token is capped
+# at INTERNAL_TOKEN_MAX_BYTES, but X-Scopes and the tokens together could still
+# exceed the buffer, so the whole response is checked here. 60 KiB leaves room
+# for the status line and the headers the ASGI server adds.
+_VALIDATE_RESPONSE_HEADER_BUDGET: int = 60 * 1024
+
+
+def _enforce_validate_header_budget(
+    response: "Response",
+) -> "Response":
+    """Return ``response``, or a 500 if its headers would overflow nginx's buffer.
+
+    Fails closed with a log line naming the large headers (names and sizes only,
+    never values), so an oversized authorization response is diagnosable in the
+    auth server log instead of only as an nginx error.
+
+    Args:
+        response: The /validate response about to be returned.
+
+    Returns:
+        The same response when it fits, otherwise a 500 JSON response.
+    """
+    header_bytes = sum(len(name) + len(value) + 4 for name, value in response.headers.items())
+    if header_bytes <= _VALIDATE_RESPONSE_HEADER_BUDGET:
+        return response
+    large = {name: len(value) for name, value in response.headers.items() if len(value) > 1024}
+    logger.error(
+        "/validate: response headers are %d bytes, over the %d-byte budget for nginx's "
+        "/validate buffer; refusing. Large headers (bytes): %s",
+        header_bytes,
+        _VALIDATE_RESPONSE_HEADER_BUDGET,
+        large,
+    )
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Authorization response too large"},
+        headers={"Connection": "close"},
+    )
 
 
 # HTTP verbs that do not change server state. Used by the generic-hop CSRF gate
@@ -4175,7 +4286,7 @@ async def validate_request(request: Request):
                     client_id="federation-static",
                 )
 
-                return response
+                return _enforce_validate_header_budget(response)
 
             # If federation token didn't match, DON'T return 403 here.
             # Fall through to the admin static token check below (if enabled).
@@ -4245,7 +4356,7 @@ async def validate_request(request: Request):
                         client_id=identity["client_id"],
                     )
 
-                    return response
+                    return _enforce_validate_header_budget(response)
 
                 # Bearer present but does not match any static token. Fall
                 # through to JWT validation below (Okta RS256 / self-signed
@@ -4477,13 +4588,14 @@ async def validate_request(request: Request):
                         detail="Entra group mappings unavailable",
                         headers={"Connection": "close", "X-Entra-Group-Lookup-Unavailable": "1"},
                     ) from e
-                # auth_request copies X-Groups alongside other headers into a
-                # finite nginx response buffer. Refuse oversized unfiltered
-                # membership sets rather than dropping arbitrary group grants.
-                from providers.entra import GRAPH_GROUP_HEADER_MAX_BYTES
+                # auth_request copies the /validate response headers, including the
+                # registry token that encodes these groups, into a finite nginx
+                # buffer. Refuse oversized unfiltered membership sets rather than
+                # dropping arbitrary group grants.
+                from providers.entra import GRAPH_GROUP_MAX_BYTES, graph_group_bytes
 
-                if len(" ".join(filtered_groups).encode("utf-8")) > GRAPH_GROUP_HEADER_MAX_BYTES:
-                    logger.warning("Entra group header exceeds safe proxy size")
+                if graph_group_bytes(filtered_groups) > GRAPH_GROUP_MAX_BYTES:
+                    logger.warning("Entra recovered group set exceeds the safe token size")
                     raise HTTPException(
                         status_code=503,
                         detail="Entra group lookup unavailable",
@@ -5159,7 +5271,9 @@ async def validate_request(request: Request):
         response.headers["X-Auth-Method"] = validation_result.get("method") or ""
         response.headers["X-Server-Name"] = server_name or ""
         response.headers["X-Tool-Name"] = tool_name or ""
-        response.headers["X-Groups"] = " ".join(validation_result.get("groups", []))
+        # No X-Groups header: nothing downstream reads it (the registry takes
+        # groups from the signed X-Internal-Token-Registry), and repeating the
+        # group list doubled the auth_request response size (issue #1939).
 
         # Canonical egress principal method: cookie callers resolve to
         # "oauth2" (the session record's value), not the literal "session_cookie".
@@ -5207,8 +5321,9 @@ async def validate_request(request: Request):
 
         # Registry /api/ hop token. Discriminate cookie vs JWT-bearer: the cookie
         # sub-path has an opaque server-side session_id (the registry resolves live
-        # groups from the session store); the JWT-bearer sub-path has no session
-        # row, so session_id is empty and the registry uses the groups claim.
+        # groups from the session store, so the helper omits them from the token);
+        # the JWT-bearer sub-path has no session row, so session_id is empty and the
+        # registry uses the groups claim.
         _registry_session_id = ""
         if validation_result.get("method") == "session_cookie":
             _registry_session_id = (validation_result.get("data") or {}).get("session_id") or ""
@@ -5226,7 +5341,7 @@ async def validate_request(request: Request):
             egress_user=_egress_user,
         )
 
-        return response
+        return _enforce_validate_header_budget(response)
 
     except ValueError as e:
         logger.warning(f"Token validation failed: {e}")
@@ -7077,11 +7192,11 @@ async def oauth2_callback(
 
         # Filter the (possibly enriched) group list down to the scope-relevant
         # subset BEFORE persisting it. IdPs such as Entra ID can return hundreds
-        # or thousands of groups; storing them all bloats the X-Groups header
-        # (nginx buffer overflow -> 500s) and makes the per-request groups->scopes
-        # lookup do one DB query per group. Filtering here is lossless for
-        # authorization because unmapped groups never produce scopes. Runs after
-        # enrichment so the final set is filtered.
+        # or thousands of groups, and every session-backed request resolves the
+        # stored list. The filter never changes the user's scopes, but it does drop
+        # groups that only group-restricted visibility (allowed_groups) would match;
+        # see the group_filter module docstring. Runs after enrichment so the final
+        # set is filtered.
         from group_filter import filter_session_groups
 
         session_groups = await filter_session_groups(
@@ -7090,10 +7205,10 @@ async def oauth2_callback(
         )
 
         if provider == "entra":
-            from providers.entra import GRAPH_GROUP_HEADER_MAX_BYTES
+            from providers.entra import GRAPH_GROUP_MAX_BYTES, graph_group_bytes
 
-            if len(" ".join(session_groups).encode("utf-8")) > GRAPH_GROUP_HEADER_MAX_BYTES:
-                logger.warning("Entra session group header exceeds safe proxy size")
+            if graph_group_bytes(session_groups) > GRAPH_GROUP_MAX_BYTES:
+                logger.warning("Entra session group set exceeds the safe membership size")
                 raise HTTPException(status_code=503, detail="Entra group lookup unavailable")
 
         # Persist the full session record server-side and put only an opaque
@@ -7826,7 +7941,8 @@ _EGRESS_STRIP_HEADERS: frozenset[str] = frozenset(
 
 
 # The gateway-internal headers that /validate sets on the auth_request subresponse
-# and nginx copies onto the proxied request. On the GENERIC hop the backend is
+# (plus X-Groups, which older auth servers set and a client can still send) and that
+# nginx copies onto the proxied request. On the GENERIC hop the backend is
 # always registrant-controlled, so these are stripped UNCONDITIONALLY (before any
 # operator/caller header merge) -- neither the caller's identity/scopes/groups nor
 # the gateway's own signed internal tokens may ever reach the backend, where they

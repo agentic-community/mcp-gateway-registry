@@ -37,6 +37,9 @@ def nginx_service():
             mock_settings.deployment_mode = MagicMock()
             mock_settings.deployment_mode.value = "with-gateway"
             mock_settings.nginx_config_path = "/tmp/nginx.conf"
+            mock_settings.auth_server_nginx_marker_secret = (
+                "test-nginx-marker-secret-0123456789abcdef"
+            )
             yield NginxConfigService()
 
 

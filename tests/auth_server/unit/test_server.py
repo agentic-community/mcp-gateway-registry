@@ -3015,12 +3015,12 @@ class TestEntraCallbackGroups:
         assert session["groups"] == ["reader-role"]
         graph.assert_not_awaited()
 
-    def test_overage_session_refuses_unfiltered_group_header_overflow(self):
-        from providers.entra import GRAPH_GROUP_HEADER_MAX_BYTES
+    def test_overage_session_refuses_oversized_recovered_group_set(self):
+        from providers.entra import GRAPH_GROUP_MAX_BYTES
 
         claims = {"sub": "alice", "tid": "tenant", "oid": "alice", "hasgroups": True}
         response, created, session, graph = self._callback(
-            claims, graph_result=["x" * (GRAPH_GROUP_HEADER_MAX_BYTES + 1)]
+            claims, graph_result=["x" * (GRAPH_GROUP_MAX_BYTES + 1)]
         )
 
         assert response.status_code == 503
@@ -3131,7 +3131,7 @@ class TestEntraCallbackGroups:
                 )
 
         assert validated.status_code == 403, validated.text
-        assert "X-Groups" not in validated.headers
+        assert "X-Scopes" not in validated.headers
         local_fallback.assert_not_awaited()
 
     def test_non_entra_callback_preserves_configured_local_fallback(self):
