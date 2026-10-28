@@ -10,7 +10,11 @@ readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
     "aiofiles>=24.1.0",
-    "fastapi>=0.115.12",
+    # 0.147 through 0.161 read an omitted bool form field as False, ignoring its
+    # declared default, so registering without append_mcp_path stored False and
+    # an omitted overwrite=True became False. 0.162 restores declared defaults.
+    # https://github.com/fastapi/fastapi/releases/tag/0.162.0
+    "fastapi>=0.162.0",
     "itsdangerous>=2.2.0",
     "jinja2>=3.1.6",
     "certifi>=2026.10.19",
@@ -201,7 +205,8 @@ package = false
 
 # Bumping certifi exclusion date to bypass 7-day window due to eMudhra certificate compromise
 # pip is pulled in by pip-api; 26.2.2 ships a certifi without the eMudhra roots
-exclude-newer-package = { certifi = "2026-10-22T00:00:00Z", pip = "2026-10-22T00:00:00Z" }
+# fastapi 0.162.0 restores declared defaults for omitted bool form fields (see dependencies)
+exclude-newer-package = { certifi = "2026-10-22T00:00:00Z", pip = "2026-10-22T00:00:00Z", fastapi = "2026-10-24T00:00:00Z" }
 # Resolve torch from the PyTorch CPU wheel index so the lockfile pins the
 # CPU-only wheels (vs. the default CUDA-enabled wheels from PyPI). This
 # lets Docker builds install torch via `uv sync --locked` without any
