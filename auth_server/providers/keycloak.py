@@ -45,6 +45,31 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _unverified_subject(token: str) -> str:
+    """Return the ``sub`` claim of a JWT without verifying its signature.
+
+    Used only to compare the subject of two tokens the realm itself issued,
+    where the token read here has already been verified upstream.
+
+    Args:
+        token: The JWT to read.
+
+    Returns:
+        The ``sub`` claim as a string.
+
+    Raises:
+        IdTokenVerificationError: The token cannot be decoded or has no ``sub``.
+    """
+    try:
+        claims = jwt.decode(token, options={"verify_signature": False})
+    except jwt.InvalidTokenError as exc:
+        raise IdTokenVerificationError("subject token is not a decodable JWT") from exc
+    subject = claims.get("sub")
+    if not isinstance(subject, str) or not subject:
+        raise IdTokenVerificationError("subject token carries no 'sub' claim")
+    return subject
+
+
 class KeycloakProvider(AuthProvider):
     """Keycloak authentication provider implementation."""
 
@@ -221,27 +246,34 @@ class KeycloakProvider(AuthProvider):
         self,
         token: str,
         target_audience: str,
+        subject_token: str,
     ) -> list[str]:
         """Verify an OBO-exchanged token and return the gateway audiences it carries.
 
         The token minted by an OBO token exchange is forwarded to the upstream
-        MCP server, so it must be audienced to that server and must NOT also be
-        a credential for this gateway. Keycloak's legacy token exchange
-        (V1) mints it with the audience client's default client scopes and
-        only adds the requested audience; with the realm's ``mcp-gateway``
-        audience mapper on the ``basic`` scope, the result would also pass
-        ``validate_token``, and the upstream could replay it against the gateway
-        as the user. Standard exchange (V2, 26.2+) filters ``aud`` down to the
-        requested audience.
+        MCP server, so it must be audienced to that server, must belong to the
+        same user as the token that was exchanged, and must NOT also be a
+        credential for this gateway. Keycloak's legacy token exchange (V1)
+        mints it with the audience client's default client scopes and only
+        adds the requested audience; with the realm's ``mcp-gateway`` audience
+        mapper on the ``basic`` scope, the result would also pass
+        ``validate_token``, and the upstream could replay it against the
+        gateway as the user. Standard exchange (V2, 26.2+) filters ``aud`` down
+        to the requested audience.
 
         The token is verified like an id_token (realm JWKS signature, RS256,
-        issuer allowlist, expiry and issued-at with a small clock-skew leeway) with
-        ``target_audience`` as the required audience, and must carry a ``sub``,
-        before its ``aud`` claim is read.
+        issuer allowlist, expiry and issued-at with a small clock-skew leeway)
+        with ``target_audience`` as the required audience. Its ``sub`` must
+        equal the subject token's ``sub``, so an IdP policy that mints a token
+        for a different user (impersonation) is refused. The subject token is
+        read without verifying its signature: /validate verified it and bound
+        it to the authorized principal, and Keycloak verified it again during
+        the exchange.
 
         Args:
             token: The access token returned by the token-exchange grant.
             target_audience: The audience the exchange was requested for.
+            subject_token: The ingress token that was exchanged.
 
         Returns:
             The audiences in the token that this gateway accepts, sorted; empty
@@ -249,9 +281,10 @@ class KeycloakProvider(AuthProvider):
 
         Raises:
             IdTokenVerificationError: If the token fails verification, does not
-                carry ``target_audience``, or has no ``sub``. A malformed JWKS
-                entry can surface as a PyJWT error instead; callers must treat
-                any exception as a failed verification.
+                carry ``target_audience``, has no ``sub``, or its ``sub`` differs
+                from the subject token's. A malformed JWKS entry can surface as
+                a PyJWT error instead; callers must treat any exception as a
+                failed verification.
         """
         claims = self._verify_id_token_with_jwks(
             token,
@@ -259,11 +292,14 @@ class KeycloakProvider(AuthProvider):
             [target_audience],
             leeway_seconds=_EXCHANGED_TOKEN_LEEWAY_SECONDS,
         )
-        if not claims.get("sub"):
+        exchanged_subject = claims.get("sub")
+        if not exchanged_subject:
             # A token without the user's subject is not a delegated token. With
             # legacy exchange this happens when the target client's default
             # scopes lack the `sub` mapper (Keycloak's built-in `basic` scope carries it).
             raise IdTokenVerificationError("exchanged token carries no 'sub' claim")
+        if exchanged_subject != _unverified_subject(subject_token):
+            raise IdTokenVerificationError("exchanged token 'sub' does not match the subject token")
         aud = claims.get("aud")
         audiences = {aud} if isinstance(aud, str) else set(aud or [])
         return sorted(audiences.intersection(self.accepted_audiences()))
@@ -301,7 +337,8 @@ class KeycloakProvider(AuthProvider):
         The OBO exchanged-token check (``exchanged_token_gateway_audiences``)
         refuses tokens carrying any of these, so a new way for the gateway to
         accept a token (for example per-server extra audiences) must be
-        reflected here too.
+        reflected here too. ``test_validate_token_ignores_per_server_extra_audiences``
+        fails if ``validate_token`` starts honoring ``extra_audiences`` first.
         """
         return [self.client_id, self.m2m_client_id, "mcp-gateway"]
 

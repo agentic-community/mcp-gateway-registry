@@ -25,7 +25,6 @@ from auth_server.egress_obo import (
     OboUnsupportedIdpError,
     obo_exchange,
 )
-from registry.exceptions import UrlValidationError
 
 
 class _FakeEntraProvider:
@@ -49,11 +48,16 @@ class _FakeKeycloakProvider:
         self.jwks_url = "https://kc.example/realms/r/protocol/openid-connect/certs"
         self.leaked = leaked or []
         self.verify_error = verify_error
-        self.checked: list[tuple[str, str]] = []
+        self.checked: list[tuple[str, str, str]] = []
 
-    def exchanged_token_gateway_audiences(self, token: str, target_audience: str) -> list[str]:
+    def exchanged_token_gateway_audiences(
+        self,
+        token: str,
+        target_audience: str,
+        subject_token: str,
+    ) -> list[str]:
         """Stand-in for KeycloakProvider's verification of the exchanged token."""
-        self.checked.append((token, target_audience))
+        self.checked.append((token, target_audience, subject_token))
         if self.verify_error is not None:
             raise self.verify_error
         return list(self.leaked)
@@ -102,10 +106,6 @@ def _patch_post(monkeypatch, response, capture: dict):
         return client
 
     monkeypatch.setattr("registry.utils.url_guard.shared_guarded_async_client", _fake_shared)
-    # The JWKS pre-check in _refuse_gateway_valid_token validates directly
-    # (not through the patched factory), and the fake realm host does not
-    # resolve; stub it the same way the factory above is stubbed.
-    monkeypatch.setattr(egress_obo, "validate_url", lambda url, **kwargs: [])
 
 
 @pytest.mark.unit
@@ -194,11 +194,9 @@ class TestErrorMapping:
     async def test_entra_access_denied_stays_generic(self, monkeypatch):
         """access_denied must NOT be reclassified on the Entra path.
 
-        The Keycloak remediation hint would be wrong there (Entra returns this
-        for denied consent and for conditional-access blocks — a different fix,
-        and for CA not operator configuration at all), and moving an already
-        released code path out of the exchange_failed audit bucket would break
-        any alerting keyed on it. This test exists to keep that boundary.
+        Entra returns it for denied consent and conditional-access blocks, so
+        the Keycloak remediation would be wrong there, and the code path keeps
+        its exchange_failed audit bucket.
         """
         cap: dict = {}
         _patch_post(monkeypatch, _FakeResponse(403, {"error": "access_denied"}), cap)
@@ -206,6 +204,17 @@ class TestErrorMapping:
             await obo_exchange(_FakeEntraProvider(), subject_token="j", target_audience="api://srv")
         assert not isinstance(excinfo.value, OboConfigError)
         assert "Keycloak" not in str(excinfo.value)
+
+    @pytest.mark.asyncio
+    async def test_entra_unsupported_grant_type_stays_generic(self, monkeypatch):
+        """Entra sends the jwt-bearer grant, so the token-exchange hint must not
+        reach it, and the code keeps its exchange_failed audit bucket."""
+        cap: dict = {}
+        _patch_post(monkeypatch, _FakeResponse(400, {"error": "unsupported_grant_type"}), cap)
+        with pytest.raises(OboExchangeError) as excinfo:
+            await obo_exchange(_FakeEntraProvider(), subject_token="j", target_audience="api://srv")
+        assert not isinstance(excinfo.value, OboConfigError)
+        assert "token-exchange" not in str(excinfo.value)
 
 
 @pytest.mark.unit
@@ -269,13 +278,10 @@ class TestKeycloakExchangeBody:
 
     @pytest.mark.asyncio
     async def test_invalid_token_maps_to_reauth(self, monkeypatch):
-        """An expired subject_token must surface as re-auth, not a generic failure.
+        """An expired subject_token surfaces as re-auth, not a generic failure.
 
-        Keycloak never answers invalid_grant for token-exchange, and up to 25.x
-        it reports an unusable subject_token as invalid_token — so mapping only
-        invalid_grant would leave the single most likely runtime failure there
-        (the ingress JWT expiring mid-flight) in the generic bucket. From 26.0
-        Keycloak answers invalid_request for it, which stays unclassified.
+        Keycloak up to 25.x reports it as invalid_token (see the version table
+        in docs/design/egress-auth-design.md).
         """
         cap: dict = {}
         _patch_post(
@@ -290,16 +296,9 @@ class TestKeycloakExchangeBody:
 
     @pytest.mark.asyncio
     async def test_invalid_request_stays_generic(self, monkeypatch):
-        """invalid_request must NOT be classified — the code is overloaded.
-
-        Keycloak answers it for an expired subject_token (legacy exchange from
-        26.0, and standard exchange), for the gateway client's Standard token
-        exchange switch being off while legacy exchange is disabled, and for an
-        audience standard exchange cannot place. Two are operator config and
-        one is user re-auth; guessing config would
-        stop the caller retrying with a fresh token. error_description is the
-        only discriminator and it is logged, not classified on.
-        """
+        """invalid_request must NOT be classified: Keycloak uses it for an
+        expired subject token and for configuration faults alike, and guessing
+        config would stop the caller retrying with a fresh token."""
         cap: dict = {}
         _patch_post(
             monkeypatch,
@@ -324,11 +323,9 @@ class TestKeycloakExchangeBody:
 
     @pytest.mark.asyncio
     async def test_access_denied_maps_to_config(self, monkeypatch, caplog):
-        """Keycloak answers access_denied when the target client has not granted
-        the token-exchange permission — the common first-run failure. It must
-        surface as an actionable configuration error, not a generic exchange
-        failure. The remediation text is operator diagnostics, so it goes to
-        the log; the exception carries the short, agent-facing message."""
+        """Keycloak answers access_denied when the exchange is not permitted.
+        It surfaces as a configuration error; the remediation text goes to the
+        log and the exception carries the short, agent-facing message."""
         cap: dict = {}
         _patch_post(
             monkeypatch,
@@ -407,31 +404,25 @@ class TestKeycloakExchangedTokenGuard:
             provider, subject_token="j", target_audience="finance-mcp-server"
         )
         assert token == "obo-tok"
-        assert provider.checked == [("obo-tok", "finance-mcp-server")]
+        assert provider.checked == [("obo-tok", "finance-mcp-server", "j")]
 
     @pytest.mark.asyncio
     async def test_blocked_jwks_endpoint_is_typed_error(self, monkeypatch, caplog):
-        """A realm JWKS endpoint the guard rejects fails the exchange with a
-        terminal, non-leaking message — same contract as the token-endpoint
-        block, applied to the verification fetch."""
+        """A realm JWKS endpoint the guard rejects fails the exchange before the
+        client secret and the user's JWT are sent, with a non-leaking message."""
         cap: dict = {}
         _patch_post(monkeypatch, _FakeResponse(200, {"access_token": "obo-tok"}), cap)
         provider = _FakeKeycloakProvider()
-
-        def _blocked(url, **kwargs):
-            if "openid-connect/certs" not in url:
-                return []  # the token endpoint stays allowed
-            raise UrlValidationError(url, "blocked in test")
-
-        monkeypatch.setattr(egress_obo, "validate_url", _blocked)
+        # A plaintext realm endpoint fails the real guard's HTTPS requirement;
+        # the token endpoint stays https and is allowed.
+        provider.jwks_url = "http://kc.example/realms/r/protocol/openid-connect/certs"
         with caplog.at_level(logging.ERROR):
             with pytest.raises(OboExchangeError, match="JWKS endpoint blocked"):
                 await obo_exchange(
                     provider, subject_token="j", target_audience="finance-mcp-server"
                 )
         assert "JWKS endpoint blocked" in caplog.text
-        # The exchange POST already happened; the block stops the verification
-        # fetch, so the token is never verified nor returned.
+        assert cap["calls"] == 0
         assert provider.checked == []
 
     @pytest.mark.asyncio
