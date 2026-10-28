@@ -92,7 +92,12 @@ sanitizer that isn't called) is equivalent to no check.
   log the size + method/id, never the body. (b) **OAuth token-endpoint error
   bodies** (`response.text` / the full error JSON, logged OR raised) — they echo
   the `client_id` and partial credential context in `error_description`; log only
-  the standard `error` code + status. (c) **IdP group-name lists** — group names
+  the standard `error` code + status. One exception is recorded: Keycloak's
+  token-exchange `invalid_request` covers both an expired subject token and
+  configuration faults, and only its `error_description` tells them apart.
+  `auth_server/egress_obo.py` logs that one field for that one code, through
+  `_sanitize_idp_text` (non-printable characters replaced, 200-character cap),
+  and never returns it to the caller. (c) **IdP group-name lists**: group names
   are organizational PII (org units, teams, cost centers); log the count, not the
   names. A "masked" token prefix is still a leak — a base64 JWT header/signature
   fragment is reconstructable; log `<token len=N>`, not `token[:10]`. (d) **A
@@ -457,6 +462,17 @@ sanitizer that isn't called) is equivalent to no check.
   in `registry/core/nginx_service.py`). For outbound service-to-service calls,
   mint an audience-restricted, short-lived delegation token rather than
   re-sending the inbound one.
+- **An IdP-minted delegation token must not also be a gateway credential.** When
+  the gateway asks its own IdP to mint a token for an upstream (OBO token
+  exchange), the IdP decides what lands in `aud`, and default client scopes can
+  add an audience this gateway accepts (Keycloak's legacy exchange copies the
+  realm's `mcp-gateway` audience mapper). The upstream could then replay the token
+  against the gateway as the user. Verify the minted token (signature, issuer,
+  expiry, target audience, and a `sub` equal to the exchanged token's), intersect
+  its `aud` with the exact list the gateway's own validation accepts, and refuse
+  to forward it on any overlap. Read that list from the same method validation
+  uses (`accepted_audiences()`), so a new way to accept a token also widens the
+  refusal; a test pins any audience source the check does not cover.
 - **A virtual server must not route around a backend's enable state.** The
   direct route only exists for an enabled, healthy server, and a failed security
   scan disables the server. Any other path to the same backend (virtual-server

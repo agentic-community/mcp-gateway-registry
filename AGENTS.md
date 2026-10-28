@@ -407,6 +407,7 @@ working in those areas.
   A virtual server also applies the direct route's enabled + healthy gate to each
   backend, and its backend locations clear the whole reserved-header set.
 - **Gateway-invented MCP names:** a tool the gateway synthesizes (the pre-consent `connect_mcpgw_<server>` tool) may get a relaxed authorization check only if the gateway answers it on every path and never forwards it, the match is on the one exact name, and the relaxation applies only on routes proven to reach the answering hop (direct, never virtual).
+- **Delegated tokens the gateway forwards:** a token the IdP mints for an upstream (OBO exchange) must be verified and refused if its `aud` overlaps the audiences the gateway's own validation accepts (read from the same `accepted_audiences()` list), or the upstream can replay it against the gateway. Bind its `sub` to the exchanged token's.
 - **Honor the disabled/inactive flag** on every request where access is derived
   (group→scope enrichment / validate), not just login; filter it in the query AND
   re-check the doc; fail closed.
