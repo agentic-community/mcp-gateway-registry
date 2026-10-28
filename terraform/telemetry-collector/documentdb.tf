@@ -29,6 +29,12 @@ resource "aws_docdb_cluster_parameter_group" "telemetry" {
   }
 }
 
+# Keep the snapshot name stable in state, including when promoting testing to production.
+# A full destroy/apply creates a new suffix without reusing a retained snapshot name.
+resource "random_id" "documentdb_final_snapshot" {
+  byte_length = 8
+}
+
 # DocumentDB cluster
 resource "aws_docdb_cluster" "telemetry" {
   cluster_identifier              = "telemetry-collector"
@@ -36,13 +42,13 @@ resource "aws_docdb_cluster" "telemetry" {
   master_username                 = var.documentdb_master_username
   master_password                 = random_password.documentdb_master.result
   backup_retention_period         = 7
-  preferred_backup_window         = "03:00-04:00"  # 3-4 AM UTC
-  preferred_maintenance_window    = "sun:04:00-sun:05:00"  # Sunday 4-5 AM UTC
+  preferred_backup_window         = "03:00-04:00"         # 3-4 AM UTC
+  preferred_maintenance_window    = "sun:04:00-sun:05:00" # Sunday 4-5 AM UTC
   db_subnet_group_name            = aws_docdb_subnet_group.telemetry.name
   db_cluster_parameter_group_name = aws_docdb_cluster_parameter_group.telemetry.name
   vpc_security_group_ids          = [aws_security_group.documentdb.id]
   skip_final_snapshot             = var.deployment_stage == "testing"
-  final_snapshot_identifier       = var.deployment_stage == "production" ? "telemetry-collector-final-snapshot-${formatdate("YYYY-MM-DD-hhmm", timestamp())}" : null
+  final_snapshot_identifier       = var.deployment_stage == "production" ? "telemetry-collector-final-snapshot-${random_id.documentdb_final_snapshot.hex}" : null
   enabled_cloudwatch_logs_exports = ["audit", "profiler"]
   storage_encrypted               = true
 
