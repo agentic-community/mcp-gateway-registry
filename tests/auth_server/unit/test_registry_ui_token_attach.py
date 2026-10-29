@@ -116,7 +116,7 @@ def test_validate_response_over_the_header_budget_is_refused():
     response.headers["X-Scopes"] = "s" * (40 * 1024)
     response.headers["X-Internal-Token"] = "t" * (30 * 1024)
 
-    result = _enforce_validate_header_budget(response)
+    result = _enforce_validate_header_budget(response, "alice")
 
     assert (result.status_code, "X-Scopes" in result.headers) == (500, False)
 
@@ -127,4 +127,4 @@ def test_validate_response_within_the_header_budget_is_returned_unchanged():
     response = JSONResponse({"valid": True})
     response.headers["X-Scopes"] = "s" * (40 * 1024)
 
-    assert _enforce_validate_header_budget(response) is response
+    assert _enforce_validate_header_budget(response, "alice") is response

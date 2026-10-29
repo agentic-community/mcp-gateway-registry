@@ -2475,20 +2475,18 @@ class Settings(BaseSettings):
                 "strong random value at least 32 bytes long, identical across all auth_server "
                 "and registry replicas (see chart values.yaml)."
             )
-        if any(
-            ch == "$" or ch.isspace() or ord(ch) < 32 or ord(ch) == 127
-            for ch in self.auth_server_nginx_marker_secret
-        ):
+        if not all("!" <= ch <= "~" and ch != "$" for ch in self.auth_server_nginx_marker_secret):
             # The registry renders the marker into a quoted nginx string and nginx
             # sends it as a header. A `$` always starts an nginx variable, and
             # whitespace or control characters do not survive the header round
-            # trip, so nginx would send a different value from the one the
-            # auth_server compares against and every internal-token mint (every
-            # registry API request) would fail without a startup error.
+            # trip. A non-ASCII value makes `secrets.compare_digest` raise on every
+            # comparison. Either way every internal-token mint (every registry API
+            # request) would fail without a startup error, so only printable ASCII
+            # other than `$` is accepted.
             raise RuntimeError(
-                "AUTH_SERVER_NGINX_MARKER_SECRET must not contain '$', whitespace or control "
-                "characters: it is rendered into the nginx config and sent as a header, "
-                "which cannot carry them. Generate it with "
+                "AUTH_SERVER_NGINX_MARKER_SECRET must contain only printable ASCII "
+                "characters other than '$' (no spaces): it is rendered into the nginx config "
+                "and sent as a header. Generate it with "
                 "`python3 -c 'import secrets; print(secrets.token_hex(32))'`."
             )
         self.egress_credential_encryption_key = self._validate_credential_encryption_key(

@@ -806,12 +806,15 @@ class TestSettingsSecretKey:
                 auth_server_nginx_marker_secret="short",
             )
 
-    @pytest.mark.parametrize("bad", ["$", "\n", "\r", " ", "\t", "\x00"])
+    @pytest.mark.parametrize(
+        "bad", ["$", "\n", "\r", " ", "\t", "\x00", "\x7f", "\u00e9", "\u00a0"]
+    )
     def test_marker_secret_nginx_cannot_carry_rejected(self, monkeypatch, tmp_path, bad) -> None:
-        """A marker the nginx header round trip would alter fails at startup, not with
-        a 401 per request."""
+        """A marker the nginx header round trip would alter, or that
+        ``secrets.compare_digest`` cannot compare (non-ASCII), fails at startup, not
+        on every request."""
         monkeypatch.chdir(tmp_path)
-        with pytest.raises(RuntimeError, match="must not contain"):
+        with pytest.raises(RuntimeError, match="only printable ASCII"):
             Settings(
                 secret_key="a-valid-secret-key-of-at-least-32-bytes",
                 auth_server_nginx_marker_secret=f"0123456789abcdef{bad}0123456789abcdef",

@@ -298,9 +298,9 @@ egressAuth:
   # nginx marker secret. REQUIRED for standalone deployment (chart render fails
   # if empty). It guards all internal-token minting (registry API, mcp-proxy,
   # generic proxy), so a mismatch with the registry 401s every registry API
-  # request, and the app requires it at startup. Set a strong random value with
-  # no '$', whitespace or control characters, identical to the registry's. In the
-  # stack it is auto-generated + shared, so leave empty there.
+  # request, and the app requires it at startup. Set a strong random value of
+  # printable ASCII other than '$' (no spaces), identical to the registry's. In
+  # the stack it is auto-generated + shared, so leave empty there.
   markerSecret: ""
 # PingFederate integration (used when authProvider.type = "pingfederate")
 pingfederate:

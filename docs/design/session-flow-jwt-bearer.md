@@ -267,9 +267,10 @@ credential, and the auth server logs the sizes and counts involved.
 The limit is two-sided. nginx forwards the registry token to the registry as a
 request header, which uvicorn accepts at this size only because `uvicorn[standard]`
 selects the httptools parser; uvicorn's h11 parser rejects request headers over
-16 KiB by default. The lasting fix is the server-side claim store from #971 for
-bearer callers, which would make the token constant-size and remove the buffer
-question entirely.
+16 KiB by default. Browser sessions already avoid this: since #971 their groups live
+in the server-side session store, so their token carries none. Bearer callers have no
+session row; making their token constant-size would need the same server-side
+approach for them, which no issue tracks yet.
 
 nginx allocates the 64 KiB header buffer for each auth check in flight, so 1,000
 concurrent requests hold about 64 MiB for it, against 16 MiB with the old 16 KiB

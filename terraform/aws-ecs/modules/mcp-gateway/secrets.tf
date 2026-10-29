@@ -107,9 +107,10 @@ resource "aws_secretsmanager_secret_version" "secret_key" {
 # (registry API, mcp-proxy, generic proxy) only when it matches, so a direct
 # :8888 /validate with a forged routing header cannot obtain one, and a mismatch
 # between the two services 401s every registry API request.
-# Generated like secret_key (not gated on egress). special=false
-# because the registry substitutes the value verbatim into the generated nginx conf,
-# where quotes/backslashes/$ would break parsing.
+# Generated like secret_key (not gated on egress). special=false keeps the value
+# to letters and digits, which satisfies the rule the registry enforces at
+# startup (printable ASCII other than '$', no spaces), since it renders the value
+# into the generated nginx conf and nginx sends it as a header.
 resource "random_password" "nginx_marker_secret" {
   length  = 64
   special = false

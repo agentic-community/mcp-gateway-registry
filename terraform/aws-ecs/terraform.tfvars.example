@@ -1518,8 +1518,10 @@ aws_registry_federation_enabled = true
 # egress_credential_encryption_key   = ""
 
 # nginx marker secret shared by auth-server + registry. REQUIRED unconditionally
-# (both services refuse to start without it), NOT egress-specific -- it guards all
-# mcp-proxy token minting. Auto-generated into Secrets Manager when left empty;
-# set this only to pin a specific value. Avoid quotes/backslashes/$ (the registry
-# substitutes it verbatim into the generated nginx config).
+# (both services refuse to start without it), NOT egress-specific: it guards all
+# internal-token minting (registry API, mcp-proxy, generic proxy), so a value that
+# differs between the two services 401s every registry API request. Auto-generated
+# into Secrets Manager when left empty; set this only to pin a specific value. It
+# must contain only printable ASCII characters other than '$' (no spaces), because
+# the registry renders it into the nginx config and nginx sends it as a header.
 # egress_nginx_marker_secret         = ""

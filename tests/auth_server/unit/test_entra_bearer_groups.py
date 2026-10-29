@@ -560,6 +560,45 @@ def test_validate_carries_large_inline_group_set_once_in_registry_token(bearer_c
     assert header_bytes < 16 * 1024
 
 
+def test_validate_refuses_an_oversized_inline_group_set_once(bearer_client, caplog):
+    """Issue #1939: a registry token over the mint cap fails /validate with the
+    specific 500, logged once with the hashed caller, never re-wrapped as a
+    generic "Internal validation error"."""
+    import logging
+
+    from registry.core.config import settings
+
+    client, provider, _repo = bearer_client
+    inline = ["inline-allowed"] + [f"00000000-0000-4000-8000-{i:012d}" for i in range(1000)]
+    provider.validate_token = MagicMock(return_value=_verified_result(_delegated(groups=inline)))
+
+    with caplog.at_level(logging.ERROR):
+        response = client.get(
+            "/validate",
+            headers={
+                "Authorization": "Bearer incoming-entra-token",
+                "X-Original-URL": "https://example.com/test-server/mcp",
+                "X-Registry-Api-Auth": "1",
+                "X-Validate-Source-Secret": settings.auth_server_nginx_marker_secret,
+            },
+        )
+
+    # Only /validate's own lines count: unrelated loggers (the audit sink) may also
+    # write errors while the test client shuts down.
+    validate_errors = [
+        r.getMessage()
+        for r in caplog.records
+        if r.levelno >= logging.ERROR
+        and ("/validate" in r.getMessage() or "during validation" in r.getMessage())
+    ]
+    assert (response.status_code, response.json()["detail"]) == (
+        500,
+        "Authorization token too large",
+    )
+    assert len(validate_errors) == 1, validate_errors
+    assert "refusing an oversized internal token for user=user_" in validate_errors[0]
+
+
 def test_validate_self_signed_token_never_enters_graph_path(bearer_client):
     import time
 
