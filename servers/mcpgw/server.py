@@ -10,6 +10,7 @@ Supports two auth modes:
 """
 
 import logging
+import mimetypes
 import os
 import re
 import time
@@ -691,6 +692,7 @@ async def list_skills(ctx: Context | None = None) -> dict[str, Any]:
 async def get_skill_content(
     skill_name: str,
     resource_path: str | None = None,
+    include_binary: bool = False,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
     """
@@ -702,18 +704,28 @@ async def get_skill_content(
     have companion resources (reference docs, scripts, configs) listed in
     the manifest that you can fetch with the resource_path parameter.
 
+    Binary companion resources (for example images or fonts) return metadata
+    by default. Set include_binary=True to also receive the bytes as base64.
+
     Args:
         skill_name: Name of the skill (e.g. "pr-review", "mcp-builder")
         resource_path: Optional path to a companion resource file
                        (e.g. "references/architecture.md")
+        include_binary: Include ``content_base64`` for binary resources.
+                        Defaults to False so large assets do not fill the
+                        model's context with unusable base64.
 
     Returns:
-        Dictionary containing the skill name, content, source URL, and status
+        Dictionary containing the skill name, content, source URL, and status.
+        Binary resources return ``resource_path``, ``resource_type``,
+        ``content_type`` and ``size_bytes``; ``content_base64`` and
+        ``content_encoding`` are added only when ``include_binary`` is True.
     """
     logger.info(
-        "get_skill_content called: skill_name=%s resource_path=%s",
+        "get_skill_content called: skill_name=%s resource_path=%s include_binary=%s",
         skill_name,
         resource_path,
+        include_binary,
     )
 
     if not skill_name or not skill_name.strip():
@@ -753,9 +765,28 @@ async def get_skill_content(
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.get(url, headers=headers, params=params)
             response.raise_for_status()
-            data = response.json()
 
-        result: dict[str, Any] = {
+        data = response.json()
+
+        # Asset resources arrive as base64 JSON from the registry. Keep them
+        # out of the model's context unless the caller explicitly asks.
+        if data.get("encoding") == "base64":
+            resource = data.get("path") or resource_path or ""
+            result: dict[str, Any] = {
+                "skill_name": skill_name,
+                "source_url": data.get("url", ""),
+                "resource_path": resource,
+                "resource_type": data.get("type", ""),
+                "content_type": mimetypes.guess_type(resource)[0] or "application/octet-stream",
+                "size_bytes": data.get("size_bytes"),
+                "status": "success",
+            }
+            if include_binary:
+                result["content_base64"] = data.get("content_base64", "")
+                result["content_encoding"] = "base64"
+            return result
+
+        result = {
             "skill_name": skill_name,
             "source_url": data.get("url", ""),
             "content": data.get("content", ""),
