@@ -300,6 +300,17 @@ def _validate_query(query: str) -> str:
     return query.strip()
 
 
+def _names_metadata_keys(
+    metadata_fields: str | None,
+) -> bool:
+    """Return whether the caller named at least one metadata key.
+
+    Comma-separated empty segments and whitespace do not opt the caller into
+    model-facing metadata, matching the registry's projection parser.
+    """
+    return bool(metadata_fields) and any(part.strip() for part in metadata_fields.split(","))
+
+
 def _list_params(
     metadata_fields: str | None = None,
 ) -> dict[str, Any]:
@@ -316,7 +327,7 @@ def _list_params(
         Query parameter dict for httpx.
     """
     params: dict[str, Any] = {"limit": LIST_PAGE_LIMIT}
-    if metadata_fields:
+    if _names_metadata_keys(metadata_fields):
         params["metadata_fields"] = metadata_fields
     return params
 
@@ -339,7 +350,7 @@ def _without_unrequested_metadata(
     Returns:
         The record, without its ``metadata`` key when none was requested.
     """
-    if metadata_fields or not isinstance(record, dict):
+    if _names_metadata_keys(metadata_fields) or not isinstance(record, dict):
         return record
     return {k: v for k, v in record.items() if k != "metadata"}
 
@@ -362,7 +373,7 @@ def _without_unrequested_agent_card_metadata(
     Returns:
         The hit, with its agent card's ``metadata`` removed when none was requested.
     """
-    if metadata_fields or not isinstance(agent, dict):
+    if _names_metadata_keys(metadata_fields) or not isinstance(agent, dict):
         return agent
     card = agent.get("agent_card")
     if not isinstance(card, dict) or "metadata" not in card:
@@ -930,7 +941,7 @@ async def search_registry(
         # Search drops the metadata subdocument unless the caller names the keys
         # it wants, so forward the request rather than choosing keys here: which
         # metadata an asset carries is up to whoever registered it.
-        if metadata_fields:
+        if _names_metadata_keys(metadata_fields):
             payload["metadata_fields"] = metadata_fields
 
         async with httpx.AsyncClient(timeout=30.0) as client:
