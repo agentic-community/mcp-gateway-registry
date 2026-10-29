@@ -21,8 +21,8 @@ const MAX_BUNDLE_BYTES = 10 * 1024 * 1024; // 10 MB
 const FETCH_CONCURRENCY = 4;
 
 // Resources whose contents render usefully inline (markdown / code).
-// Assets are treated as opaque in v1 (download-only) since the server
-// returns content as UTF-8 text and binary assets would be corrupted.
+// Assets are treated as opaque (download-only); the API delivers their bytes
+// as base64 JSON so an asset can never choose an executable content type.
 const TEXT_PREVIEWABLE_TYPES: ReadonlySet<SkillResource['type']> = new Set<SkillResource['type']>(
   ['script', 'reference', 'agent'],
 );
@@ -96,11 +96,21 @@ function _isOverCap(resources: SkillResource[]): CapResult {
 }
 
 
+export type FetchedResource =
+  | { path: string; kind: 'text'; content: string; contentType: string }
+  | { path: string; kind: 'binary'; content: Uint8Array; contentType: string };
+
+
+function _decodeBase64(value: string): Uint8Array {
+  return Uint8Array.from(atob(value), (char) => char.charCodeAt(0));
+}
+
+
 async function _fetchResource(
   skillApiPath: string,
   resourcePath: string,
   authToken: string | null,
-): Promise<{ path: string; content: string }> {
+): Promise<FetchedResource> {
   const headers = authToken ? { Authorization: `Bearer ${authToken}` } : undefined;
   const resp = await axios.get(
     `/api/skills${skillApiPath}/content`,
@@ -109,7 +119,25 @@ async function _fetchResource(
       ...(headers ? { headers } : {}),
     },
   );
-  return { path: resourcePath, content: resp.data.content as string };
+  const data = (
+    resp.data !== null && typeof resp.data === 'object' ? resp.data : {}
+  ) as { content?: unknown; content_base64?: unknown; encoding?: unknown };
+
+  // Assets arrive as base64 JSON; text resources keep the content field.
+  if (data.encoding === 'base64' && typeof data.content_base64 === 'string') {
+    return {
+      path: resourcePath,
+      kind: 'binary',
+      content: _decodeBase64(data.content_base64),
+      contentType: 'application/octet-stream',
+    };
+  }
+  return {
+    path: resourcePath,
+    kind: 'text',
+    content: String(data.content ?? ''),
+    contentType: 'application/json',
+  };
 }
 
 
@@ -124,10 +152,10 @@ async function _fetchAllWithConcurrency(
   authToken: string | null,
   onProgress: (done: number, total: number) => void,
 ): Promise<{
-  successes: { path: string; content: string }[];
+  successes: FetchedResource[];
   failures: { path: string; error: string }[];
 }> {
-  const successes: { path: string; content: string }[] = [];
+  const successes: FetchedResource[] = [];
   const failures: { path: string; error: string }[] = [];
   const queue = [...resources];
   let done = 0;
@@ -164,7 +192,7 @@ async function _fetchAllWithConcurrency(
 async function _buildAndDownloadZip(
   skill: Skill,
   skillMdContent: string,
-  fetched: { path: string; content: string }[],
+  fetched: FetchedResource[],
 ): Promise<void> {
   const zip = new JSZip();
   zip.file('SKILL.md', skillMdContent);
@@ -203,7 +231,11 @@ function ResourceItem({
     setDownloadError(null);
     try {
       const result = await _fetchResource(skillApiPath, resource.path, authToken);
-      const blob = new Blob([result.content], { type: 'text/plain' });
+      const blob = result.kind === 'binary'
+        ? new Blob([result.content as BlobPart], {
+            type: result.contentType || 'application/octet-stream',
+          })
+        : new Blob([result.content], { type: 'text/plain' });
       triggerBlobDownload(blob, _basename(resource.path));
     } catch (e: any) {
       const status = e?.response?.status;
@@ -356,7 +388,12 @@ function ResourcePreview({
     setError(null);
     _fetchResource(skillApiPath, resource.path, authToken)
       .then((result) => {
-        if (!cancelled) setContent(result.content);
+        if (cancelled) return;
+        if (result.kind === 'binary') {
+          setError('Binary resources cannot be previewed. Download the file instead.');
+          return;
+        }
+        setContent(result.content);
       })
       .catch((e: any) => {
         if (cancelled) return;
