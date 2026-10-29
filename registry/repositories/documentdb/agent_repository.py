@@ -10,6 +10,11 @@ from pymongo.errors import DuplicateKeyError
 
 from ...exceptions import AssetIdConflictError
 from ...schemas.agent_models import AgentCard
+from ...utils.metadata_security import (
+    metadata_field_unset,
+    metadata_field_update,
+    stamp_metadata_scan,
+)
 from ...utils.url_normalize import ENTITY_TYPE_AGENT, NORMALIZED_IDENTITY_URL_FIELD
 from ..interfaces import AgentRepositoryBase
 from ._identity_url_sidecar import (
@@ -196,6 +201,10 @@ class DocumentDBAgentRepository(AgentRepositoryBase):
 
         agent_dict = agent.model_dump(mode="json")
         agent_dict["is_enabled"] = False
+        # The verdict is computed from the metadata being written, never taken
+        # from the caller (issue #1811).
+        stamp_metadata_scan(agent_dict, "agent")
+        agent.metadata_scan = agent_dict.get("metadata_scan")
 
         try:
             doc = {**agent_dict}
@@ -267,6 +276,10 @@ class DocumentDBAgentRepository(AgentRepositoryBase):
         update_dict = updated_agent.model_dump(mode="json")
         update_dict.pop("path", None)
         update_dict.update(extra_fields)
+        # The card is complete here, so metadata is always present and the
+        # verdict is always recomputed (issue #1811).
+        stamp_metadata_scan(update_dict, "agent")
+        updated_agent.metadata_scan = update_dict.get("metadata_scan")
         populate_normalized_identity_url(update_dict, ENTITY_TYPE_AGENT)
         unset_ops: dict[str, str] = {}
         if (
@@ -408,18 +421,24 @@ class DocumentDBAgentRepository(AgentRepositoryBase):
         field: str,
         value: Any,
     ) -> bool:
-        """Update a single field on a document."""
+        """Update a single field on a document.
+
+        Raises:
+            ValueError: If ``field`` is ``metadata_scan`` (set or unset), which
+                is only ever written together with the metadata it was
+                computed for.
+        """
         collection = await self._get_collection()
 
         if value is None:
             result = await collection.update_one(
                 {"_id": path},
-                {"$unset": {field: ""}},
+                {"$unset": metadata_field_unset(field)},
             )
         else:
             result = await collection.update_one(
                 {"_id": path},
-                {"$set": {field: value}},
+                {"$set": metadata_field_update(field, value, "agent")},
             )
 
         return result.modified_count > 0

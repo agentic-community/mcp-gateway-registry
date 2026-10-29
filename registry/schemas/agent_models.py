@@ -829,6 +829,12 @@ class AgentCard(ProxyableMixin):
         default_factory=dict,
         description="Additional metadata",
     )
+    # Computed by the registry on every write (issue #1811); any client-supplied
+    # value is replaced by the repository. See registry/utils/metadata_security.py.
+    metadata_scan: dict[str, Any] | None = Field(
+        default=None,
+        description="Registry-computed YARA verdict for metadata; read-only",
+    )
 
     # MCP Gateway Registry extensions (optional - not part of A2A spec)
     path: str | None = Field(
@@ -1286,6 +1292,13 @@ class AgentInfo(BaseModel):
     metadata: dict[str, Any] = Field(
         default_factory=dict,
         description="Additional metadata key-value pairs",
+    )
+    metadata_security: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "Operator-facing YARA verdict for the agent's full metadata (issue #1811): "
+            "status, flagged_keys and findings. Absent on model-facing responses"
+        ),
     )
     # Gateway-proxy opt-in (mirrored from the AgentCard so listings show the badge
     # and the edit modal populates the toggle). proxy_client_url is the read-only,

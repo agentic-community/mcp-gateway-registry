@@ -9,6 +9,7 @@ Supports two auth modes:
   - Legacy bearer token: pass a Keycloak JWT via Authorization header directly.
 """
 
+import copy
 import logging
 import mimetypes
 import os
@@ -333,27 +334,91 @@ def _list_params(
     return params
 
 
+# metadata_security statuses under which a record's metadata may reach a model
+# whole. "flagged" keeps the keys the YARA verdict did not flag; anything else
+# (unscanned, stale, failed, missing, unknown) withholds it all (issue #1811).
+_METADATA_FULLY_VISIBLE_STATUSES: frozenset[str] = frozenset({"clean", "disabled"})
+
+
+def _flagged_key_paths(
+    security: dict[str, Any],
+) -> list[list[str]] | None:
+    """Return the verdict's flagged key paths, or None if they are malformed."""
+    paths = security.get("flagged_keys")
+    if not isinstance(paths, list):
+        return None
+    for path in paths:
+        if not isinstance(path, list) or not path or not all(isinstance(s, str) for s in path):
+            return None
+    return paths
+
+
+def _without_key_paths(
+    metadata: dict[str, Any],
+    paths: list[list[str]],
+) -> dict[str, Any]:
+    """Return a copy of ``metadata`` with each key path removed."""
+    result = copy.deepcopy(metadata)
+    for path in paths:
+        node: Any = result
+        for segment in path[:-1]:
+            node = node.get(segment) if isinstance(node, dict) else None
+        if isinstance(node, dict):
+            node.pop(path[-1], None)
+    return result
+
+
+def _model_visible_metadata(
+    record: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Apply the registry's YARA verdict to a record's (projected) metadata.
+
+    The REST list endpoints are operator-facing and return all metadata with a
+    ``metadata_security`` verdict beside it. Before metadata reaches a model,
+    keys the verdict flagged are removed even when the caller named them, and
+    a record whose verdict is missing, stale or failed carries no metadata.
+    """
+    metadata = record.get("metadata")
+    if not isinstance(metadata, dict) or not metadata:
+        return metadata
+    security = record.get("metadata_security")
+    status = security.get("status") if isinstance(security, dict) else None
+    if status in _METADATA_FULLY_VISIBLE_STATUSES:
+        return metadata
+    if status == "flagged":
+        paths = _flagged_key_paths(security)
+        if paths is not None:
+            return _without_key_paths(metadata, paths)
+    return None
+
+
 def _without_unrequested_metadata(
     record: dict[str, Any],
     metadata_fields: str | None,
 ) -> dict[str, Any]:
-    """Drop a listing record's metadata unless the caller named keys to keep.
+    """Shape a listing record's metadata for a model.
 
     Metadata is free-form text the registrant controls, and these tools put it
     straight into a model's context, so it is opt-in: a caller that does not pass
-    metadata_fields gets no metadata, the same as search_registry (issue #1811).
-    The REST API keeps returning full metadata, because the edit forms read it.
+    metadata_fields gets no metadata, the same as search_registry. When keys are
+    requested, the registry's YARA verdict still applies: flagged keys are
+    removed and unverified metadata is withheld (issue #1811). The REST API keeps
+    returning full metadata, because the edit forms read it.
 
     Args:
         record: One server, agent or skill record from the registry list API.
         metadata_fields: The caller's metadata_fields argument.
 
     Returns:
-        The record, without its ``metadata`` key when none was requested.
+        The record without ``metadata`` when none was requested, otherwise with
+        only its model-visible metadata. ``metadata_security`` is never passed on.
     """
-    if _names_metadata_keys(metadata_fields) or not isinstance(record, dict):
+    if not isinstance(record, dict):
         return record
-    return {k: v for k, v in record.items() if k != "metadata"}
+    shaped = {k: v for k, v in record.items() if k not in ("metadata", "metadata_security")}
+    if _names_metadata_keys(metadata_fields):
+        shaped["metadata"] = _model_visible_metadata(record)
+    return shaped
 
 
 def _without_unrequested_agent_card_metadata(

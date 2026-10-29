@@ -1416,8 +1416,12 @@ class SearchRepositoryBase(ABC):
         path: str,
         server_info: dict[str, Any],
         is_enabled: bool = False,
+        skip_if_unchanged: bool = False,
     ) -> bool:
         """Index a server for search.
+
+        ``skip_if_unchanged`` skips the embedding call when the entry's
+        embedding text is unchanged (used by the metadata rescan, #1811).
 
         Returns:
             True if the entry is stored with an embedding, False otherwise.
@@ -1430,8 +1434,12 @@ class SearchRepositoryBase(ABC):
         path: str,
         agent_card: AgentCard,
         is_enabled: bool = False,
+        skip_if_unchanged: bool = False,
     ) -> bool:
         """Index an agent for search.
+
+        ``skip_if_unchanged`` skips the embedding call when the entry's
+        embedding text is unchanged (used by the metadata rescan, #1811).
 
         Returns:
             True if the entry is stored with an embedding, False otherwise.
@@ -1469,6 +1477,7 @@ class SearchRepositoryBase(ABC):
         path: str,
         skill: Any,
         is_enabled: bool = False,
+        skip_if_unchanged: bool = False,
     ) -> bool:
         """Index a skill for search.
 

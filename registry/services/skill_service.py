@@ -50,6 +50,7 @@ from ..schemas.skill_models import (
     SkillResourceManifest,
     VisibilityEnum,
 )
+from ..utils.metadata_security import operator_metadata_security
 from ..utils.path_utils import normalize_skill_path
 from ..utils.url_guard import (
     guarded_async_client,
@@ -1514,6 +1515,9 @@ class SkillService:
                 author=s.metadata.author if s.metadata else None,
                 version=s.metadata.version if s.metadata else None,
                 metadata=s.metadata,
+                metadata_security=operator_metadata_security(
+                    s.metadata, getattr(s, "metadata_scan", None), "skill"
+                ),
                 compatibility=s.compatibility,
                 target_agents=s.target_agents,
                 is_enabled=s.is_enabled,
