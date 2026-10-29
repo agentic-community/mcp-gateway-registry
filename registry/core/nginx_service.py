@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 
 import httpx
 
+from registry.auth.proxied_token import _api_auth_request_enabled
 from registry.auth.resource_binding import INVALID_VERSION_SENTINEL
 from registry.common.log_redaction import redact_url
 from registry.constants import (
@@ -689,6 +690,57 @@ _UNRENDERED_TEMPLATE_MARKERS: tuple[str, ...] = (
 )
 
 
+# Brackets the `auth_request /validate;` line of every registry `/api/` location in
+# both nginx templates. NGINX_DISABLE_API_AUTH_REQUEST drops the bracketed lines;
+# the marker lines themselves are always removed from the rendered config.
+_API_AUTH_REQUEST_REGION_RE = re.compile(
+    r"^[ \t]*# \{\{API_AUTH_REQUEST_START\}\}[ \t]*\n"
+    r".*?"
+    r"^[ \t]*# \{\{API_AUTH_REQUEST_END\}\}[ \t]*\n",
+    re.MULTILINE | re.DOTALL,
+)
+_API_AUTH_REQUEST_MARKER_LINE_RE = re.compile(
+    r"^[ \t]*# \{\{API_AUTH_REQUEST_(?:START|END)\}\}[ \t]*\n",
+    re.MULTILINE,
+)
+
+
+def _apply_api_auth_request_markers(
+    template_content: str,
+    auth_request_enabled: bool,
+) -> str:
+    """Keep or drop the `/api/` auth_request lines marked in the nginx template.
+
+    The template is the only copy of the `/api/` location. When
+    ``auth_request_enabled`` is False (NGINX_DISABLE_API_AUTH_REQUEST set), the
+    lines between the ``{{API_AUTH_REQUEST_START}}`` and
+    ``{{API_AUTH_REQUEST_END}}`` markers are removed, so nginx stops running
+    ``/validate`` for ``/api/`` while every other directive in the location
+    (rate limits, header clears, error pages) stays as the template wrote it.
+
+    Args:
+        template_content: Raw nginx template text.
+        auth_request_enabled: Whether `/api/` keeps ``auth_request /validate``.
+
+    Returns:
+        The template text with the marker lines removed, and with the marked
+        region removed too when ``auth_request_enabled`` is False.
+    """
+    if not auth_request_enabled:
+        template_content, removed = _API_AUTH_REQUEST_REGION_RE.subn("", template_content)
+        if removed:
+            logger.warning(
+                "NGINX_DISABLE_API_AUTH_REQUEST enabled: bypassing auth_request for /api/"
+            )
+        else:
+            logger.warning(
+                "NGINX_DISABLE_API_AUTH_REQUEST enabled but the nginx template has no "
+                "{{API_AUTH_REQUEST_START}}/{{API_AUTH_REQUEST_END}} markers; "
+                "/api/ keeps auth_request"
+            )
+    return _API_AUTH_REQUEST_MARKER_LINE_RE.sub("", template_content)
+
+
 def _is_unrendered_template(
     path: Path,
 ) -> bool:
@@ -1201,120 +1253,13 @@ class NginxConfigService:
             #
             # Set NGINX_DISABLE_API_AUTH_REQUEST=true to bypass `auth_request` for `/api/` and rely
             # on FastAPI's own auth (session cookie or bearer token validation inside the app).
-            import os
-
-            if os.environ.get("NGINX_DISABLE_API_AUTH_REQUEST", "false").lower() in (
-                "1",
-                "true",
-                "yes",
-                "on",
-            ):
-                # KNOWN ISSUE (tracked separately from #1939): this literal no
-                # longer matches the /api/ location in either template (they gained
-                # rate limits, reworded comments and extra headers), so the
-                # replacement below never fires and this flag leaves nginx running
-                # auth_request. Do not just fix the matcher: unprotected_api_block is
-                # stale too. It lacks `proxy_set_header X-Internal-Secret "";` (the
-                # templates clear it, and /api/internal/sessions/* falls through to
-                # /api/), uses $scheme where the templates use $forwarded_proto /
-                # $real_scheme, and has no `error_page 502 = @upstream_unavailable;`.
-                protected_api_block = """    # Protected API endpoints - require authentication
-    location {{ROOT_PATH}}/api/ {
-        # Mark this as a registry-API request (rewrite phase) so the shared
-        # /validate subrequest forwards X-Registry-Api-Auth and /validate mints
-        # the registry-UI internal token. Set inside the location (NOT a
-        # server-scope default), which the auth_request subrequest would clobber.
-        set $registry_api_auth "1";
-
-        # Authenticate request via auth server (validates JWT Bearer tokens)
-        auth_request /validate;
-        auth_request_set $auth_subrequest_status $upstream_status;
-        auth_request_set $auth_entra_outage_marker $upstream_http_x_entra_group_lookup_unavailable;
-        error_page 403 = @forbidden_error;
-        error_page 502 = @upstream_unavailable;
-        error_page 500 = @auth_internal_error;
-
-        # Capture auth server response headers
-        auth_request_set $auth_user $upstream_http_x_user;
-        auth_request_set $auth_username $upstream_http_x_username;
-        auth_request_set $auth_client_id $upstream_http_x_client_id;
-        auth_request_set $auth_scopes $upstream_http_x_scopes;
-        auth_request_set $auth_method $upstream_http_x_auth_method;
-        # Capture the /validate-minted registry-UI token (binds verified identity).
-        # The registry verifies this instead of trusting the forgeable X-* headers.
-        auth_request_set $auth_internal_token_registry $upstream_http_x_internal_token_registry;
-
-        # Proxy to FastAPI service
-        proxy_pass http://127.0.0.1:7860/api/;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-
-        # Forward validated auth context to FastAPI
-        proxy_set_header X-User $auth_user;
-        proxy_set_header X-Username $auth_username;
-        proxy_set_header X-Client-Id $auth_client_id;
-        proxy_set_header X-Scopes $auth_scopes;
-        proxy_set_header X-Auth-Method $auth_method;
-        # The internal token the registry verifies (it ignores the X-* headers above).
-        proxy_set_header X-Internal-Token-Registry $auth_internal_token_registry;
-
-        # Pass through original Authorization header
-        proxy_set_header Authorization $http_authorization;
-
-        # Pass all request headers
-        proxy_pass_request_headers on;
-
-        # Timeouts
-        proxy_connect_timeout 10s;
-        proxy_send_timeout 30s;
-        proxy_read_timeout 30s;
-    }"""
-
-                unprotected_api_block = """    # API endpoints - FastAPI handles authentication (session cookie / bearer)
-    location {{ROOT_PATH}}/api/ {
-        # Inbound rate limits still apply even though auth_request is bypassed:
-        # /api/ is the highest-volume surface and must stay bounded at the edge,
-        # and the registration endpoints keep their stricter per-source cap (the
-        # register zone key is empty for non-registration URIs, so it is a no-op
-        # for the rest of /api/).
-        limit_req zone=mcp_gateway_edge burst=100 nodelay;
-        limit_req zone=mcp_gateway_register burst=10 nodelay;
-        limit_conn mcp_gateway_conn 100;
-
-        # Proxy to FastAPI service
-        proxy_pass http://127.0.0.1:7860/api/;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-
-        # Pass through original Authorization header (if present)
-        proxy_set_header Authorization $http_authorization;
-
-        # Pass all request headers and cookies
-        proxy_pass_request_headers on;
-
-        # Timeouts
-        proxy_connect_timeout 10s;
-        proxy_send_timeout 30s;
-        proxy_read_timeout 30s;
-    }"""
-
-                if protected_api_block in template_content:
-                    template_content = template_content.replace(
-                        protected_api_block, unprotected_api_block
-                    )
-                    logger.warning(
-                        "NGINX_DISABLE_API_AUTH_REQUEST enabled: bypassing auth_request for /api/"
-                    )
-                else:
-                    logger.warning(
-                        "NGINX_DISABLE_API_AUTH_REQUEST enabled but could not find /api/ auth_request block in template"
-                    )
+            # The template stays the only copy of the `/api/` location: it marks the
+            # auth_request lines, and the flag only decides whether they are kept.
+            # Read through the registry-side helper so nginx and the registry
+            # always agree on whether the flag is set.
+            template_content = _apply_api_auth_request_markers(
+                template_content, _api_auth_request_enabled()
+            )
 
             # Generate location blocks for enabled and healthy servers with transport support
             # In registry-only mode, skip MCP server location blocks (use empty list)
