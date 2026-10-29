@@ -659,7 +659,7 @@ The old cluster's final snapshot uses the identifier already stored in state. Th
 Replacing only `aws_docdb_cluster.telemetry` leaves the random resource in state. The replacement cluster inherits the name used for the previous cluster's snapshot. Reusing that name for another deletion can fail with `DBClusterSnapshotAlreadyExistsFault`. After that replacement, rotate the suffix in a separate apply before the next cluster replacement or destroy:
 
 ```bash
-terraform apply -replace=random_id.documentdb_final_snapshot -var='deployment_stage=production'
+terraform apply -replace=random_id.documentdb_final_snapshot
 ```
 
 Use the same variable files and other inputs as the deployment. If a retained snapshot already uses the current name, run this rotation before deleting the current cluster. Check the stored name with `terraform output -raw documentdb_final_snapshot_identifier`.
