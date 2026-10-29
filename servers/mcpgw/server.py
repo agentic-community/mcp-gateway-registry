@@ -783,8 +783,10 @@ async def get_skill_content(
     have companion resources (reference docs, scripts, configs) listed in
     the manifest that you can fetch with the resource_path parameter.
 
-    Binary companion resources (for example images or fonts) return metadata
-    by default. Set include_binary=True to also receive the bytes as base64.
+    Text companion resources, including text assets such as templates and
+    schemas, return their text in content. Binary assets (for example images
+    or fonts) return metadata by default. Set include_binary=True to also
+    receive their bytes as base64.
 
     Args:
         skill_name: Name of the skill (e.g. "pr-review", "mcp-builder")
@@ -796,9 +798,11 @@ async def get_skill_content(
 
     Returns:
         Dictionary containing the skill name, content, source URL, and status.
-        Binary resources return ``resource_path``, ``resource_type``,
-        ``content_type`` and ``size_bytes``; ``content_base64`` and
-        ``content_encoding`` are added only when ``include_binary`` is True.
+        Text resources also return ``resource_path``, ``resource_type`` and
+        ``size_bytes``. Binary resources return ``resource_path``,
+        ``resource_type``, ``content_type`` and ``size_bytes``;
+        ``content_base64`` and ``content_encoding`` are added only when
+        ``include_binary`` is True.
     """
     logger.info(
         "get_skill_content called: skill_name=%s resource_path=%s include_binary=%s",
@@ -874,6 +878,8 @@ async def get_skill_content(
         if resource_path:
             result["resource_path"] = data.get("path", resource_path)
             result["resource_type"] = data.get("type", "")
+            if "size_bytes" in data:
+                result["size_bytes"] = data["size_bytes"]
         else:
             manifest = data.get("resource_manifest")
             if manifest:

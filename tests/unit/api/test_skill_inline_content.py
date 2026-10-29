@@ -365,7 +365,7 @@ def _fetch_resource_via_http(
 
 @pytest.mark.unit
 class TestAssetResourceContent:
-    """Asset resources are always delivered as base64 JSON, never raw bytes."""
+    """Binary assets are base64 JSON; text assets keep ``content``; never raw bytes."""
 
     def test_png_asset_round_trips_byte_for_byte(
         self,
@@ -438,6 +438,113 @@ class TestAssetResourceContent:
         assert base64.b64decode(data["content_base64"]) == payload
         assert data["type"] == "asset"
         assert "content" not in data
+
+    @pytest.mark.parametrize(
+        ("path", "payload"),
+        [
+            ("assets/report-template.md", b"# Report\n\nSummary: {{summary}}\n"),
+            ("config.yaml", "name: caf\u00e9\nretries: 3\n".encode()),
+            ("assets/page.html", b"<html><script>alert(1)</script></html>"),
+            ("assets/bom-template.md", b"\xef\xbb\xbf# Report\n"),
+            ("assets/empty.txt", b""),
+        ],
+    )
+    def test_utf8_assets_return_text_content_as_json(
+        self,
+        test_client,
+        mock_skill_service,
+        path,
+        payload,
+    ):
+        """Text assets (templates, schemas, root-level config) stay readable as text."""
+        # Arrange
+        skill = _make_skill_with_resources(_resource_entry(path, "asset"))
+
+        # Act
+        response = _fetch_resource_via_http(
+            test_client,
+            mock_skill_service,
+            skill,
+            path,
+            payload,
+        )
+
+        # Assert
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "application/json"
+        data = response.json()
+        assert data["content"].encode("utf-8") == payload
+        assert data["type"] == "asset"
+        assert data["path"] == path
+        assert "content_base64" not in data
+        assert "encoding" not in data
+        assert data["size_bytes"] == len(payload)
+
+    @pytest.mark.parametrize(
+        ("path", "payload"),
+        [
+            ("assets/notes-utf16.txt", "notes\n".encode("utf-16-le")),
+            ("assets/tiny.bin", b"AB\x00CD"),
+        ],
+    )
+    def test_assets_with_nul_bytes_are_base64(
+        self,
+        test_client,
+        mock_skill_service,
+        path,
+        payload,
+    ):
+        """Valid-UTF-8 bytes containing NUL (UTF-16 text, small binaries) use base64."""
+        # Arrange
+        skill = _make_skill_with_resources(_resource_entry(path, "asset"))
+
+        # Act
+        response = _fetch_resource_via_http(
+            test_client,
+            mock_skill_service,
+            skill,
+            path,
+            payload,
+        )
+
+        # Assert
+        assert response.status_code == 200
+        data = response.json()
+        assert data["encoding"] == "base64"
+        assert base64.b64decode(data["content_base64"]) == payload
+        assert "content" not in data
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("resource_type", ["reference", "script", "agent", "asset"])
+@pytest.mark.parametrize(
+    "payload",
+    [b"<svg onload=alert(1)>", b"<svg>\xff<script>alert(1)</script></svg>"],
+    ids=["valid-utf8", "invalid-utf8"],
+)
+def test_every_resource_response_is_json(
+    test_client,
+    mock_skill_service,
+    resource_type,
+    payload,
+):
+    """No resource type or byte content can select a non-JSON content type."""
+    # Arrange
+    path = "files/evil.svg"
+    skill = _make_skill_with_resources(_resource_entry(path, resource_type))
+
+    # Act
+    response = _fetch_resource_via_http(
+        test_client,
+        mock_skill_service,
+        skill,
+        path,
+        payload,
+    )
+
+    # Assert
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/json"
 
 
 @pytest.mark.unit

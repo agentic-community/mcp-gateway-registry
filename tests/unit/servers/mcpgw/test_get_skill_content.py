@@ -230,7 +230,7 @@ def _binary_asset_payload(path: str, data: bytes) -> dict:
 
 
 class TestGetSkillContentBinaryResource:
-    """Asset resources return metadata by default and base64 only on request."""
+    """Binary assets return metadata by default and base64 only on request."""
 
     async def test_binary_resource_returns_metadata_by_default(self):
         png_bytes = b"\x89PNG\r\n\x1a\n" + bytes(range(256))
@@ -289,4 +289,26 @@ class TestGetSkillContentBinaryResource:
         assert result["status"] == "success"
         assert result["content"] == "hello"
         assert result["resource_type"] == ""
+        assert "content_base64" not in result
+
+    async def test_text_asset_returns_content_without_include_binary(self):
+        payload = {
+            "content": "# Report\n\nSummary: {{summary}}\n",
+            "size_bytes": 31,
+            "path": "assets/report-template.md",
+            "type": "asset",
+            "url": "https://raw.example.com/assets/report-template.md",
+        }
+
+        result = await _call_get_skill_content(
+            "valid-skill",
+            resource_path="assets/report-template.md",
+            payload=payload,
+        )
+
+        assert result["status"] == "success"
+        assert result["content"] == payload["content"]
+        assert result["resource_type"] == "asset"
+        assert result["source_url"] == payload["url"]
+        assert result["size_bytes"] == 31
         assert "content_base64" not in result

@@ -21,8 +21,9 @@ const MAX_BUNDLE_BYTES = 10 * 1024 * 1024; // 10 MB
 const FETCH_CONCURRENCY = 4;
 
 // Resources whose contents render usefully inline (markdown / code).
-// Assets are treated as opaque (download-only); the API delivers their bytes
-// as base64 JSON so an asset can never choose an executable content type.
+// Assets are treated as opaque (download-only). The API returns text assets in
+// `content` and binary assets as base64 JSON, so an asset can never choose an
+// executable content type.
 const TEXT_PREVIEWABLE_TYPES: ReadonlySet<SkillResource['type']> = new Set<SkillResource['type']>(
   ['script', 'reference', 'agent'],
 );
@@ -96,9 +97,12 @@ function _isOverCap(resources: SkillResource[]): CapResult {
 }
 
 
+// Blob MIME types are fixed constants at the download site, never derived from
+// the resource path: a path-derived text/html on a blob: URL would run with
+// this page's origin.
 export type FetchedResource =
-  | { path: string; kind: 'text'; content: string; contentType: string }
-  | { path: string; kind: 'binary'; content: Uint8Array; contentType: string };
+  | { path: string; kind: 'text'; content: string }
+  | { path: string; kind: 'binary'; content: Uint8Array };
 
 
 function _decodeBase64(value: string): Uint8Array {
@@ -123,20 +127,19 @@ async function _fetchResource(
     resp.data !== null && typeof resp.data === 'object' ? resp.data : {}
   ) as { content?: unknown; content_base64?: unknown; encoding?: unknown };
 
-  // Assets arrive as base64 JSON; text resources keep the content field.
+  // Binary assets arrive as base64 JSON; text resources and text assets keep
+  // the content field.
   if (data.encoding === 'base64' && typeof data.content_base64 === 'string') {
     return {
       path: resourcePath,
       kind: 'binary',
       content: _decodeBase64(data.content_base64),
-      contentType: 'application/octet-stream',
     };
   }
   return {
     path: resourcePath,
     kind: 'text',
     content: String(data.content ?? ''),
-    contentType: 'application/json',
   };
 }
 
@@ -232,9 +235,7 @@ function ResourceItem({
     try {
       const result = await _fetchResource(skillApiPath, resource.path, authToken);
       const blob = result.kind === 'binary'
-        ? new Blob([result.content as BlobPart], {
-            type: result.contentType || 'application/octet-stream',
-          })
+        ? new Blob([result.content as BlobPart], { type: 'application/octet-stream' })
         : new Blob([result.content], { type: 'text/plain' });
       triggerBlobDownload(blob, _basename(resource.path));
     } catch (e: any) {

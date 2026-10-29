@@ -356,6 +356,32 @@ describe('Per-file Download', () => {
       expect.not.objectContaining({ responseType: 'arraybuffer' }),
     );
   });
+
+  test('downloads a text asset as a text/plain Blob of its UTF-8 bytes', async () => {
+    const template = 'name: caf\u00e9 \u2014 r\u00e9sum\u00e9\n';
+    mockedAxios.get.mockResolvedValueOnce({
+      data: {
+        content: template,
+        size_bytes: Buffer.byteLength(template, 'utf8'),
+        path: 'assets/config.yaml',
+        type: 'asset',
+      },
+    });
+
+    const manifest = makeManifest({
+      assets: [{ path: 'assets/config.yaml', type: 'asset', size_bytes: 20 }],
+    });
+    render(<SkillResources {...defaultProps({ resource_manifest: manifest })} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /Assets/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Download assets\/config\.yaml/ }));
+
+    await waitFor(() => expect(triggerSpy).toHaveBeenCalled());
+    const [blob, filename] = triggerSpy.mock.calls[0];
+    expect(filename).toBe('config.yaml');
+    expect(blob.type).toBe('text/plain');
+    expect(blob.size).toBe(Buffer.byteLength(template, 'utf8'));
+  });
 });
 
 
@@ -560,5 +586,33 @@ describe('Download all', () => {
     const entry = zip.file('assets/logo.png');
     expect(entry).not.toBeNull();
     expect(Array.from(await entry!.async('uint8array'))).toEqual(Array.from(pngBytes));
+  });
+
+  test('bundles a text asset into the zip as its exact UTF-8 bytes', async () => {
+    const template = '# Report \u2014 caf\u00e9\n\nSummary: {{summary}}\n';
+    mockedAxios.get.mockResolvedValueOnce({
+      data: {
+        content: template,
+        size_bytes: Buffer.byteLength(template, 'utf8'),
+        path: 'assets/report-template.md',
+        type: 'asset',
+      },
+    });
+
+    const manifest = makeManifest({
+      assets: [{ path: 'assets/report-template.md', type: 'asset', size_bytes: 40 }],
+    });
+    render(<SkillResources {...defaultProps({ resource_manifest: manifest }, '# Doc\n')} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /Download all/ }));
+
+    await waitFor(() => expect(triggerSpy).toHaveBeenCalled());
+    const [zipBlob] = triggerSpy.mock.calls[0];
+    const zip = await JSZip.loadAsync(zipBlob);
+    const entry = zip.file('assets/report-template.md');
+    expect(entry).not.toBeNull();
+    expect(Array.from(await entry!.async('uint8array'))).toEqual(
+      Array.from(Buffer.from(template, 'utf8')),
+    );
   });
 });
