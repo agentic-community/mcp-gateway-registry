@@ -4302,8 +4302,8 @@ class TestFormRouteMetadataLimits:
     @pytest.mark.parametrize(
         ("raw", "message"),
         [
-            (_SURROGATE_RAW, "not valid Unicode"),
-            (_UNDECODABLE_DEPTH_RAW, "too deeply to decode"),
+            (_SURROGATE_RAW, ("not valid Unicode",)),
+            (_UNDECODABLE_DEPTH_RAW, ("too deeply to decode", "over the limit of 8")),
         ],
         ids=["unpaired-surrogate", "decoder-recursion"],
     )
@@ -4313,14 +4313,14 @@ class TestFormRouteMetadataLimits:
         response = self._post_raw(test_client_admin, "/api/servers/register", raw)
 
         assert response.status_code == 422
-        assert message in response.json()["reason"]
+        assert any(fragment in response.json()["reason"] for fragment in message)
         mock_server_service.register_server.assert_not_called()
 
     @pytest.mark.parametrize(
         ("raw", "message"),
         [
-            (_SURROGATE_RAW, "not valid Unicode"),
-            (_UNDECODABLE_DEPTH_RAW, "too deeply to decode"),
+            (_SURROGATE_RAW, ("not valid Unicode",)),
+            (_UNDECODABLE_DEPTH_RAW, ("too deeply to decode", "over the limit of 8")),
         ],
         ids=["unpaired-surrogate", "decoder-recursion"],
     )
@@ -4334,14 +4334,14 @@ class TestFormRouteMetadataLimits:
             response = self._post_raw(test_client_admin, "/api/register", raw)
 
         assert response.status_code == 422
-        assert message in response.json()["detail"]
+        assert any(fragment in response.json()["detail"] for fragment in message)
         mock_server_service.register_server.assert_not_called()
 
     @pytest.mark.parametrize(
         ("raw", "message"),
         [
-            (_SURROGATE_RAW, "not valid Unicode"),
-            (_UNDECODABLE_DEPTH_RAW, "too deeply to decode"),
+            (_SURROGATE_RAW, ("not valid Unicode",)),
+            (_UNDECODABLE_DEPTH_RAW, ("too deeply to decode", "over the limit of 8")),
         ],
         ids=["unpaired-surrogate", "decoder-recursion"],
     )
@@ -4361,14 +4361,14 @@ class TestFormRouteMetadataLimits:
             )
 
         assert response.status_code == 422
-        assert message in response.json()["reason"]
+        assert any(fragment in response.json()["reason"] for fragment in message)
         mock_server_service.register_server.assert_not_called()
 
     @pytest.mark.parametrize(
         ("raw", "message"),
         [
-            (_SURROGATE_RAW, "not valid Unicode"),
-            (_UNDECODABLE_DEPTH_RAW, "too deeply to decode"),
+            (_SURROGATE_RAW, ("not valid Unicode",)),
+            (_UNDECODABLE_DEPTH_RAW, ("too deeply to decode", "over the limit of 8")),
         ],
         ids=["unpaired-surrogate", "decoder-recursion"],
     )
@@ -4398,7 +4398,7 @@ class TestFormRouteMetadataLimits:
         )
 
         assert response.status_code == 422
-        assert message in response.json()["detail"]
+        assert any(fragment in response.json()["detail"] for fragment in message)
         mock_server_service.update_server.assert_not_called()
 
     def test_servers_register_keeps_400_for_invalid_json(

@@ -221,18 +221,50 @@ async def test_list_agents_forwards_metadata_fields():
 
 
 @pytest.mark.asyncio
-async def test_empty_metadata_fields_is_treated_as_unasked():
-    """An empty string is not a projection request; sending one would be a 422."""
+@pytest.mark.parametrize("empty_fields", ["", " ", ",", " , , "])
+async def test_empty_metadata_fields_is_treated_as_unasked(empty_fields):
+    """Blank and comma-only projections must not opt a caller into metadata."""
     capture = {}
 
-    await _call_with_mocked_get(
+    result = await _call_with_mocked_get(
         list_services,
-        {"servers": []},
+        {"servers": [_server_record(INJECTED_METADATA)]},
         capture=capture,
-        metadata_fields="",
+        metadata_fields=empty_fields,
     )
 
     assert "metadata_fields" not in capture["params"]
+    assert result["services"][0]["metadata"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("empty_fields", [" ", ",", " , , "])
+@pytest.mark.parametrize(
+    ("tool_func", "record_key", "result_key", "record"),
+    [
+        (list_agents, "agents", "agents", {"name": "sre", "metadata": INJECTED_METADATA}),
+        (
+            list_skills,
+            "skills",
+            "skills",
+            {"path": "/skills/deploy", "name": "deploy", "metadata": INJECTED_METADATA},
+        ),
+    ],
+)
+async def test_blank_metadata_fields_never_expose_other_catalog_metadata(
+    empty_fields, tool_func, record_key, result_key, record
+):
+    capture = {}
+
+    result = await _call_with_mocked_get(
+        tool_func,
+        {record_key: [record]},
+        capture=capture,
+        metadata_fields=empty_fields,
+    )
+
+    assert "metadata_fields" not in capture["params"]
+    assert result[result_key][0]["metadata"] is None
 
 
 @pytest.mark.asyncio
@@ -573,3 +605,19 @@ async def test_verdict_details_never_reach_the_model():
 
     assert "metadata_security" not in result["services"][0]
     assert "findings" not in json.dumps(result)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("empty_fields", ["", " ", ",", " , , "])
+async def test_search_registry_blank_metadata_fields_do_not_expose_agent_card(empty_fields):
+    capture = {}
+
+    result = await _call_search_with_mocked_post(
+        {"agents": [_agent_hit(INJECTED_METADATA)]},
+        capture=capture,
+        query="sre agent",
+        metadata_fields=empty_fields,
+    )
+
+    assert "metadata_fields" not in capture["json"]
+    assert "metadata" not in result["agents"][0]["agent_card"]

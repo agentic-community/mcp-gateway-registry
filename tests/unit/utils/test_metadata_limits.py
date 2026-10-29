@@ -202,14 +202,16 @@ class TestMalformedInput:
         with pytest.raises(json.JSONDecodeError):
             parse_metadata_json("{not json")
 
-    def test_parse_reports_decoder_recursion_as_a_depth_error(self):
-        """100,000 levels overflows json.loads itself, before the depth check runs."""
+    def test_parse_reports_extreme_nesting_as_a_depth_error(self):
+        """A huge document must fail the depth limit on every Python version.
+
+        Some Python versions reject it during JSON decoding; newer ones may
+        decode it successfully and let our own depth validator reject it.
+        """
         raw = '{"a": ' + "[" * 100_000 + "]" * 100_000 + "}"
-        with pytest.raises(RecursionError):
-            json.loads(raw)
 
         with pytest.raises(MetadataLimitError, match="over the limit of 8"):
-            parse_metadata_json(raw)
+            validate_metadata_limits(parse_metadata_json(raw))
 
     def test_parse_does_not_mask_depth_the_decoder_can_read(self):
         """Moderately deep JSON decodes; the depth limit then reports the real depth."""
