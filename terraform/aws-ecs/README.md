@@ -935,6 +935,32 @@ See [OPERATIONS.md](OPERATIONS.md) for detailed operations and maintenance docum
 - Updating running services
 - Rolling back deployments
 
+### Infrastructure upgrades and repeat plans
+
+The `CreatedAt` tag uses one timestamp stored in Terraform state for this deployment.
+Existing deployments set it when they first apply `time_static.created`.
+This value records when Terraform initialized the shared tag, not when each AWS resource was created.
+
+The first upgrade creates `time_static.created`, updates the affected tags, and replaces `time_sleep.wait_for_bucket_policy` to add its bucket trigger.
+If `null_resource.dual_ingress_warning` already exists, its trigger change also causes a one-time replacement.
+After the upgrade, `null_resource.dual_ingress_warning` prints the Mode 3 access notice only when Terraform creates it or the domain changes.
+
+Before applying, confirm that the plan contains no service security group or task definition replacements and no changes that would redeploy ECS services.
+In-place updates that change only `tags` and `tags_all` are expected, including on `aws_ecs_service.keycloak` and `aws_ecs_task_definition.keycloak`.
+
+After applying the upgrade, run `terraform plan -detailed-exitcode` with the same inputs and provider and module versions.
+Exit code `0` means no changes, `2` means changes remain, and `1` means an error occurred.
+
+The existing 30-second delay runs when Terraform creates or recreates the wait resource.
+Updating only the bucket policy while keeping the same bucket ID does not rerun the delay.
+
+For a fresh deployment, verify access logging for both the Gateway and Keycloak ALBs.
+Check for `ELBAccessLogTestFile` and actual request logs.
+The Gateway ALB uses no extra prefix; the Keycloak ALB uses `keycloak-alb`.
+ALBs [publish access logs for each node every 5 minutes](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-access-logs.html).
+Wait at least 5 minutes after sending requests and allow extra time for delivery.
+See the [AWS access logging guide](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/enable-access-logging.html) for the permission test and log paths.
+
 ## Troubleshooting
 
 ### Common Issues

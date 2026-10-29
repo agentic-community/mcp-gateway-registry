@@ -11,6 +11,7 @@ All recommendations implemented:
 """
 
 import asyncio
+import base64
 import logging
 from datetime import UTC, datetime
 from typing import (
@@ -636,6 +637,11 @@ async def get_skill_content(
     Without ``resource``: returns SKILL.md markdown and the resource manifest.
     With ``resource``: returns the content of the specified companion file
     (validated against the stored manifest to prevent path traversal).
+    ``reference``, ``script`` and ``agent`` resources are returned as text in
+    ``content`` (invalid bytes are replaced, not rejected). ``asset`` resources
+    are treated as opaque and returned as base64 in ``content_base64`` with
+    ``encoding: "base64"``, so an attacker-controlled extension or body can
+    never select an executable response content type.
     """
     normalized_path = normalize_skill_path(skill_path)
     service = get_skill_service()
@@ -707,8 +713,22 @@ async def get_skill_content(
             )
             drift_task.add_done_callback(_log_task_exception)
 
+            # Assets are opaque: carry the exact bytes as base64. Returning
+            # them as a raw Response would let the registrant's file extension
+            # choose the content type (for example text/html or image/svg+xml),
+            # which turns a public skill asset into stored XSS on this origin.
+            if matched[0].type == "asset":
+                return {
+                    "content_base64": base64.b64encode(response.content).decode("ascii"),
+                    "encoding": "base64",
+                    "size_bytes": len(response.content),
+                    "path": resource,
+                    "type": matched[0].type,
+                    "url": resource_url,
+                }
+
             return {
-                "content": response.text,
+                "content": response.content.decode("utf-8", errors="replace"),
                 "path": resource,
                 "type": matched[0].type,
                 "url": resource_url,

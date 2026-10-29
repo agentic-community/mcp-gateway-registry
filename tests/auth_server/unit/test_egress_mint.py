@@ -812,10 +812,9 @@ class TestAttachMcpProxyTokenMarker:
         )
         assert "X-Internal-Token" not in resp.headers
 
-    def test_empty_marker_mints_unconditionally(self, monkeypatch):
-        # Function-level fallback only: an empty marker is rejected at startup
-        # (Settings.__init__), so this state is unreachable in a running server.
-        # Kept to pin the helper's branch behavior.
+    def test_empty_marker_does_not_mint(self, monkeypatch):
+        # An empty marker is rejected at startup (Settings.__init__); the helper
+        # still refuses on its own rather than minting for any caller.
         monkeypatch.setattr(server.settings, "auth_server_nginx_marker_secret", "")
         resp = _FakeResponse()
         server._attach_mcp_proxy_token(
@@ -826,10 +825,7 @@ class TestAttachMcpProxyTokenMarker:
             server_name="github-mcp",
             auth_method="oauth2",
         )
-        claims = _decode(resp.headers["X-Internal-Token"])
-        assert claims["sub"] == "alice"
-        assert claims["auth_method"] == "oauth2"
-        assert claims["upstream_url"] == "https://u/mcp"
+        assert "X-Internal-Token" not in resp.headers
 
     def test_marker_enabled_and_matching_mints(self, monkeypatch):
         monkeypatch.setattr(server.settings, "auth_server_nginx_marker_secret", "s3cret")
@@ -951,10 +947,12 @@ class TestAttachMcpProxyTokenMarker:
     def test_egress_user_claim_is_stamped(self, monkeypatch):
         # The vend path reads egress_user off this token to key the vault, so the
         # canonical per-user id must ride along even when it differs from subject.
-        monkeypatch.setattr(server.settings, "auth_server_nginx_marker_secret", "")
+        monkeypatch.setattr(server.settings, "auth_server_nginx_marker_secret", "s3cret")
         resp = _FakeResponse()
         server._attach_mcp_proxy_token(
-            _FakeRequest({"X-Resolved-Upstream": "https://u/mcp"}),
+            _FakeRequest(
+                {"X-Resolved-Upstream": "https://u/mcp", "X-Validate-Source-Secret": "s3cret"}
+            ),
             resp,
             subject="alice@example.com",
             scopes=[],
@@ -969,7 +967,7 @@ class TestAttachMcpProxyTokenMarker:
         # The mcp-proxy hop attributes its OBO mint record from this claim. It is
         # signed here precisely so that hop never has to read identity from the
         # raw ingress header, which /validate may not have verified at all.
-        monkeypatch.setattr(server.settings, "auth_server_nginx_marker_secret", "")
+        monkeypatch.setattr(server.settings, "auth_server_nginx_marker_secret", "s3cret")
         vr = {
             "username": "00000000-sub-alice",
             "data": {
@@ -981,7 +979,9 @@ class TestAttachMcpProxyTokenMarker:
         }
         resp = _FakeResponse()
         server._attach_mcp_proxy_token(
-            _FakeRequest({"X-Resolved-Upstream": "https://u/mcp"}),
+            _FakeRequest(
+                {"X-Resolved-Upstream": "https://u/mcp", "X-Validate-Source-Secret": "s3cret"}
+            ),
             resp,
             subject="00000000-sub-alice",
             scopes=[],
@@ -1004,7 +1004,7 @@ class TestAttachMcpProxyTokenMarker:
         # written under one id and looked up under another -- a permanent vend miss
         # presenting as "0 tools" and a re-consent prompt. Mint with and without
         # the audit claim and require the vault-keying claims to be identical.
-        monkeypatch.setattr(server.settings, "auth_server_nginx_marker_secret", "")
+        monkeypatch.setattr(server.settings, "auth_server_nginx_marker_secret", "s3cret")
         vr = {
             "method": server.AUTH_METHOD_SELF_SIGNED,
             "username": "alice",
@@ -1017,7 +1017,9 @@ class TestAttachMcpProxyTokenMarker:
         ):
             resp = _FakeResponse()
             server._attach_mcp_proxy_token(
-                _FakeRequest({"X-Resolved-Upstream": "https://u/mcp"}),
+                _FakeRequest(
+                    {"X-Resolved-Upstream": "https://u/mcp", "X-Validate-Source-Secret": "s3cret"}
+                ),
                 resp,
                 subject="alice",
                 scopes=["repo"],
@@ -1042,10 +1044,12 @@ class TestAttachMcpProxyTokenMarker:
         # machine credential with no IdP claims and pass no audit identity, so the
         # response header nginx copies must not be padded with an empty claim.
         # Deleting the guard would sign `"audit_identity": null` on those paths.
-        monkeypatch.setattr(server.settings, "auth_server_nginx_marker_secret", "")
+        monkeypatch.setattr(server.settings, "auth_server_nginx_marker_secret", "s3cret")
         resp = _FakeResponse()
         server._attach_mcp_proxy_token(
-            _FakeRequest({"X-Resolved-Upstream": "https://u/mcp"}),
+            _FakeRequest(
+                {"X-Resolved-Upstream": "https://u/mcp", "X-Validate-Source-Secret": "s3cret"}
+            ),
             resp,
             subject="federation-peer",
             scopes=[],

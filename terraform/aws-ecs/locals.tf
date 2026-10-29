@@ -1,3 +1,6 @@
+# Keep CreatedAt stable across plans to avoid repeated tag updates.
+resource "time_static" "created" {}
+
 locals {
   # Dynamic domain construction based on region
   # Format: kc.{region}.mycorp.click and registry.{region}.mycorp.click
@@ -18,7 +21,7 @@ locals {
     Component   = "keycloak"
     Environment = "production"
     ManagedBy   = "terraform"
-    CreatedAt   = timestamp()
+    CreatedAt   = time_static.created.rfc3339
   }
 
   # Storage backend classification (issue #955).

@@ -377,9 +377,10 @@ ensure_secret() {
 ensure_secret SECRET_KEY 32
 
 # AUTH_SERVER_NGINX_MARKER_SECRET: required by both auth_server and registry, it
-# guards all mcp-proxy token minting (a direct :8888 /validate with a forged
-# X-Resolved-Upstream cannot obtain a token without it). Must be identical across
-# both services.
+# guards all internal-token minting (registry API, mcp-proxy, generic proxy; a
+# direct :8888 /validate with a forged routing header cannot obtain a token
+# without it). Must be identical across both services: a mismatch 401s every
+# registry API request.
 ensure_secret AUTH_SERVER_NGINX_MARKER_SECRET 32
 
 # DOCUMENTDB_PASSWORD: the local MongoDB container runs with --auth and creates

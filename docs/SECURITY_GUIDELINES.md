@@ -443,14 +443,25 @@ sanitizer that isn't called) is equivalent to no check.
   couples a read scope with a management scope on the same static token.
 - **Never forward the caller's inbound credential to a proxied/untrusted
   destination.** When the gateway proxies to a registrant-controlled upstream (or
-  an agent calls a discovered remote agent), strip `Authorization`/`Cookie` from
-  the forwarded request — the upstream is authenticated by the gateway's own
-  mechanism, not by relaying the caller's registry token. nginx subrequests
-  inherit the parent request's headers, so `Cookie`/`Authorization` must be
-  explicitly cleared (`proxy_set_header ... "";`) on any location that proxies
-  directly to a registrant-controlled backend. For outbound service-to-service
-  calls, mint an audience-restricted, short-lived delegation token rather than
+  an agent calls a discovered remote agent), strip every caller and gateway
+  credential from the forwarded request. The upstream is authenticated by the
+  gateway's own mechanism, not by relaying the caller's registry token. Clearing
+  only `Authorization`/`Cookie` is not enough: this gateway's clients carry the
+  bearer in `X-Authorization`, and `Proxy-Authorization` and the signed
+  `X-Internal-Token*` headers are credentials too. nginx subrequests inherit the
+  parent request's headers, so each one must be cleared explicitly
+  (`proxy_set_header ... "";`) on any location that proxies directly to a
+  registrant-controlled backend. Derive that list from
+  `RESERVED_CUSTOM_HEADER_NAMES` rather than writing it by hand, so a newly
+  reserved header is stripped automatically (see `_VS_BACKEND_STRIPPED_HEADERS`
+  in `registry/core/nginx_service.py`). For outbound service-to-service calls,
+  mint an audience-restricted, short-lived delegation token rather than
   re-sending the inbound one.
+- **A virtual server must not route around a backend's enable state.** The
+  direct route only exists for an enabled, healthy server, and a failed security
+  scan disables the server. Any other path to the same backend (virtual-server
+  locations and tool mappings) must apply the same gate, or disabling a server
+  leaves it reachable through every virtual server that maps it.
 - **Never accept a credential as a URL query parameter.** Query strings land in
   access logs, the audit trail, and browser history. Take secrets via a request
   header or POST body; a credential that arrives in the query string should be
@@ -512,8 +523,8 @@ sanitizer that isn't called) is equivalent to no check.
   never add signed delegated `scp` values on top, because an app registration
   names those and users grant them by consent, outside administrator control.
   On any lookup or consent failure, stop authorization instead of using partial
-  groups. Filter recovered groups before writing the login session or building
-  `X-Groups`, and deny an oversized header rather than truncating grants.
+  groups. Filter recovered groups before writing the login session or minting
+  the registry token, and deny an oversized group set rather than truncating grants.
 - **Group recovery controls must not resurrect stale grants.** When Entra
   Graph recovery is disabled, discard overage-marked inline groups and keep
   only verified roles. Bound the positive group cache TTL because it delays
@@ -775,6 +786,12 @@ sanitizer that isn't called) is equivalent to no check.
   never set (`X-Validate-Binding-Secret`) -- and treat them as absent otherwise.
   The existing marker proves "came through nginx", not "came through this
   version of the template".
+- **Every internal token `/validate` mints needs the nginx marker, not just its
+  routing header.** `X-Resolved-Upstream`, `X-Resolved-Generic-Upstream` and
+  `X-Registry-Api-Auth` choose which token `/validate` mints, and each is a plain
+  header a direct auth-server caller can send. Gate every mint on the matching
+  `X-Validate-Source-Secret`, including a token that only asserts the caller's
+  own identity: a later consumer may come to trust it for more.
 - **Validate the type of any claim that drives authorization, and reject rather
   than coerce.** A `groups` claim arrives as a JSON array of strings. Six
   readings of it had each guessed differently at what to do with other shapes:

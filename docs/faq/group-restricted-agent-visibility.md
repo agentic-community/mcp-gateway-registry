@@ -155,6 +155,8 @@ The `allowed_groups` field works with any IdP (Keycloak, Entra ID, Cognito, Okta
 
 For Entra ID, the group value is typically the Group Object ID or the group display name, depending on your claims configuration.
 
+Browser sessions see fewer groups than the token carries. At login the auth server keeps only the groups that some scope maps (or that `ALLOWED_IDP_GROUPS` lists), so a group named only in `allowed_groups` works for a bearer token but not in the browser. To keep such a group without granting anything, map it to a scope with no `server_access` and no `ui_permissions`: the filter then keeps the group, and the scope adds no access. When `ALLOWED_IDP_GROUPS` is set, list the group there instead. For Entra users whose tokens carry a group overage marker, the groups recovered from Microsoft Graph are filtered the same way. See [Entra ID setup](../entra-id-setup.md#group-membership-for-user-delegated-bearer-tokens).
+
 ## Related Documentation
 
 - [Agent Visibility and Group-Based Access Control](../agent-visibility-and-group-access.md) -- full explanation of the two-layer model with examples

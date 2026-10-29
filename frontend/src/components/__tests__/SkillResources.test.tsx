@@ -8,6 +8,7 @@
 import React from 'react';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import axios from 'axios';
+import JSZip from 'jszip';
 
 // react-markdown 10 is ESM-only and CRA's default jest config can't resolve
 // its transitive deps (unist-util-visit-parents). For these tests we don't
@@ -318,6 +319,43 @@ describe('Per-file Download', () => {
     await waitFor(() => expect(screen.getByText('HTTP 502')).toBeInTheDocument());
     expect(triggerSpy).not.toHaveBeenCalled();
   });
+
+  test('downloads a base64 binary asset as a Blob of decoded bytes', async () => {
+    const pngBytes = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    mockedAxios.get.mockResolvedValueOnce({
+      data: {
+        content_base64: Buffer.from(pngBytes).toString('base64'),
+        encoding: 'base64',
+        size_bytes: pngBytes.length,
+        path: 'assets/logo.png',
+        type: 'asset',
+      },
+    });
+
+    const manifest = makeManifest({
+      assets: [{ path: 'assets/logo.png', type: 'asset', size_bytes: pngBytes.length }],
+    });
+    render(<SkillResources {...defaultProps({ resource_manifest: manifest })} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /Assets/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Download assets\/logo\.png/ }));
+
+    await waitFor(() => expect(triggerSpy).toHaveBeenCalled());
+    const [blob, filename] = triggerSpy.mock.calls[0];
+    expect(filename).toBe('logo.png');
+    expect(blob.type).toBe('application/octet-stream');
+    expect(blob.size).toBe(pngBytes.length);
+    expect(mockedAxios.get).toHaveBeenCalledWith(
+      '/api/skills/doc-coauthor/content',
+      expect.objectContaining({
+        params: { resource: 'assets/logo.png' },
+      }),
+    );
+    expect(mockedAxios.get).toHaveBeenCalledWith(
+      '/api/skills/doc-coauthor/content',
+      expect.not.objectContaining({ responseType: 'arraybuffer' }),
+    );
+  });
 });
 
 
@@ -493,5 +531,34 @@ describe('Download all', () => {
 
     expect(maxInFlight).toBeLessThanOrEqual(__test__.FETCH_CONCURRENCY);
     expect(mockedAxios.get).toHaveBeenCalledTimes(total);
+  });
+
+  test('bundles binary asset bytes into the zip without decoding them', async () => {
+    const pngBytes = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    mockedAxios.get.mockResolvedValueOnce({
+      data: {
+        content_base64: Buffer.from(pngBytes).toString('base64'),
+        encoding: 'base64',
+        size_bytes: pngBytes.length,
+        path: 'assets/logo.png',
+        type: 'asset',
+      },
+    });
+
+    const manifest = makeManifest({
+      assets: [{ path: 'assets/logo.png', type: 'asset', size_bytes: pngBytes.length }],
+    });
+    render(<SkillResources {...defaultProps({ resource_manifest: manifest }, '# Doc\n')} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /Download all/ }));
+
+    await waitFor(() => expect(triggerSpy).toHaveBeenCalled());
+    const [zipBlob, filename] = triggerSpy.mock.calls[0];
+    expect(filename).toBe('doc-coauthor.zip');
+
+    const zip = await JSZip.loadAsync(zipBlob);
+    const entry = zip.file('assets/logo.png');
+    expect(entry).not.toBeNull();
+    expect(Array.from(await entry!.async('uint8array'))).toEqual(Array.from(pngBytes));
   });
 });

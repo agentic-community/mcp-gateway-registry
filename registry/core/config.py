@@ -1986,11 +1986,12 @@ class Settings(BaseSettings):
         default="",
         description=(
             "Shared secret: nginx force-sets it as X-Validate-Source-Secret on "
-            "the /validate subrequest; auth_server only mints the egress-capable mcp-proxy "
-            "token when it matches, so a direct :8888 /validate call with a forged "
-            "X-Resolved-Upstream cannot obtain one. Required (non-empty) when "
-            "EGRESS_AUTH_ENABLED=true -- startup fails otherwise, since an empty marker "
-            "would mint unconditionally. Treat as a secret."
+            "the /validate subrequest; auth_server mints the mcp-proxy, generic-proxy "
+            "and registry API tokens only when it matches, so a direct :8888 /validate "
+            "call with a forged routing header cannot obtain one. Always required: "
+            "startup fails when it is unset or shorter than 32 bytes, and an empty marker "
+            "mints nothing. Rotate it on registry and auth_server together; during a "
+            "mismatch every registry API request returns 401. Treat as a secret."
         ),
     )
     aws_secrets_region: str = Field(
@@ -2470,19 +2471,38 @@ class Settings(BaseSettings):
         # validated (whitespace-stripped) value so the registry and auth_server
         # derive an identical signing key from the same environment variable.
         self.secret_key = validate_secret_key(self.secret_key)
+        # Strip surrounding whitespace first, like SECRET_KEY: HTTP drops leading and
+        # trailing whitespace from the header nginx sends, so an unstripped value
+        # would never match. Registry and auth_server share this Settings class, so
+        # both compare and render the same stripped value.
+        self.auth_server_nginx_marker_secret = self.auth_server_nginx_marker_secret.strip()
         if not self.auth_server_nginx_marker_secret:
             raise RuntimeError(
                 "AUTH_SERVER_NGINX_MARKER_SECRET environment variable is required. "
                 "Set it to a strong random value (at least 32 bytes), identical across all "
-                "auth_server and registry replicas (see chart values.yaml). Without it, the "
-                "auth_server mints mcp-proxy tokens unconditionally, letting a direct :8888 "
-                "/validate call with a forged X-Resolved-Upstream bypass nginx and obtain one."
+                "auth_server and registry replicas (see chart values.yaml). nginx sends it on "
+                "every /validate call, and the auth_server refuses to mint internal tokens "
+                "without a match, so a direct :8888 /validate call cannot obtain one."
             )
         if len(self.auth_server_nginx_marker_secret.encode()) < 32:
             raise RuntimeError(
                 "AUTH_SERVER_NGINX_MARKER_SECRET must be at least 32 bytes long. Set it to a "
                 "strong random value at least 32 bytes long, identical across all auth_server "
                 "and registry replicas (see chart values.yaml)."
+            )
+        if not all("!" <= ch <= "~" and ch != "$" for ch in self.auth_server_nginx_marker_secret):
+            # The registry renders the marker into a quoted nginx string and nginx
+            # sends it as a header. A `$` always starts an nginx variable, and
+            # whitespace or control characters do not survive the header round
+            # trip. A non-ASCII value makes `secrets.compare_digest` raise on every
+            # comparison. Either way every internal-token mint (every registry API
+            # request) would fail without a startup error, so only printable ASCII
+            # other than `$` is accepted.
+            raise RuntimeError(
+                "AUTH_SERVER_NGINX_MARKER_SECRET must contain only printable ASCII "
+                "characters other than '$' (no spaces): it is rendered into the nginx config "
+                "and sent as a header. Generate it with "
+                "`python3 -c 'import secrets; print(secrets.token_hex(32))'`."
             )
         self.egress_credential_encryption_key = self._validate_credential_encryption_key(
             self.egress_credential_encryption_key
@@ -2620,7 +2640,7 @@ class Settings(BaseSettings):
         - a public callback base URL is required to build the redirect_uri.
 
         The nginx marker secret is required unconditionally (in __init__), not
-        just for egress, since it guards all mcp-proxy token minting.
+        just for egress, since it guards all internal-token minting.
         """
         if not self.egress_auth_enabled:
             return

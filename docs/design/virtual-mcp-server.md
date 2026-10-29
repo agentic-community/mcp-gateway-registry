@@ -628,8 +628,9 @@ When a virtual server is created or updated, the service layer performs the foll
 
 | Error Condition | Lua Router Behavior |
 |----------------|---------------------|
-| Missing `Mcp-Session-Id` header | Returns JSON-RPC error: "Missing session" |
-| Invalid/expired client session | Returns JSON-RPC error: "Invalid session" |
+| Missing or malformed `Mcp-Session-Id` header | Returns HTTP 400 with a JSON-RPC error |
+| Unknown or expired client session, or one owned by another user or minted for another virtual server | Returns HTTP 404 with a JSON-RPC error; per the MCP spec the client starts a new session with `initialize` |
+| Client session check fails (registry or session store unavailable) | Returns HTTP 503 with a JSON-RPC error; the client can retry without starting a new session |
 | Backend returns HTTP 400, 404, or 410 | Invalidates cached session state (stateful or stateless), retries once with a fresh `initialize` |
 | Backend unreachable | Returns JSON-RPC error with backend details |
 | User lacks required scope | Returns HTTP 403 with scope details |

@@ -402,7 +402,7 @@ and `oid`, `/validate` recovers missing `groups` claims and overage markers
 behalf of the user for a Graph-audience `User.Read` token and fetches direct
 and nested group IDs from `/me/transitiveMemberOf`. Entra M2M tokens that use
 `roles` do not trigger this recovery. The auth server filters recovered IDs
-with `filter_session_groups` before scope mapping and the `X-Groups` header.
+with `filter_session_groups` before scope mapping and before minting the registry token.
 
 Bearer recovery is enabled by default. Even a verified token with direct `scp` access needs a working Graph OBO exchange
 when its group claims are absent; a consent or Graph outage returns 503 before direct-scope authorization. Grant
@@ -426,10 +426,22 @@ The scope-derived group mapping set has a 30-second per-process cache. Changes t
 can take up to 30 seconds to affect recovered bearer groups; lookup errors or absent mappings deny validation rather
 than forwarding unfiltered groups. An explicit `ALLOWED_IDP_GROUPS` allowlist takes precedence.
 
-If the filtered `X-Groups` value still exceeds 4 KiB, `/validate` refuses the request instead of filling nginx's 16 KiB
-auth-subrequest header buffer. Registry API requests also carry an internal token encoding those groups, so the smaller
-limit leaves room for both headers. Map only the groups that grant scopes, or set `ALLOWED_IDP_GROUPS` to the exact IDs
-the gateway needs.
+If the filtered group list still exceeds 8 KiB as JSON (`GRAPH_GROUP_MAX_BYTES`, about 200 GUIDs, the same number Entra
+places inline), `/validate` refuses the request, and so does browser login. The cap refuses a runaway membership instead
+of truncating its grants; registry API requests carry the groups in the signed `X-Internal-Token-Registry`, well inside
+the 64 KiB nginx buffer for the `/validate` response. Map only the groups that grant scopes, or set `ALLOWED_IDP_GROUPS`
+to the exact IDs the gateway needs.
+
+Tokens that carry `groups` inline (no overage marker) pass to the registry unfiltered, because group-restricted
+visibility matches `allowed_groups` against them. The registry token encodes them once. An Entra access token carries at
+most 200 inline groups, which needs about 11 KiB of the 64 KiB buffer.
+
+For one Entra user, a group that grants visibility through `allowed_groups` but maps to no scope works on a bearer token
+that carries its groups inline. The same group is dropped when the token has an overage marker, because the auth server
+filters Graph-recovered groups to the scope-mapped set, and in the browser, because login keeps only the scope-mapped
+groups. Map such a group to a scope with no `server_access` and no `ui_permissions` (or, when `ALLOWED_IDP_GROUPS` is
+set, list it there), which keeps the group without granting any access. The size bound for other identity providers is in
+[the JWT bearer session flow design](design/session-flow-jwt-bearer.md#42-where-the-groups-come-from).
 
 Successful lookups stay in a per-process cache for `ENTRA_GROUP_CACHE_TTL_SECONDS` (default 300 seconds, allowed 30 to
 3600), with at most 512 entries keyed by Graph fetch URL, native Graph resource, and verified `(tid, oid)`. Concurrent
