@@ -165,10 +165,14 @@ Skills support three visibility levels:
 
 Skills are health-checked by verifying SKILL.md accessibility:
 
-1. **HEAD Request**: Verify the raw URL is accessible
-2. **Status Codes**: 2xx = healthy, others = unhealthy
+1. **HEAD Request**: Verify the raw URL is accessible, retrying with a GET whose body is never read when the server answers HEAD with 405 or 501
+2. **Status Codes**: 2xx = healthy, others = unhealthy in the response
 3. **Trusted Domains**: Only allowed domains are checked (SSRF protection)
-4. **Caching**: Results cached with `last_checked_time`
+4. **Storage**: The result and `last_checked_time` are stored on the skill record in the skills collection, but only when the result is conclusive: reachable, 404 or 410, or blocked by the SSRF guard. Rate limits, other error statuses and timeouts are returned to the caller and not stored, because any user who can view a skill can run the check
+5. **Inline Content**: A skill with `skill_md_content` (AgentCore federation) is healthy without a request, since the registry serves its content from the database. The health check and the content route both record it healthy
+6. **Content Fetches**: `GET /api/skills/{path}/content` records a 404 or 410 from its SKILL.md fetch as unhealthy and a success (including serving inline content) as healthy, writing only when the status changes; transient failures leave health unchanged, so a caller cannot flip a skill by hammering the route
+
+Semantic search reads `health_status` and `last_checked_time` from the skills collection for each matched skill. The search index does not store health. If that read fails, search still returns its results and reports every skill as `unknown` rather than failing the request.
 
 ### Trusted Domains
 

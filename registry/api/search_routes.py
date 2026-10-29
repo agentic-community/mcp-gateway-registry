@@ -1,8 +1,10 @@
 import logging
 import re
+from datetime import datetime
 from typing import (
     Annotated,
     Literal,
+    get_args,
 )
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -27,6 +29,15 @@ from ..utils.metadata import parse_and_validate_metadata_fields, project_metadat
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# Skill fields read from the skills collection rather than the search index.
+# A health check writes only the skills collection (issue #1952).
+SKILL_HEALTH_FIELDS: list[str] = ["health_status", "last_checked_time"]
+
+# The skill health values the response declares; one definition for the model
+# field and the check that coerces stored values.
+SkillHealthStatus = Literal["healthy", "unhealthy", "unknown"]
+SKILL_HEALTH_VALUES: frozenset[str] = frozenset(get_args(SkillHealthStatus))
 
 
 def get_search_repo() -> SearchRepositoryBase:
@@ -316,7 +327,7 @@ class SkillSearchResult(BaseModel):
     visibility: str | None = None
     owner: str | None = None
     is_enabled: bool = False
-    health_status: Literal["healthy", "unhealthy", "unknown"] = "unknown"
+    health_status: SkillHealthStatus = "unknown"
     last_checked_time: str | None = None
     status: str = Field(default="active", description="Lifecycle status")
     relevance_score: float = Field(..., ge=0.0, le=1.0)
@@ -652,6 +663,69 @@ def _entity_has_all_tags(
     """Check if an entity has ALL required tags (case-insensitive)."""
     entity_tags_lower = {t.lower() for t in entity_tags}
     return all(tag in entity_tags_lower for tag in required_tags)
+
+
+def _skill_health_from_record(
+    record: dict,
+) -> tuple[SkillHealthStatus, str | None]:
+    """Read health from a raw skills-collection document, failing to unknown.
+
+    The result model is assigned after construction, so Pydantic does not
+    validate these values; anything outside the declared set reads as
+    ``unknown`` rather than leaking into the response.
+
+    Args:
+        record: Raw skill document, or an empty dict when none was found.
+
+    Returns:
+        Tuple of (health_status, last_checked_time as an ISO string or None).
+    """
+    status_value = record.get("health_status")
+    if status_value not in SKILL_HEALTH_VALUES:
+        status_value = "unknown"
+    checked = record.get("last_checked_time")
+    if isinstance(checked, datetime):
+        checked = checked.isoformat()
+    elif not isinstance(checked, str):
+        checked = None
+    return status_value, checked
+
+
+async def _apply_skill_records(
+    skills: list[SkillSearchResult],
+    metadata_paths: list[str] | None,
+) -> None:
+    """Overlay health and projected metadata from the skills collection.
+
+    One batch read covers both: health always, metadata only when the caller
+    requested a projection (Issue #1277). Reading health here, not from the
+    search index, keeps search in step with the UI and the health endpoint,
+    which use the same collection (issue #1952).
+
+    Args:
+        skills: Skill results that passed the access checks; updated in place.
+        metadata_paths: Validated metadata projection paths, or None.
+    """
+    if not skills:
+        return
+
+    fields = list(SKILL_HEALTH_FIELDS)
+    if metadata_paths is not None:
+        fields.append("metadata")
+
+    records = await get_skill_repository().list_by_paths(
+        [skill.path for skill in skills],
+        fields=fields,
+    )
+    for skill in skills:
+        record = records.get(skill.path, {})
+        skill.health_status, skill.last_checked_time = _skill_health_from_record(record)
+        if metadata_paths is not None:
+            raw_meta = record.get("metadata")
+            skill.metadata = project_metadata(
+                raw_meta if isinstance(raw_meta, dict) else {},
+                metadata_paths,
+            )
 
 
 @router.post(
@@ -1005,12 +1079,6 @@ async def semantic_search(
         ):
             continue
 
-        # Build projected metadata for skills if requested (Issue #1277).
-        # The actual projection is applied after the loop via a batch fetch
-        # from the skills collection (avoids N+1 and gives access to full
-        # metadata including extra.*).
-        _skill_metadata_for_projection: dict | None = None
-
         filtered_skills.append(
             SkillSearchResult(
                 path=skill_path,
@@ -1024,33 +1092,14 @@ async def semantic_search(
                 visibility=visibility,
                 owner=owner,
                 is_enabled=skill.get("is_enabled", False),
-                health_status=skill.get("health_status", "unknown"),
-                last_checked_time=skill.get("last_checked_time"),
                 status=skill.get("status", "active"),
                 relevance_score=skill.get("relevance_score", 0.0),
                 similarity_score=skill.get("similarity_score"),
                 match_context=skill.get("match_context"),
-                metadata=_skill_metadata_for_projection,
             )
         )
 
-    # Batch-fetch full skill metadata and apply projection (Issue #1277).
-    # Only fires when metadata_fields is supplied AND skills were found.
-    if _metadata_paths is not None and filtered_skills:
-        skill_repo = get_skill_repository()
-        skill_paths = [s.path for s in filtered_skills]
-        full_skill_docs = await skill_repo.list_by_paths(skill_paths)
-        for skill_result in filtered_skills:
-            full_doc = full_skill_docs.get(skill_result.path)
-            if full_doc:
-                raw_meta = full_doc.get("metadata", {})
-                # SkillMetadata is stored as {"author":..,"version":..,"extra":{..}}
-                if isinstance(raw_meta, dict):
-                    skill_result.metadata = project_metadata(raw_meta, _metadata_paths)
-                else:
-                    skill_result.metadata = project_metadata({}, _metadata_paths)
-            else:
-                skill_result.metadata = project_metadata({}, _metadata_paths)
+    await _apply_skill_records(filtered_skills, _metadata_paths)
 
     # Process virtual servers
     filtered_virtual_servers: list[VirtualServerSearchResult] = []

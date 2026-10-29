@@ -688,6 +688,13 @@ async def list_skills(
     you can load and execute. Use get_skill_content to retrieve the full
     markdown instructions for a discovered skill.
 
+    Each skill carries health_status: "healthy" (SKILL.md was reachable when
+    last checked), "unknown" (not checked yet; this is not a failure, so treat
+    it like healthy), or "unhealthy" (SKILL.md was gone or blocked when last
+    checked, so get_skill_content is likely to fail). Prefer a healthy or
+    unknown skill over an unhealthy one. An unhealthy skill can recover: a
+    successful get_skill_content call marks it healthy again.
+
     Args:
         metadata_fields: Comma-separated metadata keys to keep on each skill,
             in dot-notation for nested keys. A skill's metadata holds "author",
@@ -904,7 +911,12 @@ async def search_registry(
       MCP server (add it to your MCP client's server configuration)
     - Tools: individual capabilities within servers, with inputSchema
     - Agents: autonomous agents with a URL you can delegate tasks to
-    - Skills: workflow instructions (use get_skill_content to fetch the full markdown)
+    - Skills: workflow instructions (use get_skill_content to fetch the full markdown).
+      health_status is "healthy" (SKILL.md was reachable when last checked),
+      "unknown" (not checked yet; not a failure, treat it like healthy) or
+      "unhealthy" (SKILL.md was gone or blocked when last checked, so
+      get_skill_content is likely to fail). Prefer healthy or unknown skills; a
+      successful get_skill_content call marks an unhealthy skill healthy again
     - Custom: records of a catalog type the registry administrator defined, each
       naming its type in entity_type. These are catalogued assets rather than
       endpoints, and there is no tool to fetch one: the search result below is

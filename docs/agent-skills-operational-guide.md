@@ -180,8 +180,16 @@ Response example:
 | Status | Meaning |
 |--------|---------|
 | Healthy (green) | SKILL.md is accessible |
-| Unhealthy (red) | SKILL.md fetch failed |
+| Unhealthy (red) | SKILL.md was gone (404 or 410) or blocked by the SSRF guard at the last check |
 | Unknown (yellow) | Not yet checked |
+
+The registry records health in two places. Neither stores a failure that may pass on its own. The health check above sends a HEAD request to the SKILL.md URL, and retries with a GET when the server answers HEAD with 405 or 501. It always returns what it saw. It stores the skill as healthy when SKILL.md is reachable and as unhealthy when the URL answers 404 or 410 or the SSRF guard blocks it. A rate limit, server error or timeout is reported but leaves the stored status unchanged, because any user who can view the skill can run the check and could otherwise hide it from agents by repeating the check until the source rate-limits the registry.
+
+The content endpoint (`GET /api/skills/{path}/content`, which the `get_skill_content` MCP tool calls) also records what its own SKILL.md read saw. A successful read marks an unhealthy or unknown skill healthy, and a 404 or 410 marks it unhealthy; it writes only when the status changes. A failed read of a companion resource file does not change health.
+
+Skills with inline SKILL.md content, such as those federated from AgentCore, are healthy without a network request, because the registry serves their content from its database. They report `unknown` until the first health check or content read, which marks them healthy. Earlier releases probed these skills over HTTP and could store `unhealthy` for them; on startup the registry resets any such value to `unknown`.
+
+Semantic search (`POST /api/search/semantic`, and the `search_registry` MCP tool built on it) and `GET /api/skills` both return `health_status` and `last_checked_time` for each skill, read from the same record the UI shows. Clients that pick skills automatically can skip entries whose `health_status` is `unhealthy`. `unknown` means nobody has checked or read the skill yet, which is not a failure.
 
 ## Rating Skills
 
@@ -364,6 +372,7 @@ See [Cursor Agent Skills Documentation](https://cursor.com/docs/context/skills) 
 1. **Check URL**: Verify the SKILL.md file is accessible in a browser
 2. **Repository access**: Ensure the repository is public or accessible
 3. **Raw URL**: The registry uses raw URLs; verify raw content is accessible
+4. **Recheck**: After fixing the URL, run the health check or fetch the skill's content once; either one clears the unhealthy status
 
 ### Rating Not Saved
 
