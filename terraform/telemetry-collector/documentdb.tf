@@ -33,6 +33,11 @@ resource "aws_docdb_cluster_parameter_group" "telemetry" {
 # A full destroy/apply creates a new suffix without reusing a retained snapshot name.
 resource "random_id" "documentdb_final_snapshot" {
   byte_length = 8
+
+  # master_username is the only input variable that forces cluster replacement.
+  keepers = {
+    master_username = var.documentdb_master_username
+  }
 }
 
 # DocumentDB cluster
