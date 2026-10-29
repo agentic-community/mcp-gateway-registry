@@ -27,9 +27,10 @@ caller:
 - Text that is not valid Unicode. JSON lets a client send an unpaired UTF-16
   surrogate (``"\\ud800"``), which Python decodes into a string that cannot be
   encoded as UTF-8, so it can be neither measured nor stored.
-- A JSON string nested so deeply that the decoder itself gives up with
-  ``RecursionError`` before any depth check can run. ``parse_metadata_json``
-  turns that into the depth error.
+- A JSON string nested so deeply that the decoder gives up with
+  ``RecursionError`` before any depth check can run (on Python versions with
+  that decoder limit). ``parse_metadata_json`` turns this into the depth error;
+  if decoding succeeds, ``validate_metadata_limits`` enforces the same cap.
 """
 
 import json
