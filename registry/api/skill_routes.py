@@ -629,6 +629,30 @@ async def check_skill_health(
 MAX_RESOURCE_SIZE = 512 * 1024  # 512 KB
 
 
+def _decode_text_asset(
+    content: bytes,
+) -> str | None:
+    """Decode an asset as text, or return None when it should be treated as binary.
+
+    Uses the strict UTF-8 decoder, so a returned string always encodes back to
+    exactly ``content``. A NUL byte also marks the asset as binary: it never
+    appears in a text template, but does appear in UTF-16 text and in many
+    small binary formats that happen to be valid UTF-8.
+
+    Args:
+        content: Raw bytes fetched for an ``asset`` resource.
+
+    Returns:
+        The decoded text, or None when the bytes are not NUL-free UTF-8.
+    """
+    if b"\x00" in content:
+        return None
+    try:
+        return content.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
 @router.get("/{skill_path:path}/content", summary="Get SKILL.md content")
 async def get_skill_content(
     user_context: Annotated[dict, Depends(nginx_proxied_auth)],
@@ -646,9 +670,14 @@ async def get_skill_content(
     (validated against the stored manifest to prevent path traversal).
     ``reference``, ``script`` and ``agent`` resources are returned as text in
     ``content`` (invalid bytes are replaced, not rejected). ``asset`` resources
-    are treated as opaque and returned as base64 in ``content_base64`` with
-    ``encoding: "base64"``, so an attacker-controlled extension or body can
-    never select an executable response content type.
+    that are valid UTF-8 with no NUL bytes (templates, schemas, data files) are
+    also returned as text in ``content``, byte-exact. Other assets are returned
+    as base64 in ``content_base64`` with ``encoding: "base64"``. The asset shape
+    depends on the file's bytes, so clients must branch on ``encoding`` rather
+    than on the path. Every resource response includes ``size_bytes``, the byte
+    length of the file as fetched upstream. Every branch returns JSON, so an
+    attacker-controlled extension or body can never select an executable
+    response content type.
 
     A SKILL.md read also updates the skill's ``health_status``: a successful
     read, or serving inline content, marks a skill that is not already healthy
@@ -728,22 +757,34 @@ async def get_skill_content(
                 _check_drift_inline(service, normalized_path, skill, resource, response.content)
             )
 
-            # Assets are opaque: carry the exact bytes as base64. Returning
-            # them as a raw Response would let the registrant's file extension
-            # choose the content type (for example text/html or image/svg+xml),
-            # which turns a public skill asset into stored XSS on this origin.
+            # Every branch returns JSON. Returning a raw Response would let the
+            # registrant's file extension choose the content type (for example
+            # text/html or image/svg+xml), which turns a public skill asset
+            # into stored XSS on this origin. Text assets (templates, schemas)
+            # come back in ``content`` byte-exact; binary assets come back as
+            # base64. Which shape an asset gets depends on its bytes, so it can
+            # change for one path if the upstream file is re-encoded.
             if matched[0].type == "asset":
-                return {
-                    "content_base64": base64.b64encode(response.content).decode("ascii"),
-                    "encoding": "base64",
-                    "size_bytes": len(response.content),
-                    "path": resource,
-                    "type": matched[0].type,
-                    "url": resource_url,
-                }
+                text = _decode_text_asset(response.content)
+                if text is None:
+                    return {
+                        "content_base64": base64.b64encode(response.content).decode("ascii"),
+                        "encoding": "base64",
+                        "size_bytes": len(response.content),
+                        "path": resource,
+                        "type": matched[0].type,
+                        "url": resource_url,
+                    }
+            else:
+                # Decode the raw bytes as UTF-8 rather than use response.text,
+                # which honors an upstream-declared charset. Assets are judged
+                # on their raw bytes above, and every resource type must use
+                # the same decode policy for downloads to stay byte-exact.
+                text = response.content.decode("utf-8", errors="replace")
 
             return {
-                "content": response.content.decode("utf-8", errors="replace"),
+                "content": text,
+                "size_bytes": len(response.content),
                 "path": resource,
                 "type": matched[0].type,
                 "url": resource_url,

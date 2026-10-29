@@ -256,6 +256,41 @@ Response example:
 }
 ```
 
+### Fetch Companion Resources
+
+A skill's `resource_manifest` lists its companion files under `references`, `scripts`, `agents` and `assets`. Fetch one by passing its manifest path as `resource`:
+
+```bash
+curl -H "Authorization: Bearer <token>" \
+  "https://your-registry.com/api/skills/pdf-processing/content?resource=assets/report-template.md"
+```
+
+The response is always JSON. Text files, including text assets such as templates and schemas, come back in `content`:
+
+```json
+{
+  "content": "# Report\n\nSummary: {{summary}}\n",
+  "size_bytes": 31,
+  "path": "assets/report-template.md",
+  "type": "asset",
+  "url": "https://raw.githubusercontent.com/org/repo/main/skills/pdf-processing/assets/report-template.md"
+}
+```
+
+An asset that is not UTF-8 text (an image, a font, or a file containing NUL bytes) comes back as base64 in `content_base64`, with `"encoding": "base64"` and no `content` field. The registry decides from the file's bytes, so the same path can switch shape if the upstream file is re-saved in another encoding. Branch on `encoding`, not on the path:
+
+```bash
+curl -s -H "Authorization: Bearer <token>" \
+  "https://your-registry.com/api/skills/pdf-processing/content?resource=assets/logo.png" \
+  | jq -r '.content_base64' | base64 --decode > logo.png
+```
+
+References, scripts and agents always come back in `content`, with any invalid UTF-8 bytes replaced by U+FFFD. The mcpgw `get_skill_content` tool returns text the same way, and for a base64 asset returns only its metadata unless the caller passes `include_binary=True`.
+
+`size_bytes` is the byte length of the file as fetched from its host. For a text resource whose invalid bytes were replaced, it can differ from the UTF-8 length of `content`.
+
+`content` is the registrant's text as written, so it can contain control characters such as ANSI escape sequences. Escape or strip them before printing `content` to a terminal.
+
 ## Tool Validation
 
 Skills can reference required MCP server tools. Validate tool availability:
