@@ -267,8 +267,8 @@ Static-token and OAuth2 config for peer-to-peer federation.
 | Parameter | Docker (`.env`) | Terraform (`.tfvars`) | Helm (`values.yaml`) | Purpose |
 |-----------|-----------------|-----------------------|----------------------|---------|
 | Enable static token auth | `FEDERATION_STATIC_TOKEN_AUTH_ENABLED` | `federation_static_token_auth_enabled` | `global.federation.staticTokenAuthEnabled` | Allow peers to use static Bearer. |
-| Federation static token **(secret)** | `FEDERATION_STATIC_TOKEN` | `federation_static_token` | `global.federation.staticToken` | Auto-generated if empty. |
-| Encryption key **(secret)** | `FEDERATION_ENCRYPTION_KEY` | `federation_encryption_key` | `global.federation.encryptionKey` | Fernet key for storing peer tokens in MongoDB. |
+| Federation static token **(secret)** | `FEDERATION_STATIC_TOKEN` | `federation_static_token` | `global.federation.staticToken` | Auto-generated if empty. Helm keeps the generated value across upgrades (see `global.generateSecrets`). |
+| Encryption key **(secret)** | `FEDERATION_ENCRYPTION_KEY` | `federation_encryption_key` | `global.federation.encryptionKey` | Fernet key for storing peer tokens in MongoDB. Helm generates it when empty and keeps it across upgrades. |
 | Federation token endpoint | `FEDERATION_TOKEN_ENDPOINT` | — | `registry.app.federationTokenEndpoint` | OAuth2 token endpoint for outbound peer auth. |
 | Federation client id | `FEDERATION_CLIENT_ID` | — | `registry.app.federationClientId` | — |
 | Federation client secret **(secret)** | `FEDERATION_CLIENT_SECRET` | — | `registry.app.federationClientSecret` | — |
@@ -342,13 +342,14 @@ that server's Connect dialog:
 | Admin URL | `KEYCLOAK_ADMIN_URL` | — | — | Used by setup scripts. |
 | Realm | `KEYCLOAK_REALM` | — | `global.authProvider.keycloak.realm` / `auth-server.keycloak.realm` | e.g. `mcp-gateway`. |
 | Admin username | `KEYCLOAK_ADMIN` | `keycloak_admin` | `global.authProvider.keycloak.adminUsername` | — |
-| Admin password **(secret)** | `KEYCLOAK_ADMIN_PASSWORD` | `keycloak_admin_password` | (auto-generated, stored in `<release>-keycloak` secret) | — |
-| DB password **(secret)** | `KEYCLOAK_DB_PASSWORD` | `keycloak_database_password` | (auto-generated, stored in `<release>-keycloak-postgresql` secret) | — |
+| Admin password **(secret)** | `KEYCLOAK_ADMIN_PASSWORD` | `keycloak_admin_password` | `keycloak.auth.adminPassword` | Helm renders it into the `<release>-keycloak` Secret. Empty generates one on first install and keeps it on upgrade (see `global.generateSecrets`). Keycloak bootstraps its admin user once, so changing it on an existing install does not change the password in the realm. |
+| DB password **(secret)** | `KEYCLOAK_DB_PASSWORD` | `keycloak_database_password` | `keycloak.postgresql.auth.password` / `.postgresPassword` | Helm renders both into the `<release>-keycloak-postgresql` Secret, generating them when empty. Set them at first install only: PostgreSQL creates its roles from them once, and a later change against a retained PVC breaks Keycloak's database login. |
 | DB username | — | `keycloak_database_username` | — | — |
 | Web client id | `KEYCLOAK_CLIENT_ID` | — | — | Populated by `init-keycloak.sh`. |
-| Web client secret **(secret)** | `KEYCLOAK_CLIENT_SECRET` | — | — | — |
+| Web client secret **(secret)** | `KEYCLOAK_CLIENT_SECRET` |  | `global.authProvider.keycloak.clientSecret` | Secret of the `mcp-gateway-web` client. Helm renders it into `keycloak-client-secret`, and the setup-keycloak Job writes it into the realm and fails if the realm holds a different value. Empty generates one on first install and keeps it on upgrade. |
 | M2M client id | `KEYCLOAK_M2M_CLIENT_ID` | — | `auth-server.keycloak.m2mClientId` | — |
-| M2M client secret **(secret)** | `KEYCLOAK_M2M_CLIENT_SECRET` | — | `auth-server.keycloak.m2mClientSecret` | — |
+| M2M client secret **(secret)** | `KEYCLOAK_M2M_CLIENT_SECRET` |  | `global.authProvider.keycloak.m2mClientSecret` (or `auth-server.keycloak.m2mClientSecret` for an externally managed Keycloak) | Secret of the `mcp-gateway-m2m` client, handled like the web client secret. |
+| Client-credentials Secret name |  |  | `global.existingKeycloakClientSecret` | Name of a Secret you manage that holds both client secrets. When set, the chart does not render `keycloak-client-secret`. Under ArgoCD, set this or the two client-secret values above, because `helm template` cannot read the previous values back. |
 | Enabled flag | `KEYCLOAK_ENABLED` | — | `auth-server.keycloak.enabled` | Enable Keycloak in OAuth2 providers. |
 | Initial admin password | `INITIAL_ADMIN_PASSWORD` | — | — | First-run user. |
 | Initial user password | `INITIAL_USER_PASSWORD` | — | — | First-run test user. |
@@ -885,6 +886,7 @@ These have no `.env` equivalent because they describe the infrastructure, not th
 | `global.sharedSecretName`, `existingSharedSecret` | Naming of the stack-level shared secret. |
 | `global.oauthProviderSecretName`, `existingOauthProviderSecret` | Naming of the OAuth-provider-secret. |
 | `global.existingMongoCredentialsSecret` | External Mongo URI secret. |
+| `global.generateSecrets` | Default `true`: the chart generates any secret value you leave empty on first install and reads it back with `lookup` on upgrade, so it stays the same. Set `false` under ArgoCD or any other `helm template` tool, which has no cluster access and would generate a new value on every sync. With `false`, an empty value fails rendering with the name of the value to set: `global.secretKey`, `global.authProvider.keycloak.clientSecret` and `.m2mClientSecret`, `keycloak.auth.adminPassword`, `keycloak.postgresql.auth.password` and `.postgresPassword`, `mongodb.password`, `global.federation.staticToken` and `.encryptionKey` (federation only), and `registry.egressAuth.markerSecret`. The `existing*Secret` values can supply them instead. |
 | `global.ingress.className`, `tls`, `routingMode`, `paths.*`, `inboundCidrs` | ALB ingress shape. |
 | `keycloak.create` | Deploy Keycloak in-chart vs external. |
 | `keycloak.httpRelativePath` | Keycloak base path. |
