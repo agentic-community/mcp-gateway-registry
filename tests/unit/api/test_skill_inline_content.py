@@ -84,6 +84,8 @@ def _make_mock_skill(
     # Tests that exercise drift behaviour should override this explicitly.
     mock.content_integrity = None
     mock.resource_manifest = None
+    # A real SkillCard always carries a health string; the content route reads it.
+    mock.health_status = "healthy"
     return mock
 
 

@@ -147,6 +147,29 @@ async def test_list_skills_keeps_requested_skill_metadata():
 
 
 @pytest.mark.asyncio
+async def test_list_skills_keeps_health_status():
+    """A client skips unhealthy skills only if list_skills returns health (issue #1952)."""
+    payload = {
+        "skills": [
+            {
+                "path": "/skills/broken",
+                "name": "broken",
+                "health_status": "unhealthy",
+                "last_checked_time": "2026-10-01T00:00:00+00:00",
+            }
+        ]
+    }
+
+    result = await _call_with_mocked_get(list_skills, payload)
+
+    skill = result["skills"][0]
+    assert (skill["health_status"], skill["last_checked_time"]) == (
+        "unhealthy",
+        "2026-10-01T00:00:00+00:00",
+    )
+
+
+@pytest.mark.asyncio
 async def test_records_without_metadata_stay_valid():
     """Metadata is optional: a registry that sends none must not fail the call."""
     payload = {

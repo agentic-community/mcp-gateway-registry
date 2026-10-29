@@ -7564,7 +7564,7 @@
           "skills"
         ],
         "summary": "Check skill health",
-        "description": "Check skill health by performing HEAD request to SKILL.md URL.\n\nReturns health status, HTTP status code, and response time.",
+        "description": "Check skill health by performing HEAD request to SKILL.md URL.\n\nRetries with a GET when the server answers HEAD with 405 or 501. Returns\nhealth status, HTTP status code, and response time. Stores the result as\nthe skill's ``health_status`` only when it is conclusive: reachable, gone\n(404 or 410), or blocked by the SSRF guard. A rate limit, server error or\ntimeout is reported but leaves the stored status unchanged.",
         "operationId": "check_skill_health_api_skills__skill_path__health_get",
         "parameters": [
           {
@@ -7617,7 +7617,7 @@
           "skills"
         ],
         "summary": "Get SKILL.md content",
-        "description": "Fetch skill content.\n\nWithout ``resource``: returns SKILL.md markdown and the resource manifest.\nWith ``resource``: returns the content of the specified companion file\n(validated against the stored manifest to prevent path traversal).",
+        "description": "Fetch skill content.\n\nWithout ``resource``: returns SKILL.md markdown and the resource manifest.\nWith ``resource``: returns the content of the specified companion file\n(validated against the stored manifest to prevent path traversal).\n``reference``, ``script`` and ``agent`` resources are returned as text in\n``content`` (invalid bytes are replaced, not rejected). ``asset`` resources\nare treated as opaque and returned as base64 in ``content_base64`` with\n``encoding: \"base64\"``, so an attacker-controlled extension or body can\nnever select an executable response content type.\n\nA SKILL.md read also updates the skill's ``health_status``: a successful\nread, or serving inline content, marks a skill that is not already healthy\nas healthy, and a 404 or 410 from the SKILL.md URL marks a skill that is\nnot already unhealthy as unhealthy. Other failures, and companion resource\nreads, leave it unchanged.",
         "operationId": "get_skill_content_api_skills__skill_path__content_get",
         "parameters": [
           {

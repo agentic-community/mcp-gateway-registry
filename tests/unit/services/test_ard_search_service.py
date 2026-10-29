@@ -164,3 +164,39 @@ class TestSearchAndScopeAccessScoping:
                 "q", None, None, 10, {}, "http://h/api/ard/search"
             )
         assert [r.display_name for r in results] == ["High", "Low"]
+
+
+async def test_skill_hit_publishes_indexed_update_time():
+    """ARD search publishes a skill's last-modified time from the search hit (issue #1952).
+
+    The hit comes from the real formatter, so the test fails if the formatter
+    and ARD search disagree on the field name.
+    """
+    from datetime import UTC, datetime
+
+    from registry.repositories.documentdb.search_repository import DocumentDBSearchRepository
+
+    doc = {
+        "entity_type": "skill",
+        "path": "/skills/pdf",
+        "name": "pdf",
+        "visibility": "public",
+        "text_boost": 9.0,
+        "metadata": {},
+        "indexed_at": datetime(2026, 10, 1, 12, 0, tzinfo=UTC),
+    }
+    raw = DocumentDBSearchRepository()._format_lexical_results([doc], 10)
+    mock_repo = AsyncMock()
+    mock_repo.search = AsyncMock(return_value=raw)
+    with (
+        patch.object(s, "get_search_repository", return_value=mock_repo),
+        patch.object(s, "user_has_asset_permission", return_value=True),
+        patch.object(s, "user_can_access_skill", AsyncMock(return_value=True)),
+        patch.object(s, "_resolve_publisher_domain", return_value="reg.example.com"),
+        patch.object(s, "_build_origin_map", AsyncMock(return_value=({}, []))),
+    ):
+        results, _, _ = await s.search_and_scope(
+            "pdf", ["skill"], None, 10, {}, "http://h/api/ard/search"
+        )
+
+    assert results[0].updated_at == "2026-10-01T12:00:00Z"
