@@ -149,13 +149,14 @@ tests:
       # RATE_LIMIT_BACKEND_TIMEOUT_MS,
       # RATE_LIMIT_USER_FLOOR_PER_MIN, RATE_LIMIT_AGENT_FLOOR_PER_MIN);
       # the MCP token TTL pair (MCP_TOKEN_DEFAULT_TTL_HOURS,
-      # MCP_TOKEN_MAX_TTL_HOURS, always rendered) is env[54]/env[55];
-      # the six unconditional GATEWAY_* generic-proxy vars are env[56]-env[61];
+      # MCP_TOKEN_MAX_TTL_HOURS, always rendered) is env[47]/env[48];
+      # the six unconditional GATEWAY_* generic-proxy vars are env[49]-env[54];
       # AWS_EC2_METADATA_DISABLED (chart-managed security constant, always
-      # rendered) is env[62]; SECURITY_BLOCK_ON_SCAN_FAILURE (always rendered)
-      # directly follows it;
-      # the forward-proxy egress pair (issue #1832, always rendered) is
-      # env[57]/env[58]; user extraEnv entries are appended at the end.
+      # rendered) is env[55]; SECURITY_BLOCK_ON_SCAN_FAILURE (always rendered)
+      # is env[56];
+      # METADATA_SCAN_ENABLED (issue #1811) is env[57]; the forward-proxy
+      # egress pair (issue #1832, always rendered) is env[58]/env[59];
+      # user extraEnv entries are appended at the end.
       #
       # The seven CIMD publisher vars (always rendered) sit at env[16]-env[22],
       # between SSRF_ALLOWED_CIDRS and A2A_REVERSE_PROXY_ENABLED, which is why
@@ -307,19 +308,22 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].env[56].name
           value: SECURITY_BLOCK_ON_SCAN_FAILURE
+      - equal:
+          path: spec.template.spec.containers[0].env[57].name
+          value: METADATA_SCAN_ENABLED
       # Forward-proxy egress pair (issue #1832), always rendered, immediately
       # before the extraEnv append.
       - equal:
-          path: spec.template.spec.containers[0].env[57].name
+          path: spec.template.spec.containers[0].env[58].name
           value: EGRESS_FORWARD_PROXY_ENABLED
       - equal:
-          path: spec.template.spec.containers[0].env[58].name
+          path: spec.template.spec.containers[0].env[59].name
           value: EGRESS_FORWARD_PROXY_CA_BUNDLE
       - equal:
-          path: spec.template.spec.containers[0].env[59].name
+          path: spec.template.spec.containers[0].env[60].name
           value: MY_FLAG
       - equal:
-          path: spec.template.spec.containers[0].env[60].name
+          path: spec.template.spec.containers[0].env[61].name
           value: MY_SECRET_VAR
 
   - it: appends extraEnvFrom entries after chart-managed envFrom sources
