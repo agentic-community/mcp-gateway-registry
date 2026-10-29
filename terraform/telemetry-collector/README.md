@@ -646,6 +646,16 @@ Production uses `telemetry-collector-final-snapshot-<suffix>`, where `random_id.
 
 Testing skips the final snapshot and keeps its identifier unset. Switching to production fills in the identifier using the existing random suffix. Apply this configuration once to existing deployments before destroying them so Terraform stores the new identifier. Terraform chooses the name during apply and stores it for deletion.
 
+To replace the cluster and rotate its snapshot suffix in one apply:
+
+```bash
+terraform apply \
+  -replace=aws_docdb_cluster.telemetry \
+  -replace=random_id.documentdb_final_snapshot
+```
+
+The old cluster's final snapshot uses the identifier already stored in state. The replacement cluster gets a new suffix for its next final snapshot.
+
 Replacing only `aws_docdb_cluster.telemetry` leaves the random resource in state. The replacement cluster inherits the name used for the previous cluster's snapshot. Reusing that name for another deletion can fail with `DBClusterSnapshotAlreadyExistsFault`. After that replacement, rotate the suffix in a separate apply before the next cluster replacement or destroy:
 
 ```bash
