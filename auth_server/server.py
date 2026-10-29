@@ -43,6 +43,7 @@ from fastapi.responses import JSONResponse, RedirectResponse, Response, Streamin
 
 # Import metrics middleware
 from internal_request_token import (
+    VALIDATE_RESPONSE_HEADER_BUDGET,
     InternalTokenTooLargeError,
     mint_generic_proxy_token,
     mint_mcp_proxy_token,
@@ -816,33 +817,45 @@ def _warn_marker_mismatch(
         "/validate: %s present but nginx marker missing/mismatched; refusing to mint "
         "%s token (possible direct-:8888 bypass, or AUTH_SERVER_NGINX_MARKER_SECRET "
         "differs between registry and auth_server). %d similar refusals suppressed "
-        "in the last %.0f s.",
+        "since the previous warning (%.0f s ago).",
         routing_header,
         token_kind,
         suppressed,
-        _MARKER_MISMATCH_LOG_INTERVAL_SECONDS,
+        now - last if last else 0.0,
     )
+
+
+# The /validate 500 for an oversized internal token. validate_request's generic
+# HTTPException handler re-raises it unchanged, so the refusal is logged once.
+_TOKEN_TOO_LARGE_DETAIL: str = "Authorization token too large"
 
 
 def _token_too_large(
     exc: InternalTokenTooLargeError,
+    subject: str,
+    client_id: str = "",
 ) -> HTTPException:
     """Log an oversized internal token and build the 500 /validate returns for it.
 
     A 500 (not a missing token, which the registry reports as 401) tells the
     operator this is a server-side size limit, not a bad credential. The message
-    carries only sizes and counts.
+    carries only sizes, counts, the hashed subject and the client id.
 
     Args:
         exc: The error ``_mint_internal_token`` raised.
+        subject: The caller the token was for; logged hashed.
+        client_id: The caller's OAuth client id or API-key id, when known.
 
     Returns:
         The HTTPException for the caller to raise.
     """
-    logger.error(f"/validate: refusing an oversized internal token: {exc}")
+    logger.error(
+        f"/validate: refusing an oversized internal token for user={hash_username(subject)} "
+        f"client_id={client_id or '-'}: {exc}"
+    )
     return HTTPException(
         status_code=500,
-        detail="Authorization token too large",
+        detail=_TOKEN_TOO_LARGE_DETAIL,
         headers={"Connection": "close"},
     )
 
@@ -933,7 +946,7 @@ def _attach_mcp_proxy_token(
     except ValueError as exc:
         logger.error(f"/validate: could not mint mcp-proxy token: {exc}")
     except InternalTokenTooLargeError as exc:
-        raise _token_too_large(exc) from exc
+        raise _token_too_large(exc, subject) from exc
 
 
 def _attach_generic_proxy_token(
@@ -1011,7 +1024,7 @@ def _attach_generic_proxy_token(
     except ValueError as exc:
         logger.error(f"/validate: could not mint generic-proxy token: {exc}")
     except InternalTokenTooLargeError as exc:
-        raise _token_too_large(exc) from exc
+        raise _token_too_large(exc, subject) from exc
 
 
 def _attach_registry_ui_token(
@@ -1064,42 +1077,36 @@ def _attach_registry_ui_token(
     except ValueError as exc:
         logger.error(f"/validate: could not mint registry-ui token: {exc}")
     except InternalTokenTooLargeError as exc:
-        raise _token_too_large(exc) from exc
-
-
-# Ceiling on the headers of a /validate response. nginx reads them into the 64 KiB
-# proxy_buffer_size of `location = /validate` (issue #1939); a larger response is
-# an opaque "upstream sent too big header" 500 there. Each minted token is capped
-# at INTERNAL_TOKEN_MAX_BYTES, but X-Scopes and the tokens together could still
-# exceed the buffer, so the whole response is checked here. 60 KiB leaves room
-# for the status line and the headers the ASGI server adds.
-_VALIDATE_RESPONSE_HEADER_BUDGET: int = 60 * 1024
+        raise _token_too_large(exc, subject, client_id) from exc
 
 
 def _enforce_validate_header_budget(
     response: "Response",
+    subject: str,
 ) -> "Response":
     """Return ``response``, or a 500 if its headers would overflow nginx's buffer.
 
     Fails closed with a log line naming the large headers (names and sizes only,
-    never values), so an oversized authorization response is diagnosable in the
-    auth server log instead of only as an nginx error.
+    never values) and the hashed caller, so an oversized authorization response is
+    diagnosable in the auth server log instead of only as an nginx error.
 
     Args:
         response: The /validate response about to be returned.
+        subject: The validated caller; logged hashed.
 
     Returns:
         The same response when it fits, otherwise a 500 JSON response.
     """
     header_bytes = sum(len(name) + len(value) + 4 for name, value in response.headers.items())
-    if header_bytes <= _VALIDATE_RESPONSE_HEADER_BUDGET:
+    if header_bytes <= VALIDATE_RESPONSE_HEADER_BUDGET:
         return response
     large = {name: len(value) for name, value in response.headers.items() if len(value) > 1024}
     logger.error(
-        "/validate: response headers are %d bytes, over the %d-byte budget for nginx's "
-        "/validate buffer; refusing. Large headers (bytes): %s",
+        "/validate: response headers for user=%s are %d bytes, over the %d-byte budget "
+        "for nginx's /validate buffer; refusing. Large headers (bytes): %s",
+        hash_username(subject),
         header_bytes,
-        _VALIDATE_RESPONSE_HEADER_BUDGET,
+        VALIDATE_RESPONSE_HEADER_BUDGET,
         large,
     )
     return JSONResponse(
@@ -4286,7 +4293,7 @@ async def validate_request(request: Request):
                     client_id="federation-static",
                 )
 
-                return _enforce_validate_header_budget(response)
+                return _enforce_validate_header_budget(response, "federation-peer")
 
             # If federation token didn't match, DON'T return 403 here.
             # Fall through to the admin static token check below (if enabled).
@@ -4356,7 +4363,7 @@ async def validate_request(request: Request):
                         client_id=identity["client_id"],
                     )
 
-                    return _enforce_validate_header_budget(response)
+                    return _enforce_validate_header_budget(response, identity["username"])
 
                 # Bearer present but does not match any static token. Fall
                 # through to JWT validation below (Okta RS256 / self-signed
@@ -5341,7 +5348,10 @@ async def validate_request(request: Request):
             egress_user=_egress_user,
         )
 
-        return _enforce_validate_header_budget(response)
+        return _enforce_validate_header_budget(
+            response,
+            validation_result.get("username") or "",
+        )
 
     except ValueError as e:
         logger.warning(f"Token validation failed: {e}")
@@ -5394,6 +5404,9 @@ async def validate_request(request: Request):
         }:
             raise
         if 400 <= e.status_code < 500:
+            raise
+        # Already logged by _token_too_large; keep its detail and log it once.
+        if e.status_code == 500 and e.detail == _TOKEN_TOO_LARGE_DETAIL:
             raise
         # For non-client HTTPExceptions, convert to 500
         logger.error(f"HTTP error during validation: {e}")

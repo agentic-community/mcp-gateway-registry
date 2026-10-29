@@ -637,10 +637,10 @@ egressAuth:
   # nginx marker secret. REQUIRED for standalone deployment (chart render fails
   # if empty). It guards all internal-token minting (registry API, mcp-proxy,
   # generic proxy), so a mismatch with auth-server 401s every registry API
-  # request, and the app requires it at startup. Set a strong random value with
-  # no '$', whitespace or control characters, identical to auth-server's. In the
-  # stack it is auto-generated + shared, so leave empty there. Only used by the
-  # standalone subchart secret.
+  # request, and the app requires it at startup. Set a strong random value of
+  # printable ASCII other than '$' (no spaces), identical to auth-server's. In
+  # the stack it is auto-generated + shared, so leave empty there. Only used by
+  # the standalone subchart secret.
   markerSecret: ""
   secretsManager:
     kmsKeyId: "" # Optional CMK; empty uses the AWS-managed key.

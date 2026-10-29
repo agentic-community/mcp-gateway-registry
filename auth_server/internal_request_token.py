@@ -38,13 +38,23 @@ MCP_REGISTRY_UI_TOKEN_USE: str = "mcp-registry-ui"
 
 # Ceiling on every internal token /validate mints. nginx reads the /validate
 # response that carries these tokens into the 64 KiB proxy_buffer_size of
-# ``location = /validate`` (issue #1939); 40 KiB leaves 24 KiB for the other auth
-# headers. A bearer's inline groups stay under it, because nginx caps one inbound
-# header at 32 KiB and re-encoding those groups yields a token near 32 KiB at
-# most. Nothing else bounds the groups that come from server-side sources:
+# ``location = /validate`` (issue #1939); 40 KiB leaves 20 KiB of
+# ``VALIDATE_RESPONSE_HEADER_BUDGET`` for the other auth headers. A bearer's
+# inline groups stay under it, because nginx caps one inbound header at 32 KiB
+# and re-encoding those groups yields a token near 32 KiB at most. Nothing else
+# bounds the groups that come from server-side sources:
 # ``REGISTRY_API_KEYS`` entries, the MongoDB ``idp_m2m_clients`` and
 # ``idp_user_groups`` enrichment, or a large scope catalog in the scopes claim.
 INTERNAL_TOKEN_MAX_BYTES: int = 40 * 1024
+
+# Ceiling on the headers of a whole /validate response, which nginx reads into the
+# same 64 KiB buffer; a larger response is an opaque "upstream sent too big header"
+# 500 there. Each token is capped above, but X-Scopes and the tokens together could
+# still exceed the buffer, so ``server._enforce_validate_header_budget`` checks the
+# total. 60 KiB leaves room for the status line and the headers the ASGI server
+# adds. The nginx template tests assert every ``location = /validate`` buffer
+# exceeds it.
+VALIDATE_RESPONSE_HEADER_BUDGET: int = 60 * 1024
 
 # Audience for the generic reverse-proxy hop (/proxy/{entity_type}/{path}), used
 # for non-MCP proxied entities (skills, agents, custom). Distinct from every
@@ -253,6 +263,11 @@ def mint_mcp_proxy_token(
     (``server._audit_identity_from_token``) already degrades an absent claim to
     the verified ``sub`` principal. Chosen over deleting the guard, which would
     sign ``"audit_identity": null`` on those paths.
+
+    Raises:
+        ValueError: The subject is empty or ``SECRET_KEY`` is unset.
+        InternalTokenTooLargeError: The minted token exceeds
+            ``INTERNAL_TOKEN_MAX_BYTES`` (see ``_mint_internal_token``).
     """
     registered_server = server_name.strip("/")
     if not registered_server:
@@ -313,6 +328,11 @@ def mint_generic_proxy_token(
     ``has_upstream_auth`` binds whether the entity has registered upstream auth
     headers, so the hop vends + injects them (from the registry's internal
     endpoint) only on the signed claim.
+
+    Raises:
+        ValueError: The subject is empty or ``SECRET_KEY`` is unset.
+        InternalTokenTooLargeError: The minted token exceeds
+            ``INTERNAL_TOKEN_MAX_BYTES`` (see ``_mint_internal_token``).
     """
     method = http_method.strip().upper()
     if not method:

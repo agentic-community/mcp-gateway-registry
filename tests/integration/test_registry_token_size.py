@@ -76,5 +76,6 @@ class TestBearerTokenSizeBounds:
             f"500-group token is {len(token)} bytes, over the {_INLINE_BEARER_TOKEN_BOUND}-byte "
             f"inline-bearer bound. A bearer/static caller with this many groups needs either a "
             f"larger `location = /validate` proxy_buffer_size and INTERNAL_TOKEN_MAX_BYTES, "
-            f"or the #971 server-side claim-store pattern."
+            f"or server-side group storage for bearer callers like the session store #971 "
+            f"added for browser sessions."
         )

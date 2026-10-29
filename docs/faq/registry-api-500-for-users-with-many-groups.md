@@ -16,12 +16,13 @@ The auth server refuses an oversized response itself and logs why, so the cause 
 
 | Auth server log line | Client sees | Cause |
 |---|---|---|
-| `/validate: refusing an oversized internal token` | 500 | The caller's groups or scopes make a registry token over 40 KiB. |
-| `/validate: response headers are ... bytes, over the ... budget` | 500 | All `/validate` response headers together exceed 60 KiB. |
+| `/validate: refusing an oversized internal token for user=...` | 500. A virtual-server `tools/call` gets a JSON-RPC 502, `Backend unavailable for tool:<name>`. | The caller's groups or scopes make an internal token (registry API, mcp-proxy or generic proxy) over 40 KiB. The line names the token, its size and counts, and the hashed user. |
+| `/validate: response headers for user=... are ... bytes, over the ... budget` | 500 | All `/validate` response headers together exceed 60 KiB. |
 | `Entra recovered group set exceeds the safe token size` | 503 | Microsoft Graph returned more than 8 KiB of groups for a token with a group overage marker. |
-| `... present but nginx marker missing/mismatched` | 401 | `AUTH_SERVER_NGINX_MARKER_SECRET` differs between the registry and the auth server. |
+| `Entra session group set exceeds the safe membership size` | 503 at browser login | The groups kept for a browser session, after the login filter, exceed 8 KiB. |
+| `... present but nginx marker missing/mismatched` | 401 on the registry API and MCP routes. A virtual-server `tools/call` gets the JSON-RPC 502 above. | `AUTH_SERVER_NGINX_MARKER_SECRET` differs between the registry and the auth server. |
 
-To check from the registry container, search the nginx error log for `too big header`. A hit there after the fix points at a template that predates it.
+To check from the registry container, search the nginx error log for `too big header` lines that also show `subrequest: "/validate"` or `subrequest: "/_vs_auth_`. Such a line after the fix points at a template that predates it. Other locations can log `too big header` for their own upstreams, which is unrelated to this issue.
 
 ## How to reduce the group count
 

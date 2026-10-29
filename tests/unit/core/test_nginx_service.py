@@ -1878,11 +1878,6 @@ def test_registry_api_locations_forward_internal_token():
         assert "proxy_set_header X-Registry-Api-Auth $registry_api_auth;" in text, conf.name
 
 
-# Room the /validate response needs beyond the registry token: X-User, X-Scopes,
-# X-Internal-Token (scopes) and the other auth headers.
-_VALIDATE_OTHER_HEADERS_BUDGET = 16 * 1024
-
-
 def _nginx_size(value: str) -> int:
     """Bytes for an nginx size such as `64k`."""
     return int(value[:-1]) * 1024 if value.endswith("k") else int(value)
@@ -1897,7 +1892,10 @@ def test_validate_locations_fit_the_registry_token():
     groups overflowed 16k), while every location that forwards the registry
     token clears a client-sent X-Groups instead of passing it through.
     """
-    from auth_server.internal_request_token import INTERNAL_TOKEN_MAX_BYTES
+    from auth_server.internal_request_token import (
+        INTERNAL_TOKEN_MAX_BYTES,
+        VALIDATE_RESPONSE_HEADER_BUDGET,
+    )
 
     for conf_path in (_HTTP_AND_HTTPS_CONF, _HTTP_ONLY_CONF):
         name = conf_path.name
@@ -1912,7 +1910,9 @@ def test_validate_locations_fit_the_registry_token():
             busy = _nginx_size(re.search(r"proxy_busy_buffers_size (\w+);", block).group(1))
             each_bytes = _nginx_size(each)
 
-            assert size >= INTERNAL_TOKEN_MAX_BYTES + _VALIDATE_OTHER_HEADERS_BUDGET, name
+            # The auth server lets a response grow to the budget, so the buffer must
+            # hold the budget; the budget in turn must hold a maximum-size token.
+            assert size > VALIDATE_RESPONSE_HEADER_BUDGET > INTERNAL_TOKEN_MAX_BYTES, name
             assert max(size, each_bytes) <= busy <= (int(count) - 1) * each_bytes, name
             assert "error_page 500 502 504 = @auth_subrequest_failed;" in block, name
         assert "upstream_http_x_groups" not in text, name
