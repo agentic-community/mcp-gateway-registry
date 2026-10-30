@@ -289,6 +289,7 @@ class TestGetSkillContentBinaryResource:
         assert result["status"] == "success"
         assert result["content"] == "hello"
         assert result["resource_type"] == ""
+        assert result["content_type"] == "text/markdown"
         assert "content_base64" not in result
 
     async def test_text_asset_returns_content_without_include_binary(self):
@@ -311,4 +312,29 @@ class TestGetSkillContentBinaryResource:
         assert result["resource_type"] == "asset"
         assert result["source_url"] == payload["url"]
         assert result["size_bytes"] == 31
+        assert result["content_type"] == "text/markdown"
         assert "content_base64" not in result
+
+    async def test_text_resource_without_known_extension_defaults_to_text_plain(self):
+        payload = {
+            "content": "MIT License\n",
+            "size_bytes": 12,
+            "path": "assets/LICENSE",
+            "type": "asset",
+            "url": "https://raw.example.com/assets/LICENSE",
+        }
+
+        result = await _call_get_skill_content(
+            "valid-skill",
+            resource_path="assets/LICENSE",
+            payload=payload,
+        )
+
+        assert result["status"] == "success"
+        assert result["content_type"] == "text/plain"
+
+    async def test_skill_md_fetch_has_no_content_type(self):
+        result = await _call_get_skill_content("valid-skill")
+
+        assert result["status"] == "success"
+        assert "content_type" not in result
