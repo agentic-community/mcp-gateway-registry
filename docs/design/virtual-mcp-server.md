@@ -385,7 +385,11 @@ at the gateway-wide document. The gate is
 `virtual_server_needs_per_server_prm`: true on Entra for every virtual server,
 and on a lenient IdP only when a backing server's own egress mode already
 requires a per-resource audience (`obo_exchange`). Keycloak and Cognito
-deployments therefore keep using the gateway-wide PRM, unchanged.
+deployments therefore keep using the gateway-wide PRM, unchanged, except for a
+virtual server backed by an `obo_exchange` server. That one gets a per-server PRM
+whose `scopes_supported` is the gateway-wide list (`MCP_ADVERTISED_SCOPES`), not
+the Entra-only `<resource>/user_impersonation`, because Keycloak rejects unknown
+scopes with `invalid_scope`.
 
 This matters because the gateway-wide document advertises the bare origin, which
 Entra cannot match to an Application ID URI and whose OIDC-basics scopes it
