@@ -277,6 +277,11 @@ def server_needs_per_server_prm(egress_auth_mode: str | None) -> bool:
     fine. Entra is the only provider that forces a per-server resource for plain
     servers, and the only one that incurs the per-connection-URL App ID URI
     registration cost.
+
+    The per-server PRM document's ``scopes_supported`` is likewise provider-
+    dependent: Entra advertises ``<resource>/user_impersonation``, every other
+    provider advertises ``derive_supported_scopes()`` (see
+    ``get_oauth_protected_resource_for_server``).
     """
     if egress_auth_mode == "obo_exchange":
         return True
@@ -445,6 +450,16 @@ async def get_oauth_protected_resource_for_server(
     no per-server env config. Lenient IdPs (Keycloak/Cognito/Okta/Auth0) do not
     hit these constraints; their plain servers keep using the gateway-wide PRM
     and this per-server PRM is what makes Entra ingress login work.
+
+    ``scopes_supported`` is provider-dependent. On Entra it is the per-resource
+    ``<resource>/user_impersonation`` scope (exposed on the gateway app). On every
+    other provider it is :func:`derive_supported_scopes`, the same IdP-universal
+    list the global PRM advertises (honouring ``MCP_ADVERTISED_SCOPES``), because
+    scope-validating IdPs such as Keycloak reject an unknown
+    ``<resource>/user_impersonation`` scope at the authorize endpoint with
+    ``invalid_scope`` (observed on Keycloak 26.2.0), which would block IDE login to
+    ``obo_exchange`` servers before the token exchange is ever reached. The
+    ``resource`` stays the per-server connection URL on all providers.
     """
     normalized = _normalize_prm_server_path(server_path)
     # Lookups are inside a guard: a repository/backend error on this
@@ -489,7 +504,15 @@ async def get_oauth_protected_resource_for_server(
     resource = build_per_server_resource_url(
         settings.registry_url, normalized, append_mcp=append_mcp
     )
-    scopes_supported = [f"{resource}/user_impersonation"]
+    # Scope shape is IdP-specific. Entra needs the per-resource
+    # `<resource>/user_impersonation` scope. Every other IdP (e.g. Keycloak)
+    # validates requested scopes against its own registered set and refuses
+    # unknown ones with `invalid_scope` (issue #1971), so advertise the same
+    # IdP-universal list the global PRM does (honours MCP_ADVERTISED_SCOPES).
+    if entra_forces_per_server_prm(settings.auth_provider):
+        scopes_supported = [f"{resource}/user_impersonation"]
+    else:
+        scopes_supported = await derive_supported_scopes()
     enforce_https(resource, https_required=settings.mcp_https_required)
 
     try:
