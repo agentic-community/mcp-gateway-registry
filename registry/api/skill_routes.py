@@ -766,6 +766,15 @@ async def get_skill_content(
             # change for one path if the upstream file is re-encoded.
             if matched[0].type == "asset":
                 text = _decode_text_asset(response.content)
+                # The shape can change for one path when the upstream file is
+                # re-encoded, so record which one this fetch produced.
+                logger.debug(
+                    "Asset %s for skill %s returned as %s (%d bytes)",
+                    resource,
+                    normalized_path,
+                    "base64" if text is None else "text",
+                    len(response.content),
+                )
                 if text is None:
                     return {
                         "content_base64": base64.b64encode(response.content).decode("ascii"),

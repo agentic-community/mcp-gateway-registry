@@ -798,9 +798,11 @@ async def get_skill_content(
 
     Returns:
         Dictionary containing the skill name, content, source URL, and status.
-        Text resources also return ``resource_path``, ``resource_type`` and
-        ``size_bytes``. Binary resources return ``resource_path``,
-        ``resource_type``, ``content_type`` and ``size_bytes``;
+        Text and binary resources both return ``resource_path``,
+        ``resource_type``, ``content_type`` and ``size_bytes``. A text
+        resource's ``content_type`` is guessed from its path and defaults to
+        ``text/plain``; a binary resource's defaults to
+        ``application/octet-stream``. For binary resources,
         ``content_base64`` and ``content_encoding`` are added only when
         ``include_binary`` is True.
     """
@@ -876,8 +878,10 @@ async def get_skill_content(
             "status": "success",
         }
         if resource_path:
-            result["resource_path"] = data.get("path", resource_path)
+            resource = data.get("path", resource_path)
+            result["resource_path"] = resource
             result["resource_type"] = data.get("type", "")
+            result["content_type"] = mimetypes.guess_type(resource)[0] or "text/plain"
             if "size_bytes" in data:
                 result["size_bytes"] = data["size_bytes"]
         else:

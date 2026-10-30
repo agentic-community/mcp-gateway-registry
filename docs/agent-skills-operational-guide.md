@@ -285,7 +285,7 @@ curl -s -H "Authorization: Bearer <token>" \
   | jq -r '.content_base64' | base64 --decode > logo.png
 ```
 
-References, scripts and agents always come back in `content`, with any invalid UTF-8 bytes replaced by U+FFFD. The mcpgw `get_skill_content` tool returns text the same way, and for a base64 asset returns only its metadata unless the caller passes `include_binary=True`.
+References, scripts and agents always come back in `content`, with any invalid UTF-8 bytes replaced by U+FFFD. The mcpgw `get_skill_content` tool returns text the same way, and for a base64 asset returns only its metadata unless the caller passes `include_binary=True`. For any companion resource, text or binary, the tool also returns a `content_type` guessed from the path. A text resource with an unknown extension defaults to `text/plain`, and a binary one to `application/octet-stream`.
 
 `size_bytes` is the byte length of the file as fetched from its host. For a text resource whose invalid bytes were replaced, it can differ from the UTF-8 length of `content`.
 

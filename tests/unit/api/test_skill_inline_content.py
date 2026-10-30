@@ -514,6 +514,44 @@ class TestAssetResourceContent:
         assert base64.b64decode(data["content_base64"]) == payload
         assert "content" not in data
 
+    @pytest.mark.parametrize(
+        ("payload", "shape"),
+        [
+            (b"# Report\n", "text"),
+            (b"AB\x00CD", "base64"),
+        ],
+    )
+    def test_asset_shape_is_logged_at_debug(
+        self,
+        test_client,
+        mock_skill_service,
+        caplog,
+        payload,
+        shape,
+    ):
+        """The debug log records which shape an asset fetch produced, not its content."""
+        # Arrange
+        path = "assets/file.dat"
+        skill = _make_skill_with_resources(_resource_entry(path, "asset"))
+        caplog.set_level(logging.DEBUG, logger="registry.api.skill_routes")
+
+        # Act
+        response = _fetch_resource_via_http(
+            test_client,
+            mock_skill_service,
+            skill,
+            path,
+            payload,
+        )
+
+        # Assert
+        assert response.status_code == 200
+        messages = [r.getMessage() for r in caplog.records if r.name == "registry.api.skill_routes"]
+        expected = (
+            f"Asset {path} for skill {INLINE_SKILL_PATH} returned as {shape} ({len(payload)} bytes)"
+        )
+        assert expected in messages
+
 
 @pytest.mark.unit
 @pytest.mark.parametrize("resource_type", ["reference", "script", "agent", "asset"])
