@@ -658,6 +658,79 @@ class TestPerServerOAuthProtectedResource:
                 "https://gw.example.com/plain/mcp/user_impersonation"
             ]
 
+    def _get_obo_prm(self, fake_provider, s, path="/obo-echo", url_suffix="obo-echo/mcp"):
+        obo_server = {"path": path, "egress_auth_mode": "obo_exchange"}
+        with (
+            patch(
+                "registry.api.wellknown_routes._get_active_auth_provider",
+                return_value=fake_provider,
+            ),
+            patch("registry.auth.oauth_metadata.settings", s),
+            patch("registry.api.wellknown_routes.settings", s),
+            patch(
+                "registry.api.wellknown_routes.server_service.get_server_info",
+                new=AsyncMock(return_value=obo_server),
+            ),
+        ):
+            client = TestClient(_make_oauth_discovery_app(fake_provider))
+            return client.get(f"/.well-known/oauth-protected-resource/{url_suffix}")
+
+    @pytest.mark.parametrize("provider", ["keycloak", "cognito", "okta", "auth0"])
+    def test_obo_server_on_non_entra_advertises_derived_scopes(self, fake_provider, provider):
+        """Issue #1971: Keycloak (and other scope-validating non-Entra IdPs) reject
+        an unknown `<resource>/user_impersonation` scope with invalid_scope at the
+        authorize endpoint, so the per-server PRM must advertise the same
+        IdP-universal list as the global PRM. The resource stays per-server."""
+        from registry.auth.oauth_metadata import DEFAULT_ADVERTISED_SCOPES
+
+        resp = self._get_obo_prm(fake_provider, self._settings(auth_provider=provider))
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["resource"] == "https://gw.example.com/obo-echo/mcp"
+        assert data["scopes_supported"] == DEFAULT_ADVERTISED_SCOPES
+        assert "user_impersonation" not in resp.text
+
+    def test_obo_server_on_keycloak_honours_mcp_advertised_scopes(self, fake_provider):
+        """The MCP_ADVERTISED_SCOPES operator override is advertised verbatim, in
+        operator order, exactly like the global PRM."""
+        s = self._settings(auth_provider="keycloak")
+        s.mcp_advertised_scopes = "openid mcp-registry email"
+        resp = self._get_obo_prm(fake_provider, s)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["resource"] == "https://gw.example.com/obo-echo/mcp"
+        assert data["scopes_supported"] == ["openid", "mcp-registry", "email"]
+        assert "user_impersonation" not in resp.text
+
+    def test_obo_server_on_keycloak_matches_global_prm_scopes(self, fake_provider):
+        """The per-server PRM and the global PRM advertise the identical scope
+        list on a non-Entra IdP (single source: derive_supported_scopes)."""
+        s = self._settings(auth_provider="keycloak")
+        s.mcp_advertised_scopes = "openid email"
+        per_server = self._get_obo_prm(fake_provider, s).json()
+        with (
+            patch(
+                "registry.api.wellknown_routes._get_active_auth_provider",
+                return_value=fake_provider,
+            ),
+            patch("registry.auth.oauth_metadata.settings", s),
+            patch("registry.api.wellknown_routes.settings", s),
+        ):
+            client = TestClient(_make_oauth_discovery_app(fake_provider))
+            global_prm = client.get("/.well-known/oauth-protected-resource").json()
+        assert per_server["scopes_supported"] == global_prm["scopes_supported"]
+
+    def test_obo_server_on_entra_ignores_mcp_advertised_scopes(self, fake_provider):
+        """Entra stays unchanged: the per-resource user_impersonation scope is
+        advertised regardless of the MCP_ADVERTISED_SCOPES override."""
+        s = self._settings(auth_provider="entra")
+        s.mcp_advertised_scopes = "openid email"
+        resp = self._get_obo_prm(fake_provider, s)
+        assert resp.status_code == 200
+        assert resp.json()["scopes_supported"] == [
+            "https://gw.example.com/obo-echo/mcp/user_impersonation"
+        ]
+
     def test_unknown_server_404s(self, fake_provider):
         s = self._settings()
         with (
@@ -822,6 +895,36 @@ class TestVirtualServerPerServerPrm:
         )
         assert resp.status_code == 200
         assert resp.json()["resource"] == "https://gw.example.com/virtual/test/mcp"
+
+    def test_lenient_idp_obo_backend_advertises_derived_scopes(self, fake_provider):
+        """Issue #1971: a virtual server pulled onto a per-server PRM by an
+        obo_exchange backend on Keycloak advertises the IdP-universal scopes, not
+        the Entra-only `<resource>/user_impersonation` that Keycloak rejects."""
+        from registry.auth.oauth_metadata import DEFAULT_ADVERTISED_SCOPES
+
+        resp = self._get(
+            fake_provider,
+            self._settings(auth_provider="keycloak"),
+            self._virtual_server(["/obo-echo"]),
+            backing={"/obo-echo": {"egress_auth_mode": "obo_exchange"}},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["resource"] == "https://gw.example.com/virtual/test/mcp"
+        assert data["scopes_supported"] == DEFAULT_ADVERTISED_SCOPES
+        assert "user_impersonation" not in resp.text
+
+    def test_lenient_idp_obo_backend_honours_mcp_advertised_scopes(self, fake_provider):
+        s = self._settings(auth_provider="keycloak")
+        s.mcp_advertised_scopes = "openid mcp-registry"
+        resp = self._get(
+            fake_provider,
+            s,
+            self._virtual_server(["/obo-echo"]),
+            backing={"/obo-echo": {"egress_auth_mode": "obo_exchange"}},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["scopes_supported"] == ["openid", "mcp-registry"]
 
     def test_disabled_virtual_server_404s(self, fake_provider):
         """A disabled virtual server has no nginx location, so no 401 and no
