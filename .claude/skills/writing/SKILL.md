@@ -138,6 +138,20 @@ Word-level fixes are not enough. LLMs lean on a handful of sentence shapes that 
   - Good: On lifecycle, you can force every new asset to land in draft, then promote it with a PATCH.
   - A leading label is fine when it is a real heading. It is not fine as a substitute for the sentence's subject.
 - Vary sentence length on purpose, not on a pattern. Mix short and long so the rhythm is unpredictable. Do not alternate long-short-long-short.
+- No slogan pairs. Two short sentences that mirror each other and end on a bare "do not" read like a tagline. Say the whole thought in one sentence.
+  - Bad: Authorization stays the same. Consent and blast radius do not.
+  - Good: Authorization works the same way it always has. What changes is how much one connection can do, and who gets asked before it does it.
+- No objects acting like people. A tool does not "hold" another tool, text does not "carry" a URL, and a notification does not "reach" anything. Make a person, a service, or the code the subject, and give it a verb someone would say.
+  - Bad: The model that reads that text now holds a tool that reaches every write-capable backend.
+  - Good: The model that reads that text can now call any write-capable backend.
+- No code vocabulary in prose. Words from the codebase ("vaults the token", "keys credentials on the user", "elicitation-complete notification", "has no session to reach") belong in backticks or nowhere. In a sentence, say what happens in words a reader would use.
+  - Bad: The gateway vaults the GitHub token, and the elicitation-complete notification has no session to reach.
+  - Good: The gateway stores the GitHub token, and the notification that consent finished has nowhere to go.
+- No institutional register. "Operators and users treat X as", "is not an enforcement control", and "rests on" sound like a policy memo. Write it the way you would explain it to a colleague at a desk.
+  - Bad: AGENTS.md says prompt guidance is not an enforcement control.
+  - Good: AGENTS.md is clear that prompt text enforces nothing.
+- No "One option... Another... A third" runs. Put a short list of options in one sentence, or in a real list.
+- Do not let a shorter sentence change the fact. Compressing "the gateway that accepted the token" into "the issuer's own gateway" made it wrong, because Keycloak issues the token. Re-check each rewritten claim against the source, not against your earlier draft.
 
 ## Replying to a person
 
@@ -155,9 +169,9 @@ Do not pad a reply to sound warm. No "great question", no restating their questi
 
 ## Revision pass
 
-Run this on every draft before you ship it:
+Run this on every draft before you ship it. That means every file, including the second and third documents you write in a session: having loaded this skill earlier in the conversation does not count as running the pass on the new file.
 
-1. Read it aloud. Fix anything you stumble on.
+1. Read it aloud, one sentence at a time. For each sentence, ask: would I say this, in these words, to a colleague sitting next to me? If not, rewrite it the way you would say it. Fix anything you stumble on. This step is the one that catches slogan pairs, objects acting like people, code vocabulary, and institutional register, and the scanner cannot do it for you.
 2. Search for is/are/was/were + participle. Flip each to active or justify it.
 3. Search for `ly ` and delete or replace each hit.
 4. Delete every phrase from the ban lists above.
@@ -169,7 +183,7 @@ Run this on every draft before you ship it:
 10. Check every claim against something real - a file, a command output, a number.
 11. Apply rule 6 last: read once more and undo anything that now sounds wrong.
 
-Run the pass. Loading this skill and then skipping the pass is how the tells survive into the draft.
+Run the pass. Loading this skill and then skipping the pass is how the tells survive into the draft. A clean scanner run is not a finished pass either: in one session a document passed the scanner with no hits, and the read-aloud step still turned up twenty sentences no person would say, plus one factual error.
 
 ## Mechanical scan
 
