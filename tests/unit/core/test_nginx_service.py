@@ -1926,45 +1926,6 @@ def test_validate_locations_fit_the_registry_token():
             assert forwards == clears, f"{name}: {location.splitlines()[0]}"
 
 
-def test_generated_protected_api_block_carries_internal_token():
-    """The generated /api/ block (protected) carries the marker + token forward;
-    the unprotected variant (NGINX_DISABLE_API_AUTH_REQUEST) carries none.
-    """
-    from pathlib import Path
-
-    src = (
-        Path(__file__).resolve().parents[3] / "registry" / "core" / "nginx_service.py"
-    ).read_text()
-    # The protected block string must contain all three directives.
-    assert 'set $registry_api_auth "1";' in src
-    assert (
-        "auth_request_set $auth_internal_token_registry "
-        "$upstream_http_x_internal_token_registry;" in src
-    )
-    assert "proxy_set_header X-Internal-Token-Registry $auth_internal_token_registry;" in src
-
-
-def test_unprotected_api_block_still_rate_limited():
-    """When auth_request is bypassed (NGINX_DISABLE_API_AUTH_REQUEST=true), the
-    replacement /api/ block must STILL carry the inbound rate limits — /api/ is
-    the highest-volume surface and dropping the edge/registration caps here would
-    reopen the flood path the limits exist to close.
-    """
-    from pathlib import Path
-
-    src = (
-        Path(__file__).resolve().parents[3] / "registry" / "core" / "nginx_service.py"
-    ).read_text()
-    # Isolate the unprotected replacement block so we assert on IT, not the
-    # protected block elsewhere in the file.
-    marker = "unprotected_api_block = "
-    assert marker in src
-    unprotected = src[src.index(marker) : src.index('"""', src.index(marker) + len(marker) + 4) + 3]
-    assert "limit_req zone=mcp_gateway_edge burst=100 nodelay;" in unprotected
-    assert "limit_req zone=mcp_gateway_register burst=10 nodelay;" in unprotected
-    assert "limit_conn mcp_gateway_conn 100;" in unprotected
-
-
 @pytest.mark.unit
 class TestResolveMcpProxyReadTimeout:
     """Tests for the nginx MCP proxy_read_timeout derivation helper.
@@ -2892,6 +2853,134 @@ async def test_proxy_ssl_placeholder_is_substituted_end_to_end(
         f"{conf_path.name} (pingfederate): {{{{PINGFEDERATE_PROXY_SSL}}}} placeholder was NOT "
         "substituted -- the .replace() wiring in _render_config_impl is broken."
     )
+
+
+def _location_blocks(text: str) -> list[str]:
+    """Split a config into its four-space-indented ``location`` blocks."""
+    return [
+        "    location " + chunk.split("\n    }", 1)[0]
+        for chunk in text.split("\n    location ")[1:]
+    ]
+
+
+def _is_api_location(block: str) -> bool:
+    """True for the registry ``/api/`` catch-all location (rendered or raw)."""
+    return re.match(r"    location (\{\{ROOT_PATH\}\})?/api/ \{", block) is not None
+
+
+@pytest.mark.parametrize("conf_path", [_HTTP_ONLY_CONF, _HTTP_AND_HTTPS_CONF])
+def test_api_auth_request_markers_wrap_only_the_api_auth_request(conf_path):
+    """Issue #1962: every /api/ location (one per frontend server block) carries the
+    API_AUTH_REQUEST markers, no other location does, and the markers bracket
+    nothing but ``auth_request /validate;``. So NGINX_DISABLE_API_AUTH_REQUEST can
+    never drop a header clear, a rate limit or another location's auth check.
+    """
+    text = conf_path.read_text()
+    blocks = _location_blocks(text)
+    api_blocks = [b for b in blocks if _is_api_location(b)]
+    marked = [b for b in blocks if "{{API_AUTH_REQUEST_START}}" in b]
+    assert api_blocks, f"{conf_path.name}: no /api/ location"
+    assert marked == api_blocks, f"{conf_path.name}: markers must be in every /api/ only"
+    assert text.count("{{API_AUTH_REQUEST_START}}") == len(api_blocks)
+    assert text.count("{{API_AUTH_REQUEST_END}}") == len(api_blocks)
+
+    for block in marked:
+        region = block.split("{{API_AUTH_REQUEST_START}}", 1)[1]
+        region = region.split("{{API_AUTH_REQUEST_END}}", 1)[0]
+        directives = [
+            line.strip()
+            for line in region.splitlines()[1:-1]
+            if line.strip() and not line.strip().startswith("#")
+        ]
+        assert directives == ["auth_request /validate;"], conf_path.name
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+@pytest.mark.parametrize("conf_path", [_HTTP_ONLY_CONF, _HTTP_AND_HTTPS_CONF])
+async def test_disable_api_auth_request_drops_auth_request_from_api_only(
+    conf_path, nginx_service, sample_servers, mock_health_service, mock_atomic_write
+):
+    """Issue #1962: NGINX_DISABLE_API_AUTH_REQUEST=true must change the rendered
+    config, and only by removing ``auth_request`` from the /api/ location.
+
+    The flag used to text-match a stale copy of the /api/ location, so the
+    lookup silently failed and nginx kept ``auth_request`` while the registry
+    (which reads the same flag) assumed it was gone. This renders the real
+    templates with the flag off and on and checks the difference directly.
+    """
+    base_env = {"AUTH_PROVIDER": "keycloak"}
+    rendered_off = await _render_real_conf(
+        nginx_service,
+        sample_servers,
+        mock_health_service,
+        mock_atomic_write,
+        conf_path,
+        {**base_env, "NGINX_DISABLE_API_AUTH_REQUEST": "false"},
+    )
+    mock_atomic_write.reset_mock()
+    rendered_on = await _render_real_conf(
+        nginx_service,
+        sample_servers,
+        mock_health_service,
+        mock_atomic_write,
+        conf_path,
+        {**base_env, "NGINX_DISABLE_API_AUTH_REQUEST": "true"},
+    )
+
+    for rendered in (rendered_off, rendered_on):
+        assert "API_AUTH_REQUEST_" not in rendered, f"{conf_path.name}: marker leaked"
+
+    assert rendered_on != rendered_off, f"{conf_path.name}: flag did not change nginx output"
+
+    blocks_off = _location_blocks(rendered_off)
+    blocks_on = _location_blocks(rendered_on)
+    assert len(blocks_off) == len(blocks_on)
+    api_off = [b for b in blocks_off if _is_api_location(b)]
+    api_on = [b for b in blocks_on if _is_api_location(b)]
+    assert api_off
+    assert len(api_off) == len(api_on)
+
+    for off, on in zip(api_off, api_on, strict=True):
+        # Flag off: the template's /api/ location is rendered as written.
+        assert "auth_request /validate;" in off
+
+        # Flag on: auth_request is gone from /api/, and nothing else in it changed.
+        assert "auth_request /validate;" not in on
+        on_lines = on.splitlines()
+        assert [line for line in off.splitlines() if line not in on_lines] == [
+            "        # Authenticate request via auth server (validates JWT Bearer tokens)",
+            "        auth_request /validate;",
+        ]
+        for kept in (
+            'proxy_set_header X-Internal-Secret "";',
+            'proxy_set_header X-Groups "";',
+            "proxy_set_header X-Internal-Token-Registry $auth_internal_token_registry;",
+            "limit_req zone=mcp_gateway_edge burst=100 nodelay;",
+            "limit_req zone=mcp_gateway_register burst=10 nodelay;",
+            "limit_conn mcp_gateway_conn 100;",
+            "error_page 502 = @upstream_unavailable;",
+        ):
+            assert kept in on, f"{conf_path.name}: /api/ lost {kept!r}"
+        assert "proxy_set_header X-Forwarded-Proto $scheme;" not in on
+
+    # Every other location (including /api/auth/me and /api/ard/, which also
+    # run auth_request) is identical with the flag on and off.
+    others_off = [b for b in blocks_off if not _is_api_location(b)]
+    others_on = [b for b in blocks_on if not _is_api_location(b)]
+    assert others_on == others_off
+    assert any("auth_request /validate;" in b for b in others_on)
+
+
+def test_api_auth_request_markers_without_markers_leave_template_unchanged(caplog):
+    """A template with no markers (e.g. a custom one) is left as is, and enabling
+    the flag logs that /api/ keeps auth_request instead of failing silently.
+    """
+    template = "location /api/ {\n    auth_request /validate;\n}\n"
+    assert nginx_module._apply_api_auth_request_markers(template, True) == template
+    with caplog.at_level("WARNING"):
+        assert nginx_module._apply_api_auth_request_markers(template, False) == template
+    assert "/api/ keeps auth_request" in caplog.text
 
 
 @pytest.mark.unit
