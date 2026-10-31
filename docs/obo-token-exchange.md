@@ -287,7 +287,7 @@ requested in issue #966).
 
 ### Enabling it
 
-**Supported identity providers: Entra only.** The gateway mints this machine token
+**Supported identity providers for backend discovery: Entra only.** The gateway mints this machine token
 against its own IdP, and `AUTH_PROVIDER=entra` is the only value implemented. Every
 other — including the shipped default `cognito`, plus `keycloak`, `okta`, `auth0` and
 `pingfederate` — resolves nothing, and the server reports unhealthy. `keycloak` is
@@ -354,7 +354,7 @@ user tokens will still fail discovery.
 
 ### Keycloak
 
-**Refused outright, deliberately.** `_gateway_idp_client` returns nothing for
+**Backend discovery is refused outright, deliberately.** `_gateway_idp_client` returns nothing for
 `AUTH_PROVIDER=keycloak` regardless of how Keycloak is configured, and logs:
 
 ```
@@ -424,11 +424,17 @@ plus `oauth_discovery.enabled`), **3** = a gateway app-only token for an
 
 ### Operational notes
 
-- **Runtime Keycloak OBO is not implemented.** `_keycloak_exchange_body` raises
-  `OboUnsupportedIdpError`, so `obo_exchange` is Entra-only end to end — runtime
-  *and* discovery. A Keycloak-backed server cannot use `obo_exchange` at all today,
-  and `_gateway_idp_client` refuses `AUTH_PROVIDER=keycloak` outright for discovery
-  rather than minting a token whose audience it cannot constrain.
+- **Runtime Keycloak OBO is supported; Keycloak backend discovery is not.** The
+  per-user runtime exchange runs on Keycloak through an RFC 8693 token exchange
+  (`_keycloak_exchange_body` in `auth_server/egress_obo.py`), and the gateway refuses
+  to forward an exchanged token that this gateway would itself accept (the Keycloak
+  provider's `exchanged_token_gateway_audiences` check). It needs an HTTPS token
+  endpoint, because the request carries the gateway's client secret and goes through
+  the credentialed OAuth SSRF profile. Keycloak prerequisites are in
+  [egress-auth-design.md](design/egress-auth-design.md). Tier-3 discovery for
+  `obo_exchange` servers is a separate path, and `_gateway_idp_client` refuses
+  `AUTH_PROVIDER=keycloak` outright for it rather than minting a token whose audience
+  it cannot constrain.
 - **Tier 2 reads the vault on every health cycle.** Unlike tiers 1 and 3 it is not
   cached, so each cycle is a fresh secret-store read plus a possible refresh. On AWS
   Secrets Manager that is a billed API call per server per cycle, and is subject to
@@ -481,8 +487,13 @@ The only value satisfying all three is the **per-server connection URL**
   needs a path-qualified Entra App ID URI: every `obo_exchange` server, plus
   `oauth_user` (3LO) servers **when the gateway's IdP is Entra**. Lenient IdPs
   (Keycloak/Cognito) keep using the gateway-wide root PRM for 3LO.
-- That per-server PRM advertises `resource = https://<gateway>/<server>/mcp` and
-  scope `.../user_impersonation`, derived dynamically from the registry entry.
+- That per-server PRM advertises `resource = https://<gateway>/<server>/mcp`,
+  derived dynamically from the registry entry. On **Entra** it also advertises
+  the scope `.../user_impersonation`; on every other IdP (e.g. Keycloak) it
+  advertises the same IdP-universal scopes as the gateway-wide PRM
+  (`MCP_ADVERTISED_SCOPES`, default `openid email profile offline_access`),
+  because a scope-validating IdP rejects the unknown `.../user_impersonation`
+  scope with `invalid_scope` at login.
 - auth-server validates that per-server `aud` (built from the **public** gateway
   URL).
 
@@ -505,7 +516,7 @@ registry and uses the gateway's existing IdP credentials. Relevant existing vars
 | `AUTH_SERVER_EXTERNAL_URL` | auth-server | Public gateway URL; auth-server builds the per-server audience to validate from it (NOT the internal `REGISTRY_URL`). |
 | `REGISTRY_URL` | registry | Public gateway URL; the per-server PRM `resource` is built from it. |
 | `IDE_OAUTH_CLIENT_ID` / `IDE_OAUTH_CALLBACK_PORT` | registry | Pre-registered public client advertised to IDEs that consume the Connect config (Cursor). Claude Code passes these as CLI flags instead. |
-| `MCP_ADVERTISED_SCOPES` | registry | Affects only the gateway-wide root PRM (non-obo discovery). Leave at the chart default; obo uses the per-server PRM. |
+| `MCP_ADVERTISED_SCOPES` | registry | Scopes advertised by the gateway-wide root PRM and, on non-Entra IdPs (e.g. Keycloak), by the per-server PRM too. On Entra the per-server PRM advertises `<resource>/user_impersonation` instead, so leave this at the chart default there. |
 | `SSRF_ALLOWED_HOSTS` / `SSRF_ALLOWED_CIDRS` | registry | **Required for an in-cluster MCP server.** The registry validates each server's `proxy_pass_url` through the SSRF guard, which blocks private/cluster IPs; an internal server (private ClusterIP) is otherwise marked unhealthy and its nginx location is commented out, so requests return `405`. List the server's host (`SSRF_ALLOWED_HOSTS=obo-echo.<ns>.svc.cluster.local`) or the cluster service CIDR (`SSRF_ALLOWED_CIDRS=172.20.0.0/16`, the EKS default). Chart values: `registry.app.ssrfAllowedHosts` / `registry.app.ssrfAllowedCidrs`. |
 
 ---
@@ -634,10 +645,12 @@ this automatic; the only requirements are:
 2. **Each obo server's per-server URL is in the gateway app's `identifierUris`**
    (the manual Entra step; see 3d-alt and `GET /api/egress/obo-identifier-uris`).
 
-No `MCP_ADVERTISED_SCOPES` tuning is needed for obo: the per-server PRM advertises
-the correct per-server `resource` + scope dynamically from the registry entry.
-(`MCP_ADVERTISED_SCOPES` only affects the gateway-wide root PRM used by non-obo
-discovery; leave it at the chart default `openid profile email offline_access`.)
+No `MCP_ADVERTISED_SCOPES` tuning is needed for obo on Entra: the per-server PRM
+advertises the correct per-server `resource` + scope dynamically from the registry
+entry. (On Entra `MCP_ADVERTISED_SCOPES` only affects the gateway-wide root PRM
+used by non-obo discovery; leave it at the chart default
+`openid profile email offline_access`. On non-Entra IdPs the per-server PRM
+advertises these same scopes instead of `user_impersonation`.)
 
 > For the CLI token path (3a) the `aud` is whatever resource you mint against via
 > `--scope`; for the MCP-client path it is the per-server resource the client
@@ -871,8 +884,10 @@ curl -ksS -i -X POST "$GW/obo-echo/mcp" \
 >        `WWW-Authenticate: resource_metadata=<gw>/.well-known/oauth-protected-resource/<server>/mcp`
 >        (nginx per-location `set $mcp_resource_metadata`; every obo server, and
 >        `oauth_user` servers too when the gateway IdP is Entra).
->     2. That per-server PRM advertises `resource = <gw>/<server>/mcp` and
->        `scope = <gw>/<server>/mcp/user_impersonation` (dynamic, from the registry).
+>     2. That per-server PRM advertises `resource = <gw>/<server>/mcp` and, on
+>        Entra, `scope = <gw>/<server>/mcp/user_impersonation` (dynamic, from the
+>        registry). Non-Entra IdPs (Keycloak) get the gateway-wide scope list
+>        (`MCP_ADVERTISED_SCOPES`) instead, since they reject unknown scopes.
 >     3. Claude sends `resource=<gw>/<server>/mcp` verbatim (has a path -> no
 >        trailing-slash) + that scope -> Entra matches the App ID URI -> token
 >        `aud = <gw>/<server>/mcp`.
