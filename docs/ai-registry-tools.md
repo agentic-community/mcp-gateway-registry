@@ -171,6 +171,21 @@ AI: "Yes, there's a travel-assistant-agent that can help with
      flight bookings, hotel searches, and itinerary planning."
 ```
 
+**Use a tool you just found:**
+
+The server tells the agent two ways to use a discovered tool. The agent can add the server's `endpoint_url` to its MCP client, which usually takes a session restart before the tools appear. If it can run shell commands, it can also call the tool right away: it POSTs MCP JSON-RPC (`initialize`, `notifications/initialized`, then `tools/call`) to the `endpoint_url` with curl, using the same bearer token it uses for the registry.
+
+```
+You: "Look up how Cloudflare Workers handle cron triggers"
+AI: *calls search_registry(query="cloudflare documentation")*
+AI: *finds the cloudflare-docs server and its search tool, with inputSchema*
+AI: *asks permission, then runs curl against the endpoint_url: initialize,
+     notifications/initialized, tools/call*
+AI: "Cloudflare's docs say a Worker declares cron triggers in wrangler.toml..."
+```
+
+Each request goes through the gateway as the user, so the gateway applies the user's own grants to every call. The client asks the user to approve each shell command, and the approval prompt shows the tool name and its arguments. If the server needs the user to connect an account first (third-party OAuth), the result carries a connect URL. The agent shows that URL to the user and retries once the user has connected.
+
 ### For Development Workflows
 
 - **Tool discovery during development** - Find the right MCP tool before building custom solutions
