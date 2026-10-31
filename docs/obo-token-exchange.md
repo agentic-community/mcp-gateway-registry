@@ -424,11 +424,15 @@ plus `oauth_discovery.enabled`), **3** = a gateway app-only token for an
 
 ### Operational notes
 
-- **Runtime Keycloak OBO is not implemented.** `_keycloak_exchange_body` raises
-  `OboUnsupportedIdpError`, so `obo_exchange` is Entra-only end to end — runtime
-  *and* discovery. A Keycloak-backed server cannot use `obo_exchange` at all today,
-  and `_gateway_idp_client` refuses `AUTH_PROVIDER=keycloak` outright for discovery
-  rather than minting a token whose audience it cannot constrain.
+- **Runtime Keycloak OBO is implemented; discovery is not.** `obo_exchange` performs
+  an RFC 8693 token exchange against Keycloak, verifies the returned token and refuses
+  it if the gateway itself would accept it. Every shipped deployment surface needs
+  operator setup first (TLS on `KEYCLOAK_URL`, the trusted IdP host, and the realm
+  audience changes); see the
+  [Keycloak prerequisites](design/egress-auth-design.md#keycloak-self-hosted-as-the-obo-identity-provider).
+  Backend discovery still refuses `AUTH_PROVIDER=keycloak` outright (see
+  [Keycloak](#keycloak)) rather than minting a token whose audience it cannot
+  constrain.
 - **Tier 2 reads the vault on every health cycle.** Unlike tiers 1 and 3 it is not
   cached, so each cycle is a fresh secret-store read plus a possible refresh. On AWS
   Secrets Manager that is a billed API call per server per cycle, and is subject to
