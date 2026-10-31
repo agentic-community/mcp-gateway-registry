@@ -7686,26 +7686,93 @@ _FORWARDED_RESPONSE_HEADERS: frozenset[str] = frozenset(
 )
 
 
+_SSE_EVENT_TERMINATOR: bytes = b"\n\n"
+_SSE_EVENT_TERMINATOR_CRLF: bytes = b"\r\n\r\n"
+
+
+class _UpstreamStreamTruncated(Exception):
+    """The upstream closed a chunked response before its terminating chunk.
+
+    Carries the bytes received so far, so a caller that can still use them --
+    an SSE stream whose earlier events completed cleanly -- can deliver them
+    instead of discarding a response that was mostly received.
+
+    Args:
+        partial: Body bytes read before the stream was cut.
+    """
+
+    def __init__(
+        self,
+        partial: bytes,
+    ) -> None:
+        super().__init__("upstream closed the response body before its terminating chunk")
+        self.partial = partial
+
+
+def _complete_events_only(
+    partial: bytes,
+) -> bytes:
+    """Return the prefix of a truncated SSE body made of complete events.
+
+    An event counts as complete only once its blank-line terminator arrived,
+    so a stream cut mid-`data:` cannot reach the caller as a half frame. This
+    also keeps truncation fail-closed for the tools/list filter: an event cut
+    in half is dropped, so a partial list can only ever lose tools rather than
+    expose ones the filter had not seen yet.
+
+    Args:
+        partial: Body bytes read before the stream was cut.
+
+    Returns:
+        The complete-event prefix, or empty when no event ever completed.
+    """
+    lf = partial.rfind(_SSE_EVENT_TERMINATOR)
+    crlf = partial.rfind(_SSE_EVENT_TERMINATOR_CRLF)
+    if crlf > lf:
+        return partial[: crlf + len(_SSE_EVENT_TERMINATOR_CRLF)]
+    if lf >= 0:
+        return partial[: lf + len(_SSE_EVENT_TERMINATOR)]
+    return b""
+
+
 async def _read_bounded(
     response: httpx.Response,
     max_bytes: int,
+    *,
+    partial_on_truncation: bool = False,
 ) -> bytes:
     """Read upstream body in chunks, enforcing an upper size bound.
 
-    Raises HTTPException(413) if total bytes exceed max_bytes.
+    Args:
+        response: Streaming upstream response to read.
+        max_bytes: Refuse the body once it exceeds this many bytes.
+        partial_on_truncation: When True, an upstream that closes a chunked
+            stream without its terminating chunk raises
+            `_UpstreamStreamTruncated` carrying what arrived. When False the
+            httpx error propagates untouched, which is what callers that
+            cannot use a partial body want.
+
+    Raises:
+        HTTPException: 413 if total bytes exceed max_bytes.
+        _UpstreamStreamTruncated: only when partial_on_truncation is True.
     """
     size = 0
     chunks: list[bytes] = []
-    async for chunk in response.aiter_bytes(chunk_size=64 * 1024):
-        size += len(chunk)
-        if size > max_bytes:
-            raise HTTPException(
-                status_code=413,
-                detail=(
-                    f"Upstream tools/list response exceeded {max_bytes} bytes; refusing to buffer."
-                ),
-            )
-        chunks.append(chunk)
+    try:
+        async for chunk in response.aiter_bytes(chunk_size=64 * 1024):
+            size += len(chunk)
+            if size > max_bytes:
+                raise HTTPException(
+                    status_code=413,
+                    detail=(
+                        f"Upstream tools/list response exceeded {max_bytes} bytes; refusing to buffer."
+                    ),
+                )
+            chunks.append(chunk)
+    except httpx.RemoteProtocolError as exc:
+        if not partial_on_truncation:
+            raise
+        raise _UpstreamStreamTruncated(b"".join(chunks)) from exc
     return b"".join(chunks)
 
 
@@ -9479,11 +9546,42 @@ async def mcp_proxy(
                 timeout=proxy_timeout,
             ) as upstream_response,
         ):
-            # Buffer with the same cap whether or not we filter, so a
-            # pathological upstream cannot DoS the proxy.
-            body_bytes = await _read_bounded(upstream_response, max_body_bytes)
-            status_code = upstream_response.status_code
+            # The content type decides whether a truncated stream is still
+            # usable, so read it before the body. httpx exposes headers while
+            # the body is still streaming.
             content_type = upstream_response.headers.get("content-type", "application/json")
+            # Buffer with the same cap whether or not we filter, so a
+            # pathological upstream cannot DoS the proxy. An SSE stream gets
+            # the partial-on-truncation read: closing the connection is one
+            # way a server ends an event stream, and the events that did
+            # complete are a valid answer.
+            try:
+                body_bytes = await _read_bounded(
+                    upstream_response,
+                    max_body_bytes,
+                    partial_on_truncation=_is_sse_content_type(content_type),
+                )
+            except _UpstreamStreamTruncated as exc:
+                complete_bytes = _complete_events_only(exc.partial)
+                if not complete_bytes:
+                    logger.error(
+                        "mcp_proxy: upstream %s closed the SSE stream before any event "
+                        f"completed ({len(exc.partial)} bytes buffered, none usable)",
+                        redact_url(upstream_url),
+                    )
+                    raise HTTPException(
+                        status_code=502,
+                        detail="Upstream MCP server error",
+                    ) from exc
+                logger.warning(
+                    "mcp_proxy: upstream %s closed the SSE stream early; delivering the "
+                    "%d bytes of complete events out of %d received",
+                    redact_url(upstream_url),
+                    len(complete_bytes),
+                    len(exc.partial),
+                )
+                body_bytes = complete_bytes
+            status_code = upstream_response.status_code
             # Snapshot upstream headers BEFORE leaving the stream context. httpx
             # releases response.headers when the async-with block exits; reading
             # them afterwards returns an empty mapping and Mcp-Session-Id is lost.
