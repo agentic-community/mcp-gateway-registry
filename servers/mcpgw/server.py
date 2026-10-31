@@ -202,16 +202,19 @@ mcp = FastMCP(
         "Start with search_registry to find relevant AI assets by describing "
         "what you need in natural language. Once you find a useful MCP server, "
         "you can use its tools in one of two ways. "
-        "To keep the server, add its endpoint_url to your MCP client. For Claude "
-        "Code: claude mcp add --transport http --scope user <name> <endpoint_url> "
-        '--header "Authorization: Bearer <token>". The new tools usually appear '
-        "only after you restart the session. "
-        "To call a tool right away, if you can run shell commands, send MCP "
-        "JSON-RPC requests to the endpoint_url with curl, using the same bearer "
-        "token you use for this registry. Ask the user where the token is if you "
-        "do not have it, and never print it. Send every request as an HTTP POST "
-        "with the headers Content-Type: application/json, Accept: application/json, "
-        "text/event-stream, and Authorization: Bearer <token>. First send "
+        "The recommended way is to add the server to your MCP client, which then "
+        "signs the user in with OAuth, so you never handle a token. For Claude "
+        "Code: claude mcp add --transport http --scope user <name> <endpoint_url>. "
+        "The user then authenticates it through /mcp, and its tools usually "
+        "appear only after the session restarts. "
+        "To call a tool right away instead, if you can run shell commands, send "
+        "MCP JSON-RPC requests to the endpoint_url with curl. Read the bearer "
+        "token from the REGISTRY_TOKEN environment variable. If it is not set, "
+        "ask the user to export it; do not search files for a token, and never "
+        "print it. Send every request as an HTTP POST with these three headers: "
+        "'Content-Type: application/json', "
+        "'Accept: application/json, text/event-stream' (one header carrying "
+        "both values), and 'Authorization: Bearer $REGISTRY_TOKEN'. First send "
         'initialize (params: protocolVersion "2025-06-18", capabilities {}, '
         "clientInfo). If the response has an Mcp-Session-Id header, send that "
         "header on every later request. Then send notifications/initialized, then "
@@ -951,13 +954,17 @@ async def search_registry(
       the registry's HTTP API directly.
 
     When you find a useful MCP server, you can use its tools in one of two ways:
-    - Keep it: add the endpoint_url to your MCP client. For Claude Code, run
+    - Keep it (recommended): add the endpoint_url to your MCP client, which
+      signs the user in with OAuth, so you never handle a token. For Claude
+      Code, run
         claude mcp add --transport http --scope user <server-name> <endpoint_url>
-          --header "Authorization: Bearer <token>"
-      The new tools usually appear only after you restart the session.
+      then the user authenticates it through /mcp. The new tools usually
+      appear only after the session restarts.
     - Call a tool now: if you can run shell commands, POST MCP JSON-RPC to the
-      endpoint_url with curl and the same bearer token you use for this
-      registry. Send initialize, then notifications/initialized, then
+      endpoint_url with curl, reading the bearer token from the REGISTRY_TOKEN
+      environment variable. If it is not set, ask the user to export it rather
+      than searching files for a token. Send initialize, then
+      notifications/initialized, then
       tools/call with the tool's name and arguments matching its inputSchema.
       This server's instructions give the exact headers and session handling.
       Check with the user before calling a tool that changes anything, and
