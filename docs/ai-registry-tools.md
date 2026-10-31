@@ -173,7 +173,9 @@ AI: "Yes, there's a travel-assistant-agent that can help with
 
 **Use a tool you just found:**
 
-The server tells the agent two ways to use a discovered tool. The agent can add the server's `endpoint_url` to its MCP client, which usually takes a session restart before the tools appear. If it can run shell commands, it can also call the tool right away: it POSTs MCP JSON-RPC (`initialize`, `notifications/initialized`, then `tools/call`) to the `endpoint_url` with curl, using the same bearer token it uses for the registry.
+The server tells the agent two ways to use a discovered tool. The recommended way is to add the server's `endpoint_url` to the MCP client (for Claude Code, `claude mcp add --transport http --scope user <name> <endpoint_url>`). The client then signs you in with OAuth, so the agent never handles a token. The new tools usually appear only after a session restart.
+
+If the agent can run shell commands, it can also call the tool right away: it POSTs MCP JSON-RPC (`initialize`, `notifications/initialized`, then `tools/call`) to the `endpoint_url` with curl. It reads the bearer token from the `REGISTRY_TOKEN` environment variable, and asks you to export it when the variable is unset. Your MCP client's own OAuth token is not visible to the agent, so this path needs a token of its own. Get one from the registry UI and export it in the shell you start the agent from.
 
 ```
 You: "Look up how Cloudflare Workers handle cron triggers"
