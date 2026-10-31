@@ -399,6 +399,8 @@ The auth-server filters a user's groups down to the **scope-relevant** subset be
 - **Design B (`ALLOWED_IDP_GROUPS` set):** explicit allowlist.
 - **Design C (default, allowlist empty):** keep only groups that some scope's `group_mappings` references.
 
+Group names are compared in canonical form on both sides: surrounding whitespace and slashes are removed, so a claim of `/mcp-admins` (a Keycloak Group Membership mapper with *Full group path* enabled) matches a mapping stored as `mcp-admins`, and the reverse. The shipped realm setup sets `full.path: false` everywhere, so a default install never emits the slash; this matters for a bring-your-own realm. `ALLOWED_IDP_GROUPS` takes names without a leading slash (its validator rejects `/`). When the filter drops a group, the auth-server logs the dropped names at WARNING, so a missing mapping is visible at login rather than only as "less access than expected".
+
 With Strategy 1 convergence this is a non-issue: Keycloak only emits the handful of mapped groups, and those are exactly the scope-relevant ones. But note the consequence: **a Keycloak group that is not referenced by any scope's `group_mappings` is silently dropped** — so a brokered user in a group with no scope mapping ends up with no access. Map every converged group to a scope. There is no read-path cache: a scope/mapping change is picked up on the **next login** (existing sessions keep their login-time groups for the session lifetime, ~8h).
 
 ---
