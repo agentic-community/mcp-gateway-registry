@@ -234,7 +234,7 @@ async def _run(
 
     arguments = json.loads(args.arguments)
     if not isinstance(arguments, dict):
-        raise ValueError("--arguments must be a JSON object, for example '{\"query\": \"x\"}'")
+        raise ValueError('--arguments must be a JSON object, for example \'{"query": "x"}\'')
     result = await call_discovered_tool(matches[0], args.registry_url, token, arguments)
     print(_result_text(result))
     return 1 if result.isError else 0
