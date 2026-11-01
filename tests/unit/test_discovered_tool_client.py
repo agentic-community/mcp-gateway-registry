@@ -95,6 +95,53 @@ class TestParseTools:
         assert [t.tool_name for t in tools] == ["search_cloudflare_documentation"]
         assert tools[0].input_schema["properties"]["query"]["type"] == "string"
 
+    def test_reads_matching_tools_under_servers_with_the_server_url(self):
+        response = {
+            "servers": [
+                {
+                    "path": "/ai-registry/cloudflare-docs",
+                    "endpoint_url": "https://registry.example.com/ai-registry/cloudflare-docs/mcp",
+                    "matching_tools": [
+                        {"tool_name": "search_cloudflare_documentation", "inputSchema": None}
+                    ],
+                }
+            ],
+            "virtual_servers": [
+                {
+                    "path": "/virtual/dev-tools",
+                    "endpoint_url": "https://registry.example.com/virtual/dev-tools/mcp",
+                    "matching_tools": [{"tool_name": "lookup"}],
+                }
+            ],
+        }
+
+        tools = dtc._parse_tools(response)
+
+        assert [(t.server_path, t.tool_name) for t in tools] == [
+            ("/ai-registry/cloudflare-docs", "search_cloudflare_documentation"),
+            ("/virtual/dev-tools", "lookup"),
+        ]
+        assert tools[0].endpoint_url.endswith("/ai-registry/cloudflare-docs/mcp")
+
+    def test_keeps_a_tool_listed_twice_once(self):
+        response = _search_response()
+        response["servers"] = [
+            {
+                "path": "/cloudflare-docs",
+                "endpoint_url": "https://registry.example.com/cloudflare-docs/mcp",
+                "matching_tools": [{"tool_name": "search_cloudflare_documentation"}],
+            }
+        ]
+
+        tools = dtc._parse_tools(response)
+
+        assert [t.tool_name for t in tools] == ["search_cloudflare_documentation"]
+
+    def test_skips_server_tools_when_the_server_has_no_endpoint(self):
+        response = {"servers": [{"path": "/local", "matching_tools": [{"tool_name": "x"}]}]}
+
+        assert dtc._parse_tools(response) == []
+
     def test_empty_or_missing_tools_array(self):
         assert dtc._parse_tools({}) == []
         assert dtc._parse_tools({"tools": None}) == []
@@ -114,9 +161,13 @@ class TestGetToken:
 
 
 class TestSearchTools:
-    """search_tools sends the user's token and a tool-only query."""
+    """search_tools sends the user's token and does not filter by entity type.
 
-    def test_sends_bearer_and_tool_filter(self, monkeypatch):
+    A tool-only filter returns no tools, because search lifts tools out of
+    their server's results rather than indexing them on their own.
+    """
+
+    def test_sends_bearer_without_entity_filter(self, monkeypatch):
         seen = {}
 
         def handler(request: httpx.Request) -> httpx.Response:
@@ -130,7 +181,7 @@ class TestSearchTools:
 
         assert seen["url"] == "https://registry.example.com/api/search/semantic"
         assert seen["auth"] == "Bearer tok"
-        assert json.loads(seen["body"])["entity_types"] == ["tool"]
+        assert "entity_types" not in json.loads(seen["body"])
         assert len(tools) == 1
 
     def test_raises_on_401(self, monkeypatch):
