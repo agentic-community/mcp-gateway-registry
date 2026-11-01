@@ -61,6 +61,11 @@ INJECTED_METADATA = {
 async def _call_with_mocked_get(tool_func, payload, capture=None, **tool_kwargs):
     """Call a listing tool with the registry GET returning `payload`.
 
+    The tool now issues its request through the process-lifetime pooled client
+    (``servers/mcpgw/http_pool.py``), so the seam is ``shared_async_client`` plus
+    ``client.request(method, url, ...)`` rather than a per-call
+    ``httpx.AsyncClient`` context manager.
+
     Args:
         tool_func: The listing tool to call.
         payload: JSON body the mocked registry GET returns.
@@ -73,18 +78,16 @@ async def _call_with_mocked_get(tool_func, payload, capture=None, **tool_kwargs)
     mock_response.raise_for_status = MagicMock()
     mock_response.json.return_value = payload
 
-    async def mock_get(url, **kwargs):
+    async def mock_request(method, url, **kwargs):
         if capture is not None:
             capture.update(kwargs)
         return mock_response
 
     mock_client = AsyncMock()
-    mock_client.get = mock_get
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.request = mock_request
 
     with (
-        patch("servers.mcpgw.server.httpx.AsyncClient", return_value=mock_client),
+        patch("servers.mcpgw.server.shared_async_client", return_value=mock_client),
         patch("servers.mcpgw.server._extract_bearer_token", return_value="test-token"),
     ):
         return await tool_func(**tool_kwargs)
@@ -442,24 +445,28 @@ async def test_list_skills_skips_an_unparseable_record():
 
 
 async def _call_search_with_mocked_post(payload, capture=None, **tool_kwargs):
-    """Call search_registry with the registry POST returning `payload`."""
+    """Call search_registry with the registry POST returning `payload`.
+
+    The tool now issues its request through the process-lifetime pooled client
+    (``servers/mcpgw/http_pool.py``), so the seam is ``shared_async_client`` plus
+    ``client.request(method, url, ...)`` rather than a per-call
+    ``httpx.AsyncClient`` context manager.
+    """
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.raise_for_status = MagicMock()
     mock_response.json.return_value = payload
 
-    async def mock_post(url, **kwargs):
+    async def mock_request(method, url, **kwargs):
         if capture is not None:
             capture.update(kwargs)
         return mock_response
 
     mock_client = AsyncMock()
-    mock_client.post = mock_post
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.request = mock_request
 
     with (
-        patch("servers.mcpgw.server.httpx.AsyncClient", return_value=mock_client),
+        patch("servers.mcpgw.server.shared_async_client", return_value=mock_client),
         patch("servers.mcpgw.server._extract_bearer_token", return_value="test-token"),
     ):
         return await search_registry(**tool_kwargs)
