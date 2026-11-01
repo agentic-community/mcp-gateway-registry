@@ -204,7 +204,7 @@ result = await call_discovered_tool(tools[0], registry_url, token, {"query": "cr
 
 `call_discovered_tool` sends the token only to the registry's own origin, and refuses any `endpoint_url` on a different scheme, host or port, because a registrant controls that value. The gateway checks the user's grants on every call, but it cannot tell whether the user meant to make the call, so the application should ask the user before running a tool that changes anything.
 
-The same file runs as a command line tool, which is a quick way to check a token and a tool before wiring them into an agent:
+The same file runs as a command line tool, which is a quick way to check a token and a tool before wiring them into an agent. Several servers can offer a tool with the same name; add `--server-path` to pick one, or the tool runs on the first match and the log names the others:
 
 ```bash
 export REGISTRY_TOKEN=<access token from the registry UI>

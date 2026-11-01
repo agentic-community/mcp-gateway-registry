@@ -122,24 +122,53 @@ def _require_registry_origin(
         )
 
 
+def _tool_entries(
+    search_response: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Collect every tool entry in a search response, with its server's path and URL.
+
+    Search returns tools in two places: the top-level tools array, and the
+    matching_tools of each server and virtual server. A server's matching tools
+    carry no endpoint_url of their own, so this copies the server's onto them.
+    """
+    entries: list[dict[str, Any]] = list(search_response.get("tools") or [])
+    for group in ("servers", "virtual_servers"):
+        for server in search_response.get(group) or []:
+            for tool in server.get("matching_tools") or []:
+                entries.append(
+                    {
+                        **tool,
+                        "server_path": server.get("path", ""),
+                        "endpoint_url": server.get("endpoint_url"),
+                    }
+                )
+    return entries
+
+
 def _parse_tools(
     search_response: dict[str, Any],
 ) -> list[DiscoveredTool]:
-    """Turn the tools array of a semantic search response into DiscoveredTool objects.
+    """Turn a semantic search response into DiscoveredTool objects, best match first.
 
     Entries without an endpoint_url are skipped, because there is nothing to
-    call (for example, a local stdio server).
+    call (for example, a local stdio server). A tool that appears both at the
+    top level and under its server is kept once.
     """
     tools: list[DiscoveredTool] = []
-    for entry in search_response.get("tools") or []:
+    seen: set[tuple[str, str]] = set()
+    for entry in _tool_entries(search_response):
         endpoint_url = entry.get("endpoint_url")
         if not endpoint_url:
             logger.debug(f"Skipping {entry.get('tool_name')}: no endpoint_url")
             continue
+        key = (entry.get("server_path", ""), entry.get("tool_name", ""))
+        if key in seen:
+            continue
+        seen.add(key)
         tools.append(
             DiscoveredTool(
-                server_path=entry.get("server_path", ""),
-                tool_name=entry.get("tool_name", ""),
+                server_path=key[0],
+                tool_name=key[1],
                 endpoint_url=endpoint_url,
                 description=entry.get("description"),
                 input_schema=entry.get("inputSchema"),
@@ -210,6 +239,10 @@ Example usage:
         help=f"Number of search results (default: {DEFAULT_MAX_RESULTS})",
     )
     parser.add_argument("--tool", help="Name of a found tool to call")
+    parser.add_argument(
+        "--server-path",
+        help="Server path to call the tool on, when several servers offer the same tool",
+    )
     parser.add_argument("--arguments", default="{}", help="Tool arguments as a JSON object")
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
     return parser.parse_args()
@@ -224,13 +257,19 @@ async def _run(
 
     if not args.tool:
         for tool in tools:
-            print(f"{tool.tool_name}  ({tool.server_path})  {tool.description or ''}")
+            summary = (tool.description or "").strip().split("\n")[0]
+            print(f"{tool.tool_name}  ({tool.server_path})  {summary}")
         return 0
 
     matches = [tool for tool in tools if tool.tool_name == args.tool]
+    if args.server_path:
+        matches = [tool for tool in matches if tool.server_path == args.server_path]
     if not matches:
         logger.error(f"No tool named {args.tool} in the search results; try another query")
         return 1
+    if len(matches) > 1:
+        others = ", ".join(tool.server_path for tool in matches[1:])
+        logger.info(f"Using {matches[0].server_path}; also offered by {others} (see --server-path)")
 
     arguments = json.loads(args.arguments)
     if not isinstance(arguments, dict):
@@ -266,7 +305,7 @@ async def search_tools(
         raise ValueError(f"max_results must be 1 to {MAX_RESULTS_LIMIT}, got {max_results}")
 
     url = registry_url.rstrip("/") + SEARCH_PATH
-    payload = {"query": query, "entity_types": ["tool"], "max_results": max_results}
+    payload = {"query": query, "max_results": max_results}
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
         response = await client.post(url, json=payload, headers=_auth_headers(token))
         response.raise_for_status()
