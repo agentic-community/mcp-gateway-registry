@@ -188,6 +188,31 @@ AI: "Cloudflare's docs say a Worker declares cron triggers in wrangler.toml..."
 
 Each request goes through the gateway as the user, so the gateway applies the user's own grants to every call. The client asks the user to approve each shell command, and the approval prompt shows the tool name and its arguments. If the server needs the user to connect an account first (third-party OAuth), the result carries a connect URL. The agent shows that URL to the user and retries once the user has connected.
 
+### For Agents Your Application Runs
+
+An agent built in code (LangGraph, Strands, the Claude Agent SDK, a hosted bot) does not need a person to add each server. The application holds the user's token and opens the MCP session itself, so the model never sees the token. [`agents/discovered_tool_client.py`](../agents/discovered_tool_client.py) shows the pattern in two functions:
+
+- `search_tools(registry_url, token, query)` calls the registry's semantic search and returns each matching tool with its `endpoint_url` and `inputSchema`.
+- `call_discovered_tool(tool, registry_url, token, arguments)` opens an MCP session to that `endpoint_url` through the gateway and calls the tool.
+
+```python
+from discovered_tool_client import call_discovered_tool, search_tools
+
+tools = await search_tools(registry_url, token, "cloudflare documentation")
+result = await call_discovered_tool(tools[0], registry_url, token, {"query": "cron triggers"})
+```
+
+`call_discovered_tool` sends the token only to the registry's own origin, and refuses any `endpoint_url` on a different scheme, host or port, because a registrant controls that value. The gateway checks the user's grants on every call, but it cannot tell whether the user meant to make the call, so the application should ask the user before running a tool that changes anything.
+
+The same file runs as a command line tool, which is a quick way to check a token and a tool before wiring them into an agent:
+
+```bash
+export REGISTRY_TOKEN=<access token from the registry UI>
+uv run python agents/discovered_tool_client.py --registry-url https://registry.example.com \
+    --query "cloudflare documentation" \
+    --tool search_cloudflare_documentation --arguments '{"query": "cron triggers"}'
+```
+
 ### For Development Workflows
 
 - **Tool discovery during development** - Find the right MCP tool before building custom solutions
