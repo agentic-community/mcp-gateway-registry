@@ -673,6 +673,7 @@ module "ecs_service_auth" {
         {
           name  = "EGRESS_FORWARD_PROXY_CA_BUNDLE"
           value = var.egress_forward_proxy_ca_bundle
+        },
         # Enabling the OBO exchanged-token cache makes the
         # auth-server a SecretStore client (previously only the registry was),
         # so it now carries the same secret-store backend env as the registry.
