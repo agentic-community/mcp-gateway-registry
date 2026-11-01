@@ -224,7 +224,7 @@ class TestKeycloakExchangeBody:
         cap: dict = {}
         _patch_post(monkeypatch, _FakeResponse(200, {"access_token": "obo-tok"}), cap)
 
-        token = await obo_exchange(
+        token, _ = await obo_exchange(
             _FakeKeycloakProvider(),
             subject_token="ingress-jwt",
             target_audience="finance-mcp-server",
@@ -400,7 +400,7 @@ class TestKeycloakExchangedTokenGuard:
         cap: dict = {}
         _patch_post(monkeypatch, _FakeResponse(200, {"access_token": "obo-tok"}), cap)
         provider = _FakeKeycloakProvider()
-        token = await obo_exchange(
+        token, _ = await obo_exchange(
             provider, subject_token="j", target_audience="finance-mcp-server"
         )
         assert token == "obo-tok"
@@ -508,7 +508,7 @@ class TestKeycloakExchangedTokenGuard:
         """The check covers the Keycloak branch only."""
         cap: dict = {}
         _patch_post(monkeypatch, _FakeResponse(200, {"access_token": "obo-tok"}), cap)
-        token = await obo_exchange(
+        token, _ = await obo_exchange(
             _FakeEntraProvider(), subject_token="j", target_audience="api://srv"
         )
         assert token == "obo-tok"

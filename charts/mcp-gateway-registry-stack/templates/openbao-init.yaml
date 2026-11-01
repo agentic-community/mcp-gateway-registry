@@ -303,7 +303,7 @@ spec:
                 path \"$KV_MOUNT/metadata/$EGRESS_PREFIX/b2JvLWNhY2hl/*\" { capabilities = [\"read\",\"list\"] }"
                 bao_api PUT sys/policies/acl/mcp-obo-cache "$(jq -nc --arg p "$OBO_POLICY" '{policy:$p}')" >/dev/null
                 echo "creating role $OBO_ROLE (sa=$AUTH_SERVER_SA ns=$NAMESPACE)..."
-                bao_api POST "auth/kubernetes/role/$OBO_ROLE" \
+                bao_api POST "auth/$AUTH_MOUNT/role/$OBO_ROLE" \
                   "$(jq -nc --arg sa "$AUTH_SERVER_SA" --arg ns "$NAMESPACE" \
                     '{bound_service_account_names:$sa,bound_service_account_namespaces:$ns,policies:"mcp-obo-cache",ttl:"1h"}')" >/dev/null
               fi
