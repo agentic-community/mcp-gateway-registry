@@ -822,6 +822,17 @@ sanitizer that isn't called) is equivalent to no check.
   userinfo paths, because a validator that one reading skips is the reading an
   attacker uses.
 - **A relaxed check for a name the gateway invents is safe only if the gateway answers that name on every path and never forwards it.** Issue #1860 added a synthetic `connect_mcpgw_<server>` tool that `tools/list` returns before egress consent. It is authorized like `tools/list`, so a user with access to the server can call it without a grant for that tool. If the gateway answered it only while consent was pending and forwarded it afterwards, a backend tool with the same name would run with the user's vaulted credential under the weaker check. The rule has three parts. Answer the invented name at the gateway in every state: `_connect_tool_local_result` in `auth_server/server.py` covers the connected, OBO and non-egress cases. Match on the one exact name derived for the server. Grant the relaxed check only on routes where every request reaches the answering hop: direct routes, which nginx always sends to `/mcp-proxy` (pinned by `test_direct_route_location_only_proxies_to_mcp_proxy`). Virtual routes get no exemption, because nginx proxies their non-egress backends straight to the backend. A hop token that lacks the route claim gets none either.
+- **A cache in front of a token exchange must re-establish what the exchange checked.** Without the cache, the IdP
+  verifies the subject token on every exchange, so the gateway never needed to: on a cookie-authenticated
+  request `/validate` verifies the cookie and never the bearer header, and the OBO hop compared only the
+  bearer's unverified `sub`. When a cache or shortcut replaces a call to another party, list everything
+  that party checked (signature, expiry, revocation, conditional access) and either re-check it locally
+  or prove the caller already did. Here `/validate` signs a digest of the exact bearer it verified with
+  an OBO-capable IdP into the hop token, and the hop serves from the cache only when its subject token
+  matches; every other request still exchanges. Bound what the skipped checks can miss with a short
+  reuse window (`EGRESS_OBO_CACHE_MAX_TTL_SECONDS`). A data-plane service that starts caching credentials also gets the
+  narrowest store access that works: an in-process handle clamped to its own namespace, plus a backend policy scoped to
+  that namespace's path, created only when the feature is on.
 
 ## Identity-provider self-registration (DCR)
 

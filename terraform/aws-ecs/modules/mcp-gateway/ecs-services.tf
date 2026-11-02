@@ -804,6 +804,17 @@ module "ecs_service_auth" {
             name      = "METRICS_API_KEY"
             valueFrom = aws_secretsmanager_secret.metrics_api_key[0].arn
           }
+        ] : [],
+        # Application-layer encryption of cached OBO tokens: the same key the
+        # registry uses, injected only when an operator supplied one AND the OBO
+        # exchanged-token cache is enabled (the auth-server stores nothing
+        # otherwise). The auth task execution role already reads this secret via
+        # ecs_secrets_access.
+        var.egress_credential_encryption_key != "" && var.egress_obo_cache_enabled ? [
+          {
+            name      = "EGRESS_CREDENTIAL_ENCRYPTION_KEY"
+            valueFrom = aws_secretsmanager_secret.egress_credential_encryption_key[0].arn
+          }
         ] : []
       )
 

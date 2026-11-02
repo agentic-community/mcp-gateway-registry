@@ -141,7 +141,7 @@ resource "aws_secretsmanager_secret" "egress_credential_encryption_key" {
   count = var.egress_credential_encryption_key != "" ? 1 : 0
 
   name_prefix             = "${local.name_prefix}-egress-cred-enc-key-"
-  description             = "AES-256-GCM key used by the registry to encrypt per-user egress credentials at rest"
+  description             = "AES-256-GCM key used by the registry (and the auth-server when the OBO cache is enabled) to encrypt egress credentials at rest"
   recovery_window_in_days = 0
   kms_key_id              = aws_kms_key.secrets.id
   tags                    = local.common_tags

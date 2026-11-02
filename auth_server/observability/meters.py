@@ -243,7 +243,11 @@ obo_exchange_failure = _meter.create_counter(
 
 obo_cache_store_error = _meter.create_counter(
     name="mcpgw_obo_cache_store_error_total",
-    description="OBO cache SecretStore ops that degraded / failed closed, labeled by op (get | put)",
+    description=(
+        "OBO cache SecretStore and lease ops that degraded or failed closed, labeled by "
+        "op (get | put | lease) and kind (backend: store/lease outage or timeout; "
+        "unexpected: a programming or contract error, also logged at ERROR)"
+    ),
     unit="1",
 )
 

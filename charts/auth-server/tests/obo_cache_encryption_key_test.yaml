@@ -1,0 +1,58 @@
+suite: OBO cache application-layer encryption key (issue 1666)
+templates:
+  - secret.yaml
+release:
+  name: test
+  namespace: default
+# The auth-server stores exchanged OBO tokens only when the cache is on, so the
+# key the registry uses to encrypt egress credentials is rendered into the
+# auth-server env secret only then, and only when an operator supplied one.
+tests:
+  - it: renders the key when the cache is on and the key is set
+    set:
+      app:
+        secretKey: "test-key-not-for-prod"  # pragma: allowlist secret
+      egressAuth:
+        markerSecret: "test-marker-not-for-prod"  # pragma: allowlist secret
+        oboCacheEnabled: "true"
+        credentialEncryptionKey: "test-obo-key-not-for-prod-0123456789abcdef"  # pragma: allowlist secret
+    asserts:
+      - equal:
+          path: data.EGRESS_CREDENTIAL_ENCRYPTION_KEY
+          value: dGVzdC1vYm8ta2V5LW5vdC1mb3ItcHJvZC0wMTIzNDU2Nzg5YWJjZGVm  # pragma: allowlist secret
+
+  - it: still renders the key in stack mode (sharedSecretName set)
+    set:
+      global:
+        sharedSecretName: test-shared-secret  # pragma: allowlist secret
+      egressAuth:
+        oboCacheEnabled: "true"
+        credentialEncryptionKey: "test-obo-key-not-for-prod-0123456789abcdef"  # pragma: allowlist secret
+    asserts:
+      - equal:
+          path: data.EGRESS_CREDENTIAL_ENCRYPTION_KEY
+          value: dGVzdC1vYm8ta2V5LW5vdC1mb3ItcHJvZC0wMTIzNDU2Nzg5YWJjZGVm  # pragma: allowlist secret
+
+  - it: omits the key when the cache is off even if the key is set
+    set:
+      app:
+        secretKey: "test-key-not-for-prod"  # pragma: allowlist secret
+      egressAuth:
+        markerSecret: "test-marker-not-for-prod"  # pragma: allowlist secret
+        oboCacheEnabled: "false"
+        credentialEncryptionKey: "test-obo-key-not-for-prod-0123456789abcdef"  # pragma: allowlist secret
+    asserts:
+      - notExists:
+          path: data.EGRESS_CREDENTIAL_ENCRYPTION_KEY
+
+  - it: omits the key when the cache is on but the key is empty
+    set:
+      app:
+        secretKey: "test-key-not-for-prod"  # pragma: allowlist secret
+      egressAuth:
+        markerSecret: "test-marker-not-for-prod"  # pragma: allowlist secret
+        oboCacheEnabled: "true"
+        credentialEncryptionKey: ""
+    asserts:
+      - notExists:
+          path: data.EGRESS_CREDENTIAL_ENCRYPTION_KEY

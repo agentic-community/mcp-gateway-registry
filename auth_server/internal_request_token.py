@@ -229,6 +229,7 @@ def mint_mcp_proxy_token(
     audit_identity: dict | None = None,
     version_id: str = "",
     virtual_backend: bool = False,
+    obo_subject_sha256: str = "",
 ) -> str:
     """Mint the per-request /mcp-proxy token in /validate's 200 path.
 
@@ -264,6 +265,15 @@ def mint_mcp_proxy_token(
     the verified ``sub`` principal. Chosen over deleting the guard, which would
     sign ``"audit_identity": null`` on those paths.
 
+    ``obo_subject_sha256`` is the SHA-256 hex digest of the bearer JWT that
+    /validate verified with the configured OBO-capable IdP. The mcp-proxy hop
+    serves an OBO token from its cache only when the subject token it holds
+    hashes to this value: on a cookie-authenticated request /validate never
+    verifies the bearer header, and a cache hit skips the IdP exchange that would
+    otherwise reject a forged or expired assertion. Omitted when empty (cookie,
+    self-signed, static-credential and non-OBO-IdP callers), which disables the
+    cache for that request.
+
     Raises:
         ValueError: The subject is empty or ``SECRET_KEY`` is unset.
         InternalTokenTooLargeError: The minted token exceeds
@@ -283,6 +293,8 @@ def mint_mcp_proxy_token(
     }
     if audit_identity:
         extra_claims["audit_identity"] = audit_identity
+    if obo_subject_sha256:
+        extra_claims["obo_subject_sha256"] = obo_subject_sha256
     return _mint_internal_token(
         audience=MCP_PROXY_AUDIENCE,
         subject=subject,

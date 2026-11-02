@@ -88,9 +88,10 @@ resource "aws_iam_policy" "ecs_egress_vault_access" {
             "secretsmanager:DescribeSecret",
             "secretsmanager:ListSecretVersionIds"
           ]
-          # Scope to the egress path prefix only. Secrets Manager ARNs append a
-          # random 6-char suffix, so the wildcard covers "<prefix>/*-??????".
-          Resource = "arn:aws:secretsmanager:*:*:secret:${var.egress_secrets_manager_path_prefix}/*"
+          # Scope to the egress path prefix in this deployment's region and
+          # account only. Secrets Manager ARNs append a random 6-char suffix, so
+          # the wildcard covers "<prefix>/*-??????".
+          Resource = "arn:${data.aws_partition.current.partition}:secretsmanager:${data.aws_region.current.id}:${data.aws_caller_identity.current.account_id}:secret:${var.egress_secrets_manager_path_prefix}/*"
         }
       ],
       # KMS only when a customer-managed CMK is configured; the AWS-managed key
@@ -131,14 +132,17 @@ resource "aws_iam_policy" "ecs_auth_server_obo_cache_vault_access" {
             "secretsmanager:CreateSecret",
             "secretsmanager:GetSecretValue",
             "secretsmanager:PutSecretValue",
-            "secretsmanager:DescribeSecret",
-            "secretsmanager:ListSecretVersionIds"
+            "secretsmanager:DeleteSecret"
           ]
-          # Scoped to the reserved OBO-cache namespace ONLY:
+          # Scoped to the reserved OBO-cache namespace ONLY, in this deployment's
+          # region and account:
           # "<prefix>/<enc('obo-cache')>/*" where enc = base64url(NFC(...)) unpadded.
-          # SM appends a random 6-char suffix, so /* covers "<...>/*-??????". No
-          # DeleteSecret: the cache never deletes (near-expiry is a plain miss).
-          Resource = "arn:aws:secretsmanager:*:*:secret:${var.egress_secrets_manager_path_prefix}/b2JvLWNhY2hl/*"
+          # SM appends a random 6-char suffix, so /* covers "<...>/*-??????".
+          # Actions are exactly what the Secrets Manager store calls. The cache
+          # never deletes entries (near-expiry is a plain miss), but the store
+          # deletes its own obsolete overflow shards and failed staging shards,
+          # so DeleteSecret is granted, still only under this namespace.
+          Resource = "arn:${data.aws_partition.current.partition}:secretsmanager:${data.aws_region.current.id}:${data.aws_caller_identity.current.account_id}:secret:${var.egress_secrets_manager_path_prefix}/b2JvLWNhY2hl/*"
         }
       ],
       # KMS only when a customer-managed CMK is configured.

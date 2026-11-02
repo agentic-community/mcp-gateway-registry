@@ -308,6 +308,13 @@ egressAuth:
   # Never reuse a cached OBO token within this many seconds of its expiry. Must be
   # < oboCacheMaxTtlSeconds.
   oboCacheExpirySkewSeconds: "30"
+  # Application-layer AES-256-GCM key for cached OBO tokens. Used only when
+  # oboCacheEnabled is "true" (rendered into the chart env secret as
+  # EGRESS_CREDENTIAL_ENCRYPTION_KEY). Should match
+  # registry.egressAuth.credentialEncryptionKey. Empty disables application-layer
+  # encryption of cached OBO tokens (they are stored as plaintext in the
+  # secret store).
+  credentialEncryptionKey: ""
   # nginx marker secret. REQUIRED for standalone deployment (chart render fails
   # if empty). It guards all internal-token minting (registry API, mcp-proxy,
   # generic proxy), so a mismatch with the registry 401s every registry API

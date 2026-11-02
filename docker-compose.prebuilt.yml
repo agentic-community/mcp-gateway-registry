@@ -524,6 +524,10 @@ services:
       - EGRESS_OBO_CACHE_ENABLED=${EGRESS_OBO_CACHE_ENABLED:-false}
       - EGRESS_OBO_CACHE_MAX_TTL_SECONDS=${EGRESS_OBO_CACHE_MAX_TTL_SECONDS:-300}
       - EGRESS_OBO_CACHE_EXPIRY_SKEW_SECONDS=${EGRESS_OBO_CACHE_EXPIRY_SKEW_SECONDS:-30}
+      # Application-layer encryption of cached OBO tokens. Same key and strict
+      # flag as the registry; only read when EGRESS_OBO_CACHE_ENABLED=true.
+      - EGRESS_CREDENTIAL_ENCRYPTION_KEY=${EGRESS_CREDENTIAL_ENCRYPTION_KEY:-}
+      - EGRESS_CREDENTIAL_ENCRYPTION_REQUIRE_ENCRYPTED=${EGRESS_CREDENTIAL_ENCRYPTION_REQUIRE_ENCRYPTED:-false}
       - SECRET_STORE_BACKEND=${SECRET_STORE_BACKEND:-openbao}
       - AWS_SECRETS_REGION=${AWS_SECRETS_REGION:-}
       - SECRETS_MANAGER_KMS_KEY_ID=${SECRETS_MANAGER_KMS_KEY_ID:-}
@@ -535,9 +539,12 @@ services:
       - OPENBAO_KV_MOUNT=${OPENBAO_KV_MOUNT:-secret}
       - OPENBAO_AUTH_METHOD=${OPENBAO_AUTH_METHOD:-token}
       - OPENBAO_ROLE=${OPENBAO_ROLE:-}
-      # Static token for OPENBAO_AUTH_METHOD=token; matches the dev OpenBao root
-      # token. Required for token auth (kubernetes auth is EKS-only).
-      - OPENBAO_TOKEN=${OPENBAO_TOKEN:?Set OPENBAO_TOKEN in .env (a strong random value; do not reuse the old dev-root-token default)}
+      # Static token for OPENBAO_AUTH_METHOD=token. Only needed when
+      # EGRESS_OBO_CACHE_ENABLED=true; empty by default so the auth-server holds
+      # no vault credential. Compose has no namespace scoping, so whatever token
+      # is set here (typically the dev root token) can read every stored
+      # credential.
+      - OPENBAO_TOKEN=${AUTH_SERVER_OPENBAO_TOKEN:-}
       - AUTH_SERVER_NGINX_MARKER_SECRET=${AUTH_SERVER_NGINX_MARKER_SECRET:-}
       - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID}
       - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET}

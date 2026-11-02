@@ -4296,6 +4296,7 @@ def _mcp_proxy_token_headers(
     scopes: list[str] | None = None,
     audit_identity: dict | None = None,
     virtual_backend: bool = False,
+    obo_subject_sha256: str = "",
 ) -> dict:
     """Build the X-Internal-Token nginx would forward to /mcp-proxy.
 
@@ -4318,6 +4319,7 @@ def _mcp_proxy_token_headers(
         upstream_url=upstream_url,
         audit_identity=audit_identity,
         virtual_backend=virtual_backend,
+        obo_subject_sha256=obo_subject_sha256,
     )
     return {
         "X-Internal-Token": token,
@@ -5109,6 +5111,106 @@ class TestMcpProxyOboExchange:
             emitted.append(kwargs)
 
         return patch.object(server_module, "_emit_token_mint_audit", _record), emitted
+
+    class _FakeOboCache:
+        """Stands in for the lifespan-built OboTokenCache on the hop."""
+
+        def __init__(self, from_cache: bool):
+            self.calls = 0
+            self._from_cache = from_cache
+
+        async def get_or_exchange(self, **kwargs):
+            from auth_server.obo_token_cache import OboToken
+
+            self.calls += 1
+            return OboToken("cached-obo-token", from_cache=self._from_cache)
+
+    def _post_obo(self, server_module, *, hop_digest: str, ingress_jwt: str, cache, exchange):
+        """Drive one OBO tools/call through the hop with the given cache and digest."""
+        patch_httpx, captured = _capture_upstream_headers()
+        patch_audit, emitted = self._capture_mint_audit(server_module)
+        with (
+            patch.object(server_module.settings, "egress_auth_enabled", True),
+            patch.object(server_module, "_vend_egress_token", self._obo_directive_vend),
+            patch.object(server_module, "get_auth_provider", lambda *a, **k: _FakeEntraProvider()),
+            patch.object(server_module, "obo_exchange", exchange),
+            patch.object(server_module, "_obo_cache", cache),
+            patch.object(server_module, "_read_mcp_filter_enabled", return_value=False),
+            _patch_scope_repo_allow_all(),
+            patch_httpx,
+            patch_audit,
+        ):
+            response = TestClient(server_module.app).post(
+                "/mcp-proxy/outlook",
+                json={"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": {}},
+                headers={
+                    **_mcp_proxy_token_headers(
+                        server_name="outlook", obo_subject_sha256=hop_digest
+                    ),
+                    "X-Authorization": f"Bearer {ingress_jwt}",
+                },
+            )
+        return response, captured, emitted
+
+    @pytest.mark.parametrize(
+        "hop_digest",
+        ["", "digest-of-a-different-token"],
+        ids=["no-verified-bearer", "digest-mismatch"],
+    )
+    def test_obo_cache_needs_the_bearer_validate_verified(self, hop_digest):
+        """A cookie-authenticated request carries no digest, and a forged bearer
+        does not match one, so the hop must exchange (the IdP checks the
+        assertion) instead of serving that user's cached token."""
+        import auth_server.server as server_module
+
+        ingress_jwt = _forged_ingress_jwt("test-user")
+        exchanged = {"n": 0}
+
+        async def _fake_exchange(provider, subject_token, target_audience, scopes=None):
+            exchanged["n"] += 1
+            return "exchanged-obo-token", 3600
+
+        cache = self._FakeOboCache(from_cache=True)
+        response, captured, emitted = self._post_obo(
+            server_module,
+            hop_digest=hop_digest,
+            ingress_jwt=ingress_jwt,
+            cache=cache,
+            exchange=_fake_exchange,
+        )
+
+        assert response.status_code == 200
+        assert cache.calls == 0
+        assert exchanged["n"] == 1
+        sent = {k.lower(): v for k, v in captured["headers"].items()}
+        assert sent["authorization"] == "Bearer exchanged-obo-token"
+        assert emitted[0]["token_path"] == "obo_exchange"
+
+    def test_obo_cache_hit_is_audited_as_obo_cache(self):
+        """With the verified-bearer digest the hop uses the cache, and a hit is
+        recorded as token_path=obo_cache because the IdP minted nothing."""
+        import auth_server.server as server_module
+
+        ingress_jwt = _obo_ingress_jwt("test-user")
+
+        async def _no_exchange(provider, subject_token, target_audience, scopes=None):
+            raise AssertionError("a cache hit must not exchange")
+
+        cache = self._FakeOboCache(from_cache=True)
+        response, captured, emitted = self._post_obo(
+            server_module,
+            hop_digest=server_module._obo_subject_digest(ingress_jwt),
+            ingress_jwt=ingress_jwt,
+            cache=cache,
+            exchange=_no_exchange,
+        )
+
+        assert response.status_code == 200
+        assert cache.calls == 1
+        sent = {k.lower(): v for k, v in captured["headers"].items()}
+        assert sent["authorization"] == "Bearer cached-obo-token"
+        assert emitted[0]["token_path"] == "obo_cache"
+        assert emitted[0]["outcome"] == "success"
 
     # The audit identity /validate would have signed into the hop token for an
     # Entra delegated caller, keyed on sub=test-user so the OBO principal binding passes.

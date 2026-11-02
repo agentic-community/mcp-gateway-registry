@@ -159,3 +159,58 @@ tests:
           content:
             name: AUTH_MOUNT
             value: kubernetes
+
+  - it: Job provisions the scoped auth-server OBO-cache role and policy when the cache is on
+    documentIndex: 3
+    set:
+      registry: {egressAuth: {enabled: true, openbao: {authMethod: kubernetes}}}
+      openbao: {enabled: true}
+      auth-server: {egressAuth: {oboCacheEnabled: "true"}}
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OBO_CACHE_ENABLED
+            value: "true"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AUTH_SERVER_SA
+            value: auth-server
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OBO_ROLE
+            value: auth-server-obo-cache
+      # Policy is scoped to the reserved "obo-cache" namespace segment only.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'data/\$EGRESS_PREFIX/b2JvLWNhY2hl/\*'
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'auth/\$AUTH_MOUNT/role/\$OBO_ROLE'
+
+  - it: Job binds the OBO role to a custom auth-server ServiceAccount name
+    documentIndex: 3
+    set:
+      registry: {egressAuth: {enabled: true, openbao: {authMethod: kubernetes}}}
+      openbao: {enabled: true}
+      auth-server: {egressAuth: {oboCacheEnabled: "true"}, serviceAccount: {name: custom-auth-sa}}
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: AUTH_SERVER_SA
+            value: custom-auth-sa
+
+  - it: Job leaves the OBO-cache step disabled when the cache is off (default)
+    documentIndex: 3
+    set:
+      registry: {egressAuth: {enabled: true, openbao: {authMethod: kubernetes}}}
+      openbao: {enabled: true}
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OBO_CACHE_ENABLED
+            value: "false"

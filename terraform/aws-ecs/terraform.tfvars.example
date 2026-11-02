@@ -1519,11 +1519,13 @@ aws_registry_federation_enabled = true
 # egress_registry_internal_url       = "http://registry:8091"   # dedicated internal vend listener (not the ALB-fronted :8080)
 # egress_secrets_manager_kms_key_id  = ""   # optional CMK; empty uses the AWS-managed key
 # egress_secrets_manager_path_prefix = "mcp/egress"
-# Registry-only AES-256-GCM key that encrypts per-user egress credentials at rest
-# before they reach Secrets Manager / OpenBao. Empty (the default) disables
-# encryption (legacy plaintext) so existing deployments are unaffected; set a
-# strong value to enable. Never auto-generated. When set, it is provisioned as a
-# dedicated Secrets Manager secret and injected into the registry task.
+# AES-256-GCM key that encrypts per-user egress credentials at rest before they
+# reach Secrets Manager / OpenBao. Empty (the default) disables encryption
+# (legacy plaintext) so existing deployments are unaffected; set a strong value
+# to enable. Never auto-generated. When set, it is provisioned as a dedicated
+# Secrets Manager secret and injected into the registry task, and also into the
+# auth-server task when egress_obo_cache_enabled = true (it encrypts cached OBO
+# tokens the same way).
 # egress_credential_encryption_key   = ""
 
 # nginx marker secret shared by auth-server + registry. REQUIRED unconditionally

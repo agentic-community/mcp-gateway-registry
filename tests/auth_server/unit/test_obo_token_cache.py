@@ -11,16 +11,23 @@ exactly one exchange.
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from pymongo.errors import PyMongoError
 
 from auth_server import obo_token_cache as otc
 from auth_server.egress_obo import _TOKEN_EXCHANGE_TIMEOUT_SECONDS, OboExchangeError
 from auth_server.obo_token_cache import OboTokenCache, _obo_identity
+from registry.core.nginx_service import MCP_PROXY_NGINX_READ_TIMEOUT_BUFFER_SECONDS
 from registry.egress_auth.schemas import StoredToken
 from registry.egress_auth.service import is_per_user_auth_method
+from registry.secrets import keys
 from registry.secrets.interfaces import SecretStoreError
+from registry.secrets.openbao.store import OpenBaoStore
+from registry.secrets.secrets_manager.store import SecretsManagerStore
+from tests.unit.secrets.test_stores import _FakeHvacClient
 
 
 class _EntraProvider:
@@ -28,8 +35,15 @@ class _EntraProvider:
 
 
 class _FakeStore:
+    """In-memory store with the real ``SecretStoreBase`` keyword-only ``purpose``.
+
+    ``purpose`` is required (no default) so a caller that drops it fails here the
+    same way it fails against the real backends.
+    """
+
     def __init__(self):
         self.data: dict = {}
+        self.purposes: set[str] = set()
         self.get_calls = 0
         self.put_calls = 0
         self.delete_calls = 0
@@ -37,21 +51,23 @@ class _FakeStore:
         self.put_error: Exception | None = None
         self.get_delay = 0.0
 
-    async def get_token(self, auth_method, user_id, provider, server_path):
+    async def get_token(self, auth_method, user_id, provider, server_path, *, purpose):
         self.get_calls += 1
+        self.purposes.add(purpose)
         if self.get_delay:
             await asyncio.sleep(self.get_delay)
         if self.get_error:
             raise self.get_error
         return self.data.get((auth_method, user_id, provider, server_path))
 
-    async def put_token(self, auth_method, user_id, provider, server_path, token):
+    async def put_token(self, auth_method, user_id, provider, server_path, token, *, purpose):
         self.put_calls += 1
+        self.purposes.add(purpose)
         if self.put_error:
             raise self.put_error
         self.data[(auth_method, user_id, provider, server_path)] = token
 
-    async def delete_token(self, auth_method, user_id, provider, server_path):
+    async def delete_token(self, auth_method, user_id, provider, server_path, *, purpose):
         self.delete_calls += 1
         self.data.pop((auth_method, user_id, provider, server_path), None)
 
@@ -121,8 +137,8 @@ def _patch_exchange(monkeypatch, *, token="tok", expires_in=3600, raises=None, d
     return calls
 
 
-def _cache(store, lease, *, enabled=True, max_ttl_s=300, skew_s=30, **kw):
-    return OboTokenCache(store, lease, enabled=enabled, max_ttl_s=max_ttl_s, skew_s=skew_s, **kw)
+def _cache(store, lease, *, max_ttl_s=300, skew_s=30, **kw):
+    return OboTokenCache(store, lease, max_ttl_s=max_ttl_s, skew_s=skew_s, **kw)
 
 
 def _call(**overrides):
@@ -140,19 +156,11 @@ def _call(**overrides):
 @pytest.mark.unit
 class TestOboTokenCache:
     @pytest.mark.asyncio
-    async def test_disabled_delegates_no_store(self, monkeypatch):
-        calls = _patch_exchange(monkeypatch)
-        store, lease = _FakeStore(), _FakeLease()
-        tok = await _cache(store, lease, enabled=False).get_or_exchange(**_call())
-        assert tok == "tok"
-        assert calls["n"] == 1
-        assert store.get_calls == 0 and store.put_calls == 0
-
-    @pytest.mark.asyncio
     async def test_empty_egress_user_bypasses_cache(self, monkeypatch):
         calls = _patch_exchange(monkeypatch)
         store, lease = _FakeStore(), _FakeLease()
-        await _cache(store, lease).get_or_exchange(**_call(egress_user=""))
+        result = await _cache(store, lease).get_or_exchange(**_call(egress_user=""))
+        assert result == ("tok", False)
         assert calls["n"] == 1
         assert store.get_calls == 0 and store.put_calls == 0
 
@@ -161,11 +169,13 @@ class TestOboTokenCache:
         calls = _patch_exchange(monkeypatch)
         store, lease = _FakeStore(), _FakeLease()
         cache = _cache(store, lease)
-        a = await cache.get_or_exchange(**_call())
-        b = await cache.get_or_exchange(**_call())
-        assert a == b == "tok"
-        assert calls["n"] == 1  # second call was a cache hit
+        first = await cache.get_or_exchange(**_call())
+        second = await cache.get_or_exchange(**_call())
+        assert first == ("tok", False)  # exchanged
+        assert second == ("tok", True)  # served from the cache
+        assert calls["n"] == 1
         assert store.put_calls == 1
+        assert store.purposes == {keys.EGRESS_PURPOSE}
 
     @pytest.mark.asyncio
     async def test_keys_on_egress_user(self, monkeypatch):
@@ -244,33 +254,50 @@ class TestOboTokenCache:
         calls = _patch_exchange(monkeypatch)
         store, lease = _FakeStore(), _FakeLease()
         store.get_error = SecretStoreError("store down")
-        tok = await _cache(store, lease).get_or_exchange(**_call())
-        assert tok == "tok" and calls["n"] == 1  # error == miss, exchange proceeds
+        result = await _cache(store, lease).get_or_exchange(**_call())
+        assert result.access_token == "tok" and calls["n"] == 1  # error == miss
 
     @pytest.mark.asyncio
     async def test_get_timeout_is_miss(self, monkeypatch):
         calls = _patch_exchange(monkeypatch)
         store, lease = _FakeStore(), _FakeLease()
         store.get_delay = 0.3
-        tok = await _cache(store, lease, get_timeout_s=0.05).get_or_exchange(**_call())
-        assert tok == "tok" and calls["n"] == 1  # slow store -> timeout -> miss
+        result = await _cache(store, lease, get_timeout_s=0.05).get_or_exchange(**_call())
+        assert result.access_token == "tok" and calls["n"] == 1  # slow store -> miss
 
     @pytest.mark.asyncio
     async def test_write_error_still_returns_token(self, monkeypatch):
         calls = _patch_exchange(monkeypatch)
         store, lease = _FakeStore(), _FakeLease()
         store.put_error = SecretStoreError("write conflict")
-        tok = await _cache(store, lease).get_or_exchange(**_call())
-        assert tok == "tok" and calls["n"] == 1  # write failed but the token is returned
+        result = await _cache(store, lease).get_or_exchange(**_call())
+        assert result.access_token == "tok" and calls["n"] == 1  # token still returned
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("op", ["get", "put"])
+    async def test_unexpected_store_error_logs_error_and_degrades(self, monkeypatch, caplog, op):
+        # A contract or programming error (the purpose-kwarg TypeError that once
+        # made the cache a silent no-op) must not hide at DEBUG.
+        calls = _patch_exchange(monkeypatch)
+        store, lease = _FakeStore(), _FakeLease()
+        setattr(store, f"{op}_error", TypeError("contract drift"))
+        with caplog.at_level(logging.ERROR, logger=otc.__name__):
+            result = await _cache(store, lease).get_or_exchange(**_call())
+        assert result.access_token == "tok" and calls["n"] == 1
+        assert any(
+            r.levelno == logging.ERROR and f"unexpected {op}_token error" in r.getMessage()
+            for r in caplog.records
+        )
 
     @pytest.mark.asyncio
     async def test_lease_backend_error_degrades(self, monkeypatch):
         calls = _patch_exchange(monkeypatch)
         store, lease = _FakeStore(), _FakeLease()
-        lease.acquire_error = RuntimeError("mongo down")
-        tok = await _cache(store, lease).get_or_exchange(**_call())
+        lease.acquire_error = PyMongoError("mongo down")
+        result = await _cache(store, lease).get_or_exchange(**_call())
         # Exchange-without-single-flight: a lease-backend error never blocks the call.
-        assert tok == "tok" and calls["n"] == 1
+        assert result.access_token == "tok" and calls["n"] == 1
+        assert store.put_calls == 0  # no fence, so no store
 
     @pytest.mark.asyncio
     async def test_exchange_error_propagates(self, monkeypatch):
@@ -279,26 +306,39 @@ class TestOboTokenCache:
         with pytest.raises(OboExchangeError):
             await _cache(store, lease).get_or_exchange(**_call())
 
-    def test_lease_ttl_covers_full_hold_and_beats_wait(self):
-        # Lease TTL covers get + exchange + put (+margin), independent of skew, and
-        # the waiter always outlasts it (promotion-not-stampede invariant).
+    def test_lease_ttl_covers_full_hold(self):
+        # The lease must outlive the holder's bounded hold (re-read + exchange +
+        # write), independent of skew, or a waiter could run a duplicate exchange.
         c0 = _cache(_FakeStore(), _FakeLease(), skew_s=0)
-        assert c0._lease_ttl_s == int(2 * c0._get_timeout_s + _TOKEN_EXCHANGE_TIMEOUT_SECONDS) + 5
-        assert c0._lease_ttl_s > int(_TOKEN_EXCHANGE_TIMEOUT_SECONDS)  # decoupled from skew
-        assert c0._wait_total_s > c0._lease_ttl_s
+        hold = c0._get_timeout_s + _TOKEN_EXCHANGE_TIMEOUT_SECONDS + c0._put_timeout_s
+        assert c0._lease_ttl_s > hold
+
+    def test_worst_case_latency_fits_nginx_headroom(self):
+        # nginx allows MCP_PROXY_TIMEOUT + this buffer per MCP request, and the
+        # upstream call alone may use MCP_PROXY_TIMEOUT. So every path through
+        # get_or_exchange must finish within the buffer, or nginx cuts the
+        # connection before the auth-server answers. Slowest path: initial read,
+        # the full wait, one more read and acquire, then a whole holder hold.
+        c = _cache(_FakeStore(), _FakeLease())
+        holder_hold = (
+            c._get_timeout_s
+            + _TOKEN_EXCHANGE_TIMEOUT_SECONDS
+            + c._put_timeout_s
+            + c._lease_timeout_s
+        )
+        worst = c._get_timeout_s + c._wait_total_s + c._get_timeout_s + c._lease_timeout_s
+        worst += holder_hold
+        assert worst < MCP_PROXY_NGINX_READ_TIMEOUT_BUFFER_SECONDS
 
     @pytest.mark.asyncio
     async def test_crashed_holder_promotes_one_waiter(self, monkeypatch):
         # A crashed holder never stores; its lease frees after TTL. Exactly ONE
-        # waiter is then promoted and exchanges -- the rest re-read the hit, not
-        # stampede. calls == 1 across the herd.
+        # waiter is then promoted and exchanges; the rest re-read the hit instead
+        # of stampeding. calls == 1 across the herd.
         calls = _patch_exchange(monkeypatch, delay=0.02)
-        # wait_total_s kept above the default lease_ttl (19) to mirror the production
-        # invariant; a real stampede regression fails fast (calls>1 on the first pass),
-        # not by waiting this out.
-        cache = _cache(_FakeStore(), _TtlLease(held_polls=5), wait_total_s=25)
+        cache = _cache(_FakeStore(), _TtlLease(held_polls=5))
         results = await asyncio.gather(*(cache.get_or_exchange(**_call()) for _ in range(15)))
-        assert results == ["tok"] * 15
+        assert [r.access_token for r in results] == ["tok"] * 15
         assert calls["n"] == 1
 
     @pytest.mark.asyncio
@@ -306,24 +346,30 @@ class TestOboTokenCache:
         calls = _patch_exchange(monkeypatch)
         cache = _cache(_FakeStore(), _FakeLease())
         for _ in range(10):
-            assert await cache.get_or_exchange(**_call()) == "tok"
+            assert (await cache.get_or_exchange(**_call())).access_token == "tok"
         assert calls["n"] == 1  # 1 exchange, 9 hits
 
     @pytest.mark.asyncio
     async def test_single_flight_cold_miss_herd(self, monkeypatch):
         # THE round-1 regression guard: N concurrent cold-miss callers -> exactly
-        # one exchange; the other N-1 wait-and-re-read the stored token.
+        # one exchange; the other N-1 wait and re-read the stored token.
         calls = _patch_exchange(monkeypatch, delay=0.05)
         cache = _cache(_FakeStore(), _FakeLease())
         results = await asyncio.gather(*(cache.get_or_exchange(**_call()) for _ in range(20)))
-        assert results == ["tok"] * 20
+        assert [r.access_token for r in results] == ["tok"] * 20
         assert calls["n"] == 1
 
-    def test_wait_total_exceeds_lease_ttl(self):
-        # a waiter must outlast a dead lease-holder, else a slow IdP
-        # or a crashed holder makes every waiter stampede the IdP.
-        c = _cache(_FakeStore(), _FakeLease())
-        assert c._wait_total_s > c._lease_ttl_s
+    @pytest.mark.asyncio
+    async def test_single_flight_with_blocking_in_process_lease(self, monkeypatch):
+        # The in-process fallback lease (no Mongo) BLOCKS in acquire until the
+        # holder releases. Waiters must wait there, not time out and exchange.
+        from registry.egress_auth.service import _InProcessLeaseManager
+
+        calls = _patch_exchange(monkeypatch, delay=1.5)
+        cache = _cache(_FakeStore(), _InProcessLeaseManager())
+        results = await asyncio.gather(*(cache.get_or_exchange(**_call()) for _ in range(10)))
+        assert [r.access_token for r in results] == ["tok"] * 10
+        assert calls["n"] == 1
 
     @pytest.mark.asyncio
     async def test_namespaced_store_refuses_foreign_auth_method(self):
@@ -342,3 +388,51 @@ class TestOboTokenCache:
                 "self_signed", "u", "entra", "sp", StoredToken(access_token="t")
             )
         assert inner.get_calls == 0  # foreign reads never reach the inner store
+
+
+@pytest.fixture
+def secrets_manager_store():
+    moto = pytest.importorskip("moto")
+    boto3 = pytest.importorskip("boto3")
+    with moto.mock_aws():
+        client = boto3.client("secretsmanager", region_name="us-east-1")
+        yield SecretsManagerStore(client=client, prefix="mcp/egress"), client
+
+
+@pytest.mark.unit
+class TestOboTokenCacheRealStores:
+    """Round trips through the real store classes, not a fake.
+
+    These catch a store-contract change (a new required argument, a renamed
+    method) that a fake would hide, and pin the vault path the scoped IAM and
+    OpenBao policies grant: ``<prefix>/b2JvLWNhY2hl/...``.
+    """
+
+    _OBO_PATH_PREFIX = "mcp/egress/b2JvLWNhY2hl/"  # base64url("obo-cache")
+
+    @pytest.mark.asyncio
+    async def test_secrets_manager_round_trip_under_scoped_path(
+        self, monkeypatch, secrets_manager_store
+    ):
+        store, client = secrets_manager_store
+        calls = _patch_exchange(monkeypatch)
+        cache = _cache(store, _FakeLease())
+        first = await cache.get_or_exchange(**_call())
+        second = await cache.get_or_exchange(**_call())
+        assert (first.from_cache, second.from_cache) == (False, True)
+        assert calls["n"] == 1
+        names = [s["Name"] for s in client.list_secrets()["SecretList"]]
+        assert names and all(n.startswith(self._OBO_PATH_PREFIX) for n in names)
+
+    @pytest.mark.asyncio
+    async def test_openbao_round_trip_under_scoped_path(self, monkeypatch):
+        hvac = _FakeHvacClient()
+        store = OpenBaoStore(client=hvac, mount_point="secret", prefix="mcp/egress")
+        calls = _patch_exchange(monkeypatch)
+        cache = _cache(store, _FakeLease())
+        first = await cache.get_or_exchange(**_call())
+        second = await cache.get_or_exchange(**_call())
+        assert (first.from_cache, second.from_cache) == (False, True)
+        assert calls["n"] == 1
+        paths = list(hvac.secrets.kv.v2._data)
+        assert paths and all(p.startswith(self._OBO_PATH_PREFIX) for p in paths)
