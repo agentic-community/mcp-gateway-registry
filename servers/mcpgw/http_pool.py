@@ -14,7 +14,7 @@ This module owns ONE pooled client shared by every egress hop mcpgw makes ITSELF
 
 Partially covered: when ``OIDC_ENABLED=true``, fastmcp's ``OAuthProxy`` also reaches
 ``KEYCLOAK_INTERNAL_URL`` for ``/token`` (login, client refresh, proactive refresh)
-and ``/revoke``. Those clients are built inline inside fastmcp 3.4.7 with no
+and ``/revoke``. Those clients are built inline inside fastmcp 3.4.9 with no
 injection point, so those four call sites are neither pooled nor guarded here nor
 counted by the reset metric. They fire per login/refresh, never per tool call, and
 their URLs are operator env config. The ``/certs`` JWKS fetch IS covered --
@@ -126,6 +126,12 @@ _DNS_RESOLUTION_TIMEOUT_SECONDS: float = 5.0
 DEFAULT_REGISTRY_BASE_URL = "http://localhost"
 DEFAULT_KEYCLOAK_INTERNAL_URL = "http://keycloak:8080"
 
+# What an MCP caller sees when the guard refuses a destination. Deliberately names no
+# host or IP; the specific reason goes to the mcpgw log instead.
+EGRESS_BLOCKED_PUBLIC_MESSAGE = (
+    "Outbound request blocked by the mcpgw egress guard. See the mcpgw logs for details."
+)
+
 # Cloud metadata and workload-identity credential endpoints. NEVER reachable, and
 # deliberately checked as an explicit set BEFORE any category logic: several of
 # these are themselves link-local or private, so allowing private-unicast (which
@@ -157,7 +163,19 @@ class EgressTargetError(ValueError):
 
     Subclasses ``ValueError`` so the tool call sites' existing ``except ValueError``
     branch reports it and fails closed, exactly like an invalid tool argument.
+
+    The tools return ``str(e)`` to the MCP caller, so the message is a fixed generic
+    string. The specific reason (internal hostname, resolved IP) is kept on
+    ``detail`` and logged here, once, for the operator.
     """
+
+    def __init__(
+        self,
+        detail: str,
+    ) -> None:
+        super().__init__(EGRESS_BLOCKED_PUBLIC_MESSAGE)
+        self.detail = detail
+        logger.warning(f"Egress request blocked: {detail}")
 
 
 def _env_int(name: str, default: int, *, low: int, high: int) -> int:

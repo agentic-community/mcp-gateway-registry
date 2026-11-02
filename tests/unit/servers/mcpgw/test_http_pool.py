@@ -324,10 +324,11 @@ async def test_request_is_pinned_to_resolved_ip(monkeypatch, captured_requests):
 async def test_resolved_metadata_address_fails_closed(monkeypatch, captured_requests):
     monkeypatch.setattr(socket, "getaddrinfo", _fake_getaddrinfo("169.254.169.254"))
     transport = http_pool._GuardedAsyncTransport()
-    with pytest.raises(http_pool.EgressTargetError, match="credential endpoint"):
+    with pytest.raises(http_pool.EgressTargetError) as exc_info:
         await transport.handle_async_request(
             httpx.Request("GET", "http://registry:8080/api/servers")
         )
+    assert "credential endpoint" in exc_info.value.detail
     assert captured_requests == []  # never reached the connection
 
 
@@ -345,10 +346,11 @@ async def test_any_blocked_answer_fails_closed(monkeypatch, captured_requests):
 
 async def test_literal_metadata_host_is_denied(captured_requests):
     transport = http_pool._GuardedAsyncTransport()
-    with pytest.raises(http_pool.EgressTargetError, match="credential endpoint"):
+    with pytest.raises(http_pool.EgressTargetError) as exc_info:
         await transport.handle_async_request(
             httpx.Request("GET", "http://169.254.169.254/latest/meta-data/")
         )
+    assert "credential endpoint" in exc_info.value.detail
     assert captured_requests == []
 
 
@@ -360,8 +362,9 @@ async def test_literal_private_host_is_allowed(captured_requests):
 
 async def test_non_http_scheme_is_denied(captured_requests):
     transport = http_pool._GuardedAsyncTransport()
-    with pytest.raises(http_pool.EgressTargetError, match="scheme"):
+    with pytest.raises(http_pool.EgressTargetError) as exc_info:
         await transport.handle_async_request(httpx.Request("GET", "file://etc/passwd"))
+    assert "scheme" in exc_info.value.detail
     assert captured_requests == []
 
 
@@ -372,10 +375,11 @@ async def test_pooled_client_enforces_the_guard(monkeypatch, captured_requests):
     monkeypatch.setattr(socket, "getaddrinfo", _fake_getaddrinfo("169.254.170.2"))
     client = http_pool.shared_async_client()
     # match= so this can never pass for the wrong reason (e.g. a destination reject).
-    with pytest.raises(http_pool.EgressTargetError, match="credential endpoint"):
+    with pytest.raises(http_pool.EgressTargetError) as exc_info:
         await client.get(
             "http://registry:8080/api/servers", headers={"Authorization": "Bearer secret"}
         )
+    assert "credential endpoint" in exc_info.value.detail
     assert captured_requests == []
 
 
@@ -390,8 +394,9 @@ async def test_guard_runs_per_request_not_per_client(monkeypatch, captured_reque
     assert resp.status_code == 200
 
     monkeypatch.setattr(socket, "getaddrinfo", _fake_getaddrinfo("169.254.169.254"))
-    with pytest.raises(http_pool.EgressTargetError, match="credential endpoint"):
+    with pytest.raises(http_pool.EgressTargetError) as exc_info:
         await client.get("http://registry:8080/api/servers")
+    assert "credential endpoint" in exc_info.value.detail
 
 
 class _FakeClient:
@@ -608,6 +613,36 @@ async def test_m2m_token_reset_is_attributed_to_the_token_site(monkeypatch):
     assert sites == ["mcpgw_m2m_token"]
 
 
+async def test_concurrent_cold_cache_mints_one_m2m_token(monkeypatch):
+    """Concurrent get_token() calls on an empty cache share ONE token POST."""
+    mcpgw_server = _import_server_module()
+
+    calls = {"n": 0}
+
+    class _SlowTokenEndpoint:
+        async def request(self, method, url, **kwargs):
+            calls["n"] += 1
+            # Yield long enough for every caller to reach the refresh lock.
+            await asyncio.sleep(0.05)
+            return httpx.Response(
+                200,
+                json={"access_token": "placeholder-access-token", "expires_in": 300},
+                request=httpx.Request(method, url),
+            )
+
+    monkeypatch.setattr(mcpgw_server, "shared_async_client", lambda: _SlowTokenEndpoint())
+
+    manager = mcpgw_server._M2MTokenManager(
+        token_url="http://keycloak:8080/realms/r/protocol/openid-connect/token",
+        client_id="mcp-gateway-m2m",
+        client_secret="placeholder-secret",
+    )
+    tokens = await asyncio.gather(*[manager.get_token() for _ in range(10)])
+
+    assert calls["n"] == 1
+    assert tokens == ["placeholder-access-token"] * 10
+
+
 # ---------------------------------------------------------------------------
 # Multi-address fallback: validated answers are tried in order, under ONE budget.
 # ---------------------------------------------------------------------------
@@ -788,8 +823,9 @@ async def test_pooled_client_enforces_the_env_destination_allowlist(monkeypatch,
 
     await client.get("http://registry:8080/api/servers")
     await client.post("http://keycloak:8080/realms/r/protocol/openid-connect/token")
-    with pytest.raises(http_pool.EgressTargetError, match="not a configured mcpgw destination"):
+    with pytest.raises(http_pool.EgressTargetError) as exc_info:
         await client.get("http://attacker.example:8080/api/servers")
+    assert "not a configured mcpgw destination" in exc_info.value.detail
 
     assert [r.headers["Host"] for r in captured_requests] == ["registry:8080", "keycloak:8080"]
 
@@ -816,11 +852,13 @@ async def test_unconfigured_destination_is_rejected(captured_requests):
     transport = http_pool._GuardedAsyncTransport(
         allowed_destinations=frozenset({("registry", 8080)})
     )
-    with pytest.raises(http_pool.EgressTargetError, match="not a configured mcpgw destination"):
+    with pytest.raises(http_pool.EgressTargetError) as exc_info:
         await transport.handle_async_request(httpx.Request("GET", "http://evil.example/steal"))
+    assert "not a configured mcpgw destination" in exc_info.value.detail
     # Same host on a different port is a different destination.
-    with pytest.raises(http_pool.EgressTargetError, match="not a configured mcpgw destination"):
+    with pytest.raises(http_pool.EgressTargetError) as exc_info:
         await transport.handle_async_request(httpx.Request("GET", "http://registry:9999/api"))
+    assert "not a configured mcpgw destination" in exc_info.value.detail
     assert captured_requests == []
 
 
@@ -837,10 +875,11 @@ async def test_url_userinfo_is_rejected(captured_requests):
     # copy_with(host=ip) would carry userinfo onto the pinned request; credentials
     # belong in a per-request header.
     transport = http_pool._GuardedAsyncTransport()
-    with pytest.raises(http_pool.EgressTargetError, match="userinfo"):
+    with pytest.raises(http_pool.EgressTargetError) as exc_info:
         await transport.handle_async_request(
             httpx.Request("GET", "http://user:pass@registry:8080/api/servers")
         )
+    assert "userinfo" in exc_info.value.detail
     assert captured_requests == []
 
 
@@ -908,8 +947,27 @@ async def test_blocked_target_surfaces_as_a_failed_tool_call(monkeypatch):
         await server_http_pool.aclose_shared_client()
 
     assert result["status"] == "failed"
-    assert "credential endpoint" in result["error"]
+    assert result["error"] == server_http_pool.EGRESS_BLOCKED_PUBLIC_MESSAGE
     assert result["total_results"] == 0
+
+
+async def test_blocked_target_does_not_reveal_internal_addresses(monkeypatch, caplog):
+    """The caller gets no host or IP; the operator log keeps the specific reason."""
+    mcpgw_server = _import_server_module()
+    monkeypatch.setattr(mcpgw_server, "REGISTRY_API_TOKEN", "placeholder-token")
+    monkeypatch.setattr(socket, "getaddrinfo", _fake_getaddrinfo("169.254.169.254"))
+
+    import http_pool as server_http_pool
+
+    server_http_pool.reset_shared_client_for_tests()
+    try:
+        result = await mcpgw_server.search_registry("docs search")
+    finally:
+        await server_http_pool.aclose_shared_client()
+
+    assert "169.254.169.254" not in result["error"]
+    assert "credential endpoint" not in result["error"]
+    assert "169.254.169.254" in caplog.text
 
 
 async def test_budget_split_applies_on_the_live_client_path(monkeypatch, attempted):

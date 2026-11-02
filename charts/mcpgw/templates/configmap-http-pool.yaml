@@ -14,7 +14,7 @@ data:
   # Unlike registry/auth-server (where these keys ride along in
   # registry-egress-config / auth-server-egress-config, gated on
   # egressAuth.enabled), mcpgw pooling is not part of the egress credential
-  # vault, so this ConfigMap is always rendered — the knobs must be reachable
+  # vault, so this ConfigMap is always rendered; the knobs must be reachable
   # on a default install.
   #
   # Keep these values matching the registry/auth-server egressAuth.httpPool*

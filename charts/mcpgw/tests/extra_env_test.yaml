@@ -46,7 +46,7 @@ tests:
       # Indices shift whenever a chart-managed env var is inserted; update
       # these assertions AND the NOTE block whenever the set changes. Adding
       # an `envFrom:` source (e.g. mcpgw-http-pool-config) does NOT shift
-      # these — only the envFrom index map in the next test.
+      # these; only the envFrom index map in the next test does.
       # NOTE: assumes no github* fields set (default values), so only
       # NODE_NAME, HOST and the unconditional Issue #1122 OTel block render
       # before extraEnv.
