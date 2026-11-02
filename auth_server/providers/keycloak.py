@@ -266,9 +266,13 @@ class KeycloakProvider(AuthProvider):
         with ``target_audience`` as the required audience. Its ``sub`` must
         equal the subject token's ``sub``, so an IdP policy that mints a token
         for a different user (impersonation) is refused. The subject token is
-        read without verifying its signature: /validate verified it and bound
-        it to the authorized principal, and Keycloak verified it again during
-        the exchange.
+        read without verifying its signature here. /validate verifies a bearer
+        token's signature only when no session cookie authenticated the
+        request, so this method does not rely on it. The caller has already
+        bound the subject token's ``sub`` to the authorized principal
+        (``_obo_subject_matches_principal``), and Keycloak verified its
+        signature during the exchange, so a forged subject token never
+        produces a token to verify.
 
         Args:
             token: The access token returned by the token-exchange grant.

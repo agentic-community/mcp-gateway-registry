@@ -468,7 +468,7 @@ sanitizer that isn't called) is equivalent to no check.
   add an audience this gateway accepts (Keycloak's legacy exchange copies the
   realm's `mcp-gateway` audience mapper). The upstream could then replay the token
   against the gateway as the user. Verify the minted token (signature, issuer,
-  expiry, target audience, and a `sub` equal to the exchanged token's), intersect
+  expiry, target audience, and a `sub` equal to the `sub` of the user's ingress token it was exchanged from), intersect
   its `aud` with the exact list the gateway's own validation accepts, and refuse
   to forward it on any overlap. Read that list from the same method validation
   uses (`accepted_audiences()`), so a new way to accept a token also widens the
