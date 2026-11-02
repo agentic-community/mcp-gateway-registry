@@ -289,6 +289,11 @@ _PER_USER_IDP_METHODS: frozenset[str] = frozenset(
     }
 )
 
+# Validator ``method`` values for a bearer JWT that /validate verified with an
+# IdP that has an OBO exchange path. Only these sign ``obo_subject_sha256`` into
+# the hop token, so only these may be served from the OBO token cache.
+_OBO_SUBJECT_VERIFIED_METHODS: frozenset[str] = frozenset({"entra", "keycloak"})
+
 
 def _canonical_auth_method(validation_result: dict) -> str:
     """The ONE canonical egress principal method, stamped into both internal tokens.
@@ -869,6 +874,7 @@ def _attach_mcp_proxy_token(
     auth_method: str = "",
     egress_user: str = "",
     audit_identity: dict | None = None,
+    obo_subject_sha256: str = "",
 ) -> None:
     """Mint and attach the X-Internal-Token for the /mcp-proxy hop.
 
@@ -888,6 +894,11 @@ def _attach_mcp_proxy_token(
     mcp-proxy hop attribute its OBO token-mint record without trusting the raw
     ingress header. Omitted by the static-credential callers (federation-static /
     network-trusted), which authenticate a machine credential with no IdP claims.
+
+    ``obo_subject_sha256`` is the digest of the bearer JWT this request's
+    /validate verified with an OBO-capable IdP (``_OBO_SUBJECT_VERIFIED_METHODS``);
+    empty otherwise. The mcp-proxy hop uses the OBO token cache only when its
+    subject token matches it (see ``_obo_cache_subject_verified``).
 
     The token is minted ONLY if nginx force-set the matching
     ``X-Validate-Source-Secret`` on this subrequest, and never when no marker is
@@ -940,6 +951,7 @@ def _attach_mcp_proxy_token(
             auth_method=auth_method,
             egress_user=egress_user,
             audit_identity=audit_identity,
+            obo_subject_sha256=obo_subject_sha256,
             version_id=version_id,
             virtual_backend=virtual_backend,
         )
@@ -2986,10 +2998,52 @@ def check_rate_limit(username: str) -> bool:
 # The auth-path flush task, held so the lifespan can cancel it on shutdown and so
 # the loop is not garbage-collected mid-flight.
 _auth_path_flush_task: asyncio.Task | None = None
-# OBO exchanged-token cache; built in the lifespan. None -> the OBO
-# hop falls back to the stateless obo_exchange (e.g. a test harness that does not
-# run the lifespan).
+# OBO exchanged-token cache; built in the lifespan only when
+# EGRESS_OBO_CACHE_ENABLED is true. None -> the OBO hop runs the stateless
+# obo_exchange (cache off, init failure, or a test harness without the lifespan).
 _obo_cache = None
+
+
+def _build_obo_cache():
+    """Build the OBO token cache when enabled; None when off or on any init error.
+
+    Construction never crashes startup: an error leaves the OBO hop stateless.
+    """
+    if not settings.egress_obo_cache_enabled:
+        return None
+    try:
+        try:
+            from obo_token_cache import OboTokenCache
+        except ImportError:
+            from auth_server.obo_token_cache import OboTokenCache
+        from registry.egress_auth.factory import get_egress_lease_manager
+        from registry.egress_auth.service import _InProcessLeaseManager
+        from registry.secrets.factory import get_secret_store
+
+        lease_mgr = get_egress_lease_manager()
+        if isinstance(lease_mgr, _InProcessLeaseManager):
+            logger.warning(
+                "OBO token cache: cross-replica lease manager unavailable; "
+                "single-flight is per-replica only (a cold-miss herd across "
+                "auth-server replicas may issue one exchange per replica)."
+            )
+        cache = OboTokenCache(
+            store=get_secret_store(),
+            lease_manager=lease_mgr,
+            max_ttl_s=settings.egress_obo_cache_max_ttl_seconds,
+            skew_s=settings.egress_obo_cache_expiry_skew_seconds,
+        )
+    except Exception as exc:
+        logger.error(
+            "OBO token cache init failed (%s); OBO exchange runs stateless", exc, exc_info=True
+        )
+        return None
+    logger.info(
+        "OBO token cache ENABLED (max_ttl=%ss, skew=%ss)",
+        settings.egress_obo_cache_max_ttl_seconds,
+        settings.egress_obo_cache_expiry_skew_seconds,
+    )
+    return cache
 
 
 @asynccontextmanager
@@ -3067,52 +3121,9 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error("Generic-proxy feature init failed during startup (%s)", type(e).__name__)
 
-    # Build the optional OBO exchanged-token cache. Default-off;
-    # construction never crashes startup -- any error leaves _obo_cache None and
-    # the OBO hop runs the stateless per-request exchange.
+    # Build the optional OBO exchanged-token cache (None when off or on error).
     global _obo_cache
-    try:
-        try:
-            from obo_token_cache import OboTokenCache
-        except ImportError:
-            from auth_server.obo_token_cache import OboTokenCache
-        if settings.egress_obo_cache_enabled:
-            from registry.egress_auth.factory import get_egress_lease_manager
-            from registry.egress_auth.service import _InProcessLeaseManager
-            from registry.secrets.factory import get_secret_store
-
-            lease_mgr = get_egress_lease_manager()
-            if isinstance(lease_mgr, _InProcessLeaseManager):
-                logger.warning(
-                    "OBO token cache: cross-replica lease manager unavailable; "
-                    "single-flight is per-replica only (a cold-miss herd across "
-                    "auth-server replicas may issue one exchange per replica)."
-                )
-            _obo_cache = OboTokenCache(
-                store=get_secret_store(),
-                lease_manager=lease_mgr,
-                enabled=True,
-                max_ttl_s=settings.egress_obo_cache_max_ttl_seconds,
-                skew_s=settings.egress_obo_cache_expiry_skew_seconds,
-            )
-            logger.info(
-                "OBO token cache ENABLED (max_ttl=%ss, skew=%ss)",
-                settings.egress_obo_cache_max_ttl_seconds,
-                settings.egress_obo_cache_expiry_skew_seconds,
-            )
-        else:
-            _obo_cache = OboTokenCache(
-                store=None,
-                lease_manager=None,
-                enabled=False,
-                max_ttl_s=settings.egress_obo_cache_max_ttl_seconds,
-                skew_s=settings.egress_obo_cache_expiry_skew_seconds,
-            )
-    except Exception as exc:
-        logger.error(
-            "OBO token cache init failed (%s); OBO exchange runs stateless", exc, exc_info=True
-        )
-        _obo_cache = None
+    _obo_cache = _build_obo_cache()
 
     yield
 
@@ -5360,6 +5371,15 @@ async def validate_request(request: Request):
             # as `rid` so that hop's token_mint record can be joined to the
             # mcp_server_access record this request writes above.
             audit_identity=_audit_identity_token_claim(validation_result, request_id),
+            # Bind the bearer this request actually verified with an OBO-capable
+            # IdP, so the hop's OBO cache never serves a token for a subject token
+            # nobody verified (a cookie request's bearer header is never checked).
+            obo_subject_sha256=(
+                _obo_subject_digest(access_token)
+                if auth_provider is not None
+                and validation_result.get("method") in _OBO_SUBJECT_VERIFIED_METHODS
+                else ""
+            ),
         )
 
         # Generic-proxy hop token (proxied non-MCP entities). Keyed on the
@@ -8380,6 +8400,26 @@ def _obo_subject_matches_principal(subject_token: str, internal_claims: dict) ->
     return principal in candidates
 
 
+def _obo_subject_digest(subject_token: str) -> str:
+    """SHA-256 hex digest of a bearer JWT, as signed into the hop token."""
+    return hashlib.sha256(subject_token.encode("utf-8")).hexdigest()
+
+
+def _obo_cache_subject_verified(subject_token: str, internal_claims: dict) -> bool:
+    """True if the hop's subject token is the bearer /validate verified with the IdP.
+
+    A cache hit skips the IdP exchange, and the exchange is what rejects a forged
+    or expired assertion. So the OBO cache may serve a request only when
+    /validate itself verified this exact token with an OBO-capable IdP and signed
+    its digest into the hop token (``obo_subject_sha256``). Cookie-authenticated,
+    self-signed and legacy hop tokens carry no digest and always exchange.
+    """
+    expected = str((internal_claims or {}).get("obo_subject_sha256") or "")
+    if not expected or not subject_token:
+        return False
+    return hmac.compare_digest(_obo_subject_digest(subject_token), expected)
+
+
 def _obo_failure_reason(exc: OboExchangeError) -> str:
     """Map a typed OBO exchange error to a short, stable audit failure_reason.
 
@@ -9344,21 +9384,28 @@ async def mcp_proxy(
                 # the record is unjoined, exactly as before, never dropped.
                 obo_correlation_id = _audit_request_id_from_token(claims)
                 try:
-                    if _obo_cache is not None:
-                        obo_token = await _obo_cache.get_or_exchange(
+                    if _obo_cache is not None and _obo_cache_subject_verified(
+                        subject_token, claims
+                    ):
+                        obo_result = await _obo_cache.get_or_exchange(
                             idp_provider=get_auth_provider(),
                             subject_token=subject_token,
                             egress_user=str((claims or {}).get("egress_user") or ""),
                             target_audience=obo_target_audience,
                             scopes=obo_scopes,
                         )
+                        obo_token, obo_from_cache = obo_result.access_token, obo_result.from_cache
                     else:
+                        # Cache off, or the subject token is not the bearer /validate
+                        # verified with the IdP: exchange statelessly so the IdP
+                        # checks the assertion.
                         obo_token, _ = await obo_exchange(
                             get_auth_provider(),
                             subject_token=subject_token,
                             target_audience=obo_target_audience,
                             scopes=obo_scopes,
                         )
+                        obo_from_cache = False
                 except OboExchangeError as exc:
                     logger.warning(
                         "mcp_proxy: obo_exchange failed for server=%s: %s", server_name, exc
@@ -9393,7 +9440,9 @@ async def mcp_proxy(
                     token_kind=TokenKind.USER.value,
                     resource_type="server",
                     resource_id=registered_server,
-                    token_path="obo_exchange",  # nosec B106 - audit metadata label, not a credential
+                    # A cache hit minted nothing at the IdP; label it so the audit
+                    # trail lines up with IdP-side sign-in logs.
+                    token_path="obo_cache" if obo_from_cache else "obo_exchange",  # nosec B106 - audit metadata label, not a credential
                     requested_scopes=list(obo_scopes),
                     expires_in_seconds=None,
                     outcome="success",

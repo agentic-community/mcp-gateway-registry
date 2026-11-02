@@ -1096,3 +1096,106 @@ class TestCanonicalEgressUser:
     def test_username_fallback_preserves_non_oidc_behavior(self):
         vr = {"data": {}, "username": "svc-account"}
         assert server._canonical_egress_user(vr) == "svc-account"
+
+
+_MARKER = "verified-marker-for-test"
+
+
+def _provider_returning(method: str):
+    """A provider whose validate_token accepts any bearer as the given IdP method."""
+    from auth_server.providers.base import AuthProvider
+
+    class _Provider:
+        recover_bearer_groups = AuthProvider.recover_bearer_groups
+        is_delegated_user = AuthProvider.is_delegated_user
+
+        def validate_token(self, token: str, extra_audiences=None) -> dict:
+            return {
+                "valid": True,
+                "username": "alice@example.com",
+                "groups": ["backend-group"],
+                "scopes": [],
+                "client_id": "ide-client",
+                "method": method,
+                "data": {"sub": "oidc-sub-alice"},
+            }
+
+        def get_provider_info(self) -> dict:
+            return {"provider_type": method}
+
+    return _Provider()
+
+
+@pytest.mark.unit
+class TestValidateSignsOboSubjectDigest:
+    """/validate signs the digest of the bearer it verified with an OBO-capable
+    IdP into the hop token, and nothing else. The hop serves an OBO token from
+    its cache only when the subject token matches that digest, so a missing
+    digest on the cookie path is what keeps a stolen cookie plus a forged
+    bearer from reading the user's cached token.
+    """
+
+    _BEARER = "opaque-idp-token"
+
+    def _hop_claims(self, *, provider, cookie_result=None) -> dict:
+        import os
+        from unittest.mock import AsyncMock, patch
+
+        from fastapi.testclient import TestClient
+
+        repo = AsyncMock()
+        repo.get_group_mappings_bulk.return_value = ["backend-only"]
+        repo.get_server_scopes.return_value = [
+            {"server": "github", "methods": ["tools/list"], "tools": []}
+        ]
+        headers = {
+            "Authorization": f"Bearer {self._BEARER}",
+            "X-Original-URL": "https://example.com/github/mcp",
+            "X-Body": '{"jsonrpc":"2.0","id":1,"method":"tools/list"}',
+            "X-Resolved-Upstream": "https://api.githubcopilot.com/mcp",
+            "X-Validate-Source-Secret": _MARKER,
+        }
+        if cookie_result is not None:
+            headers["Cookie"] = "mcp_gateway_session=signed-session-value"
+        with (
+            patch("auth_server.server.get_scope_repository", return_value=repo),
+            patch("auth_server.server.get_auth_provider", return_value=provider),
+            patch(
+                "auth_server.server.validate_session_cookie",
+                AsyncMock(return_value=cookie_result),
+            ),
+            patch.object(server.settings, "auth_server_nginx_marker_secret", _MARKER),
+        ):
+            response = TestClient(server.app).get("/validate", headers=headers)
+        assert response.status_code == 200, response.text
+        return pyjwt.decode(
+            response.headers["X-Internal-Token"],
+            os.environ["SECRET_KEY"],
+            algorithms=["HS256"],
+            options={"verify_aud": False, "verify_iss": False},
+        )
+
+    @pytest.mark.parametrize("method", ["entra", "keycloak"])
+    def test_obo_idp_bearer_signs_its_digest(self, method):
+        claims = self._hop_claims(provider=_provider_returning(method))
+        assert claims["obo_subject_sha256"] == server._obo_subject_digest(self._BEARER)
+
+    def test_non_obo_idp_bearer_signs_no_digest(self):
+        claims = self._hop_claims(provider=_provider_returning("cognito"))
+        assert "obo_subject_sha256" not in claims
+
+    def test_cookie_request_signs_no_digest_even_with_a_bearer(self):
+        # The cookie wins at /validate, so the bearer header is never verified.
+        cookie_result = {
+            "valid": True,
+            "username": "alice@example.com",
+            "scopes": ["backend-only"],
+            "method": "session_cookie",
+            "groups": ["backend-group"],
+            "client_id": "",
+            "data": {"auth_method": "oauth2", "subject": "oidc-sub-alice"},
+        }
+        claims = self._hop_claims(
+            provider=_provider_returning("entra"), cookie_result=cookie_result
+        )
+        assert "obo_subject_sha256" not in claims

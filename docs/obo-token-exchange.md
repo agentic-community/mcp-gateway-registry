@@ -211,8 +211,7 @@ sequenceDiagram
 
 Key points:
 
-- **Stateless, per-request.** The exchanged token embeds the user's `sub`; it is
-  minted fresh each request and never cached/reused across users.
+- **Stateless, per-request, by default.** The exchanged token embeds the user's `sub`; it is minted fresh each request and never reused across users. The opt-in [exchanged-token cache](egress-obo-cache.md) (`EGRESS_OBO_CACHE_ENABLED`, default off) lets one user reuse their own token for the same audience for up to `EGRESS_OBO_CACHE_MAX_TTL_SECONDS`.
 - **The user's gateway credentials never reach the MCP server.** The seam strips
   `Authorization`/`X-Authorization`/`Cookie`/`X-Internal-Token` before injecting
   the exchanged token.
@@ -236,7 +235,7 @@ the forwarded token is **sourced**.
 | Token source | Per-user vaulted third-party token | IdP token exchange, minted per request |
 | IdP relationship | Third-party provider (GitHub/Google/...) | SAME IdP as the gateway |
 | User interaction | One-time browser consent per `(provider, server)` | None (ingress token is the exchange subject) |
-| Storage | Secret store (OpenBao / Secrets Manager) + refresh | Stateless — nothing stored |
+| Storage | Secret store (OpenBao / Secrets Manager) + refresh | Stateless by default; the opt-in [exchanged-token cache](egress-obo-cache.md) stores tokens under a reserved `obo-cache` namespace |
 | Forwarded token | Provider resource token (opaque, not re-exchangeable) | IdP JWT re-audienced to the MCP server (the server may optionally exchange it again) |
 | Registration | `provider`, `client_id`, `client_secret`, scopes | `target_audience` (+ audience scopes) |
 | Credentials used | Per-server operator-supplied OAuth app | The gateway's OWN IdP client credentials |
@@ -1000,10 +999,12 @@ kubectl logs -n mcp-entra -l app=obo-echo --tail=80
   `<target>/.default` — every delegated permission the gateway app holds on the
   MCP server's API. Tighter scoping requires listing explicit scopes rather than
   `.default`; privilege is otherwise bounded by the app-registration grants.
-- **Stateless mint is a hard invariant.** The exchanged token embeds the user's
-  `sub`; it is minted per request and never cached or reused across users. A
-  cache-key bug would be privilege escalation; the `obo_exchange` branch shares no
-  cache with the `oauth_user` vault.
+- **Stateless mint is the default.** The exchanged token embeds the user's `sub`; it is minted per request and never
+  reused across users. The opt-in [exchanged-token cache](egress-obo-cache.md) keys each entry on the immutable user id,
+  IdP, audience and scope digest, so an entry is served only to the user it was minted for, and only when `/validate`
+  verified the exact bearer JWT being exchanged. A key bug there would be privilege escalation, which is why the key
+  carries the immutable id rather than the username. The cache lives in its own `obo-cache` namespace and shares nothing
+  with the `oauth_user` vault entries.
 - **Closed audience allowlist.** auth-server accepts a per-server `aud` only for
   the registered obo server being accessed (derived from the request path + the
   public gateway URL), never a wildcard.

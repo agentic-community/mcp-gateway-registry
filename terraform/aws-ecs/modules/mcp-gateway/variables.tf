@@ -2156,7 +2156,7 @@ variable "egress_secrets_manager_path_prefix" {
 }
 
 variable "egress_credential_encryption_key" {
-  description = "Optional AES-256-GCM key (registry-only) used to encrypt per-user egress credentials at rest before they reach Secrets Manager / OpenBao. Empty disables encryption (legacy plaintext); existing deployments keep working unchanged. Never auto-generated."
+  description = "Optional AES-256-GCM key used to encrypt per-user egress credentials at rest before they reach Secrets Manager / OpenBao. Injected into the registry task, and also into the auth-server task when egress_obo_cache_enabled is true (encrypts cached OBO tokens). Empty disables encryption (legacy plaintext); existing deployments keep working unchanged. Never auto-generated."
   type        = string
   default     = ""
   sensitive   = true
