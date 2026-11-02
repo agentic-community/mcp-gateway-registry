@@ -8305,9 +8305,11 @@ def _obo_subject_matches_principal(subject_token: str, internal_claims: dict) ->
     removing reliance on the implicit "nginx forwards the same header to both the
     auth_request subrequest and this hop" invariant.
 
-    The subject token's signature was already verified by /validate; here we only
-    read identity claims (unverified decode) to compare. A missing internal
-    principal, no matching claim, or an undecodable token fails closed.
+    This reads identity claims with an unverified decode. /validate verifies the
+    bearer token's signature only when no session cookie authenticated the
+    request, so do not assume the subject token was verified. The IdP verifies it
+    during the exchange that follows. A missing internal principal, no matching
+    claim, or an undecodable token fails closed.
     """
     principal = (internal_claims or {}).get("sub") or ""
     if not principal:
@@ -9218,8 +9220,10 @@ async def mcp_proxy(
                 # rely solely on nginx forwarding the same header to both the
                 # auth_request subrequest and this hop, re-check that the raw
                 # subject token we are about to exchange belongs to the same
-                # principal the internal token authorized. Signature was already
-                # verified at /validate; here we only compare the `sub` claim.
+                # principal the internal token authorized. This compares claims
+                # only: on a cookie-authenticated request /validate never verified
+                # this header's signature (see the audit note below). The IdP
+                # verifies it during the exchange.
                 if not _obo_subject_matches_principal(subject_token, claims):
                     logger.warning(
                         "mcp_proxy: obo_exchange server=%s subject-token principal does not "

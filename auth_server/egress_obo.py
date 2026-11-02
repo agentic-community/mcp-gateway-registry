@@ -241,7 +241,8 @@ def _map_keycloak_token_error(
         # the log names both remedies; the caller gets the short message.
         logger.error(
             f"Keycloak denied the exchange (access_denied, status={status_code}): "
-            "grant the target client's token-exchange permission (legacy exchange), "
+            "grant the target client's token-exchange permission (legacy exchange, "
+            "which needs the admin-fine-grained-authz feature enabled), "
             "or place the gateway client inside the subject token's audience "
             f"(standard exchange, Keycloak 26.2+). See {_KEYCLOAK_VERSION_NOTES}"
         )
@@ -389,7 +390,8 @@ def _gateway_credentials(
 def _exchange_body(
     idp_provider: object,
     kind: str,
-    credentials: tuple[str, str, str],
+    client_id: str,
+    client_secret: str,
     subject_token: str,
     target_audience: str,
     scopes: list[str],
@@ -399,7 +401,8 @@ def _exchange_body(
     Args:
         idp_provider: The gateway's own IdP provider (named in the error only).
         kind: The IdP family from ``_idp_kind``.
-        credentials: ``(client_id, client_secret, token_url)``.
+        client_id: The gateway's client id.
+        client_secret: The gateway's client secret.
         subject_token: The raw ingress JWT.
         target_audience: The internal MCP server's audience.
         scopes: Explicit scopes; may be empty.
@@ -410,7 +413,6 @@ def _exchange_body(
     Raises:
         OboUnsupportedIdpError: The IdP family has no OBO implementation.
     """
-    client_id, client_secret, _ = credentials
     if kind == "entra":
         return _entra_exchange_body(
             client_id, client_secret, subject_token, target_audience, scopes
@@ -572,16 +574,18 @@ async def obo_exchange(
     """
     kind = _idp_kind(idp_provider)
     verifier = _keycloak_verifier(idp_provider) if kind == "keycloak" else None
-    credentials = _gateway_credentials(idp_provider, target_audience)
+    client_id, client_secret, token_url = _gateway_credentials(idp_provider, target_audience)
     scopes = scopes or []
-    body = _exchange_body(idp_provider, kind, credentials, subject_token, target_audience, scopes)
+    body = _exchange_body(
+        idp_provider, kind, client_id, client_secret, subject_token, target_audience, scopes
+    )
     logger.info(
         "obo_exchange: idp=%s target_audience=%s scopes=%s",
         kind,
         target_audience,
         scopes or "[.default]",
     )
-    resp = await _post_token_request(credentials[2], body)
+    resp = await _post_token_request(token_url, body)
     if resp.status_code != 200:
         raise _token_error(resp, kind)
     access_token = _access_token_from(resp)

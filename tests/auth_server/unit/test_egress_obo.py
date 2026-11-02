@@ -426,6 +426,33 @@ class TestKeycloakExchangedTokenGuard:
         assert provider.checked == []
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "jwks_host",
+        [
+            "10.0.0.5",
+            "169.254.169.254",
+            "[::ffff:169.254.169.254]",
+            "100.100.100.200",
+        ],
+    )
+    async def test_jwks_endpoint_on_a_private_or_metadata_ip_is_blocked(
+        self,
+        monkeypatch,
+        jwks_host,
+    ):
+        """The JWKS check skips DNS, but a literal private or metadata IP is still
+        refused before the client secret and the user's JWT are sent, even over
+        https."""
+        cap: dict = {}
+        _patch_post(monkeypatch, _FakeResponse(200, {"access_token": "obo-tok"}), cap)
+        provider = _FakeKeycloakProvider()
+        provider.jwks_url = f"https://{jwks_host}/realms/r/protocol/openid-connect/certs"
+        with pytest.raises(OboExchangeError, match="JWKS endpoint blocked"):
+            await obo_exchange(provider, subject_token="j", target_audience="finance-mcp-server")
+        assert cap["calls"] == 0
+        assert provider.checked == []
+
+    @pytest.mark.asyncio
     async def test_token_with_gateway_audience_is_refused(self, monkeypatch):
         cap: dict = {}
         _patch_post(monkeypatch, _FakeResponse(200, {"access_token": "obo-tok"}), cap)
