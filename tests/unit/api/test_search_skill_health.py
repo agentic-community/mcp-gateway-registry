@@ -14,6 +14,7 @@ from registry.api.search_routes import (
     SemanticSearchRequest,
     semantic_search,
 )
+from registry.utils.metadata_security import canonical_metadata, metadata_digest
 
 SKILL_PATH: str = "/skills/pdf"
 CHECKED_AT: str = "2026-10-01T00:00:00+00:00"
@@ -97,11 +98,19 @@ async def test_search_reports_unknown_for_an_unrecognised_stored_value():
 
 @pytest.mark.asyncio
 async def test_search_projects_metadata_alongside_health():
+    metadata = {"author": "someone", "extra": {"team": "docs"}}
+    clean_verdict = {
+        "status": "clean",
+        "scanned_at": "2026-11-01T00:00:00+00:00",
+        "metadata_digest": metadata_digest(canonical_metadata(metadata, "skill")),
+        "ruleset": "test-ruleset",
+    }
     response = await _search(
         {
             SKILL_PATH: {
                 "health_status": "healthy",
-                "metadata": {"author": "someone", "extra": {"team": "docs"}},
+                "metadata": metadata,
+                "metadata_scan": clean_verdict,
             }
         },
         metadata_fields="extra.team",
@@ -109,3 +118,20 @@ async def test_search_projects_metadata_alongside_health():
 
     skill = response.skills[0]
     assert (skill.health_status, skill.metadata) == ("healthy", {"extra": {"team": "docs"}})
+
+
+@pytest.mark.asyncio
+async def test_search_withholds_unscanned_metadata_but_preserves_health():
+    response = await _search(
+        {
+            SKILL_PATH: {
+                "health_status": "healthy",
+                "metadata": {"extra": {"team": "docs"}},
+            }
+        },
+        metadata_fields="extra.team",
+    )
+
+    skill = response.skills[0]
+    assert skill.health_status == "healthy"
+    assert skill.metadata is None
