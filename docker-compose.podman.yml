@@ -318,9 +318,10 @@ services:
       - ANS_API_TIMEOUT_SECONDS=${ANS_API_TIMEOUT_SECONDS:-30}
       - ANS_SYNC_INTERVAL_HOURS=${ANS_SYNC_INTERVAL_HOURS:-6}
       - ANS_VERIFICATION_CACHE_TTL_SECONDS=${ANS_VERIFICATION_CACHE_TTL_SECONDS:-3600}
-      # Podman/local: allow the dashboard to call /api/* using the session cookie
-      # (disables nginx auth_request for /api/*; FastAPI still enforces auth)
-      - NGINX_DISABLE_API_AUTH_REQUEST=${NGINX_DISABLE_API_AUTH_REQUEST:-true}
+      # Keep nginx auth_request on /api/ (the default on every surface).
+      # Set to true only for local testing: /api/ then accepts only the
+      # session cookie, so Bearer-token API callers get 401.
+      - NGINX_DISABLE_API_AUTH_REQUEST=${NGINX_DISABLE_API_AUTH_REQUEST:-false}
       # Federation static token auth
       - FEDERATION_STATIC_TOKEN_AUTH_ENABLED=${FEDERATION_STATIC_TOKEN_AUTH_ENABLED:-false}
       - FEDERATION_STATIC_TOKEN=${FEDERATION_STATIC_TOKEN:-}
