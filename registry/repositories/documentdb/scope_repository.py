@@ -318,8 +318,8 @@ class DocumentDBScopeRepository(ScopeRepositoryBase):
         collection = await self._get_collection()
 
         try:
-            # Match the raw and the canonical form so a mapping stored as "team"
-            # matches a claim of "/team" and vice versa (issue #1689).
+            # Match the raw, canonical and "/name" forms so a mapping stored as
+            # "team" matches a claim of "/team" and vice versa (issue #1689).
             variants = group_name_variants([keycloak_group])
             if not variants:
                 return []
@@ -345,8 +345,8 @@ class DocumentDBScopeRepository(ScopeRepositoryBase):
         backed by the ``group_mappings`` index. Returns a de-duplicated,
         order-stable list of scope names.
         """
-        # Raw plus canonical form of every group, so a claim of "/team" matches
-        # a mapping stored as "team" and vice versa (issue #1689).
+        # Raw, canonical and "/name" form of every group, so a claim of "/team"
+        # matches a mapping stored as "team" and vice versa (issue #1689).
         unique = group_name_variants(groups)
         if not unique:
             return []
@@ -386,8 +386,13 @@ class DocumentDBScopeRepository(ScopeRepositoryBase):
             async for doc in cursor:
                 # Include the canonical form of each stored name so the login
                 # filter's membership test matches a claim in either form
-                # (issue #1689).
-                names.update(group_name_variants(doc.get("group_mappings") or []))
+                # (issue #1689). The "/name" query form is not needed here:
+                # the filter compares canonical names on both sides.
+                for stored in doc.get("group_mappings") or []:
+                    canonical = normalize_group_name(stored)
+                    if canonical:
+                        names.add(canonical)
+                        names.add(stored.strip())
             logger.debug(f"DocumentDB READ: Found {len(names)} distinct mapped group names")
             return names
         except Exception as e:

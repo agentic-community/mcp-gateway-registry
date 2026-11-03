@@ -78,8 +78,12 @@ class TestNormalizeGroupNames:
 class TestGroupNameVariants:
     """Query-side forms for matching stored mappings in either shape."""
 
-    def test_canonical_name_yields_one_variant(self):
-        assert group_name_variants(["team"]) == ["team"]
+    def test_bare_name_also_yields_full_path_form(self):
+        """A bare claim must find a mapping stored as ``/team``."""
+        assert group_name_variants(["team"]) == ["/team", "team"]
+
+    def test_nested_path_yields_full_path_form(self):
+        assert group_name_variants(["parent/child"]) == ["/parent/child", "parent/child"]
 
     def test_full_path_yields_raw_and_canonical(self):
         assert group_name_variants(["/team"]) == ["/team", "team"]
@@ -88,4 +92,4 @@ class TestGroupNameVariants:
         assert group_name_variants(["/b", "a", "b", "/a"]) == ["/a", "/b", "a", "b"]
 
     def test_empties_removed(self):
-        assert group_name_variants(["", "/", None, "x"]) == ["x"]  # type: ignore[list-item]
+        assert group_name_variants(["", "/", None, "x"]) == ["/x", "x"]  # type: ignore[list-item]

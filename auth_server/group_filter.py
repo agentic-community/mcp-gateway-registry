@@ -154,14 +154,14 @@ def _log_filter_result(
     groups: list[str],
     kept: list[str],
 ) -> None:
-    """Log the outcome of a filter pass, naming any group that was dropped.
+    """Log the outcome of a filter pass, warning when any group was dropped.
 
-    The counts alone (``5 -> 1``) cannot tell an operator which group went
-    missing, and once a group is gone from the session every later log line
-    faithfully reports the reduced set. Naming the dropped groups here is the
-    one place the information still exists (issue #1689). Group names are
-    already logged at INFO elsewhere on this path (the ``/validate`` enrichment
-    check), so this does not widen what the logs expose.
+    A dropped group means a claim the IdP sent has no scope mapping, which is
+    usually a configuration mistake. The INFO count line alone is easy to miss,
+    so a drop is raised to WARNING (issue #1689). Only the number of dropped
+    groups is logged, never their names: group names are claim content, and an
+    operator who needs them can compare the IdP's group list for the user with
+    the configured ``group_mappings``.
 
     Args:
         mode: Which filter ran, for the log line.
@@ -177,14 +177,13 @@ def _log_filter_result(
         len(kept),
     )
     kept_set = set(kept)
-    dropped = [g for g in groups if g not in kept_set]
-    if dropped:
+    dropped_count = sum(1 for g in groups if g not in kept_set)
+    if dropped_count:
         logger.warning(
-            "Group filter (%s) user=%s dropped %d group(s) with no scope mapping: %s",
+            "Group filter (%s) user=%s dropped %d group(s) with no scope mapping",
             mode,
             username_hash,
-            len(dropped),
-            dropped,
+            dropped_count,
         )
 
 

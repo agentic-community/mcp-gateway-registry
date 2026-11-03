@@ -424,15 +424,14 @@ class TestGroupNameNormalization:
 
 
 class TestDroppedGroupsAreLogged:
-    """A dropped group must be named, not just counted (issue #1689).
+    """A drop is raised to WARNING with a count, never with names (issue #1689).
 
-    ``5 -> 1`` cannot tell an operator which group went missing, and every
-    later log line faithfully reports the reduced set. This is the one place
-    the information still exists.
+    Group names are claim content and stay out of the logs. The count is
+    enough to tell an operator that a claim has no scope mapping.
     """
 
     @pytest.mark.asyncio
-    async def test_scope_derived_drop_names_the_groups(self, caplog):
+    async def test_scope_derived_drop_warns_with_count(self, caplog):
         repo = _make_scope_repo({"mcp-admins"})
         with patch.object(group_filter, "ALLOWED_IDP_GROUPS", []):
             with patch("registry.repositories.factory.get_scope_repository", return_value=repo):
@@ -443,10 +442,23 @@ class TestDroppedGroupsAreLogged:
                     )
         warnings = [r.message for r in caplog.records if r.levelno == logging.WARNING]
         assert any("dropped 2 group(s)" in m for m in warnings), warnings
-        assert any("finance-team" in m and "hr-team" in m for m in warnings), warnings
 
     @pytest.mark.asyncio
-    async def test_allowlist_drop_names_the_groups(self, caplog):
+    async def test_drop_never_logs_group_names(self, caplog):
+        repo = _make_scope_repo({"mcp-admins"})
+        with patch.object(group_filter, "ALLOWED_IDP_GROUPS", []):
+            with patch("registry.repositories.factory.get_scope_repository", return_value=repo):
+                with caplog.at_level(logging.DEBUG, logger="auth_server.group_filter"):
+                    await group_filter.filter_session_groups(
+                        ["mcp-admins", "/finance-team", "hr-team"],
+                        username_hash="h",
+                    )
+        logged = " ".join(r.getMessage() for r in caplog.records)
+        for name in ("mcp-admins", "finance-team", "hr-team"):
+            assert name not in logged, logged
+
+    @pytest.mark.asyncio
+    async def test_allowlist_drop_warns_with_count(self, caplog):
         with patch.object(group_filter, "ALLOWED_IDP_GROUPS", ["keep-a"]):
             with caplog.at_level(logging.WARNING, logger="auth_server.group_filter"):
                 await group_filter.filter_session_groups(
@@ -454,7 +466,8 @@ class TestDroppedGroupsAreLogged:
                     username_hash="h",
                 )
         warnings = [r.message for r in caplog.records if r.levelno == logging.WARNING]
-        assert any("drop-x" in m for m in warnings), warnings
+        assert any("dropped 1 group(s)" in m for m in warnings), warnings
+        assert not any("drop-x" in m for m in warnings), warnings
 
     @pytest.mark.asyncio
     async def test_nothing_dropped_logs_no_warning(self, caplog):

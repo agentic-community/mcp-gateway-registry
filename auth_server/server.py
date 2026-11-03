@@ -1973,10 +1973,11 @@ async def map_groups_to_scopes(groups: list[str]) -> list[str]:
         logger.error(f"Error querying group mappings from DocumentDB: {e}", exc_info=True)
         # Fall back to in-memory config if DocumentDB query fails. Compare on
         # the canonical group name, as the repository path does (issue #1689).
-        group_mappings = {
-            normalize_group_name(name): mapped
-            for name, mapped in SCOPES_CONFIG.get("group_mappings", {}).items()
-        }
+        # Merge rather than overwrite: "team" and "/team" can both be keys and
+        # must contribute their scopes together.
+        group_mappings: dict[str, list[str]] = {}
+        for name, mapped in SCOPES_CONFIG.get("group_mappings", {}).items():
+            group_mappings.setdefault(normalize_group_name(name), []).extend(mapped)
         for group in normalize_group_names(groups):
             if group in group_mappings:
                 group_scopes = group_mappings[group]

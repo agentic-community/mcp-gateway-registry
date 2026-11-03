@@ -58,25 +58,33 @@ def normalize_group_names(groups: list[str]) -> list[str]:
 def group_name_variants(groups: list[str]) -> list[str]:
     """Return every form a stored mapping might use for the given groups.
 
-    Scope documents written before normalisation existed may hold either the
-    raw or the canonical form, and a data migration is not worth the risk for
-    a comparison this cheap. Querying with both forms matches either without
-    touching stored data.
+    Scope documents written before normalisation existed may hold the raw
+    claim, the canonical name, or the Keycloak full-path form (``/team``), and
+    a data migration is not worth the risk for a comparison this cheap.
+    Querying with all three forms matches any of them without touching stored
+    data, so a bare ``team`` claim finds a mapping stored as ``/team`` and a
+    ``/team`` claim finds one stored as ``team``. That keeps scope lookup in
+    agreement with the login filter, which canonicalises the stored names.
+
+    A stored value with other decoration (a trailing slash, padding inside the
+    slashes) is not matched; rewrite such a mapping in canonical form.
 
     Args:
         groups: Raw group identifiers.
 
     Returns:
-        Sorted, de-duplicated list of the raw and canonical forms, with
-        empties removed. Sorted so a query built from it is deterministic.
+        Sorted, de-duplicated list of the raw, canonical and leading-slash
+        forms, with empties removed. Sorted so a query built from it is
+        deterministic.
     """
     variants: set[str] = set()
     for group in groups or []:
         canonical = normalize_group_name(group)
         if not canonical:
             # A value that is empty once canonicalised ("", "/", whitespace)
-            # names no group in either form, so neither form is queried.
+            # names no group in any form, so none is queried.
             continue
         variants.add(canonical)
+        variants.add(f"/{canonical}")
         variants.add(group.strip())
     return sorted(variants)
