@@ -26,11 +26,15 @@ _EMBEDDINGS_BACKEND_KIND_PATTERN = (
 
 # Allowlist of values for cloud_detection_method. Added in schema v3
 # (issue #986). Extended in issue #1120 with explicit, operator_declared,
-# operator_declined.
+# operator_declined. Extended in issue #1911 with host_os, wsl, docker_desktop.
 _CLOUD_DETECTION_METHOD_PATTERN = (
     r"^(env|dmi|ecs_meta|k8s_heuristic|imds|"
-    r"explicit|operator_declared|operator_declined|unknown)$"
+    r"explicit|operator_declared|operator_declined|"
+    r"host_os|wsl|docker_desktop|unknown)$"
 )
+
+# Methods that identify a developer machine. They pair only with cloud=local.
+_LOCAL_DETECTION_METHODS = ("host_os", "wsl", "docker_desktop")
 
 # Allowlist of values for internal_deployment_type. Added in schema v5
 # (issue #1216). Keep in sync with InternalDeploymentType in registry/core/config.py.
@@ -82,14 +86,22 @@ def _check_cloud_detection_consistency(cloud: str, method: str | None) -> None:
             f"cloud=unknown requires cloud_detection_method in (unknown, operator_declined, None), "
             f"got method={method!r}"
         )
-    if method == "operator_declared" and cloud not in ("on_premises", "other"):
-        raise ValueError(
-            f"cloud_detection_method=operator_declared requires cloud in "
-            f"{{on_premises, other}}, got cloud={cloud!r}"
-        )
+    # The admin-UI banner lets an operator name aws/azure/gcp when
+    # auto-detection fails, so operator_declared covers every named cloud.
+    if method == "operator_declared" and cloud == "unknown":
+        raise ValueError("cloud_detection_method=operator_declared requires a named cloud")
     if method == "operator_declined" and cloud != "unknown":
         raise ValueError(
             f"cloud_detection_method=operator_declined requires cloud=unknown, got cloud={cloud!r}"
+        )
+    if cloud == "local" and method not in _LOCAL_DETECTION_METHODS:
+        raise ValueError(
+            f"cloud=local requires cloud_detection_method in {_LOCAL_DETECTION_METHODS}, "
+            f"got method={method!r}"
+        )
+    if method in _LOCAL_DETECTION_METHODS and cloud != "local":
+        raise ValueError(
+            f"cloud_detection_method={method!r} requires cloud=local, got cloud={cloud!r}"
         )
     if cloud in ("on_premises", "other") and method not in ("operator_declared", "explicit"):
         raise ValueError(
@@ -118,7 +130,7 @@ class StartupEvent(BaseModel):
     arch: str = Field(..., min_length=1, max_length=20, description="CPU architecture")
     cloud: str = Field(
         default="unknown",
-        pattern="^(aws|gcp|azure|on_premises|other|unknown)$",
+        pattern="^(aws|gcp|azure|on_premises|other|local|unknown)$",
         description="Cloud provider",
     )
     compute: str = Field(
@@ -299,7 +311,7 @@ class HeartbeatEvent(BaseModel):
     )
     cloud: str = Field(
         default="unknown",
-        pattern="^(aws|gcp|azure|on_premises|other|unknown)$",
+        pattern="^(aws|gcp|azure|on_premises|other|local|unknown)$",
         description="Cloud provider",
     )
     compute: str = Field(

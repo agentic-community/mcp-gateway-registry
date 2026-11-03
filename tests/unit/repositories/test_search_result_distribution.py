@@ -425,3 +425,23 @@ async def test_skill_search_preserves_group_visibility():
         {"groups": ["team-b"]},
     )
     assert allowed and not denied
+
+
+def test_skill_search_result_carries_raw_skill_md_url():
+    """The index nests the raw URL under metadata; the result must surface it (issue #1952)."""
+    repo = DocumentDBSearchRepository()
+    doc = {
+        "entity_type": "skill",
+        "path": "/skills/pdf",
+        "name": "pdf",
+        "visibility": "public",
+        "text_boost": 9.0,
+        "metadata": {
+            "skill_md_url": "https://github.com/o/r/blob/main/SKILL.md",
+            "skill_md_raw_url": "https://raw.githubusercontent.com/o/r/main/SKILL.md",
+        },
+    }
+
+    hit = repo._format_lexical_results([doc], 10)["skills"][0]
+
+    assert hit["skill_md_raw_url"] == "https://raw.githubusercontent.com/o/r/main/SKILL.md"

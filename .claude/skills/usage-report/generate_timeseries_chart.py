@@ -23,6 +23,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 _sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from cloud_labels import cloud_label  # noqa: E402
 from tufte_style import apply_tufte_style, tufte_axes  # noqa: E402
 
 # Configure logging with basicConfig
@@ -112,7 +113,7 @@ def _compute_cumulative_installs(
         rid = row.get("registry_id", "").strip()
         if not rid:
             continue
-        cloud = row.get("cloud") or "unknown"
+        cloud = cloud_label(row)
         ts = row.get("ts", "")
         date = _extract_date(ts)
         if not date:
@@ -152,7 +153,7 @@ def _compute_daily_unique_installs(
         rid = row.get("registry_id", "").strip()
         if not rid:
             continue
-        cloud = row.get("cloud") or "unknown"
+        cloud = cloud_label(row)
         ts = row.get("ts", "")
         date = _extract_date(ts)
         if not date:
@@ -193,7 +194,7 @@ def _compute_daily_new_installs(
         date = _extract_date(row.get("ts", ""))
         if not date:
             continue
-        cloud = row.get("cloud") or "unknown"
+        cloud = cloud_label(row)
         prior = earliest.get(rid)
         if prior is None or date < prior[0]:
             earliest[rid] = (date, cloud)

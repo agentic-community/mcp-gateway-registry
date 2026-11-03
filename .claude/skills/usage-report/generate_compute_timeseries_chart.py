@@ -43,6 +43,9 @@ FIGURE_HEIGHT: int = 7
 LINE_PALETTE: str = "Set2"
 DIMENSION_COLUMN: str = "compute"
 DIMENSION_LABEL: str = "Compute Platform"
+# Only the bastion export is a telemetry snapshot. Dated folders also hold
+# CSV sidecars with no registry_id column, which would count as empty rows.
+SNAPSHOT_CSV_NAME: str = "registry_metrics.csv"
 
 
 def _find_csv_files(
@@ -180,6 +183,8 @@ def _compute_snapshot_table(
     for csv_path in csv_files:
         parent = os.path.basename(os.path.dirname(csv_path))
         if not date_re.match(parent):
+            continue
+        if os.path.basename(csv_path) != SNAPSHOT_CSV_NAME:
             continue
         seen: dict[str, str] = {}
         with open(csv_path, newline="") as f:

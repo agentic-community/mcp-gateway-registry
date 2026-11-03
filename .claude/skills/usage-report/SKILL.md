@@ -367,7 +367,7 @@ Same data-sourcing behavior as the other historical charts (scans all CSVs acros
 
 ### Step 5d: Generate Install Forecast Chart
 
-Project when the registry will reach 2,000 installs using two models: a 14-day OLS linear regression and a 7-day recent-pace extrapolation. Produces a PNG chart (cumulative installs with forecast line and confidence bands) and a JSON summary with ETAs. The target defaults to 2,000 and is overridable via `--target`.
+Project when the registry will reach 5,000 installs using two models: a 14-day OLS linear regression and a 7-day recent-pace extrapolation. Produces a PNG chart (cumulative installs with forecast line and confidence bands) and a JSON summary with ETAs. The target defaults to 5,000 and is overridable via `--target`.
 
 ```bash
 /usr/bin/python3 .claude/skills/usage-report/generate_install_forecast.py \
@@ -377,10 +377,12 @@ Project when the registry will reach 2,000 installs using two models: a 14-day O
 ```
 
 Outputs:
-- PNG chart showing cumulative installs, linear fit, and projected crossing of the 2,000-install target
+- PNG chart showing cumulative installs, linear fit, and projected crossing of the 5,000-install target
 - JSON summary with `today.installs`, `linear.eta` (with 95% CI bounds), `recent_pace.eta`, and model parameters
 
 Embed the chart in the report's **Install Forecast** section. Include a table showing both model ETAs and daily rates. This section should come after Version Adoption and before Customer Infra Spend.
+
+**Note**: Run this after Step 6. The series is one point per `metrics-*.json` snapshot, so today's point exists only once the analysis has written `metrics-YYYY-MM-DD.json`. Run earlier, the forecast silently uses the previous report's install count.
 
 ### Step 5e: Generate Adoption Funnel Chart
 
@@ -537,7 +539,16 @@ In addition to the manual `known-internal-instances.md` allowlist, the analysis 
 
 The computed data is written to the JSON output under the `internal_installs` key (`total`, `by_type`, `timeseries`, `since_release`). These fields come from the CSV export, so the bastion export script (`telemetry_db.py`) must include the `internal_only_deployment` and `internal_deployment_type` columns (it does as of #1216).
 
-If the file does not exist, the script treats all instances as external (no internal labeling, stickiness counts all instances).
+Every script that computes customer-only numbers also treats an instance as internal when its latest non-empty `internal_only_deployment` telemetry value is true (release 1.24.5 onwards). The shared helper `internal_instances.py` applies both sources, so the allowlist and the telemetry flag count the same way in every script. If the allowlist file does not exist, only the telemetry flag marks instances as internal.
+
+Cloud tables and charts show `cloud=unknown` with `cloud_detection_method=operator_declined` as `declined`, through the shared helper `cloud_labels.py`, so an operator who chose Dismiss on the admin banner is not counted as a detection miss. Rules that pick a non-AWS cloud, such as the "surprising survivor" architecture pattern, skip `declined` as well as `unknown`.
+
+Two more shared helpers keep sections consistent:
+
+- `version_labels.py` decides whether a version is a clean release tag (`^v?MAJOR.MINOR.PATCH(-pN)?$`). The Version Adoption table, the Community vs Internal split, and the Cloud Detection narrative all use it, so a commit hash or fork build is labeled `Build` everywhere rather than `Release` in one section.
+- `forecast_trend.py` classifies the 7-day install pace against the 14-day OLS slope as ahead, behind, or converged, with a 15% tolerance. The Install Forecast narrative and the forecast recommendations both call it, so the two cannot contradict each other.
+
+The Feature Adoption table counts unique instances (each instance's latest non-empty value), not events. The GitHub growth recommendation fires only above 5 stars or 2 forks per day, measured over the actual gap since the previous report.
 
 When writing the report:
 
@@ -624,7 +635,7 @@ The report MUST embed all 15 charts (the template's `![...]` references). If any
 6. `lifetime-buckets-YYYY-MM-DD.png` (retention % over time)
 7. `active-instances-YYYY-MM-DD.png` (DAI + MA7 + streak)
 8. `compute-installs-timeseries-YYYY-MM-DD.png` (compute platform cumulative + daily)
-9. `install-forecast-YYYY-MM-DD.png` (OLS + recent-pace to 2,000)
+9. `install-forecast-YYYY-MM-DD.png` (OLS + recent-pace to 5,000)
 10. `daily-reporters-YYYY-MM-DD.png` (daily AWS reporters: all + persisted >=2 events + persisted >=2 days)
 11. `ltv-spend-YYYY-MM-DD.png` (daily compute + bedrock + cumulative)
 12. `adoption-funnel-YYYY-MM-DD.png` (funnel from total to confirmed-alive)

@@ -226,6 +226,36 @@ class AuthProvider(ABC):
             f"{type(self).__name__} does not support verified id_token extraction"
         )
 
+    async def recover_bearer_groups(
+        self,
+        validation_result: dict[str, Any],
+        access_token: str,
+    ) -> list[str] | None:
+        """Return recovered groups, or None when this provider uses inline claims.
+
+        A confirmed empty membership is [], not None. Providers that need an
+        external lookup override this method and raise on lookup failure.
+
+        Args:
+            validation_result: The provider's verified token result.
+            access_token: The bearer token presented to the gateway.
+
+        Returns:
+            Recovered memberships, or None to leave the claims unchanged.
+        """
+        return None
+
+    def is_delegated_user(self, validation_result: dict[str, Any]) -> bool:
+        """Whether the verified result is a user token, not an M2M client.
+
+        Args:
+            validation_result: The provider's verified token result.
+
+        Returns:
+            False unless a provider implements delegated-user classification.
+        """
+        return False
+
     @abstractmethod
     def validate_token(self, token: str, **kwargs: Any) -> dict[str, Any]:
         """Validate an access token and return user info.

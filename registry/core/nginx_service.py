@@ -14,9 +14,15 @@ from urllib.parse import urlparse
 
 import httpx
 
+from registry.auth.proxied_token import _api_auth_request_enabled
 from registry.auth.resource_binding import INVALID_VERSION_SENTINEL
 from registry.common.log_redaction import redact_url
-from registry.constants import REGISTRY_CONSTANTS, DeploymentType, HealthStatus
+from registry.constants import (
+    REGISTRY_CONSTANTS,
+    RESERVED_CUSTOM_HEADER_NAMES,
+    DeploymentType,
+    HealthStatus,
+)
 from registry.egress_auth.upstream_binding import registered_versions, selected_upstream
 from registry.exceptions import UrlValidationError
 from registry.schemas.proxy_mixin import _assert_egress_allowed, build_proxy_client_path
@@ -124,6 +130,40 @@ _NGINX_AGENT_PATH_SAFE = re.compile(r"^[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*$")
 # newlines) remain excluded because they are not hex digits.
 _NGINX_AGENT_URL_SAFE = re.compile(
     r"^https?://[A-Za-z0-9.\-]+(?::\d+)?(?:/(?:[A-Za-z0-9._~\-/]|%[0-9A-Fa-f]{2})*)?$"
+)
+
+
+# Directory virtual_router.lua reads the per-virtual-server mapping JSON from.
+VIRTUAL_MAPPINGS_DIR: Path = Path("/etc/nginx/lua/virtual_mappings")
+
+
+# Request headers the /_vs_backend location must not relay to a
+# registrant-controlled backend. The set is derived from the canonical
+# RESERVED_CUSTOM_HEADER_NAMES denylist, so a header added there is stripped
+# here too. Two groups are carved out:
+#   - framing headers that nginx manages or the location sets itself
+#     (Host, Accept, Content-Type); clearing them would break the request.
+#   - X-User / X-Username, which the location re-sets from the values
+#     virtual_router.lua copied from the validated identity.
+# Everything else (ingress credentials, the gateway's signed internal tokens,
+# internal routing/identity headers, client-IP/forwarding headers) is cleared.
+_VS_BACKEND_FRAMING_HEADERS: frozenset[str] = frozenset(
+    {
+        "content-type",
+        "content-length",
+        "accept",
+        "host",
+        "connection",
+        "keep-alive",
+        "te",
+        "trailer",
+        "transfer-encoding",
+        "upgrade",
+    }
+)
+_VS_BACKEND_RESET_IDENTITY_HEADERS: frozenset[str] = frozenset({"x-user", "x-username"})
+_VS_BACKEND_STRIPPED_HEADERS: frozenset[str] = (
+    RESERVED_CUSTOM_HEADER_NAMES - _VS_BACKEND_FRAMING_HEADERS - _VS_BACKEND_RESET_IDENTITY_HEADERS
 )
 
 
@@ -472,9 +512,62 @@ def _render_real_ip_config() -> str:
     return "\n".join(lines)
 
 
+def _vs_backend_header_clears(
+    indent: str = "        ",
+) -> str:
+    """Return the nginx directives that clear every stripped header.
+
+    Args:
+        indent: Leading whitespace for each directive inside the location block.
+
+    Returns:
+        One ``proxy_set_header <Name> "";`` line per header in
+        ``_VS_BACKEND_STRIPPED_HEADERS``, sorted so the rendered config is stable.
+    """
+    lines = []
+    for name in sorted(_VS_BACKEND_STRIPPED_HEADERS):
+        canonical = "-".join(part.capitalize() for part in name.split("-"))
+        lines.append(f'{indent}proxy_set_header {canonical} "";')
+    return "\n".join(lines)
+
+
+def _virtual_backend_is_routable(
+    active: dict[str, Any],
+    base_path: str,
+) -> bool:
+    """Return True when a virtual server may route to this backend.
+
+    Applies the same gate as the direct route: the server must be enabled and
+    healthy. A security scan that fails disables the server, so this also drops
+    quarantined backends. Without it, a virtual server would keep routing to a
+    backend whose direct route has been removed.
+
+    Args:
+        active: The backend's active server document.
+        base_path: The active server path, used when the document has no path.
+
+    Returns:
+        True only when the backend is enabled and its health status is healthy.
+    """
+    if not active.get("is_enabled", False):
+        return False
+    health_key = active.get("path") or base_path
+    return HealthStatus.is_healthy(_server_health_status(health_key))
+
+
+def _server_health_status(
+    server_path: str,
+) -> str:
+    """Return the cached health status for a server path, UNKNOWN if never checked."""
+    from ..health.service import health_service
+
+    return health_service.server_health_status.get(server_path, HealthStatus.UNKNOWN)
+
+
 def _atomic_write_text(
     path: Path,
     content: str,
+    record_metric: bool = True,
 ) -> None:
     """Write content to path atomically (issue #1044).
 
@@ -496,6 +589,9 @@ def _atomic_write_text(
     Args:
         path: Destination path.
         content: Text content to write.
+        record_metric: Count this write in ``NGINX_CONFIG_WRITES``. Pass False
+            for files that are not the nginx config, such as the virtual-server
+            mapping files, so the metric keeps counting config writes only.
 
     Raises:
         OSError: If the temp file cannot be created, written, or replaced.
@@ -523,9 +619,11 @@ def _atomic_write_text(
         tmp.close()
         os.chmod(tmp_path, target_mode)
         os.replace(tmp_path, path)
-        NGINX_CONFIG_WRITES.labels(status="success").inc()
+        if record_metric:
+            NGINX_CONFIG_WRITES.labels(status="success").inc()
     except Exception:
-        NGINX_CONFIG_WRITES.labels(status="failure").inc()
+        if record_metric:
+            NGINX_CONFIG_WRITES.labels(status="failure").inc()
         try:
             tmp.close()
         except Exception:  # nosec B110 - best-effort cleanup of temp file on write failure
@@ -575,6 +673,99 @@ _LAST_GOOD_SUFFIX: str = ".last-good"
 # only mode or local dev), so the caller promotes the candidate without a test
 # rather than rejecting a legitimate render it cannot validate.
 _NGINX_TEST_NO_BINARY: str = "__nginx_binary_missing__"
+
+
+# Placeholders that only a raw, unrendered template contains. The registry
+# entrypoint waits for these same six to disappear before it starts nginx
+# (docker/registry-entrypoint.sh), so keep the two lists in sync. An unrendered
+# marker secret makes the auth server refuse every internal-token mint, which
+# 401s every registry API request.
+_UNRENDERED_TEMPLATE_MARKERS: tuple[str, ...] = (
+    "{{ADDITIONAL_SERVER_NAMES}}",
+    "{{ANTHROPIC_API_VERSION}}",
+    "{{LOCATION_BLOCKS}}",
+    "{{VIRTUAL_SERVER_BLOCKS}}",
+    "{{MCP_RESOURCE_METADATA_URL}}",
+    "{{NGINX_MARKER_SECRET}}",
+)
+
+
+# Brackets the `auth_request /validate;` line of every registry `/api/` location in
+# both nginx templates. NGINX_DISABLE_API_AUTH_REQUEST drops the bracketed lines;
+# the marker lines themselves are always removed from the rendered config.
+_API_AUTH_REQUEST_REGION_RE = re.compile(
+    r"^[ \t]*# \{\{API_AUTH_REQUEST_START\}\}[ \t]*\n"
+    r".*?"
+    r"^[ \t]*# \{\{API_AUTH_REQUEST_END\}\}[ \t]*\n",
+    re.MULTILINE | re.DOTALL,
+)
+_API_AUTH_REQUEST_MARKER_LINE_RE = re.compile(
+    r"^[ \t]*# \{\{API_AUTH_REQUEST_(?:START|END)\}\}[ \t]*\n",
+    re.MULTILINE,
+)
+
+
+def _apply_api_auth_request_markers(
+    template_content: str,
+    auth_request_enabled: bool,
+) -> str:
+    """Keep or drop the `/api/` auth_request lines marked in the nginx template.
+
+    The template is the only copy of the `/api/` location. When
+    ``auth_request_enabled`` is False (NGINX_DISABLE_API_AUTH_REQUEST set), the
+    lines between the ``{{API_AUTH_REQUEST_START}}`` and
+    ``{{API_AUTH_REQUEST_END}}`` markers are removed, so nginx stops running
+    ``/validate`` for ``/api/`` while every other directive in the location
+    (rate limits, header clears, error pages) stays as the template wrote it.
+
+    Args:
+        template_content: Raw nginx template text.
+        auth_request_enabled: Whether `/api/` keeps ``auth_request /validate``.
+
+    Returns:
+        The template text with the marker lines removed, and with the marked
+        region removed too when ``auth_request_enabled`` is False.
+    """
+    if not auth_request_enabled:
+        template_content, removed = _API_AUTH_REQUEST_REGION_RE.subn("", template_content)
+        if removed:
+            logger.warning(
+                "NGINX_DISABLE_API_AUTH_REQUEST enabled: bypassing auth_request for /api/"
+            )
+        else:
+            logger.warning(
+                "NGINX_DISABLE_API_AUTH_REQUEST enabled but the nginx template has no "
+                "{{API_AUTH_REQUEST_START}}/{{API_AUTH_REQUEST_END}} markers; "
+                "/api/ keeps auth_request"
+            )
+    return _API_AUTH_REQUEST_MARKER_LINE_RE.sub("", template_content)
+
+
+def _is_unrendered_template(
+    path: Path,
+) -> bool:
+    """Return True if the file at ``path`` is a raw template, not a rendered config.
+
+    The entrypoint copies the raw template into the live config path before the
+    registry renders it for the first time. That copy is not a config nginx can
+    load, so it must never be restored as the last-known-good config.
+
+    Args:
+        path: The live nginx config path.
+
+    Returns:
+        True if the file contains any unrendered template marker. False if it
+        contains none, or if it cannot be read (the backup step then reports
+        the read error).
+    """
+    try:
+        content = path.read_text()
+    except OSError:
+        return False
+    for marker in _UNRENDERED_TEMPLATE_MARKERS:
+        if marker in content:
+            return True
+    return False
 
 
 def _run_nginx_config_test() -> tuple[bool, str]:
@@ -684,6 +875,16 @@ def _write_and_validate_config(
 
     had_previous = path.exists()
     backup_path = path.with_name(path.name + _LAST_GOOD_SUFFIX)
+
+    # A raw template left by the entrypoint is not a last-good config. Treat it
+    # as no prior config, so a rejected first render removes the file instead
+    # of restoring a template nginx fails to parse (Issue #1575).
+    if had_previous and _is_unrendered_template(path):
+        logger.info(
+            "Live nginx config %s is an unrendered template; it will not be kept as last-good",
+            path,
+        )
+        had_previous = False
 
     # Back up the current live config so we can restore it on rejection.
     if had_previous:
@@ -1052,106 +1253,13 @@ class NginxConfigService:
             #
             # Set NGINX_DISABLE_API_AUTH_REQUEST=true to bypass `auth_request` for `/api/` and rely
             # on FastAPI's own auth (session cookie or bearer token validation inside the app).
-            import os
-
-            if os.environ.get("NGINX_DISABLE_API_AUTH_REQUEST", "false").lower() in (
-                "1",
-                "true",
-                "yes",
-                "on",
-            ):
-                protected_api_block = """    # Protected API endpoints - require authentication
-    location {{ROOT_PATH}}/api/ {
-        # Mark this as a registry-API request (rewrite phase) so the shared
-        # /validate subrequest forwards X-Registry-Api-Auth and /validate mints
-        # the registry-UI internal token. Set inside the location (NOT a
-        # server-scope default), which the auth_request subrequest would clobber.
-        set $registry_api_auth "1";
-
-        # Authenticate request via auth server (validates JWT Bearer tokens)
-        auth_request /validate;
-
-        # Capture auth server response headers
-        auth_request_set $auth_user $upstream_http_x_user;
-        auth_request_set $auth_username $upstream_http_x_username;
-        auth_request_set $auth_client_id $upstream_http_x_client_id;
-        auth_request_set $auth_scopes $upstream_http_x_scopes;
-        auth_request_set $auth_method $upstream_http_x_auth_method;
-        # Capture the /validate-minted registry-UI token (binds verified identity).
-        # The registry verifies this instead of trusting the forgeable X-* headers.
-        auth_request_set $auth_internal_token_registry $upstream_http_x_internal_token_registry;
-
-        # Proxy to FastAPI service
-        proxy_pass http://127.0.0.1:7860/api/;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-
-        # Forward validated auth context to FastAPI
-        proxy_set_header X-User $auth_user;
-        proxy_set_header X-Username $auth_username;
-        proxy_set_header X-Client-Id $auth_client_id;
-        proxy_set_header X-Scopes $auth_scopes;
-        proxy_set_header X-Auth-Method $auth_method;
-        # The internal token the registry verifies (it ignores the X-* headers above).
-        proxy_set_header X-Internal-Token-Registry $auth_internal_token_registry;
-
-        # Pass through original Authorization header
-        proxy_set_header Authorization $http_authorization;
-
-        # Pass all request headers
-        proxy_pass_request_headers on;
-
-        # Timeouts
-        proxy_connect_timeout 10s;
-        proxy_send_timeout 30s;
-        proxy_read_timeout 30s;
-    }"""
-
-                unprotected_api_block = """    # API endpoints - FastAPI handles authentication (session cookie / bearer)
-    location {{ROOT_PATH}}/api/ {
-        # Inbound rate limits still apply even though auth_request is bypassed:
-        # /api/ is the highest-volume surface and must stay bounded at the edge,
-        # and the registration endpoints keep their stricter per-source cap (the
-        # register zone key is empty for non-registration URIs, so it is a no-op
-        # for the rest of /api/).
-        limit_req zone=mcp_gateway_edge burst=100 nodelay;
-        limit_req zone=mcp_gateway_register burst=10 nodelay;
-        limit_conn mcp_gateway_conn 100;
-
-        # Proxy to FastAPI service
-        proxy_pass http://127.0.0.1:7860/api/;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-
-        # Pass through original Authorization header (if present)
-        proxy_set_header Authorization $http_authorization;
-
-        # Pass all request headers and cookies
-        proxy_pass_request_headers on;
-
-        # Timeouts
-        proxy_connect_timeout 10s;
-        proxy_send_timeout 30s;
-        proxy_read_timeout 30s;
-    }"""
-
-                if protected_api_block in template_content:
-                    template_content = template_content.replace(
-                        protected_api_block, unprotected_api_block
-                    )
-                    logger.warning(
-                        "NGINX_DISABLE_API_AUTH_REQUEST enabled: bypassing auth_request for /api/"
-                    )
-                else:
-                    logger.warning(
-                        "NGINX_DISABLE_API_AUTH_REQUEST enabled but could not find /api/ auth_request block in template"
-                    )
+            # The template stays the only copy of the `/api/` location: it marks the
+            # auth_request lines, and the flag only decides whether they are kept.
+            # Read through the registry-side helper so nginx and the registry
+            # always agree on whether the flag is set.
+            template_content = _apply_api_auth_request_markers(
+                template_content, _api_auth_request_enabled()
+            )
 
             # Generate location blocks for enabled and healthy servers with transport support
             # In registry-only mode, skip MCP server location blocks (use empty list)
@@ -1311,12 +1419,15 @@ class NginxConfigService:
                 "{{ADDITIONAL_SERVER_NAMES}}", additional_server_names
             )
             config_content = config_content.replace("{{ANTHROPIC_API_VERSION}}", api_version)
-            # egress marker: force-set on the /validate subrequest so a direct
-            # :8888 caller cannot supply it. Empty default leaves the header empty
-            # (marker disabled), matching auth_server's empty-secret pass-through.
+            # Marker secret: force-set on every /validate subrequest so the auth
+            # server mints internal tokens only for requests that came through
+            # nginx. Read from the same Settings object that refuses to start
+            # without it (and that the generated /_vs_auth_* blocks use), so a
+            # value supplied only through .env cannot render as an empty marker,
+            # which would make the auth server refuse every mint.
             config_content = config_content.replace(
                 "{{NGINX_MARKER_SECRET}}",
-                os.environ.get("AUTH_SERVER_NGINX_MARKER_SECRET", ""),
+                self._sanitize_for_nginx_set(settings.auth_server_nginx_marker_secret),
             )
             config_content = config_content.replace("{{KEYCLOAK_SCHEME}}", keycloak_scheme)
             config_content = config_content.replace("{{KEYCLOAK_HOST}}", keycloak_host)
@@ -1931,6 +2042,10 @@ class NginxConfigService:
         # config can name internal locations this config no longer has.
         set $vs_config_generation "{VS_CONFIG_GENERATION_PLACEHOLDER}";
         auth_request /validate;
+        auth_request_set $auth_subrequest_status $upstream_status;
+        auth_request_set $auth_entra_outage_marker $upstream_http_x_entra_group_lookup_unavailable;
+        error_page 500 = @auth_internal_error;
+        error_page 502 = @upstream_unavailable_jsonrpc;
         auth_request_set $auth_scopes $upstream_http_x_scopes;
         auth_request_set $auth_user $upstream_http_x_user;
         auth_request_set $auth_username $upstream_http_x_username;
@@ -2075,6 +2190,10 @@ class NginxConfigService:
     location {{{{ROOT_PATH}}}}{location_path} {{
         client_max_body_size {body_size};
         auth_request /validate;
+        auth_request_set $auth_subrequest_status $upstream_status;
+        auth_request_set $auth_entra_outage_marker $upstream_http_x_entra_group_lookup_unavailable;
+        error_page 500 = @auth_internal_error;
+        error_page 502 = @upstream_unavailable;
         auth_request_set $auth_internal_token_generic $upstream_http_x_internal_token_generic;
         auth_request_set $auth_user $upstream_http_x_user;
         auth_request_set $auth_scopes $upstream_http_x_scopes;
@@ -2277,6 +2396,9 @@ class NginxConfigService:
         if not active:
             logger.warning("Active server not found for virtual backend %s", backend_path)
             return None
+        if not _virtual_backend_is_routable(active, base_path):
+            logger.warning("Skipping disabled or unhealthy virtual backend %s", backend_path)
+            return None
         egress_mode = active.get("egress_auth_mode", "none")
         if egress_mode not in ("none", "pat", "oauth_user", "obo_exchange"):
             logger.warning("Invalid egress auth mode for virtual backend %s", backend_path)
@@ -2399,6 +2521,21 @@ class NginxConfigService:
         proxy_read_timeout 10s;
         proxy_send_timeout 10s;
         proxy_http_version 1.1;
+        # This location proxies straight to the auth server's /validate; it never
+        # passes through the template's shared `location = /validate` block, so
+        # it repeats that block's header buffers here (issue #1939). The response
+        # carries the scope-bearing X-Internal-Token minted for the backend
+        # (X-Resolved-Upstream is set below) but no registry token, because
+        # X-Registry-Api-Auth is cleared below, so it never carries the groups.
+        proxy_buffer_size 64k;
+        proxy_buffers 2 64k;
+        proxy_busy_buffers_size 64k;
+        # The Lua router treats any non-200, or a 200 without a signed
+        # X-Internal-Token, as a failed backend authorization. In an
+        # ngx.location.capture the error_page below did not rewrite the status
+        # (an oversized auth response reached Lua as 502); it is kept to stop a
+        # server-level error_page such as /502.html from answering here.
+        error_page 500 502 504 = @auth_subrequest_failed;
         proxy_set_header Host $host;
         proxy_set_header X-Original-URL $scheme://$host{{{{ROOT_PATH}}}}{safe_backend_path}/mcp;
         # The parent URI is the only source of a virtual-resource token's
@@ -2504,23 +2641,13 @@ class NginxConfigService:
         proxy_ssl_server_name on;
         proxy_set_header Host {safe_upstream_host};
         # SECURITY: this location proxies directly to a registrant-controlled
-        # (not fully trusted) MCP backend. Never relay the caller's registry
-        # credential here -- clearing Authorization AND Cookie prevents a
-        # malicious registered upstream from capturing and replaying the
-        # caller's gateway bearer token or registry session cookie against the
-        # registry API. This location is reached via a Lua subrequest that
-        # inherits the parent request's headers, so Cookie must be explicitly
-        # cleared or the user's session cookie would be forwarded verbatim.
-        # The gateway authenticates the upstream via its own mechanism, not by
-        # forwarding the caller's credential.
-        proxy_set_header Authorization "";
-        proxy_set_header Cookie "";
-        proxy_set_header X-Authorization "";
-        proxy_set_header X-Internal-Token "";
-        proxy_set_header X-Internal-Token-Generic "";
-        proxy_set_header X-Internal-Token-Registry "";
-        proxy_set_header X-Body "";
-        proxy_set_header X-Body-Uninspectable "";
+        # (not fully trusted) MCP backend. It is reached via a Lua subrequest
+        # that inherits the parent request's headers, so every reserved header
+        # is cleared explicitly: the caller's credentials (Authorization,
+        # X-Authorization, Proxy-Authorization, Cookie), the gateway's signed
+        # internal tokens, and the internal routing/identity headers. The list
+        # comes from RESERVED_CUSTOM_HEADER_NAMES (_VS_BACKEND_STRIPPED_HEADERS).
+{_vs_backend_header_clears()}
         # Forward the validated caller identity so backends can attribute
         # write operations to the authenticated user.  These are set as
         # request headers by virtual_router.lua (ngx.req.set_header) before
@@ -2563,7 +2690,7 @@ class NginxConfigService:
 
             server_repo = get_server_repository()
 
-            mappings_dir = Path("/etc/nginx/lua/virtual_mappings")
+            mappings_dir = VIRTUAL_MAPPINGS_DIR
             mappings_dir.mkdir(parents=True, exist_ok=True)
 
             for vs in virtual_servers:
@@ -2641,9 +2768,13 @@ class NginxConfigService:
                     "tool_backend_map": tool_backend_map,
                 }
 
+                # Atomic, so virtual_router.lua never reads a half-written file.
                 mapping_path = mappings_dir / f"{server_id}.json"
-                with open(mapping_path, "w") as f:
-                    json.dump(mapping_data, f, indent=2, default=str)
+                _atomic_write_text(
+                    mapping_path,
+                    json.dumps(mapping_data, indent=2, default=str),
+                    record_metric=False,
+                )
 
                 logger.debug(f"Wrote virtual server mapping: {mapping_path}")
 
@@ -2846,6 +2977,10 @@ class NginxConfigService:
         resolver {dns_resolver} valid=10s;
         resolver_timeout {dns_resolver_timeout}s;
         auth_request /validate;
+        auth_request_set $auth_subrequest_status $upstream_status;
+        auth_request_set $auth_entra_outage_marker $upstream_http_x_entra_group_lookup_unavailable;
+        error_page 500 = @auth_internal_error;
+        error_page 502 = @upstream_unavailable;
         auth_request_set $auth_scopes $upstream_http_x_scopes;
         set $agent_backend_url "{safe_backend_url}";
         set $agent_card_upstream "{card_internal_uri}";
@@ -2882,6 +3017,10 @@ class NginxConfigService:
         resolver {dns_resolver} valid=10s;
         resolver_timeout {dns_resolver_timeout}s;
         auth_request /validate;
+        auth_request_set $auth_subrequest_status $upstream_status;
+        auth_request_set $auth_entra_outage_marker $upstream_http_x_entra_group_lookup_unavailable;
+        error_page 500 = @auth_internal_error;
+        error_page 502 = @upstream_unavailable_jsonrpc;
         auth_request_set $auth_user $upstream_http_x_user;
         auth_request_set $auth_username $upstream_http_x_username;
         auth_request_set $auth_scopes $upstream_http_x_scopes;
@@ -3178,6 +3317,10 @@ class NginxConfigService:
 
         # Authenticate request - pass entire request to auth server
         auth_request /validate;
+        auth_request_set $auth_subrequest_status $upstream_status;
+        auth_request_set $auth_entra_outage_marker $upstream_http_x_entra_group_lookup_unavailable;
+        error_page 500 = @auth_internal_error;
+        error_page 502 = @upstream_unavailable_jsonrpc;
 
         # Capture auth server response headers for forwarding
         auth_request_set $auth_user $upstream_http_x_user;

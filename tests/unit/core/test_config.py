@@ -184,7 +184,7 @@ class TestSettingsInstantiation:
             "session_cookie_name": "test_cookie",
             "session_max_age_seconds": 3600,
             "embeddings_provider": "litellm",
-            "embeddings_model_name": "text-embedding-3-small",
+            "embeddings_model_name": "openai/text-embedding-3-small",
             "embeddings_model_dimensions": 1024,
             "health_check_interval_seconds": 600,
         }
@@ -657,7 +657,7 @@ class TestSettingsEmbeddingsProviders:
         # Act
         settings = Settings(
             embeddings_provider="litellm",
-            embeddings_model_name="text-embedding-3-small",
+            embeddings_model_name="openai/text-embedding-3-small",
             embeddings_model_dimensions=1536,
             embeddings_api_key="test-api-key",
             embeddings_api_base="https://api.openai.com/v1",
@@ -665,7 +665,7 @@ class TestSettingsEmbeddingsProviders:
 
         # Assert
         assert settings.embeddings_provider == "litellm"
-        assert settings.embeddings_model_name == "text-embedding-3-small"
+        assert settings.embeddings_model_name == "openai/text-embedding-3-small"
         assert settings.embeddings_model_dimensions == 1536
         assert settings.embeddings_api_key == "test-api-key"
         assert settings.embeddings_api_base == "https://api.openai.com/v1"
@@ -805,6 +805,32 @@ class TestSettingsSecretKey:
                 secret_key="a-valid-secret-key-of-at-least-32-bytes",
                 auth_server_nginx_marker_secret="short",
             )
+
+    @pytest.mark.parametrize(
+        "bad", ["$", "\n", "\r", " ", "\t", "\x00", "\x7f", "\u00e9", "\u00a0"]
+    )
+    def test_marker_secret_nginx_cannot_carry_rejected(self, monkeypatch, tmp_path, bad) -> None:
+        """A marker the nginx header round trip would alter, or that
+        ``secrets.compare_digest`` cannot compare (non-ASCII), fails at startup, not
+        on every request."""
+        monkeypatch.chdir(tmp_path)
+        with pytest.raises(RuntimeError, match="only printable ASCII"):
+            Settings(
+                secret_key="a-valid-secret-key-of-at-least-32-bytes",
+                auth_server_nginx_marker_secret=f"0123456789abcdef{bad}0123456789abcdef",
+            )
+
+    def test_marker_secret_surrounding_whitespace_is_stripped(self, monkeypatch, tmp_path) -> None:
+        """A trailing newline from a secret file must not reach the comparison."""
+        monkeypatch.chdir(tmp_path)
+        marker = "0123456789abcdef0123456789abcdef"
+
+        settings = Settings(
+            secret_key="a-valid-secret-key-of-at-least-32-bytes",
+            auth_server_nginx_marker_secret=f"  {marker}\n",
+        )
+
+        assert settings.auth_server_nginx_marker_secret == marker
 
 
 # =============================================================================

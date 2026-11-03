@@ -8,7 +8,7 @@ global:
   image:
     # Container registry (host + optional namespace), e.g. "public.ecr.aws/p3v1o3c6"
     registry: public.ecr.aws/p3v1o3c6
-    tag: 1.33.0
+    tag: 1.36.0
     pullPolicy: IfNotPresent
   # When installing chart from repository, add --set global.chartVersion=$(git rev-parse HEAD) to add the git hash to a configmap for debugging
   chartVersion:
@@ -33,6 +33,29 @@ global:
   existingSharedSecret: "" # If set, skip creating shared-secret and use this name instead
   existingOauthProviderSecret: "" # If set, skip creating oauth-provider-secret and use this name instead
   existingMongoCredentialsSecret: "" # If set, use this name instead of mongo-credentials in deployments
+  existingKeycloakClientSecret: "" # If set, skip creating keycloak-client-secret and use this name instead. Required under ArgoCD/GitOps unless the client secrets below are set explicitly — see charts/mcp-gateway-registry-stack/README.md.
+  # Secret generation switch.
+  #
+  # true (default): values the chart cannot resolve are generated randomly on
+  # first install and preserved across `helm upgrade` via `lookup`.
+  #
+  # false: REQUIRED for ArgoCD and any other `helm template` based tool. Those
+  # render without cluster access, so `lookup` always returns empty and a
+  # generated value would differ on every sync — replacing secrets under
+  # running pods, rotating the MongoDB user's credential, and re-randomizing
+  # the Keycloak PostgreSQL password against a retained PVC. With generation
+  # off, an unresolved value is a render-time error naming the value to set.
+  #
+  # Values to supply when set to false (or point the existing* keys above at
+  # Secrets that already hold them):
+  #   global.secretKey
+  #   global.authProvider.keycloak.clientSecret / .m2mClientSecret
+  #   keycloak.auth.adminPassword
+  #   keycloak.postgresql.auth.password / .postgresPassword
+  #   mongodb.password
+  #   global.federation.staticToken / .encryptionKey  (federation only)
+  #   registry.egressAuth.markerSecret
+  generateSecrets: true
   # Federation configuration - shared between registry and auth-server
   federation:
     staticTokenAuthEnabled: false # If not provided, defaults to false
@@ -48,6 +71,15 @@ global:
       adminUsername: &keycloakAdmin "user"
       realm: &keycloakRealm "mcp-gateway"
       # Don't set password here - let Keycloak chart generate it
+      # OIDC client secrets for the realm's mcp-gateway-web / mcp-gateway-m2m
+      # clients. Left empty, the chart generates them on first install,
+      # preserves them across `helm upgrade`, and the setup-keycloak Job
+      # publishes them to Keycloak. Set them explicitly when the rendered
+      # value must be deterministic (ArgoCD renders with `helm template`, so
+      # the chart cannot read the previous value back out of the cluster) or
+      # when pointing at an externally managed Keycloak.
+      clientSecret: ""
+      m2mClientSecret: ""
     entra:
       adminGroupId: # UUID of Entra admin group
   # Common ingress settings. Only the registry exposes a public ingress.
@@ -214,9 +246,23 @@ keycloak:
   auth:
     adminUser: *keycloakAdmin
     existingSecret: '{{ .Release.Name }}-keycloak'
+    # Keycloak admin password. Empty generates one on first install and
+    # preserves it across upgrades (see global.generateSecrets). Rendered into
+    # the Secret named by existingSecret above, which is what the bundled
+    # Bitnami chart reads. Keycloak bootstraps its admin user once, so setting
+    # this on an existing install does not change the password in the realm.
+    adminPassword: ""
   postgresql:
     auth:
       existingSecret: '{{ .Release.Name }}-keycloak-postgresql'
+      # Keycloak's PostgreSQL credentials. Empty generates them on first
+      # install and preserves them across upgrades (see
+      # global.generateSecrets). Set them at FIRST install only: PostgreSQL
+      # initializes its roles from these values once, and changing them later
+      # while the PVC is retained causes the bn_keycloak authentication
+      # failure.
+      password: ""
+      postgresPassword: ""
     image:
       registry: docker.io
       repository: bitnamilegacy/postgresql
@@ -604,6 +650,16 @@ mcpgw:
     # mcpgw only consumes a subset (no MongoDB writer); extra keys merged in
     # by the anchor are ignored by charts/mcpgw/templates/configmap-app-log.yaml.
     !!merge <<: *appLogConfig
+    # Egress HTTP connection pooling (operational tuning). mcpgw holds ONE
+    # process-lifetime pooled httpx client for every outbound hop: the
+    # registry API calls and the Keycloak M2M token POST. Unlike the registry
+    # and auth-server (where these ride under egressAuth.*), mcpgw has no
+    # egress credential vault, so they live under app.* and are always applied.
+    # These MUST match registry.egressAuth and auth-server.egressAuth.
+    httpPoolMaxConnections: "100" # Max total egress connections in the pool
+    httpPoolMaxKeepalive: "20" # Max idle keep-alive connections retained
+    httpPoolKeepaliveExpirySeconds: "30" # Idle keep-alive lifetime (s); below LB idle timeout
+    httpPoolConnectRetries: "1" # Transport-level connect retries
   nodeSelector: {}
   # Extra env vars / envFrom sources appended to the mcpgw container.
   # See charts/mcpgw/values.yaml for validation rules, reserved names,
@@ -693,8 +749,12 @@ auth-server:
     clientId: ""
     clientSecret: ""
     tenantId: ""
-    loginBaseUrl: "" # Custom Entra login base URL for sovereign clouds
-    graphBaseUrl: "" # Optional Microsoft Graph base URL override (auto-inferred from loginBaseUrl)
+    loginBaseUrl: "" # Sovereign Entra login base URL; a custom login proxy also needs graphBaseUrl.
+    graphBaseUrl: "" # Optional on known Entra clouds; required for a custom login proxy. This is the network fetch URL.
+    graphResourceUrl: "" # Native Microsoft Graph OAuth resource, required for custom login proxies when groupRecoveryEnabled or browserUserReadEnabled is true. Set DoD explicitly.
+    browserUserReadEnabled: false # Request User.Read on browser login. Default false keeps OIDC-only login; Graph lookup also requires groupRecoveryEnabled.
+    groupRecoveryEnabled: true # Recover overage groups via Graph for eligible bearer tokens and browser sessions consented to User.Read. False disables Graph recovery.
+    groupCacheTtlSeconds: 300 # Positive Graph group-result cache lifetime (30..3600 seconds); removals can remain cached until expiration.
     scopeFormat: "" # Entra PRM scope form: "v1" (api://<app-id>/<scope>) or "v2" (bare, default). Set "v1" only if your app exposes v1-style api:// scopes (issue #990).
     applicationIdUri: "" # Application ID URI (e.g. api://<app-id>). Used as the v1 scope prefix and accepted as a token audience. Defaults to api://<clientId>.
   # Okta settings (used when global.authProvider.type = "okta")

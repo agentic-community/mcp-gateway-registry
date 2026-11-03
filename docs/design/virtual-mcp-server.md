@@ -385,7 +385,11 @@ at the gateway-wide document. The gate is
 `virtual_server_needs_per_server_prm`: true on Entra for every virtual server,
 and on a lenient IdP only when a backing server's own egress mode already
 requires a per-resource audience (`obo_exchange`). Keycloak and Cognito
-deployments therefore keep using the gateway-wide PRM, unchanged.
+deployments therefore keep using the gateway-wide PRM, unchanged, except for a
+virtual server backed by an `obo_exchange` server. That one gets a per-server PRM
+whose `scopes_supported` is the gateway-wide list (`MCP_ADVERTISED_SCOPES`), not
+the Entra-only `<resource>/user_impersonation`, because Keycloak rejects unknown
+scopes with `invalid_scope`.
 
 This matters because the gateway-wide document advertises the bare origin, which
 Entra cannot match to an Application ID URI and whose OIDC-basics scopes it
@@ -628,8 +632,9 @@ When a virtual server is created or updated, the service layer performs the foll
 
 | Error Condition | Lua Router Behavior |
 |----------------|---------------------|
-| Missing `Mcp-Session-Id` header | Returns JSON-RPC error: "Missing session" |
-| Invalid/expired client session | Returns JSON-RPC error: "Invalid session" |
+| Missing or malformed `Mcp-Session-Id` header | Returns HTTP 400 with a JSON-RPC error |
+| Unknown or expired client session, or one owned by another user or minted for another virtual server | Returns HTTP 404 with a JSON-RPC error; per the MCP spec the client starts a new session with `initialize` |
+| Client session check fails (registry or session store unavailable) | Returns HTTP 503 with a JSON-RPC error; the client can retry without starting a new session |
 | Backend returns HTTP 400, 404, or 410 | Invalidates cached session state (stateful or stateless), retries once with a fresh `initialize` |
 | Backend unreachable | Returns JSON-RPC error with backend details |
 | User lacks required scope | Returns HTTP 403 with scope details |

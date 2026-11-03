@@ -120,6 +120,10 @@ services:
       - EGRESS_TOKEN_REFRESH_SKEW_SECONDS=${EGRESS_TOKEN_REFRESH_SKEW_SECONDS:-300}
       - EGRESS_STATE_TTL_SECONDS=${EGRESS_STATE_TTL_SECONDS:-600}
       - EGRESS_OBO_ALLOWED_AUDIENCES=${EGRESS_OBO_ALLOWED_AUDIENCES:-}
+      # Opt-in OBO exchanged-token cache. Off by default.
+      - EGRESS_OBO_CACHE_ENABLED=${EGRESS_OBO_CACHE_ENABLED:-false}
+      - EGRESS_OBO_CACHE_MAX_TTL_SECONDS=${EGRESS_OBO_CACHE_MAX_TTL_SECONDS:-300}
+      - EGRESS_OBO_CACHE_EXPIRY_SKEW_SECONDS=${EGRESS_OBO_CACHE_EXPIRY_SKEW_SECONDS:-30}
       - EGRESS_OAUTH_TRUSTED_IDP_HOSTS=${EGRESS_OAUTH_TRUSTED_IDP_HOSTS:-}
       - EGRESS_CREDENTIAL_ENCRYPTION_KEY=${EGRESS_CREDENTIAL_ENCRYPTION_KEY:-}
       - EGRESS_CREDENTIAL_ENCRYPTION_REQUIRE_ENCRYPTED=${EGRESS_CREDENTIAL_ENCRYPTION_REQUIRE_ENCRYPTED:-false}
@@ -300,6 +304,16 @@ services:
       - EMBEDDINGS_API_KEY=${EMBEDDINGS_API_KEY}
       - EMBEDDINGS_API_BASE=${EMBEDDINGS_API_BASE}
       - EMBEDDINGS_AWS_REGION=${EMBEDDINGS_AWS_REGION:-us-east-1}
+      - EMBEDDINGS_RESPONSE_FORMAT=${EMBEDDINGS_RESPONSE_FORMAT:-openai}
+      - EMBEDDINGS_REQUEST_TIMEOUT_SECONDS=${EMBEDDINGS_REQUEST_TIMEOUT_SECONDS:-30}
+      - EMBEDDINGS_MAX_RETRIES=${EMBEDDINGS_MAX_RETRIES:-2}
+      - EMBEDDINGS_RETRY_MAX_INPUT_CHARS=${EMBEDDINGS_RETRY_MAX_INPUT_CHARS:-}
+      # Extra headers on embeddings requests, one 'Name: value' per slot (litellm only)
+      - EMBEDDINGS_EXTRA_HEADER_1=${EMBEDDINGS_EXTRA_HEADER_1}
+      - EMBEDDINGS_EXTRA_HEADER_2=${EMBEDDINGS_EXTRA_HEADER_2}
+      - EMBEDDINGS_EXTRA_HEADER_3=${EMBEDDINGS_EXTRA_HEADER_3}
+      - EMBEDDINGS_EXTRA_HEADER_4=${EMBEDDINGS_EXTRA_HEADER_4}
+      - EMBEDDINGS_EXTRA_HEADER_5=${EMBEDDINGS_EXTRA_HEADER_5}
       # Embeddings IdP Auth (only when EMBEDDINGS_AUTH_MODE=idp)
       - EMBEDDINGS_AUTH_MODE=${EMBEDDINGS_AUTH_MODE}
       - EMBEDDINGS_IDP_TOKEN_ENDPOINT=${EMBEDDINGS_IDP_TOKEN_ENDPOINT}
@@ -470,8 +484,9 @@ services:
       # heuristic; set it to harden against open-redirect via a controlled subdomain.
       - OAUTH2_ALLOWED_REDIRECT_URIS=${OAUTH2_ALLOWED_REDIRECT_URIS:-}
       # Per-user egress credential vault: auth-server only needs the feature flag,
-      # the internal vend URL, and the nginx marker secret (it does NOT touch the
-      # secret store, so no SECRET_STORE/AWS/OPENBAO vars here).
+      # the internal vend URL, and the nginx marker secret. With the opt-in OBO
+      # token cache it also becomes a secret-store client, so it
+      # needs the same SECRET_STORE/AWS/OPENBAO vars as the registry (added below).
       - EGRESS_AUTH_ENABLED=${EGRESS_AUTH_ENABLED:-false}
       - EGRESS_REGISTRY_INTERNAL_URL=${EGRESS_REGISTRY_INTERNAL_URL:-http://registry:8091}
       # OBO (same-IdP) token exchange against a self-hosted IdP: allowlist its
@@ -502,6 +517,34 @@ services:
       # exactly equivalent to leaving it unset.
       - AWS_EC2_METADATA_DISABLED=${AWS_EC2_METADATA_DISABLED:-false}
       - EGRESS_FORWARD_PROXY_CA_BUNDLE=${EGRESS_FORWARD_PROXY_CA_BUNDLE:-}
+      # Opt-in OBO exchanged-token cache. Off by default. When
+      # enabled, auth-server reuses still-valid exchanged tokens from the per-user
+      # SecretStore, which is why it now needs the secret-store backend config
+      # below (previously registry-only).
+      - EGRESS_OBO_CACHE_ENABLED=${EGRESS_OBO_CACHE_ENABLED:-false}
+      - EGRESS_OBO_CACHE_MAX_TTL_SECONDS=${EGRESS_OBO_CACHE_MAX_TTL_SECONDS:-300}
+      - EGRESS_OBO_CACHE_EXPIRY_SKEW_SECONDS=${EGRESS_OBO_CACHE_EXPIRY_SKEW_SECONDS:-30}
+      # Application-layer encryption of cached OBO tokens. Same key and strict
+      # flag as the registry; only read when EGRESS_OBO_CACHE_ENABLED=true.
+      - EGRESS_CREDENTIAL_ENCRYPTION_KEY=${EGRESS_CREDENTIAL_ENCRYPTION_KEY:-}
+      - EGRESS_CREDENTIAL_ENCRYPTION_REQUIRE_ENCRYPTED=${EGRESS_CREDENTIAL_ENCRYPTION_REQUIRE_ENCRYPTED:-false}
+      - SECRET_STORE_BACKEND=${SECRET_STORE_BACKEND:-openbao}
+      - AWS_SECRETS_REGION=${AWS_SECRETS_REGION:-}
+      - SECRETS_MANAGER_KMS_KEY_ID=${SECRETS_MANAGER_KMS_KEY_ID:-}
+      - SECRETS_MANAGER_PATH_PREFIX=${SECRETS_MANAGER_PATH_PREFIX:-mcp/egress}
+      # Default to the in-stack OpenBao container (dev mode). Override for an
+      # external vault.
+      - OPENBAO_ADDR=${OPENBAO_ADDR:-http://openbao:8200}
+      - OPENBAO_NAMESPACE=${OPENBAO_NAMESPACE:-}
+      - OPENBAO_KV_MOUNT=${OPENBAO_KV_MOUNT:-secret}
+      - OPENBAO_AUTH_METHOD=${OPENBAO_AUTH_METHOD:-token}
+      - OPENBAO_ROLE=${OPENBAO_ROLE:-}
+      # Static token for OPENBAO_AUTH_METHOD=token. Only needed when
+      # EGRESS_OBO_CACHE_ENABLED=true; empty by default so the auth-server holds
+      # no vault credential. Compose has no namespace scoping, so whatever token
+      # is set here (typically the dev root token) can read every stored
+      # credential.
+      - OPENBAO_TOKEN=${AUTH_SERVER_OPENBAO_TOKEN:-}
       - AUTH_SERVER_NGINX_MARKER_SECRET=${AUTH_SERVER_NGINX_MARKER_SECRET:-}
       - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID}
       - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET}
@@ -550,6 +593,12 @@ services:
       - ENTRA_CLIENT_ID=${ENTRA_CLIENT_ID}
       - ENTRA_CLIENT_SECRET=${ENTRA_CLIENT_SECRET}
       - ENTRA_ENABLED=${ENTRA_ENABLED:-false}
+      - ENTRA_LOGIN_BASE_URL=${ENTRA_LOGIN_BASE_URL:-https://login.microsoftonline.com}
+      - ENTRA_GRAPH_BASE_URL=${ENTRA_GRAPH_BASE_URL:-}
+      - ENTRA_GRAPH_RESOURCE_URL=${ENTRA_GRAPH_RESOURCE_URL:-}
+      - ENTRA_BROWSER_USER_READ_ENABLED=${ENTRA_BROWSER_USER_READ_ENABLED:-false}
+      - ENTRA_GROUP_RECOVERY_ENABLED=${ENTRA_GROUP_RECOVERY_ENABLED:-true}
+      - ENTRA_GROUP_CACHE_TTL_SECONDS=${ENTRA_GROUP_CACHE_TTL_SECONDS:-300}
       # Okta configuration
       - OKTA_DOMAIN=${OKTA_DOMAIN:-}
       - OKTA_CLIENT_ID=${OKTA_CLIENT_ID:-}
@@ -672,6 +721,13 @@ services:
       - OTEL_METRIC_EXPORT_INTERVAL_MS=${OTEL_METRIC_EXPORT_INTERVAL_MS:-15000}
       - OTEL_EXPORTER_PROMETHEUS_HOST=${OTEL_EXPORTER_PROMETHEUS_HOST:-0.0.0.0}
       - OTEL_EXPORTER_PROMETHEUS_PORT=${OTEL_EXPORTER_PROMETHEUS_PORT:-9464}
+      # Egress httpx client connection pooling (mcpgw registry API + Keycloak
+      # M2M hops). Keep keepalive_expiry below the shortest upstream/LB idle
+      # timeout. Set identically to the registry/auth-server values.
+      - EGRESS_HTTP_POOL_MAX_CONNECTIONS=${EGRESS_HTTP_POOL_MAX_CONNECTIONS:-100}
+      - EGRESS_HTTP_POOL_MAX_KEEPALIVE=${EGRESS_HTTP_POOL_MAX_KEEPALIVE:-20}
+      - EGRESS_HTTP_POOL_KEEPALIVE_EXPIRY_SECONDS=${EGRESS_HTTP_POOL_KEEPALIVE_EXPIRY_SECONDS:-30}
+      - EGRESS_HTTP_POOL_CONNECT_RETRIES=${EGRESS_HTTP_POOL_CONNECT_RETRIES:-1}
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -695,7 +751,7 @@ services:
 
   # Prometheus for metrics collection - using canonical upstream image
   prometheus:
-    image: prom/prometheus:${PROMETHEUS_VERSION:-v3.11.3}
+    image: prom/prometheus:${PROMETHEUS_VERSION:-v3.15.1}
     # Operator dashboard: published on loopback only (no auth on Prometheus).
     ports:
       # Loopback-only: Prometheus UI is a local-dev convenience, not a public surface.

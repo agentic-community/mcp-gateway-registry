@@ -88,13 +88,64 @@ resource "aws_iam_policy" "ecs_egress_vault_access" {
             "secretsmanager:DescribeSecret",
             "secretsmanager:ListSecretVersionIds"
           ]
-          # Scope to the egress path prefix only. Secrets Manager ARNs append a
-          # random 6-char suffix, so the wildcard covers "<prefix>/*-??????".
-          Resource = "arn:aws:secretsmanager:*:*:secret:${var.egress_secrets_manager_path_prefix}/*"
+          # Scope to the egress path prefix in this deployment's region and
+          # account only. Secrets Manager ARNs append a random 6-char suffix, so
+          # the wildcard covers "<prefix>/*-??????".
+          Resource = "arn:${data.aws_partition.current.partition}:secretsmanager:${data.aws_region.current.id}:${data.aws_caller_identity.current.account_id}:secret:${var.egress_secrets_manager_path_prefix}/*"
         }
       ],
       # KMS only when a customer-managed CMK is configured; the AWS-managed key
       # needs no explicit grant.
+      var.egress_secrets_manager_kms_key_id != "" ? [
+        {
+          Effect = "Allow"
+          Action = [
+            "kms:Decrypt",
+            "kms:GenerateDataKey"
+          ]
+          Resource = [var.egress_secrets_manager_kms_key_id]
+        }
+      ] : []
+    )
+  })
+
+  tags = local.common_tags
+}
+
+# The auth-server OBO exchanged-token cache is a SecretStore client
+# ONLY for its reserved "obo-cache" auth_method namespace. This grant is scoped to
+# that namespace's secret path (auth_method "obo-cache" -> base64url segment
+# "b2JvLWNhY2hl"), so the auth-server can read/write its own cache entries but
+# NEVER any user's PAT/3LO secrets under the same egress prefix. Created only when
+# the cache is enabled on the secrets-manager backend.
+resource "aws_iam_policy" "ecs_auth_server_obo_cache_vault_access" {
+  count       = var.egress_auth_enabled && var.egress_obo_cache_enabled && var.egress_secret_store_backend == "secrets-manager" ? 1 : 0
+  name_prefix = "${local.name_prefix}-obo-cache-vault-"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = concat(
+      [
+        {
+          Effect = "Allow"
+          Action = [
+            "secretsmanager:CreateSecret",
+            "secretsmanager:GetSecretValue",
+            "secretsmanager:PutSecretValue",
+            "secretsmanager:DeleteSecret"
+          ]
+          # Scoped to the reserved OBO-cache namespace ONLY, in this deployment's
+          # region and account:
+          # "<prefix>/<enc('obo-cache')>/*" where enc = base64url(NFC(...)) unpadded.
+          # SM appends a random 6-char suffix, so /* covers "<...>/*-??????".
+          # Actions are exactly what the Secrets Manager store calls. The cache
+          # never deletes entries (near-expiry is a plain miss), but the store
+          # deletes its own obsolete overflow shards and failed staging shards,
+          # so DeleteSecret is granted, still only under this namespace.
+          Resource = "arn:${data.aws_partition.current.partition}:secretsmanager:${data.aws_region.current.id}:${data.aws_caller_identity.current.account_id}:secret:${var.egress_secrets_manager_path_prefix}/b2JvLWNhY2hl/*"
+        }
+      ],
+      # KMS only when a customer-managed CMK is configured.
       var.egress_secrets_manager_kms_key_id != "" ? [
         {
           Effect = "Allow"

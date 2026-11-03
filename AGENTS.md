@@ -404,7 +404,11 @@ working in those areas.
 - **Virtual MCP tools:** a backend tool's blocked override must be checked at
   every `tools/call` and `tools/list` boundary, including cached lists. Bind the
   decision to the mapped backend path and original tool name; unknown state denies.
+  A virtual server also applies the direct route's enabled + healthy gate to each
+  backend, and its backend locations clear the whole reserved-header set.
 - **Gateway-invented MCP names:** a tool the gateway synthesizes (the pre-consent `connect_mcpgw_<server>` tool) may get a relaxed authorization check only if the gateway answers it on every path and never forwards it, the match is on the one exact name, and the relaxation applies only on routes proven to reach the answering hop (direct, never virtual).
+- **Delegated tokens the gateway forwards:** a token the IdP mints for an upstream (OBO exchange) must be verified and refused if its `aud` overlaps the audiences the gateway's own validation accepts (read from the same `accepted_audiences()` list), or the upstream can replay it against the gateway. Its `sub` must equal the `sub` of the user's ingress token it was exchanged from.
+- **Caching an exchange result:** a cache in front of an IdP or upstream call skips that party's checks (signature, expiry, revocation). Serve a hit only when the gateway itself verified the exact input the call would have checked (the OBO cache requires the digest of the bearer `/validate` verified), bound the reuse window, and give the caching service a namespace-clamped store handle plus a namespace-scoped backend policy.
 - **Honor the disabled/inactive flag** on every request where access is derived
   (group→scope enrichment / validate), not just login; filter it in the query AND
   re-check the doc; fail closed.
@@ -413,6 +417,10 @@ working in those areas.
   explicit-list default-empty (fail closed); keep Terraform+CDK in parity.
 - **Internal tokens:** short TTL isn't enough: add `jti` + single-use via a
   shared store (unless the token is legitimately verified twice per flow).
+- **Internal-token mints:** gate every token `/validate` mints on the nginx
+  marker (`X-Validate-Source-Secret`), never on its routing header alone
+  (`X-Registry-Api-Auth`, `X-Resolved-Upstream`, `X-Resolved-Generic-Upstream`);
+  each is a plain header a direct auth-server caller can send.
 - **DoS:** rate-limit at the inbound edge (nginx `limit_req`), never the shared
   `/validate` subrequest; cover all deploy modes. **Audit:** durable-by-default
   (fail closed), attributable to a specific actor.

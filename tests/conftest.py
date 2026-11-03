@@ -47,7 +47,6 @@ import pytest
 from hypothesis import settings as hypothesis_settings
 
 from tests.fixtures.mocks.mock_embeddings import (
-    create_mock_litellm_module,
     create_mock_st_module,
 )
 
@@ -235,11 +234,6 @@ def _setup_auto_mocking() -> None:
     mock_st = create_mock_st_module()
     sys.modules["sentence_transformers"] = mock_st
     logger.info("Auto-mocked: sentence_transformers")
-
-    # Mock litellm
-    mock_litellm = create_mock_litellm_module()
-    sys.modules["litellm"] = mock_litellm
-    logger.info("Auto-mocked: litellm")
 
 
 # Execute auto-mocking setup

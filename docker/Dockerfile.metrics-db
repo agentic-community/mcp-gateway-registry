@@ -1,10 +1,13 @@
 # Pin to specific version for reproducibility
-FROM public.ecr.aws/docker/library/alpine:3.19
+FROM public.ecr.aws/docker/library/alpine:3.22
 
 ENV SQLITE_DB_PATH=/var/lib/sqlite/metrics.db
 
-# Install SQLite as root
-RUN apk add --no-cache sqlite
+# Install SQLite as root.
+# apk upgrade pulls in security patches against the base image's
+# already-installed packages (e.g. the ca-certificates-bundle trust store)
+# that would otherwise stay at whatever version was baked into the image.
+RUN apk upgrade --no-cache && apk add --no-cache sqlite
 
 # Create database directory
 RUN mkdir -p /var/lib/sqlite

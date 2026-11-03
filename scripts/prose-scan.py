@@ -81,6 +81,19 @@ TELLS: dict[str, str] = {
         r"|(?:^|<p>)(Two|Three|Four|Five) (things|reasons|parts|facts)[,.]"
         r"|There are (two|three|four|five) (things|reasons|parts)\b)"
     ),
+    # Slogan pair: a short sentence that ends on an elliptical "do not." mirroring
+    # the sentence before it ("Authorization stays the same. Consent does not.").
+    # Capped at 40 characters so a long sentence with a natural "does not." ending
+    # is left alone.
+    "slogan pair": r"\. [A-Z][\w ,]{0,40} (do|does|did|is|are|was|were) not\.(\s|$|<)",
+    # Enumerated options as separate sentences instead of one list.
+    "option run": r"\bOne (option|way|approach|choice)\b[^.]*\.\s+Another\b",
+    # Codebase vocabulary used as plain-English verbs.
+    "code vocabulary": (
+        r"\b(vault(s|ed) (the|a|an|its|their|your)\b|keys \w+ on the\b"
+        r"|has no session to reach)"
+    ),
+    "institutional register": r"\b(operators|users) (and \w+ )?treat (that|this|the|it) \w*\s*as\b",
 }
 
 _COMPILED: dict[str, re.Pattern[str]] = {

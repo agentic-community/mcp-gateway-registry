@@ -2765,7 +2765,9 @@ class TestOAuth2CallbackIdTokenVerification:
     and never persists attacker-controlled identity or group claims.
     """
 
-    def _drive_callback(self, provider: str, validate_side_effect):
+    def _drive_callback(
+        self, provider: str, validate_side_effect, requested_scopes=None, id_token=True
+    ):
         """Drive the callback for a JWKS provider with a mocked provider whose
         validate_id_token exhibits the given behaviour. Returns
         (response, create_session_called, captured_kwargs).
@@ -2777,6 +2779,8 @@ class TestOAuth2CallbackIdTokenVerification:
             "access_token": "mock-access-token-value",
             "id_token": "attacker-supplied-id-token",
         }
+        if not id_token:
+            mock_token_data.pop("id_token")
         temp_session_data = {
             "state": "test-state",
             "provider": provider,
@@ -2784,6 +2788,8 @@ class TestOAuth2CallbackIdTokenVerification:
             "nonce": "test-nonce",
             "code_verifier": "test-code-verifier",
         }
+        if requested_scopes is not None:
+            temp_session_data["requested_scopes"] = requested_scopes
         temp_cookie = signer.dumps(temp_session_data)
 
         captured: dict = {}
@@ -2855,6 +2861,16 @@ class TestOAuth2CallbackIdTokenVerification:
         assert create_called is False
         assert captured == {}
 
+    def test_entra_requires_id_token_instead_of_falling_back_to_userinfo(self):
+        with patch("auth_server.server.get_user_info", new_callable=AsyncMock) as userinfo:
+            response, created, session = self._drive_callback(
+                "entra", lambda _token, expected_nonce=None: {}, id_token=False
+            )
+        assert response.status_code == 401
+        assert created is False
+        assert session == {}
+        userinfo.assert_not_awaited()
+
     def test_verified_id_token_allows_login(self):
         """A verified id_token proceeds to session creation with its claims."""
         verified = {
@@ -2871,6 +2887,574 @@ class TestOAuth2CallbackIdTokenVerification:
         assert response.status_code == 302
         assert create_called is True
         assert captured["username"] == "alice"
+
+
+class TestEntraCallbackGroups:
+    """The callback stores verified transitive memberships and denies Graph failures."""
+
+    def _callback(
+        self,
+        claims,
+        graph_result=None,
+        graph_error=None,
+        requested_scopes="openid email profile User.Read",
+        allow_local_fallback=False,
+    ):
+        from providers.entra import EntraIdProvider
+
+        from auth_server.mongodb_groups_enrichment import should_enrich_user_groups
+
+        graph = (
+            AsyncMock(side_effect=graph_error)
+            if graph_error
+            else AsyncMock(return_value=graph_result)
+        )
+
+        async def keep_groups(groups, **_kwargs):
+            return groups
+
+        fallback_gate = (
+            patch(
+                "mongodb_groups_enrichment.should_enrich_user_groups",
+                wraps=should_enrich_user_groups,
+            )
+            if allow_local_fallback
+            else patch("mongodb_groups_enrichment.should_enrich_user_groups", return_value=False)
+        )
+
+        with (
+            patch.object(EntraIdProvider, "fetch_groups_via_graph", graph),
+            patch("group_filter.filter_session_groups", keep_groups),
+            fallback_gate,
+        ):
+            response, create_called, session = (
+                TestOAuth2CallbackIdTokenVerification()._drive_callback(
+                    "entra",
+                    lambda _token, expected_nonce=None: claims,
+                    requested_scopes=requested_scopes,
+                )
+            )
+        return response, create_called, session, graph
+
+    @pytest.mark.parametrize(
+        "claims,expected",
+        [
+            ({"groups": ["inline-id"]}, ["inline-id"]),
+            ({"roles": ["role-id"], "hasgroups": True}, ["role-id"]),
+            ({"groups": ["stale-inline"], "hasgroups": True}, []),
+            ({}, []),
+        ],
+    )
+    def test_login_without_user_read_drops_overage_groups_without_graph(self, claims, expected):
+        token_claims = {"sub": "alice", "tid": "tenant", "oid": "alice", **claims}
+        response, created, session, graph = self._callback(
+            token_claims, requested_scopes="openid email profile"
+        )
+        assert response.status_code == 302
+        assert created is True
+        assert session["groups"] == expected
+        graph.assert_not_awaited()
+
+    def test_disabled_recovery_ignores_stale_overage_groups_even_with_user_read(self, monkeypatch):
+        monkeypatch.setenv("ENTRA_GROUP_RECOVERY_ENABLED", "false")
+        claims = {
+            "sub": "alice",
+            "tid": "tenant",
+            "oid": "alice",
+            "hasgroups": True,
+            "groups": ["stale-admin"],
+            "roles": ["reader-role"],
+        }
+        response, created, session, graph = self._callback(claims)
+        assert response.status_code == 302
+        assert created is True
+        assert session["groups"] == ["reader-role"]
+        graph.assert_not_awaited()
+
+    def test_missing_signed_scope_snapshot_does_not_enable_graph(self):
+        response, created, session, graph = self._callback(
+            {"sub": "alice", "tid": "tenant", "oid": "alice"}, requested_scopes=None
+        )
+        assert response.status_code == 302
+        assert created is True
+        assert session["groups"] == []
+        graph.assert_not_awaited()
+
+    @pytest.mark.parametrize(
+        "claims",
+        [
+            {"sub": "alice", "tid": "tenant", "oid": "alice", "hasgroups": True},
+            {"sub": "alice", "tid": "tenant", "oid": "alice"},
+            {"sub": "alice", "tid": "tenant", "oid": "alice", "groups": [], "roles": []},
+        ],
+    )
+    def test_verified_overage_or_missing_claims_store_transitive_group_ids(self, claims):
+        response, created, session, graph = self._callback(
+            claims, graph_result=["direct-id", "nested-parent-id"]
+        )
+        assert response.status_code == 302
+        assert created is True
+        assert session["groups"] == ["direct-id", "nested-parent-id"]
+        graph.assert_awaited_once()
+        assert graph.call_args.args[0] == "mock-access-token-value"
+        assert graph.call_args.kwargs == {"tenant_id": "tenant", "object_id": "alice"}
+
+    def test_inline_claims_create_session_without_graph_lookup(self):
+        claims = {"sub": "alice", "groups": ["inline-id"], "tid": "tenant", "oid": "alice"}
+        response, created, session, graph = self._callback(claims)
+        assert response.status_code == 302
+        assert created is True
+        assert session["groups"] == ["inline-id"]
+        graph.assert_not_awaited()
+
+    def test_role_claims_create_session_without_graph_lookup(self):
+        claims = {"sub": "alice", "roles": ["reader-role"], "tid": "tenant", "oid": "alice"}
+        response, created, session, graph = self._callback(claims)
+        assert response.status_code == 302
+        assert created is True
+        assert session["groups"] == ["reader-role"]
+        graph.assert_not_awaited()
+
+    def test_overage_session_refuses_oversized_recovered_group_set(self):
+        from providers.entra import GRAPH_GROUP_MAX_BYTES
+
+        claims = {"sub": "alice", "tid": "tenant", "oid": "alice", "hasgroups": True}
+        response, created, session, graph = self._callback(
+            claims, graph_result=["x" * (GRAPH_GROUP_MAX_BYTES + 1)]
+        )
+
+        assert response.status_code == 503
+        assert created is False
+        assert session == {}
+        graph.assert_awaited_once()
+
+    def test_empty_graph_result_creates_session_with_no_groups(self):
+        claims = {"sub": "alice", "hasgroups": True, "tid": "tenant", "oid": "alice"}
+        response, created, session, graph = self._callback(claims, graph_result=[])
+        assert response.status_code == 302
+        assert created is True
+        assert session["groups"] == []
+        graph.assert_awaited_once()
+
+    @pytest.mark.parametrize("graph_result", [[], ["nested-parent-id"]])
+    def test_graph_memberships_override_configured_stale_local_groups(self, graph_result):
+        from auth_server import server
+
+        claims = {"sub": "alice", "hasgroups": True, "tid": "tenant", "oid": "alice"}
+        with (
+            patch.object(server, "IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS", ["entra"]),
+            patch(
+                "mongodb_groups_enrichment.enrich_user_groups_from_mongodb",
+                new_callable=AsyncMock,
+                return_value=["stale-admin"],
+            ) as local_fallback,
+        ):
+            response, created, session, graph = self._callback(
+                claims, graph_result=graph_result, allow_local_fallback=True
+            )
+        assert response.status_code == 302
+        assert created is True
+        assert session["groups"] == graph_result
+        graph.assert_awaited_once()
+        assert session["entra_graph_groups_resolved"] is True
+        local_fallback.assert_not_awaited()
+
+    def test_no_graph_request_preserves_configured_local_fallback(self):
+        from auth_server import server
+
+        with (
+            patch.object(server, "IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS", ["entra"]),
+            patch(
+                "mongodb_groups_enrichment.enrich_user_groups_from_mongodb",
+                new_callable=AsyncMock,
+                return_value=["stale-admin"],
+            ) as local_fallback,
+        ):
+            response, created, session, graph = self._callback(
+                {"sub": "alice", "tid": "tenant", "oid": "alice"},
+                requested_scopes="openid email profile",
+                allow_local_fallback=True,
+            )
+        assert response.status_code == 302
+        assert created is True
+        assert session["groups"] == ["stale-admin"]
+        assert session["entra_graph_groups_resolved"] is False
+        graph.assert_not_awaited()
+        local_fallback.assert_awaited_once_with("alice", [], "entra")
+
+    def test_confirmed_empty_graph_session_cannot_reacquire_local_scope(
+        self, auth_env_vars, mock_scope_repository_with_data, mock_scopes_config
+    ):
+        from itsdangerous import URLSafeTimedSerializer
+
+        from auth_server import server
+        from auth_server.mongodb_groups_enrichment import should_enrich_user_groups
+
+        claims = {"sub": "alice", "hasgroups": True, "tid": "tenant", "oid": "alice"}
+        repo = mock_scope_repository_with_data
+        mock_scopes_config["group_mappings"]["stale-admin"] = ["read:servers"]
+        mock_scopes_config["read:servers"][0]["methods"].append("mcp")
+        with patch.object(server, "IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS", ["entra"]):
+            response, created, captured, graph = self._callback(
+                claims, graph_result=[], allow_local_fallback=True
+            )
+            assert response.status_code == 302
+            assert created is True
+            assert captured["groups"] == []
+            assert captured["entra_graph_groups_resolved"] is True
+            graph.assert_awaited_once()
+
+            async def resolve_session(_session_id):
+                return {"session_id": _session_id, **captured}
+
+            with (
+                patch.object(server, "signer", URLSafeTimedSerializer(auth_env_vars["SECRET_KEY"])),
+                patch.object(server, "get_scope_repository", return_value=repo),
+                patch("session_store.resolve_session", resolve_session),
+                patch(
+                    "mongodb_groups_enrichment.should_enrich_user_groups",
+                    wraps=should_enrich_user_groups,
+                ),
+                patch(
+                    "mongodb_groups_enrichment.enrich_user_groups_from_mongodb",
+                    new_callable=AsyncMock,
+                    return_value=["stale-admin"],
+                ) as local_fallback,
+            ):
+                cookie = server.signer.dumps("confirmed-graph-session")
+                validated = TestClient(server.app).get(
+                    "/validate",
+                    headers={
+                        "Cookie": f"mcp_gateway_session={cookie}",
+                        "X-Original-URL": "https://example.com/test-server/mcp",
+                    },
+                )
+
+        assert validated.status_code == 403, validated.text
+        assert "X-Scopes" not in validated.headers
+        local_fallback.assert_not_awaited()
+
+    def test_non_entra_callback_preserves_configured_local_fallback(self):
+        from auth_server import server
+        from auth_server.mongodb_groups_enrichment import should_enrich_user_groups
+
+        async def keep_groups(groups, **_kwargs):
+            return groups
+
+        with (
+            patch.object(server, "IDP_USER_GROUP_FALLBACK_ENABLED_PROVIDERS", ["keycloak"]),
+            patch(
+                "mongodb_groups_enrichment.should_enrich_user_groups",
+                wraps=should_enrich_user_groups,
+            ),
+            patch(
+                "mongodb_groups_enrichment.enrich_user_groups_from_mongodb",
+                new_callable=AsyncMock,
+                return_value=["local-membership"],
+            ) as local_fallback,
+            patch("group_filter.filter_session_groups", keep_groups),
+        ):
+            response, created, session = TestOAuth2CallbackIdTokenVerification()._drive_callback(
+                "keycloak", lambda _token, expected_nonce=None: {"sub": "alice", "groups": []}
+            )
+
+        assert response.status_code == 302
+        assert created is True
+        assert session["groups"] == ["local-membership"]
+        local_fallback.assert_awaited_once_with("alice", [], "keycloak")
+
+    @pytest.mark.parametrize(
+        "claims",
+        [
+            {
+                "sub": "alice",
+                "hasgroups": True,
+                "groups": ["stale-inline"],
+                "tid": "tenant",
+                "oid": "alice",
+            },
+            {"sub": "alice", "tid": "tenant", "oid": "alice"},
+        ],
+    )
+    def test_graph_error_denies_login_without_storing_stale_claims(self, claims):
+        from providers.entra import GraphGroupLookupError
+
+        response, created, session, graph = self._callback(
+            claims, graph_error=GraphGroupLookupError("Graph unavailable")
+        )
+        assert response.status_code == 503
+        assert created is False
+        assert session == {}
+        graph.assert_awaited_once()
+
+    def test_invalid_inline_group_claim_denies_login(self):
+        response, created, session, graph = self._callback(
+            {"sub": "alice", "groups": {"admin": True}, "tid": "tenant", "oid": "alice"}
+        )
+        assert response.status_code == 401
+        assert created is False
+        assert session == {}
+        graph.assert_not_awaited()
+
+
+class TestEntraBrowserOAuthCloudEndpoints:
+    @pytest.mark.parametrize(
+        "login,graph",
+        [
+            ("https://login.microsoftonline.com", "https://graph.microsoft.com"),
+            ("https://login.microsoftonline.us", "https://graph.microsoft.us"),
+            ("https://login.chinacloudapi.cn", "https://microsoftgraph.chinacloudapi.cn"),
+        ],
+    )
+    def test_browser_auth_and_userinfo_use_the_same_enrolled_cloud(self, monkeypatch, login, graph):
+        from auth_server.server import load_oauth2_config
+
+        monkeypatch.setenv("ENTRA_ENABLED", "true")
+        monkeypatch.setenv("ENTRA_LOGIN_BASE_URL", login)
+        monkeypatch.setenv("ENTRA_TENANT_ID", "test-tenant")
+        monkeypatch.delenv("ENTRA_GRAPH_BASE_URL", raising=False)
+        configured = load_oauth2_config()["providers"]["entra"]
+
+        assert configured["auth_url"] == f"{login}/test-tenant/oauth2/v2.0/authorize"
+        assert configured["token_url"] == f"{login}/test-tenant/oauth2/v2.0/token"
+        assert configured["user_info_url"] == f"{graph}/oidc/userinfo"
+
+    def test_default_login_scopes_do_not_require_graph_consent(self, monkeypatch):
+        from auth_server.server import load_oauth2_config
+
+        monkeypatch.setenv("ENTRA_ENABLED", "true")
+
+        monkeypatch.delenv("ENTRA_LOGIN_BASE_URL", raising=False)
+        monkeypatch.delenv("ENTRA_GRAPH_BASE_URL", raising=False)
+        assert load_oauth2_config()["providers"]["entra"]["scopes"] == [
+            "openid",
+            "email",
+            "profile",
+        ]
+
+    def test_login_snapshots_exact_requested_scopes_for_callback(self):
+        import urllib.parse
+
+        from auth_server import server as srv
+
+        configured = dict(srv.OAUTH2_CONFIG)
+        configured["providers"] = dict(configured.get("providers", {}))
+        configured["providers"]["entra"] = {
+            "enabled": True,
+            "client_id": "gateway-web",
+            "response_type": "code",
+            "scopes": ["openid", "email", "profile", "User.Read"],
+            "auth_url": "https://login.microsoftonline.com/tenant/oauth2/v2.0/authorize",
+        }
+        with patch.object(srv, "OAUTH2_CONFIG", configured):
+            response = TestClient(srv.app).get("/oauth2/login/entra", follow_redirects=False)
+
+        assert response.status_code == 302
+        requested = urllib.parse.parse_qs(
+            urllib.parse.urlsplit(response.headers["location"]).query
+        )["scope"][0]
+        assert (
+            srv.signer.loads(response.cookies["oauth2_temp_session"])["requested_scopes"]
+            == requested
+        )
+
+    def test_browser_user_read_flag_adds_exact_scope_once(self, monkeypatch):
+        from auth_server.server import load_oauth2_config
+
+        monkeypatch.setenv("ENTRA_ENABLED", "true")
+        monkeypatch.setenv("ENTRA_BROWSER_USER_READ_ENABLED", "true")
+        assert load_oauth2_config()["providers"]["entra"]["scopes"] == [
+            "openid",
+            "email",
+            "profile",
+            "User.Read",
+        ]
+
+    def test_bad_disabled_entra_config_preserves_other_providers(self, monkeypatch):
+        from auth_server.server import load_oauth2_config
+
+        monkeypatch.setenv("ENTRA_ENABLED", "false")
+        monkeypatch.setenv("ENTRA_LOGIN_BASE_URL", "https://login.private.example.com")
+        monkeypatch.setenv("ENTRA_GROUP_CACHE_TTL_SECONDS", "invalid")
+        assert "github" in load_oauth2_config()["providers"]
+
+    @pytest.mark.parametrize(
+        "setting,value",
+        [
+            ("ENTRA_BROWSER_USER_READ_ENABLED", "maybe"),
+            ("ENTRA_GROUP_RECOVERY_ENABLED", "maybe"),
+            ("ENTRA_GROUP_CACHE_TTL_SECONDS", "29"),
+        ],
+    )
+    def test_bad_active_entra_settings_fail_config_loading(self, monkeypatch, setting, value):
+        from auth_server.server import load_oauth2_config
+
+        monkeypatch.setenv("ENTRA_ENABLED", "true")
+        monkeypatch.setenv(setting, value)
+        with pytest.raises(ValueError, match=setting):
+            load_oauth2_config()
+
+    def test_unrecognized_entra_enabled_disables_entra_and_keeps_other_providers(
+        self,
+        monkeypatch,
+        caplog,
+    ):
+        """A malformed ENTRA_ENABLED must not stop login for other providers."""
+        from auth_server.server import load_oauth2_config
+
+        monkeypatch.setenv("ENTRA_ENABLED", "maybe")
+        with caplog.at_level("ERROR"):
+            providers = load_oauth2_config()["providers"]
+
+        assert providers["entra"]["enabled"] is False
+        assert "github" in providers
+        assert "ENTRA_ENABLED" in caplog.text
+
+    @pytest.mark.parametrize(
+        "value,expected",
+        [
+            ("true", True),
+            ("1", True),
+            ("yes", True),
+            ("false", False),
+            ("0", False),
+            ("no", False),
+        ],
+    )
+    def test_entra_enabled_accepts_registry_boolean_spellings(
+        self,
+        monkeypatch,
+        value,
+        expected,
+    ):
+        """The provider flag matches the registry's bool parsing, so "0" is off."""
+        from auth_server.server import load_oauth2_config
+
+        monkeypatch.setenv("ENTRA_ENABLED", value)
+        assert load_oauth2_config()["providers"]["entra"]["enabled"] is expected
+
+    def test_unknown_login_proxy_requires_native_graph_audience(self, monkeypatch):
+        from auth_server.server import load_oauth2_config
+
+        monkeypatch.setenv("ENTRA_ENABLED", "true")
+        monkeypatch.setenv("ENTRA_LOGIN_BASE_URL", "https://login.private.example.com")
+        monkeypatch.setenv("ENTRA_GRAPH_BASE_URL", "https://graph.proxy.example.com")
+        monkeypatch.delenv("ENTRA_GRAPH_RESOURCE_URL", raising=False)
+        with pytest.raises(ValueError, match="ENTRA_GRAPH_RESOURCE_URL"):
+            load_oauth2_config()
+
+    def test_unknown_login_without_graph_proxy_fails_active_entra_configuration(self, monkeypatch):
+        from auth_server.server import load_oauth2_config
+
+        monkeypatch.setenv("ENTRA_ENABLED", "true")
+        monkeypatch.setenv("ENTRA_LOGIN_BASE_URL", "https://login.private.example.com")
+        monkeypatch.delenv("ENTRA_GRAPH_BASE_URL", raising=False)
+        with pytest.raises(ValueError, match="ENTRA_GRAPH_BASE_URL"):
+            load_oauth2_config()
+
+    def test_unknown_login_resource_without_fetch_proxy_fails_at_startup(self, monkeypatch):
+        from auth_server.server import load_oauth2_config
+
+        monkeypatch.setenv("ENTRA_ENABLED", "true")
+        monkeypatch.setenv("ENTRA_LOGIN_BASE_URL", "https://login.private.example.com")
+        monkeypatch.setenv("ENTRA_GRAPH_RESOURCE_URL", "https://graph.microsoft.com")
+        monkeypatch.delenv("ENTRA_GRAPH_BASE_URL", raising=False)
+
+        with pytest.raises(ValueError, match="ENTRA_GRAPH_BASE_URL"):
+            load_oauth2_config()
+
+    def test_unknown_login_proxy_without_resource_allows_disabled_recovery(self, monkeypatch):
+        from auth_server.server import load_oauth2_config
+
+        monkeypatch.setenv("ENTRA_ENABLED", "true")
+        monkeypatch.setenv("ENTRA_GROUP_RECOVERY_ENABLED", "false")
+        monkeypatch.setenv("ENTRA_LOGIN_BASE_URL", "https://login.private.example.com")
+        monkeypatch.setenv("ENTRA_GRAPH_BASE_URL", "https://graph.proxy.example.com")
+        monkeypatch.delenv("ENTRA_GRAPH_RESOURCE_URL", raising=False)
+
+        configured = load_oauth2_config()["providers"]["entra"]
+        assert configured["user_info_url"] == "https://graph.proxy.example.com/oidc/userinfo"
+
+    def test_unknown_login_browser_graph_request_requires_native_resource(self, monkeypatch):
+        from auth_server.server import load_oauth2_config
+
+        monkeypatch.setenv("ENTRA_ENABLED", "true")
+        monkeypatch.setenv("ENTRA_GROUP_RECOVERY_ENABLED", "false")
+        monkeypatch.setenv("ENTRA_BROWSER_USER_READ_ENABLED", "true")
+        monkeypatch.setenv("ENTRA_LOGIN_BASE_URL", "https://login.private.example.com")
+        monkeypatch.setenv("ENTRA_GRAPH_BASE_URL", "https://graph.proxy.example.com")
+        monkeypatch.delenv("ENTRA_GRAPH_RESOURCE_URL", raising=False)
+
+        with pytest.raises(ValueError, match="ENTRA_GRAPH_RESOURCE_URL"):
+            load_oauth2_config()
+
+    def test_unknown_login_with_native_graph_resource_uses_only_configured_proxy(self, monkeypatch):
+        from auth_server.server import load_oauth2_config
+
+        monkeypatch.setenv("ENTRA_ENABLED", "true")
+
+        monkeypatch.setenv("ENTRA_LOGIN_BASE_URL", "https://login.private.example.com")
+        monkeypatch.setenv("ENTRA_GRAPH_BASE_URL", "https://graph.proxy.example.com")
+        monkeypatch.setenv("ENTRA_GRAPH_RESOURCE_URL", "https://graph.microsoft.us")
+        configured = load_oauth2_config()["providers"]["entra"]
+        assert configured["auth_url"].startswith("https://login.private.example.com/")
+        assert configured["user_info_url"] == "https://graph.proxy.example.com/oidc/userinfo"
+
+    def test_dod_graph_resource_selects_native_graph_userinfo(self, monkeypatch):
+        from auth_server.server import load_oauth2_config
+
+        monkeypatch.setenv("ENTRA_ENABLED", "true")
+
+        monkeypatch.setenv("ENTRA_LOGIN_BASE_URL", "https://login.microsoftonline.us")
+        monkeypatch.setenv("ENTRA_GRAPH_RESOURCE_URL", "https://dod-graph.microsoft.us")
+        monkeypatch.delenv("ENTRA_GRAPH_BASE_URL", raising=False)
+        configured = load_oauth2_config()["providers"]["entra"]
+        assert configured["user_info_url"] == "https://dod-graph.microsoft.us/oidc/userinfo"
+
+    @pytest.mark.parametrize("login", ["", "https://login.microsoftonline.com/"])
+    def test_blank_or_slash_login_origin_matches_provider_and_browser(self, monkeypatch, login):
+        from providers.entra import EntraIdProvider
+
+        from auth_server.server import load_oauth2_config
+
+        monkeypatch.setenv("ENTRA_ENABLED", "true")
+
+        monkeypatch.setenv("ENTRA_LOGIN_BASE_URL", login)
+        monkeypatch.setenv("ENTRA_TENANT_ID", "test-tenant")
+        monkeypatch.delenv("ENTRA_GRAPH_BASE_URL", raising=False)
+        browser = load_oauth2_config()["providers"]["entra"]
+        provider = EntraIdProvider("test-tenant", "test-client", "test-secret")
+
+        assert browser["auth_url"] == provider.auth_url
+        assert browser["user_info_url"] == provider.userinfo_url
+
+    def test_trailing_slash_graph_proxy_matches_provider_userinfo(self, monkeypatch):
+        from providers.entra import EntraIdProvider
+
+        from auth_server.server import load_oauth2_config
+
+        monkeypatch.setenv("ENTRA_ENABLED", "true")
+
+        monkeypatch.setenv("ENTRA_TENANT_ID", "test-tenant")
+        monkeypatch.setenv("ENTRA_GRAPH_BASE_URL", "https://graph.proxy.example.com/")
+        browser = load_oauth2_config()["providers"]["entra"]
+        provider = EntraIdProvider("test-tenant", "test-client", "test-secret")
+
+        assert browser["user_info_url"] == provider.userinfo_url
+
+    def test_custom_oauth_config_without_entra_keeps_other_providers(self, monkeypatch):
+        from auth_server import server
+
+        monkeypatch.setattr(
+            server.yaml,
+            "safe_load",
+            lambda _stream: {
+                "providers": {"keycloak": {"enabled": True, "auth_url": "https://idp.example"}}
+            },
+        )
+        config = server.load_oauth2_config()
+
+        assert config["providers"]["keycloak"]["enabled"] is True
 
 
 class TestOAuth2PkceAndNonce:
@@ -3712,6 +4296,7 @@ def _mcp_proxy_token_headers(
     scopes: list[str] | None = None,
     audit_identity: dict | None = None,
     virtual_backend: bool = False,
+    obo_subject_sha256: str = "",
 ) -> dict:
     """Build the X-Internal-Token nginx would forward to /mcp-proxy.
 
@@ -3734,6 +4319,7 @@ def _mcp_proxy_token_headers(
         upstream_url=upstream_url,
         audit_identity=audit_identity,
         virtual_backend=virtual_backend,
+        obo_subject_sha256=obo_subject_sha256,
     )
     return {
         "X-Internal-Token": token,
@@ -4408,6 +4994,50 @@ class _FakeEntraProvider:
     token_url = "https://login.microsoftonline.com/t/oauth2/v2.0/token"
 
 
+def _keycloak_obo_provider():
+    """A real KeycloakProvider, its local test JWKS, and a signer for exchanged tokens.
+
+    The OBO engine verifies the token Keycloak returns through the provider
+    (signature, issuer, expiry, target audience) before forwarding it, so the
+    Keycloak pipeline tests need tokens that provider would accept. Returns
+    ``(provider, jwks, sign)`` where ``sign(audience)`` mints such a token.
+    """
+    import json as _json
+    import time as _time
+
+    import jwt as _jwt
+    from cryptography.hazmat.primitives.asymmetric import rsa as _rsa
+    from jwt.algorithms import RSAAlgorithm as _RSAAlgorithm
+
+    from auth_server.providers.keycloak import KeycloakProvider
+
+    provider = KeycloakProvider(
+        keycloak_url="https://kc.example.com",
+        realm="test-realm",
+        client_id="gateway-web",
+        client_secret="gw-secret",
+        m2m_client_id="gateway-m2m",
+    )
+    private_key = _rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    public_jwk = _json.loads(_RSAAlgorithm.to_jwk(private_key.public_key()))
+    public_jwk.update({"kid": "obo-test-kid", "alg": "RS256", "use": "sig"})
+    jwks = {"keys": [public_jwk]}
+
+    def sign(audience: list[str]) -> str:
+        now = int(_time.time())
+        claims = {
+            "iss": provider.realm_url,
+            "aud": audience,
+            "sub": "test-user",
+            "azp": "gateway-web",
+            "iat": now,
+            "exp": now + 300,
+        }
+        return _jwt.encode(claims, private_key, algorithm="RS256", headers={"kid": "obo-test-kid"})
+
+    return provider, jwks, sign
+
+
 class TestMcpProxyOboExchange:
     """Phase 3 seam: obo_exchange branch in mcp_proxy.
 
@@ -4432,7 +5062,7 @@ class TestMcpProxyOboExchange:
         async def _fake_exchange(provider, subject_token, target_audience, scopes=None):
             assert subject_token == ingress_jwt
             assert target_audience == "api://outlook-mcp-server"
-            return "exchanged-obo-token"
+            return "exchanged-obo-token", 3600
 
         patch_httpx, captured = _capture_upstream_headers()
         with (
@@ -4482,6 +5112,106 @@ class TestMcpProxyOboExchange:
 
         return patch.object(server_module, "_emit_token_mint_audit", _record), emitted
 
+    class _FakeOboCache:
+        """Stands in for the lifespan-built OboTokenCache on the hop."""
+
+        def __init__(self, from_cache: bool):
+            self.calls = 0
+            self._from_cache = from_cache
+
+        async def get_or_exchange(self, **kwargs):
+            from auth_server.obo_token_cache import OboToken
+
+            self.calls += 1
+            return OboToken("cached-obo-token", from_cache=self._from_cache)
+
+    def _post_obo(self, server_module, *, hop_digest: str, ingress_jwt: str, cache, exchange):
+        """Drive one OBO tools/call through the hop with the given cache and digest."""
+        patch_httpx, captured = _capture_upstream_headers()
+        patch_audit, emitted = self._capture_mint_audit(server_module)
+        with (
+            patch.object(server_module.settings, "egress_auth_enabled", True),
+            patch.object(server_module, "_vend_egress_token", self._obo_directive_vend),
+            patch.object(server_module, "get_auth_provider", lambda *a, **k: _FakeEntraProvider()),
+            patch.object(server_module, "obo_exchange", exchange),
+            patch.object(server_module, "_obo_cache", cache),
+            patch.object(server_module, "_read_mcp_filter_enabled", return_value=False),
+            _patch_scope_repo_allow_all(),
+            patch_httpx,
+            patch_audit,
+        ):
+            response = TestClient(server_module.app).post(
+                "/mcp-proxy/outlook",
+                json={"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": {}},
+                headers={
+                    **_mcp_proxy_token_headers(
+                        server_name="outlook", obo_subject_sha256=hop_digest
+                    ),
+                    "X-Authorization": f"Bearer {ingress_jwt}",
+                },
+            )
+        return response, captured, emitted
+
+    @pytest.mark.parametrize(
+        "hop_digest",
+        ["", "digest-of-a-different-token"],
+        ids=["no-verified-bearer", "digest-mismatch"],
+    )
+    def test_obo_cache_needs_the_bearer_validate_verified(self, hop_digest):
+        """A cookie-authenticated request carries no digest, and a forged bearer
+        does not match one, so the hop must exchange (the IdP checks the
+        assertion) instead of serving that user's cached token."""
+        import auth_server.server as server_module
+
+        ingress_jwt = _forged_ingress_jwt("test-user")
+        exchanged = {"n": 0}
+
+        async def _fake_exchange(provider, subject_token, target_audience, scopes=None):
+            exchanged["n"] += 1
+            return "exchanged-obo-token", 3600
+
+        cache = self._FakeOboCache(from_cache=True)
+        response, captured, emitted = self._post_obo(
+            server_module,
+            hop_digest=hop_digest,
+            ingress_jwt=ingress_jwt,
+            cache=cache,
+            exchange=_fake_exchange,
+        )
+
+        assert response.status_code == 200
+        assert cache.calls == 0
+        assert exchanged["n"] == 1
+        sent = {k.lower(): v for k, v in captured["headers"].items()}
+        assert sent["authorization"] == "Bearer exchanged-obo-token"
+        assert emitted[0]["token_path"] == "obo_exchange"
+
+    def test_obo_cache_hit_is_audited_as_obo_cache(self):
+        """With the verified-bearer digest the hop uses the cache, and a hit is
+        recorded as token_path=obo_cache because the IdP minted nothing."""
+        import auth_server.server as server_module
+
+        ingress_jwt = _obo_ingress_jwt("test-user")
+
+        async def _no_exchange(provider, subject_token, target_audience, scopes=None):
+            raise AssertionError("a cache hit must not exchange")
+
+        cache = self._FakeOboCache(from_cache=True)
+        response, captured, emitted = self._post_obo(
+            server_module,
+            hop_digest=server_module._obo_subject_digest(ingress_jwt),
+            ingress_jwt=ingress_jwt,
+            cache=cache,
+            exchange=_no_exchange,
+        )
+
+        assert response.status_code == 200
+        assert cache.calls == 1
+        sent = {k.lower(): v for k, v in captured["headers"].items()}
+        assert sent["authorization"] == "Bearer cached-obo-token"
+        assert emitted[0]["token_path"] == "obo_cache"
+        assert emitted[0]["outcome"] == "success"
+
     # The audit identity /validate would have signed into the hop token for an
     # Entra delegated caller, keyed on sub=test-user so the OBO principal binding passes.
     _SIGNED_AUDIT_IDENTITY = {
@@ -4502,7 +5232,7 @@ class TestMcpProxyOboExchange:
         ingress_jwt = _obo_ingress_jwt("test-user")
 
         async def _fake_exchange(provider, subject_token, target_audience, scopes=None):
-            return "exchanged-obo-token"
+            return "exchanged-obo-token", 3600
 
         patch_httpx, _ = _capture_upstream_headers()
         patch_audit, emitted = self._capture_mint_audit(server_module)
@@ -4568,7 +5298,7 @@ class TestMcpProxyOboExchange:
         )
 
         async def _fake_exchange(provider, subject_token, target_audience, scopes=None):
-            return "exchanged-obo-token"
+            return "exchanged-obo-token", 3600
 
         patch_httpx, _ = _capture_upstream_headers()
         patch_audit, emitted = self._capture_mint_audit(server_module)
@@ -4617,7 +5347,7 @@ class TestMcpProxyOboExchange:
         import auth_server.server as server_module
 
         async def _fake_exchange(provider, subject_token, target_audience, scopes=None):
-            return "exchanged-obo-token"
+            return "exchanged-obo-token", 3600
 
         patch_httpx, _ = _capture_upstream_headers()
         patch_audit, emitted = self._capture_mint_audit(server_module)
@@ -4662,7 +5392,7 @@ class TestMcpProxyOboExchange:
         forged_jwt = _forged_ingress_jwt("test-user", upn="ceo@example.com")
 
         async def _fake_exchange(provider, subject_token, target_audience, scopes=None):
-            return "exchanged-obo-token"
+            return "exchanged-obo-token", 3600
 
         patch_httpx, _ = _capture_upstream_headers()
         patch_audit, emitted = self._capture_mint_audit(server_module)
@@ -4721,7 +5451,7 @@ class TestMcpProxyOboExchange:
         ingress_jwt = _obo_ingress_jwt("test-user")
 
         async def _fake_exchange(provider, subject_token, target_audience, scopes=None):
-            return "exchanged-obo-token"
+            return "exchanged-obo-token", 3600
 
         patch_httpx, _ = _capture_upstream_headers()
         patch_audit, emitted = self._capture_mint_audit(server_module)
@@ -4774,7 +5504,7 @@ class TestMcpProxyOboExchange:
         ingress_jwt = _obo_ingress_jwt("test-user")
 
         async def _fake_exchange(provider, subject_token, target_audience, scopes=None):
-            return "exchanged-obo-token"
+            return "exchanged-obo-token", 3600
 
         patch_httpx, _ = _capture_upstream_headers()
         patch_audit, emitted = self._capture_mint_audit(server_module)
@@ -4854,7 +5584,7 @@ class TestMcpProxyOboExchange:
 
         async def _fake_exchange(provider, subject_token, target_audience, scopes=None):
             exchange_called["n"] += 1
-            return "should-not-be-reached"
+            return "should-not-be-reached", 3600
 
         # A JWT for a DIFFERENT principal than the internal token's sub (test-user).
         mismatched_jwt = _obo_ingress_jwt("attacker-user")
@@ -5094,6 +5824,124 @@ class TestMcpProxyOboExchange:
         # The exchanged token reached the upstream Authorization header.
         sent = {k.lower(): v for k, v in captured["headers"].items()}
         assert sent["authorization"] == "Bearer real-exchanged-token"
+
+    @staticmethod
+    async def _keycloak_obo_directive_vend(token, server):
+        return {
+            "mode": "obo_exchange",
+            "obo_target_audience": "finance-mcp-server",
+            "obo_scopes": [],
+        }
+
+    def _run_keycloak_obo(self, audience: list[str]):
+        """Drive /mcp-proxy through the REAL obo_exchange engine and a REAL
+        KeycloakProvider. The IdP token endpoint, the provider's JWKS (a local
+        test key) and the upstream are mocked, and the registry vend, auth
+        provider lookup, MCP filter and scope repository are patched as in the
+        Entra pipeline test. The exchanged token Keycloak "returns" carries
+        ``audience``. Returns (response, idp_post, captured, ingress_jwt,
+        exchanged_token).
+        """
+        import auth_server.server as server_module
+
+        provider, jwks, sign = _keycloak_obo_provider()
+        exchanged_token = sign(audience)
+
+        class _IdpResp:
+            status_code = 200
+
+            def json(self):
+                return {"access_token": exchanged_token}
+
+        idp_post = AsyncMock(return_value=_IdpResp())
+
+        upstream_resp = _build_mock_upstream_response(
+            status_code=200,
+            headers={"content-type": "application/json"},
+            body=b'{"jsonrpc":"2.0","id":1,"result":{}}',
+        )
+        upstream_cm = AsyncMock()
+        upstream_cm.__aenter__ = AsyncMock(return_value=upstream_resp)
+        upstream_cm.__aexit__ = AsyncMock(return_value=False)
+        captured: dict = {}
+
+        def _stream(method, url, **kwargs):
+            captured["headers"] = kwargs.get("headers", {})
+            return upstream_cm
+
+        def _unified_client(*a, **k):
+            c = MagicMock()
+            c.post = idp_post  # engine's IdP token call (driven via post_with_reconnect)
+            c.stream = MagicMock(side_effect=_stream)  # upstream proxy stream
+            return c
+
+        ingress_jwt = _obo_ingress_jwt("test-user")
+
+        with (
+            patch.object(server_module.settings, "egress_auth_enabled", True),
+            patch.object(server_module, "_vend_egress_token", self._keycloak_obo_directive_vend),
+            patch.object(server_module, "get_auth_provider", lambda *a, **k: provider),
+            patch.object(provider, "get_jwks", return_value=jwks),
+            patch("registry.utils.url_guard.shared_guarded_async_client", _unified_client),
+            patch.object(server_module, "_read_mcp_filter_enabled", return_value=False),
+            _patch_scope_repo_allow_all(),
+        ):
+            client = TestClient(server_module.app)
+            response = client.post(
+                "/mcp-proxy/finance",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
+                    "params": {"name": "get_balance"},
+                },
+                headers={
+                    **_mcp_proxy_token_headers(server_name="finance"),
+                    "X-Authorization": f"Bearer {ingress_jwt}",
+                },
+            )
+        return response, idp_post, captured, ingress_jwt, exchanged_token
+
+    def test_keycloak_obo_integration_real_exchange_only_idp_mocked(self):
+        """Keycloak twin of the Entra pipeline test: directive -> subject ->
+        RFC 8693 body -> exchange -> verification of the exchanged token ->
+        strip -> inject -> forward."""
+        response, idp_post, captured, ingress_jwt, exchanged = self._run_keycloak_obo(
+            ["finance-mcp-server"]
+        )
+
+        assert response.status_code == 200
+        # The engine built the RFC 8693 token-exchange body from the directive + subject.
+        idp_body = idp_post.call_args.kwargs["data"]
+        assert idp_body["grant_type"] == "urn:ietf:params:oauth:grant-type:token-exchange"
+        assert idp_body["subject_token"] == ingress_jwt
+        assert idp_body["subject_token_type"] == "urn:ietf:params:oauth:token-type:access_token"
+        assert idp_body["requested_token_type"] == "urn:ietf:params:oauth:token-type:access_token"
+        assert idp_body["audience"] == "finance-mcp-server"
+        # The verified exchanged token reached the upstream Authorization header,
+        # and the user's gateway credentials were stripped.
+        sent = {k.lower(): v for k, v in captured["headers"].items()}
+        assert sent["authorization"] == f"Bearer {exchanged}"
+        assert "x-authorization" not in sent
+        assert "cookie" not in sent
+        assert "x-internal-token" not in sent
+        assert all(ingress_jwt not in str(value) for value in sent.values())
+
+    def test_keycloak_obo_refuses_a_token_the_gateway_would_accept(self):
+        """An exchanged token that also carries ``mcp-gateway`` is never
+        forwarded: legacy Keycloak exchange keeps the audience client's
+        default-scope audiences, and the realm's ``basic`` scope adds
+        ``mcp-gateway``."""
+        response, _, captured, _, _ = self._run_keycloak_obo(["finance-mcp-server", "mcp-gateway"])
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["error"]["message"] == "obo_exchange_failed"
+        detail = body["error"]["data"]["detail"]
+        assert "would accept" in detail
+        # The caller is not told which gateway audiences the token carried.
+        assert "mcp-gateway" not in detail
+        assert "headers" not in captured, "the upstream must not be called"
 
 
 class TestMcpProxyPatMode:
@@ -7022,6 +7870,33 @@ class TestToolsListFilterDiagnostics:
             kept = asyncio.run(filter_tools_list_response("office-docs", ["grp"], [{"name": "t1"}]))
 
         assert [t["name"] for t in kept] == ["t1"]
+
+
+@pytest.mark.asyncio
+async def test_entra_code_exchange_uses_credentialed_guard():
+    from auth_server.server import exchange_code_for_token
+    from registry.utils.url_guard import CREDENTIALED_OAUTH_PROFILE
+
+    config = {
+        "grant_type": "authorization_code",
+        "client_id": "gateway-web",
+        "client_secret": "secret",
+        "token_url": "https://login.microsoftonline.com/tenant/oauth2/v2.0/token",
+    }
+    client = MagicMock()
+    client.post = AsyncMock(return_value=MagicMock(json=lambda: {"access_token": "token"}))
+    with (
+        patch("registry.utils.url_guard.shared_guarded_async_client", return_value=client) as guard,
+        patch("registry.utils.url_guard.shared_plain_async_client") as plain,
+    ):
+        token = await exchange_code_for_token(
+            "entra", "code", config, auth_server_url="https://gateway.example.com"
+        )
+
+    assert token == {"access_token": "token"}
+    guard.assert_called_once_with(profile=CREDENTIALED_OAUTH_PROFILE)
+    plain.assert_not_called()
+    client.post.assert_awaited_once()
 
 
 async def test_callback_uses_pooled_plain_client_not_closed(monkeypatch):

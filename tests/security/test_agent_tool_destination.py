@@ -8,8 +8,10 @@ server path cannot replace the configured host.
 Covers issue #1862.
 """
 
+import asyncio
 import sys
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -43,6 +45,32 @@ class TestConfiguredRegistryBaseUrl:
         # prompt-injected instruction can set. Guard against it coming back.
         params = agent.invoke_mcp_tool.args_schema.model_fields
         assert "mcp_registry_url" not in params
+
+    def test_hostile_path_is_rejected_before_any_transport_sends_auth(
+        self,
+        configured_registry,
+        monkeypatch,
+    ):
+        http_transport = AsyncMock()
+        sse_transport = AsyncMock()
+        monkeypatch.setattr(agent, "_invoke_via_http", http_transport)
+        monkeypatch.setattr(agent, "_invoke_via_sse", sse_transport)
+        monkeypatch.setattr(agent.agent_settings, "auth_token", "synthetic-jwt")
+
+        async def invoke_hostile_path():
+            await agent.invoke_mcp_tool.ainvoke(
+                {
+                    "server_name": "https://evil.example/x",
+                    "tool_name": "synthetic_tool",
+                    "arguments": {},
+                }
+            )
+
+        with pytest.raises(agent.AgentConfigError):
+            asyncio.run(invoke_hostile_path())
+
+        http_transport.assert_not_awaited()
+        sse_transport.assert_not_awaited()
 
     def test_unset_registry_url_is_refused(self):
         previous = agent.agent_settings.registry_url

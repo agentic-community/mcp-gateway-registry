@@ -11,7 +11,9 @@ All recommendations implemented:
 """
 
 import asyncio
+import base64
 import logging
+from collections.abc import Coroutine
 from datetime import UTC, datetime
 from typing import (
     Annotated,
@@ -70,6 +72,8 @@ from ..services.lifecycle_events import (
 )
 from ..services.registration_gate_service import check_registration_gate
 from ..services.skill_service import (
+    SKILL_MD_GONE_STATUSES,
+    SkillService,
     _build_skill_fetch_request,
     _check_drift_inline,
     _decrypt_skill_auth,
@@ -116,6 +120,10 @@ class UpstreamHeadersUpdateRequest(BaseModel):
 router = APIRouter(prefix="/skills", tags=["skills"])
 
 _SKILL_CARD_EXCLUDE = {"auth_credential_encrypted", "custom_headers_encrypted"}
+
+# Strong references to fire-and-forget tasks. The event loop holds only weak
+# references, so an unreferenced task can be collected before it finishes.
+_BACKGROUND_TASKS: set[asyncio.Task] = set()
 
 
 # Dependency for normalized path
@@ -585,7 +593,11 @@ async def check_skill_health(
 ) -> dict:
     """Check skill health by performing HEAD request to SKILL.md URL.
 
-    Returns health status, HTTP status code, and response time.
+    Retries with a GET when the server answers HEAD with 405 or 501. Returns
+    health status, HTTP status code, and response time. Stores the result as
+    the skill's ``health_status`` only when it is conclusive: reachable, gone
+    (404 or 410), or blocked by the SSRF guard. A rate limit, server error or
+    timeout is reported but leaves the stored status unchanged.
     """
     normalized_path = normalize_skill_path(skill_path)
     service = get_skill_service()
@@ -617,6 +629,30 @@ async def check_skill_health(
 MAX_RESOURCE_SIZE = 512 * 1024  # 512 KB
 
 
+def _decode_text_asset(
+    content: bytes,
+) -> str | None:
+    """Decode an asset as text, or return None when it should be treated as binary.
+
+    Uses the strict UTF-8 decoder, so a returned string always encodes back to
+    exactly ``content``. A NUL byte also marks the asset as binary: it never
+    appears in a text template, but does appear in UTF-16 text and in many
+    small binary formats that happen to be valid UTF-8.
+
+    Args:
+        content: Raw bytes fetched for an ``asset`` resource.
+
+    Returns:
+        The decoded text, or None when the bytes are not NUL-free UTF-8.
+    """
+    if b"\x00" in content:
+        return None
+    try:
+        return content.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
 @router.get("/{skill_path:path}/content", summary="Get SKILL.md content")
 async def get_skill_content(
     user_context: Annotated[dict, Depends(nginx_proxied_auth)],
@@ -632,6 +668,22 @@ async def get_skill_content(
     Without ``resource``: returns SKILL.md markdown and the resource manifest.
     With ``resource``: returns the content of the specified companion file
     (validated against the stored manifest to prevent path traversal).
+    ``reference``, ``script`` and ``agent`` resources are returned as text in
+    ``content`` (invalid bytes are replaced, not rejected). ``asset`` resources
+    that are valid UTF-8 with no NUL bytes (templates, schemas, data files) are
+    also returned as text in ``content``, byte-exact. Other assets are returned
+    as base64 in ``content_base64`` with ``encoding: "base64"``. The asset shape
+    depends on the file's bytes, so clients must branch on ``encoding`` rather
+    than on the path. Every resource response includes ``size_bytes``, the byte
+    length of the file as fetched upstream. Every branch returns JSON, so an
+    attacker-controlled extension or body can never select an executable
+    response content type.
+
+    A SKILL.md read also updates the skill's ``health_status``: a successful
+    read, or serving inline content, marks a skill that is not already healthy
+    as healthy, and a 404 or 410 from the SKILL.md URL marks a skill that is
+    not already unhealthy as unhealthy. Other failures, and companion resource
+    reads, leave it unchanged.
     """
     normalized_path = normalize_skill_path(skill_path)
     service = get_skill_service()
@@ -656,8 +708,11 @@ async def get_skill_content(
             ),
         )
 
-    # For federated skills with inline content, serve directly from DB
+    # For federated skills with inline content, serve directly from DB. Serving
+    # it is a successful SKILL.md read, so record that as health too.
     if skill.skill_md_content:
+        if skill.health_status != "healthy":
+            _run_in_background(service.record_skill_health(normalized_path, healthy=True))
         return {
             "content": skill.skill_md_content,
             "source": "inline",
@@ -698,13 +753,47 @@ async def get_skill_content(
                 max_size=MAX_RESOURCE_SIZE,
             )
 
-            drift_task = asyncio.create_task(
+            _run_in_background(
                 _check_drift_inline(service, normalized_path, skill, resource, response.content)
             )
-            drift_task.add_done_callback(_log_task_exception)
+
+            # Every branch returns JSON. Returning a raw Response would let the
+            # registrant's file extension choose the content type (for example
+            # text/html or image/svg+xml), which turns a public skill asset
+            # into stored XSS on this origin. Text assets (templates, schemas)
+            # come back in ``content`` byte-exact; binary assets come back as
+            # base64. Which shape an asset gets depends on its bytes, so it can
+            # change for one path if the upstream file is re-encoded.
+            if matched[0].type == "asset":
+                text = _decode_text_asset(response.content)
+                # The shape can change for one path when the upstream file is
+                # re-encoded, so record which one this fetch produced.
+                logger.debug(
+                    "Asset %s for skill %s returned as %s (%d bytes)",
+                    resource,
+                    normalized_path,
+                    "base64" if text is None else "text",
+                    len(response.content),
+                )
+                if text is None:
+                    return {
+                        "content_base64": base64.b64encode(response.content).decode("ascii"),
+                        "encoding": "base64",
+                        "size_bytes": len(response.content),
+                        "path": resource,
+                        "type": matched[0].type,
+                        "url": resource_url,
+                    }
+            else:
+                # Decode the raw bytes as UTF-8 rather than use response.text,
+                # which honors an upstream-declared charset. Assets are judged
+                # on their raw bytes above, and every resource type must use
+                # the same decode policy for downloads to stay byte-exact.
+                text = response.content.decode("utf-8", errors="replace")
 
             return {
-                "content": response.text,
+                "content": text,
+                "size_bytes": len(response.content),
                 "path": resource,
                 "type": matched[0].type,
                 "url": resource_url,
@@ -712,10 +801,13 @@ async def get_skill_content(
 
         response = await _fetch_authenticated_content(str(raw_url), skill)
 
-        drift_task = asyncio.create_task(
+        _run_in_background(
             _check_drift_inline(service, normalized_path, skill, "SKILL.md", response.content)
         )
-        drift_task.add_done_callback(_log_task_exception)
+        # A successful fetch only writes when it changes the recorded state, so
+        # the hot read path does not write on every call.
+        if skill.health_status != "healthy":
+            _run_in_background(service.record_skill_health(normalized_path, healthy=True))
 
         result: dict[str, Any] = {
             "content": response.text,
@@ -738,6 +830,16 @@ async def get_skill_content(
             detail=str(e),
         )
     except SkillContentFetchError as e:
+        # Record only a SKILL.md that is gone. Rate limits, 5xx and timeouts are
+        # transient, and a caller can provoke them by hammering this route, so
+        # they must not flip health. A missing companion resource says nothing
+        # about SKILL.md itself. Like the success path, write only on a change.
+        if (
+            resource is None
+            and e.upstream_status in SKILL_MD_GONE_STATUSES
+            and skill.health_status != "unhealthy"
+        ):
+            await _record_skill_md_gone(service, normalized_path)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=str(e),
@@ -1141,12 +1243,8 @@ async def register_skill(
             ASSET_ID_SUPPLIED_TOTAL.labels(asset_type="skill").inc()
 
         # Security scanning if enabled (non-blocking — mirrors server registration pattern)
-        scan_task = asyncio.create_task(
-            _perform_skill_security_scan_on_registration(skill, service)
-        )
-        scan_task.add_done_callback(_log_task_exception)
-
-        asyncio.create_task(
+        _run_in_background(_perform_skill_security_scan_on_registration(skill, service))
+        _run_in_background(
             send_registration_webhook(
                 event_type="registration",
                 registration_type="skill",
@@ -1424,7 +1522,7 @@ async def delete_skill(
             status_code=status.HTTP_404_NOT_FOUND, detail=f"Skill not found: {normalized_path}"
         )
 
-    asyncio.create_task(
+    _run_in_background(
         send_registration_webhook(
             event_type="deletion",
             registration_type="skill",
@@ -1546,6 +1644,39 @@ def _log_task_exception(task: asyncio.Task) -> None:
     exc = task.exception()
     if exc is not None:
         logger.error("Background task failed: %s", exc, exc_info=exc)
+
+
+def _run_in_background(
+    coro: Coroutine[Any, Any, Any],
+) -> None:
+    """Run a coroutine without awaiting it, keeping the task alive and logged.
+
+    Args:
+        coro: Coroutine to schedule on the running loop.
+    """
+    task = asyncio.create_task(coro)
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
+    task.add_done_callback(_log_task_exception)
+
+
+async def _record_skill_md_gone(
+    service: SkillService,
+    skill_path: str,
+) -> None:
+    """Record a skill unhealthy after its SKILL.md URL answered 404 or 410.
+
+    Awaited rather than backgrounded so a shutdown cannot drop the write. A
+    failed write is logged and the caller still gets the original 502.
+
+    Args:
+        service: Skill service that owns the write.
+        skill_path: Normalized skill path.
+    """
+    try:
+        await service.record_skill_health(skill_path, healthy=False)
+    except SkillServiceError:
+        logger.exception("Failed to record unhealthy status for skill %s", skill_path)
 
 
 def _user_can_access_skill(

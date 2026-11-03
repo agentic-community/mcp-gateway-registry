@@ -2,7 +2,7 @@
 # Each server must have pyproject.toml, uv.lock, and server.py.
 # Build context can be either the server directory directly, or the repo
 # root with --build-arg SERVER_DIR=servers/<name>.
-FROM python:3.14.8-slim
+FROM python:3.14.9-slim
 
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
@@ -34,7 +34,7 @@ RUN groupadd -g 1000 appuser && useradd -u 1000 -g appuser appuser
 WORKDIR /app
 
 # Install uv as root (global tool)
-RUN pip install uv==0.11.14
+RUN pip install uv==0.13.5
 
 # Create /app directory with correct ownership from the start
 RUN chown appuser:appuser /app

@@ -17,8 +17,8 @@ bearer token rather than a fixed API key. The registry handles the token lifecyc
 
 ## Requirement: the endpoint must return the OpenAI embeddings *envelope*
 
-The registry uses LiteLLM's OpenAI-compatible client, so your endpoint must accept
-the standard request and return the standard **response envelope**:
+The registry sends a standard OpenAI embeddings request, so your endpoint must accept
+it and return the standard **response envelope**:
 
 ```jsonc
 // request  (what the registry sends)
@@ -34,11 +34,26 @@ the standard request and return the standard **response envelope**:
 ```
 
 If your endpoint instead returns a **bare array of vectors** (`[[0.12, ...], ...]`)
-rather than the envelope, LiteLLM cannot parse it (it reads `data[i].embedding`). For
+rather than the envelope, the standard parser cannot read it (it reads `data[i].embedding`). For
 that case set `EMBEDDINGS_RESPONSE_FORMAT=raw_array`: the registry then calls the
 endpoint directly and reads the bare array (it also accepts the same array wrapped
 under a top-level `embeddings`, `data`, or `vectors` key). Leave the variable unset
 (or `openai`) for standard envelope endpoints.
+
+## Extra request headers
+
+Some endpoints sit behind a gateway that routes or authorizes on a header other than `Authorization`, such as a tenant or module ID. Set one header per slot in `EMBEDDINGS_EXTRA_HEADER_1` through `EMBEDDINGS_EXTRA_HEADER_5`, in `Name: value` form:
+
+```bash
+EMBEDDINGS_EXTRA_HEADER_1=X-Tenant-Id: research
+EMBEDDINGS_EXTRA_HEADER_2=X-Route: embeddings-v2
+```
+
+The registry adds these headers to every embeddings request, with either value of `EMBEDDINGS_RESPONSE_FORMAT`. It skips blank slots, so you can leave gaps. It refuses to start if a slot has no colon, holds an invalid name or value, repeats a header name from another slot, or names `Authorization`, `Content-Type`, or `Accept`, which the registry sets itself. The headers do not go to the IdP token endpoint.
+
+**Warning:** the registry stores these values in clear text and shows them unmasked on the System Config page and in config exports. Never put a credential in a slot. Use `EMBEDDINGS_API_KEY` or `EMBEDDINGS_AUTH_MODE=idp` for credentials.
+
+With `EMBEDDINGS_PROVIDER=sentence-transformers` the registry makes no HTTP call, so it ignores the slots and prints a warning banner at startup.
 
 ## Configuration parameters
 
@@ -56,6 +71,7 @@ under a top-level `embeddings`, `data`, or `vectors` key). Leave the variable un
 | `EMBEDDINGS_IDP_TIMEOUT_SECONDS` | No | Token request timeout (default `30`). |
 | `EMBEDDINGS_IDP_ALLOW_INSECURE` | No | Local dev only: permit an `http://` **loopback** token endpoint. Default `false` (https required). A remote `http://` endpoint is always rejected. |
 | `EMBEDDINGS_RESPONSE_FORMAT` | No | Endpoint response shape: `openai` (default, standard envelope) or `raw_array` (endpoint returns a bare `[[float]]` array). Independent of auth mode. |
+| `EMBEDDINGS_EXTRA_HEADER_1` to `_5` | No | One extra request header per slot, as `Name: value`. Clear text, never a credential. See [Extra request headers](#extra-request-headers). |
 
 The full cross-surface reference (Docker / Terraform / Helm) is in
 [docs/unified-parameter-reference.md](../unified-parameter-reference.md).

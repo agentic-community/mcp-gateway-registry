@@ -356,7 +356,16 @@ oauth2_allowed_redirect_uris = ""
 # embeddings_idp_scope             = "api://<app-id>/.default"
 # embeddings_idp_timeout_seconds   = 30
 # embeddings_idp_allow_insecure    = false  # local dev only: permit http:// loopback token endpoint
+# embeddings_request_timeout_seconds = 30  # per remote embeddings request (litellm only)
+# embeddings_max_retries             = 2   # retries on 429/5xx/connection errors
+# embeddings_retry_max_input_chars   = 28000  # trim target for the one retry after a failure; null = per-model default
 # embeddings_response_format       = "openai"  # default; use "raw_array" only if your endpoint returns a bare [[float]] array instead of the OpenAI envelope
+# Extra headers on every embeddings request (litellm only), at most 5. Stored in
+# clear text; never put a credential here (use embeddings_api_key or IdP mode).
+# embeddings_extra_headers = {
+#   "X-Tenant-Id" = "research"
+#   "X-Route"     = "embeddings-v2"
+# }
 
 # ============================================================================
 # REGISTRATION DEDUPLICATION
@@ -933,9 +942,10 @@ registry_api_token = "m3zT65wREARMVDToKosg_DgNkKqS_434hNxy3sslGPY"
 # Entra ID Login Base URL (optional - defaults to Azure Public Cloud)
 # Change only if using a sovereign cloud:
 #   - Azure Public Cloud (default): https://login.microsoftonline.com
-#   - Azure Government: https://login.microsoftonline.us
+#   - Azure Government (US Gov or DoD): https://login.microsoftonline.us
 #   - Azure China: https://login.chinacloudapi.cn
-#   - Azure Germany: https://login.microsoftonline.de
+#   - Custom login proxies always need entra_graph_base_url and need
+#     entra_graph_resource_url if recovery or browser User.Read is enabled.
 # entra_login_base_url = "https://login.microsoftonline.com"
 
 # Microsoft Graph Base URL (optional)
@@ -943,6 +953,29 @@ registry_api_token = "m3zT65wREARMVDToKosg_DgNkKqS_434hNxy3sslGPY"
 # via the documented sovereign-cloud mapping. Set explicitly only for proxied or
 # air-gapped deployments.
 # entra_graph_base_url = "https://graph.microsoft.com"
+
+# Native Microsoft Graph OAuth resource (optional for known login clouds).
+# Custom login proxies need the official resource for their target cloud when
+# group recovery or browser User.Read is enabled. Do not use the fetch proxy.
+# login.microsoftonline.us infers US Gov Graph; set DoD explicitly.
+# Public: https://graph.microsoft.com; China: https://microsoftgraph.chinacloudapi.cn
+# US Gov: https://graph.microsoft.us; DoD: https://dod-graph.microsoft.us
+# entra_graph_resource_url = "https://dod-graph.microsoft.us"
+
+# Request User.Read consent during Entra browser login to allow browser group
+# overage lookup. Default false keeps OIDC-only login; group recovery must also
+# be enabled for lookup. Does not affect delegated bearer token recovery.
+# entra_browser_user_read_enabled = false
+
+# Recover full Entra group membership through Microsoft Graph for overage
+# tokens. Defaults to true for eligible bearer tokens; browser login requires
+# User.Read consent as well. False disables Graph recovery and never trusts
+# stale inline group claims on an overage token.
+# entra_group_recovery_enabled = true
+
+# Positive Graph group-result cache lifetime in seconds (30..3600, default 300).
+# Group removals can remain cached until the TTL expires.
+# entra_group_cache_ttl_seconds = 300
 
 # IdP Group Filter Prefix (optional, comma-separated, applies to all identity providers)
 # Only groups whose name starts with any of these prefixes are shown in IAM > Groups
@@ -1457,7 +1490,8 @@ aws_registry_federation_enabled = true
 # egress_oauth_callback_base_url     = "https://mcpgateway.example.com"
 # egress_token_refresh_skew_seconds  = 300
 # egress_state_ttl_seconds           = 600
-# Egress httpx client connection pooling (shared by url_guard; registry + auth-server).
+# Egress httpx client connection pooling. Forwarded to all three egress consumers:
+# registry + auth-server (via url_guard) and the mcpgw MCP server.
 # Keep the keepalive expiry below the shortest upstream/LB idle timeout.
 # egress_http_pool_max_connections          = 100
 # egress_http_pool_max_keepalive            = 20
@@ -1468,6 +1502,14 @@ aws_registry_federation_enabled = true
 # App ID URI / bare client-id only, no https host URLs or GUIDs), so shared
 # first-party APIs (Graph/ARM/Key Vault) are rejected at registration.
 # egress_obo_allowed_audiences       = "api://outlook-mcp-server api://calendar-mcp-server"
+# Opt-in: cache exchanged OBO tokens in the per-user SecretStore so repeated calls
+# by the same principal to the same audience reuse a still-valid token instead of
+# re-exchanging. Default off preserves the stateless per-request exchange. MAX_TTL
+# caps the reuse window below the token's real expiry; EXPIRY_SKEW keeps a margin
+# before expiry and must be < the max TTL.
+# egress_obo_cache_enabled             = false
+# egress_obo_cache_max_ttl_seconds     = 300
+# egress_obo_cache_expiry_skew_seconds = 30
 # Hostnames of operator-controlled IdPs whose OAuth token endpoints may resolve to
 # private addresses. Needed for a self-hosted IdP (Keycloak, or Entra over Private
 # Link), where the token endpoint resolves to RFC1918 and egress consent would
@@ -1477,16 +1519,20 @@ aws_registry_federation_enabled = true
 # egress_registry_internal_url       = "http://registry:8091"   # dedicated internal vend listener (not the ALB-fronted :8080)
 # egress_secrets_manager_kms_key_id  = ""   # optional CMK; empty uses the AWS-managed key
 # egress_secrets_manager_path_prefix = "mcp/egress"
-# Registry-only AES-256-GCM key that encrypts per-user egress credentials at rest
-# before they reach Secrets Manager / OpenBao. Empty (the default) disables
-# encryption (legacy plaintext) so existing deployments are unaffected; set a
-# strong value to enable. Never auto-generated. When set, it is provisioned as a
-# dedicated Secrets Manager secret and injected into the registry task.
+# AES-256-GCM key that encrypts per-user egress credentials at rest before they
+# reach Secrets Manager / OpenBao. Empty (the default) disables encryption
+# (legacy plaintext) so existing deployments are unaffected; set a strong value
+# to enable. Never auto-generated. When set, it is provisioned as a dedicated
+# Secrets Manager secret and injected into the registry task, and also into the
+# auth-server task when egress_obo_cache_enabled = true (it encrypts cached OBO
+# tokens the same way).
 # egress_credential_encryption_key   = ""
 
 # nginx marker secret shared by auth-server + registry. REQUIRED unconditionally
-# (both services refuse to start without it), NOT egress-specific -- it guards all
-# mcp-proxy token minting. Auto-generated into Secrets Manager when left empty;
-# set this only to pin a specific value. Avoid quotes/backslashes/$ (the registry
-# substitutes it verbatim into the generated nginx config).
+# (both services refuse to start without it), NOT egress-specific: it guards all
+# internal-token minting (registry API, mcp-proxy, generic proxy), so a value that
+# differs between the two services 401s every registry API request. Auto-generated
+# into Secrets Manager when left empty; set this only to pin a specific value. It
+# must contain only printable ASCII characters other than '$' (no spaces), because
+# the registry renders it into the nginx config and nginx sends it as a header.
 # egress_nginx_marker_secret         = ""

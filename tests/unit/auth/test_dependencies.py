@@ -1225,7 +1225,6 @@ class TestNginxProxiedAuth:
             x_username="attacker",
             x_scopes="mcp-registry-admin",
             x_auth_method="keycloak",
-            x_groups="registry-admins",
             x_internal_token=token,
         )
 
@@ -1253,7 +1252,6 @@ class TestNginxProxiedAuth:
                 x_username="attacker",
                 x_scopes="mcp-registry-admin",
                 x_auth_method="keycloak",
-                x_groups="registry-admins",
                 x_internal_token=None,
             )
         assert exc.value.status_code == 401
@@ -1274,7 +1272,6 @@ class TestNginxProxiedAuth:
                 x_username="attacker",
                 x_scopes="mcp-registry-admin",
                 x_auth_method="keycloak",
-                x_groups="registry-admins",
                 x_internal_token=bad_token,
             )
         assert exc.value.status_code == 401
@@ -1304,7 +1301,6 @@ class TestNginxProxiedAuth:
             x_username="attacker",
             x_scopes="mcp-registry-admin",
             x_auth_method="keycloak",
-            x_groups="registry-admins",
             x_internal_token=None,
         )
         assert context["username"] == "session_user"  # from cookie, not forged header

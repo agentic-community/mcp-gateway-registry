@@ -349,7 +349,7 @@ This approach is useful when:
 ### How It Works
 
 1. **Create a JSON config file** describing the gateway or agent (path, proxy URL, auth scheme, tags, tool list)
-2. **Register with the CLI**: `./cli/service_mgmt.sh add gateway-config.json` (this script prints a deprecation banner pointing to `api/registry_management.py register`; the banner is informational and the `add` command still works)
+2. **Register with the CLI**: `uv run python api/registry_management.py --registry-url <registry-url> --token-file <token-file> register --config gateway-config.json`
 3. **Provide a JWT token** when calling the gateway -- the IdP does not matter, just provide a valid bearer token at call time via `--token-file`
 4. **Refresh the token** when it expires -- how you obtain the token is up to you (curl, SDK, script)
 
@@ -405,7 +405,7 @@ The identity provider is irrelevant for manual registration. The registry uses p
 
 ```bash
 # Register the gateway
-./cli/service_mgmt.sh add gateway-config.json
+uv run python api/registry_management.py --registry-url http://localhost --token-file .token register --config gateway-config.json
 
 # Call a tool through the registry (provide a valid JWT from any IdP)
 uv run cli/mcp_client.py \

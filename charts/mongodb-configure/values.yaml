@@ -1,11 +1,19 @@
 global:
+  # Secret generation switch shared with the umbrella chart. true (default)
+  # generates unresolved secret values randomly and preserves them across
+  # `helm upgrade` via `lookup`. Set false for ArgoCD and other
+  # `helm template` based tools, which render without cluster access: there the
+  # lookup is always empty, so a generated value would differ on every sync.
+  # With generation off, an unresolved value is a render-time error naming the
+  # value to set.
+  generateSecrets: true
   existingMongoCredentialsSecret: "" # If set, use this existing secret instead of creating one
   # Image defaults, shared with the other subcharts. Declared here so this chart
   # also renders standalone (`helm template ./charts/mongodb-configure`); the
   # stack chart's global.image overrides these.
   image:
     registry: public.ecr.aws/p3v1o3c6
-    tag: 1.33.0
+    tag: 1.36.0
     pullPolicy: IfNotPresent
   authProvider:
     type: keycloak

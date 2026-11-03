@@ -1,14 +1,36 @@
 """Microsoft Entra ID (Azure AD) authentication provider implementation."""
 
+import asyncio
+import hashlib
+import json
 import logging
 import os
 import time
+from collections import OrderedDict
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit, urlunsplit
 
 import httpx
 import jwt
 import requests
+
+from registry.exceptions import UrlValidationError
+from registry.utils.url_guard import (
+    ENTRA_GRAPH_PROFILE,
+    guarded_async_client,
+    guarded_client,
+    validate_url,
+)
+
+try:
+    from egress_obo import OboConfigError, OboConsentRequired, OboExchangeError, obo_exchange
+except ImportError:
+    from auth_server.egress_obo import (
+        OboConfigError,
+        OboConsentRequired,
+        OboExchangeError,
+        obo_exchange,
+    )
 
 from .base import AuthProvider, normalize_groups_claim
 
@@ -28,39 +50,244 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-# Default Entra ID login base URL. Sovereign clouds override via env:
-#   Public (default): https://login.microsoftonline.com
-#   US Gov:           https://login.microsoftonline.us
-#   China:            https://login.partner.microsoftonline.cn
+# Public and sovereign login bases map to their own Microsoft Graph resources.
+# https://learn.microsoft.com/en-us/graph/deployments
 DEFAULT_ENTRA_LOGIN_BASE_URL = "https://login.microsoftonline.com"
-
-# Default Microsoft Graph base URL. Inferred from the login base URL via the
-# fixed sovereign-cloud mapping below; ENTRA_GRAPH_BASE_URL can override for
-# edge cases (e.g. a Graph proxy in front of the cluster). Operators on the
-# three documented sovereign clouds only need to set ENTRA_LOGIN_BASE_URL.
 DEFAULT_ENTRA_GRAPH_BASE_URL = "https://graph.microsoft.com"
-
-# Fixed Microsoft mapping from login host -> Graph host across sovereign clouds.
-# Documented at https://learn.microsoft.com/en-us/graph/deployments
 _LOGIN_TO_GRAPH_HOST: dict[str, str] = {
     "login.microsoftonline.com": "https://graph.microsoft.com",
     "login.microsoftonline.us": "https://graph.microsoft.us",
+    "login.chinacloudapi.cn": "https://microsoftgraph.chinacloudapi.cn",
     "login.partner.microsoftonline.cn": "https://microsoftgraph.chinacloudapi.cn",
 }
 
+# Only Microsoft's native Graph OAuth resources may be token audiences. The
+# fetch endpoint may instead be an operator's reverse proxy.
+_NATIVE_GRAPH_RESOURCES = frozenset(
+    {*_LOGIN_TO_GRAPH_HOST.values(), "https://dod-graph.microsoft.us"}
+)
 
-def _infer_graph_base_url(login_base_url: str) -> str:
-    """Infer the Graph base URL from the configured login base URL.
+# Memberships are cached per auth-server process; bounded TTL limits stale grants.
+GRAPH_GROUP_CACHE_MAX_ENTRIES = 512
+GRAPH_GROUP_LOOKUP_TIMEOUT_SECONDS = 8.0
+GRAPH_GROUP_PAGE_SIZE = 999  # Microsoft Graph transitiveMemberOf maximum $top.
+GRAPH_GROUP_NEGATIVE_TTL_SECONDS = 30
+GRAPH_GROUP_NEGATIVE_MAX_ENTRIES = 512
+_CACHEABLE_GROUP_FAILURES = frozenset({"consent", "configuration", "authorization"})
 
-    Returns the matching Graph host for one of Microsoft's three documented
-    sovereign clouds. Unknown login hosts fall back to the public Graph
-    endpoint; operators should set ENTRA_GRAPH_BASE_URL explicitly in that
-    case (e.g. air-gapped or proxied deployments).
+
+def _group_recovery_enabled() -> bool:
+    """Read the operator switch; reject malformed values rather than guessing."""
+    value = os.environ.get("ENTRA_GROUP_RECOVERY_ENABLED", "true").lower()
+    if value not in {"true", "false"}:
+        raise ValueError("ENTRA_GROUP_RECOVERY_ENABLED must be true or false")
+    return value == "true"
+
+
+def _group_cache_ttl_seconds() -> int:
+    """Bound the membership revocation window configured for this process."""
+    raw = os.environ.get("ENTRA_GROUP_CACHE_TTL_SECONDS", "300")
+    try:
+        ttl = int(raw)
+    except ValueError as exc:
+        raise ValueError("ENTRA_GROUP_CACHE_TTL_SECONDS must be 30..3600") from exc
+    if not 30 <= ttl <= 3600:
+        raise ValueError("ENTRA_GROUP_CACHE_TTL_SECONDS must be 30..3600")
+    return ttl
+
+
+# Budget for Entra memberships recovered from Microsoft Graph, measured as the
+# JSON list a registry token encodes. Graph can return thousands of groups, and
+# at login the filtered list is stored in the session and resolved on every
+# request, so a runaway membership is refused rather than truncated (which would
+# drop arbitrary grants). 8 KiB is about 200 GUIDs after the scope-mapping filter,
+# the same count Entra itself places inline in a token, so a recovered set gets
+# the same room as an inline one; either fits well inside the 64 KiB /validate
+# buffer and the auth server's 40 KiB token cap.
+GRAPH_GROUP_MAX_BYTES: int = 8 * 1024
+
+
+def graph_group_bytes(groups: list[str]) -> int:
+    """Size of ``groups`` as the JSON list a registry token encodes.
+
+    Args:
+        groups: Group IDs recovered from Microsoft Graph.
+
+    Returns:
+        The UTF-8 byte length of ``json.dumps(groups)``.
     """
-    from urllib.parse import urlparse
+    return len(json.dumps(groups).encode("utf-8"))
 
-    host = urlparse(login_base_url).hostname or ""
-    return _LOGIN_TO_GRAPH_HOST.get(host, DEFAULT_ENTRA_GRAPH_BASE_URL)
+
+class GraphGroupLookupError(Exception):
+    """Microsoft Graph could not establish the user's complete group membership."""
+
+    def __init__(self, message: str, *, reason: str = "unknown") -> None:
+        super().__init__(message)
+        # A finite, non-sensitive label for structured request logging.
+        self.reason = (
+            reason
+            if reason
+            in {
+                "configuration",
+                "consent",
+                "authorization",
+                "timeout",
+                "pagination",
+                "transport",
+                "malformed",
+                "limit",
+                "identity",
+                "token_exchange",
+                "unknown",
+            }
+            else "unknown"
+        )
+
+
+def _entra_login_base() -> str:
+    """Use a consistent login origin for browser and bearer flows."""
+    return (os.environ.get("ENTRA_LOGIN_BASE_URL") or DEFAULT_ENTRA_LOGIN_BASE_URL).rstrip("/")
+
+
+def _infer_graph_base_url(login_base_url: str) -> str | None:
+    """Return the Graph resource for a recognized Entra login cloud.
+
+    A validated but unknown login origin has no implicit public-Graph resource.
+    """
+    try:
+        parsed = urlsplit(login_base_url)
+        port = parsed.port
+    except ValueError as exc:
+        raise GraphGroupLookupError(
+            "Invalid Entra login cloud configuration", reason="configuration"
+        ) from exc
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+        or parsed.path not in ("", "/")
+        or port not in (None, 443)
+    ):
+        raise GraphGroupLookupError(
+            "Invalid Entra login cloud configuration", reason="configuration"
+        )
+    return _LOGIN_TO_GRAPH_HOST.get(parsed.hostname or "")
+
+
+def _validated_graph_resource_url(login_resource: str | None) -> str | None:
+    """Select an official Graph OAuth resource, independently of its fetch URL."""
+    configured = os.environ.get("ENTRA_GRAPH_RESOURCE_URL")
+    if configured is None or configured == "":
+        return login_resource
+    try:
+        parsed = urlsplit(configured)
+        if (
+            configured != configured.strip()
+            or parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+            or parsed.path not in ("", "/")
+            or parsed.query
+            or parsed.fragment
+            or parsed.port not in (None, 443)
+        ):
+            raise GraphGroupLookupError(
+                "Invalid Microsoft Graph resource configuration", reason="configuration"
+            )
+    except ValueError as exc:
+        raise GraphGroupLookupError(
+            "Invalid Microsoft Graph resource configuration", reason="configuration"
+        ) from exc
+    resource = f"https://{parsed.hostname}"
+    if configured not in {resource, f"{resource}/", f"{resource}:443", f"{resource}:443/"}:
+        raise GraphGroupLookupError(
+            "Invalid Microsoft Graph resource configuration", reason="configuration"
+        )
+    if resource not in _NATIVE_GRAPH_RESOURCES:
+        raise GraphGroupLookupError(
+            "Microsoft Graph resource must be a native Graph origin", reason="configuration"
+        )
+    if login_resource is not None:
+        permitted = {login_resource}
+        if login_resource == "https://graph.microsoft.us":
+            permitted.add("https://dod-graph.microsoft.us")
+        if resource not in permitted:
+            raise GraphGroupLookupError(
+                "Graph resource does not match Entra login cloud", reason="configuration"
+            )
+    return resource
+
+
+def _validated_graph_override(login_resource: str | None) -> str | None:
+    """Validate an explicit Graph fetch origin and reject cross-cloud Graph hosts."""
+    configured = os.environ.get("ENTRA_GRAPH_BASE_URL")
+    if not configured:
+        return None
+    override = configured.rstrip("/")
+    try:
+        origin = urlsplit(override)
+        if (
+            origin.scheme != "https"
+            or not origin.hostname
+            or origin.username
+            or origin.password
+            or origin.path
+            or origin.query
+            or origin.fragment
+            or origin.port not in (None, 443)
+        ):
+            raise GraphGroupLookupError(
+                "Invalid Microsoft Graph endpoint configuration", reason="configuration"
+            )
+        validate_url(override, profile=ENTRA_GRAPH_PROFILE, resolve=False)
+    except (UrlValidationError, ValueError) as exc:
+        raise GraphGroupLookupError(
+            "Invalid Microsoft Graph endpoint configuration", reason="configuration"
+        ) from exc
+    known_graph_hosts = {urlsplit(base).hostname for base in _NATIVE_GRAPH_RESOURCES}
+    if origin.hostname in known_graph_hosts and login_resource != f"https://{origin.hostname}":
+        raise GraphGroupLookupError(
+            "Graph endpoint does not match Entra login cloud", reason="configuration"
+        )
+    return override
+
+
+def _graph_resource_url() -> str:
+    """Return the trusted native Graph OAuth audience, never the fetch proxy."""
+    resource = _validated_graph_resource_url(_infer_graph_base_url(_entra_login_base()))
+    _validated_graph_override(resource)
+    if resource is None:
+        raise GraphGroupLookupError(
+            "Unknown Entra cloud: cannot determine Graph token resource", reason="configuration"
+        )
+    return resource
+
+
+def _post_entra_token(
+    url: str,
+    data: dict[str, str],
+) -> httpx.Response:
+    """Send an Entra token request through the HTTPS-only, pinned OAuth client."""
+    from registry.utils.url_guard import CREDENTIALED_OAUTH_PROFILE
+
+    validate_url(url, profile=CREDENTIALED_OAUTH_PROFILE, resolve=False)
+    with guarded_client(
+        profile=CREDENTIALED_OAUTH_PROFILE, timeout=10.0, follow_redirects=False
+    ) as client:
+        return client.post(url, data=data)
+
+
+def _delegated_scopes(claims: dict[str, Any]) -> list[str]:
+    """Read signed Entra user scopes, retaining the legacy scope claim."""
+    raw = claims.get("scp", claims.get("scope", ""))
+    if not isinstance(raw, str):
+        raise ValueError("Entra scp claim must be a string")
+    return raw.split()
 
 
 class EntraIdProvider(AuthProvider):
@@ -129,15 +356,18 @@ class EntraIdProvider(AuthProvider):
         self._jwks_cache_time: float = 0
         self._jwks_cache_ttl: int = 3600  # 1 hour
 
-        # Login base URL: explicit env override, defaulting to the public
-        # cloud. Graph base URL: explicit override (rare — for proxied
-        # deployments) takes precedence; otherwise inferred from the login
-        # base URL via the documented sovereign-cloud mapping.
-        login_base_url = os.environ.get("ENTRA_LOGIN_BASE_URL", DEFAULT_ENTRA_LOGIN_BASE_URL)
-        graph_override = os.environ.get("ENTRA_GRAPH_BASE_URL")
-        self.graph_base_url = (
-            graph_override.rstrip("/") if graph_override else _infer_graph_base_url(login_base_url)
-        )
+        # The fetch endpoint can be a private TLS reverse proxy; the OAuth
+        # resource is always a separate, explicitly trusted native Graph origin.
+        login_base_url = _entra_login_base()
+        login_resource = _infer_graph_base_url(login_base_url)
+        graph_resource = _validated_graph_resource_url(login_resource)
+        self.graph_base_url = _validated_graph_override(graph_resource)
+        if self.graph_base_url is None:
+            if login_resource is None:
+                raise GraphGroupLookupError(
+                    "Unknown Entra cloud: configure Graph endpoint", reason="configuration"
+                )
+            self.graph_base_url = graph_resource
 
         # Entra ID endpoints
         base_url = f"{login_base_url}/{tenant_id}"
@@ -435,12 +665,13 @@ class EntraIdProvider(AuthProvider):
                 raw_groups = claims.get("roles")
             groups = normalize_groups_claim(raw_groups, source="entra groups")
 
+            scopes = _delegated_scopes(claims)
             return {
                 "valid": True,
                 "username": claims.get("preferred_username", claims.get("sub")),
                 "email": claims.get("email"),
                 "groups": groups,
-                "scopes": claims.get("scope", "").split() if claims.get("scope") else [],
+                "scopes": scopes,
                 "client_id": claims.get("azp", self.client_id),
                 "method": "entra",
                 "data": claims,
@@ -618,9 +849,7 @@ class EntraIdProvider(AuthProvider):
                 "redirect_uri": redirect_uri,
             }
 
-            headers = {"Content-Type": "application/x-www-form-urlencoded"}
-
-            response = requests.post(self.token_url, data=data, headers=headers, timeout=10)
+            response = _post_entra_token(self.token_url, data)
             response.raise_for_status()
 
             token_data = response.json()
@@ -628,21 +857,22 @@ class EntraIdProvider(AuthProvider):
 
             return token_data
 
-        except requests.RequestException as e:
-            logger.error(f"Failed to exchange code for token: {e}")
-            raise ValueError(f"Token exchange failed: {e}")
+        except (httpx.HTTPError, UrlValidationError) as e:
+            logger.warning("Entra code token exchange failed; type=%s", type(e).__name__)
+            raise ValueError("Token exchange failed") from e
 
-    # Path for the user's direct group memberships. Combined with the
-    # tenant's Graph base URL (varies by sovereign cloud) at call time. We
-    # use /me/memberOf rather than /me/getMemberObjects because memberOf
-    # works with the User.Read scope already granted by 'openid email profile';
-    # getMemberObjects requires Directory.Read.All / GroupMember.Read.All
-    # which would force a tenant admin to grant new consent.
-    GRAPH_MEMBEROF_PATH: str = "/v1.0/me/memberOf?$select=id"
-
-    # Hard cap so a misconfigured tenant cannot pull an unbounded list. 1000
-    # covers any realistic user; pages past this are dropped with a warning.
+    # Graph supports direct and nested memberships with delegated User.Read.
+    GRAPH_MEMBEROF_PATH: str = "/v1.0/me/transitiveMemberOf"
     GROUP_FETCH_HARD_CAP: int = 1000
+    GROUP_FETCH_PAGE_HARD_CAP: int = 100
+    _group_cache: OrderedDict[tuple[str, str, str, str | None], tuple[float, tuple[str, ...]]] = (
+        OrderedDict()
+    )
+    _group_inflight: dict[tuple[str, str, str, str | None, bytes], asyncio.Task[list[str]]] = {}
+    _group_denials: OrderedDict[tuple[str, str, str, str | None, bytes], tuple[float, str]] = (
+        OrderedDict()
+    )
+    _group_verified: OrderedDict[tuple[str, str, str, str | None, bytes], float] = OrderedDict()
 
     @staticmethod
     def has_group_overage(claims: dict[str, Any]) -> bool:
@@ -665,82 +895,375 @@ class EntraIdProvider(AuthProvider):
 
     @classmethod
     def _graph_memberof_url(cls) -> str:
-        """Build the full Graph /me/memberOf URL.
-
-        Resolves the base URL at call time using the same precedence as
-        __init__ (explicit ENTRA_GRAPH_BASE_URL override, otherwise inferred
-        from ENTRA_LOGIN_BASE_URL). Resolved per-call so sovereign-cloud
-        overrides set after module import are honored.
-        """
-        graph_override = os.environ.get("ENTRA_GRAPH_BASE_URL")
-        if graph_override:
-            base = graph_override.rstrip("/")
-        else:
-            login_base = os.environ.get("ENTRA_LOGIN_BASE_URL", DEFAULT_ENTRA_LOGIN_BASE_URL)
-            base = _infer_graph_base_url(login_base)
+        """Build the guarded Graph fetch endpoint, distinct from its OAuth resource."""
+        login_resource = _infer_graph_base_url(_entra_login_base())
+        resource = _validated_graph_resource_url(login_resource)
+        base = _validated_graph_override(resource)
+        if base is None:
+            if login_resource is None:
+                raise GraphGroupLookupError(
+                    "Unknown Entra cloud: configure Graph endpoint", reason="configuration"
+                )
+            base = resource
         return f"{base}{cls.GRAPH_MEMBEROF_PATH}"
 
     @classmethod
-    async def fetch_groups_via_graph(cls, access_token: str) -> list[str]:
-        """Fetch the user's direct group object IDs from Microsoft Graph.
+    async def resolve_groups(
+        cls,
+        claims: dict[str, Any],
+        access_token: str,
+        *,
+        graph_requested: bool = False,
+    ) -> list[str]:
+        """Use verified inline groups or recover when Graph was requested.
 
-        Used when the ID token signals group overage (see has_group_overage).
-        Calls GET /me/memberOf, follows @odata.nextLink for pagination, and
-        returns deduplicated group object IDs only (filters out directoryRole
-        and other directory-object types).
-
-        Returns [] on any HTTP/network failure so the caller can degrade
-        gracefully — the user ends up with whatever groups were inline (often
-        none in the overage case), which is the same as today's behavior.
+        Raises:
+            GraphGroupLookupError: Graph did not establish complete membership.
+            ValueError: A present group or role claim has an invalid type.
         """
+        inline = normalize_groups_claim(claims.get("groups"), source="entra groups")
+        roles = normalize_groups_claim(claims.get("roles"), source="entra roles")
+        groups = inline or roles
+        overage = cls.has_group_overage(claims)
+        if not graph_requested:
+            return roles if overage else groups
+        if not _group_recovery_enabled():
+            return roles if overage else groups
+        if not overage and groups:
+            return groups
+
+        tid = claims.get("tid")
+        oid = claims.get("oid")
+        try:
+            async with asyncio.timeout(GRAPH_GROUP_LOOKUP_TIMEOUT_SECONDS):
+                graph_groups = await cls.fetch_groups_via_graph(
+                    access_token,
+                    tenant_id=tid if isinstance(tid, str) else None,
+                    object_id=oid if isinstance(oid, str) else None,
+                )
+        except TimeoutError as e:
+            raise GraphGroupLookupError(
+                "Microsoft Graph group lookup timed out", reason="timeout"
+            ) from e
+        return list(dict.fromkeys([*roles, *graph_groups]))
+
+    @classmethod
+    async def _lookup_bearer_groups(
+        cls,
+        key: tuple[str, str, str, str | None],
+        access_token: str,
+        idp_provider: "EntraIdProvider",
+    ) -> list[str]:
+        """Exchange one delegated user assertion before querying Graph."""
+        graph_resource = _graph_resource_url()
+        try:
+            # nginx closes /validate at ten seconds; cap the whole OBO and
+            # paginated Graph chain to leave room for scope mapping and signing.
+            async with asyncio.timeout(GRAPH_GROUP_LOOKUP_TIMEOUT_SECONDS):
+                graph_token = await obo_exchange(
+                    idp_provider,
+                    subject_token=access_token,
+                    target_audience=graph_resource,
+                    scopes=[f"{graph_resource}/User.Read"],
+                )
+                return await cls.fetch_groups_via_graph(
+                    graph_token, tenant_id=key[1], object_id=key[2]
+                )
+        except OboConsentRequired as e:
+            raise GraphGroupLookupError(
+                "Microsoft Graph token exchange failed", reason="consent"
+            ) from e
+        except OboConfigError as e:
+            raise GraphGroupLookupError(
+                "Microsoft Graph token exchange failed", reason="configuration"
+            ) from e
+        except OboExchangeError as e:
+            raise GraphGroupLookupError(
+                "Microsoft Graph token exchange failed", reason="token_exchange"
+            ) from e
+        except TimeoutError as e:
+            raise GraphGroupLookupError(
+                "Microsoft Graph group lookup timed out", reason="timeout"
+            ) from e
+        except (ValueError, AttributeError, TypeError) as e:
+            logger.warning("Entra Graph token exchange returned malformed response")
+            raise GraphGroupLookupError(
+                "Microsoft Graph token exchange failed", reason="malformed"
+            ) from e
+
+    @staticmethod
+    def is_delegated_user(validation_result: dict[str, Any]) -> bool:
+        """Identify a verified Entra user token eligible for group recovery."""
+        claims = validation_result.get("data")
+        return (
+            validation_result.get("method") == "entra"
+            and validation_result.get("valid") is True
+            and isinstance(claims, dict)
+            and bool(_delegated_scopes(claims))
+        )
+
+    @classmethod
+    def _finish_group_lookup(
+        cls,
+        key: tuple[str, str, str, str | None, bytes],
+        task: asyncio.Task[list[str]],
+    ) -> None:
+        """Release the single-flight slot after a lookup finishes."""
+        if cls._group_inflight.get(key) is task:
+            cls._group_inflight.pop(key, None)
+        if not task.cancelled():
+            task.exception()
+
+    async def recover_bearer_groups(
+        self,
+        validation_result: dict[str, Any],
+        access_token: str,
+    ) -> list[str] | None:
+        """Recover a verified Entra user's missing or overage group claims.
+
+        Returns:
+            Group IDs (including a confirmed empty result), or None if inline
+            claims apply or the token is not a delegated Entra user token.
+
+        Raises:
+            GraphGroupLookupError: No reliable membership could be resolved.
+        """
+        if validation_result.get("method") != "entra":
+            return None
+        if validation_result.get("valid") is not True:
+            raise GraphGroupLookupError("Entra token was not verified", reason="identity")
+        claims = validation_result.get("data")
+        if not isinstance(claims, dict):
+            raise GraphGroupLookupError("Verified Entra claims unavailable", reason="identity")
+        if not _delegated_scopes(claims):
+            return None  # Client-credential tokens have roles, not user scopes.
+        inline = normalize_groups_claim(claims.get("groups"), source="entra groups")
+        roles = normalize_groups_claim(claims.get("roles"), source="entra roles")
+        overage = self.has_group_overage(claims)
+        if not overage and (inline or roles):
+            return None
+        if not _group_recovery_enabled():
+            return roles if overage else []
+
+        _group_cache_ttl_seconds()
+        tid, oid = claims.get("tid"), claims.get("oid")
+        if not isinstance(tid, str) or not tid or not isinstance(oid, str) or not oid:
+            raise GraphGroupLookupError(
+                "Verified Entra user identity unavailable", reason="identity"
+            )
+        resource = _graph_resource_url()  # Validate before cache access.
+        key = (self._graph_memberof_url(), tid, oid, resource)
+        cached = self._group_cache.get(key)
+        denial_key = (*key, hashlib.sha256(access_token.encode("utf-8")).digest())
+        denied = self._group_denials.get(denial_key)
+        if denied and time.monotonic() < denied[0]:
+            self._group_denials.move_to_end(denial_key)
+            raise GraphGroupLookupError(
+                "Microsoft Graph group lookup unavailable", reason=denied[1]
+            )
+        self._group_denials.pop(denial_key, None)
+
+        verified_until = self._group_verified.get(denial_key)
+        if (
+            cached
+            and time.monotonic() < cached[0]
+            and verified_until
+            and time.monotonic() < verified_until
+        ):
+            self._group_cache.move_to_end(key)
+            self._group_verified.move_to_end(denial_key)
+            graph_groups = list(cached[1])
+            return list(dict.fromkeys([*roles, *graph_groups])) if graph_groups else roles
+        self._group_verified.pop(denial_key, None)
+
+        task = self._group_inflight.get(denial_key)
+        if task is None:
+            task = asyncio.create_task(self._lookup_bearer_groups(key, access_token, self))
+            self._group_inflight[denial_key] = task
+            task.add_done_callback(lambda done: self._finish_group_lookup(denial_key, done))
+        try:
+            graph_groups = list(await asyncio.shield(task))
+        except GraphGroupLookupError as exc:
+            if exc.reason in _CACHEABLE_GROUP_FAILURES:
+                self._group_denials[denial_key] = (
+                    time.monotonic() + GRAPH_GROUP_NEGATIVE_TTL_SECONDS,
+                    exc.reason,
+                )
+                self._group_denials.move_to_end(denial_key)
+                while len(self._group_denials) > GRAPH_GROUP_NEGATIVE_MAX_ENTRIES:
+                    self._group_denials.popitem(last=False)
+            raise
+        cached = self._group_cache.get(key)
+        if cached and time.monotonic() < cached[0]:
+            self._group_verified[denial_key] = cached[0]
+            self._group_verified.move_to_end(denial_key)
+            while len(self._group_verified) > GRAPH_GROUP_CACHE_MAX_ENTRIES:
+                self._group_verified.popitem(last=False)
+        return list(dict.fromkeys([*roles, *graph_groups])) if graph_groups else roles
+
+    @classmethod
+    async def fetch_groups_via_graph(
+        cls,
+        access_token: str,
+        tenant_id: str | None = None,
+        object_id: str | None = None,
+    ) -> list[str]:
+        """Fetch complete transitive group IDs; cache successful results only.
+
+        Raises:
+            GraphGroupLookupError: Graph failed or returned an incomplete response.
+        """
+        cache_ttl = _group_cache_ttl_seconds()
+        url = cls._graph_memberof_url()
+        resource = _validated_graph_resource_url(_infer_graph_base_url(_entra_login_base()))
+        try:
+            origin = urlsplit(url)
+            if (
+                origin.scheme != "https"
+                or not origin.hostname
+                or origin.username
+                or origin.password
+                or origin.query
+                or origin.fragment
+                or origin.path != cls.GRAPH_MEMBEROF_PATH
+                or origin.port not in (None, 443)
+            ):
+                raise GraphGroupLookupError(
+                    "Invalid Microsoft Graph endpoint configuration", reason="configuration"
+                )
+            # Validate the proxy even on cache hits. The guarded transport
+            # resolves and pins each uncached network request separately.
+            validate_url(url, profile=ENTRA_GRAPH_PROFILE, resolve=False)
+        except (UrlValidationError, ValueError) as e:
+            raise GraphGroupLookupError(
+                "Invalid Microsoft Graph endpoint configuration", reason="configuration"
+            ) from e
+
+        cache_key = (
+            (url, tenant_id, object_id, resource)
+            if isinstance(tenant_id, str) and tenant_id and isinstance(object_id, str) and object_id
+            else None
+        )
+        if cache_key:
+            cached = cls._group_cache.get(cache_key)
+            if cached and time.monotonic() < cached[0]:
+                cls._group_cache.move_to_end(cache_key)
+                return list(cached[1])
+            cls._group_cache.pop(cache_key, None)
+
         ids: list[str] = []
         seen: set[str] = set()
-        url: str | None = cls._graph_memberof_url()
-
+        visited: set[str] = set()
+        page = 0
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                page = 0
+            async with guarded_async_client(
+                profile=ENTRA_GRAPH_PROFILE, timeout=10.0, follow_redirects=False
+            ) as client:
                 while url:
+                    target = urlsplit(url)
+                    if (
+                        target.scheme != origin.scheme
+                        or target.netloc != origin.netloc
+                        or target.path != origin.path
+                        or target.username
+                        or target.password
+                        or target.fragment
+                        or url in visited
+                        or page >= cls.GROUP_FETCH_PAGE_HARD_CAP
+                    ):
+                        raise GraphGroupLookupError(
+                            "Invalid Microsoft Graph pagination link", reason="pagination"
+                        )
+                    visited.add(url)
                     page += 1
                     response = await client.get(
-                        url, headers={"Authorization": f"Bearer {access_token}"}
+                        url,
+                        headers={"Authorization": f"Bearer {access_token}"},
+                        params={"$top": GRAPH_GROUP_PAGE_SIZE} if page == 1 else None,
                     )
                     response.raise_for_status()
+                    if response.status_code != 200:
+                        raise GraphGroupLookupError(
+                            "Microsoft Graph group request was not successful", reason="transport"
+                        )
                     body = response.json()
+                    if not isinstance(body, dict) or not isinstance(body.get("value"), list):
+                        raise GraphGroupLookupError(
+                            "Malformed Microsoft Graph group response", reason="malformed"
+                        )
 
-                    for item in body.get("value", []):
+                    for item in body["value"]:
+                        if not isinstance(item, dict):
+                            raise GraphGroupLookupError(
+                                "Malformed Microsoft Graph group object", reason="malformed"
+                            )
                         if item.get("@odata.type") != "#microsoft.graph.group":
                             continue
                         gid = item.get("id")
-                        if not gid or gid in seen:
+                        if not isinstance(gid, str) or not gid:
+                            raise GraphGroupLookupError(
+                                "Microsoft Graph group missing object ID", reason="malformed"
+                            )
+                        if gid in seen:
                             continue
+                        if len(ids) >= cls.GROUP_FETCH_HARD_CAP:
+                            raise GraphGroupLookupError(
+                                "Microsoft Graph group limit exceeded", reason="limit"
+                            )
                         seen.add(gid)
                         ids.append(gid)
-                        if len(ids) >= cls.GROUP_FETCH_HARD_CAP:
-                            logger.warning(
-                                "Entra Graph group fetch hit hard cap "
-                                f"({cls.GROUP_FETCH_HARD_CAP}); truncating"
-                            )
-                            return ids
 
-                    url = body.get("@odata.nextLink")
-
-                logger.info(
-                    f"Resolved {len(ids)} Entra group IDs via Graph memberOf across {page} page(s)"
-                )
+                    next_link = body.get("@odata.nextLink")
+                    if next_link is not None and (not isinstance(next_link, str) or not next_link):
+                        raise GraphGroupLookupError(
+                            "Malformed Microsoft Graph pagination link", reason="pagination"
+                        )
+                    if next_link and os.environ.get("ENTRA_GRAPH_BASE_URL"):
+                        # Graph may return its native origin even when the
+                        # request went through an operator's reverse proxy.
+                        # Rewrite only the selected OAuth resource's exact
+                        # origin/path, never a different cloud or arbitrary URL.
+                        resource = _validated_graph_resource_url(
+                            _infer_graph_base_url(_entra_login_base())
+                        )
+                        if resource:
+                            link = urlsplit(next_link)
+                            graph = urlsplit(resource)
+                            if (
+                                link.scheme == graph.scheme
+                                and link.netloc == graph.netloc
+                                and link.path == origin.path
+                                and not link.username
+                                and not link.password
+                                and not link.fragment
+                            ):
+                                next_link = urlunsplit(
+                                    (origin.scheme, origin.netloc, link.path, link.query, "")
+                                )
+                    url = next_link
+        except GraphGroupLookupError:
+            raise
         except httpx.HTTPStatusError as e:
-            logger.warning(
-                f"Entra Graph memberOf returned {e.response.status_code}; "
-                "falling back to inline groups (may be empty)"
-            )
-            return []
-        except httpx.HTTPError as e:
-            logger.warning(f"Entra Graph memberOf request failed: {e}")
-            return []
-        except Exception as e:
-            logger.warning(f"Unexpected error during Entra Graph memberOf fetch: {e}")
-            return []
+            logger.warning("Entra Graph transitiveMemberOf returned %d", e.response.status_code)
+            raise GraphGroupLookupError(
+                "Microsoft Graph group request failed",
+                reason="authorization" if e.response.status_code == 403 else "transport",
+            ) from e
+        except (httpx.HTTPError, UrlValidationError, ValueError, TypeError) as e:
+            logger.warning("Entra Graph transitiveMemberOf request or response failed")
+            raise GraphGroupLookupError(
+                "Microsoft Graph group request failed", reason="transport"
+            ) from e
 
+        logger.info("Resolved %d Entra group IDs via Graph across %d page(s)", len(ids), page)
+        if cache_key:
+            cls._group_cache[cache_key] = (
+                time.monotonic() + cache_ttl,
+                tuple(ids),
+            )
+            cls._group_cache.move_to_end(cache_key)
+            while len(cls._group_cache) > GRAPH_GROUP_CACHE_MAX_ENTRIES:
+                cls._group_cache.popitem(last=False)
         return ids
 
     def get_user_info(self, access_token: str) -> dict[str, Any]:
@@ -759,22 +1282,34 @@ class EntraIdProvider(AuthProvider):
             ValueError: If user info cannot be retrieved
         """
         try:
-            logger.debug("Fetching user info from Entra ID")
+            login_resource = _infer_graph_base_url(_entra_login_base())
+            graph_resource = _validated_graph_resource_url(login_resource)
+            graph_origin = _validated_graph_override(graph_resource) or graph_resource
+            if self.userinfo_url != f"{graph_origin}/oidc/userinfo":
+                raise ValueError("Invalid Microsoft Graph userinfo endpoint")
+            validate_url(self.userinfo_url, profile=ENTRA_GRAPH_PROFILE, resolve=False)
 
-            headers = {"Authorization": f"Bearer {access_token}"}
-            response = requests.get(self.userinfo_url, headers=headers, timeout=10)
-            response.raise_for_status()
-
-            user_info = response.json()
-            logger.debug(
-                f"User info retrieved for: {user_info.get('preferred_username', 'unknown')}"
-            )
-
+            with guarded_client(
+                profile=ENTRA_GRAPH_PROFILE, timeout=10.0, follow_redirects=False
+            ) as client:
+                response = client.get(
+                    self.userinfo_url, headers={"Authorization": f"Bearer {access_token}"}
+                )
+                response.raise_for_status()
+                user_info = response.json()
+            if not isinstance(user_info, dict):
+                raise ValueError("Invalid Microsoft Graph userinfo response")
+            logger.debug("User info retrieved from Entra ID")
             return user_info
-
-        except requests.RequestException as e:
-            logger.error(f"Failed to get user info: {e}")
-            raise ValueError(f"User info retrieval failed: {e}")
+        except (
+            GraphGroupLookupError,
+            httpx.HTTPError,
+            UrlValidationError,
+            ValueError,
+            TypeError,
+        ):
+            logger.warning("Failed to get user info from Entra ID")
+            raise ValueError("User info retrieval failed") from None
 
     def get_auth_url(self, redirect_uri: str, state: str, scope: str | None = None) -> str:
         """Get Entra ID authorization URL.
@@ -842,9 +1377,7 @@ class EntraIdProvider(AuthProvider):
                 "client_secret": self.client_secret,
             }
 
-            headers = {"Content-Type": "application/x-www-form-urlencoded"}
-
-            response = requests.post(self.token_url, data=data, headers=headers, timeout=10)
+            response = _post_entra_token(self.token_url, data)
             response.raise_for_status()
 
             token_data = response.json()
@@ -852,9 +1385,9 @@ class EntraIdProvider(AuthProvider):
 
             return token_data
 
-        except requests.RequestException as e:
-            logger.error(f"Failed to refresh token: {e}")
-            raise ValueError(f"Token refresh failed: {e}")
+        except (httpx.HTTPError, UrlValidationError) as e:
+            logger.warning("Entra refresh token exchange failed; type=%s", type(e).__name__)
+            raise ValueError("Token refresh failed") from e
 
     def validate_m2m_token(self, token: str) -> dict[str, Any]:
         """Validate a machine-to-machine token.
@@ -909,9 +1442,7 @@ class EntraIdProvider(AuthProvider):
                 "scope": scope,
             }
 
-            headers = {"Content-Type": "application/x-www-form-urlencoded"}
-
-            response = requests.post(self.token_url, data=data, headers=headers, timeout=10)
+            response = _post_entra_token(self.token_url, data)
             response.raise_for_status()
 
             token_data = response.json()
@@ -919,9 +1450,9 @@ class EntraIdProvider(AuthProvider):
 
             return token_data
 
-        except requests.RequestException as e:
-            logger.error(f"Failed to get M2M token: {e}")
-            raise ValueError(f"M2M token generation failed: {e}")
+        except (httpx.HTTPError, UrlValidationError) as e:
+            logger.warning("Entra M2M token exchange failed; type=%s", type(e).__name__)
+            raise ValueError("M2M token generation failed") from e
 
     def initiate_device_code_flow(self, scope: str | None = None) -> dict[str, Any]:
         """Initiate device code flow for user authentication.
@@ -954,22 +1485,19 @@ class EntraIdProvider(AuthProvider):
 
             data = {"client_id": self.client_id, "scope": scope}
 
-            headers = {"Content-Type": "application/x-www-form-urlencoded"}
-
-            # Device code endpoint
+            # Derive only the sibling endpoint from this provider's token URL.
             device_code_url = self.token_url.replace("/token", "/devicecode")
-
-            response = requests.post(device_code_url, data=data, headers=headers, timeout=10)
+            response = _post_entra_token(device_code_url, data)
             response.raise_for_status()
 
             result = response.json()
-            logger.info(f"Device code flow initiated, user_code: {result.get('user_code')}")
+            logger.info("Device code flow initiated")
 
             return result
 
-        except requests.RequestException as e:
-            logger.error(f"Failed to initiate device code flow: {e}")
-            raise ValueError(f"Device code flow initiation failed: {e}")
+        except (httpx.HTTPError, UrlValidationError) as e:
+            logger.warning("Entra device code request failed; type=%s", type(e).__name__)
+            raise ValueError("Device code flow initiation failed") from e
 
     def poll_device_code_token(
         self, device_code: str, interval: int = 5, timeout: int = 300
@@ -1001,12 +1529,12 @@ class EntraIdProvider(AuthProvider):
                 "device_code": device_code,
             }
 
-            headers = {"Content-Type": "application/x-www-form-urlencoded"}
+            # Each poll checks the destination before sending the device assertion.
 
             start_time = time.time()
 
             while (time.time() - start_time) < timeout:
-                response = requests.post(self.token_url, data=data, headers=headers, timeout=10)
+                response = _post_entra_token(self.token_url, data)
 
                 if response.status_code == 200:
                     token_data = response.json()
@@ -1038,9 +1566,9 @@ class EntraIdProvider(AuthProvider):
 
             raise ValueError("Device code authentication timed out")
 
-        except requests.RequestException as e:
-            logger.error(f"Failed to poll device code token: {e}")
-            raise ValueError(f"Device code token polling failed: {e}")
+        except (httpx.HTTPError, UrlValidationError) as e:
+            logger.warning("Entra device token poll failed; type=%s", type(e).__name__)
+            raise ValueError("Device code token polling failed") from e
 
     def authorization_server_metadata(self) -> dict[str, Any]:
         """Return Entra ID's RFC 8414 metadata for the v2.0 endpoint.

@@ -25,7 +25,6 @@ import csv
 import json
 import logging
 import os
-import re
 from collections import defaultdict
 from datetime import datetime
 
@@ -40,7 +39,9 @@ import matplotlib.pyplot as plt  # noqa: E402
 import seaborn as sns  # noqa: E402
 
 _sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from internal_instances import load_internal_instance_ids  # noqa: E402
 from tufte_style import apply_tufte_style, tufte_axes  # noqa: E402
+from version_labels import is_release_version  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -54,35 +55,9 @@ FIGURE_WIDTH: int = 14
 FIGURE_HEIGHT: int = 7
 LINE_PALETTE: str = "Set2"
 
-# A clean release tag: optional leading v, MAJOR.MINOR.PATCH, optional -pN suffix.
-# Anything else (git-describe, commit hashes, dev, branch-suffixed) is internal.
-_RELEASE_RE = re.compile(r"^v?\d+\.\d+\.\d+(-p\d+)?$")
-
 CLASS_COMMUNITY: str = "community"
 CLASS_INTERNAL: str = "internal"
 CLASS_UNKNOWN: str = "unknown"
-
-
-def _load_internal_allowlist(
-    path: str | None,
-) -> set[str]:
-    """Read known-internal registry instance IDs from the allowlist markdown.
-
-    The file lists instance IDs in a markdown table with backtick-quoted IDs
-    (e.g. `| \\`<uuid>\\` | Internal |`). We extract every backtick-quoted token
-    that looks like an instance id. Returns an empty set if no path/file.
-    """
-    if not path or not os.path.isfile(path):
-        return set()
-    ids: set[str] = set()
-    with open(path) as f:
-        content = f.read()
-    for match in re.findall(r"`([^`]+)`", content):
-        token = match.strip()
-        if token:
-            ids.add(token)
-    logger.info(f"Loaded {len(ids)} known-internal instance IDs from {path}")
-    return ids
 
 
 def _classify_version(
@@ -92,7 +67,7 @@ def _classify_version(
     v = (version or "").strip()
     if not v:
         return CLASS_UNKNOWN
-    if _RELEASE_RE.match(v):
+    if is_release_version(v):
         return CLASS_COMMUNITY
     return CLASS_INTERNAL
 
@@ -390,11 +365,10 @@ def main() -> None:
         raise SystemExit(1)
 
     all_rows = _read_all_csvs(csv_files)
+    internal_ids = load_internal_instance_ids(args.internal_instances, all_rows)
     if not all_rows:
         logger.error("No data found in CSV files")
         raise SystemExit(1)
-
-    internal_ids = _load_internal_allowlist(args.internal_instances)
 
     # Summary uses ALL rows (cumulative + yesterday headline are accurate).
     summary = _compute_summary(all_rows, internal_ids, args.yesterday)

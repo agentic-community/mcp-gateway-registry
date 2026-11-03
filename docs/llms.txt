@@ -38,7 +38,7 @@ Key features include: centralized server management, OAuth 2.0/3.0 authenticatio
 | `terraform/` | **Infrastructure as Code** - AWS deployment automation | `aws-ecs/` (ECS Fargate), `modules/` (reusable modules) |
 | `tests/` | **Test Suite** - pytest unit, integration, E2E tests | `conftest.py`, `unit/`, `integration/` |
 | `docs/` | **Documentation** - Architecture, guides, design docs | `llms.txt` (this file), `design/` (architecture) |
-| `cli/` | **Command-Line Tools** - MCP client, service management | `mcp_client.py`, `service_mgmt.sh` |
+| `cli/` | **Command-Line Tools** - MCP client, service management | `mcp_client.py`, `registry_cli_wrapper.py` |
 | `keycloak/` | **Keycloak Setup** - Docker configs, initialization scripts | `docker-compose.yml`, `setup/` (init scripts) |
 | `docker/` | **Docker Configurations** - Dockerfiles for all services | `Dockerfile.registry`, `Dockerfile.auth` |
 | `scripts/` | **Automation Scripts** - Deployment, testing, utilities | `test.py` (test runner), `publish-containers.sh` |

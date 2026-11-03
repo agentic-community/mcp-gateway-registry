@@ -295,7 +295,7 @@ if [ "$EMBEDDINGS_PROVIDER" = "sentence-transformers" ]; then
         echo "Embeddings model found at $EMBEDDINGS_MODEL_DIR"
     fi
 elif [ "$EMBEDDINGS_PROVIDER" = "litellm" ]; then
-    echo "Using LiteLLM provider - no local model download required"
+    echo "Using remote embeddings API provider - no local model download required"
     echo "Model: $EMBEDDINGS_MODEL_NAME"
     if [[ "$EMBEDDINGS_MODEL_NAME" == bedrock/* ]]; then
         echo "Bedrock model will use AWS credential chain for authentication"
@@ -393,12 +393,14 @@ WAIT_TIME=0
 MAX_WAIT=120
 while [ $WAIT_TIME -lt $MAX_WAIT ]; do
     if [ -f "/etc/nginx/conf.d/nginx_rev_proxy.conf" ]; then
-        # Check if placeholders have been replaced
+        # Check if placeholders have been replaced. Keep this list in sync with
+        # _UNRENDERED_TEMPLATE_MARKERS in registry/core/nginx_service.py.
         if ! grep -q "{{ADDITIONAL_SERVER_NAMES}}" "/etc/nginx/conf.d/nginx_rev_proxy.conf" && \
            ! grep -q "{{ANTHROPIC_API_VERSION}}" "/etc/nginx/conf.d/nginx_rev_proxy.conf" && \
            ! grep -q "{{LOCATION_BLOCKS}}" "/etc/nginx/conf.d/nginx_rev_proxy.conf" && \
            ! grep -q "{{VIRTUAL_SERVER_BLOCKS}}" "/etc/nginx/conf.d/nginx_rev_proxy.conf" && \
-           ! grep -q "{{MCP_RESOURCE_METADATA_URL}}" "/etc/nginx/conf.d/nginx_rev_proxy.conf"; then
+           ! grep -q "{{MCP_RESOURCE_METADATA_URL}}" "/etc/nginx/conf.d/nginx_rev_proxy.conf" && \
+           ! grep -q "{{NGINX_MARKER_SECRET}}" "/etc/nginx/conf.d/nginx_rev_proxy.conf"; then
             echo "Nginx configuration generated successfully"
             break
         fi
@@ -409,6 +411,8 @@ done
 
 if [ $WAIT_TIME -ge $MAX_WAIT ]; then
     echo "WARNING: Timeout waiting for nginx configuration. Starting nginx anyway..."
+    echo "WARNING: The registry did not produce a rendered nginx config. If nginx -t rejected it,"
+    echo "WARNING: the registry log has the reason: search it for 'Rejected nginx config candidate'."
 fi
 
 # Resolve METRICS_SERVICE_URL hostname to IPv4 before nginx starts.

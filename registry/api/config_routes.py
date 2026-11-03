@@ -190,6 +190,16 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             ("embeddings_idp_client_secret", "IdP Client Secret", True),
             ("embeddings_idp_scope", "IdP Scope", False),
             ("embeddings_idp_timeout_seconds", "IdP Timeout (s)", False),
+            ("embeddings_request_timeout_seconds", "Request Timeout (s)", False),
+            ("embeddings_max_retries", "Max Retries", False),
+            ("embeddings_retry_max_input_chars", "Retry Trim Target (chars)", False),
+            # Raw slots, not the embeddings_extra_headers property: every
+            # CONFIG_GROUPS value must stay a scalar for the exporters (issue #1819).
+            ("embeddings_extra_header_1", "Extra Header 1", False),
+            ("embeddings_extra_header_2", "Extra Header 2", False),
+            ("embeddings_extra_header_3", "Extra Header 3", False),
+            ("embeddings_extra_header_4", "Extra Header 4", False),
+            ("embeddings_extra_header_5", "Extra Header 5", False),
         ],
     },
     "health_check": {
@@ -432,6 +442,9 @@ CONFIG_GROUPS: dict[str, dict[str, Any]] = {
             ("egress_state_ttl_seconds", "OAuth State TTL (s)", False),
             ("egress_registry_internal_url", "Registry Internal Vend URL", False),
             ("egress_obo_allowed_audiences", "OBO Allowed Audiences", False),
+            ("egress_obo_cache_enabled", "OBO Cache Enabled", False),
+            ("egress_obo_cache_max_ttl_seconds", "OBO Cache Max TTL (s)", False),
+            ("egress_obo_cache_expiry_skew_seconds", "OBO Cache Expiry Skew (s)", False),
             # trusted-IdP allowlist for the credentialed-OAuth SSRF profile; not
             # sensitive (hostnames only) but shown here because entries receive
             # client secrets and refresh tokens

@@ -414,7 +414,7 @@ and `AUTH_SERVER_NGINX_MARKER_SECRET`.
 | `EGRESS_REFRESH_WORKER_INTERVAL_SECONDS` | `120` | Background proactive-refresh scan interval; `0` disables the sweep. |
 | `EGRESS_STATE_TTL_SECONDS` | `600` | Lifetime of the AEAD-encrypted OAuth consent state. |
 | `EGRESS_REGISTRY_INTERNAL_URL` | `http://registry:8091` | URL the auth-server uses to reach the registry's dedicated internal vend listener (never exposed to the host / public Ingress). |
-| `AUTH_SERVER_NGINX_MARKER_SECRET` | _(required)_ | Shared secret nginx force-sets on `/validate`; the auth-server only mints an mcp-proxy token when it matches. **Required at startup** (auth-server and registry refuse to start without it) and must be identical across both. Set a strong random value. **(secret)** |
+| `AUTH_SERVER_NGINX_MARKER_SECRET` | _(required)_ | Shared secret nginx force-sets on `/validate`; the auth-server mints the mcp-proxy, generic-proxy and registry API tokens only when it matches. **Required at startup** (auth-server and registry refuse to start without it) and must be identical across both. Rotate it on both together: during a mismatch every registry API and UI request returns 401, not just egress. Set a strong random value. **(secret)** |
 | `EGRESS_CREDENTIAL_ENCRYPTION_KEY` | `""` | Application-layer root key. When set (>= 32 chars), `StoredToken` payloads are AES-256-GCM encrypted under a per-principal HKDF-derived key before reaching either backend, so the vault holds ciphertext. Empty = plaintext at rest (legacy). Backend-independent; legacy plaintext entries are re-encrypted on first read. Must live **outside** the secret-store trust boundary it protects. **(secret)** |
 | `EGRESS_CREDENTIAL_ENCRYPTION_REQUIRE_ENCRYPTED` | `false` | Terminal strict mode. When `true` (and the key is set), reads **reject** any remaining legacy plaintext entry instead of accepting it, closing the plaintext-downgrade/injection hole against a write-capable backend. Enable only after read-repair has migrated all entries. |
 | `AWS_SECRETS_REGION` | `""` | AWS region (required when `SECRET_STORE_BACKEND=secrets-manager`). |
@@ -719,12 +719,12 @@ Users can review and revoke their connections in the UI at **Connected Accounts*
 ## Security model
 
 - **Marker secret (fail-closed).** nginx force-sets `X-Validate-Source-Secret` on
-  the internal `/validate` subrequest. The auth-server mints an mcp-proxy token
-  **only** if the marker matches — so a direct caller hitting `:8888` with a forged
-  `X-Resolved-Upstream` cannot obtain one. `AUTH_SERVER_NGINX_MARKER_SECRET` is
-  **required at startup** (both auth-server and registry refuse to start without
-  it); an empty marker — which would mint unconditionally — is rejected rather than
-  silently disabling the check.
+  the internal `/validate` subrequest. The auth-server mints its internal tokens
+  (mcp-proxy, generic-proxy and registry API) **only** if the marker matches, so a
+  direct caller hitting `:8888` with a forged `X-Resolved-Upstream`,
+  `X-Resolved-Generic-Upstream` or `X-Registry-Api-Auth` cannot obtain one.
+  `AUTH_SERVER_NGINX_MARKER_SECRET` is **required at startup** (both auth-server
+  and registry refuse to start without it), and an empty marker mints nothing.
 - **Dedicated internal vend listener (network boundary).** The vend endpoint
   `/_egress_internal/egress-token` is served on a separate nginx listener
   (`registry:8091`) that is NEVER published to the host (Compose) nor routed by
@@ -817,7 +817,7 @@ Users can review and revoke their connections in the UI at **Connected Accounts*
 | Connected, but a `tools/call` asks to reconnect after a backend URL change | Destination binding: changing a server's `proxy_pass_url`, `mcp_endpoint` (or a custom provider's `custom_token_url`) invalidates credentials bound to the old destination. **Reconnect once** (from Connected Accounts) to rebind. Adding a *new version* at a URL that was not registered when you connected only requires a reconnect for calls routed to that new version; existing routes are unaffected. Promoting a version never requires a reconnect. |
 | After upgrading to the exact-destination-binding release, every connection asks to reconnect once | Credentials stored before the upgrade carry an empty or origin-only binding (for example `https://api.example.com` instead of `https://api.example.com/mcp`), which does not match the exact outbound URL — a deliberate one-time forced reconnect (`oauth_user` → connect nudge, `pat` → "submit a PAT"; a designated discovery identity must reconnect too, and its server reports unhealthy discovery until then), mirroring the `sub`-keying migration above. |
 | "Connection failed" on the consent callback; registry logs `state user mismatch` | The account-swap guard saw the consent-initiate principal differ from the callback's live-session principal. Almost always the session predates the `sub`-persisting login — **log out and back in**, then reconnect, so the cookie session carries the `subject` the initiate leg bound the state to. |
-| Vend returns 401 from auth-server | Marker secret mismatch. Ensure `AUTH_SERVER_NGINX_MARKER_SECRET` matches on registry + auth-server, and nginx sets it on `/validate`. |
+| Vend returns 401 from auth-server, or every registry API call returns 401 | Marker secret mismatch. Ensure `AUTH_SERVER_NGINX_MARKER_SECRET` matches on registry + auth-server, and nginx sets it on `/validate`. The auth-server logs `nginx marker missing/mismatched` for each refused mint. |
 | OpenBao reads fail with permission denied | The role token lapsed. The store re-authenticates and retries once; persistent failure means a real policy/role gap — verify the `mcp-egress` policy and the role binding to the registry ServiceAccount. |
 | `decrypt` errors on client secret | `SECRET_KEY` was rotated after the server's egress config was saved. Re-save the egress config with the client secret. |
 | Vend/list fails: "Egress credential failed authentication" or "is encrypted but ... not set" | `EGRESS_CREDENTIAL_ENCRYPTION_KEY` is missing, was changed, or does not match the key entries were encrypted under. The store fails closed rather than returning/overwriting plaintext. Restore the original key (rotation needs the old key available to decrypt existing entries). |

@@ -10,6 +10,17 @@ from pydantic import Field, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from registry.common.secret_key import validate_secret_key
+from registry.constants import (
+    MAX_EMBEDDINGS_EXTRA_HEADERS,
+    REGISTRY_MANAGED_EMBEDDINGS_HEADERS,
+)
+from registry.utils.embeddings_provider import (
+    resolve_remote_model,
+)
+from registry.utils.header_validation import (
+    validate_header_name,
+    validate_header_value,
+)
 
 
 def _normalize_cors_origin(value: str) -> str | None:
@@ -492,6 +503,48 @@ class Settings(BaseSettings):
     #                  litellm cannot parse that, so the registry calls the endpoint
     #                  directly and extracts the vectors itself. Opt-in only.
     embeddings_response_format: str = "openai"  # "openai" | "raw_array"
+
+    # Timeout and retries for every remote embeddings call (issue #1826). Before
+    # LiteLLM was removed these were LiteLLM's own defaults; now they are ours.
+    # Retries cover 429, 5xx and connection errors; on Amazon Bedrock they map to
+    # botocore's standard retry mode (max_attempts = retries + 1).
+    embeddings_request_timeout_seconds: int = Field(default=30, ge=1, le=600)
+    embeddings_max_retries: int = Field(default=2, ge=0, le=10)
+
+    # Trim target for the single retry after a failed embedding call (#1917). The
+    # first attempt always sends the full text. Only when it fails and the text is
+    # longer than this does the registry retry once with the text trimmed: every
+    # tool/skill name kept, the longest descriptions shortened first. Unset uses a
+    # per-model default: 2048 for Cohere on Amazon Bedrock (its hard limit), 28000
+    # otherwise. Lower it for a model with a smaller input limit.
+    embeddings_retry_max_input_chars: int | None = Field(default=None, ge=256, le=200000)
+
+    @field_validator("embeddings_retry_max_input_chars", mode="before")
+    @classmethod
+    def _empty_retry_max_input_chars_is_unset(cls, v: object) -> object:
+        """Treat a blank value as unset rather than as a parse error.
+
+        Compose passes ``${EMBEDDINGS_RETRY_MAX_INPUT_CHARS:-}`` and Terraform
+        passes an empty string for null, so "not configured" arrives as "".
+        Without this the registry refuses to start on those surfaces.
+        """
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
+
+    # Operator-configured extra headers for the embeddings endpoint (issue #1819).
+    # Five separate scalar slots rather than one structured value, so every config
+    # serializer and every deployment surface keeps treating these as plain
+    # strings. Each slot holds one header in HTTP syntax: "Name: value".
+    # Only sent when embeddings_provider='litellm'; validated in __init__.
+    #
+    # NOT a credential store: values are plain config, never encrypted, never
+    # masked. A bearer token belongs in EMBEDDINGS_API_KEY or the IdP auth mode.
+    embeddings_extra_header_1: str = ""
+    embeddings_extra_header_2: str = ""
+    embeddings_extra_header_3: str = ""
+    embeddings_extra_header_4: str = ""
+    embeddings_extra_header_5: str = ""
 
     # IdP client-credentials auth for the litellm embeddings provider.
     # When embeddings_auth_mode == "idp", a bearer token is fetched from the IdP
@@ -1914,15 +1967,45 @@ class Settings(BaseSettings):
             "an explicit, audited set of internal server audiences."
         ),
     )
+    egress_obo_cache_enabled: bool = Field(
+        default=False,
+        description=(
+            "Opt-in: cache exchanged OBO tokens in the per-user SecretStore so "
+            "repeated calls by the same principal to the same audience reuse a "
+            "still-valid token instead of re-exchanging. Default off preserves the "
+            "stateless per-request exchange. On a hit the gateway skips the IdP's "
+            "per-request re-authorization for up to the reuse window -- keep the "
+            "max TTL small (or off) where per-call conditional-access matters."
+        ),
+    )
+    egress_obo_cache_max_ttl_seconds: int = Field(
+        default=300,
+        ge=1,
+        le=3600,
+        description=(
+            "Hard cap (seconds) on the OBO cache reuse window, applied below the "
+            "token's real expiry. Bounds revocation/CA-re-evaluation latency on hits."
+        ),
+    )
+    egress_obo_cache_expiry_skew_seconds: int = Field(
+        default=30,
+        ge=1,
+        le=600,
+        description=(
+            "Never reuse a cached OBO token within this many seconds of its expiry "
+            "(applied once, on read). Must be < EGRESS_OBO_CACHE_MAX_TTL_SECONDS."
+        ),
+    )
     auth_server_nginx_marker_secret: str = Field(
         default="",
         description=(
             "Shared secret: nginx force-sets it as X-Validate-Source-Secret on "
-            "the /validate subrequest; auth_server only mints the egress-capable mcp-proxy "
-            "token when it matches, so a direct :8888 /validate call with a forged "
-            "X-Resolved-Upstream cannot obtain one. Required (non-empty) when "
-            "EGRESS_AUTH_ENABLED=true -- startup fails otherwise, since an empty marker "
-            "would mint unconditionally. Treat as a secret."
+            "the /validate subrequest; auth_server mints the mcp-proxy, generic-proxy "
+            "and registry API tokens only when it matches, so a direct :8888 /validate "
+            "call with a forged routing header cannot obtain one. Always required: "
+            "startup fails when it is unset or shorter than 32 bytes, and an empty marker "
+            "mints nothing. Rotate it on registry and auth_server together; during a "
+            "mismatch every registry API request returns 401. Treat as a secret."
         ),
     )
     aws_secrets_region: str = Field(
@@ -2402,13 +2485,18 @@ class Settings(BaseSettings):
         # validated (whitespace-stripped) value so the registry and auth_server
         # derive an identical signing key from the same environment variable.
         self.secret_key = validate_secret_key(self.secret_key)
+        # Strip surrounding whitespace first, like SECRET_KEY: HTTP drops leading and
+        # trailing whitespace from the header nginx sends, so an unstripped value
+        # would never match. Registry and auth_server share this Settings class, so
+        # both compare and render the same stripped value.
+        self.auth_server_nginx_marker_secret = self.auth_server_nginx_marker_secret.strip()
         if not self.auth_server_nginx_marker_secret:
             raise RuntimeError(
                 "AUTH_SERVER_NGINX_MARKER_SECRET environment variable is required. "
                 "Set it to a strong random value (at least 32 bytes), identical across all "
-                "auth_server and registry replicas (see chart values.yaml). Without it, the "
-                "auth_server mints mcp-proxy tokens unconditionally, letting a direct :8888 "
-                "/validate call with a forged X-Resolved-Upstream bypass nginx and obtain one."
+                "auth_server and registry replicas (see chart values.yaml). nginx sends it on "
+                "every /validate call, and the auth_server refuses to mint internal tokens "
+                "without a match, so a direct :8888 /validate call cannot obtain one."
             )
         if len(self.auth_server_nginx_marker_secret.encode()) < 32:
             raise RuntimeError(
@@ -2416,10 +2504,110 @@ class Settings(BaseSettings):
                 "strong random value at least 32 bytes long, identical across all auth_server "
                 "and registry replicas (see chart values.yaml)."
             )
+        if not all("!" <= ch <= "~" and ch != "$" for ch in self.auth_server_nginx_marker_secret):
+            # The registry renders the marker into a quoted nginx string and nginx
+            # sends it as a header. A `$` always starts an nginx variable, and
+            # whitespace or control characters do not survive the header round
+            # trip. A non-ASCII value makes `secrets.compare_digest` raise on every
+            # comparison. Either way every internal-token mint (every registry API
+            # request) would fail without a startup error, so only printable ASCII
+            # other than `$` is accepted.
+            raise RuntimeError(
+                "AUTH_SERVER_NGINX_MARKER_SECRET must contain only printable ASCII "
+                "characters other than '$' (no spaces): it is rendered into the nginx config "
+                "and sent as a header. Generate it with "
+                "`python3 -c 'import secrets; print(secrets.token_hex(32))'`."
+            )
         self.egress_credential_encryption_key = self._validate_credential_encryption_key(
             self.egress_credential_encryption_key
         )
         self._validate_egress_auth_config()
+        self._validate_embeddings_extra_header_slots()
+        self._validate_embeddings_model_name()
+
+    def _raw_embeddings_extra_header_slots(self) -> list[tuple[int, str]]:
+        """Return (slot number, stripped value) for every populated header slot."""
+        populated: list[tuple[int, str]] = []
+        for index in range(1, MAX_EMBEDDINGS_EXTRA_HEADERS + 1):
+            raw = getattr(self, f"embeddings_extra_header_{index}", "") or ""
+            if raw.strip():
+                populated.append((index, raw.strip()))
+        return populated
+
+    def _validate_embeddings_model_name(self) -> None:
+        """Reject a remote embeddings model name no adapter can serve, at startup.
+
+        Without this, an unsupported name (for example a cohere/ or voyage/ model
+        LiteLLM used to accept, issue #1826) only fails on the first embedding call
+        and search silently degrades to keyword-only. raw_array posts to
+        EMBEDDINGS_API_BASE whatever the prefix, so it is not checked.
+
+        Raises:
+            ValueError: If the provider is the remote one and the model name has no
+                supported prefix. The message names the replacement.
+        """
+        if self.embeddings_provider.lower() != "litellm":
+            return
+        if self.embeddings_response_format.lower() == "raw_array":
+            return
+        resolve_remote_model(self.embeddings_model_name)
+
+    def _validate_embeddings_extra_header_slots(self) -> None:
+        """Validate every populated EMBEDDINGS_EXTRA_HEADER_<N> slot.
+
+        Runs in __init__ rather than as a @field_validator because a field
+        validator sees one slot at a time and cannot detect the same header name
+        set in two slots. Fails at process start rather than on the first
+        embedding call: a bad header breaks every search query, so a loud
+        startup failure beats a 400 from the endpoint discovered hours later.
+
+        Raises:
+            ValueError: If a slot is malformed, names a registry-managed header,
+                or repeats a header name already set in another slot.
+        """
+        seen: dict[str, int] = {}
+        for index, raw in self._raw_embeddings_extra_header_slots():
+            env_name = f"EMBEDDINGS_EXTRA_HEADER_{index}"
+            if ":" not in raw:
+                raise ValueError(
+                    f"{env_name} must be in 'Name: value' form, e.g. "
+                    "'X-Tenant-Id: research'. Got a value with no colon."
+                )
+            name, _, value = raw.partition(":")
+            name = name.strip()
+            value = value.strip()
+            validate_header_name(name, context=env_name)
+            validate_header_value(value, context=env_name)
+
+            lower_name = name.lower()
+            if lower_name in REGISTRY_MANAGED_EMBEDDINGS_HEADERS:
+                raise ValueError(
+                    f"{env_name} cannot set '{name}': the registry manages this "
+                    "header. For a credential use EMBEDDINGS_API_KEY or "
+                    "EMBEDDINGS_AUTH_MODE=idp."
+                )
+            if lower_name in seen:
+                raise ValueError(
+                    f"{env_name} sets header '{name}', already set by "
+                    f"EMBEDDINGS_EXTRA_HEADER_{seen[lower_name]}. Remove one."
+                )
+            seen[lower_name] = index
+
+    @property
+    def embeddings_extra_headers(self) -> dict[str, str]:
+        """Collapse the EMBEDDINGS_EXTRA_HEADER_<N> slots into a header map.
+
+        Slots may be sparse: setting only _3 is valid. Blank slots are skipped
+        rather than treated as the end of the list, so a gap cannot silently
+        drop the headers after it. Splits on the first colon only, so a value
+        containing a colon (a URL, a timestamp) survives intact. Validation
+        already ran in __init__, so this does not re-check.
+        """
+        headers: dict[str, str] = {}
+        for _index, raw in self._raw_embeddings_extra_header_slots():
+            name, _, value = raw.partition(":")
+            headers[name.strip()] = value.strip()
+        return headers
 
     @staticmethod
     def _validate_credential_encryption_key(value: str | None) -> str:
@@ -2466,8 +2654,47 @@ class Settings(BaseSettings):
         - a public callback base URL is required to build the redirect_uri.
 
         The nginx marker secret is required unconditionally (in __init__), not
-        just for egress, since it guards all mcp-proxy token minting.
+        just for egress, since it guards all internal-token minting.
         """
+        if self.egress_obo_cache_enabled:
+            if not self.egress_auth_enabled:
+                raise ValueError(
+                    "EGRESS_OBO_CACHE_ENABLED=true requires EGRESS_AUTH_ENABLED=true "
+                    "(the cache only applies to obo_exchange servers)."
+                )
+            if self.egress_obo_cache_expiry_skew_seconds >= self.egress_obo_cache_max_ttl_seconds:
+                raise ValueError(
+                    "EGRESS_OBO_CACHE_EXPIRY_SKEW_SECONDS "
+                    f"({self.egress_obo_cache_expiry_skew_seconds}) must be < "
+                    "EGRESS_OBO_CACHE_MAX_TTL_SECONDS "
+                    f"({self.egress_obo_cache_max_ttl_seconds}); otherwise every "
+                    "cached token is born expired."
+                )
+            if self.secret_store_backend not in ("openbao", "secrets-manager"):
+                raise ValueError(
+                    "EGRESS_OBO_CACHE_ENABLED=true requires SECRET_STORE_BACKEND to be "
+                    f"'openbao' or 'secrets-manager'; got {self.secret_store_backend!r}."
+                )
+            if self.secret_store_backend == "openbao" and self.openbao_auth_method != "kubernetes":  # nosec B105 - backend name comparison, not a secret  # pragma: allowlist secret
+                import logging as _logging
+
+                _logging.getLogger(__name__).warning(
+                    "EGRESS_OBO_CACHE_ENABLED=true with OPENBAO_AUTH_METHOD=%r: the "
+                    "OBO cache is NOT confined to the obo-cache namespace by a scoped "
+                    "kubernetes-auth role. Use OPENBAO_AUTH_METHOD=kubernetes (the "
+                    "auth-server-obo-cache role), or scope the OpenBao token's own policy "
+                    "to the obo-cache path.",
+                    self.openbao_auth_method,
+                )
+            if self.auth_provider not in ("entra", "keycloak"):
+                import logging as _logging
+
+                _logging.getLogger(__name__).warning(
+                    "EGRESS_OBO_CACHE_ENABLED=true but auth_provider=%r has no OBO "
+                    "token-exchange path; the cache will never populate.",
+                    self.auth_provider,
+                )
+
         if not self.egress_auth_enabled:
             return
 
@@ -2751,6 +2978,40 @@ mode there is no gateway to proxy through, so agent routing is DISABLED:
   - /agent/* paths return the registry-only 503
 
 Set DEPLOYMENT_MODE=with-gateway to actually enable A2A reverse-proxy routing.
+================================================================================
+"""
+    logger.warning(banner)
+    print(banner)
+
+
+def print_embeddings_extra_headers_inert_banner(s: Settings) -> None:
+    """Loudly warn when EMBEDDINGS_EXTRA_HEADER_<N> slots are set but never sent.
+
+    Only the 'litellm' provider makes an HTTP request. 'sentence-transformers'
+    runs the model in-process, so there is no request to attach headers to. An
+    operator who configured headers to reach their endpoint while the provider
+    is sentence-transformers has a bigger problem than the headers: embeddings
+    are not going to that endpoint at all. Header names and values are left out
+    of the banner on purpose; the count shows the slots were read.
+    """
+    header_count = len(s.embeddings_extra_headers)
+    if header_count == 0:
+        return
+    if s.embeddings_provider.lower() == "litellm":
+        return
+    banner = f"""
+================================================================================
+WARNING: EMBEDDINGS_EXTRA_HEADER_<N> is set but will NEVER be sent.
+
+EMBEDDINGS_PROVIDER={s.embeddings_provider} runs the embedding model in-process
+and makes no HTTP request, so there is no request to add headers to.
+{header_count} configured header(s) are being IGNORED.
+
+This usually means the whole endpoint configuration is inert, not just the
+headers: embeddings are being computed locally, not by your endpoint.
+
+Set EMBEDDINGS_PROVIDER=litellm (with EMBEDDINGS_API_BASE) to use your endpoint
+and send these headers.
 ================================================================================
 """
     logger.warning(banner)

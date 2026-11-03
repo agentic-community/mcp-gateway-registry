@@ -101,6 +101,140 @@ tests:
           path: spec.template.spec.containers[0].env[27].name
           value: MY_SECRET_VAR
 
+  - it: enables Entra overage recovery with a 300-second positive cache by default
+    set:
+      authProvider:
+        type: entra
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ENTRA_BROWSER_USER_READ_ENABLED
+            value: "false"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ENTRA_GROUP_RECOVERY_ENABLED
+            value: "true"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ENTRA_GROUP_CACHE_TTL_SECONDS
+            value: "300"
+
+  - it: requests User.Read with independent group recovery disabled
+    set:
+      authProvider:
+        type: entra
+      entra:
+        browserUserReadEnabled: true
+        groupRecoveryEnabled: false
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ENTRA_BROWSER_USER_READ_ENABLED
+            value: "true"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ENTRA_GROUP_RECOVERY_ENABLED
+            value: "false"
+
+  - it: permits disabling Entra recovery and setting the minimum cache TTL
+    set:
+      authProvider:
+        type: entra
+      entra:
+        groupRecoveryEnabled: false
+        groupCacheTtlSeconds: 30
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ENTRA_GROUP_RECOVERY_ENABLED
+            value: "false"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ENTRA_GROUP_CACHE_TTL_SECONDS
+            value: "30"
+
+  - it: permits the maximum positive cache TTL
+    set:
+      authProvider:
+        type: entra
+      entra:
+        groupCacheTtlSeconds: 3600
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ENTRA_GROUP_CACHE_TTL_SECONDS
+            value: "3600"
+
+  - it: rejects a cache TTL below 30 seconds
+    set:
+      authProvider:
+        type: entra
+      entra:
+        groupCacheTtlSeconds: 29
+    asserts:
+      - failedTemplate:
+          errorPattern: "groupCacheTtlSeconds must be a whole number between 30 and 3600"
+
+  - it: rejects a cache TTL above 3600 seconds
+    set:
+      authProvider:
+        type: entra
+      entra:
+        groupCacheTtlSeconds: 3601
+    asserts:
+      - failedTemplate:
+          errorPattern: "groupCacheTtlSeconds must be a whole number between 30 and 3600"
+
+  - it: rejects a nonintegral cache TTL
+    set:
+      authProvider:
+        type: entra
+      entra:
+        groupCacheTtlSeconds: "30.5"
+    asserts:
+      - failedTemplate:
+          errorPattern: "groupCacheTtlSeconds must be a whole number between 30 and 3600"
+
+  - it: rejects a nonboolean group recovery switch
+    set:
+      authProvider:
+        type: entra
+      entra:
+        groupRecoveryEnabled: "false"
+    asserts:
+      - failedTemplate:
+          errorPattern: "groupRecoveryEnabled must be a boolean"
+
+  - it: rejects a nonboolean browser User.Read switch
+    set:
+      authProvider:
+        type: entra
+      entra:
+        browserUserReadEnabled: "true"
+    asserts:
+      - failedTemplate:
+          errorPattern: "browserUserReadEnabled must be a boolean"
+
+  - it: ignores unused Entra settings for a Keycloak deployment
+    set:
+      authProvider:
+        type: keycloak
+      entra:
+        groupCacheTtlSeconds: "bad"
+        groupRecoveryEnabled: "bad"
+        browserUserReadEnabled: "bad"
+    asserts:
+      - isKind:
+          of: Deployment
+
   - it: appends extraEnvFrom entries after chart-managed envFrom sources
     set:
       extraEnvFrom:
@@ -137,6 +271,15 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: "\"ENTRA_CLIENT_SECRET\" is a reserved variable"
+
+  - it: rejects ENTRA_GRAPH_RESOURCE_URL via extraEnv
+    set:
+      extraEnv:
+        - name: ENTRA_GRAPH_RESOURCE_URL
+          value: "https://graph-proxy.example.test"
+    asserts:
+      - failedTemplate:
+          errorPattern: "\"ENTRA_GRAPH_RESOURCE_URL\" is a reserved variable"
 
   - it: fails when extraEnv contains a reserved generic stream limit
     set:
@@ -246,6 +389,33 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: "\"AWS_EC2_METADATA_DISABLED\" is a reserved variable"
+
+  - it: rejects ENTRA_BROWSER_USER_READ_ENABLED via extraEnv
+    set:
+      extraEnv:
+        - name: ENTRA_BROWSER_USER_READ_ENABLED
+          value: "true"
+    asserts:
+      - failedTemplate:
+          errorPattern: "\"ENTRA_BROWSER_USER_READ_ENABLED\" is a reserved variable"
+
+  - it: rejects ENTRA_GROUP_RECOVERY_ENABLED via extraEnv
+    set:
+      extraEnv:
+        - name: ENTRA_GROUP_RECOVERY_ENABLED
+          value: "false"
+    asserts:
+      - failedTemplate:
+          errorPattern: "\"ENTRA_GROUP_RECOVERY_ENABLED\" is a reserved variable"
+
+  - it: rejects ENTRA_GROUP_CACHE_TTL_SECONDS via extraEnv
+    set:
+      extraEnv:
+        - name: ENTRA_GROUP_CACHE_TTL_SECONDS
+          value: "9999"
+    asserts:
+      - failedTemplate:
+          errorPattern: "\"ENTRA_GROUP_CACHE_TTL_SECONDS\" is a reserved variable"
 
   - it: fails when extraEnv contains ENTRA_SCOPE_FORMAT (issue #990)
     set:

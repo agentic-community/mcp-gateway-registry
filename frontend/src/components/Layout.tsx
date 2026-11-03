@@ -17,7 +17,8 @@ import UptimeDisplay from './UptimeDisplay';
 import { useServerStats } from '../hooks/useServerStats';
 import { useUiTitle } from '../hooks/useUiTitle';
 import { useAuth } from '../contexts/AuthContext';
-import logo from '../assets/logo.png';
+import logoOnLight from '../assets/icon-on-light.svg';
+import logoOnDark from '../assets/icon-on-dark.svg';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -94,10 +95,16 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
               {/* Logo */}
               <div className="flex items-center ml-2 md:ml-0">
                 <Link to="/" className="flex items-center hover:opacity-80 transition-opacity">
+                  {/* Each theme gets its own colored icon; never filter it to white. */}
                   <img
-                    src={logo}
+                    src={logoOnLight}
                     alt="Logo"
-                    className="h-8 w-8 dark:brightness-0 dark:invert"
+                    className="h-10 w-10 dark:hidden"
+                  />
+                  <img
+                    src={logoOnDark}
+                    alt="Logo"
+                    className="hidden h-10 w-10 dark:block"
                   />
                   <span className="ml-2 text-xl font-bold text-gray-900 dark:text-white">
                     {uiTitle}

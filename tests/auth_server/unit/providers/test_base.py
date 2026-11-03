@@ -124,6 +124,13 @@ class TestConcreteImplementation:
         assert provider.validate_m2m_token("token")["valid"] is True
         assert "access_token" in provider.get_m2m_token()
         assert provider.authorization_server_metadata()["issuer"].startswith("https://")
+        assert provider.is_delegated_user({"valid": True, "method": "test"}) is False
+
+    @pytest.mark.asyncio
+    async def test_provider_without_graph_recovery_preserves_claims(self):
+        provider = TestProtectedResourceMetadataDefault()._make_provider()
+        claims = {"valid": True, "method": "other", "groups": ["users"]}
+        assert await provider.recover_bearer_groups(claims, "token") is None
 
 
 class TestProtectedResourceMetadataDefault:

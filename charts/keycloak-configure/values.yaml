@@ -1,3 +1,30 @@
+# Stack-level values this chart reads. The umbrella chart
+# (mcp-gateway-registry-stack) overrides them; the defaults here only exist so
+# the templates render standalone.
+global:
+  # Secret generation switch shared with the umbrella chart. true (default)
+  # generates unresolved secret values randomly and preserves them across
+  # `helm upgrade` via `lookup`. Set false for ArgoCD and other
+  # `helm template` based tools, which render without cluster access: there the
+  # lookup is always empty, so a generated value would differ on every sync.
+  # With generation off, an unresolved value is a render-time error naming the
+  # value to set.
+  generateSecrets: true
+  # Name of the Secret holding the realm's OIDC client credentials. The
+  # umbrella chart renders it as "keycloak-client-secret"; the Job mounts it
+  # and publishes those values to Keycloak.
+  existingKeycloakClientSecret: ""
+  # Used to compute the realm's redirect URIs. Declared here so
+  # templates/secret.yaml renders standalone (`helm lint`,
+  # `helm template charts/keycloak-configure`) instead of nil-dereferencing
+  # global.ingress; the umbrella chart overrides all of them.
+  domain: localhost
+  ingress:
+    tls: false
+    routingMode: subdomain
+    paths:
+      registry: /registry
+
 # Keycloak configuration
 keycloak:
   adminUser: user

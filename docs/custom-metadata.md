@@ -108,6 +108,7 @@ curl "https://registry.example.com/api/search?q=us-east-1 deployed"
 ## Key Features
 
 - **Flexible Schema:** Store any JSON-serializable data (strings, numbers, booleans, nested objects, arrays)
+- **Bounded:** At most 10,240 bytes as compact UTF-8 JSON and 8 levels of nesting; larger documents are rejected with a 422 (see [Metadata Field Projection](metadata-field-projection.md#size-and-nesting-limits))
 - **Fully Searchable:** All metadata included in semantic search embeddings
 - **Backward Compatible:** Optional field - existing registrations work without modification
 - **Type-Safe:** Pydantic validation ensures data integrity

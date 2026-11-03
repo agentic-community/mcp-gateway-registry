@@ -4,7 +4,7 @@
 # dependencies need to compile from source. For servers that do (e.g.
 # anything pulling a sdist without a wheel for the build target), use
 # Dockerfile.mcp-server.
-FROM python:3.14.8-slim
+FROM python:3.14.9-slim
 
 # Build arg for server directory (when building from repo root)
 ARG SERVER_DIR
@@ -29,7 +29,7 @@ RUN groupadd -g 1000 appuser && useradd -u 1000 -g appuser appuser
 WORKDIR /app
 
 # Install uv as root (global tool)
-RUN pip install uv==0.11.14
+RUN pip install uv==0.13.5
 
 # Create /app with correct ownership
 RUN chown appuser:appuser /app

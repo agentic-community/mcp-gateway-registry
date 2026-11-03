@@ -24,7 +24,7 @@ dependencies:
     repository: "file://../mcpgw"
     condition: mcpgw.enabled
   - name: keycloak-configure
-    version: 0.1.0
+    version: 0.2.0
     repository: "file://../keycloak-configure"
     condition: keycloak-configure.enabled
   - name: mongodb-configure

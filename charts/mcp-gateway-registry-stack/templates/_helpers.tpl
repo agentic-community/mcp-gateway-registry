@@ -94,3 +94,28 @@ subcharts render.
 {{- fail "generic proxy is enabled but no egress policy is declared: enable auth-server.egress.networkPolicy or explicitly acknowledge an equivalent external policy with auth-server.egress.externalEgressPolicyAcknowledged=true" -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+Guard chart-generated random secret value.
+
+`global.generateSecrets: true` (the default) generates a random value,
+`lookup` preserves it across `helm upgrade`.
+
+`global.generateSecrets: false` is the GitOps mode. ArgoCD and every other
+`helm template`-based tool renders without cluster access, so `lookup` always
+returns empty and a generated value is a NEW value on every sync — which then
+silently disagrees with the value the running pods already hold (a changed
+`envFrom` Secret does not restart pods), rotates the MongoDB user password out
+from under the operator-provisioned SCRAM credential, and re-randomizes the
+Keycloak PostgreSQL password against a retained PVC. With generation off, a
+value the chart cannot resolve is a render-time error naming the value to set
+instead of a silent rotation.
+
+Usage:
+  {{- include "mcp-gateway-registry-stack.requireGeneratedSecret" (dict "ctx" . "key" "SECRET_KEY" "value" "global.secretKey" "byo" "global.existingSharedSecret") }}
+*/}}
+{{- define "mcp-gateway-registry-stack.requireGeneratedSecret" -}}
+{{- if not (dig "generateSecrets" true .ctx.Values.global) -}}
+{{- fail (printf "global.generateSecrets is false and %s has no value, so the chart will not generate one. Set %s explicitly, or set %s to a Secret that already holds it. Generation is unsafe under ArgoCD and other `helm template` based tools: they render without cluster access, so the chart cannot read the previous value back and every sync would produce a different secret." .key .value .byo) -}}
+{{- end -}}
+{{- end -}}

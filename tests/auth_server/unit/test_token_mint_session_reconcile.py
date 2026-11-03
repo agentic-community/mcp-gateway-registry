@@ -49,19 +49,21 @@ class TestSessionReconciliation:
     @pytest.mark.asyncio
     async def test_no_session_id_uses_body_as_is(self):
         ctx = {"groups": ["developers"], "scopes": ["srv/read"]}
-        groups, scopes, subject = await _reconcile_context_against_session(ctx)
+        groups, scopes, subject, resolved = await _reconcile_context_against_session(ctx)
         assert groups == ["developers"]
         assert scopes == ["srv/read"]
         # No session-backed source and no body-asserted egress id -> empty.
         assert subject == ""
+        assert resolved is False
 
     @pytest.mark.asyncio
     async def test_no_session_id_uses_body_asserted_egress_id(self):
         # A non-session caller may still assert its canonical egress id in the
         # body; it flows through as the subject (explicit trust boundary).
         ctx = {"groups": [], "scopes": [], "egress_user": "oidc-sub-123"}
-        _, _, subject = await _reconcile_context_against_session(ctx)
+        _, _, subject, resolved = await _reconcile_context_against_session(ctx)
         assert subject == "oidc-sub-123"
+        assert resolved is False
 
     @pytest.mark.asyncio
     async def test_session_id_that_does_not_resolve_fails_closed(self):
@@ -101,11 +103,12 @@ class TestSessionReconciliation:
                 AsyncMock(return_value=["srv/read"]),
             ),
         ):
-            groups, scopes, subject = await _reconcile_context_against_session(ctx)
+            groups, scopes, subject, resolved = await _reconcile_context_against_session(ctx)
         assert groups == ["developers"]
         assert scopes == ["srv/read"]
         # The session's OIDC sub is returned as the canonical egress id.
         assert subject == "oidc-sub-abc"
+        assert resolved is False
 
     @pytest.mark.asyncio
     async def test_session_without_subject_returns_empty_subject(self):
@@ -122,8 +125,9 @@ class TestSessionReconciliation:
                 AsyncMock(return_value=["srv/read"]),
             ),
         ):
-            _, _, subject = await _reconcile_context_against_session(ctx)
+            _, _, subject, resolved = await _reconcile_context_against_session(ctx)
         assert subject == ""
+        assert resolved is False
 
     @pytest.mark.asyncio
     async def test_privileged_group_allowed_when_session_holds_it(self):
@@ -140,9 +144,10 @@ class TestSessionReconciliation:
                 AsyncMock(return_value=["admin/all"]),
             ),
         ):
-            groups, scopes, _ = await _reconcile_context_against_session(ctx)
+            groups, scopes, _, resolved = await _reconcile_context_against_session(ctx)
         assert groups == ["registry-admins"]
         assert scopes == ["admin/all"]
+        assert resolved is False
 
     @pytest.mark.asyncio
     async def test_empty_body_groups_defaults_to_session_groups(self):
@@ -155,6 +160,33 @@ class TestSessionReconciliation:
                 AsyncMock(return_value=["srv/read"]),
             ),
         ):
-            groups, scopes, _ = await _reconcile_context_against_session(ctx)
+            groups, scopes, _, resolved = await _reconcile_context_against_session(ctx)
         assert groups == ["developers"]
         assert scopes == ["srv/read"]
+        assert resolved is False
+
+    @pytest.mark.asyncio
+    async def test_graph_authority_only_comes_from_resolved_entra_session(self):
+        ctx = {
+            "groups": [],
+            "scopes": [],
+            "session_id": "s1",
+            "entra_graph_groups_resolved": True,
+        }
+        for provider, expected in (("entra", True), ("keycloak", False)):
+            session = {
+                "username": "alice",
+                "groups": [],
+                "provider": provider,
+                "entra_graph_groups_resolved": True,
+            }
+            with patch("session_store.resolve_session", AsyncMock(return_value=session)):
+                _, _, _, resolved = await _reconcile_context_against_session(ctx)
+            assert resolved is expected
+
+        with patch(
+            "session_store.resolve_session",
+            AsyncMock(return_value={"username": "alice", "groups": [], "provider": "entra"}),
+        ):
+            _, _, _, resolved = await _reconcile_context_against_session(ctx)
+        assert resolved is False

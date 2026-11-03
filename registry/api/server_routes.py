@@ -79,6 +79,11 @@ from ..utils.metadata import (
     parse_and_validate_metadata_fields,
     project_metadata,
 )
+from ..utils.metadata_limits import (
+    MetadataLimitError,
+    parse_metadata_json,
+    validate_metadata_limits,
+)
 from ._etag_utils import parse_if_match, updated_ms, weak_etag_for_timestamp
 
 logger = logging.getLogger(__name__)
@@ -366,6 +371,41 @@ def _coerce_metadata_to_dict(parsed_metadata: Any, path: str) -> dict[str, Any]:
         type(parsed_metadata).__name__,
     )
     return {}
+
+
+def _metadata_limit_violation(
+    metadata: dict[str, Any],
+    path: str,
+) -> str | None:
+    """Return why ``metadata`` breaks the shared limits, or None if it fits.
+
+    The form-based registration and edit routes parse metadata from a JSON
+    string, so no Pydantic model sees it. Each calls this and answers 422 with
+    the returned message (issue #1811). Decoding failures that are really limit
+    violations come from ``_metadata_decode_violation`` instead.
+
+    Args:
+        metadata: The parsed metadata document.
+        path: Server path, for the log line.
+
+    Returns:
+        The error message naming the broken limit, or None.
+    """
+    try:
+        validate_metadata_limits(metadata)
+    except MetadataLimitError as e:
+        logger.warning("metadata for %s rejected: %s", path, e)
+        return str(e)
+    return None
+
+
+def _metadata_decode_violation(
+    error: MetadataLimitError,
+    path: str,
+) -> str:
+    """Log and return the message for metadata JSON too deep to decode (#1811)."""
+    logger.warning("metadata for %s rejected while decoding: %s", path, error)
+    return str(error)
 
 
 async def _apply_tool_visibility(
@@ -1867,12 +1907,21 @@ async def register_service(
         try:
             import json
 
-            parsed_metadata = json.loads(metadata)
+            parsed_metadata = parse_metadata_json(metadata)
             server_entry["metadata"] = _coerce_metadata_to_dict(parsed_metadata, path)
         except json.JSONDecodeError:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid JSON in metadata field",
+            )
+        except MetadataLimitError as e:
+            limit_error = _metadata_decode_violation(e, path)
+        else:
+            limit_error = _metadata_limit_violation(server_entry["metadata"], path)
+        if limit_error:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=limit_error,
             )
 
     # Registration gate check (admission control, issue #809)
@@ -2178,12 +2227,23 @@ async def internal_register_service(
         server_entry["auth_header_name"] = auth_header_name
     if metadata:
         try:
-            parsed_metadata = json.loads(metadata) if isinstance(metadata, str) else metadata
+            parsed_metadata = (
+                parse_metadata_json(metadata) if isinstance(metadata, str) else metadata
+            )
             server_entry["metadata"] = _coerce_metadata_to_dict(parsed_metadata, path)
         except json.JSONDecodeError:
             return JSONResponse(
                 status_code=400,
                 content={"error": "Invalid metadata", "reason": "metadata must be valid JSON"},
+            )
+        except MetadataLimitError as e:
+            limit_error = _metadata_decode_violation(e, path)
+        else:
+            limit_error = _metadata_limit_violation(server_entry["metadata"], path)
+        if limit_error:
+            return JSONResponse(
+                status_code=422,
+                content={"error": "Invalid metadata", "reason": limit_error},
             )
 
     # Registration gate check (admission control, issue #809)
@@ -2899,11 +2959,23 @@ async def edit_server_submit(
         try:
             import json
 
-            updated_server_entry["metadata"] = json.loads(metadata)
+            updated_server_entry["metadata"] = parse_metadata_json(metadata)
         except json.JSONDecodeError:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Invalid JSON in metadata field",
+            )
+        except MetadataLimitError as e:
+            limit_error = _metadata_decode_violation(e, service_path)
+        else:
+            limit_error = _metadata_limit_violation(
+                updated_server_entry["metadata"],
+                service_path,
+            )
+        if limit_error:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=limit_error,
             )
 
     # Registration gate check (admission control, issue #809)
@@ -4614,7 +4686,9 @@ async def register_service_api(
     # Normalize metadata before admission control so the gate evaluates what is stored.
     if metadata:
         try:
-            parsed_metadata = json.loads(metadata) if isinstance(metadata, str) else metadata
+            parsed_metadata = (
+                parse_metadata_json(metadata) if isinstance(metadata, str) else metadata
+            )
             server_entry["metadata"] = _coerce_metadata_to_dict(parsed_metadata, path)
         except json.JSONDecodeError:
             return JSONResponse(
@@ -4623,6 +4697,19 @@ async def register_service_api(
                     "error": "Invalid metadata",
                     "reason": "metadata must be valid JSON",
                     "detail": "Provide metadata as a JSON string",
+                },
+            )
+        except MetadataLimitError as e:
+            limit_error = _metadata_decode_violation(e, path)
+        else:
+            limit_error = _metadata_limit_violation(server_entry["metadata"], path)
+        if limit_error:
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "error": "Invalid metadata",
+                    "reason": limit_error,
+                    "detail": "Reduce the metadata to fit the limit and register again",
                 },
             )
 

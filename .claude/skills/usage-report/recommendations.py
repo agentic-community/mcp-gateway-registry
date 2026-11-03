@@ -12,7 +12,23 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from datetime import datetime
 from pathlib import Path
+
+from forecast_trend import (
+    FORECAST_TREND_AHEAD,
+    FORECAST_TREND_BEHIND,
+    forecast_trend_from_rates,
+)
+
+MILESTONE_STEP: int = 100
+MILESTONE_MIN: int = 500
+
+# GitHub growth counts as a spike only above these per-day rates. Over October
+# 2026 the repo averaged about 2 stars and 0.5 forks per day, so a fixed count
+# such as "5 stars" fired on every report spanning more than a few days.
+GITHUB_SPIKE_STARS_PER_DAY: float = 5.0
+GITHUB_SPIKE_FORKS_PER_DAY: float = 2.0
 
 # ============================================================================
 # Helper utilities
@@ -72,6 +88,22 @@ def _is_new_high(
     return current > historical_max
 
 
+def _days_since_previous_report(
+    prev_report_date: str,
+    current_date: str,
+) -> int | None:
+    """Return whole days between the previous report and this one, or None."""
+    try:
+        prev = datetime.strptime(prev_report_date, "%Y-%m-%d")
+        cur = datetime.strptime(current_date, "%Y-%m-%d")
+    except ValueError:
+        return None
+    days = (cur - prev).days
+    if days <= 0:
+        return None
+    return days
+
+
 # ============================================================================
 # Rules
 # ============================================================================
@@ -86,30 +118,15 @@ def rule_milestone_install_count(
     prev = vars_.get("prev_total_instances", 0)
     if not isinstance(cur, int) or not isinstance(prev, int):
         return None
-    for milestone in (
-        2000,
-        1900,
-        1800,
-        1700,
-        1600,
-        1500,
-        1400,
-        1300,
-        1200,
-        1100,
-        1000,
-        900,
-        800,
-        700,
-        600,
-        500,
-    ):
-        if cur >= milestone > prev:
-            return (
-                f"**Crossed {milestone} unique registry installs.** "
-                f"The fleet went from {prev} to {cur} since the previous report. "
-                f"Worth marking as a milestone in any external comms."
-            )
+    # The highest 100-multiple at or below the current count. A fixed list
+    # stopped at 2000 and went silent once the fleet passed it.
+    milestone = (cur // MILESTONE_STEP) * MILESTONE_STEP
+    if milestone >= MILESTONE_MIN and milestone > prev:
+        return (
+            f"**Crossed {milestone} unique registry installs.** "
+            f"The fleet went from {prev} to {cur} since the previous report. "
+            f"Worth marking as a milestone in any external comms."
+        )
     return None
 
 
@@ -158,19 +175,20 @@ def rule_install_pace_acceleration(
     vars_: dict,
     args: argparse.Namespace,
 ) -> str | None:
-    """Detect sustained acceleration: recent_pace > linear for 3+ consecutive reports."""
+    """Detect sustained acceleration (3+ consecutive reports ahead) or a slowdown."""
     search_dir = args.search_dir or str(Path(args.output_dir).parent)
     history = _load_recent_forecast_history(search_dir, args.date, n=3)
 
     cur_recent = float(vars_.get("forecast_recent_rate", 0))
     cur_linear = float(vars_.get("forecast_linear_rate", 0))
 
-    consecutive_acceleration = cur_recent > cur_linear
+    cur_trend = forecast_trend_from_rates(cur_recent, cur_linear)
+    consecutive_acceleration = cur_trend == FORECAST_TREND_AHEAD
     if consecutive_acceleration:
         for h in history:
             r = h.get("recent_pace", {}).get("daily_add_rate", 0)
             slope = h.get("linear", {}).get("slope_per_day", 0)
-            if r <= slope:
+            if forecast_trend_from_rates(r, slope) != FORECAST_TREND_AHEAD:
                 consecutive_acceleration = False
                 break
     if consecutive_acceleration and len(history) >= 2:
@@ -180,7 +198,7 @@ def rule_install_pace_acceleration(
             f"{len(history) + 1} consecutive reports. This is acceleration, not noise."
         )
 
-    if cur_recent < cur_linear * 0.85:
+    if cur_trend == FORECAST_TREND_BEHIND:
         return (
             f"**Install-pace deceleration.** Recent pace ({cur_recent:.1f}/day) is "
             f"meaningfully below the 14-day OLS ({cur_linear:.1f}/day). Worth checking "
@@ -193,32 +211,28 @@ def rule_install_forecast_eta(
     vars_: dict,
     args: argparse.Namespace,
 ) -> str | None:
-    """Highlight when both forecast models converge tightly or diverge significantly."""
+    """Highlight when both forecast models put the milestone within a few days.
+
+    Divergence is reported by rule_install_pace_acceleration from the daily
+    rates. The ETA gap is not used for it, because far from the target a small
+    rate difference stretches into weeks between ETAs.
+    """
     linear_eta_str = vars_.get("forecast_linear_eta", "")
     recent_eta_str = vars_.get("forecast_recent_eta", "")
     if not (linear_eta_str and recent_eta_str):
         return None
     try:
-        from datetime import datetime
-
         linear_eta = datetime.strptime(linear_eta_str, "%Y-%m-%d")
         recent_eta = datetime.strptime(recent_eta_str, "%Y-%m-%d")
         gap = abs((linear_eta - recent_eta).days)
     except ValueError:
         return None
-    target_str = vars_.get("forecast_target", "2,000")
+    target_str = vars_.get("forecast_target", "5,000")
     if gap <= 2:
         return (
             f"**Forecast models converged within {gap} day{'s' if gap != 1 else ''}** "
             f"(linear: {linear_eta_str}, recent-pace: {recent_eta_str}). "
             f"The {target_str}-install milestone is forecastable to within a small window."
-        )
-    if gap >= 7:
-        return (
-            f"**Forecast models diverged by {gap} days** "
-            f"(linear: {linear_eta_str}, recent-pace: {recent_eta_str}). "
-            f"Check the recent daily-active chart to understand whether the spread reflects "
-            f"weekend volatility or a structural shift in install velocity."
         )
     return None
 
@@ -332,7 +346,7 @@ def rule_github_growth(
     vars_: dict,
     args: argparse.Namespace,
 ) -> str | None:
-    """Trigger when stars OR forks jump notably in one report period."""
+    """Trigger when stars or forks grow faster per day than the recent baseline."""
     stars_delta_str = vars_.get("github_stars_delta_str", "0")
     forks_delta_str = vars_.get("github_forks_delta_str", "0")
     try:
@@ -340,13 +354,18 @@ def rule_github_growth(
         forks_delta = int(forks_delta_str.replace("+", "").replace(",", ""))
     except ValueError:
         return None
-    if stars_delta >= 5 or forks_delta >= 5:
-        return (
-            f"**GitHub growth spike.** +{stars_delta} stars, +{forks_delta} forks since the "
-            f"previous report. Likely social/blog-post visibility. Worth checking referrer "
-            f"data on the repo if available."
-        )
-    return None
+    days = _days_since_previous_report(vars_.get("prev_report_date", ""), args.date)
+    if days is None:
+        return None
+    stars_per_day = stars_delta / days
+    forks_per_day = forks_delta / days
+    if stars_per_day < GITHUB_SPIKE_STARS_PER_DAY and forks_per_day < GITHUB_SPIKE_FORKS_PER_DAY:
+        return None
+    return (
+        f"**GitHub growth spike.** +{stars_delta} stars, +{forks_delta} forks in {days} "
+        f"day{'s' if days != 1 else ''} ({stars_per_day:.1f} stars/day). Likely "
+        f"social/blog-post visibility. Worth checking referrer data on the repo if available."
+    )
 
 
 def rule_auth_path_not_landing(

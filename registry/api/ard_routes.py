@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.exception_handlers import (
     http_exception_handler as _default_http_handler,
 )
@@ -240,4 +241,17 @@ async def ard_validation_exception_handler(request: Request, exc: RequestValidat
             status_code=400,
             content={"errorCode": "INVALID_REQUEST", "message": _ARD_MESSAGES["INVALID_REQUEST"]},
         )
-    return await _default_validation_handler(request, exc)
+    try:
+        return await _default_validation_handler(request, exc)
+    except UnicodeEncodeError:
+        # Pydantic includes the rejected input in validation errors. An unpaired
+        # surrogate in that input cannot be rendered by JSONResponse as UTF-8,
+        # turning an ordinary 422 into a 500. Keep the field/error details but
+        # avoid echoing the unrenderable raw input in this exceptional case.
+        errors_without_input = [
+            {key: value for key, value in error.items() if key != "input"} for error in exc.errors()
+        ]
+        return JSONResponse(
+            status_code=422,
+            content={"detail": jsonable_encoder(errors_without_input)},
+        )

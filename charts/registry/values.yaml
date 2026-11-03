@@ -1,9 +1,17 @@
 # Global configuration
 global:
+  # Secret generation switch shared with the umbrella chart. true (default)
+  # generates unresolved secret values randomly and preserves them across
+  # `helm upgrade` via `lookup`. Set false for ArgoCD and other
+  # `helm template` based tools, which render without cluster access: there the
+  # lookup is always empty, so a generated value would differ on every sync.
+  # With generation off, an unresolved value is a render-time error naming the
+  # value to set.
+  generateSecrets: true
   image:
     # Container registry (host + optional namespace). Shared default across subcharts.
     registry: public.ecr.aws/p3v1o3c6
-    tag: 1.33.0
+    tag: 1.36.0
     pullPolicy: IfNotPresent
   cloud:
     # AWS region for cloud detection in telemetry. Set this when deploying
@@ -480,6 +488,16 @@ ard:
 # values and continue to be set via extraEnv.
 embeddings:
   responseFormat: "" # "" (openai envelope, default) or "raw_array" (endpoint returns a bare [[float]] array)
+  requestTimeoutSeconds: "" # "" uses the code default (30). Per remote embeddings request (litellm only).
+  maxRetries: "" # "" uses the code default (2). Retries on 429/5xx/connection errors.
+  retryMaxInputChars: "" # "" uses the per-model default (2048 Cohere on Bedrock, 28000 otherwise). Trim target for the one retry after a failed embedding.
+  # Extra HTTP headers sent on every embeddings request (litellm provider only),
+  # at most 5, each as "Name: value". Rendered as EMBEDDINGS_EXTRA_HEADER_1..N.
+  # Stored in CLEAR TEXT and shown unmasked on the System Config page: never put
+  # a credential here (use the API key or authMode: idp). Example:
+  #   extraHeaders:
+  #     - "X-Tenant-Id: research"
+  extraHeaders: []
   authMode: "" # "" (static, default) or "idp"
   idpTokenEndpoint: "" # OAuth2 token endpoint; https:// required unless idpAllowInsecure
   idpClientId: ""
@@ -592,6 +610,18 @@ egressAuth:
   httpPoolMaxKeepalive: "20"
   httpPoolKeepaliveExpirySeconds: "30"
   httpPoolConnectRetries: "1"
+  # Opt-in exchanged-OBO-token cache. When enabled, exchanged OBO
+  # tokens are cached in the per-user SecretStore so repeated calls by the same
+  # principal to the same audience reuse a still-valid token instead of
+  # re-exchanging. Default off preserves the stateless per-request exchange.
+  oboCacheEnabled: "false"
+  # Hard cap (seconds) on the OBO cache reuse window, applied below the token's
+  # real expiry. Bounds revocation / conditional-access re-evaluation latency on
+  # cache hits.
+  oboCacheMaxTtlSeconds: "300"
+  # Never reuse a cached OBO token within this many seconds of its expiry. Must be
+  # < oboCacheMaxTtlSeconds.
+  oboCacheExpirySkewSeconds: "30"
   # obo_exchange target_audience allowlist (whitespace-separated). Optional.
   # When set, an obo server may only use a listed audience (authoritative positive
   # control against a confused-deputy that points obo at a shared first-party API).
@@ -617,10 +647,12 @@ egressAuth:
   # (legacy plaintext storage), so existing deployments keep working unchanged.
   credentialEncryptionKey: ""
   # nginx marker secret. REQUIRED for standalone deployment (chart render fails
-  # if empty) -- it guards all mcp-proxy token minting and the app requires it
-  # at startup. Set a strong random value, identical to auth-server's. In the
-  # stack it is auto-generated + shared, so leave empty there. Only used by the
-  # standalone subchart secret.
+  # if empty). It guards all internal-token minting (registry API, mcp-proxy,
+  # generic proxy), so a mismatch with auth-server 401s every registry API
+  # request, and the app requires it at startup. Set a strong random value of
+  # printable ASCII other than '$' (no spaces), identical to auth-server's. In
+  # the stack it is auto-generated + shared, so leave empty there. Only used by
+  # the standalone subchart secret.
   markerSecret: ""
   secretsManager:
     kmsKeyId: "" # Optional CMK; empty uses the AWS-managed key.

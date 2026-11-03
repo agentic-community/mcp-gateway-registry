@@ -3,6 +3,7 @@
 from .client import (
     EmbeddingsClient,
     LiteLLMClient,
+    RemoteEmbeddingsClient,
     SentenceTransformersClient,
     create_embeddings_client,
 )
@@ -14,6 +15,7 @@ __all__ = [
     "EmbeddingsClient",
     "SentenceTransformersClient",
     "LiteLLMClient",
+    "RemoteEmbeddingsClient",
     "EmbeddingsTokenProvider",
     "create_embeddings_client",
 ]

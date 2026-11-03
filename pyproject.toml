@@ -10,9 +10,14 @@ readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
     "aiofiles>=24.1.0",
-    "fastapi>=0.115.12",
+    # 0.147 through 0.161 read an omitted bool form field as False, ignoring its
+    # declared default, so registering without append_mcp_path stored False and
+    # an omitted overwrite=True became False. 0.162 restores declared defaults.
+    # https://github.com/fastapi/fastapi/releases/tag/0.162.0
+    "fastapi>=0.162.0",
     "itsdangerous>=2.2.0",
     "jinja2>=3.1.6",
+    "certifi>=2026.10.19",
     # Capped below 2.0: mcp 2.x renamed streamable_http.streamablehttp_client to
     # streamable_http_client with no back-compat alias, which breaks
     # registry/core/mcp_client.py on import. Migrating to 2.x needs the 2.0
@@ -57,7 +62,6 @@ dependencies = [
     "motor>=3.3.0",
     "pymongo>=4.6.3",
     "dnspython>=2.4.0",
-    "litellm>=1.93.2",
     "cryptography>=48.0.1",
     "prometheus-client>=0.20.0",
     "opentelemetry-api>=1.41.1",
@@ -189,9 +193,20 @@ directory = "htmlcov"
 title = "MCP Registry Coverage Report"
 
 [tool.uv]
+# LiteLLM is not installed (issue #1826). The registry calls embeddings APIs with
+# its own adapters, and the Cisco scanners need LiteLLM only for their 'llm'
+# analyzer. cisco-ai-mcp-scanner still declares it as a hard dependency, so this
+# override keeps it out; registry/services/scanner_llm_analyzer.py supplies the
+# stand-in mcp-scanner needs at import. Remove this line and the stand-in once
+# mcp-scanner makes LiteLLM optional: https://github.com/cisco-ai-defense/mcp-scanner/issues/285
+override-dependencies = ["litellm; sys_platform == 'never'"]
 # Local-only project - never resolve from PyPI
 package = false
 
+# Bumping certifi exclusion date to bypass 7-day window due to eMudhra certificate compromise
+# pip is pulled in by pip-api; 26.2.2 ships a certifi without the eMudhra roots
+# fastapi 0.162.0 restores declared defaults for omitted bool form fields (see dependencies)
+exclude-newer-package = { certifi = "2026-10-22T00:00:00Z", pip = "2026-10-22T00:00:00Z", fastapi = "2026-10-24T00:00:00Z" }
 # Resolve torch from the PyTorch CPU wheel index so the lockfile pins the
 # CPU-only wheels (vs. the default CUDA-enabled wheels from PyPI). This
 # lets Docker builds install torch via `uv sync --locked` without any

@@ -1,6 +1,7 @@
 -- Regression tests for virtual MCP backend aggregation and session management.
 -- Covers discovery fallback, empty/truncated responses, per-user egress tools,
--- stateless/stateful initialization, and backend authorization before dispatch.
+-- stateless/stateful initialization, backend authorization before dispatch, and
+-- the HTTP status returned for a missing, unknown or unverifiable client session.
 --
 -- Run from the repo root with OpenResty's resty CLI (provides lua-cjson):
 --   resty tests/lua/test_virtual_router.lua
@@ -1573,6 +1574,67 @@ do
     M._handle_resources_read(4, { uri = "file://alice" }, { tools = {} }, nil, "docs")
     check(reads == 2, "cached lookup naming an unmapped backend is never used")
     capture_handler = nil
+end
+
+-- ---------------------------------------------------------------------------
+print("test: client session check separates malformed, unknown and unverifiable sessions")
+do
+    local session_id = "vs-5e55"
+    local cache_key = "csess_valid:alice:/virtual/session_check:" .. session_id
+    local validations, validation_status = 0, nil
+    capture_handler = function(loc)
+        if loc:find("/_internal/sessions/client/", 1, true) == 1 then
+            validations = validations + 1
+            return { status = validation_status }
+        end
+    end
+    ngx.var.virtual_server_id = "session_check"
+    ngx.var.request_method = "POST"
+    ngx.var.auth_user = "alice"
+    ngx.req._body = cjson.encode({ jsonrpc = "2.0", id = 1, method = "tools/list" })
+
+    -- A missing or malformed header never reaches the registry and stays 400.
+    for _, header in ipairs({ false, "not-a-session" }) do
+        ngx.var.http_mcp_session_id = header or nil
+        ngx.status = 200
+        M.route()
+        check(ngx.status == 400 and validations == 0,
+            "header " .. (header or "absent") .. " -> 400 without a registry lookup")
+    end
+
+    -- Unknown, expired, another user's or another server's session: the
+    -- registry answers 404 for all of them, and the client must re-initialize.
+    ngx.var.http_mcp_session_id = session_id
+    validation_status = 404
+    ngx.status = 200
+    M.route()
+    check(ngx.status == 404 and validations == 1
+        and cjson.decode(ngx._last_body).error.code == -32600,
+        "session unknown to the registry -> 404")
+    check(dict:get(cache_key) == nil, "a 404 is not cached as a valid session")
+
+    -- A failed check must not tell every client to re-initialize.
+    for _, status in ipairs({ 500, 502, 503, 403, 422 }) do
+        validation_status = status
+        ngx.status = 200
+        M.route()
+        check(ngx.status == 503 and cjson.decode(ngx._last_body).error.code == -32603,
+            "session check answering " .. status .. " -> 503")
+    end
+    check(dict:get(cache_key) == nil, "a failed check is not cached as a valid session")
+
+    -- A live session passes and is cached; an unknown method then reaches the
+    -- method dispatch, which answers 200 with a JSON-RPC "Method not found".
+    dict:set("mapping::session_check", cjson.encode({ tools = {} }))
+    ngx.req._body = cjson.encode({ jsonrpc = "2.0", id = 2, method = "session/check" })
+    validation_status = 200
+    ngx.status = 200
+    M.route()
+    check(ngx.status == 200 and cjson.decode(ngx._last_body).error.code == -32601
+        and dict:get(cache_key) == "1",
+        "session confirmed by the registry passes the check and is cached")
+    capture_handler = nil
+    ngx.var.http_mcp_session_id = nil
 end
 
 -- ---------------------------------------------------------------------------

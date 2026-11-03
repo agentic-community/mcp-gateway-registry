@@ -1102,10 +1102,17 @@ end
 -- Uses L1 cache to avoid repeated DB lookups; the cache key includes both the
 -- user and the virtual server path so a cached "valid" result can never
 -- authorize a different user or a different virtual server.
--- Returns true if valid AND owned by the caller for this server, false otherwise.
+-- Returns (ok, err): ok is true if valid AND owned by the caller for this
+-- server. Otherwise ok is false and err is one of:
+--   "not_found": the registry answered 404. No live session has this ID for
+--       this user and virtual server (never minted, expired after the idle
+--       TTL, owned by another user, or minted for another virtual server).
+--       Also returned for an empty ID, which route() already rejects with 400.
+--   "unavailable": the check itself failed (no response, or any status other
+--       than 200 or 404), so the state of the session is unknown.
 local function _validate_client_session(client_session_id, user_id, virtual_server_path)
     if not client_session_id or client_session_id == "" then
-        return false
+        return false, "not_found"
     end
 
     -- L1: fast path check (cache valid sessions for SESSION_CACHE_TTL).
@@ -1138,8 +1145,13 @@ local function _validate_client_session(client_session_id, user_id, virtual_serv
         session_cache:set(cache_key, "1", SESSION_CACHE_TTL)
         return true
     end
+    if res and res.status == 404 then
+        return false, "not_found"
+    end
 
-    return false
+    ngx.log(ngx.ERR, "Client session validation failed for path=", virtual_server_path,
+        " status=", res and res.status or "nil")
+    return false, "unavailable"
 end
 
 
@@ -1560,18 +1572,31 @@ function _M.route()
         return
     end
 
-    -- Validate client session: per MCP spec, servers that require a session ID
-    -- SHOULD respond with 400 Bad Request to requests without a valid Mcp-Session-Id.
+    -- Validate client session. Per MCP Streamable HTTP 2025-03-26 to 2025-11-25
+    -- (Session Management), 400 is for a request without an Mcp-Session-Id
+    -- (handled above) and a terminated session MUST get 404 Not Found, which
+    -- tells the client to start a new session. The registry expires idle client
+    -- sessions, so an unknown well-formed ID gets 404.
     -- Initialize and ping are exempt; notifications already handled above with 202.
     -- The session must also belong to the authenticated caller AND have been
     -- minted for this virtual server -- presenting another user's session ID,
     -- or replaying a session from a different virtual server, is rejected here
-    -- before any session context is loaded or routed.
-    if not _validate_client_session(client_session_id, auth_user, "/virtual/" .. server_id) then
-        ngx.status = 400
+    -- before any session context is loaded or routed, with the same 404 so the
+    -- reply does not reveal that the session exists for someone else.
+    -- A failed check gets 503 so clients retry instead of re-initializing.
+    local session_ok, session_err = _validate_client_session(client_session_id, auth_user,
+        "/virtual/" .. server_id)
+    if not session_ok then
         ngx.header["Content-Type"] = "application/json"
+        if session_err == "unavailable" then
+            ngx.status = 503
+            ngx.say(_jsonrpc_error(request_id, -32603,
+                "Session validation unavailable. Please retry."))
+            return
+        end
+        ngx.status = 404
         ngx.say(_jsonrpc_error(request_id, -32600,
-            "Missing or invalid Mcp-Session-Id. Send an initialize request first."))
+            "Session not found or expired. Send a new initialize request."))
         return
     end
 
