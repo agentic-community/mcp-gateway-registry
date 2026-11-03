@@ -47,7 +47,15 @@ RECORD = {
     "visibility": "public",
     "owner": "alice",
     "tags": ["analytics"],
+    "is_enabled": True,
+    "num_stars": 4.5,
+    "created_at": "2026-10-01T12:00:00Z",
+    "updated_at": "2026-10-02T12:00:00Z",
     "attributes": {"retention_days": 90, "steward": "data-platform"},
+    # Fields the registry returns that CustomEntityInfo drops.
+    "allowed_groups": ["data-stewards"],
+    "rating_details": [{"user": "bob", "rating": 5}],
+    "is_proxied": False,
 }
 
 
@@ -125,6 +133,30 @@ class TestGetCustomEntityValidPath:
         assert capture["url"].endswith(f"/api/custom/data_product/{VALID_UUID}")
         assert result["_http_call_count"] == 1
 
+    async def test_record_is_shaped_by_custom_entity_info(self):
+        result = await _call_get_custom_entity(VALID_PATH)
+
+        assert result["record"] == {
+            "path": VALID_PATH,
+            "entity_type": "data_product",
+            "name": "Customer churn dataset",
+            "description": "Monthly churn snapshot",
+            "visibility": "public",
+            "owner": "alice",
+            "tags": ["analytics"],
+            "enabled": True,
+            "num_stars": 4.5,
+            "created_at": "2026-10-01T12:00:00Z",
+            "updated_at": "2026-10-02T12:00:00Z",
+            "attributes": {"retention_days": 90, "steward": "data-platform"},
+        }
+
+    async def test_logs_only_the_validated_path(self, caplog):
+        with caplog.at_level("INFO", logger=mcpgw_server.logger.name):
+            await _call_get_custom_entity(f"  data_product/{VALID_UUID}/\n")
+
+        assert f"get_custom_entity called: path=/data_product/{VALID_UUID}" in caplog.text
+
     @pytest.mark.parametrize(
         "path",
         [
@@ -180,23 +212,38 @@ class TestGetCustomEntityTraversalRejected:
         assert result["_http_call_count"] == 0
         assert "url" not in capture
 
+    async def test_rejected_path_is_logged_truncated_and_escaped(self, caplog):
+        # A newline inside the logged prefix must be escaped, not start a
+        # forged log line, and the tail past the cap must not be logged.
+        payload = "../\nFORGED-LINE " + "a" * 500
+        with caplog.at_level("INFO", logger=mcpgw_server.logger.name):
+            await _call_get_custom_entity(payload)
+
+        rejected = [r.getMessage() for r in caplog.records if "rejected" in r.getMessage()]
+        assert len(rejected) == 1
+        assert "\n" not in rejected[0]
+        assert repr(payload[: mcpgw_server.MAX_LOGGED_INPUT_LEN]) in rejected[0]
+        assert "a" * mcpgw_server.MAX_LOGGED_INPUT_LEN not in rejected[0]
+
 
 class TestGetCustomEntityRegistryErrors:
     """Registry refusals surface as clean tool errors."""
 
-    async def test_forbidden_record_returns_clean_error(self):
-        result = await _call_get_custom_entity(
-            VALID_PATH, response=_make_mock_response(status_code=403)
-        )
-
-        assert result["status"] == "failed"
-        assert result["error"] == "HTTP 403"
-        assert "record" not in result
-
-    async def test_missing_record_returns_clean_error(self):
+    async def test_denied_or_missing_record_returns_clean_404(self):
+        # The registry answers 404 both when the record is absent and when the
+        # caller may not view it, so it does not disclose existence.
         result = await _call_get_custom_entity(
             VALID_PATH, response=_make_mock_response(status_code=404)
         )
 
         assert result["status"] == "failed"
         assert result["error"] == "HTTP 404"
+        assert "record" not in result
+
+    async def test_server_error_returns_clean_error(self):
+        result = await _call_get_custom_entity(
+            VALID_PATH, response=_make_mock_response(status_code=500)
+        )
+
+        assert result["status"] == "failed"
+        assert result["error"] == "HTTP 500"
