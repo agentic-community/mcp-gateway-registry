@@ -18,7 +18,14 @@ from typing import Any
 import httpx
 from fastmcp import Context, FastMCP
 from logging_setup import setup_mcpgw_logging
-from models import AgentInfo, RegistryStats, ServerInfo, SkillInfo, ToolSearchResult
+from models import (
+    AgentInfo,
+    CustomEntityInfo,
+    RegistryStats,
+    ServerInfo,
+    SkillInfo,
+    ToolSearchResult,
+)
 from observability_bootstrap import init_meter_provider_if_needed, track_tool
 from starlette.responses import JSONResponse
 
@@ -61,6 +68,8 @@ _DEFAULT_MCPGW_ALLOWED_HOSTS = "mcpgw-server"
 MCPGW_HTTP_ALLOWED_HOSTS = os.getenv("MCPGW_HTTP_ALLOWED_HOSTS", _DEFAULT_MCPGW_ALLOWED_HOSTS)
 
 MAX_QUERY_LENGTH: int = 500
+# Cap on how much of a rejected, caller-supplied value a log line echoes.
+MAX_LOGGED_INPUT_LEN: int = 200
 MIN_TOP_N: int = 1
 MAX_TOP_N: int = 50
 
@@ -817,11 +826,11 @@ async def get_custom_entity(
               (e.g. "/data_product/3f2b8c1e-9d4a-4b7e-8f21-6a5c0d9e7b13")
 
     Returns:
-        Dictionary containing the path, the record (including entity_type,
-        name, description, tags, owner, visibility and attributes), and status
+        Dictionary containing the path, the record (entity_type, name,
+        description, visibility, owner, tags, enabled, num_stars, timestamps
+        and attributes), and status. A record that does not exist and one the
+        caller may not view both fail with "HTTP 404".
     """
-    logger.info("get_custom_entity called: path=%s", path)
-
     path = (path or "").strip()
 
     # Both segments are interpolated into an outbound URL path below, so the
@@ -832,6 +841,8 @@ async def get_custom_entity(
     # trust downstream URL normalization.
     match = _CUSTOM_RECORD_PATH_PATTERN.match(path)
     if not match:
+        # %r keeps control characters visible and the slice bounds the line.
+        logger.info("get_custom_entity rejected path=%r", path[:MAX_LOGGED_INPUT_LEN])
         return {
             "path": path,
             "error": (
@@ -843,6 +854,7 @@ async def get_custom_entity(
 
     entity_type = match.group("type")
     record_uuid = match.group("uuid")
+    logger.info("get_custom_entity called: path=/%s/%s", entity_type, record_uuid)
 
     try:
         headers = await _get_registry_headers(ctx)
@@ -851,11 +863,11 @@ async def get_custom_entity(
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.get(url, headers=headers)
             response.raise_for_status()
-            record = response.json()
+            data = response.json()
 
         return {
             "path": f"/{entity_type}/{record_uuid}",
-            "record": record,
+            "record": CustomEntityInfo(**data).model_dump(),
             "status": "success",
         }
 
