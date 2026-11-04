@@ -71,13 +71,13 @@ from urllib.parse import (
     urlparse,
 )
 
-import httpx
-import mcp
+import httpx2
 import yaml
 from langchain_anthropic import ChatAnthropic
 from langchain_aws import ChatBedrock
 from langchain_core.tools import tool
 from langgraph.prebuilt import create_react_agent
+from mcp import Client
 from mcp.client.sse import sse_client
 from mcp.client.streamable_http import streamable_http_client
 from registry_client import (
@@ -792,12 +792,10 @@ async def _invoke_via_sse(
     tool_name: str,
     arguments: dict[str, Any],
 ) -> str:
-    """Invoke tool via SSE transport."""
-    async with sse_client(server_url, headers=headers) as (read, write):
-        async with mcp.ClientSession(read, write) as session:
-            await session.initialize()
-            result = await session.call_tool(tool_name, arguments=arguments)
-            return _format_tool_response(result)
+    """Invoke tool via the HTTP+SSE transport, which only speaks the initialize handshake."""
+    async with Client(sse_client(server_url, headers=headers), mode="legacy") as client:
+        result = await client.call_tool(tool_name, arguments=arguments)
+        return _format_tool_response(result)
 
 
 async def _invoke_via_http(
@@ -806,16 +804,17 @@ async def _invoke_via_http(
     tool_name: str,
     arguments: dict[str, Any],
 ) -> str:
-    """Invoke tool via streamable HTTP transport."""
-    async with httpx.AsyncClient(headers=headers) as http_client:
-        async with streamable_http_client(
-            url=server_url,
-            http_client=http_client,
-        ) as (read, write, _):
-            async with mcp.ClientSession(read, write) as session:
-                await session.initialize()
-                result = await session.call_tool(tool_name, arguments=arguments)
-                return _format_tool_response(result)
+    """Invoke tool via streamable HTTP transport.
+
+    Client(mode="auto") speaks MCP 2026-07-28 to servers that support it and
+    falls back to the initialize handshake for older servers. The MCP SDK 2.x
+    takes headers only through its own httpx2 client.
+    """
+    async with httpx2.AsyncClient(headers=headers) as http_client:
+        transport = streamable_http_client(server_url, http_client=http_client)
+        async with Client(transport, mode="auto") as client:
+            result = await client.call_tool(tool_name, arguments=arguments)
+            return _format_tool_response(result)
 
 
 def _format_tool_response(result: Any) -> str:
