@@ -532,6 +532,30 @@ class TestGenerateVirtualBackendLocations:
         assert f"location = {pinned.replace('/_vs_backend', '/_vs_auth', 1)} {{" in blocks
 
     @pytest.mark.asyncio
+    async def test_mapping_keeps_a_schema_stored_by_health_discovery(self, mock_server_repository):
+        """Health-loop discovery stores a tool's schema under "schema". The mapping
+        file must still carry it, or a fallback to the mapping serves no arguments."""
+        schema = {"type": "object", "properties": {"q": {"type": "string"}}}
+        vs = _make_vs_config(
+            tool_mappings=[ToolMapping(tool_name="search", backend_server_path="/github")]
+        )
+        mock_server_repository.get.side_effect = {
+            "/github": {
+                "is_enabled": True,
+                "proxy_pass_url": "http://svc:8000/mcp",
+                "tool_list": [{"name": "search", "description": "Search", "schema": schema}],
+            },
+        }.get
+        from registry.core.nginx_service import NginxConfigService
+
+        with TemporaryDirectory() as tmpdir:
+            with patch("registry.core.nginx_service.VIRTUAL_MAPPINGS_DIR", Path(tmpdir)):
+                await NginxConfigService()._write_virtual_server_mappings([vs])
+            data = json.loads((Path(tmpdir) / "dev-essentials.json").read_text())
+
+        assert data["tools"][0]["inputSchema"] == schema
+
+    @pytest.mark.asyncio
     async def test_versioned_path_without_explicit_pin_uses_selected_doc(
         self, mock_server_repository
     ):

@@ -862,6 +862,9 @@ def _extract_tool_details(
                     "description": tool_desc or "",
                     "parsed_description": parsed_desc,
                     "schema": tool_schema,
+                    # The MCP field name, which the virtual-server mapping, the tool
+                    # catalog and search read. "schema" stays for ToolDescription.
+                    "inputSchema": tool_schema,
                 }
             )
 
