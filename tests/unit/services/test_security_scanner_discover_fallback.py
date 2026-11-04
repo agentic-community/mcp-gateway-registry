@@ -62,7 +62,8 @@ def _decisions(
 @pytest.mark.unit
 def test_unpatched_scanner_refuses_mcp_1x_fallback():
     """Documents the upstream bug the patch exists for. If this starts failing,
-    mcp-scanner fixed it and the patch can be removed."""
+    mcp-scanner fixed it and the patch can be removed:
+    https://github.com/cisco-ai-defense/mcp-scanner/issues/302"""
     decisions = _decisions(patched=False)
 
     assert decisions["mcp 1.x server rejects the 2026 header"] is False
