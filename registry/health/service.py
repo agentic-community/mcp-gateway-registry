@@ -53,8 +53,17 @@ MAX_DISCOVER_RESPONSE_BYTES: int = 65536
 # server/discover and go straight to initialize + ping. After it expires the
 # probe asks again, so a server that upgrades to 2026-07-28 is picked up.
 LEGACY_MCP_ERA_CACHE_SECONDS: int = 3600
+# registry/utils/url_guard.py starts the reason of every resolver failure with this.
+DNS_FAILURE_REASON_PREFIX: str = "DNS resolution"
 HEALTH_PROBE_CLIENT_NAME: str = "mcp-gateway-registry"
 HEALTH_PROBE_CLIENT_VERSION: str = "2.0.0"
+
+
+def _is_dns_failure(
+    error: UrlValidationError,
+) -> bool:
+    """Whether the URL guard refused a URL only because its host did not resolve."""
+    return str(getattr(error, "reason", "")).startswith(DNS_FAILURE_REASON_PREFIX)
 
 
 def _health_server_path(
@@ -1198,7 +1207,13 @@ class HealthMonitoringService:
                     "mcp_server", entity_path, registered_target, outbound_url
                 )
                 validate_url(outbound_url, profile=outbound_profile)
-        except UrlValidationError:
+        except UrlValidationError as e:
+            if _is_dns_failure(e):
+                logger.warning(
+                    f"Health check could not resolve the host of {redact_url(proxy_pass_url)} "
+                    "(credentials NOT sent)",
+                )
+                return False, HealthStatus.UNHEALTHY_HOST_NOT_RESOLVED
             logger.warning(
                 f"Health check blocked by SSRF guard for {redact_url(proxy_pass_url)} (credentials NOT sent)",
             )
