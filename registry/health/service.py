@@ -36,6 +36,105 @@ logger = logging.getLogger(__name__)
 DISCOVERY_IDENTITY_UNCONNECTED = "unhealthy: discovery identity designated but not connected"
 
 
+# MCP 2026-07-28 health probe. A modern server has no initialize handshake, so
+# the probe first sends server/discover (an RPC every 2026-07-28 server MUST
+# implement). A DiscoverResult, or one of the error codes the 2026-07-28 spec
+# defines, proves a live modern server. Any other answer means a handshake-era
+# server (or no answer at all), and the probe falls back to initialize + ping.
+# Spec: https://modelcontextprotocol.io/specification/2026-07-28/server/discover
+MODERN_MCP_PROTOCOL_VERSION: str = "2026-07-28"
+# HeaderMismatch, MissingRequiredClientCapability, UnsupportedProtocolVersion.
+MODERN_MCP_ERROR_CODES: frozenset[int] = frozenset({-32020, -32021, -32022})
+# A DiscoverResult is a few hundred bytes. Stop reading well before a server
+# that streams forever could make the probe hold memory.
+MAX_DISCOVER_RESPONSE_BYTES: int = 65536
+HEALTH_PROBE_CLIENT_NAME: str = "mcp-gateway-registry"
+HEALTH_PROBE_CLIENT_VERSION: str = "2.0.0"
+
+
+def _parse_jsonrpc_response(
+    body: bytes,
+) -> dict | None:
+    """Parse a JSON-RPC response from a plain JSON or SSE-framed body.
+
+    Args:
+        body: Raw response bytes (possibly truncated).
+
+    Returns:
+        The first JSON object that carries "result" or "error", else None.
+    """
+    text = body.decode("utf-8", errors="replace").strip()
+    if text.startswith("{"):
+        candidates = [text]
+    else:
+        candidates = [line[5:].strip() for line in text.splitlines() if line.startswith("data:")]
+    for candidate in candidates:
+        try:
+            message = json.loads(candidate)
+        except ValueError:
+            continue
+        if isinstance(message, dict) and ("result" in message or "error" in message):
+            return message
+    return None
+
+
+def _is_modern_mcp_answer(
+    message: dict | None,
+) -> bool:
+    """Whether a server/discover answer came from a 2026-07-28 MCP server.
+
+    Per the spec, a modern server either returns a DiscoverResult (with a
+    supportedVersions list) or a recognized modern JSON-RPC error. A
+    handshake-era server returns something else, typically -32601 or a
+    -32600 "no session" error.
+
+    Args:
+        message: The parsed JSON-RPC response, or None.
+
+    Returns:
+        True when the answer identifies a live modern server.
+    """
+    if not message:
+        return False
+    result = message.get("result")
+    if isinstance(result, dict):
+        versions = result.get("supportedVersions")
+        return isinstance(versions, list) and any(isinstance(v, str) for v in versions)
+    error = message.get("error")
+    if isinstance(error, dict):
+        return error.get("code") in MODERN_MCP_ERROR_CODES
+    return False
+
+
+def _server_discover_request() -> tuple[dict[str, str], str]:
+    """Build the extra headers and the body for a server/discover probe.
+
+    Returns:
+        (headers to add, JSON body). The headers mirror the body as the
+        2026-07-28 Streamable HTTP transport requires.
+    """
+    body = {
+        "jsonrpc": "2.0",
+        "id": "health-discover",
+        "method": "server/discover",
+        "params": {
+            "_meta": {
+                "io.modelcontextprotocol/protocolVersion": MODERN_MCP_PROTOCOL_VERSION,
+                "io.modelcontextprotocol/clientInfo": {
+                    "name": HEALTH_PROBE_CLIENT_NAME,
+                    "version": HEALTH_PROBE_CLIENT_VERSION,
+                },
+                "io.modelcontextprotocol/clientCapabilities": {},
+            }
+        },
+    }
+    headers = {
+        "MCP-Protocol-Version": MODERN_MCP_PROTOCOL_VERSION,
+        "Mcp-Method": "server/discover",
+    }
+    return headers, json.dumps(body)
+
+
 def _discovery_identity_unconnected(server_info: dict) -> bool:
     """Whether a designated discovery identity resolved no credential.
 
@@ -663,6 +762,83 @@ class HealthMonitoringService:
                 logger.warning(f"Health credential decryption failed service={entity_path}")
         return headers
 
+    async def _read_discover_response(
+        self,
+        response: httpx.Response,
+    ) -> dict | None:
+        """Read a server/discover response until it holds a JSON-RPC answer.
+
+        Stops at the first complete answer or MAX_DISCOVER_RESPONSE_BYTES, so
+        an SSE response that stays open cannot hold the probe.
+
+        Args:
+            response: The streamed response.
+
+        Returns:
+            The parsed JSON-RPC response, or None.
+        """
+        body = b""
+        async for chunk in response.aiter_bytes():
+            body += chunk
+            message = _parse_jsonrpc_response(body)
+            if message is not None:
+                return message
+            if len(body) >= MAX_DISCOVER_RESPONSE_BYTES:
+                break
+        return _parse_jsonrpc_response(body)
+
+    async def _probe_server_discover(
+        self,
+        client: httpx.AsyncClient,
+        endpoint: str,
+        headers: dict[str, str],
+    ) -> bool:
+        """Check whether the endpoint is a live MCP 2026-07-28 server.
+
+        Sends server/discover on the same guarded client and headers the
+        legacy probe uses. Never decides "unhealthy" by itself: any failure,
+        auth error or non-modern answer returns False, and the caller falls
+        back to the initialize + ping probe unchanged.
+
+        Args:
+            client: The guarded httpx client.
+            endpoint: The exact MCP endpoint, already validated.
+            headers: Headers built for this exact destination.
+
+        Returns:
+            True when the server answered as a modern MCP server.
+        """
+        extra_headers, payload = _server_discover_request()
+        probe_headers = {**headers, **extra_headers}
+        try:
+            async with client.stream(
+                "POST",
+                endpoint,
+                headers=probe_headers,
+                content=payload,
+                follow_redirects=True,
+                timeout=httpx.Timeout(settings.health_check_timeout_seconds),
+            ) as response:
+                status = response.status_code
+                if status in (401, 403):
+                    logger.debug(
+                        f"server/discover probe got status={status} endpoint={redact_url(endpoint)}; "
+                        "using the legacy probe for its auth handling"
+                    )
+                    return False
+                message = await self._read_discover_response(response)
+        except Exception as e:
+            logger.debug(
+                f"server/discover probe failed endpoint={redact_url(endpoint)} type={type(e).__name__}"
+            )
+            return False
+
+        is_modern = _is_modern_mcp_answer(message)
+        logger.debug(
+            f"server/discover probe endpoint={redact_url(endpoint)} status={status} modern={is_modern}"
+        )
+        return is_modern
+
     async def _initialize_mcp_session(
         self, client: httpx.AsyncClient, endpoint: str, headers: dict[str, str]
     ) -> str | None:
@@ -1021,6 +1197,16 @@ class HealthMonitoringService:
             )
             logger.info(f"[TRACE] Resolved streamable-http endpoint: {redact_url(endpoint)}")
 
+            # Step 0: an MCP 2026-07-28 server has no initialize handshake. If it
+            # answers server/discover as a modern server, it is healthy. Any other
+            # answer falls through to the handshake-era probe below, unchanged.
+            if await self._probe_server_discover(client, endpoint, headers):
+                logger.info(
+                    f"Health check succeeded at {redact_url(endpoint)} "
+                    f"(server/discover, MCP {MODERN_MCP_PROTOCOL_VERSION})"
+                )
+                return True, HealthStatus.HEALTHY
+
             try:
                 # Step 1: Initialize session to get session ID
                 logger.info(
@@ -1153,6 +1339,14 @@ class HealthMonitoringService:
             logger.info(
                 f"[TRACE] Resolved default streamable-http endpoint: {redact_url(endpoint)}"
             )
+            # Same modern-server check as the streamable-http path above. The
+            # ping below gets 400 -32020 from a 2026-07-28 server (no headers).
+            if await self._probe_server_discover(client, endpoint, headers):
+                logger.info(
+                    f"Health check succeeded at {redact_url(endpoint)} "
+                    f"(server/discover, MCP {MODERN_MCP_PROTOCOL_VERSION})"
+                )
+                return True, HealthStatus.HEALTHY
             ping_payload = '{ "jsonrpc": "2.0", "id": "0", "method": "ping" }'
 
             try:
