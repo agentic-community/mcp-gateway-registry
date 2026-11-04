@@ -84,10 +84,36 @@ local block_responses = {
         { status = 200, body = '{"blocked_tools":[]}' },
 }
 
+-- Backends that answer the router's server/discover probe as 2026-07-28 servers.
+-- Every other /_vs_backend_* location answers it like a legacy server
+-- (-32601), so tests that count backend traffic do not see the probe.
+local modern_backends = {}
+
+local function _is_discover_probe(loc, opts)
+    if loc:sub(1, 12) ~= "/_vs_backend" or type(opts) ~= "table" or type(opts.body) ~= "string" then
+        return false
+    end
+    local ok, request = pcall(cjson.decode, opts.body)
+    return ok and type(request) == "table" and request.method == "server/discover"
+end
+
 _G.ngx = {
     shared = { virtual_server_map = dict },
     location = {
         capture = function(loc, opts)
+            if _is_discover_probe(loc, opts) and not modern_backends[loc] then
+                return { status = 200, body = '{"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"Method not found"}}' }
+            end
+            -- The probe's own backend grant check: answered here for legacy test
+            -- backends, so tests that count /validate calls see only theirs.
+            if loc:sub(1, 9) == "/_vs_auth" then
+                local backend = loc:gsub("^/_vs_auth_", "/_vs_backend_", 1)
+                local x_body = _G.ngx.req._headers["X-Body"]
+                if not modern_backends[backend]
+                    and _is_discover_probe(backend, { body = x_body }) then
+                    return { status = 200, header = { ["X-Internal-Token"] = "probe-signed" } }
+                end
+            end
             if loc:find("/_internal/sessions/tool-block?", 1, true) == 1 then
                 block_requests = block_requests + 1
                 return block_responses[loc] or { status = 404, body = "" }
@@ -1860,6 +1886,218 @@ do
     check(ngx.req._headers["MCP-Protocol-Version"] == "2025-11-25",
         "legacy client header is left for backend subrequests as before")
     ngx.req._headers = {}
+end
+
+-- ---------------------------------------------------------------------------
+-- MCP 2026-07-28 backends: probed once, then called statelessly.
+-- ---------------------------------------------------------------------------
+local B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+ngx.encode_base64 = function(s)
+    return ((s:gsub(".", function(c)
+        local r, b = "", c:byte()
+        for i = 8, 1, -1 do r = r .. (b % 2 ^ i - b % 2 ^ (i - 1) > 0 and "1" or "0") end
+        return r
+    end) .. "0000"):gsub("%d%d%d?%d?%d?%d?", function(x)
+        if #x < 6 then return "" end
+        local c = 0
+        for i = 1, 6 do c = c + (x:sub(i, i) == "1" and 2 ^ (6 - i) or 0) end
+        return B64:sub(c + 1, c + 1)
+    end) .. ({ "", "==", "=" })[#s % 3 + 1])
+end
+
+print("test: Mcp-Name / Mcp-Param-* value encoding")
+do
+    check(M._encode_mcp_header_value("us-west1") == "us-west1", "plain string as is")
+    check(M._encode_mcp_header_value(42) == "42", "integer as decimal")
+    check(M._encode_mcp_header_value(true) == "true", "boolean as true")
+    check(M._encode_mcp_header_value(1.5) == nil, "non-integer number cannot be mirrored")
+    check(M._encode_mcp_header_value(" padded ") == "=?base64?IHBhZGRlZCA=?=", "whitespace -> base64")
+    check(M._encode_mcp_header_value("line1\nline2") == "=?base64?bGluZTEKbGluZTI=?=", "newline -> base64")
+    check(M._encode_mcp_header_value("=?base64?literal?=") == "=?base64?PT9iYXNlNjQ/bGl0ZXJhbD89?=",
+        "sentinel-shaped value -> base64")
+end
+
+print("test: x-mcp-header annotations follow the 2026-07-28 rules")
+do
+    local entries = M._x_mcp_header_entries({ type = "object", properties = {
+        region = { type = "string", ["x-mcp-header"] = "Region" },
+        opts = { type = "object", properties = { tenant = { type = "integer", ["x-mcp-header"] = "Tenant" } } },
+        list = { type = "array", items = { type = "object", properties = {
+            x = { type = "string", ["x-mcp-header"] = "Hidden" } } } },
+        plain = { type = "string" },
+    } })
+    local by_header = {}
+    for _, e in ipairs(entries or {}) do by_header[e.header] = table.concat(e.path, ".") end
+    check(by_header["Mcp-Param-Region"] == "region" and by_header["Mcp-Param-Tenant"] == "opts.tenant",
+        "top-level and nested properties chains are mirrored")
+    check(by_header["Mcp-Param-Hidden"] == nil, "a property under items (array) is not reachable")
+    check(M._x_mcp_header_entries({ properties = { n = { type = "number", ["x-mcp-header"] = "N" } } }) == nil,
+        "number parameters are invalid")
+    check(M._x_mcp_header_entries({ properties = {
+        a = { type = "string", ["x-mcp-header"] = "Dup" }, b = { type = "string", ["x-mcp-header"] = "dup" } } }) == nil,
+        "case-insensitive duplicates are invalid")
+    check(M._x_mcp_header_entries({ properties = { a = { type = "string", ["x-mcp-header"] = "Bad Name" } } }) == nil,
+        "non-token names are invalid")
+    local headers = M._param_headers(entries, { region = "eu", opts = { tenant = cjson.null } })
+    check(headers["Mcp-Param-Region"] == "eu" and headers["Mcp-Param-Tenant"] == nil,
+        "present values become headers; null and missing ones send none")
+end
+
+-- A capture handler for a 2026-07-28 backend at `loc` that records what it saw.
+local function modern_backend_handler(loc, seen, tools)
+    return function(l, opts)
+        if l == loc then
+            local request = cjson.decode(opts.body)
+            if request.method == "server/discover" then
+                return { status = 200, body = cjson.encode({ jsonrpc = "2.0", id = 1,
+                    result = { supportedVersions = { "2026-07-28" }, capabilities = {} } }) }
+            end
+            local h = ngx.req._headers
+            seen[#seen + 1] = { method = request.method, body = request, pv = h["MCP-Protocol-Version"],
+                mcp_method = h["Mcp-Method"], mcp_name = h["Mcp-Name"], region = h["Mcp-Param-Region"],
+                sid = h["Mcp-Session-Id"] }
+            if request.method == "tools/list" then
+                return { status = 200, body = cjson.encode({ result = { tools = tools or {} } }) }
+            end
+            return { status = 200, body = cjson.encode({ result = { resultType = "complete",
+                content = { { type = "text", text = "ok" } } } }) }
+        end
+        if l:find("/_internal/sessions/backend/", 1, true) == 1 then
+            seen.session_calls = (seen.session_calls or 0) + 1
+            return { status = 404 }
+        end
+    end
+end
+
+print("test: backend era is probed once and cached; failures are not cached")
+do
+    modern_backends["/_vs_backend_era_m"] = true
+    local seen = {}
+    local probes = 0
+    local handler = modern_backend_handler("/_vs_backend_era_m", seen)
+    capture_handler = function(l, opts)
+        if l == "/_vs_backend_era_m" and cjson.decode(opts.body).method == "server/discover" then
+            probes = probes + 1
+        end
+        return handler(l, opts)
+    end
+    check(M._backend_era("/_vs_backend_era_m", nil) == "modern", "a backend listing 2026-07-28 is modern")
+    check(M._backend_era("/_vs_backend_era_m", nil) == "modern" and probes == 1, "the era is cached after one probe")
+    check(M._backend_era("/_vs_backend_era_legacy", nil) == "legacy", "a -32601 answer means legacy")
+
+    modern_backends["/_vs_backend_era_fail"] = true
+    capture_handler = function(l)
+        if l == "/_vs_auth_era_fail" then return { status = 503 } end
+    end
+    check(M._backend_era("/_vs_backend_era_fail", nil) == "legacy"
+        and dict:get("bera:/_vs_backend_era_fail:") == nil,
+        "a probe that could not be authorized falls back without caching")
+    capture_handler = nil
+end
+
+print("test: a 2026-07-28 backend gets a stateless request with headers from the sent body")
+do
+    modern_backends["/_vs_backend_mod"] = true
+    local seen = {}
+    capture_handler = modern_backend_handler("/_vs_backend_mod", seen)
+    ngx.req._headers = { ["MCP-Protocol-Version"] = "2025-11-25" }
+    local body = cjson.encode({ jsonrpc = "2.0", id = 3, method = "tools/call",
+        params = { name = "get_weather", arguments = { region = "us-west1" } } })
+    local res, outcome = M._call_backend("/_vs_backend_mod", body, "vs-abc", "srv", nil, false,
+        { ["Mcp-Param-Region"] = "us-west1" })
+    local call = seen[1]
+    check(res and res.status == 200 and outcome == "ok", "the call reaches the modern backend")
+    check(call and call.method == "tools/call" and (seen.session_calls or 0) == 0,
+        "no initialize and no backend session for a modern backend")
+    check(call and call.body.params._meta["io.modelcontextprotocol/protocolVersion"] == "2026-07-28",
+        "the sent body carries the 2026-07-28 _meta")
+    check(call and call.pv == "2026-07-28" and call.mcp_method == "tools/call"
+        and call.mcp_name == "get_weather" and call.region == "us-west1",
+        "MCP-Protocol-Version, Mcp-Method, Mcp-Name and Mcp-Param-* match the sent body")
+    check(call and call.sid == nil, "no Mcp-Session-Id is sent to a modern backend")
+    check(ngx.req._headers["MCP-Protocol-Version"] == "2025-11-25" and ngx.req._headers["Mcp-Param-Region"] == nil
+        and ngx.req._headers["Mcp-Method"] == nil,
+        "request headers are restored, so a later legacy backend call sees none of them")
+    capture_handler = nil
+    ngx.req._headers = {}
+end
+
+print("test: tools/list from a 2026-07-28 backend drops invalid tools and feeds Mcp-Param-*")
+do
+    modern_backends["/_vs_backend_wx"] = true
+    local seen = {}
+    capture_handler = modern_backend_handler("/_vs_backend_wx", seen, {
+        { name = "forecast", inputSchema = { type = "object", properties = {
+            region = { type = "string", ["x-mcp-header"] = "Region" } } } },
+        { name = "broken", inputSchema = { type = "object", properties = {
+            n = { type = "number", ["x-mcp-header"] = "N" } } } },
+    })
+    local outcome, items = M._fetch_backend_list("/_vs_backend_wx", "tools/list", "tools", "vs-abc", "srv")
+    local names = {}
+    for _, tool in ipairs(items or {}) do names[#names + 1] = tool.name end
+    check(outcome == "ok" and #names == 1 and names[1] == "forecast",
+        "a tool with an invalid x-mcp-header is dropped from the list")
+
+    ngx.var.virtual_server_id = "wx"
+    dict:set("mapping::wx", cjson.encode({ tools = {
+        { name = "wx_forecast", original_name = "forecast", backend_location = "/_vs_backend_wx",
+          backend_server_path = "/fine" } },
+        tool_backend_map = { wx_forecast = { original_name = "forecast",
+            backend_location = "/_vs_backend_wx", backend_server_path = "/fine" } } }))
+    M._handle_tools_call(9, cjson.decode(dict:get("mapping::wx")),
+        { name = "wx_forecast", arguments = { region = "eu-north1" } }, "", "vs-abc", "wx")
+    local call = seen[#seen]
+    check(call and call.method == "tools/call" and call.body.params.name == "forecast"
+        and call.mcp_name == "forecast" and call.region == "eu-north1",
+        "tools/call to the alias sends the original name and the mirrored Mcp-Param-Region")
+    capture_handler = nil
+    ngx.req._headers = {}
+end
+
+print("test: backend lists are read across pages, and a failed page fails the fetch")
+do
+    local cursors, fail_page, endless = {}, nil, false
+    capture_handler = function(loc, opts)
+        if loc ~= "/_vs_backend_paged" then return nil end
+        local request = cjson.decode(opts.body)
+        local cursor = request.params and request.params.cursor or false
+        cursors[#cursors + 1] = cursor
+        local page = #cursors
+        if fail_page == page then return { status = 503 } end
+        local next_cursor = endless and "again" or ({ "c2", "c3", nil })[page]
+        return { status = 200, body = cjson.encode({ result = {
+            tools = { { name = "t" .. page } }, nextCursor = next_cursor } }) }
+    end
+    local outcome, items = M._fetch_backend_list("/_vs_backend_paged", "tools/list", "tools", nil, "srv")
+    check(outcome == "ok" and #items == 3 and items[3].name == "t3", "all three pages are merged")
+    check(cursors[1] == false and cursors[2] == "c2" and cursors[3] == "c3",
+        "each request passes back the previous page's nextCursor")
+
+    cursors, fail_page = {}, 2
+    outcome = M._fetch_backend_list("/_vs_backend_paged", "tools/list", "tools", nil, "srv")
+    check(outcome == "failed", "a failed second page fails the whole fetch")
+
+    cursors, fail_page, endless = {}, nil, true
+    outcome, items = M._fetch_backend_list("/_vs_backend_paged", "tools/list", "tools", nil, "srv")
+    check(outcome == "ok" and #cursors == 50 and #items == 50,
+        "a backend that never stops returning a cursor is read for at most 50 pages")
+    capture_handler = nil
+end
+
+print("test: a 2026-07-28 backend's 404 -32601 for a list means unsupported")
+do
+    capture_handler = function(loc)
+        if loc == "/_vs_backend_nores" then
+            return { status = 404, body = cjson.encode({ jsonrpc = "2.0", id = 1,
+                error = { code = -32601, message = "Method not found" } }) }
+        end
+        if loc == "/_vs_backend_gone" then return { status = 404, body = "not here" } end
+    end
+    check(M._fetch_backend_list("/_vs_backend_nores", "resources/list", "resources", nil, "srv")
+        == "unsupported", "404 with a JSON-RPC -32601 -> unsupported")
+    check(M._fetch_backend_list("/_vs_backend_gone", "resources/list", "resources", nil, "srv")
+        == "failed", "a 404 without a JSON-RPC error is still a failure")
+    capture_handler = nil
 end
 
 -- ---------------------------------------------------------------------------

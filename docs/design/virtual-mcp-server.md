@@ -100,7 +100,7 @@ A client connecting to `/virtual/dev-tools` sees `search-repo`, `post-message`, 
    An IdP token issued for the virtual server's own resource (Entra issues one per server, so its `aud` is `https://<gateway>/virtual/<id>/mcp`) is accepted at the backend hop for that parent virtual server only. The backend's own audience is still accepted, and the backend's scope grant is still required.
 5. Lua calls `/_vs_backend_<backend>` only after that grant. A PAT or `oauth_user` backend routes through auth-server's `/mcp-proxy/<backend>/` vend/inject hop. Plain backends retain their direct proxy, with ingress credentials and internal tokens stripped. The resolved backend path, not the virtual alias, keys the egress vault.
    The signed token retains the exact registered backing path and selected version ID. Vend checks the selected version's exact outbound endpoint against the credential's write-time destination binding; adding or retargeting a version requires reconnecting or resubmitting its credential.
-6. Virtual `initialize` creates the client session locally. Backend `initialize` is performed when a backend is first used; both stateful session IDs and successful sessionless initialization are remembered per caller and mapped backend version. `tools/list` and other routed methods also require the backing grant.
+6. Virtual `initialize` creates the client session locally (a 2026-07-28 client sends no `initialize`; see [MCP 2026-07-28](#mcp-2026-07-28)). Backend `initialize` is performed when a backend is first used; both stateful session IDs and successful sessionless initialization are remembered per caller and mapped backend version. `tools/list` and other routed methods also require the backing grant.
 
 ### Component Responsibilities
 
@@ -207,6 +207,27 @@ The mapping-file cache is keyed by `$vs_config_generation`, a deterministic hash
 2. Every routed request first checks the virtual grant and then checks the backing server grant on the rewritten method and original backend tool name.
 3. On an L1/L2 miss, Lua authorizes and sends backend `initialize`; a successful stateful session ID or explicit stateless result is stored for that owner, backend and pinned version.
 4. Only a session-related HTTP 400, 404, or 410 invalidates the cached state (a stateful session ID or a stateless marker) and triggers one reinitialize. An authorization failure does not retry or become a stateless marker.
+
+### MCP 2026-07-28
+
+[MCP 2026-07-28](https://modelcontextprotocol.io/specification/2026-07-28/changelog) has no `initialize` handshake and no `Mcp-Session-Id`. Each request carries its protocol version in `params._meta`, and the `MCP-Protocol-Version`, `Mcp-Method` and `Mcp-Name` headers mirror the body. The router handles each side separately.
+
+**Clients.** A request carrying the 2026-07-28 markers (the `_meta` version, or an `MCP-Protocol-Version` header in that era) takes its own path in `route()`:
+
+- The router validates the mirrored headers. A missing or mismatched `MCP-Protocol-Version`, `Mcp-Method` or `Mcp-Name` (after base64 sentinel decoding) gets HTTP 400 with `-32020`. A version other than 2026-07-28 gets HTTP 400 with `-32022` and the supported list. `initialize` sent with 2026-07-28 metadata gets HTTP 400 with `-32020`.
+- `server/discover` is answered by the router without a session. `ping`, which 2026-07-28 removed, and any other unknown method get HTTP 404 with `-32601`.
+- The client's `MCP-Protocol-Version`, `Mcp-Method`, `Mcp-Name`, `Mcp-Param-*` and `Mcp-Session-Id` are cleared before any backend subrequest, because a subrequest carries a different body.
+- The rest of the request runs on a client session the router creates for the caller. It is owned by the authenticated user and scoped to the virtual server, exactly like one minted by `initialize`, so backend sessions, grants and egress consent work unchanged. The router caches its ID per user and server, re-validates it before every use, and replaces it once the registry expires it. The client never sees it.
+
+Requests without the 2026-07-28 markers keep the handshake path above.
+
+**Backends.** Before its first request to a backend, the router sends `server/discover` (authorized at the backend-bound `/validate` like any other request) and caches the answer for 5 minutes per backend location and version. A probe that could not be authorized or delivered is not cached.
+
+- A backend whose answer lists 2026-07-28 gets stateless requests: no `initialize`, no backend session, the 2026-07-28 `_meta` in the body, and `MCP-Protocol-Version`, `Mcp-Method` and `Mcp-Name` set from the body the router sends. A 2026-07-28 client's own `_meta` (its `clientInfo`, `clientCapabilities` and `progressToken`) is kept. The router restores its request headers after the call, so a later handshake-era backend in the same request sees none of them.
+- For `tools/call`, the router sends `Mcp-Param-*` headers from the `x-mcp-header` annotations in that backend's `tools/list`, fetching the list once when it has not seen it in the last 5 minutes. A tool whose annotation breaks a 2026-07-28 rule (a non-token name, a `number` or non-primitive parameter, a case-insensitive duplicate) is dropped from the list, as the spec requires.
+- Every other backend keeps the `initialize` handshake.
+
+Discovery lists follow `nextCursor` for up to 50 pages. A failed page fails that backend's whole fetch, so a partial list is never presented or cached as complete. A 2026-07-28 backend's HTTP 404 with `-32601` for a list method counts as `unsupported`, the same as the HTTP 200 form.
 
 ---
 
