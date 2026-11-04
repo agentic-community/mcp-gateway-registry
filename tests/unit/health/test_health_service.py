@@ -1977,6 +1977,7 @@ async def test_probe_mcp_endpoint_does_not_read_body_on_200(health_service):
 # =============================================================================
 
 from registry.health.service import (  # noqa: E402
+    LEGACY_MCP_ERA_CACHE_SECONDS,
     MODERN_MCP_PROTOCOL_VERSION,
     _is_modern_mcp_answer,
     _parse_jsonrpc_response,
@@ -2197,3 +2198,133 @@ class TestTransportAwareModernProbe:
         assert is_healthy is False
         assert status == HealthStatus.UNHEALTHY_URL_BLOCKED
         discover.assert_not_called()
+
+
+def _legacy_client() -> MagicMock:
+    """A client whose every server/discover gets the handshake-era -32601."""
+    client = MagicMock()
+    client.stream = MagicMock(
+        side_effect=lambda *a, **k: _stream_ctx(_StreamedResponse(200, [LEGACY_METHOD_NOT_FOUND]))
+    )
+    return client
+
+
+class TestLegacyEraCache:
+    """A handshake-era answer is remembered, so checks skip server/discover."""
+
+    ENDPOINT = "https://h.example/mcp"
+
+    @pytest.mark.asyncio
+    async def test_legacy_answer_skips_the_next_probe(self, health_service):
+        client = _legacy_client()
+
+        first = await health_service._probe_server_discover(client, self.ENDPOINT, {}, "/srv")
+        second = await health_service._probe_server_discover(client, self.ENDPOINT, {}, "/srv")
+
+        assert (first, second) == (False, False)
+        assert client.stream.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_no_answer_is_remembered(self, health_service):
+        """A server that never answers server/discover costs one timeout per hour."""
+        client = MagicMock()
+        client.stream = MagicMock(side_effect=httpx.ReadTimeout("slow"))
+
+        await health_service._probe_server_discover(client, self.ENDPOINT, {}, "/srv")
+        await health_service._probe_server_discover(client, self.ENDPOINT, {}, "/srv")
+
+        assert client.stream.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_modern_answer_is_not_remembered(self, health_service):
+        client = MagicMock()
+        client.stream = MagicMock(
+            side_effect=lambda *a, **k: _stream_ctx(_StreamedResponse(200, [DISCOVER_RESULT]))
+        )
+
+        await health_service._probe_server_discover(client, self.ENDPOINT, {}, "/srv")
+        assert await health_service._probe_server_discover(client, self.ENDPOINT, {}, "/srv")
+
+        assert client.stream.call_count == 2
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("status", [401, 403])
+    async def test_auth_failure_is_not_remembered(self, health_service, status):
+        client = MagicMock()
+        client.stream = MagicMock(
+            side_effect=lambda *a, **k: _stream_ctx(_StreamedResponse(status, []))
+        )
+
+        await health_service._probe_server_discover(client, self.ENDPOINT, {}, "/srv")
+        await health_service._probe_server_discover(client, self.ENDPOINT, {}, "/srv")
+
+        assert client.stream.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_entry_expires(self, health_service):
+        client = _legacy_client()
+        now = 1_000_000.0
+
+        with patch("registry.health.service.time", return_value=now):
+            await health_service._probe_server_discover(client, self.ENDPOINT, {}, "/srv")
+        later = now + LEGACY_MCP_ERA_CACHE_SECONDS
+        with patch("registry.health.service.time", return_value=later):
+            await health_service._probe_server_discover(client, self.ENDPOINT, {}, "/srv")
+
+        assert client.stream.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_changed_endpoint_probes_again(self, health_service):
+        client = _legacy_client()
+
+        await health_service._probe_server_discover(client, self.ENDPOINT, {}, "/srv")
+        await health_service._probe_server_discover(client, "https://new.example/mcp", {}, "/srv")
+
+        assert client.stream.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_without_server_path_nothing_is_cached(self, health_service):
+        client = _legacy_client()
+
+        await health_service._probe_server_discover(client, self.ENDPOINT, {})
+        await health_service._probe_server_discover(client, self.ENDPOINT, {})
+
+        assert client.stream.call_count == 2
+        assert health_service._legacy_mcp_endpoints == {}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("result", "kept"),
+        [((True, HealthStatus.HEALTHY), True), ((False, "unhealthy: status 500"), False)],
+    )
+    async def test_unhealthy_result_forgets_the_entry(
+        self, health_service, mock_server_info, result, kept
+    ):
+        """A modern server that was down at its first probe is not stuck as legacy."""
+        path = "/test-server"
+        server_info = {**mock_server_info, "path": path}
+        health_service._remember_legacy_endpoint(path, self.ENDPOINT)
+
+        with patch.object(
+            health_service, "_check_transport_endpoints", AsyncMock(return_value=result)
+        ):
+            got = await health_service._check_server_endpoint_transport_aware(
+                MagicMock(), "http://localhost:8000/mcp", server_info
+            )
+
+        assert got == result
+        assert (path in health_service._legacy_mcp_endpoints) is kept
+
+    @pytest.mark.asyncio
+    async def test_health_path_passes_the_server_path(self, health_service, mock_server_info):
+        server_info = {**mock_server_info, "path": "/test-server"}
+        discover = AsyncMock(return_value=True)
+        with (
+            patch("registry.health.service.validate_url", return_value=["93.184.216.34"]),
+            patch.object(health_service, "_probe_server_discover", discover),
+        ):
+            await health_service._check_server_endpoint_transport_aware(
+                MagicMock(), "http://localhost:8000/mcp", server_info
+            )
+
+        assert discover.call_args.kwargs["server_path"] == "/test-server"
