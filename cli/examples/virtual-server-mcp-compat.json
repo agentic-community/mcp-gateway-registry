@@ -1,0 +1,49 @@
+{
+  "path": "/virtual/compat-test",
+  "server_name": "MCP Protocol Compatibility Test",
+  "description": "Virtual server over the MCP everything reference server (dual-era) and pingmcp (legacy) for MCP 2026-07-28 compatibility testing. Both backends expose an echo tool, so each is aliased.",
+  "tool_mappings": [
+    {
+      "tool_name": "echo",
+      "alias": "ev_echo",
+      "backend_server_path": "/everything/"
+    },
+    {
+      "tool_name": "get-sum",
+      "backend_server_path": "/everything/"
+    },
+    {
+      "tool_name": "get-header-params",
+      "backend_server_path": "/everything/"
+    },
+    {
+      "tool_name": "get-structured-content",
+      "backend_server_path": "/everything/"
+    },
+    {
+      "tool_name": "get-annotated-message",
+      "backend_server_path": "/everything/"
+    },
+    {
+      "tool_name": "trigger-long-running-operation",
+      "backend_server_path": "/everything/"
+    },
+    {
+      "tool_name": "echo",
+      "alias": "ping_echo",
+      "backend_server_path": "/pingmcp/"
+    }
+  ],
+  "required_scopes": [],
+  "tool_scope_overrides": [],
+  "tags": [
+    "mcp",
+    "testing",
+    "protocol",
+    "compatibility"
+  ],
+  "supported_transports": [
+    "streamable-http"
+  ],
+  "is_enabled": true
+}

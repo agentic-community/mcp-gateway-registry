@@ -1,0 +1,12 @@
+{
+  "server_name": "MCP Everything Reference Server",
+  "description": "The MCP project's reference test server (@modelcontextprotocol/server-everything). Serves 2026-07-28 clients statelessly and 2025-era clients with sessions on one endpoint, and exercises tools, resources, prompts, multi round-trip requests, subscriptions, cache hints and x-mcp-header. Used for MCP protocol compatibility testing.",
+  "path": "/everything/",
+  "proxy_pass_url": "http://mcp-everything:3001/",
+  "supported_transports": ["streamable-http"],
+  "auth_scheme": "none",
+  "tags": ["mcp", "reference", "testing", "protocol", "compatibility"],
+  "license": "MIT",
+  "status": "active",
+  "visibility": "public"
+}
