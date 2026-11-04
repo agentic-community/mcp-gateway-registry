@@ -55,7 +55,8 @@ _SCANNER_BEARER_ENV = "MCP_GATEWAY_SCAN_BEARER"  # nosec B105 - env var name, no
 # mcp-scanner already makes and adds that one. If the module cannot be imported or the
 # method is ever renamed, the patch does nothing rather than break the scan.
 # Spec: https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http#backward-compatibility
-# Remove once cisco-ai-mcp-scanner falls back on any non-2026 discover error.
+# Remove once cisco-ai-mcp-scanner falls back on any non-2026 discover error:
+# https://github.com/cisco-ai-defense/mcp-scanner/issues/302
 MCP_SCANNER_DISCOVER_FALLBACK_PATCH: str = (
     "try:\n"
     "    import mcpscanner.core.scanner as _mcps\n"
