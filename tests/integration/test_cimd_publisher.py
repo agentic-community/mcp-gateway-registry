@@ -69,6 +69,7 @@ def test_document_shape_and_client_id_parity(monkeypatch):
     # The client_id IS the canonical URL of this very document (byte-for-byte).
     assert doc["client_id"] == f"{TEST_URL}{CIMD_PATH}"
     assert doc["token_endpoint_auth_method"] == "none"
+    assert doc["application_type"] == "web"
     assert "authorization_code" in doc["grant_types"]
     assert "refresh_token" in doc["grant_types"]
     assert doc["client_uri"] == TEST_URL
