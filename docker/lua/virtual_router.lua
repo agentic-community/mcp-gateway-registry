@@ -1172,18 +1172,12 @@ end
 --   "create_failed"   -- the client session could not be created; route()
 --       emits an error instead of a misleading 200 with no Mcp-Session-Id
 --       (which would make the client 400 on its very next request).
-local function _handle_initialize(request_id, server_id, params)
-    local user_id = _auth_user_id()
-    if not user_id then
-        ngx.log(ngx.WARN, "initialize rejected: no authenticated user for server=", server_id)
-        return nil, "unauthenticated"
-    end
-    local virtual_path = "/virtual/" .. server_id
-
-    -- Create client session in MongoDB via internal API
+-- Create a client session owned by user_id for this virtual server, via the
+-- registry's internal API. Returns the server-minted vs-<hex> ID, or nil.
+local function _create_client_session(server_id, user_id)
     local body = cjson.encode({
         user_id = user_id,
-        virtual_server_path = virtual_path,
+        virtual_server_path = "/virtual/" .. server_id,
     })
     local res = ngx.location.capture("/_internal/sessions/client", {
         method = ngx.HTTP_POST,
@@ -1193,17 +1187,30 @@ local function _handle_initialize(request_id, server_id, params)
     local client_session_id = nil
     if res and res.status == 201 then
         local ok, data = pcall(cjson.decode, res.body)
-        if ok then
+        if ok and type(data) == "table" and type(data.client_session_id) == "string" then
             client_session_id = data.client_session_id
         end
+    end
+    if not client_session_id then
+        ngx.log(ngx.ERR, "Failed to create client session for server=", server_id,
+            " status=", res and res.status or "nil")
+    end
+    return client_session_id
+end
+
+
+local function _handle_initialize(request_id, server_id, params)
+    local user_id = _auth_user_id()
+    if not user_id then
+        ngx.log(ngx.WARN, "initialize rejected: no authenticated user for server=", server_id)
+        return nil, "unauthenticated"
     end
 
     -- Fail loudly if the session could not be created: returning a successful
     -- initialize with no Mcp-Session-Id just defers the failure to the client's
     -- next request (which 400s on the missing session).
+    local client_session_id = _create_client_session(server_id, user_id)
     if not client_session_id then
-        ngx.log(ngx.ERR, "Failed to create client session for server=", server_id,
-            " status=", res and res.status or "nil")
         return nil, "create_failed"
     end
 
@@ -1414,6 +1421,192 @@ end
 
 
 -- Main entry point
+-- ---------------------------------------------------------------------------
+-- MCP 2026-07-28 clients
+--
+-- A 2026-07-28 client sends no initialize and no Mcp-Session-Id. Every request
+-- carries its protocol version in params._meta, mirrored in the
+-- MCP-Protocol-Version header, and Mcp-Method / Mcp-Name mirror the body.
+-- The router validates those headers (a server that processes the body MUST),
+-- answers server/discover itself, and serves the rest through a client session
+-- it creates on the caller's behalf. That session is owned by the authenticated
+-- user and scoped to this virtual server, exactly like one minted by
+-- initialize, so backend sessions, grants and egress consent work unchanged.
+-- Requests without the 2026-07-28 markers keep the handshake-era path.
+-- Spec: https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http
+-- ---------------------------------------------------------------------------
+local MODERN_PROTOCOL_VERSION = "2026-07-28"
+local META_PROTOCOL_VERSION_KEY = "io.modelcontextprotocol/protocolVersion"
+local META_SERVER_INFO_KEY = "io.modelcontextprotocol/serverInfo"
+local JSONRPC_HEADER_MISMATCH = -32020
+local JSONRPC_UNSUPPORTED_PROTOCOL_VERSION = -32022
+local BASE64_SENTINEL_PREFIX = "=?base64?"
+local BASE64_SENTINEL_SUFFIX = "?="
+-- The registry expires an idle client session after 1 hour; reuse the cached
+-- one for half of that and re-validate it before every use anyway.
+local MODERN_SESSION_CACHE_TTL = 1800
+-- Methods whose target name (params.name or params.uri) is mirrored in Mcp-Name.
+local MCP_NAME_SOURCE = {
+    ["tools/call"] = "name",
+    ["prompts/get"] = "name",
+    ["resources/read"] = "uri",
+}
+-- Versions advertised by server/discover and in -32022 errors, newest first.
+local ADVERTISED_PROTOCOL_VERSIONS = {
+    "2026-07-28", "2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05",
+}
+
+
+-- A request is 2026-07-28 when its _meta or its header names that era.
+local function _is_modern_request(params)
+    local meta = type(params) == "table" and params._meta
+    if type(meta) == "table" and type(meta[META_PROTOCOL_VERSION_KEY]) == "string" then
+        return true
+    end
+    local header = ngx.var.http_mcp_protocol_version
+    return type(header) == "string" and header:sub(1, 5) == "2026-"
+end
+
+
+-- Undo the =?base64?...?= sentinel encoding of an Mcp-Name header value.
+local function _decode_mcp_header_value(value)
+    if type(value) ~= "string" then
+        return value
+    end
+    local prefix_len, suffix_len = #BASE64_SENTINEL_PREFIX, #BASE64_SENTINEL_SUFFIX
+    if #value <= prefix_len + suffix_len
+        or value:sub(1, prefix_len) ~= BASE64_SENTINEL_PREFIX
+        or value:sub(-suffix_len) ~= BASE64_SENTINEL_SUFFIX then
+        return value
+    end
+    return ngx.decode_base64(value:sub(prefix_len + 1, -suffix_len - 1)) or value
+end
+
+
+-- Write a 2026-07-28 protocol error with an HTTP status and optional data.
+local function _modern_error(status, request_id, code, message, data)
+    ngx.status = status
+    ngx.header["Content-Type"] = "application/json"
+    local err = { code = code, message = message }
+    if data then
+        err.data = data
+    end
+    ngx.say(cjson.encode({ jsonrpc = "2.0", id = request_id or cjson.null, error = err }))
+end
+
+
+-- Validate the version and the mirrored headers of a 2026-07-28 request.
+-- Writes the error response and returns false when the request must stop.
+local function _validate_modern_request(request_id, method, params)
+    local header_version = ngx.var.http_mcp_protocol_version
+    local meta = type(params) == "table" and params._meta
+    local body_version = type(meta) == "table" and meta[META_PROTOCOL_VERSION_KEY] or nil
+
+    if method == "initialize" then
+        _modern_error(400, request_id, JSONRPC_HEADER_MISMATCH,
+            "Header mismatch: initialize (the legacy handshake) was sent with 2026-07-28 metadata")
+        return false
+    end
+    if type(header_version) ~= "string" or header_version == "" then
+        _modern_error(400, request_id, JSONRPC_HEADER_MISMATCH,
+            "Header mismatch: missing MCP-Protocol-Version header")
+        return false
+    end
+    if type(body_version) ~= "string" then
+        _modern_error(400, request_id, JSONRPC_HEADER_MISMATCH,
+            "Header mismatch: params._meta lacks " .. META_PROTOCOL_VERSION_KEY)
+        return false
+    end
+    if header_version ~= body_version then
+        _modern_error(400, request_id, JSONRPC_HEADER_MISMATCH,
+            "Header mismatch: MCP-Protocol-Version does not match params._meta")
+        return false
+    end
+    if body_version ~= MODERN_PROTOCOL_VERSION then
+        _modern_error(400, request_id, JSONRPC_UNSUPPORTED_PROTOCOL_VERSION,
+            "Unsupported protocol version: " .. body_version,
+            { supported = ADVERTISED_PROTOCOL_VERSIONS, requested = body_version })
+        return false
+    end
+    if ngx.var.http_mcp_method ~= method then
+        _modern_error(400, request_id, JSONRPC_HEADER_MISMATCH,
+            "Header mismatch: Mcp-Method does not match the body method")
+        return false
+    end
+    local name_field = MCP_NAME_SOURCE[method]
+    if name_field then
+        local body_name = type(params) == "table" and params[name_field] or nil
+        if _decode_mcp_header_value(ngx.var.http_mcp_name) ~= body_name then
+            _modern_error(400, request_id, JSONRPC_HEADER_MISMATCH,
+                "Header mismatch: Mcp-Name does not match params." .. name_field)
+            return false
+        end
+    end
+    return true
+end
+
+
+-- The 2026-07-28 headers describe the client's request to the router. A
+-- backend subrequest carries a different body (the router's own initialize,
+-- an alias rewritten to the original tool name, a list with empty params), so
+-- the client's copies must not reach it.
+local function _clear_client_mcp_headers()
+    ngx.req.clear_header("MCP-Protocol-Version")
+    ngx.req.clear_header("Mcp-Method")
+    ngx.req.clear_header("Mcp-Name")
+    for name, _ in pairs(ngx.req.get_headers()) do
+        if type(name) == "string" and name:lower():sub(1, 10) == "mcp-param-" then
+            ngx.req.clear_header(name)
+        end
+    end
+end
+
+
+-- Answer server/discover for this virtual server.
+local function _handle_discover(request_id)
+    return _jsonrpc_result(request_id, {
+        resultType = "complete",
+        supportedVersions = ADVERTISED_PROTOCOL_VERSIONS,
+        -- An empty Lua table encodes as a JSON object ({}), which is what an
+        -- advertised capability with no sub-options is.
+        capabilities = {
+            tools = { listChanged = false },
+            resources = {},
+            prompts = {},
+        },
+        _meta = {
+            [META_SERVER_INFO_KEY] = { name = "mcp-gateway-virtual-server", version = "1.0.0" },
+        },
+    })
+end
+
+
+-- Return the client session the router uses for a 2026-07-28 caller, creating
+-- one when none is cached or the cached one has expired. Returns (id, err) with
+-- err "unavailable" when the registry cannot be reached.
+local function _modern_client_session(server_id, user_id)
+    local virtual_path = "/virtual/" .. server_id
+    local cache_key = "modern_csess:" .. #user_id .. ":" .. user_id .. ":" .. virtual_path
+    local cached = session_cache:get(cache_key)
+    if cached then
+        local ok, err = _validate_client_session(cached, user_id, virtual_path)
+        if ok then
+            return cached
+        end
+        if err == "unavailable" then
+            return nil, "unavailable"
+        end
+        session_cache:delete(cache_key)
+    end
+    local client_session_id = _create_client_session(server_id, user_id)
+    if not client_session_id then
+        return nil, "unavailable"
+    end
+    session_cache:set(cache_key, client_session_id, MODERN_SESSION_CACHE_TTL)
+    return client_session_id
+end
+
+
 function _M.route()
     -- Per MCP Streamable HTTP 2025-11-25 spec, the client MUST include Accept header
     -- listing both application/json and text/event-stream. Set this on the request so
@@ -1506,6 +1699,24 @@ function _M.route()
         return
     end
 
+    -- MCP 2026-07-28: validate the mirrored headers, then drop the client's
+    -- copies so no backend subrequest inherits them (see _clear_client_mcp_headers).
+    local modern = _is_modern_request(params)
+    if modern then
+        if not _validate_modern_request(request_id, method, params) then
+            return
+        end
+        _clear_client_mcp_headers()
+        -- 2026-07-28 has no sessions: ignore any Mcp-Session-Id the client sent.
+        ngx.req.clear_header("Mcp-Session-Id")
+        if method == "server/discover" then
+            ngx.status = 200
+            ngx.header["Content-Type"] = "application/json"
+            ngx.say(_handle_discover(request_id))
+            return
+        end
+    end
+
     -- Handle initialize: generate a client session and return capabilities.
     -- A session must be owned by a concrete user; refuse to mint one for a
     -- request with no authenticated identity, and surface a session-creation
@@ -1529,8 +1740,9 @@ function _M.route()
         return
     end
 
-    -- Handle ping: simple echo (no mapping needed)
-    if method == "ping" then
+    -- Handle ping: simple echo (no mapping needed). 2026-07-28 removed ping, so a
+    -- modern request falls through to "method not found" below.
+    if method == "ping" and not modern then
         ngx.status = 200
         ngx.header["Content-Type"] = "application/json"
         ngx.say(_jsonrpc_result(request_id, {}))
@@ -1553,6 +1765,19 @@ function _M.route()
         ngx.say(_jsonrpc_error(request_id, -32600,
             "Authenticated user identity required."))
         return
+    end
+
+    -- A 2026-07-28 client has no session. Use the one the router keeps for this
+    -- user on this virtual server; it passes the same owner and server checks.
+    if modern then
+        local session_err
+        client_session_id, session_err = _modern_client_session(server_id, auth_user)
+        if not client_session_id then
+            ngx.log(ngx.ERR, "No client session for 2026-07-28 caller on server=", server_id,
+                " err=", session_err)
+            _modern_error(503, request_id, -32603, "Session store unavailable. Please retry.")
+            return
+        end
     end
 
     -- Reject any session ID that is not in the server-minted format before it
@@ -1677,7 +1902,9 @@ function _M.route()
         _handle_prompts_get(request_id, params, mapping, client_session_id, server_id)
 
     else
-        ngx.status = 200
+        -- 2026-07-28 answers an unknown method with HTTP 404, which a dual-era
+        -- client reads as "modern server, method missing", not "legacy server".
+        ngx.status = modern and 404 or 200
         ngx.say(_jsonrpc_error(request_id, -32601, "Method not found: " .. tostring(method)))
     end
 end
@@ -1696,6 +1923,11 @@ if _G._VR_TEST then
     _M._get_backend_session = _get_backend_session
     _M._proxy_to_backend = _proxy_to_backend
     _M._forward_identity_headers = _forward_identity_headers
+    _M._is_modern_request = _is_modern_request
+    _M._decode_mcp_header_value = _decode_mcp_header_value
+    _M._validate_modern_request = _validate_modern_request
+    _M._clear_client_mcp_headers = _clear_client_mcp_headers
+    _M._modern_client_session = _modern_client_session
     return _M
 end
 

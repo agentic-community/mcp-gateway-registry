@@ -1638,6 +1638,231 @@ do
 end
 
 -- ---------------------------------------------------------------------------
+-- MCP 2026-07-28 clients: no initialize, no Mcp-Session-Id, headers mirror body.
+-- ---------------------------------------------------------------------------
+local MODERN_META = { ["io.modelcontextprotocol/protocolVersion"] = "2026-07-28",
+    ["io.modelcontextprotocol/clientInfo"] = { name = "t", version = "0" },
+    ["io.modelcontextprotocol/clientCapabilities"] = {} }
+
+local function modern_request(method, extra_params, headers)
+    local params = { _meta = MODERN_META }
+    for k, v in pairs(extra_params or {}) do params[k] = v end
+    ngx.req._body = cjson.encode({ jsonrpc = "2.0", id = 7, method = method, params = params })
+    ngx.var.http_mcp_protocol_version = "2026-07-28"
+    ngx.var.http_mcp_method = method
+    ngx.var.http_mcp_name = nil
+    ngx.var.http_mcp_session_id = nil
+    for k, v in pairs(headers or {}) do ngx.var[k] = v end
+    ngx.var.request_method = "POST"
+    ngx.var.auth_user = "alice"
+    ngx.status = 200
+    ngx.header = {}
+    ngx._last_body = nil
+end
+
+local function clear_modern_vars()
+    ngx.var.http_mcp_protocol_version = nil
+    ngx.var.http_mcp_method = nil
+    ngx.var.http_mcp_name = nil
+    ngx.var.http_mcp_session_id = nil
+end
+
+print("test: 2026-07-28 request classification")
+do
+    clear_modern_vars()
+    check(M._is_modern_request({ _meta = MODERN_META }) == true, "_meta version -> modern")
+    ngx.var.http_mcp_protocol_version = "2026-07-28"
+    check(M._is_modern_request({}) == true, "2026 header alone -> modern")
+    ngx.var.http_mcp_protocol_version = "2025-11-25"
+    check(M._is_modern_request({ protocolVersion = "2025-11-25" }) == false,
+        "legacy header and body -> legacy")
+    clear_modern_vars()
+    check(M._is_modern_request(nil) == false, "no params, no header -> legacy")
+end
+
+print("test: Mcp-Name base64 sentinel decoding")
+do
+    ngx.decode_base64 = function(s) return ({ ["ZWNobw=="] = "echo" })[s] end
+    check(M._decode_mcp_header_value("echo") == "echo", "plain value unchanged")
+    check(M._decode_mcp_header_value("=?base64?ZWNobw==?=") == "echo", "sentinel value decoded")
+    check(M._decode_mcp_header_value("=?base64??=") == "=?base64??=", "empty sentinel left as is")
+end
+
+print("test: 2026-07-28 header and version validation at the router")
+do
+    ngx.var.virtual_server_id = "modsrv"
+    local function err_code() return cjson.decode(ngx._last_body).error.code end
+
+    modern_request("tools/list", nil, { http_mcp_protocol_version = "" })
+    ngx.var.http_mcp_protocol_version = nil
+    M.route()
+    check(ngx.status == 400 and err_code() == -32020, "missing MCP-Protocol-Version -> 400 -32020")
+
+    modern_request("tools/list")
+    ngx.var.http_mcp_method = "tools/call"
+    M.route()
+    check(ngx.status == 400 and err_code() == -32020, "Mcp-Method mismatch -> 400 -32020")
+
+    modern_request("tools/call", { name = "ev_echo", arguments = {} },
+        { http_mcp_name = "something_else" })
+    M.route()
+    check(ngx.status == 400 and err_code() == -32020, "Mcp-Name mismatch -> 400 -32020")
+
+    modern_request("initialize", { protocolVersion = "2025-11-25" })
+    M.route()
+    check(ngx.status == 400 and err_code() == -32020,
+        "initialize with 2026-07-28 metadata -> 400 -32020")
+
+    local old = MODERN_META["io.modelcontextprotocol/protocolVersion"]
+    MODERN_META["io.modelcontextprotocol/protocolVersion"] = "1900-01-01"
+    modern_request("tools/list", nil, { http_mcp_protocol_version = "1900-01-01" })
+    ngx.var.http_mcp_protocol_version = "2026-07-28"
+    M.route()
+    check(ngx.status == 400 and err_code() == -32020, "header and _meta disagree -> 400 -32020")
+    modern_request("tools/list")
+    ngx.var.http_mcp_protocol_version = "1900-01-01"
+    ngx.req._body = cjson.encode({ jsonrpc = "2.0", id = 7, method = "tools/list",
+        params = { _meta = MODERN_META } })
+    M.route()
+    local body = cjson.decode(ngx._last_body)
+    check(ngx.status == 400 and body.error.code == -32022
+        and body.error.data.requested == "1900-01-01"
+        and body.error.data.supported[1] == "2026-07-28",
+        "unsupported version -> 400 -32022 with supported list")
+    MODERN_META["io.modelcontextprotocol/protocolVersion"] = old
+    clear_modern_vars()
+end
+
+print("test: server/discover and removed methods are answered by the router")
+do
+    ngx.var.virtual_server_id = "modsrv"
+    local session_posts = 0
+    capture_handler = function(loc, opts)
+        if loc == "/_internal/sessions/client" then session_posts = session_posts + 1 end
+    end
+    modern_request("server/discover")
+    M.route()
+    local body = cjson.decode(ngx._last_body)
+    check(ngx.status == 200 and body.result.supportedVersions[1] == "2026-07-28"
+        and body.result.resultType == "complete" and body.result.capabilities.tools ~= nil,
+        "server/discover -> DiscoverResult listing 2026-07-28")
+    check(ngx.header["Mcp-Session-Id"] == nil and session_posts == 0,
+        "server/discover mints no session and returns no Mcp-Session-Id")
+
+    modern_request("ping")
+    dict:set("mapping::modsrv", cjson.encode({ tools = {} }))
+    capture_handler = function(loc, opts)
+        if loc == "/_internal/sessions/client" then
+            return { status = 201, body = '{"client_session_id":"vs-feed01"}' }
+        end
+        if loc:find("/_internal/sessions/client/", 1, true) == 1 then return { status = 200 } end
+    end
+    M.route()
+    check(ngx.status == 404 and cjson.decode(ngx._last_body).error.code == -32601,
+        "ping (removed in 2026-07-28) -> 404 -32601")
+    capture_handler = nil
+    clear_modern_vars()
+end
+
+print("test: 2026-07-28 tools/list runs on a router-owned session without client headers")
+do
+    ngx.var.virtual_server_id = "modsrv"
+    dict._store["tools_enriched::modsrv:5:alice"] = nil
+    -- Start without a cached router-owned session (an earlier test made one).
+    for k, _ in pairs(dict._store) do
+        if k:find("modern_csess:", 1, true) == 1 or k:find("csess_valid:", 1, true) == 1 then
+            dict._store[k] = nil
+        end
+    end
+    dict:set("mapping::modsrv", cjson.encode({ tools = {
+        { name = "m_tool", original_name = "m_tool", backend_location = "/_vs_backend_m1",
+          backend_server_path = "/ok", inputSchema = { type = "object" } } } }))
+    local posts, seen_headers = 0, nil
+    local session_valid = true
+    capture_handler = function(loc, opts)
+        if loc == "/_internal/sessions/client" then
+            posts = posts + 1
+            return { status = 201, body = cjson.encode({ client_session_id = "vs-cafe0" .. posts }) }
+        end
+        if loc:find("/_internal/sessions/client/", 1, true) == 1 then
+            return { status = session_valid and 200 or 404 }
+        end
+        if loc:find("/_internal/sessions/backend/", 1, true) == 1 then
+            if opts.method == ngx.HTTP_GET then
+                return { status = 200, body = '{"stateless":true,"backend_session_id":null}' }
+            end
+            return { status = 200 }
+        end
+        if loc == "/_vs_backend_m1" then
+            local h = ngx.req._headers
+            seen_headers = { pv = h["MCP-Protocol-Version"], method = h["Mcp-Method"],
+                name = h["Mcp-Name"], param = h["Mcp-Param-Region"], sid = h["Mcp-Session-Id"] }
+            return { status = 200, body = cjson.encode({ result = { tools = { { name = "m_tool" } } } }) }
+        end
+    end
+    modern_request("tools/list")
+    ngx.req._headers = { ["MCP-Protocol-Version"] = "2026-07-28", ["Mcp-Method"] = "tools/list",
+        ["Mcp-Param-Region"] = "us-west1", ["Mcp-Session-Id"] = "client-supplied" }
+    M.route()
+    local body = cjson.decode(ngx._last_body)
+    check(ngx.status == 200 and body.result and body.result.tools[1].name == "m_tool",
+        "tools/list without a session reaches the backend and returns its tools")
+    check(posts == 1, "the router created one client session for the caller")
+    check(seen_headers and seen_headers.pv == nil and seen_headers.method == nil
+        and seen_headers.param == nil,
+        "the backend saw none of the client's 2026-07-28 headers")
+    check(seen_headers and seen_headers.sid ~= "client-supplied",
+        "the client's Mcp-Session-Id never reaches the backend")
+    check(ngx.header["Mcp-Session-Id"] == nil, "no session id is returned to a 2026-07-28 client")
+
+    dict._store["tools_enriched::modsrv:5:alice"] = nil
+    modern_request("tools/list")
+    M.route()
+    check(posts == 1, "a second request reuses the cached router-owned session")
+
+    -- The cached session expired in the registry: create a new one.
+    dict._store["tools_enriched::modsrv:5:alice"] = nil
+    for k, _ in pairs(dict._store) do
+        if k:find("csess_valid:", 1, true) == 1 then dict._store[k] = nil end
+    end
+    session_valid = false
+    modern_request("tools/list")
+    local original_handler = capture_handler
+    capture_handler = function(loc, opts)
+        local res = original_handler(loc, opts)
+        if loc == "/_internal/sessions/client" then session_valid = true end
+        return res
+    end
+    M.route()
+    check(posts == 2 and ngx.status == 200, "an expired router-owned session is replaced")
+
+    -- The session store is down: a clear 503, not a session error.
+    for k, _ in pairs(dict._store) do
+        if k:find("modern_csess:", 1, true) == 1 then dict._store[k] = nil end
+    end
+    capture_handler = function(loc)
+        if loc == "/_internal/sessions/client" then return { status = 503 } end
+    end
+    modern_request("tools/list")
+    M.route()
+    check(ngx.status == 503, "session store outage -> 503")
+    capture_handler = nil
+    ngx.req._headers = {}
+    clear_modern_vars()
+end
+
+print("test: a legacy request keeps today's header pass-through")
+do
+    ngx.req._headers = { ["MCP-Protocol-Version"] = "2025-11-25" }
+    clear_modern_vars()
+    check(M._is_modern_request({}) == false, "no 2026 markers -> legacy path")
+    -- The legacy path never calls _clear_client_mcp_headers.
+    check(ngx.req._headers["MCP-Protocol-Version"] == "2025-11-25",
+        "legacy client header is left for backend subrequests as before")
+    ngx.req._headers = {}
+end
+
+-- ---------------------------------------------------------------------------
 if failures > 0 then
     print(string.format("\n%d check(s) FAILED", failures))
     os.exit(1)
