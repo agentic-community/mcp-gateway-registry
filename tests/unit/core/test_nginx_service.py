@@ -5,6 +5,7 @@ Tests the NginxConfigService for configuration generation and reload.
 """
 
 import asyncio
+import hashlib
 import re
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, mock_open, patch
@@ -3229,3 +3230,38 @@ def test_every_capture_body_site_sets_the_body_size_directives():
         assert lines[index - 1].strip() == "{_MCP_BODY_CAPTURE_SIZE_DIRECTIVES}", (
             f"capture_body.lua at module line {index + 1} lacks the body size directives"
         )
+
+
+@pytest.mark.asyncio
+async def test_scheduler_writes_virtual_mappings_even_when_config_is_unchanged(
+    monkeypatch, tmp_path
+):
+    """Adding a tool on a backend a virtual server already uses changes only its
+    mapping file, not the nginx config. The mapping must still be written, and
+    nginx must not be rewritten or reloaded."""
+    from registry.core.nginx_service import NginxReloadScheduler
+
+    scheduler = NginxReloadScheduler(debounce_seconds=0.0, poll_external=False)
+    live = tmp_path / "nginx_rev_proxy.conf"
+
+    async def _fake_fetch():
+        return {}
+
+    commit = AsyncMock()
+    write_and_validate = MagicMock()
+    reload_nginx = MagicMock(return_value=True)
+    monkeypatch.setattr(nginx_module, "settings", _scheduler_settings(live))
+    monkeypatch.setattr(nginx_module, "_fetch_all_enabled_servers", _fake_fetch)
+    monkeypatch.setattr(
+        nginx_module.nginx_service, "render_config", AsyncMock(return_value="# same config\n")
+    )
+    monkeypatch.setattr(nginx_module.nginx_service, "_commit_virtual_server_mappings", commit)
+    monkeypatch.setattr(nginx_module, "_write_and_validate_config", write_and_validate)
+    monkeypatch.setattr(nginx_module.nginx_service, "reload_nginx", reload_nginx)
+    scheduler._last_config_hash = hashlib.sha256(b"# same config\n").hexdigest()
+
+    await scheduler._do_reload_if_changed()
+
+    commit.assert_awaited_once()
+    write_and_validate.assert_not_called()
+    reload_nginx.assert_not_called()
