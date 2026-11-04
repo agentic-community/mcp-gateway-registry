@@ -6,6 +6,7 @@ rate limiting, and helper functions.
 """
 
 import asyncio
+import json
 import logging
 import time
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
@@ -4363,6 +4364,35 @@ def _obo_ingress_jwt(sub: str = "test-user") -> str:
     return _jwt.encode({"sub": sub, "preferred_username": sub}, "test-secret", algorithm="HS256")
 
 
+_CONSENT_VEND: dict = {
+    "consent_required": True,
+    "connect_url": "https://gw.example.com/oauth2/egress/connect?server=%2Fgithub",
+    "request_state": "AEAD-blob",
+    "provider": "github",
+}
+
+
+def _modern_call(
+    url_capable: bool,
+) -> dict:
+    """A 2026-07-28 tools/call body, with or without URL elicitation declared."""
+    capabilities: dict = {"elicitation": {"url": {}}} if url_capable else {}
+    return {
+        "jsonrpc": "2.0",
+        "id": 7,
+        "method": "tools/call",
+        "params": {
+            "name": "search",
+            "arguments": {"q": "x"},
+            "_meta": {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientInfo": {"name": "t", "version": "1"},
+                "io.modelcontextprotocol/clientCapabilities": capabilities,
+            },
+        },
+    }
+
+
 def _patch_scope_repo_allow_all():
     """Patch get_scope_repository so ``admin:all`` grants any server/method.
 
@@ -4714,6 +4744,126 @@ class TestMcpProxyEndpointHeaderPassthrough:
         assert e["url"].startswith(vend["connect_url"])
         assert "elicitationId=" in e["url"]
         assert "github" in e["message"]
+
+    def _post_tokenless_call(
+        self,
+        payload: dict,
+        use_elicitation: bool,
+        authorize: AsyncMock | None = None,
+    ) -> dict:
+        """POST a JSON-RPC body to an egress server whose user has no token."""
+        import auth_server.server as server_module
+
+        async def _consent_vend(token, server):
+            return dict(_CONSENT_VEND)
+
+        authorize = authorize or AsyncMock(return_value=None)
+        with (
+            patch.object(server_module.settings, "egress_auth_enabled", True),
+            patch.object(server_module.settings, "egress_consent_use_elicitation", use_elicitation),
+            patch.object(server_module, "_vend_egress_token", _consent_vend),
+            patch.object(server_module, "_authorize_forwarded_mcp_body", authorize),
+            _patch_scope_repo_allow_all(),
+        ):
+            client = TestClient(server_module.app)
+            response = client.post(
+                "/mcp-proxy/github",
+                json=payload,
+                headers=_mcp_proxy_token_headers(server_name="github"),
+            )
+        assert response.status_code == 200
+        return response.json()
+
+    def test_modern_url_capable_client_gets_input_required(self):
+        """With elicitation on, a 2026-07-28 client that declared URL elicitation
+        gets the consent prompt as an input_required result, not -32042."""
+        body = self._post_tokenless_call(_modern_call(url_capable=True), use_elicitation=True)
+
+        result = body["result"]
+        assert result["resultType"] == "input_required"
+        prompt = result["inputRequests"]["egress_connect"]
+        assert prompt["method"] == "elicitation/create"
+        assert prompt["params"]["mode"] == "url"
+        assert prompt["params"]["url"].startswith(_CONSENT_VEND["connect_url"])
+        assert result["requestState"].startswith("mcpgw-egress-consent.")
+
+    @pytest.mark.parametrize(
+        ("payload", "use_elicitation", "expect"),
+        [
+            # Elicitation off (the default): every client keeps the isError result.
+            (lambda: _modern_call(url_capable=True), False, "baseline"),
+            # A 2026-07-28 client that did not declare URL elicitation keeps -32042.
+            (lambda: _modern_call(url_capable=False), True, "-32042"),
+            # A legacy request keeps -32042.
+            (
+                lambda: {
+                    "jsonrpc": "2.0",
+                    "id": 7,
+                    "method": "tools/call",
+                    "params": {"name": "search"},
+                },
+                True,
+                "-32042",
+            ),
+        ],
+    )
+    def test_other_requests_keep_todays_answer(self, payload, use_elicitation, expect):
+        body = self._post_tokenless_call(payload(), use_elicitation=use_elicitation)
+
+        if expect == "baseline":
+            assert body["result"]["isError"] is True
+            assert "resultType" not in body["result"]
+        else:
+            assert body["error"]["code"] == -32042
+
+    @pytest.mark.parametrize("answer", ["decline", "cancel"])
+    def test_declined_retry_ends_with_the_baseline_result(self, answer):
+        payload = _modern_call(url_capable=True)
+        payload["params"]["requestState"] = "mcpgw-egress-consent.abc"
+        payload["params"]["inputResponses"] = {"egress_connect": {"action": answer}}
+
+        body = self._post_tokenless_call(payload, use_elicitation=True)
+
+        assert body["result"]["isError"] is True
+        assert _CONSENT_VEND["connect_url"] in body["result"]["content"][0]["text"]
+
+    def test_accepted_retry_without_a_token_asks_again(self):
+        payload = _modern_call(url_capable=True)
+        payload["params"]["requestState"] = "mcpgw-egress-consent.abc"
+        payload["params"]["inputResponses"] = {"egress_connect": {"action": "accept"}}
+
+        body = self._post_tokenless_call(payload, use_elicitation=True)
+
+        assert body["result"]["resultType"] == "input_required"
+
+    def test_retry_fields_are_removed_before_authorization(self):
+        """The bytes authorized, and later forwarded, carry no gateway round-trip
+        fields, while the tool name and arguments stay."""
+        payload = _modern_call(url_capable=True)
+        payload["params"]["requestState"] = "mcpgw-egress-consent.abc"
+        payload["params"]["inputResponses"] = {"egress_connect": {"action": "accept"}}
+        authorize = AsyncMock(return_value=None)
+
+        self._post_tokenless_call(payload, use_elicitation=True, authorize=authorize)
+
+        forwarded = json.loads(authorize.call_args.args[1])
+        assert "requestState" not in forwarded["params"]
+        assert "inputResponses" not in forwarded["params"]
+        assert forwarded["params"]["name"] == "search"
+        assert forwarded["params"]["arguments"] == {"q": "x"}
+
+    def test_upstream_request_state_is_left_alone(self):
+        """A requestState the upstream issued is forwarded untouched."""
+        payload = _modern_call(url_capable=True)
+        payload["params"]["requestState"] = "upstream-state"
+        payload["params"]["inputResponses"] = {"q1": {"action": "accept"}}
+        authorize = AsyncMock(return_value=None)
+
+        self._post_tokenless_call(payload, use_elicitation=True, authorize=authorize)
+
+        forwarded = json.loads(authorize.call_args.args[1])
+        assert forwarded["params"]["requestState"] == "upstream-state"
+        assert forwarded["params"]["inputResponses"] == {"q1": {"action": "accept"}}
 
     def test_egress_consent_answers_initialize_locally(self):
         """For an egress server with no vaulted token, the gateway must answer

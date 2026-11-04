@@ -8407,6 +8407,104 @@ _ELICITATION_PERMITTED_METHODS: frozenset[str] = frozenset(
     {"tools/call", "prompts/get", "resources/read"}
 )
 
+# MCP 2026-07-28 consent prompt (multi round-trip request). The gateway answers
+# with resultType "input_required" holding one URL-mode elicitation/create under
+# EGRESS_CONSENT_INPUT_KEY, and a requestState that starts with
+# EGRESS_CONSENT_REQUEST_STATE_PREFIX. The client asks the user, then retries the
+# same request with inputResponses and that requestState. The gateway removes
+# both before authorizing and forwarding the retry, so the upstream never sees a
+# prompt it did not send. The state carries no data the gateway trusts: a client
+# that forges the prefix only gets its own two fields removed.
+# Spec: https://modelcontextprotocol.io/specification/2026-07-28/changelog
+EGRESS_CONSENT_INPUT_KEY: str = "egress_connect"
+EGRESS_CONSENT_REQUEST_STATE_PREFIX: str = "mcpgw-egress-consent."
+_META_PROTOCOL_VERSION_KEY: str = "io.modelcontextprotocol/protocolVersion"
+_META_CLIENT_CAPABILITIES_KEY: str = "io.modelcontextprotocol/clientCapabilities"
+_CONSENT_DECLINE_ACTIONS: frozenset[str] = frozenset({"decline", "cancel"})
+
+
+def _request_meta(
+    payload: object,
+) -> dict:
+    """Return params._meta of a JSON-RPC request, or an empty dict."""
+    if not isinstance(payload, dict):
+        return {}
+    params = payload.get("params")
+    meta = params.get("_meta") if isinstance(params, dict) else None
+    return meta if isinstance(meta, dict) else {}
+
+
+def _client_accepts_url_input_request(
+    payload: object,
+) -> bool:
+    """Whether a request is MCP 2026-07-28 and its client handles URL prompts.
+
+    The spec lets a server send a URL-mode elicitation only to a client that
+    declared ``elicitation.url`` in its capabilities. A 2026-07-28 request
+    carries the capabilities in ``params._meta`` on every call.
+    """
+    meta = _request_meta(payload)
+    version = meta.get(_META_PROTOCOL_VERSION_KEY)
+    if not isinstance(version, str) or version < "2026-":
+        return False
+    capabilities = meta.get(_META_CLIENT_CAPABILITIES_KEY)
+    if not isinstance(capabilities, dict):
+        return False
+    elicitation = capabilities.get("elicitation")
+    return isinstance(elicitation, dict) and isinstance(elicitation.get("url"), dict)
+
+
+def _strip_gateway_consent_retry(
+    payload: object,
+) -> tuple[bool, str | None]:
+    """Remove the gateway's own consent round-trip fields from a retried request.
+
+    Changes ``payload`` in place when its ``params.requestState`` is one the
+    gateway issued.
+
+    Returns:
+        (stripped, action): whether anything was removed, and the user's answer
+        to the consent prompt ("accept", "decline", "cancel") when present.
+    """
+    if not isinstance(payload, dict):
+        return False, None
+    params = payload.get("params")
+    if not isinstance(params, dict):
+        return False, None
+    state = params.get("requestState")
+    if not isinstance(state, str) or not state.startswith(EGRESS_CONSENT_REQUEST_STATE_PREFIX):
+        return False, None
+    params.pop("requestState", None)
+    responses = params.pop("inputResponses", None)
+    answer = responses.get(EGRESS_CONSENT_INPUT_KEY) if isinstance(responses, dict) else None
+    action = answer.get("action") if isinstance(answer, dict) else None
+    return True, action if isinstance(action, str) else None
+
+
+def _input_required_consent_response(
+    req_id: object,
+    message: str,
+    url: str,
+) -> JSONResponse:
+    """Ask a 2026-07-28 client to open the connect URL, then retry the request."""
+    return JSONResponse(
+        status_code=200,
+        content={
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "result": {
+                "resultType": "input_required",
+                "inputRequests": {
+                    EGRESS_CONSENT_INPUT_KEY: {
+                        "method": "elicitation/create",
+                        "params": {"mode": "url", "message": message, "url": url},
+                    }
+                },
+                "requestState": EGRESS_CONSENT_REQUEST_STATE_PREFIX + secrets.token_urlsafe(12),
+            },
+        },
+    )
+
 
 def _ingress_subject_token(request: "Request") -> str:
     """Extract the raw ingress JWT to use as the OBO exchange subject.
@@ -8882,6 +8980,8 @@ def _egress_consent_response(
     req_id: object,
     vend: dict,
     is_connect_tool: bool = False,
+    incoming_payload: object = None,
+    consent_answer: str | None = None,
 ):
     """Build the consent-required response for an egress server with no token.
 
@@ -8905,6 +9005,13 @@ def _egress_consent_response(
 
     ``is_connect_tool`` is True for a call to the synthetic connect tool, whose
     baseline text asks the user to reconnect the server rather than retry.
+
+    With elicitation enabled, a 2026-07-28 request whose client declared URL
+    elicitation gets the 2026-07-28 form instead of ``-32042``: an
+    ``input_required`` result the client answers by retrying the request. Every
+    other request is answered as before. ``consent_answer`` is the user's answer
+    from such a retry; "decline" or "cancel" ends the round trip with the
+    baseline result.
     """
     connect_url = vend.get("connect_url") or vend.get("authorize_url") or ""
     provider = vend.get("provider") or "the provider"
@@ -8933,8 +9040,17 @@ def _egress_consent_response(
     # works on EVERY MCP client (no -32042 support needed); the human sees the URL
     # in the tool output, connects, and re-runs. Elicitation below is the opt-in
     # enhancement for clients that understand url-mode.
+    # A 2026-07-28 client that declared URL elicitation can take the prompt as
+    # an input_required result. If the user declined it, stop asking.
+    modern_prompt = (
+        settings.egress_consent_use_elicitation
+        and incoming_method in _ELICITATION_PERMITTED_METHODS
+        and bool(connect_url)
+        and _client_accepts_url_input_request(incoming_payload)
+    )
+    declined = modern_prompt and consent_answer in _CONSENT_DECLINE_ACTIONS
     if (
-        not settings.egress_consent_use_elicitation
+        (not settings.egress_consent_use_elicitation or declined)
         and incoming_method in _ELICITATION_PERMITTED_METHODS
         and connect_url
     ):
@@ -8965,6 +9081,15 @@ def _egress_consent_response(
                 },
             },
         )
+
+    if modern_prompt:
+        logger.info(
+            "mcp_proxy: egress consent required for server=%s method=%s; "
+            "returning input_required with a URL elicitation (MCP 2026-07-28)",
+            server_name,
+            incoming_method,
+        )
+        return _input_required_consent_response(req_id, message, url_with_id)
 
     if incoming_method in _ELICITATION_PERMITTED_METHODS and connect_url:
         logger.info(
@@ -9242,6 +9367,19 @@ async def mcp_proxy(
     except Exception as exc:
         logger.debug(f"mcp_proxy: could not parse incoming body as JSON-RPC: {exc}")
         incoming_method = None
+
+    # A retry of the gateway's own 2026-07-28 consent prompt carries the
+    # gateway's requestState and the user's answer. Remove both before the body
+    # is authorized and forwarded, so the bytes checked are the bytes sent.
+    retried_consent, consent_answer = _strip_gateway_consent_retry(incoming_payload)
+    if retried_consent:
+        request_body = json.dumps(incoming_payload, separators=(",", ":")).encode("utf-8")
+        logger.info(
+            "mcp_proxy: server=%s method=%s retries the gateway consent prompt (answer=%s)",
+            server_name,
+            incoming_method,
+            consent_answer,
+        )
 
     filter_enabled = _read_mcp_filter_enabled()
     max_body_bytes = _read_mcp_proxy_max_body_bytes()
@@ -9599,6 +9737,8 @@ async def mcp_proxy(
                     req_id=req_id,
                     vend=vend,
                     is_connect_tool=is_connect_tool_call,
+                    incoming_payload=incoming_payload,
+                    consent_answer=consent_answer,
                 )
 
     # The synthetic connect tool belongs to the gateway: answer it here on every
