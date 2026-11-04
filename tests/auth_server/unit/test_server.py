@@ -4472,6 +4472,44 @@ class TestMcpProxyEndpointHeaderPassthrough:
         assert response.status_code == 200
         assert response.headers.get("mcp-session-id") == "sess-filtered-002"
 
+    def test_filtered_json_tools_list_is_marked_private(self):
+        """A 2026-07-28 list result filtered per user must not stay cacheScope public."""
+        import auth_server.server as server_module
+
+        upstream_body = (
+            b'{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"t1"}],'
+            b'"resultType":"complete","cacheScope":"public","ttlMs":60000}}'
+        )
+        upstream_resp = _build_mock_upstream_response(
+            status_code=200,
+            headers={"content-type": "application/json"},
+            body=upstream_body,
+        )
+
+        async def _no_filter(server_name, user_scopes, tools):
+            return tools
+
+        with (
+            _patch_httpx_async_client(upstream_resp),
+            _patch_scope_repo_allow_all(),
+            patch.object(server_module, "_read_mcp_filter_enabled", return_value=True),
+            patch.object(
+                server_module,
+                "filter_tools_list_response",
+                side_effect=_no_filter,
+            ),
+        ):
+            client = TestClient(server_module.app)
+            response = client.post(
+                "/mcp-proxy/office-docs",
+                json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+                headers=_mcp_proxy_token_headers(),
+            )
+
+        result = response.json()["result"]
+        assert result["cacheScope"] == "private"
+        assert result["ttlMs"] == 60000
+
     def test_session_id_forwarded_on_tools_list_non_json_fallback(self):
         """tools/list whose upstream body fails JSON parsing falls into
         the ``_safe_parse_body`` JSONResponse branch; that branch must
