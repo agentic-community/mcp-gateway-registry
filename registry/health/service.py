@@ -48,8 +48,20 @@ MODERN_MCP_ERROR_CODES: frozenset[int] = frozenset({-32020, -32021, -32022})
 # A DiscoverResult is a few hundred bytes. Stop reading well before a server
 # that streams forever could make the probe hold memory.
 MAX_DISCOVER_RESPONSE_BYTES: int = 65536
+# How long to remember that a server answered server/discover as a
+# handshake-era server. Until the entry expires, its health checks skip
+# server/discover and go straight to initialize + ping. After it expires the
+# probe asks again, so a server that upgrades to 2026-07-28 is picked up.
+LEGACY_MCP_ERA_CACHE_SECONDS: int = 3600
 HEALTH_PROBE_CLIENT_NAME: str = "mcp-gateway-registry"
 HEALTH_PROBE_CLIENT_VERSION: str = "2.0.0"
+
+
+def _health_server_path(
+    server_info: dict,
+) -> str | None:
+    """The server's registry path, used as the handshake-era cache key."""
+    return server_info.get("path") or server_info.get("service_path")
 
 
 def _parse_jsonrpc_response(
@@ -347,6 +359,10 @@ class HealthMonitoringService:
         self._cached_health_data: dict = {}
         self._cache_timestamp = 0
         self._cache_ttl = settings.websocket_cache_ttl_seconds
+
+        # Servers known to answer server/discover as handshake-era servers:
+        # server path -> (endpoint probed, expiry as a time() timestamp).
+        self._legacy_mcp_endpoints: dict[str, tuple[str, float]] = {}
 
     async def _check_secret_key_persistence(self):
         """Warn if servers have encrypted credentials but SECRET_KEY is auto-generated."""
@@ -787,26 +803,59 @@ class HealthMonitoringService:
                 break
         return _parse_jsonrpc_response(body)
 
-    async def _probe_server_discover(
+    def _is_known_legacy_endpoint(
+        self,
+        server_path: str,
+        endpoint: str,
+    ) -> bool:
+        """Whether this server recently answered server/discover as handshake-era.
+
+        An entry for a different endpoint (the server's URL changed) or an
+        expired entry is dropped and does not count.
+        """
+        entry = self._legacy_mcp_endpoints.get(server_path)
+        if entry is None:
+            return False
+        cached_endpoint, expires_at = entry
+        if cached_endpoint != endpoint or time() >= expires_at:
+            self._legacy_mcp_endpoints.pop(server_path, None)
+            return False
+        return True
+
+    def _remember_legacy_endpoint(
+        self,
+        server_path: str,
+        endpoint: str,
+    ) -> None:
+        """Record that this server answered server/discover as handshake-era."""
+        self._legacy_mcp_endpoints[server_path] = (
+            endpoint,
+            time() + LEGACY_MCP_ERA_CACHE_SECONDS,
+        )
+        logger.debug(
+            f"Remembering {server_path} as handshake-era for "
+            f"{LEGACY_MCP_ERA_CACHE_SECONDS}s endpoint={redact_url(endpoint)}"
+        )
+
+    def _forget_legacy_endpoint(
+        self,
+        server_path: str | None,
+    ) -> None:
+        """Drop the handshake-era entry, so the next check sends server/discover."""
+        if server_path and self._legacy_mcp_endpoints.pop(server_path, None) is not None:
+            logger.debug(f"Forgot handshake-era entry for {server_path}")
+
+    async def _send_server_discover(
         self,
         client: httpx.AsyncClient,
         endpoint: str,
         headers: dict[str, str],
-    ) -> bool:
-        """Check whether the endpoint is a live MCP 2026-07-28 server.
-
-        Sends server/discover on the same guarded client and headers the
-        legacy probe uses. Never decides "unhealthy" by itself: any failure,
-        auth error or non-modern answer returns False, and the caller falls
-        back to the initialize + ping probe unchanged.
-
-        Args:
-            client: The guarded httpx client.
-            endpoint: The exact MCP endpoint, already validated.
-            headers: Headers built for this exact destination.
+    ) -> bool | None:
+        """Send server/discover and classify the answer.
 
         Returns:
-            True when the server answered as a modern MCP server.
+            True for a modern server, False for any other answer or failure,
+            None for a 401 or 403 (the server's era is still unknown).
         """
         extra_headers, payload = _server_discover_request()
         probe_headers = {**headers, **extra_headers}
@@ -825,7 +874,7 @@ class HealthMonitoringService:
                         f"server/discover probe got status={status} endpoint={redact_url(endpoint)}; "
                         "using the legacy probe for its auth handling"
                     )
-                    return False
+                    return None
                 message = await self._read_discover_response(response)
         except Exception as e:
             logger.debug(
@@ -838,6 +887,45 @@ class HealthMonitoringService:
             f"server/discover probe endpoint={redact_url(endpoint)} status={status} modern={is_modern}"
         )
         return is_modern
+
+    async def _probe_server_discover(
+        self,
+        client: httpx.AsyncClient,
+        endpoint: str,
+        headers: dict[str, str],
+        server_path: str | None = None,
+    ) -> bool:
+        """Check whether the endpoint is a live MCP 2026-07-28 server.
+
+        Sends server/discover on the same guarded client and headers the
+        legacy probe uses. Never decides "unhealthy" by itself: any failure,
+        auth error or non-modern answer returns False, and the caller falls
+        back to the initialize + ping probe unchanged.
+
+        With a server_path, a handshake-era answer (or no answer) is
+        remembered for LEGACY_MCP_ERA_CACHE_SECONDS, and later checks skip
+        server/discover until the entry expires or the legacy probe fails.
+        A 401 or 403 is not remembered, since it says nothing about the era.
+
+        Args:
+            client: The guarded httpx client.
+            endpoint: The exact MCP endpoint, already validated.
+            headers: Headers built for this exact destination.
+            server_path: The server's registry path, the cache key.
+
+        Returns:
+            True when the server answered as a modern MCP server.
+        """
+        if server_path and self._is_known_legacy_endpoint(server_path, endpoint):
+            logger.debug(
+                f"Skipping server/discover for {server_path}: answered as handshake-era recently"
+            )
+            return False
+
+        is_modern = await self._send_server_discover(client, endpoint, headers)
+        if is_modern is False and server_path:
+            self._remember_legacy_endpoint(server_path, endpoint)
+        return is_modern is True
 
     async def _initialize_mcp_session(
         self, client: httpx.AsyncClient, endpoint: str, headers: dict[str, str]
@@ -1051,9 +1139,34 @@ class HealthMonitoringService:
             return response
 
     async def _check_server_endpoint_transport_aware(
-        self, client: httpx.AsyncClient, proxy_pass_url: str, server_info: dict
+        self,
+        client: httpx.AsyncClient,
+        proxy_pass_url: str,
+        server_info: dict,
     ) -> tuple[bool, str]:
         """Check server endpoint using transport-aware logic.
+
+        An unhealthy result drops the server's handshake-era entry, so the
+        next check asks server/discover again. A modern server that was down
+        when it was first probed is then recognized once it is back.
+
+        Returns:
+            tuple[bool, str]: (is_healthy, status_detail)
+        """
+        is_healthy, status_detail = await self._check_transport_endpoints(
+            client, proxy_pass_url, server_info
+        )
+        if not is_healthy:
+            self._forget_legacy_endpoint(_health_server_path(server_info))
+        return is_healthy, status_detail
+
+    async def _check_transport_endpoints(
+        self,
+        client: httpx.AsyncClient,
+        proxy_pass_url: str,
+        server_info: dict,
+    ) -> tuple[bool, str]:
+        """Run the transport-aware probes for one server.
 
         Returns:
             tuple[bool, str]: (is_healthy, status_detail)
@@ -1200,7 +1313,9 @@ class HealthMonitoringService:
             # Step 0: an MCP 2026-07-28 server has no initialize handshake. If it
             # answers server/discover as a modern server, it is healthy. Any other
             # answer falls through to the handshake-era probe below, unchanged.
-            if await self._probe_server_discover(client, endpoint, headers):
+            if await self._probe_server_discover(
+                client, endpoint, headers, server_path=_health_server_path(server_info)
+            ):
                 logger.info(
                     f"Health check succeeded at {redact_url(endpoint)} "
                     f"(server/discover, MCP {MODERN_MCP_PROTOCOL_VERSION})"
@@ -1341,7 +1456,9 @@ class HealthMonitoringService:
             )
             # Same modern-server check as the streamable-http path above. The
             # ping below gets 400 -32020 from a 2026-07-28 server (no headers).
-            if await self._probe_server_discover(client, endpoint, headers):
+            if await self._probe_server_discover(
+                client, endpoint, headers, server_path=_health_server_path(server_info)
+            ):
                 logger.info(
                     f"Health check succeeded at {redact_url(endpoint)} "
                     f"(server/discover, MCP {MODERN_MCP_PROTOCOL_VERSION})"
