@@ -178,6 +178,19 @@ _VS_BACKEND_STRIPPED_HEADERS: frozenset[str] = (
 MCP_PROXY_NGINX_READ_TIMEOUT_BUFFER_SECONDS: int = 30
 
 
+# DNS resolver for nginx upstreams that resolve at request time (bare hostnames
+# such as docker-compose service names, and agent routes). NGINX_DNS_RESOLVER
+# wins when set. Otherwise nginx uses the container's own nameservers from
+# /etc/resolv.conf: Docker's embedded DNS (127.0.0.11) on Compose, the VPC
+# resolver on ECS, kube-dns on Kubernetes. Public DNS is the last resort,
+# because it cannot resolve any of those private names.
+NGINX_DNS_RESOLVER_ENV: str = "NGINX_DNS_RESOLVER"
+FALLBACK_NGINX_DNS_RESOLVER: str = "8.8.8.8 8.8.4.4"
+RESOLV_CONF_PATH: str = "/etc/resolv.conf"
+# glibc reads at most three nameserver lines, so nginx gets the same set.
+MAX_RESOLV_CONF_NAMESERVERS: int = 3
+
+
 # Minimum sane prefix length for a TRUSTED_REAL_IP_CIDRS entry. A prefix shorter
 # than this (e.g. 0.0.0.0/1, 10.0.0.0/4) trusts an implausibly large peer range
 # for a proxy subnet and edges toward the catch-all footgun, so we warn (but still
@@ -412,6 +425,81 @@ def _resolve_mcp_proxy_read_timeout_seconds() -> int:
         logger.debug(f"Invalid mcp_proxy_timeout, using default for nginx read timeout: {e}")
         upstream = default_upstream
     return int(math.ceil(upstream)) + MCP_PROXY_NGINX_READ_TIMEOUT_BUFFER_SECONDS
+
+
+def _read_resolv_conf_nameservers(
+    path: str,
+) -> list[str]:
+    """Read nameserver addresses from a resolv.conf file, formatted for nginx.
+
+    Every value ends up inside the nginx config, so only literal IP addresses
+    are kept: anything that does not parse as one is skipped. IPv6 addresses
+    are wrapped in brackets, which nginx's resolver directive requires.
+    Link-local IPv6 entries with a zone id (fe80::1%eth0) are skipped, because
+    nginx cannot use them.
+
+    Args:
+        path: Path to the resolv.conf file.
+
+    Returns:
+        Up to MAX_RESOLV_CONF_NAMESERVERS addresses, in file order. Empty when
+        the file is missing, unreadable, or lists no usable nameserver.
+    """
+    try:
+        lines = Path(path).read_text().splitlines()
+    except OSError as e:
+        logger.debug(f"Cannot read {path} for nginx resolver: {e}")
+        return []
+
+    nameservers: list[str] = []
+    for line in lines:
+        fields = line.split()
+        if len(fields) < 2 or fields[0] != "nameserver":
+            continue
+        try:
+            address = ipaddress.ip_address(fields[1])
+        except ValueError:
+            logger.debug(f"Skipping non-IP nameserver entry in {path}: {fields[1]!r}")
+            continue
+        if address.version == 6:
+            if address.scope_id:
+                logger.debug(f"Skipping zone-scoped IPv6 nameserver in {path}: {fields[1]!r}")
+                continue
+            nameservers.append(f"[{address.compressed}]")
+        else:
+            nameservers.append(address.compressed)
+        if len(nameservers) == MAX_RESOLV_CONF_NAMESERVERS:
+            break
+    return nameservers
+
+
+def _get_nginx_dns_resolver() -> str:
+    """Return the address list for nginx ``resolver`` directives.
+
+    Order of precedence:
+        1. NGINX_DNS_RESOLVER, when set to a non-blank value.
+        2. The nameservers in /etc/resolv.conf, so nginx resolves names the same
+           way the container itself does.
+        3. FALLBACK_NGINX_DNS_RESOLVER (public DNS), with a warning, because it
+           cannot resolve private names such as docker-compose service names.
+
+    Returns:
+        A space-separated address list, for example "127.0.0.11".
+    """
+    configured = os.environ.get(NGINX_DNS_RESOLVER_ENV, "").strip()
+    if configured:
+        return configured
+
+    nameservers = _read_resolv_conf_nameservers(RESOLV_CONF_PATH)
+    if nameservers:
+        return " ".join(nameservers)
+
+    logger.warning(
+        f"No {NGINX_DNS_RESOLVER_ENV} set and no usable nameserver in "
+        f"{RESOLV_CONF_PATH}; nginx falls back to public DNS "
+        f"({FALLBACK_NGINX_DNS_RESOLVER}), which cannot resolve private hostnames"
+    )
+    return FALLBACK_NGINX_DNS_RESOLVER
 
 
 def _render_real_ip_config() -> str:
@@ -2624,7 +2712,7 @@ class NginxConfigService:
                     backend_var = (
                         "$vs_backend_" + hashlib.sha256(location_path.encode()).hexdigest()[:16]
                     )
-                    dns_resolver = os.environ.get("NGINX_DNS_RESOLVER", "8.8.8.8 8.8.4.4")
+                    dns_resolver = _get_nginx_dns_resolver()
                     dns_resolver_timeout = os.environ.get("NGINX_DNS_RESOLVER_TIMEOUT", "5")
                     proxy_directive = (
                         f"resolver {dns_resolver} valid=10s;\n"
@@ -2949,7 +3037,7 @@ class NginxConfigService:
         else:
             host_header = "$host"
 
-        dns_resolver = os.environ.get("NGINX_DNS_RESOLVER", "8.8.8.8 8.8.4.4")
+        dns_resolver = _get_nginx_dns_resolver()
         dns_resolver_timeout = os.environ.get("NGINX_DNS_RESOLVER_TIMEOUT", "5")
         safe_name = self._sanitize_for_nginx_comment(agent_name)
         route = f"{AGENT_ROUTE_PREFIX}/{agent_path}"
@@ -3291,12 +3379,10 @@ class NginxConfigService:
         limit_req zone=mcp_gateway_edge burst=100 nodelay;
         limit_conn mcp_gateway_conn 100;
 
-        # DNS resolver for dynamic proxy_pass upstreams.
-        # Default: 8.8.8.8 8.8.4.4 (public DNS).
-        # Override with NGINX_DNS_RESOLVER env var for environments where
-        # backend servers use internal hostnames (e.g., Kubernetes
-        # cluster-local names like *.svc.cluster.local need kube-dns).
-        resolver {os.environ.get("NGINX_DNS_RESOLVER", "8.8.8.8 8.8.4.4")} valid=10s;
+        # DNS resolver for dynamic proxy_pass upstreams: NGINX_DNS_RESOLVER,
+        # else the container's /etc/resolv.conf nameservers, else public DNS.
+        # See _get_nginx_dns_resolver.
+        resolver {_get_nginx_dns_resolver()} valid=10s;
         resolver_timeout {os.environ.get("NGINX_DNS_RESOLVER_TIMEOUT", "5")}s;
 
         # Upstream timeouts for the browser -> nginx -> auth-server mcp_proxy
