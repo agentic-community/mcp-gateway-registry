@@ -178,6 +178,22 @@ _VS_BACKEND_STRIPPED_HEADERS: frozenset[str] = (
 MCP_PROXY_NGINX_READ_TIMEOUT_BUFFER_SECONDS: int = 30
 
 
+# Largest MCP request body nginx accepts, and how much of it nginx keeps in memory.
+# capture_body.lua copies the body into the X-Body header for /validate. A body
+# larger than client_body_buffer_size is written to a temp file, Lua cannot read it,
+# and /validate refuses it (413), which auth_request turns into a bare 500. nginx's
+# default buffer is far below its default 1m maximum, so any tools/call with more
+# than about 10 KB of arguments failed. Keeping the buffer equal to the maximum
+# means every accepted body can be authorized. 1m is nginx's default
+# client_max_body_size, so the largest accepted body does not change.
+# docker/auth-entrypoint.sh sizes uvicorn's header limit to fit an X-Body this big.
+MCP_MAX_REQUEST_BODY_SIZE: str = "1m"
+_MCP_BODY_CAPTURE_SIZE_DIRECTIVES: str = (
+    f"        client_max_body_size {MCP_MAX_REQUEST_BODY_SIZE};\n"
+    f"        client_body_buffer_size {MCP_MAX_REQUEST_BODY_SIZE};"
+)
+
+
 # DNS resolver for nginx upstreams that resolve at request time (bare hostnames
 # such as docker-compose service names, and agent routes). NGINX_DNS_RESOLVER
 # wins when set. Otherwise nginx uses the container's own nameservers from
@@ -2138,6 +2154,7 @@ class NginxConfigService:
         auth_request_set $auth_user $upstream_http_x_user;
         auth_request_set $auth_username $upstream_http_x_username;
         auth_request_set $auth_method $upstream_http_x_auth_method;
+{_MCP_BODY_CAPTURE_SIZE_DIRECTIVES}
         rewrite_by_lua_file /etc/nginx/lua/capture_body.lua;
         content_by_lua_file /etc/nginx/lua/virtual_router.lua;
 
@@ -3127,6 +3144,7 @@ class NginxConfigService:
         # Capture the JSON-RPC body (rewrite phase) so emit_metrics can record
         # the A2A method; per-agent invoke is enforced by the auth server via
         # the /validate subrequest above.
+{_MCP_BODY_CAPTURE_SIZE_DIRECTIVES}
         rewrite_by_lua_file /etc/nginx/lua/capture_body.lua;
         log_by_lua_file /etc/nginx/lua/emit_metrics.lua;
 
@@ -3469,8 +3487,9 @@ class NginxConfigService:
 
         # Transport-specific settings
         if transport_type == "sse":
-            transport_settings = """
+            transport_settings = f"""
         # Capture request body for auth validation using Lua
+{_MCP_BODY_CAPTURE_SIZE_DIRECTIVES}
         rewrite_by_lua_file /etc/nginx/lua/capture_body.lua;
         log_by_lua_file /etc/nginx/lua/emit_metrics.lua;
 
@@ -3484,8 +3503,9 @@ class NginxConfigService:
         chunked_transfer_encoding off;"""
 
         elif transport_type == "streamable-http":
-            transport_settings = """
+            transport_settings = f"""
         # Capture request body for auth validation using Lua
+{_MCP_BODY_CAPTURE_SIZE_DIRECTIVES}
         rewrite_by_lua_file /etc/nginx/lua/capture_body.lua;
         log_by_lua_file /etc/nginx/lua/emit_metrics.lua;
 
@@ -3496,8 +3516,9 @@ class NginxConfigService:
         proxy_set_header Accept $http_accept;"""
 
         else:  # direct
-            transport_settings = """
+            transport_settings = f"""
         # Capture request body for auth validation using Lua
+{_MCP_BODY_CAPTURE_SIZE_DIRECTIVES}
         rewrite_by_lua_file /etc/nginx/lua/capture_body.lua;
         log_by_lua_file /etc/nginx/lua/emit_metrics.lua;
 

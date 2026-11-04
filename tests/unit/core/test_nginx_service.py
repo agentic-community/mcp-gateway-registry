@@ -3183,3 +3183,49 @@ async def test_marker_secret_renders_from_settings_not_process_env(
         'proxy_set_header X-Validate-Source-Secret "test-nginx-marker-secret-0123456789abcdef";'
         in rendered
     )
+
+
+# =============================================================================
+# REQUEST BODY CAPTURE SIZE (bodies over ~10 KB returned a bare 500)
+# =============================================================================
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("transport", ["streamable-http", "sse"])
+def test_body_capturing_location_keeps_whole_body_in_memory(nginx_service, transport):
+    """capture_body.lua can only read an in-memory body for /validate.
+
+    client_body_buffer_size must equal client_max_body_size, or a body between the
+    two is spilled to a temp file, /validate refuses it (413), and auth_request turns
+    that into a 500 for the client.
+    """
+    from registry.core.nginx_service import MCP_MAX_REQUEST_BODY_SIZE
+
+    server_info = {
+        "proxy_pass_url": "http://localhost:8000/mcp",
+        "supported_transports": [transport],
+    }
+
+    block = nginx_service._generate_transport_location_blocks("/test", server_info)[0]
+
+    assert "capture_body.lua" in block
+    assert f"client_max_body_size {MCP_MAX_REQUEST_BODY_SIZE};" in block
+    assert f"client_body_buffer_size {MCP_MAX_REQUEST_BODY_SIZE};" in block
+
+
+@pytest.mark.unit
+def test_every_capture_body_site_sets_the_body_size_directives():
+    """Every location that runs capture_body.lua, including virtual servers, must
+    also set the body size directives, so a new location cannot reintroduce the 500."""
+    import inspect
+
+    from registry.core import nginx_service as module
+
+    lines = inspect.getsource(module).splitlines()
+    capture_lines = [i for i, line in enumerate(lines) if "lua/capture_body.lua;" in line]
+
+    assert len(capture_lines) >= 5
+    for index in capture_lines:
+        assert lines[index - 1].strip() == "{_MCP_BODY_CAPTURE_SIZE_DIRECTIVES}", (
+            f"capture_body.lua at module line {index + 1} lacks the body size directives"
+        )
