@@ -98,6 +98,7 @@ local function _is_discover_probe(loc, opts)
 end
 
 _G.ngx = {
+    ctx = {},
     shared = { virtual_server_map = dict },
     location = {
         capture = function(loc, opts)
@@ -2203,6 +2204,27 @@ do
 
     local plain = M._ensure_mcp_schema({ type = "object", properties = {} })
     check(plain.type == "object", "an object schema is unchanged")
+end
+
+-- ---------------------------------------------------------------------------
+print("forwarded results gain resultType for 2026-07-28 clients")
+do
+    local json = M._with_result_type('{"jsonrpc":"2.0","id":3,"result":{"content":[],"isError":false}}')
+    local decoded = cjson.decode(json)
+    check(decoded.result.resultType == "complete", "a JSON result without resultType gets complete")
+    check(json:find('"content":%[%]') ~= nil, "an empty content array stays an array")
+
+    local sse = M._with_result_type('event: message\ndata: {"jsonrpc":"2.0","id":4,"result":{"content":[{"type":"text","text":"x"}]}}\n\n')
+    local data = sse:match("data: ([^\n]+)")
+    check(cjson.decode(data).result.resultType == "complete", "an SSE data line gets resultType")
+    check(sse:sub(1, 15) == "event: message\n" and sse:sub(-2) == "\n\n", "the SSE framing is kept")
+
+    local kept = '{"jsonrpc":"2.0","id":5,"result":{"resultType":"input_required","inputRequests":{}}}'
+    check(M._with_result_type(kept) == kept, "an existing resultType is left alone")
+
+    local err = '{"jsonrpc":"2.0","id":6,"error":{"code":-32602,"message":"bad"}}'
+    check(M._with_result_type(err) == err, "an error response is unchanged")
+    check(M._with_result_type("not json") == "not json", "a body that is not JSON is unchanged")
 end
 
 -- ---------------------------------------------------------------------------

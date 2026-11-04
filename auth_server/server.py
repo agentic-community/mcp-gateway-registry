@@ -8506,6 +8506,28 @@ def _input_required_consent_response(
     )
 
 
+def _is_modern_mcp_request(
+    payload: object,
+) -> bool:
+    """Whether a request carries MCP 2026-07-28 metadata in params._meta."""
+    version = _request_meta(payload).get(_META_PROTOCOL_VERSION_KEY)
+    return isinstance(version, str) and version >= "2026-"
+
+
+def _gateway_result(
+    result: dict,
+    payload: object,
+) -> dict:
+    """Mark a result the gateway built itself as complete for a 2026-07-28 client.
+
+    MCP 2026-07-28 requires resultType on every result, and the SDK rejects a
+    result without it. Older clients get the result unchanged.
+    """
+    if _is_modern_mcp_request(payload) and "resultType" not in result:
+        return {**result, "resultType": "complete"}
+    return result
+
+
 def _ingress_subject_token(request: "Request") -> str:
     """Extract the raw ingress JWT to use as the OBO exchange subject.
 
@@ -8742,6 +8764,7 @@ def _connect_tool_local_result(
     server_name: str,
     req_id: object,
     account_connected: bool,
+    incoming_payload: object = None,
 ) -> JSONResponse:
     """Answer a call to the synthetic connect tool when no consent is pending.
 
@@ -8775,7 +8798,10 @@ def _connect_tool_local_result(
         content={
             "jsonrpc": "2.0",
             "id": req_id,
-            "result": {"content": [{"type": "text", "text": text}], "isError": False},
+            "result": _gateway_result(
+                {"content": [{"type": "text", "text": text}], "isError": False},
+                incoming_payload,
+            ),
         },
     )
 
@@ -8815,7 +8841,14 @@ def _pre_consent_local_response(
     if method.startswith("notifications/"):
         return Response(status_code=202)
     if method == "ping":
-        return JSONResponse(status_code=200, content={"jsonrpc": "2.0", "id": req_id, "result": {}})
+        return JSONResponse(
+            status_code=200,
+            content={
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "result": _gateway_result({}, incoming_payload),
+            },
+        )
     if method in _PRE_CONSENT_UNSUPPORTED_METHODS:
         return JSONResponse(
             status_code=200,
@@ -8833,7 +8866,11 @@ def _pre_consent_local_response(
         items = [connect_tool]
     return JSONResponse(
         status_code=200,
-        content={"jsonrpc": "2.0", "id": req_id, "result": {result_key: items}},
+        content={
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "result": _gateway_result({result_key: items}, incoming_payload),
+        },
         headers={EGRESS_CONSENT_REQUIRED_HEADER: mode},
     )
 
@@ -8869,20 +8906,23 @@ def _pat_missing_response(
         content={
             "jsonrpc": "2.0",
             "id": req_id,
-            "result": {
-                "content": [
-                    {
-                        "type": "text",
-                        "text": (
-                            "No usable PAT for this server: none was submitted, it "
-                            "expired, or it was submitted before the server's endpoint "
-                            "changed. Submit one via the Registry Connected Accounts "
-                            "page, then retry."
-                        ),
-                    }
-                ],
-                "isError": True,
-            },
+            "result": _gateway_result(
+                {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": (
+                                "No usable PAT for this server: none was submitted, it "
+                                "expired, or it was submitted before the server's endpoint "
+                                "changed. Submit one via the Registry Connected Accounts "
+                                "page, then retry."
+                            ),
+                        }
+                    ],
+                    "isError": True,
+                },
+                incoming_payload,
+            ),
         },
     )
 
@@ -9065,20 +9105,23 @@ def _egress_consent_response(
             content={
                 "jsonrpc": "2.0",
                 "id": req_id,
-                "result": {
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": _baseline_consent_text(
-                                message,
-                                provider,
-                                url_with_id,
-                                is_connect_tool,
-                            ),
-                        }
-                    ],
-                    "isError": True,
-                },
+                "result": _gateway_result(
+                    {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": _baseline_consent_text(
+                                    message,
+                                    provider,
+                                    url_with_id,
+                                    is_connect_tool,
+                                ),
+                            }
+                        ],
+                        "isError": True,
+                    },
+                    incoming_payload,
+                ),
             },
         )
 
@@ -9746,7 +9789,9 @@ async def mcp_proxy(
     # (see _scope_check_target) can never carry a credential upstream.
     if is_connect_tool_call:
         req_id = incoming_payload.get("id") if isinstance(incoming_payload, dict) else None
-        return _connect_tool_local_result(server_name, req_id, egress_token_injected)
+        return _connect_tool_local_result(
+            server_name, req_id, egress_token_injected, incoming_payload
+        )
 
     logger.info(
         f"mcp_proxy: server={server_name} method={incoming_method} filter_enabled={filter_enabled} timeout={proxy_timeout}"
