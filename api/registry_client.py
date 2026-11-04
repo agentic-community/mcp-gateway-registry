@@ -4065,6 +4065,7 @@ class RegistryClient:
         custom_scope_separator: str | None = None,
         custom_token_auth_style: str | None = None,
         custom_resource: str | None = None,
+        expected_issuer: str | None = None,
     ) -> dict[str, Any]:
         """Configure per-user egress auth on a server (admin only).
 
@@ -4093,6 +4094,9 @@ class RegistryClient:
             custom_resource: RFC 8707 resource indicator, sent on both the
                 authorize and token requests to bind the token to one protected
                 resource (custom only).
+            expected_issuer: RFC 9207 issuer of the provider's authorization
+                server (any provider). When set, the callback rejects a reply
+                whose ``iss`` names a different issuer.
 
         Returns:
             Non-secret egress config view dict.
@@ -4128,6 +4132,8 @@ class RegistryClient:
             body["custom_token_auth_style"] = custom_token_auth_style
         if custom_resource is not None:
             body["custom_resource"] = custom_resource
+        if expected_issuer is not None:
+            body["expected_issuer"] = expected_issuer
 
         response = self._make_request(
             method="POST",

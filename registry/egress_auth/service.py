@@ -71,6 +71,29 @@ class ConsentRequired(EgressAuthError):
         self.authorize_url = authorize_url
 
 
+def _check_response_issuer(
+    expected_issuer: str | None,
+    response_issuer: str | None,
+) -> None:
+    """Apply RFC 9207 section 2.4 to the provider's authorization reply.
+
+    The gateway sends every provider back to one shared callback URL, so a reply
+    names its issuer to prove which authorization server produced the code.
+    Compared as exact strings, as RFC 9207 requires.
+
+    Raises:
+        EgressAuthError: when an expected issuer is configured and the reply
+            names a different one.
+    """
+    if not expected_issuer or not response_issuer:
+        return
+    if response_issuer != expected_issuer:
+        logger.warning(
+            "egress callback: authorization reply iss does not match the expected issuer"
+        )
+        raise EgressAuthError("authorization response issuer mismatch")
+
+
 class ReplayGuard(Protocol):
     """Single-use guard for OAuth ``state`` nonces (a Mongo-TTL-backed implementation backs this).
 
@@ -308,6 +331,7 @@ class EgressAuthService:
             purpose=purpose,
             approved_upstreams=approved_upstreams,
             token_url=cfg.token_url,
+            expected_issuer=egress_oauth.get("expected_issuer") or None,
         )
         return oauth_engine.build_authorize_url(
             cfg=cfg,
@@ -327,6 +351,7 @@ class EgressAuthService:
         egress_oauth: dict,
         current_user_id: str | None = None,
         current_auth_method: str | None = None,
+        response_issuer: str | None = None,
     ) -> EgressConnection:
         """Verify state, exchange the code, and store the token.
 
@@ -337,6 +362,10 @@ class EgressAuthService:
         - account-swap guard: the live principal (if provided) matches the
           principal bound in the signed state -- bind to (user_id, auth_method),
           NOT session_id (a legit "same user, new session" must still work).
+        - RFC 9207: when the state names an expected issuer, a reply whose
+          ``iss`` (``response_issuer``) differs is refused. A reply without
+          ``iss`` is accepted, since the gateway does not know whether the
+          provider sends it.
         """
         try:
             state = decode_state(state_blob)
@@ -365,6 +394,8 @@ class EgressAuthService:
             raise EgressAuthError("state user mismatch")
         if current_auth_method is not None and current_auth_method != state.auth_method:
             raise EgressAuthError("state auth_method mismatch")
+
+        _check_response_issuer(state.expected_issuer, response_issuer)
 
         cfg = resolve_provider(egress_oauth)
         # The code is exchanged at the token endpoint the user consented under. A

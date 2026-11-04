@@ -74,6 +74,7 @@ def server_record() -> dict[str, Any]:
                 "client_secret_encrypted": "ciphertext-must-not-leak",
                 "custom_authorize_url": "https://idp.example.com/authorize",
                 "custom_token_url": "https://idp.example.com/token",
+                "expected_issuer": "https://idp.example.com",
             },
             "auth_method": "oauth2",
             "user_id": "oidc-sub-of-the-designated-admin",
@@ -194,6 +195,10 @@ class TestOAuthConfigReadAuthz:
         assert "oidc-sub-of-the-designated-admin" not in str(body)
         assert body["identity_designated"] is True
         assert body["designated_by"] == OWNER
+
+    def test_discovery_view_shows_the_expected_issuer(self, client_owner):
+        body = client_owner.get("/api/servers/test-server/oauth-discovery").json()
+        assert body["expected_issuer"] == "https://idp.example.com"
 
     def test_oauth_config_view_omits_the_inert_header_name(self, client_owner):
         """A resolved OAuth bearer always uses Authorization, so the view must not

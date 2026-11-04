@@ -112,6 +112,7 @@ interface ServerFormData {
   oauth_discovery_custom_scope_separator: string;
   oauth_discovery_custom_token_auth_style: string;
   oauth_discovery_custom_resource: string;
+  oauth_discovery_expected_issuer: string;
   // Discovery Identity (OAuth 2.1): an INDEPENDENT flag, orthogonal to
   // auth_scheme. Persisted after create via PUT /servers/{path}/oauth-discovery.
   oauth_discovery_enabled: boolean;
@@ -194,6 +195,7 @@ const initialServerForm: ServerFormData = {
   oauth_discovery_custom_scope_separator: '',
   oauth_discovery_custom_token_auth_style: '',
   oauth_discovery_custom_resource: '',
+  oauth_discovery_expected_issuer: '',
   oauth_discovery_enabled: false,
   custom_headers: [],
   status: 'active',
@@ -723,6 +725,7 @@ const RegisterPage: React.FC = () => {
                 custom_scope_separator: serverForm.oauth_discovery_custom_scope_separator || undefined,
                 custom_token_auth_style: serverForm.oauth_discovery_custom_token_auth_style || undefined,
                 custom_resource: serverForm.oauth_discovery_custom_resource || undefined,
+                expected_issuer: serverForm.oauth_discovery_expected_issuer || undefined,
               },
               { headers: csrfHeaders }
             );

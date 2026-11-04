@@ -5283,6 +5283,7 @@ def _oauth_discovery_view(server: dict) -> dict:
         "custom_scope_separator": oauth.get("custom_scope_separator"),
         "custom_token_auth_style": oauth.get("custom_token_auth_style"),
         "custom_resource": oauth.get("custom_resource"),
+        "expected_issuer": oauth.get("expected_issuer"),
     }
 
 
@@ -5438,6 +5439,7 @@ async def put_server_oauth_discovery(
         custom_scope_separator=body.custom_scope_separator,
         custom_token_auth_style=body.custom_token_auth_style,
         custom_resource=body.custom_resource,
+        expected_issuer=body.expected_issuer,
         prior_secret_encrypted=prior.get("client_secret_encrypted"),
     )
     oauth_cfg["updated_at"] = datetime.now(UTC).isoformat()

@@ -56,6 +56,7 @@ export interface ServerEditForm {
   // 'post_body' | 'basic_header' | 'none' — 'none' is a public client (no secret, PKCE only)
   egress_custom_token_auth_style: string;
   egress_custom_resource: string; // RFC 8707 resource indicator (optional)
+  egress_expected_issuer: string; // RFC 9207 issuer of the provider (optional)
   // obo_exchange (same-IdP OBO hop 1) field:
   egress_target_audience: string;
   // Discovery Identity (OAuth 2.1): the registry borrows a connected admin
@@ -73,6 +74,7 @@ export interface ServerEditForm {
   // 'post_body' | 'basic_header' | 'none' — 'none' is a public client (PKCE only)
   oauth_discovery_custom_token_auth_style: string;
   oauth_discovery_custom_resource: string; // RFC 8707 resource indicator (optional)
+  oauth_discovery_expected_issuer: string; // RFC 9207 issuer of the provider (optional)
   // pat inject header config (admin). Blank = server defaults (Authorization / Bearer).
 }
 
@@ -125,6 +127,7 @@ const ServerEditModal: React.FC<ServerEditModalProps> = ({
       f.oauth_discovery_custom_scope_separator,
       f.oauth_discovery_custom_token_auth_style,
       f.oauth_discovery_custom_resource,
+      f.oauth_discovery_expected_issuer,
     ]);
   const [savedDiscoverySnapshot] = React.useState(() => discoverySnapshot(form));
   const discoveryDirty = discoverySnapshot(form) !== savedDiscoverySnapshot;
@@ -593,6 +596,26 @@ const ServerEditModal: React.FC<ServerEditModalProps> = ({
                         </div>
                       </>
                     )}
+                    <div>
+                      <label className={LABEL}>Expected issuer (RFC 9207, optional)</label>
+                      <input
+                        type="text"
+                        value={form.egress_expected_issuer}
+                        onChange={(e) =>
+                          setForm((prev) => ({
+                            ...prev,
+                            egress_expected_issuer: e.target.value,
+                          }))
+                        }
+                        placeholder="https://idp.example"
+                        className={FIELD}
+                      />
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                        The issuer the provider names in its sign-in reply. When set, a
+                        reply naming a different issuer is refused. Leave blank if the
+                        provider does not publish one.
+                      </p>
+                    </div>
                   </>
                 )}
               </div>
