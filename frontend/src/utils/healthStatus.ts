@@ -1,4 +1,4 @@
-// Backend `registry/constants.py` HealthStatus emits 9 distinct values
+// Backend `registry/constants.py` HealthStatus emits 10 distinct values
 // including `local`, `checking`, and granular `unhealthy: <reason>` strings.
 // The UI groups these into a smaller display set for icons / labels.
 export type DisplayStatus =

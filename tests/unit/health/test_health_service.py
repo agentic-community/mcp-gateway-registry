@@ -2328,3 +2328,47 @@ class TestLegacyEraCache:
             )
 
         assert discover.call_args.kwargs["server_path"] == "/test-server"
+
+
+class TestUnresolvedHostLabel:
+    """A host that does not resolve is reported as such, not as an SSRF block."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("reason", "expected"),
+        [
+            ("DNS resolution failed: [Errno -2] Name or service not known", "host"),
+            ("DNS resolution timed out", "host"),
+            ("resolves to private address 10.0.0.5", "blocked"),
+        ],
+    )
+    async def test_status_names_the_cause(self, health_service, mock_server_info, reason, expected):
+        from registry.exceptions import UrlValidationError
+
+        with patch(
+            "registry.health.service.validate_url",
+            side_effect=UrlValidationError("http://gone:8000/mcp", reason),
+        ):
+            is_healthy, status = await health_service._check_server_endpoint_transport_aware(
+                MagicMock(), "http://gone:8000/mcp", mock_server_info
+            )
+
+        assert is_healthy is False
+        if expected == "host":
+            assert status == HealthStatus.UNHEALTHY_HOST_NOT_RESOLVED
+        else:
+            assert status == HealthStatus.UNHEALTHY_URL_BLOCKED
+
+    def test_unhealthy_label_keeps_the_route_gate_closed(self):
+        assert not HealthStatus.is_healthy(HealthStatus.UNHEALTHY_HOST_NOT_RESOLVED)
+
+    def test_url_guard_reason_still_matches_the_prefix(self):
+        """Pins the url_guard wording the label depends on, with a real lookup."""
+        from registry.exceptions import UrlValidationError
+        from registry.health.service import DNS_FAILURE_REASON_PREFIX
+        from registry.utils.url_guard import PROXY_PROFILE, validate_url
+
+        with pytest.raises(UrlValidationError) as info:
+            validate_url("https://no-such-host.invalid/mcp", profile=PROXY_PROFILE)
+
+        assert info.value.reason.startswith(DNS_FAILURE_REASON_PREFIX)
