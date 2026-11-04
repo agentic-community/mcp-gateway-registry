@@ -522,6 +522,8 @@ def test_extract_tool_details(mock_tools_response):
     assert result[0]["parsed_description"]["main"] == "Test tool for testing."
     assert "param1" in result[0]["parsed_description"]["args"]
     assert result[0]["schema"]["properties"]["param1"] == {"type": "string"}
+    # The MCP field name too, which virtual mappings, the catalog and search read.
+    assert result[0]["inputSchema"] == result[0]["schema"]
     # Verify raw description is also stored
     assert "description" in result[0]
     assert "Test tool for testing" in result[0]["description"]

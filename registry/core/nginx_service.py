@@ -27,6 +27,7 @@ from registry.egress_auth.upstream_binding import registered_versions, selected_
 from registry.exceptions import UrlValidationError
 from registry.schemas.proxy_mixin import _assert_egress_allowed, build_proxy_client_path
 from registry.utils.path_utils import make_version_id
+from registry.utils.tool_schema import stored_input_schema
 from registry.utils.url_guard import validate_proxy_pass_url, validate_server_path
 
 from .config import settings
@@ -2835,7 +2836,7 @@ class NginxConfigService:
                     for st in server_info.get("tool_list", []):
                         if st.get("name") == tm.tool_name:
                             description = tm.description_override or st.get("description", "")
-                            input_schema = st.get("inputSchema", st.get("input_schema", {}))
+                            input_schema = stored_input_schema(st)
                             break
 
                     input_schema = _ensure_mcp_compliant_schema(input_schema)
