@@ -70,6 +70,10 @@ _TOOL_EXECUTION_BOUNDED_ATTRS: frozenset[str] = frozenset(
     {"tool_name", "method", "client_name", "client_version", "server_name"}
 )
 
+# MCP 2026-07-28 request metadata keys (params._meta).
+META_PROTOCOL_VERSION_KEY: str = "io.modelcontextprotocol/protocolVersion"
+META_CLIENT_INFO_KEY: str = "io.modelcontextprotocol/clientInfo"
+
 # Protocol-latency attributes that need bounding. flow_step is a server-set enum;
 # server_name carries the same churn risk as above, on another histogram. The
 # limiter tracks distinct values per label NAME, so the two instruments that use
@@ -141,6 +145,26 @@ _GENERIC_PROXY_TARGET_KINDS: dict[str, str] = {
     "skill": "generic_proxy_skill",
     "a2a_agent": "generic_proxy_agent",
 }
+
+
+def _apply_request_meta(
+    tool_info: dict[str, Any],
+    params: object,
+) -> None:
+    """Fill protocol_version and client_info from an MCP 2026-07-28 request's _meta.
+
+    Leaves tool_info unchanged for a request without those keys, so a legacy
+    session still falls back to the client info stored from its initialize.
+    """
+    meta = params.get("_meta") if isinstance(params, dict) else None
+    if not isinstance(meta, dict):
+        return
+    version = meta.get(META_PROTOCOL_VERSION_KEY)
+    if isinstance(version, str):
+        tool_info["protocol_version"] = version
+    client_info = meta.get(META_CLIENT_INFO_KEY)
+    if isinstance(client_info, dict):
+        tool_info["client_info"] = client_info
 
 
 class AuthMetricsMiddleware(BaseHTTPMiddleware):
@@ -370,6 +394,11 @@ class AuthMetricsMiddleware(BaseHTTPMiddleware):
                     elif tool_info["method"] == "initialize" and isinstance(params, dict):
                         tool_info["protocol_version"] = params.get("protocolVersion")
                         tool_info["client_info"] = params.get("clientInfo", {})
+
+                    # MCP 2026-07-28 has no initialize: every request names its
+                    # protocol version and client in params._meta.
+                    if tool_info["method"] != "initialize":
+                        _apply_request_meta(tool_info, params)
 
         except Exception as e:
             logger.debug(f"Could not extract tool information from X-Body header: {e}")
