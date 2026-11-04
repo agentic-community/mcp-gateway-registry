@@ -8,16 +8,18 @@ Copied directly from main_old.py working implementation.
 import asyncio
 import logging
 import re
+
+# MCP SDK 2.x. Client(mode="auto") speaks MCP 2026-07-28 and falls back to the
+# initialize handshake for servers on 2025-11-25 and earlier. The SDK's HTTP
+# stack is httpx2, a separate package from the httpx the rest of the registry
+# uses.
+import ssl
 from typing import (
     Any,
     Literal,
     TypedDict,
 )
 
-# MCP SDK 2.x. Client(mode="auto") speaks MCP 2026-07-28 and falls back to the
-# initialize handshake for servers on 2025-11-25 and earlier. The SDK's HTTP
-# stack is httpx2, a separate package from the httpx the rest of the registry
-# uses.
 import httpx2
 from mcp import Client
 from mcp.client.sse import sse_client
@@ -44,6 +46,10 @@ MAX_TOOL_LIST_PAGES: int = 50
 # real limit; these only bound a single stalled read or connect.
 MCP_HTTP_CONNECT_TIMEOUT_SECONDS: float = 10.0
 MCP_HTTP_READ_TIMEOUT_SECONDS: float = 25.0
+# The SDK's own client defaults (mcp.shared._httpx_utils), kept for the SSE
+# transport, whose stream stays open between events.
+SDK_DEFAULT_TIMEOUT_SECONDS: float = 30.0
+SDK_DEFAULT_SSE_READ_TIMEOUT_SECONDS: float = 300.0
 MCP_DISCOVERY_CLIENT_NAME: str = "mcp-gateway-registry"
 MCP_DISCOVERY_CLIENT_VERSION: str = "2.0.0"
 
@@ -208,6 +214,36 @@ async def _discover_tools(
             return tools, client.server_info
 
 
+def _tls_context() -> ssl.SSLContext:
+    """The registry's TLS trust for httpx2 (imported here, as url_guard is above)."""
+    from ..utils.url_guard import egress_ssl_context
+
+    return egress_ssl_context()
+
+
+def _verified_http_client(
+    headers: dict[str, str] | None = None,
+    timeout: httpx2.Timeout | None = None,
+    auth: httpx2.Auth | None = None,
+) -> httpx2.AsyncClient:
+    """The SDK's client factory, with the registry's TLS trust.
+
+    Same defaults as mcp.shared._httpx_utils.create_mcp_http_client; only the
+    certificate trust differs (see egress_ssl_context).
+    """
+    if timeout is None:
+        timeout = httpx2.Timeout(
+            SDK_DEFAULT_TIMEOUT_SECONDS,
+            read=SDK_DEFAULT_SSE_READ_TIMEOUT_SECONDS,
+        )
+    return httpx2.AsyncClient(
+        headers=headers,
+        timeout=timeout,
+        auth=auth,
+        verify=_tls_context(),
+    )
+
+
 async def _discover_streamable_http(
     mcp_url: str,
     headers: dict[str, str],
@@ -230,7 +266,11 @@ async def _discover_streamable_http(
         MCP_HTTP_READ_TIMEOUT_SECONDS,
         connect=MCP_HTTP_CONNECT_TIMEOUT_SECONDS,
     )
-    async with httpx2.AsyncClient(headers=headers, timeout=timeout) as http_client:
+    async with httpx2.AsyncClient(
+        headers=headers,
+        timeout=timeout,
+        verify=_tls_context(),
+    ) as http_client:
         transport = streamable_http_client(mcp_url, http_client=http_client)
         return await _discover_tools(transport, mode="auto")
 
@@ -249,7 +289,7 @@ async def _discover_sse(
     Returns:
         The tools and the server identity.
     """
-    transport = sse_client(sse_url, headers=headers)
+    transport = sse_client(sse_url, headers=headers, httpx_client_factory=_verified_http_client)
     return await _discover_tools(transport, mode="legacy")
 
 
