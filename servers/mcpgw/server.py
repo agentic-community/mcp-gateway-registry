@@ -234,7 +234,7 @@ if OIDC_ENABLED:
         # any future code path that closes the pool mid-life must re-inject here.
         #
         # The other Keycloak hops OAuthProxy makes (/token x3, /revoke) have no
-        # injection point in fastmcp 3.4.9 and stay unpooled and unguarded; they fire
+        # injection point in fastmcp 3.4.9 or 4.1.6 and stay unpooled and unguarded; they fire
         # per login/refresh, never per tool call, and their URLs are operator env
         # config.
         token_verifier=JWTVerifier(
@@ -264,7 +264,7 @@ async def _lifespan(_server: FastMCP) -> AsyncIterator[dict[str, Any]]:
 
     fastmcp enters this for both stdio and streamable-http (including
     ``stateless_http=True``). The teardown half runs on stdio exit and SIGINT; under
-    SIGTERM (``docker stop`` / ECS / K8s) fastmcp 3.4.9 never reaches it, because
+    SIGTERM (``docker stop`` / ECS / K8s) fastmcp 3.4.9 never reached it (not rechecked on 4.x), because
     uvicorn re-raises the captured signal with the default handlers already restored
     once ``server.serve()`` returns. That is benign for an HTTP pool -- nothing is
     buffered and the kernel reclaims the sockets -- so this is hygiene for the

@@ -52,7 +52,7 @@ The two `mcpgw_*` label values are emitted by the **mcpgw process** and are scra
 - the **streaming** hops (MCP-proxy egress stream, health initialize/probe). A streaming POST cannot be wrapped by the reconnect helper, so a reset surfaces as a 502 (the MCP client) or a failed health check (retried next cycle).
 - the **login callback** (authorization-code token exchange + userinfo). Its calls are pooled but not wrapped in the reconnect helper, so a reset surfaces as a failed login that the user retries.
 
-On `mcpgw`, `mcpgw_registry` + `mcpgw_m2m_token` cover every hop mcpgw makes *itself* (all are idempotent, all are wrapped), which is more than the registry/auth-server side gets. They do **not** cover fastmcp's own OAuth hops when `OIDC_ENABLED=true`: `OAuthProxy` builds clients inline for `/token` (login, client refresh, proactive refresh) and `/revoke` with no injection point in fastmcp 3.4.9, so those four call sites are unpooled, unguarded and uncounted. They fire per login/refresh rather than per tool call. The `/certs` JWKS fetch *is* covered: `JWTVerifier` accepts a public `http_client=` and is wired to the pooled client.
+On `mcpgw`, `mcpgw_registry` + `mcpgw_m2m_token` cover every hop mcpgw makes *itself* (all are idempotent, all are wrapped), which is more than the registry/auth-server side gets. They do **not** cover fastmcp's own OAuth hops when `OIDC_ENABLED=true`: `OAuthProxy` builds clients inline for `/token` (login, client refresh, proactive refresh) and `/revoke` with no injection point in fastmcp 3.4.9 or 4.1.6, so those four call sites are unpooled, unguarded and uncounted. They fire per login/refresh rather than per tool call. The `/certs` JWKS fetch *is* covered: `JWTVerifier` accepts a public `http_client=` and is wired to the pooled client.
 
 ## mcpgw scope
 
@@ -70,7 +70,7 @@ On `mcpgw`, `mcpgw_registry` + `mcpgw_m2m_token` cover every hop mcpgw makes *it
 - **Per-request timeouts are preserved** (30s on the Registry API calls, 15s on the M2M token POST). The client's default timeout is only a fallback for a call that sets none.
 - A **no-store cookie jar** is installed, so a `Set-Cookie` is never persisted onto a later or concurrent request sharing the client.
 - Credentials ride **per-request headers only**. The shared client carries no default auth headers.
-- Teardown is wired through `FastMCP(lifespan=...)`, which runs on stdio exit and on SIGINT. Under **SIGTERM** (`docker stop`, ECS task stop, Kubernetes pod termination) fastmcp 3.4.9 skips it: uvicorn re-raises the signal with the default handlers restored once `server.serve()` returns, so the lifespan shutdown never runs. That is benign for an httpx pool (no write buffering to flush, and the kernel reclaims the sockets), so do **not** rely on a guaranteed pool close on SIGTERM.
+- Teardown is wired through `FastMCP(lifespan=...)`, which runs on stdio exit and on SIGINT. Under **SIGTERM** (`docker stop`, ECS task stop, Kubernetes pod termination) fastmcp 3.4.9 skipped it (not rechecked on 4.x): uvicorn re-raises the signal with the default handlers restored once `server.serve()` returns, so the lifespan shutdown never runs. That is benign for an httpx pool (no write buffering to flush, and the kernel reclaims the sockets), so do **not** rely on a guaranteed pool close on SIGTERM.
 
 ## Rollback
 
