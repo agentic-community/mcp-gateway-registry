@@ -3651,11 +3651,17 @@ class NginxReloadScheduler:
                     return
 
                 new_hash = hashlib.sha256(config_text.encode()).hexdigest()
+
+                # Write the virtual server Lua mappings on every flush, before the
+                # hash check. The Lua router re-reads them at request time, so a
+                # mapping change needs no nginx reload. Changing a virtual server's
+                # tools on backends it already uses leaves the nginx config
+                # identical, so tying the mappings to a config change left the
+                # router serving the old tool list.
+                await nginx_service._commit_virtual_server_mappings()
+
                 if new_hash == self._last_config_hash:
                     return
-
-                # Config changed: write virtual server Lua mappings, then nginx config
-                await nginx_service._commit_virtual_server_mappings()
 
                 async with nginx_service.reload_lock:
                     # Validate the candidate in-tree before it can persist as
