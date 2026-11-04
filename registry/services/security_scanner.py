@@ -38,18 +38,58 @@ OUTPUT_DIR = PROJECT_ROOT / "security_scans"
 # this module and the shim below; deliberately NOT one of mcp-scanner's own variables.
 _SCANNER_BEARER_ENV = "MCP_GATEWAY_SCAN_BEARER"  # nosec B105 - env var name, not a secret
 
+# Python source run inside the scanner subprocess, after the litellm stand-in. It fixes
+# when mcp-scanner falls back from MCP 2026-07-28 to the initialize handshake.
+#
+# mcp-scanner 4.8.7 sends server/discover first. When that fails it falls back to
+# initialize only for one exact message, "Bad Request: Missing session ID". A server on
+# the mcp 1.x Python SDK (FastMCP 2/3, the gateway's own mcpgw) checks the
+# MCP-Protocol-Version header first and answers -32600 "Bad Request: Unsupported
+# protocol version: 2026-07-28. Supported versions: ...", so the scan failed and,
+# with SECURITY_BLOCK_ON_SCAN_FAILURE on, the registry disabled the server.
+#
+# The 2026-07-28 spec's rule is: only the errors that 2026-07-28 itself defines
+# (-32020 HeaderMismatch, -32021 MissingRequiredClientCapability, -32022
+# UnsupportedProtocolVersion) identify a modern server. Any other error means a
+# handshake-era server, so fall back to initialize. The patch keeps every fallback
+# mcp-scanner already makes and adds that one. If the module cannot be imported or the
+# method is ever renamed, the patch does nothing rather than break the scan.
+# Spec: https://modelcontextprotocol.io/specification/2026-07-28/basic/transports/streamable-http#backward-compatibility
+# Remove once cisco-ai-mcp-scanner falls back on any non-2026 discover error.
+MCP_SCANNER_DISCOVER_FALLBACK_PATCH: str = (
+    "try:\n"
+    "    import mcpscanner.core.scanner as _mcps\n"
+    "except ImportError:\n"
+    "    _mcps=None\n"
+    "_mcps_original=getattr(getattr(_mcps,'Scanner',None),'_should_fallback_to_initialize',None)\n"
+    "if _mcps_original is not None:\n"
+    "    def _mcps_should_fallback(error,*,legacy_stdio=False,legacy_http=False):\n"
+    "        if _mcps_original(error,legacy_stdio=legacy_stdio,legacy_http=legacy_http):\n"
+    "            return True\n"
+    "        code=getattr(error,'code',None)\n"
+    "        if code is None:\n"
+    "            code=getattr(getattr(error,'error',None),'code',None)\n"
+    "        return code not in (-32020,-32021,-32022)\n"
+    "    _mcps.Scanner._should_fallback_to_initialize=staticmethod(_mcps_should_fallback)\n"
+)
+
 # Launched as `python -c <shim>`, so the scan credential never appears in any argv. The
 # shim pops it from the environment and re-attaches mcp-scanner's own flag inside the
 # child, then hands off to the same entry point the console script uses. Popping it also
 # keeps it out of the environment the scanner might pass to anything it spawns.
 # MCP_SCANNER_LITELLM_STANDIN runs first: mcp-scanner imports litellm at module
 # load even for a YARA-only scan, and the registry no longer installs it (#1826).
-_SCANNER_SHIM = MCP_SCANNER_LITELLM_STANDIN + (
-    "import os,sys;"
-    "from mcpscanner.cli import cli_entry_point;"
-    f"_t=os.environ.pop({_SCANNER_BEARER_ENV!r},None);"
-    "sys.argv=['mcp-scanner']+sys.argv[1:]+(['--bearer-token',_t] if _t else []);"
-    "sys.exit(cli_entry_point())"
+# MCP_SCANNER_DISCOVER_FALLBACK_PATCH runs second, before the CLI starts a scan.
+_SCANNER_SHIM = (
+    MCP_SCANNER_LITELLM_STANDIN
+    + MCP_SCANNER_DISCOVER_FALLBACK_PATCH
+    + (
+        "import os,sys;"
+        "from mcpscanner.cli import cli_entry_point;"
+        f"_t=os.environ.pop({_SCANNER_BEARER_ENV!r},None);"
+        "sys.argv=['mcp-scanner']+sys.argv[1:]+(['--bearer-token',_t] if _t else []);"
+        "sys.exit(cli_entry_point())"
+    )
 )
 
 
