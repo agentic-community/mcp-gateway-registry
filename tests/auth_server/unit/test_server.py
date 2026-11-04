@@ -4606,7 +4606,12 @@ class TestMcpProxyEndpointHeaderPassthrough:
             client = TestClient(server_module.app)
             response = client.post(
                 "/mcp-proxy/github",
-                json={"jsonrpc": "2.0", "id": 7, "method": "tools/call"},
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 7,
+                    "method": "tools/call",
+                    "params": {"name": "search"},
+                },
                 headers=_mcp_proxy_token_headers(server_name="github"),
             )
 
@@ -4647,7 +4652,12 @@ class TestMcpProxyEndpointHeaderPassthrough:
             client = TestClient(server_module.app)
             response = client.post(
                 "/mcp-proxy/github",
-                json={"jsonrpc": "2.0", "id": 7, "method": "tools/call"},
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 7,
+                    "method": "tools/call",
+                    "params": {"name": "search"},
+                },
                 headers=_mcp_proxy_token_headers(server_name="github"),
             )
 
@@ -5142,7 +5152,12 @@ class TestMcpProxyOboExchange:
         ):
             response = TestClient(server_module.app).post(
                 "/mcp-proxy/outlook",
-                json={"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": {}},
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 7,
+                    "method": "tools/call",
+                    "params": {"name": "search"},
+                },
                 headers={
                     **_mcp_proxy_token_headers(
                         server_name="outlook", obo_subject_sha256=hop_digest
@@ -6119,7 +6134,12 @@ class TestMcpProxyPatMode:
             client = TestClient(server_module.app)
             response = client.post(
                 "/mcp-proxy/github",
-                json={"jsonrpc": "2.0", "id": 9, "method": "tools/call"},
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 9,
+                    "method": "tools/call",
+                    "params": {"name": "search"},
+                },
                 headers=_mcp_proxy_token_headers(server_name="github"),
             )
 
@@ -7595,7 +7615,12 @@ class TestMcpProxyEgressUnavailable:
             client = TestClient(server_module.app)
             response = client.post(
                 "/mcp-proxy/github",
-                json={"jsonrpc": "2.0", "id": 9, "method": "tools/call"},
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 9,
+                    "method": "tools/call",
+                    "params": {"name": "search"},
+                },
                 headers=_mcp_proxy_token_headers(server_name="github"),
             )
 

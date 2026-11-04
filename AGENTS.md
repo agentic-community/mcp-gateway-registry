@@ -343,7 +343,8 @@ working in those areas.
 - **Authorization:** deny by default; never treat a broad/execute scope as admin;
   enforce ownership server-side before every mutation across the whole endpoint
   family; `dict.get("k")` not `getattr(dict, "k")`; no substring matching for
-  privilege decisions; verify externally-supplied JWTs (sig/iss/aud/exp) before
+  privilege decisions; a wildcard in one grant dimension never grants another
+  (`tools: ["*"]` grants tools, not methods); verify externally-supplied JWTs (sig/iss/aud/exp) before
   trusting claims; attach shared/global credentials only on explicit admin opt-in.
 - **Virtual backend grants:** internal subrequests that rewrite the backing URL
   must preserve any resource-bound token's virtual URI in a trusted nginx-only

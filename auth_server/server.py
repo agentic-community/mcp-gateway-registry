@@ -2517,6 +2517,25 @@ def _scope_check_target(
     return method, tool_name
 
 
+# MCP methods that any scope with access to a server allows, whatever its methods
+# list says. server/discover (MCP 2026-07-28) only reports the server's protocol
+# versions and capabilities. A client notification acknowledges or cancels and
+# returns no data. Neither reveals or changes anything the server-level grant
+# does not already cover. Never applied to HTTP verbs (the generic-proxy hop).
+_SERVER_ACCESS_METHODS: frozenset[str] = frozenset({"server/discover"})
+_SERVER_ACCESS_METHOD_PREFIX: str = "notifications/"
+
+
+def _granted_by_server_access(
+    method: str,
+    is_http_verb: bool,
+) -> bool:
+    """Whether any access to a server is enough for this MCP method."""
+    if is_http_verb or not isinstance(method, str):
+        return False
+    return method in _SERVER_ACCESS_METHODS or method.startswith(_SERVER_ACCESS_METHOD_PREFIX)
+
+
 async def validate_server_tool_access(
     server_name: str,
     method: str,
@@ -2595,6 +2614,13 @@ async def validate_server_tool_access(
                 if _server_names_match(server_config_name, server_name):
                     logger.debug("  Server name matches")
 
+                    if _granted_by_server_access(method, is_http_verb):
+                        logger.info(
+                            f"Access granted: server='{server_name}' method='{method}' "
+                            f"tool='{tool_name}' (any server access)"
+                        )
+                        return True
+
                     # Check methods first
                     allowed_methods = server_config.get("methods", [])
                     logger.debug(f"  Allowed methods for server '{server_name}': {allowed_methods}")
@@ -2672,9 +2698,21 @@ async def validate_server_tool_access(
                         else:
                             logger.debug(f"  Tool '{tool_name}' NOT found in allowed tools")
                     else:
-                        # For other methods, check if method is in tools list (backward compatibility)
+                        # Backward compatibility: a scope may list a method name in
+                        # its tools list. Only an explicitly named method counts.
+                        # A wildcard tools list ("*" / "all") grants every TOOL for
+                        # tools/call; it must not grant every METHOD, or the methods
+                        # list stops restricting anything. HTTP verbs already skip
+                        # this branch (above).
                         logger.debug(f"  Checking if method '{method}' is in allowed tools...")
-                        if method in allowed_tools or has_wildcard_tools:
+                        # A body-less request (opening an HTTP+SSE stream) is
+                        # authorized as its URL tail (mcp / sse / messages), which
+                        # no methods list names. Wildcard-tool scopes allowed it
+                        # through this branch before, so keep exactly that case.
+                        transport_open = has_wildcard_tools and method in MCP_TRANSPORT_ENDPOINTS
+                        if transport_open or (
+                            isinstance(allowed_tools, list) and method in allowed_tools
+                        ):
                             logger.debug(f"  Method '{method}' found in allowed tools")
                             logger.debug(f"scope '{scope}' allows access to {server_name}.{method}")
                             logger.info(
