@@ -22,6 +22,10 @@ from ..utils.url_guard import (
 
 logger = logging.getLogger(__name__)
 
+# MCP 2026-07-28 deprecates HTTP+SSE with a twelve-month window, so the gateway
+# keeps routing it until at least this date.
+SSE_TRANSPORT_REMOVAL_EARLIEST: str = "2027-07-28"
+
 
 def _validate_endpoint_fields(
     server_info: dict[str, Any],
@@ -49,6 +53,27 @@ def _validate_endpoint_fields(
             reject_nginx_metacharacters=True,
             resolve=False,
         )
+
+
+def _warn_if_sse_only(
+    server_info: dict[str, Any],
+) -> None:
+    """Log a warning for a server registered with only the HTTP+SSE transport.
+
+    MCP 2026-07-28 deprecates HTTP+SSE. The gateway still routes it; this gives
+    operators notice before support is removed (no earlier than
+    SSE_TRANSPORT_REMOVAL_EARLIEST).
+    """
+    transports = server_info.get("supported_transports") or []
+    if list(transports) != ["sse"]:
+        return
+    logger.warning(
+        "Server %s registers only the deprecated HTTP+SSE transport. MCP 2026-07-28 "
+        "deprecates it; gateway support may be removed no earlier than %s. Move the "
+        "server to streamable-http.",
+        server_info.get("path"),
+        SSE_TRANSPORT_REMOVAL_EARLIEST,
+    )
 
 
 class ServerService:
@@ -107,6 +132,7 @@ class ServerService:
         """
         path = server_info.get("path")
         new_version = server_info.get("version")
+        _warn_if_sse_only(server_info)
 
         # Fail-closed URL validation on every registration path (dashboard/API,
         # internal register, CLI, federation import) before anything is
