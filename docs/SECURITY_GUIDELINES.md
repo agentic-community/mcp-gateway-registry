@@ -397,6 +397,18 @@ sanitizer that isn't called) is equivalent to no check.
   round-trip (`cjson.decode`), not a handwritten Lua table with `nil`.
 - **No substring matching for privilege decisions** (`"unrestricted" in scope`
   accepted access scopes as admin). Match exact, centralized constants.
+- **A wildcard in one grant dimension must not grant another.** A scope entry
+  has `methods` and `tools`. `validate_server_tool_access` had a
+  backward-compatibility branch that allowed any non-`tools/call` method found
+  in `tools`, and it also accepted `tools: ["*"]` there, so every wildcard-tool
+  scope allowed every MCP method and its `methods` list restricted nothing. The
+  same branch did `method in allowed_tools` on a string-valued `tools`, a
+  substring test. Rule: a wildcard grants only within its own dimension (`*` in
+  `tools` means every tool for `tools/call`); cross-dimension compatibility is
+  limited to exact, explicitly named entries in a list. When closing such a
+  fallback, first find what it was quietly allowing (here, the URL-derived
+  `sse`/`mcp`/`messages` names body-less HTTP+SSE requests are authorized as)
+  and keep exactly those cases explicitly, or the fix breaks a transport.
 - **Reserve the wildcard/sentinel names at every write that turns user input
   into an authorization key.** If a resolver treats a magic value (`all`, `*`)
   as a cross-cutting wildcard, then any name derived from user input — a server

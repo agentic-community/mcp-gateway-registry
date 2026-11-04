@@ -6,17 +6,17 @@
   "server_access": [
     {
       "server": "/currenttime",
-      "methods": ["initialize", "notifications/initialized", "ping", "tools/list", "tools/call", "resources/list", "resources/templates/list"],
+      "methods": ["initialize", "notifications/initialized", "ping", "tools/list", "tools/call", "resources/list", "resources/templates/list", "resources/read", "prompts/list", "prompts/get"],
       "tools": ["*"]
     },
     {
       "server": "/mcpgw",
-      "methods": ["initialize", "notifications/initialized", "ping", "tools/list", "tools/call", "resources/list", "resources/templates/list"],
+      "methods": ["initialize", "notifications/initialized", "ping", "tools/list", "tools/call", "resources/list", "resources/templates/list", "resources/read", "prompts/list", "prompts/get"],
       "tools": ["*"]
     },
     {
       "server": "/realserverfaketools",
-      "methods": ["initialize", "notifications/initialized", "ping", "tools/list", "tools/call", "resources/list", "resources/templates/list"],
+      "methods": ["initialize", "notifications/initialized", "ping", "tools/list", "tools/call", "resources/list", "resources/templates/list", "resources/read", "prompts/list", "prompts/get"],
       "tools": ["*"]
     },
     {
