@@ -272,6 +272,10 @@ The gateway authorizes the method and tool named in the request body. An MCP 202
 
 A request that sends none of these headers, which covers every legacy client, is not checked. A body that nginx spilled to a temporary file is not compared either, because `/validate` already refuses a body it cannot inspect.
 
+### Denied requests
+
+A request the scopes do not allow gets HTTP 403 with `WWW-Authenticate: Bearer resource_metadata="..."`, the same protected-resource metadata URL a 401 names. The header deliberately omits `error="insufficient_scope"`. MCP clients answer that error by running authorization again, but the gateway denies on group membership and blocked tools, so a new token carries the same access and the client would only prompt the user for nothing.
+
 ### Validation Flow Diagram
 
 ```
