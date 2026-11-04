@@ -1476,6 +1476,47 @@ end
 
 -- Proxy a single request to a specific backend with session management and stale retry.
 -- Returns the response body directly. Used for tools/call, resources/read, prompts/get.
+-- A cjson instance that decodes JSON arrays with the array metatable, so a
+-- re-encoded backend result keeps [] as [] (plain cjson writes an empty table
+-- as {}). Used only to add resultType to forwarded results.
+local cjson_keep_arrays = cjson.new()
+cjson_keep_arrays.decode_array_with_array_mt(true)
+
+
+-- Add resultType "complete" to one JSON-RPC message, if it is a result that
+-- lacks it. Returns the message text unchanged when nothing applies.
+local function _add_result_type(text)
+    local ok, message = pcall(cjson_keep_arrays.decode, text)
+    if not ok or type(message) ~= "table" or type(message.result) ~= "table"
+        or message.result.resultType ~= nil then
+        return text
+    end
+    message.result.resultType = "complete"
+    return cjson_keep_arrays.encode(message)
+end
+
+
+-- MCP 2026-07-28 requires resultType on every result, and the SDK rejects a
+-- result without it. A handshake-era backend never sends it, so add it when
+-- the client spoke 2026-07-28. Handles a JSON body and SSE "data:" lines.
+local function _with_result_type(body)
+    if type(body) ~= "string" or body == "" then
+        return body
+    end
+    if body:sub(1, 1) == "{" then
+        return _add_result_type(body)
+    end
+    local lines = {}
+    for line in (body .. "\n"):gmatch("(.-)\n") do
+        if line:sub(1, 6) == "data: " then
+            line = "data: " .. _add_result_type(line:sub(7))
+        end
+        lines[#lines + 1] = line
+    end
+    return table.concat(lines, "\n")
+end
+
+
 local function _proxy_to_backend(request_id, method_name, proxied_params,
                                   backend_location, client_session_id, server_id,
                                   backend_version, label, allow_pre_consent, param_headers)
@@ -1522,7 +1563,11 @@ local function _proxy_to_backend(request_id, method_name, proxied_params,
     else
         ngx.header["Content-Type"] = "application/json"
     end
-    ngx.print(res.body)
+    if ngx.ctx.vr_modern_client then
+        ngx.print(_with_result_type(res.body))
+    else
+        ngx.print(res.body)
+    end
 end
 
 
@@ -2152,6 +2197,7 @@ function _M.route()
     -- MCP 2026-07-28: validate the mirrored headers, then drop the client's
     -- copies so no backend subrequest inherits them (see _clear_client_mcp_headers).
     local modern = _is_modern_request(params)
+    ngx.ctx.vr_modern_client = modern
     if modern then
         if not _validate_modern_request(request_id, method, params) then
             return
@@ -2386,6 +2432,7 @@ if _G._VR_TEST then
     _M._proxy_list_to_backends = _proxy_list_to_backends
     _M._get_mapping = _get_mapping
     _M._ensure_mcp_schema = _ensure_mcp_schema
+    _M._with_result_type = _with_result_type
     _M._handle_resources_read = _handle_resources_read
     _M._append_mapping_tools_for_backend = _append_mapping_tools_for_backend
     _M._handle_tools_list = _handle_tools_list

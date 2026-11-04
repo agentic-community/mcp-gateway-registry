@@ -4812,7 +4812,7 @@ class TestMcpProxyEndpointHeaderPassthrough:
 
         if expect == "baseline":
             assert body["result"]["isError"] is True
-            assert "resultType" not in body["result"]
+            assert body["result"].get("resultType", "complete") == "complete"
         else:
             assert body["error"]["code"] == -32042
 
@@ -4864,6 +4864,30 @@ class TestMcpProxyEndpointHeaderPassthrough:
         forwarded = json.loads(authorize.call_args.args[1])
         assert forwarded["params"]["requestState"] == "upstream-state"
         assert forwarded["params"]["inputResponses"] == {"q1": {"action": "accept"}}
+
+    @pytest.mark.parametrize("method", ["tools/list", "ping"])
+    def test_pre_consent_local_results_are_complete_for_modern_clients(self, method):
+        payload = _modern_call(url_capable=False)
+        payload["method"] = method
+        payload["params"] = {"_meta": payload["params"]["_meta"]}
+
+        body = self._post_tokenless_call(payload, use_elicitation=False)
+
+        assert body["result"]["resultType"] == "complete"
+
+    def test_baseline_consent_result_is_complete_for_modern_clients(self):
+        body = self._post_tokenless_call(_modern_call(url_capable=False), use_elicitation=False)
+
+        assert body["result"]["isError"] is True
+        assert body["result"]["resultType"] == "complete"
+
+    @pytest.mark.parametrize("method", ["tools/list", "ping", "tools/call"])
+    def test_legacy_requests_get_no_result_type(self, method):
+        payload = {"jsonrpc": "2.0", "id": 7, "method": method, "params": {"name": "search"}}
+
+        body = self._post_tokenless_call(payload, use_elicitation=False)
+
+        assert "resultType" not in body["result"]
 
     def test_egress_consent_answers_initialize_locally(self):
         """For an egress server with no vaulted token, the gateway must answer
