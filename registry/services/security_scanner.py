@@ -17,6 +17,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import certifi
+
 from ..common.log_redaction import redact_url
 from ..core.config import settings
 from ..core.endpoint_utils import get_endpoint_url
@@ -525,6 +527,11 @@ class SecurityScannerService:
         ]
 
         env = os.environ.copy()
+        # mcp-scanner 4.8.7 runs on MCP SDK 2.x, whose httpx2 client reads only the
+        # operating system trust store, and the registry image ships none. Give
+        # it certifi, the trust 4.8.6 had through httpx. An operator's own
+        # SSL_CERT_FILE is left alone.
+        env.setdefault("SSL_CERT_FILE", certifi.where())
         # Parse the resolved auth headers and hand the credential over out-of-band.
         if headers:
             bearer_token = _extract_bearer_token_from_headers(headers)
