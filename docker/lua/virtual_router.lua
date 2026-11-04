@@ -158,6 +158,24 @@ local function _tag_empty_schema_arrays(node, depth)
 end
 
 
+-- JSON Schema keywords that hold reusable definitions (2020-12 and draft-07).
+local SCHEMA_DEFINITION_KEYS = { "$defs", "definitions" }
+
+
+-- True when a JSON Schema "type" list includes "object".
+local function _type_list_allows_object(schema_type)
+    if type(schema_type) ~= "table" then
+        return false
+    end
+    for _, value in ipairs(schema_type) do
+        if value == "object" then
+            return true
+        end
+    end
+    return false
+end
+
+
 -- Ensure inputSchema has "type": "object" as required by MCP spec
 local function _ensure_mcp_schema(schema)
     if not schema or type(schema) ~= "table" then
@@ -171,8 +189,23 @@ local function _ensure_mcp_schema(schema)
         schema.type = "object"
         return schema
     end
-    -- Non-object type: wrap it
-    return { type = "object", properties = { value = schema } }
+    -- A type list that allows an object (["object", "null"]) already describes
+    -- the arguments object. MCP 2026-07-28 requires the root type to be exactly
+    -- "object", so narrow it instead of nesting the arguments under "value".
+    if _type_list_allows_object(schema.type) then
+        schema.type = "object"
+        return schema
+    end
+    -- Non-object type: wrap it. "#/$defs/..." references resolve against the
+    -- document root, so the definitions move to the new root.
+    local wrapper = { type = "object", properties = { value = schema } }
+    for _, key in ipairs(SCHEMA_DEFINITION_KEYS) do
+        if schema[key] ~= nil then
+            wrapper[key] = schema[key]
+            schema[key] = nil
+        end
+    end
+    return wrapper
 end
 
 
@@ -2352,6 +2385,7 @@ if _G._VR_TEST then
     _M._fetch_backend_list = _fetch_backend_list
     _M._proxy_list_to_backends = _proxy_list_to_backends
     _M._get_mapping = _get_mapping
+    _M._ensure_mcp_schema = _ensure_mcp_schema
     _M._handle_resources_read = _handle_resources_read
     _M._append_mapping_tools_for_backend = _append_mapping_tools_for_backend
     _M._handle_tools_list = _handle_tools_list

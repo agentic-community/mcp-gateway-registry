@@ -2176,6 +2176,36 @@ do
 end
 
 -- ---------------------------------------------------------------------------
+print("inputSchema normalization keeps object schemas and their definitions")
+do
+    local nullable = M._ensure_mcp_schema({
+        type = { "object", "null" }, properties = { q = { type = "string" } },
+    })
+    check(nullable.type == "object" and nullable.properties.q.type == "string"
+        and nullable.properties.value == nil,
+        "a type list that allows an object is narrowed to object, not nested under value")
+
+    local ref_root = M._ensure_mcp_schema({
+        ["$ref"] = "#/$defs/Args", ["$defs"] = { Args = { type = "object" } },
+    })
+    check(ref_root.type == "object" and ref_root["$ref"] == "#/$defs/Args"
+        and ref_root["$defs"].Args ~= nil,
+        "a root $ref without a type keeps its reference and definitions")
+
+    local wrapped = M._ensure_mcp_schema({
+        type = "array", items = { ["$ref"] = "#/$defs/Item" },
+        ["$defs"] = { Item = { type = "string" } },
+    })
+    check(wrapped.type == "object" and wrapped.properties.value.type == "array"
+        and wrapped["$defs"] and wrapped["$defs"].Item.type == "string"
+        and wrapped.properties.value["$defs"] == nil,
+        "a wrapped non-object schema moves $defs to the new root so references resolve")
+
+    local plain = M._ensure_mcp_schema({ type = "object", properties = {} })
+    check(plain.type == "object", "an object schema is unchanged")
+end
+
+-- ---------------------------------------------------------------------------
 if failures > 0 then
     print(string.format("\n%d check(s) FAILED", failures))
     os.exit(1)

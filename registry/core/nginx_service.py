@@ -82,6 +82,9 @@ def _virtual_config_generation(
 # currently has so an operator's chmod isn't silently reverted.
 DEFAULT_NGINX_CONFIG_MODE: int = 0o644
 
+# JSON Schema keywords that hold reusable definitions (2020-12 and draft-07).
+SCHEMA_DEFINITION_KEYS: tuple[str, ...] = ("$defs", "definitions")
+
 # Route prefix under which enabled A2A agents are reverse-proxied through the
 # gateway. An agent registered at path "/flight-booking-agent" is
 # reachable at "{ROOT_PATH}/agent/flight-booking-agent/".
@@ -1046,6 +1049,22 @@ def _write_and_validate_config(
     raise RuntimeError(f"nginx config rejected by nginx -t: {message.strip()}")
 
 
+def _wrap_non_object_schema(
+    input_schema: dict[str, Any],
+) -> dict[str, Any]:
+    """Nest a non-object schema under properties.value, keeping its definitions.
+
+    References such as "#/$defs/Item" resolve against the document root. The
+    definitions therefore move to the new root, or the references would break.
+    """
+    inner = dict(input_schema)
+    wrapper: dict[str, Any] = {"type": "object", "properties": {"value": inner}}
+    for key in SCHEMA_DEFINITION_KEYS:
+        if key in inner:
+            wrapper[key] = inner.pop(key)
+    return wrapper
+
+
 def _ensure_mcp_compliant_schema(input_schema: dict[str, Any]) -> dict[str, Any]:
     """Ensure inputSchema conforms to MCP spec by adding 'type': 'object' if missing.
 
@@ -1065,13 +1084,22 @@ def _ensure_mcp_compliant_schema(input_schema: dict[str, Any]) -> dict[str, Any]
     if input_schema.get("type") == "object":
         return input_schema
 
+    # A type list that allows an object (for example ["object", "null"]) already
+    # describes the arguments object. MCP 2026-07-28 requires the root type to
+    # be exactly "object", so narrow it instead of nesting the arguments.
+    root_type = input_schema.get("type")
+    if isinstance(root_type, list) and "object" in root_type:
+        schema_copy = input_schema.copy()
+        schema_copy["type"] = "object"
+        return schema_copy
+
     # If schema has "type" but it's not "object", wrap it
     if "type" in input_schema:
         logger.warning(
             f"Tool inputSchema has non-object type '{input_schema.get('type')}'. "
             "Wrapping in object schema to comply with MCP spec."
         )
-        return {"type": "object", "properties": {"value": input_schema}}
+        return _wrap_non_object_schema(input_schema)
 
     # If no "type" field but has "properties", add "type": "object"
     if "properties" in input_schema or "additionalProperties" in input_schema:
