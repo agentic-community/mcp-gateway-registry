@@ -262,6 +262,16 @@ def validate_server_tool_access(server_name: str, method: str, tool_name: str, u
 5. **Tool Validation**: For `tools/call`, validate specific tool permissions
 6. **Access Decision**: Grant access if any scope allows the operation
 
+### MCP 2026-07-28 request headers
+
+The gateway authorizes the method and tool named in the request body. An MCP 2026-07-28 client also names them in the `Mcp-Method` and `Mcp-Name` headers, and a backend may route on those headers instead of reading the body. So before authorization, nginx (`docker/lua/capture_body.lua`) compares the headers with the body and answers HTTP 400 with JSON-RPC error `-32020` (header mismatch) when they disagree. The check applies to direct and virtual servers alike, and covers three cases:
+
+- `Mcp-Method` must equal the body `method`.
+- `Mcp-Name` must equal `params.name` for `tools/call` and `prompts/get`, and `params.uri` for `resources/read`, after decoding the `=?base64?...?=` form. Other methods must not send it.
+- `MCP-Protocol-Version` must equal `params._meta["io.modelcontextprotocol/protocolVersion"]` when either names a 2026 version. Either header is then required.
+
+A request that sends none of these headers, which covers every legacy client, is not checked. A body that nginx spilled to a temporary file is not compared either, because `/validate` already refuses a body it cannot inspect.
+
 ### Validation Flow Diagram
 
 ```
