@@ -227,6 +227,8 @@ Requests without the 2026-07-28 markers keep the handshake path above.
 - For `tools/call`, the router sends `Mcp-Param-*` headers from the `x-mcp-header` annotations in that backend's `tools/list`, fetching the list once when it has not seen it in the last 5 minutes. A tool whose annotation breaks a 2026-07-28 rule (a non-token name, a `number` or non-primitive parameter, a case-insensitive duplicate) is dropped from the list, as the spec requires.
 - Every other backend keeps the `initialize` handshake.
 
+**Lists the router builds.** `tools/list` keeps each backend tool's `title`, `annotations`, `outputSchema`, `icons`, `execution` and `_meta`, alongside the alias name, description and `inputSchema`. `resources/templates/list` is aggregated across backends like `resources/list`. For a 2026-07-28 client, `tools/list`, `resources/list`, `resources/templates/list` and `prompts/list` also carry `resultType: "complete"`, `cacheScope: "private"` (the lists are filtered per user, so no shared cache may store them) and `ttlMs: 60000`. Handshake-era clients get the lists without those three fields.
+
 Discovery lists follow `nextCursor` for up to 50 pages. A failed page fails that backend's whole fetch, so a partial list is never presented or cached as complete. A 2026-07-28 backend's HTTP 404 with `-32601` for a list method counts as `unsupported`, the same as the HTTP 200 form.
 
 ---

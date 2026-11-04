@@ -45,6 +45,10 @@
     {
       "tool_name": "header_param",
       "backend_server_path": "/pingmcp-modern/"
+    },
+    {
+      "tool_name": "needs_input",
+      "backend_server_path": "/pingmcp-modern/"
     }
   ],
   "required_scopes": [],

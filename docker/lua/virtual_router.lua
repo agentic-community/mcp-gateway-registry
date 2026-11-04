@@ -514,6 +514,28 @@ local function _invalidate_backend_session(client_session_id, backend_location, 
 end
 
 
+-- Optional fields of a backend tool that the virtual tools/list passes through
+-- unchanged. inputSchema and the name/description are handled separately.
+local PASSTHROUGH_TOOL_FIELDS = { "title", "annotations", "outputSchema", "icons", "execution", "_meta" }
+
+
+-- Copy the pass-through fields from one tool table to another. outputSchema
+-- gets the same empty-array tagging as inputSchema, so a [] keeps its type
+-- through cjson (including the per-user tools/list cache).
+local function _copy_tool_fields(from, to)
+    for _, field in ipairs(PASSTHROUGH_TOOL_FIELDS) do
+        local value = from[field]
+        if value ~= nil and value ~= cjson.null then
+            if field == "outputSchema" and type(value) == "table" then
+                _tag_empty_schema_arrays(value, 0)
+            end
+            to[field] = value
+        end
+    end
+    return to
+end
+
+
 -- A mapped tool without a valid backend identity cannot be safely displayed.
 -- The decision helper is defined later, before the router executes.
 local _blocked_backend_tools
@@ -1140,7 +1162,22 @@ end
 
 
 -- Handle tools/list method - proxy to backends for full metadata, with cache
-local function _handle_tools_list(request_id, mapping, user_scopes_str, client_session_id, server_id)
+-- The result object for a list the router builds. For a 2026-07-28 client it
+-- also carries resultType and the cache hints: the list is filtered per user
+-- (scopes, egress consent, blocked tools), so no shared cache may store it.
+local function _list_result(result_key, items, modern)
+    local result = { [result_key] = _as_json_array(items) }
+    if modern then
+        result.resultType = "complete"
+        result.cacheScope = "private"
+        result.ttlMs = ENRICHED_CACHE_TTL * 1000
+    end
+    return result
+end
+
+
+local function _handle_tools_list(request_id, mapping, user_scopes_str, client_session_id, server_id,
+                                  modern)
     -- Egress discovery depends on individual credentials and must be fresh.
     local has_egress_backend = next(_egress_locations(mapping)) ~= nil
 
@@ -1221,7 +1258,7 @@ local function _handle_tools_list(request_id, mapping, user_scopes_str, client_s
                         if not desc or desc == "" then
                             desc = bt.description or ""
                         end
-                        enriched_tools[#enriched_tools + 1] = {
+                        enriched_tools[#enriched_tools + 1] = _copy_tool_fields(bt, {
                             name = display_name,
                             original_name = mapping_entry.original_name or mapping_entry.name,
                             backend_server_path = mapping_entry.backend_server_path,
@@ -1229,7 +1266,7 @@ local function _handle_tools_list(request_id, mapping, user_scopes_str, client_s
                             description = desc,
                             inputSchema = _ensure_mcp_schema(bt.inputSchema or bt.input_schema),
                             required_scopes = mapping_entry.required_scopes,
-                        }
+                        })
                     end
                 end
             elseif result.outcome == LIST_CONSENT then
@@ -1299,16 +1336,16 @@ local function _handle_tools_list(request_id, mapping, user_scopes_str, client_s
                 end
             end
             if not blocked_by_path[path][tool.original_name] then
-                tools[#tools + 1] = {
+                tools[#tools + 1] = _copy_tool_fields(tool, {
                     name = tool.name,
                     description = tool.description or "",
                     inputSchema = _ensure_mcp_schema(tool.inputSchema),
-                }
+                })
             end
         end
     end
 
-    return _jsonrpc_result(request_id, { tools = _as_json_array(tools) })
+    return _jsonrpc_result(request_id, _list_result("tools", tools, modern))
 end
 
 
@@ -2222,7 +2259,8 @@ function _M.route()
 
     if method == "tools/list" then
         ngx.status = 200
-        ngx.say(_handle_tools_list(request_id, mapping, user_scopes_str, client_session_id, server_id))
+        ngx.say(_handle_tools_list(request_id, mapping, user_scopes_str, client_session_id, server_id,
+            modern))
 
     elseif method == "tools/call" then
         _handle_tools_call(request_id, mapping, params, user_scopes_str, client_session_id, server_id)
@@ -2243,7 +2281,25 @@ function _M.route()
             return
         end
         ngx.status = 200
-        ngx.say(_jsonrpc_result(request_id, { resources = _as_json_array(resources) }))
+        ngx.say(_jsonrpc_result(request_id, _list_result("resources", resources, modern)))
+
+    elseif method == "resources/templates/list" then
+        -- Enforce server-level required_scopes
+        if not _has_scopes(user_scopes_str, mapping.required_scopes) then
+            ngx.status = 200
+            ngx.say(_jsonrpc_error(request_id, -32603, "Access denied: missing required server scopes"))
+            return
+        end
+        local templates, _, denied = _proxy_list_to_backends("resources/templates/list",
+            "resourceTemplates", mapping, client_session_id, server_id)
+        if not templates then
+            ngx.status = denied and 403 or 502
+            ngx.say(_jsonrpc_error(request_id, -32603,
+                denied and "Backend access denied" or "Backend discovery failed"))
+            return
+        end
+        ngx.status = 200
+        ngx.say(_jsonrpc_result(request_id, _list_result("resourceTemplates", templates, modern)))
 
     elseif method == "resources/read" then
         -- Enforce server-level required_scopes
@@ -2270,7 +2326,7 @@ function _M.route()
             return
         end
         ngx.status = 200
-        ngx.say(_jsonrpc_result(request_id, { prompts = _as_json_array(prompts) }))
+        ngx.say(_jsonrpc_result(request_id, _list_result("prompts", prompts, modern)))
 
     elseif method == "prompts/get" then
         -- Enforce server-level required_scopes

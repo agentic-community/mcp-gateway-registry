@@ -2100,6 +2100,81 @@ do
     capture_handler = nil
 end
 
+print("test: virtual tools/list keeps backend tool fields, also from its cache")
+do
+    dict._store["tools_enriched::fields:5:alice"] = nil
+    local mapping = { tools = {
+        { name = "alias_weather", original_name = "weather", backend_location = "/_vs_backend_fields",
+          backend_server_path = "/fine" } } }
+    capture_handler = function(loc)
+        if loc == "/_vs_backend_fields" then
+            return { status = 200, body = cjson.encode({ result = { tools = { {
+                name = "weather", title = "Weather", description = "Forecast",
+                inputSchema = { type = "object", properties = {} },
+                outputSchema = { type = "object", properties = { tags = { type = "array", default = {} } },
+                    required = setmetatable({}, cjson.empty_array_mt) },
+                annotations = { readOnlyHint = true }, icons = { { src = "https://x/i.png" } } } } } }) }
+        end
+    end
+    local first = cjson.decode(M._handle_tools_list(1, mapping, "", nil, "fields"))
+    local second_raw = M._handle_tools_list(2, mapping, "", nil, "fields")
+    local second = cjson.decode(second_raw)
+    for label, listed in pairs({ live = first, cached = second }) do
+        local tool = listed.result.tools[1]
+        check(tool and tool.name == "alias_weather" and tool.title == "Weather"
+            and tool.annotations.readOnlyHint == true and tool.icons[1].src == "https://x/i.png"
+            and tool.outputSchema.type == "object",
+            label .. " list keeps title, annotations, icons and outputSchema")
+    end
+    check(second_raw:find('"required":[]', 1, true) ~= nil,
+        "an empty outputSchema array stays an array after the cache round trip")
+    check(first.result.resultType == nil and first.result.cacheScope == nil,
+        "a legacy client gets no 2026-07-28 result fields")
+    dict._store["tools_enriched::fields:5:alice"] = nil
+    local modern = cjson.decode(M._handle_tools_list(3, mapping, "", nil, "fields", true))
+    check(modern.result.resultType == "complete" and modern.result.cacheScope == "private"
+        and modern.result.ttlMs == 60000,
+        "a 2026-07-28 client gets resultType, cacheScope private and ttlMs")
+    capture_handler = nil
+end
+
+print("test: resources/templates/list is aggregated across backends")
+do
+    local session_id = "vs-7e7"
+    dict:set("csess_valid:alice:/virtual/tpl:" .. session_id, "1")
+    dict:set("mapping::tpl", cjson.encode({ tools = {
+        { name = "a", backend_location = "/_vs_backend_tpl_a", backend_server_path = "/fine" },
+        { name = "b", backend_location = "/_vs_backend_tpl_b", backend_server_path = "/fine" } } }))
+    ngx.var.virtual_server_id = "tpl"
+    ngx.var.http_mcp_session_id = session_id
+    ngx.var.request_method = "POST"
+    ngx.var.auth_user = "alice"
+    ngx.req._body = cjson.encode({ jsonrpc = "2.0", id = 1, method = "resources/templates/list", params = {} })
+    capture_handler = function(loc, opts)
+        if loc:find("/_internal/sessions/backend/", 1, true) == 1 then
+            if opts.method == ngx.HTTP_GET then
+                return { status = 200, body = '{"stateless":true,"backend_session_id":null}' }
+            end
+            return { status = 200 }
+        end
+        if loc == "/_vs_backend_tpl_a" then
+            return { status = 200, body = cjson.encode({ result = { resourceTemplates = {
+                { uriTemplate = "file:///{path}", name = "files" } } } }) }
+        end
+        if loc == "/_vs_backend_tpl_b" then
+            return { status = 200, body = cjson.encode({ error = { code = -32601, message = "nope" } }) }
+        end
+    end
+    ngx.status = 200
+    M.route()
+    local body = cjson.decode(ngx._last_body)
+    check(ngx.status == 200 and body.result and #body.result.resourceTemplates == 1
+        and body.result.resourceTemplates[1].uriTemplate == "file:///{path}",
+        "templates from the supporting backend are listed; an unsupported backend is skipped")
+    capture_handler = nil
+    ngx.var.http_mcp_session_id = nil
+end
+
 -- ---------------------------------------------------------------------------
 if failures > 0 then
     print(string.format("\n%d check(s) FAILED", failures))
