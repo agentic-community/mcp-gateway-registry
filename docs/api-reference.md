@@ -870,7 +870,7 @@ Modern JWT-authenticated endpoints for programmatic server management. These are
 - `auth_credential` (optional): Plaintext credential (encrypted before storage)
 - `auth_header_name` (optional): Custom header name (default: `Authorization` for bearer, `X-API-Key` for api_key)
 - `tool_list_json` (optional): JSON array of MCP tool definitions (for manual tool registration)
-- `supported_transports` (optional): JSON array of transports
+- `supported_transports` (optional): JSON array of transports (`streamable-http`, `sse`, `stdio`). MCP 2026-07-28 deprecates HTTP+SSE: the gateway still routes it, and registering a server with `["sse"]` alone logs a warning that support may be removed no earlier than 2027-07-28.
 - `headers` (optional): JSON object of custom headers
 - `mcp_endpoint` (optional): Custom MCP endpoint URL
 - `sse_endpoint` (optional): Custom SSE endpoint URL
