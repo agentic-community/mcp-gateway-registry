@@ -2784,6 +2784,24 @@ async def _scopes_with_server_entry(
     return matched
 
 
+def _mark_filtered_list_private(
+    result: dict,
+) -> None:
+    """Mark a per-user filtered tools/list result as not shareable.
+
+    MCP 2026-07-28 lets a server say whether a shared cache may store a list
+    (cacheScope "public") or not ("private"). The gateway filters tools/list by
+    the caller's scopes and blocked tools, so whatever the upstream said, the
+    filtered list belongs to this caller alone. Results without cacheScope
+    (handshake-era servers) are left as they are.
+
+    Args:
+        result: The JSON-RPC result object, modified in place.
+    """
+    if "cacheScope" in result:
+        result["cacheScope"] = "private"
+
+
 async def filter_tools_list_response(
     server_name: str,
     user_scopes: list[str],
@@ -2957,6 +2975,7 @@ async def _filter_sse_tools_list_body(
             user_scopes,
             result["tools"],
         )
+        _mark_filtered_list_private(result)
         parsed["result"] = result
         filtered_any = True
         indent = line[: len(line) - len(stripped)]
@@ -9775,6 +9794,7 @@ async def mcp_proxy(
             result["tools"],
         )
         result["tools"] = filtered
+        _mark_filtered_list_private(result)
         parsed["result"] = result
 
     return JSONResponse(content=parsed, status_code=status_code, headers=response_headers)
