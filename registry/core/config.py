@@ -1939,7 +1939,9 @@ class Settings(BaseSettings):
             "result with isError=true whose text carries the connect URL -- works "
             "on every MCP client. True (enhancement): a -32042 "
             "URLElicitationRequiredError -- cleaner UX but only on clients that "
-            "understand url-mode elicitation (others may swallow it)."
+            "understand url-mode elicitation (others may swallow it). With True, "
+            "an MCP 2026-07-28 client that declares URL elicitation gets an "
+            "input_required result instead of -32042."
         ),
     )
     egress_registry_internal_url: str = Field(
