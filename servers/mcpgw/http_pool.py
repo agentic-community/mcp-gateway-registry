@@ -14,7 +14,7 @@ This module owns ONE pooled client shared by every egress hop mcpgw makes ITSELF
 
 Partially covered: when ``OIDC_ENABLED=true``, fastmcp's ``OAuthProxy`` also reaches
 ``KEYCLOAK_INTERNAL_URL`` for ``/token`` (login, client refresh, proactive refresh)
-and ``/revoke``. Those clients are built inline inside fastmcp 3.4.9 with no
+and ``/revoke``. Those clients are built inline inside fastmcp (3.4.9 and 4.1.6) with no
 injection point, so those four call sites are neither pooled nor guarded here nor
 counted by the reset metric. They fire per login/refresh, never per tool call, and
 their URLs are operator env config. The ``/certs`` JWKS fetch IS covered --
