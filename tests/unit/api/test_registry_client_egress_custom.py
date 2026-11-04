@@ -94,12 +94,14 @@ class TestConfigureEgressAuthCustomFields:
                 custom_scope_separator=",",
                 custom_token_auth_style="basic_header",
                 custom_resource="https://api.example.com/mcp",
+                expected_issuer="https://login.salesforce.com",
             )
 
         body = _sent_body(mock_req)
         assert body["custom_scope_separator"] == ","
         assert body["custom_token_auth_style"] == "basic_header"
         assert body["custom_resource"] == "https://api.example.com/mcp"
+        assert body["expected_issuer"] == "https://login.salesforce.com"
 
     def test_custom_fields_omitted_when_not_supplied(
         self,
@@ -171,6 +173,7 @@ class TestEgressConfigureCommandWiring:
             "custom_scope_separator": None,
             "custom_token_auth_style": None,
             "custom_resource": None,
+            "expected_issuer": None,
         }
         base.update(overrides)
         return SimpleNamespace(**base)
@@ -187,6 +190,7 @@ class TestEgressConfigureCommandWiring:
             custom_scope_separator=",",
             custom_token_auth_style="basic_header",
             custom_resource="https://api.example.com/mcp",
+            expected_issuer="https://login.salesforce.com",
         )
 
         with patch.object(registry_management, "_create_client", return_value=mock_client):
@@ -199,6 +203,7 @@ class TestEgressConfigureCommandWiring:
         assert kwargs["custom_scope_separator"] == ","
         assert kwargs["custom_token_auth_style"] == "basic_header"
         assert kwargs["custom_resource"] == "https://api.example.com/mcp"
+        assert kwargs["expected_issuer"] == "https://login.salesforce.com"
         # Pre-existing args must still be forwarded.
         assert kwargs["mode"] == "oauth_user"
         assert kwargs["provider"] == "custom"
@@ -217,3 +222,4 @@ class TestEgressConfigureCommandWiring:
         assert rc == 0
         kwargs = mock_client.configure_egress_auth.call_args.kwargs
         assert all(kwargs[k] is None for k in kwargs if k.startswith("custom_"))
+        assert kwargs["expected_issuer"] is None

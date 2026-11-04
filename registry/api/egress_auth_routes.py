@@ -86,6 +86,8 @@ _PAT_PROVIDER_RE = re.compile(r"^[a-z0-9_-]{1,64}$")
 
 # pat lifetime is mandatory and bounded: no "never expires", capped at 30 days.
 _PAT_MAX_TTL_SECONDS: int = 30 * 24 * 3600
+# RFC 9207 issuer identifiers are short URLs; cap what an operator may store.
+MAX_EXPECTED_ISSUER_LENGTH: int = 2048
 _TTL_UNIT_SECONDS: dict[str, int] = {"minutes": 60, "hours": 3600, "days": 86400}
 
 
@@ -890,6 +892,7 @@ class EgressConfigRequest(BaseModel):
     custom_scope_separator: str | None = None
     custom_token_auth_style: str | None = None
     custom_resource: str | None = None  # RFC 8707 resource indicator (custom only)
+    expected_issuer: str | None = None  # RFC 9207 issuer of the provider (any provider)
     # obo_exchange only: the internal MCP server's audience (IdP-shaped).
     target_audience: str | None = None
 
@@ -909,12 +912,41 @@ def _egress_config_view(server: dict) -> dict:
         "custom_scope_separator": eo.get("custom_scope_separator"),
         "custom_token_auth_style": eo.get("custom_token_auth_style"),
         "custom_resource": eo.get("custom_resource"),
+        "expected_issuer": eo.get("expected_issuer"),
     }
 
 
 def _require_admin(user_context: dict) -> None:
     if not user_context.get("is_admin"):
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail="admin required")
+
+
+def _validated_expected_issuer(
+    value: str | None,
+) -> str | None:
+    """Validate an RFC 9207 / RFC 8414 issuer identifier, or return None.
+
+    An issuer is an https URL with no query and no fragment. Blank means not set.
+
+    Raises:
+        HTTPException: 400 when the value is set but is not a valid issuer.
+    """
+    issuer = (value or "").strip()
+    if not issuer:
+        return None
+    parsed = urlparse(issuer)
+    if (
+        parsed.scheme != "https"
+        or not parsed.netloc
+        or parsed.query
+        or parsed.fragment
+        or len(issuer) > MAX_EXPECTED_ISSUER_LENGTH
+    ):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="expected_issuer rejected: must be an https URL without a query or fragment",
+        )
+    return issuer
 
 
 def build_oauth_provider_config(
@@ -928,6 +960,7 @@ def build_oauth_provider_config(
     custom_scope_separator: str | None = None,
     custom_token_auth_style: str | None = None,
     custom_resource: str | None = None,
+    expected_issuer: str | None = None,
     prior_secret_encrypted: str | None = None,
 ) -> dict:
     """Validate and build a provider OAuth config (the ``EgressOAuthConfig`` shape)
@@ -952,6 +985,7 @@ def build_oauth_provider_config(
         "custom_scope_separator": custom_scope_separator,
         "custom_token_auth_style": custom_token_auth_style,
         "custom_resource": custom_resource,
+        "expected_issuer": _validated_expected_issuer(expected_issuer),
     }
     if provider == "custom":
         for field, url, profile in (
@@ -1031,6 +1065,7 @@ async def configure_egress_auth(
             custom_scope_separator=body.custom_scope_separator,
             custom_token_auth_style=body.custom_token_auth_style,
             custom_resource=body.custom_resource,
+            expected_issuer=body.expected_issuer,
             prior_secret_encrypted=(server.get("egress_oauth") or {}).get(
                 "client_secret_encrypted"
             ),
@@ -1502,10 +1537,14 @@ async def egress_callback(
     request: Request,
     code: str = "",
     state: str = "",
+    iss: str = "",
 ):
     """Provider redirect target. No ingress auth -- the signed+encrypted state is
     the authority. Verifies state (TTL + single-use + account-swap), exchanges the
-    code, and stores the token. Reached via nginx -> registry (no /validate)."""
+    code, and stores the token. Reached via nginx -> registry (no /validate).
+
+    ``iss`` is the RFC 9207 issuer the provider names in its reply. It is checked
+    against the server's ``expected_issuer`` when one is configured."""
     if not code or not state:
         return HTMLResponse("<h3>Connection failed: missing code/state.</h3>", status_code=400)
 
@@ -1567,6 +1606,7 @@ async def egress_callback(
             egress_oauth=oauth_cfg,
             current_user_id=current_user,
             current_auth_method=current_method,
+            response_issuer=iss or None,
         )
     except EgressAuthError as exc:
         # Detail to server logs only. Do NOT reflect the exception text into the

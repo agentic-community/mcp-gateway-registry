@@ -379,7 +379,7 @@ prefix; the AS facade is mounted at root and registered only when
 
 | Method | Path | Auth | Purpose |
 |--------|------|------|---------|
-| `POST` | `/api/servers/{server_path}/egress-auth` | proxied auth + admin | Configure egress OAuth on a server (provider, client_id, write-only encrypted client_secret, scopes, custom URLs, optional RFC 8707 `custom_resource`). |
+| `POST` | `/api/servers/{server_path}/egress-auth` | proxied auth + admin | Configure egress OAuth on a server (provider, client_id, write-only encrypted client_secret, scopes, custom URLs, optional RFC 8707 `custom_resource`, optional RFC 9207 `expected_issuer`). |
 | `GET` | `/api/servers/{server_path}/egress-auth` | proxied auth + admin | Read the non-secret egress config (secret stripped). |
 
 ### End-user
@@ -689,6 +689,16 @@ A public client also changes what the **admin form** asks for: once the style is
 `none` the Client Secret field disappears, `client_id` becomes required, and any
 previously stored secret is dropped on save.
 
+### Setting `expected_issuer`
+
+Every provider sends the user back to the same `/oauth2/egress/callback`, so the callback cannot tell from the URL which authorization server issued a code. [RFC 9207](https://www.rfc-editor.org/rfc/rfc9207) fixes that: the authorization server adds `iss` to its reply, and the client compares it with the issuer it expected. MCP 2026-07-28 requires clients to do this.
+
+`expected_issuer` is optional and works with any provider, built-in or `custom`. When it is set, the gateway records it in the signed consent state when consent begins, and the callback refuses a reply whose `iss` names a different issuer, before it exchanges the code. The comparison is exact, as the RFC requires. A reply without `iss` is accepted, because the gateway does not know whether the provider sends one. With the field empty, the callback behaves as it did before.
+
+Take the value from the `issuer` field of the provider's authorization-server metadata, the same document step 2 above reads. It must be an `https` URL with no query and no fragment. Leave it empty for a provider that publishes no metadata, such as GitHub OAuth apps.
+
+Set it with `registry_management.py egress-configure --expected-issuer <url>`, the `expected_issuer` field of `POST /api/servers/{server_path}/egress-auth` and `PUT /api/servers/{server_path}/oauth-discovery`, or the Expected issuer field in the server edit form.
+
 ---
 
 <a id="setup-ide"></a>
@@ -718,6 +728,7 @@ Users can review and revoke their connections in the UI at **Connected Accounts*
 
 ## Security model
 
+- **Authorization reply issuer (RFC 9207).** When a server sets `expected_issuer`, the callback refuses a reply whose `iss` differs from the value snapshotted in the consent state, so a code from another authorization server is never exchanged. See [Setting `expected_issuer`](#setting-expected_issuer).
 - **Marker secret (fail-closed).** nginx force-sets `X-Validate-Source-Secret` on
   the internal `/validate` subrequest. The auth-server mints its internal tokens
   (mcp-proxy, generic-proxy and registry API) **only** if the marker matches, so a

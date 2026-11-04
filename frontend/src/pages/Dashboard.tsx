@@ -330,6 +330,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
     egress_custom_token_url: '',
     egress_custom_token_auth_style: '',  // '' = backend default (post_body)
     egress_custom_resource: '',  // RFC 8707 resource indicator (optional)
+    egress_expected_issuer: '',  // RFC 9207 issuer of the provider (optional)
     egress_target_audience: '',
     // Discovery Identity (OAuth 2.1) — an independent flag under Backend Auth.
     oauth_discovery_enabled: false,
@@ -342,6 +343,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
     oauth_discovery_custom_scope_separator: '',
     oauth_discovery_custom_token_auth_style: '',
     oauth_discovery_custom_resource: '',
+    oauth_discovery_expected_issuer: '',
   });
   // Tracks whether the server had discovery identity enabled when the edit modal
   // opened, so save only DELETEs /oauth-discovery when it was previously enabled
@@ -1354,6 +1356,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         egress_custom_token_url: serverDetails.egress_oauth?.custom_token_url || '',
         egress_custom_token_auth_style: serverDetails.egress_oauth?.custom_token_auth_style || '',
         egress_custom_resource: serverDetails.egress_oauth?.custom_resource || '',
+        egress_expected_issuer: serverDetails.egress_oauth?.expected_issuer || '',
         egress_target_audience: serverDetails.egress_oauth?.target_audience || '',
         oauth_discovery_enabled: serverDetails.oauth_discovery?.enabled === true,
         oauth_discovery_provider: serverDetails.oauth_discovery?.oauth?.provider || '',
@@ -1365,6 +1368,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         oauth_discovery_custom_scope_separator: serverDetails.oauth_discovery?.oauth?.custom_scope_separator || '',
         oauth_discovery_custom_token_auth_style: serverDetails.oauth_discovery?.oauth?.custom_token_auth_style || '',
         oauth_discovery_custom_resource: serverDetails.oauth_discovery?.oauth?.custom_resource || '',
+        oauth_discovery_expected_issuer: serverDetails.oauth_discovery?.oauth?.expected_issuer || '',
       });
     } catch (error) {
       console.error('Failed to fetch server details:', error);
@@ -1407,6 +1411,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         egress_custom_token_url: '',
         egress_custom_token_auth_style: '',
         egress_custom_resource: '',
+        egress_expected_issuer: '',
         egress_target_audience: '',
         oauth_discovery_enabled: false,
         oauth_discovery_provider: '',
@@ -1418,6 +1423,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
         oauth_discovery_custom_scope_separator: '',
         oauth_discovery_custom_token_auth_style: '',
         oauth_discovery_custom_resource: '',
+        oauth_discovery_expected_issuer: '',
       });
     }
   }, []);
@@ -1673,6 +1679,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
                 custom_token_url: editForm.egress_custom_token_url || undefined,
                 custom_token_auth_style: editForm.egress_custom_token_auth_style || undefined,
                 custom_resource: editForm.egress_custom_resource || undefined,
+                expected_issuer: editForm.egress_expected_issuer || undefined,
               },
               { headers: csrfHeaders }
             );
@@ -1735,6 +1742,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
                 custom_scope_separator: editForm.oauth_discovery_custom_scope_separator || undefined,
                 custom_token_auth_style: editForm.oauth_discovery_custom_token_auth_style || undefined,
                 custom_resource: editForm.oauth_discovery_custom_resource || undefined,
+                expected_issuer: editForm.oauth_discovery_expected_issuer || undefined,
               },
               { headers: csrfHeaders }
             );
