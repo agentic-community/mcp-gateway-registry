@@ -231,6 +231,10 @@ Requests without the 2026-07-28 markers keep the handshake path above.
 
 Discovery lists follow `nextCursor` for up to 50 pages. A failed page fails that backend's whole fetch, so a partial list is never presented or cached as complete. A 2026-07-28 backend's HTTP 404 with `-32601` for a list method counts as `unsupported`, the same as the HTTP 200 form.
 
+**Results from handshake-era backends.** 2026-07-28 requires `resultType` on every result, and the MCP SDK rejects a result without it. When a 2026-07-28 client calls a tool, resource or prompt on a handshake-era backend, the router adds `resultType: "complete"` to the forwarded result (in a JSON body or in SSE `data:` lines) and leaves an existing `resultType`, an error or a non-JSON body unchanged.
+
+**Live checks.** Two scripts exercise this against a running gateway and exit non-zero on any unexpected result. `tests/e2e/mcp_client_matrix.py` calls one tool per route with a raw 2025-03-26 handshake and with the MCP SDK 2.x in legacy, auto and 2026-07-28 modes. `tests/e2e/mcp_2026_gateway_checks.py` checks `server/discover`, header mismatch rejection, `cacheScope` and the 401/403 challenges.
+
 ---
 
 ## 5. Nginx Configuration Generation
@@ -794,4 +798,6 @@ tests/
     test_virtual_mcp_protocol.py      # MCP protocol E2E tests
     test_virtual_mcp_latency.py       # Latency benchmarks
     test_virtual_mcp_stress.py        # Stress tests
+    mcp_client_matrix.py              # Old and new MCP clients per route (live)
+    mcp_2026_gateway_checks.py        # MCP 2026-07-28 wire behavior (live)
 ```
