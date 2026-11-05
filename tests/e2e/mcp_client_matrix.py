@@ -29,6 +29,11 @@ Usage:
     # Another gateway and token file
     uv run python tests/e2e/mcp_client_matrix.py \\
         --base https://mcpgateway.example.com --token-file .oauth-tokens/ingress.json
+
+    # Your own routes: a JSON list of
+    # {"route": "/x/mcp", "tool": "echo", "arguments": {}, "expected_ok": [true, true, true, true]}
+    # (expected_ok follows the client styles above; it defaults to all true)
+    uv run python tests/e2e/mcp_client_matrix.py --targets-file my-routes.json
 """
 
 import argparse
@@ -136,6 +141,28 @@ EGRESS_TARGETS: tuple[Target, ...] = (
         "Slack OAuth egress (needs this user's connection); Slack speaks only the handshake",
     ),
 )
+
+
+def _load_targets(
+    targets_file: Path,
+) -> tuple[Target, ...]:
+    """Read routes to test from a JSON list of route, tool, arguments, expected_ok."""
+    entries = json.loads(targets_file.read_text())
+    targets = []
+    for entry in entries:
+        expected = tuple(entry.get("expected_ok", ALL_OK))
+        if len(expected) != len(CLIENT_STYLES):
+            raise ValueError(f"expected_ok for {entry['route']} needs {len(CLIENT_STYLES)} values")
+        targets.append(
+            Target(
+                entry["route"],
+                entry["tool"],
+                entry.get("arguments", {}),
+                expected,
+                entry.get("note", ""),
+            )
+        )
+    return tuple(targets)
 
 
 def _load_token(
@@ -310,6 +337,12 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Also check GitHub and Slack, which need this user's egress connections",
     )
+    parser.add_argument(
+        "--targets-file",
+        type=Path,
+        default=None,
+        help="JSON list of routes to test instead of the default compatibility routes",
+    )
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
     return parser.parse_args()
 
@@ -322,7 +355,8 @@ def main() -> int:
         # The SDK and httpx log every request at INFO; keep the table readable.
         for noisy in ("httpx", "httpx2", "mcp"):
             logging.getLogger(noisy).setLevel(logging.WARNING)
-    targets = DEFAULT_TARGETS + (EGRESS_TARGETS if args.include_egress else ())
+    base_targets = _load_targets(args.targets_file) if args.targets_file else DEFAULT_TARGETS
+    targets = base_targets + (EGRESS_TARGETS if args.include_egress else ())
     logger.info(f"Gateway {args.base}, {len(targets)} routes, {len(CLIENT_STYLES)} client styles")
     start = time.time()
     unexpected = _run_matrix(args.base, _load_token(args.token_file), targets)
