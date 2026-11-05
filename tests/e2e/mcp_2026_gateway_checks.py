@@ -25,6 +25,11 @@ Usage:
 
     # Also check the 403 challenge with a user who cannot reach /everything/
     uv run python tests/e2e/mcp_2026_gateway_checks.py --restricted-token-file .token2
+
+    # Other routes and tools (a direct server and a virtual server with two tools each)
+    uv run python tests/e2e/mcp_2026_gateway_checks.py --base https://gw.example.com \\
+        --direct-route /pingmcp-dual/mcp --direct-tool echo --direct-other-tool inspect_request \\
+        --virtual-route /virtual/my-test/mcp --virtual-tool tool_a --virtual-other-tool tool_b
 """
 
 import argparse
@@ -52,6 +57,8 @@ DIRECT_ROUTE: str = "/everything/mcp"
 VIRTUAL_ROUTE: str = "/virtual/compat-test/mcp"
 DIRECT_TOOL: str = "echo"
 VIRTUAL_TOOL: str = "pm_echo"
+DIRECT_OTHER_TOOL: str = "get-sum"
+VIRTUAL_OTHER_TOOL: str = "ping_echo"
 MODERN_PROTOCOL_VERSION: str = "2026-07-28"
 LEGACY_PROTOCOL_VERSION: str = "2025-06-18"
 HEADER_MISMATCH_CODE: int = -32020
@@ -195,26 +202,22 @@ def _check_forbidden_challenge(
 
 
 def _build_checks(
-    base_url: str,
+    args: argparse.Namespace,
     token: str,
     restricted_token: str | None,
 ) -> list[tuple[str, Callable[[], tuple[bool, str]]]]:
     """Name every check with a zero-argument callable that runs it."""
-    direct = base_url.rstrip("/") + DIRECT_ROUTE
-    virtual = base_url.rstrip("/") + VIRTUAL_ROUTE
+    direct = args.base.rstrip("/") + args.direct_route
+    virtual = args.base.rstrip("/") + args.virtual_route
+    d_tool, d_other = args.direct_tool, args.direct_other_tool
+    v_tool, v_other = args.virtual_tool, args.virtual_other_tool
     checks: list[tuple[str, Callable[[], tuple[bool, str]]]] = [
         ("discover-direct", lambda: _check_discover(direct, token)),
         ("discover-virtual", lambda: _check_discover(virtual, token)),
         ("legacy-handshake", lambda: _check_legacy_handshake(direct, token)),
-        ("mismatch-name", lambda: _check_mismatch(direct, token, DIRECT_TOOL, None, "get-sum")),
-        (
-            "mismatch-method",
-            lambda: _check_mismatch(direct, token, DIRECT_TOOL, "tools/list", DIRECT_TOOL),
-        ),
-        (
-            "mismatch-virtual",
-            lambda: _check_mismatch(virtual, token, VIRTUAL_TOOL, None, "ping_echo"),
-        ),
+        ("mismatch-name", lambda: _check_mismatch(direct, token, d_tool, None, d_other)),
+        ("mismatch-method", lambda: _check_mismatch(direct, token, d_tool, "tools/list", d_tool)),
+        ("mismatch-virtual", lambda: _check_mismatch(virtual, token, v_tool, None, v_other)),
         ("cache-scope", lambda: _check_cache_scope(direct, token)),
         ("one-challenge-401", lambda: _check_one_challenge(direct)),
     ]
@@ -235,6 +238,20 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--token-file", type=Path, default=DEFAULT_TOKEN_FILE, help="Admin token file"
     )
+    parser.add_argument("--direct-route", default=DIRECT_ROUTE, help="Direct route to check")
+    parser.add_argument("--direct-tool", default=DIRECT_TOOL, help="A tool on the direct route")
+    parser.add_argument(
+        "--direct-other-tool",
+        default=DIRECT_OTHER_TOOL,
+        help="A second tool name on the direct route, used to build a header mismatch",
+    )
+    parser.add_argument("--virtual-route", default=VIRTUAL_ROUTE, help="Virtual route to check")
+    parser.add_argument("--virtual-tool", default=VIRTUAL_TOOL, help="A tool on the virtual route")
+    parser.add_argument(
+        "--virtual-other-tool",
+        default=VIRTUAL_OTHER_TOOL,
+        help="A second tool name on the virtual route, used to build a header mismatch",
+    )
     parser.add_argument(
         "--restricted-token-file",
         type=Path,
@@ -247,7 +264,7 @@ def _parse_args() -> argparse.Namespace:
 def main() -> int:
     args = _parse_args()
     restricted = _load_token(args.restricted_token_file) if args.restricted_token_file else None
-    checks = _build_checks(args.base, _load_token(args.token_file), restricted)
+    checks = _build_checks(args, _load_token(args.token_file), restricted)
     failures = 0
     for name, run in checks:
         try:
