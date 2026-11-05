@@ -61,6 +61,48 @@ Each entry has a status, a **100 level** explanation (what it means in plain wor
 
 **200 level.** The virtual router reads `io.modelcontextprotocol/protocolVersion` from `params._meta`, requires the `MCP-Protocol-Version` header to match it, and answers an unknown version with HTTP 400 and `-32022`, listing the versions it supports. When it calls a 2026-07-28 backend it copies the client's whole `_meta` (client info, capabilities, progress token, log level, trace context) and adds what is missing. The auth server's metrics middleware (`auth_server/metrics_middleware.py`) reads the client name and protocol version from `_meta` on every request, since there is no `initialize` to read them from. The router's own `server/discover` answer names the gateway in `io.modelcontextprotocol/serverInfo`; results forwarded from a backend keep whatever `serverInfo` that backend sent.
 
+A handshake-era client opens a session, then sends the session id with each call:
+
+```http
+POST /virtual/dev-essentials/mcp
+Content-Type: application/json
+
+{"jsonrpc": "2.0", "id": 1, "method": "initialize",
+ "params": {"protocolVersion": "2025-11-25", "capabilities": {},
+            "clientInfo": {"name": "my-client", "version": "1.0"}}}
+```
+
+```http
+POST /virtual/dev-essentials/mcp
+Mcp-Session-Id: vs-6f1c...
+MCP-Protocol-Version: 2025-11-25
+
+{"jsonrpc": "2.0", "id": 2, "method": "tools/list"}
+```
+
+A 2026-07-28 client sends the same call on its own, with the version and client details in `_meta` and mirrored into headers:
+
+```http
+POST /virtual/dev-essentials/mcp
+MCP-Protocol-Version: 2026-07-28
+Mcp-Method: tools/list
+
+{"jsonrpc": "2.0", "id": 2, "method": "tools/list",
+ "params": {"_meta": {
+   "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+   "io.modelcontextprotocol/clientInfo": {"name": "my-client", "version": "1.0"},
+   "io.modelcontextprotocol/clientCapabilities": {}}}}
+```
+
+A version the router does not know gets HTTP 400:
+
+```json
+{"jsonrpc": "2.0", "id": 2,
+ "error": {"code": -32022, "message": "Unsupported protocol version: 2027-01-01",
+           "data": {"supported": ["2026-07-28", "2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"],
+                    "requested": "2027-01-01"}}}
+```
+
 ### Major 3. `server/discover`
 
 **Status:** supported.
@@ -75,6 +117,24 @@ Each entry has a status, a **100 level** explanation (what it means in plain wor
 - The health check (`registry/health/service.py`) sends `server/discover` first. A `supportedVersions` answer or a 2026-07-28 error code marks a live 2026-07-28 server. Anything else falls back to the `initialize` and `ping` check, and the health check remembers a handshake-era answer for an hour so later checks skip the extra request.
 - Tool discovery (`registry/core/mcp_client.py`) uses the MCP SDK 2.x client in auto mode, which asks `server/discover` and falls back to `initialize`.
 
+
+The virtual router's answer:
+
+```json
+{"jsonrpc": "2.0", "id": 1,
+ "result": {
+   "resultType": "complete",
+   "supportedVersions": ["2026-07-28", "2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"],
+   "capabilities": {"tools": {"listChanged": false}, "resources": {}, "prompts": {}},
+   "_meta": {"io.modelcontextprotocol/serverInfo": {"name": "mcp-gateway-virtual-server", "version": "1.0.0"}}}}
+```
+
+The gateway's answer before a user has connected an egress account. A handshake-era backend answers with the same code, in its own words:
+
+```json
+{"jsonrpc": "2.0", "id": 1, "error": {"code": -32601, "message": "Method not found"}}
+```
+
 ### Major 4. `subscriptions/listen` replaces the GET stream and `resources/subscribe`
 
 **Status:** not supported yet.
@@ -83,6 +143,15 @@ Each entry has a status, a **100 level** explanation (what it means in plain wor
 
 **200 level.** The direct-route proxy answers `subscriptions/listen` with `-32601` before contacting the backend, because it buffers each response and an open-ended stream would hold a pooled connection forever (#1890). The virtual router answers it as an unknown method (404 `-32601`). Supporting it needs a streaming relay on both route types, which also changes how progress notifications and long calls work; that is a separate design.
 
+
+The direct-route answer:
+
+```json
+{"jsonrpc": "2.0", "id": 5,
+ "error": {"code": -32601, "message": "Method not found: subscriptions/listen",
+           "data": {"detail": "This method is not supported through the gateway proxy."}}}
+```
+
 ### Major 5. `ping`, `logging/setLevel` and `notifications/roots/list_changed` removed; log level per request
 
 **Status:** supported.
@@ -90,6 +159,13 @@ Each entry has a status, a **100 level** explanation (what it means in plain wor
 **100 level.** These requests no longer exist in 2026-07-28. Virtual servers answer them as unknown for 2026-07-28 clients and keep answering `ping` for older clients. A per-request log level reaches the backend unchanged.
 
 **200 level.** The virtual router answers `ping` and any other method 2026-07-28 does not define with HTTP 404 and `-32601` when the client speaks 2026-07-28, and keeps the handshake-era behavior otherwise. `io.modelcontextprotocol/logLevel` is part of the client `_meta` the router copies to 2026-07-28 backends. On direct routes all of these pass through to the backend.
+
+
+`ping` from a 2026-07-28 client on a virtual route, answered with HTTP 404:
+
+```json
+{"jsonrpc": "2.0", "id": 9, "error": {"code": -32601, "message": "Method not found: ping"}}
+```
 
 ### Major 6. Tasks move to the `io.modelcontextprotocol/tasks` extension
 
@@ -111,6 +187,38 @@ Each entry has a status, a **100 level** explanation (what it means in plain wor
 - On the retry, `_strip_gateway_consent_retry()` in `auth_server/server.py` removes the gateway's `requestState` and `inputResponses` before the gateway authorizes and forwards the body, so it checks the same bytes it sends and the upstream never sees a prompt it did not send. A declined or cancelled prompt ends with an `isError` result carrying the link.
 - With the setting off (the default), every client gets the `isError` result with the link, as before. See [egress credential vault](egress-credential-vault.md).
 
+
+The consent prompt a 2026-07-28 client gets:
+
+```json
+{"jsonrpc": "2.0", "id": 7,
+ "result": {
+   "resultType": "input_required",
+   "inputRequests": {
+     "egress_connect": {
+       "method": "elicitation/create",
+       "params": {"mode": "url",
+                  "message": "Connect your github account to use this server.",
+                  "url": "https://gateway.example.com/oauth2/egress/connect?server=%2Fgithub&elicitationId=..."}}},
+   "requestState": "mcpgw-egress-consent.Qx3..."}}
+```
+
+The client's retry, and what the gateway forwards after removing its own two fields:
+
+```json
+{"method": "tools/call",
+ "params": {"name": "search_issues", "arguments": {"q": "bug"},
+            "requestState": "mcpgw-egress-consent.Qx3...",
+            "inputResponses": {"egress_connect": {"action": "accept"}},
+            "_meta": {"io.modelcontextprotocol/protocolVersion": "2026-07-28"}}}
+```
+
+```json
+{"method": "tools/call",
+ "params": {"name": "search_issues", "arguments": {"q": "bug"},
+            "_meta": {"io.modelcontextprotocol/protocolVersion": "2026-07-28"}}}
+```
+
 ### Major 8. Every result carries `resultType`
 
 **Status:** supported.
@@ -122,6 +230,17 @@ Each entry has a status, a **100 level** explanation (what it means in plain wor
 - Results the router forwards from a handshake-era backend to a 2026-07-28 client gain `resultType: "complete"`, in a JSON body or in SSE `data:` lines. The router re-encodes them with a cjson instance that keeps `[]` as an array. An existing `resultType`, an error and a body that is not JSON pass through unchanged.
 - The auth server's own pre-consent answers (lists, `ping`, the connect tool's result, the consent result, the missing-PAT result) carry `resultType: "complete"` when the request is 2026-07-28.
 - On a direct route the backend's results pass through as the backend wrote them.
+
+
+A handshake-era backend's `tools/call` result, and what the router sends to a 2026-07-28 client:
+
+```json
+{"jsonrpc": "2.0", "id": 3, "result": {"content": [{"type": "text", "text": "hi"}], "isError": false}}
+```
+
+```json
+{"jsonrpc": "2.0", "id": 3, "result": {"content": [{"type": "text", "text": "hi"}], "isError": false, "resultType": "complete"}}
+```
 
 ### Major 9. No SSE resumability or `Last-Event-ID`
 
@@ -165,6 +284,35 @@ Each entry has a status, a **100 level** explanation (what it means in plain wor
 
 **200 level.** `docker/lua/capture_body.lua` runs before authorization on every MCP route and compares `Mcp-Method` with the body's method, `Mcp-Name` (base64 form decoded) with `params.name` or `params.uri`, and `MCP-Protocol-Version` with the `_meta` version. A mismatch gets HTTP 400 and `-32020`. nginx skips the check for requests without these headers, which covers every handshake-era client. For 2026-07-28 backends the router sets the headers from the exact body it sends and adds `Mcp-Param-*` headers from the backend's `x-mcp-header` tool annotations, dropping any tool whose annotation breaks the spec's rules. See [scopes](scopes.md#mcp-2026-07-28-request-headers).
 
+
+A request whose header names a different tool than its body, answered with HTTP 400:
+
+```http
+POST /github/mcp
+MCP-Protocol-Version: 2026-07-28
+Mcp-Method: tools/call
+Mcp-Name: list_issues
+
+{"jsonrpc": "2.0", "id": 4, "method": "tools/call",
+ "params": {"name": "delete_repository", "arguments": {}, "_meta": {...}}}
+```
+
+```json
+{"jsonrpc": "2.0", "id": 4, "error": {"code": -32020, "message": "Header mismatch: Mcp-Name does not match params.name"}}
+```
+
+A tool whose schema marks a parameter with `x-mcp-header`, and the header the router adds when it calls a 2026-07-28 backend:
+
+```json
+{"name": "get_weather",
+ "inputSchema": {"type": "object",
+                 "properties": {"region": {"type": "string", "x-mcp-header": "Region"}}}}
+```
+
+```http
+Mcp-Param-Region: us-east-1
+```
+
 ### Minor 5. `ttlMs` and `cacheScope` on cacheable results
 
 **Status:** partly supported.
@@ -172,6 +320,14 @@ Each entry has a status, a **100 level** explanation (what it means in plain wor
 **100 level.** Lists and resource reads now say how long a client may reuse them and whether a shared cache may store them. When the gateway filters a list per user, it marks the list private.
 
 **200 level.** Lists the virtual router builds for 2026-07-28 clients carry `cacheScope: "private"` and `ttlMs: 60000`. On a direct route, the auth server rewrites `cacheScope: "public"` to `"private"` on a `tools/list` it filters per user. Two cases are not covered yet; see [known gaps](#known-gaps).
+
+
+A list the virtual router builds for a 2026-07-28 client:
+
+```json
+{"jsonrpc": "2.0", "id": 2,
+ "result": {"tools": [...], "resultType": "complete", "cacheScope": "private", "ttlMs": 60000}}
+```
 
 ### Minor 6. Resource not found is `-32602`
 
@@ -189,6 +345,19 @@ Each entry has a status, a **100 level** explanation (what it means in plain wor
 
 **200 level.** `expected_issuer` is an optional field on a server's egress and discovery OAuth configuration (API, CLI and server forms). The gateway records it in the encrypted consent state when consent begins. The shared callback `/oauth2/egress/callback` reads `iss`, and `_check_response_issuer()` in `registry/egress_auth/service.py` refuses a reply whose `iss` differs, before the code exchange. The callback accepts a reply without `iss`. The user login flow gives each identity provider its own callback URL, which RFC 9207 accepts as a defense on its own. See [egress credential vault](egress-credential-vault.md#setting-expected_issuer).
 
+
+The field in a `POST /api/servers/{server_path}/egress-auth` body:
+
+```json
+{"egress_auth_mode": "oauth_user",
+ "egress_provider": "custom",
+ "client_id": "my-client",
+ "client_secret": "YOUR_CLIENT_SECRET",
+ "custom_authorize_url": "https://idp.example.com/authorize",
+ "custom_token_url": "https://idp.example.com/token",
+ "expected_issuer": "https://idp.example.com"}
+```
+
 ### Minor 8. `application_type` in client registration
 
 **Status:** supported.
@@ -196,6 +365,19 @@ Each entry has a status, a **100 level** explanation (what it means in plain wor
 **100 level.** A client that registers itself with a sign-in server must say what kind of application it is. The registry's own client description says it is a web application.
 
 **200 level.** The registry's Client ID Metadata Document at `/oauth/client-metadata.json` (off by default) carries `"application_type": "web"`. MCP clients that register with the gateway's identity provider send their own `application_type`, which the provider handles.
+
+
+```json
+{"client_id": "https://gateway.example.com/oauth/client-metadata.json",
+ "client_name": "AI Registry Tools",
+ "client_uri": "https://gateway.example.com",
+ "redirect_uris": ["https://gateway.example.com/oauth2/egress/callback"],
+ "grant_types": ["authorization_code", "refresh_token"],
+ "response_types": ["code"],
+ "token_endpoint_auth_method": "none",
+ "scope": "...",
+ "application_type": "web"}
+```
 
 ### Minor 9. Credentials bound to the authorization server that issued them
 
@@ -213,13 +395,36 @@ Each entry has a status, a **100 level** explanation (what it means in plain wor
 
 **200 level.** The schema normalization used for virtual servers (`_ensure_mcp_compliant_schema` in `registry/core/nginx_service.py` and `_ensure_mcp_schema` in the router) leaves an object schema alone, narrows a type list such as `["object", "null"]` to `"object"` (the root type must be `"object"`), and moves `$defs` and `definitions` to the root when it has to wrap a non-object schema, so `#/$defs/...` references still resolve. Tools found by health-loop discovery keep their schema whichever key stored it (`registry/utils/tool_schema.py`). The gateway does not resolve `$ref`; clients do.
 
+
+A root type list, before and after:
+
+```json
+{"type": ["object", "null"], "properties": {"q": {"type": "string"}}}
+```
+
+```json
+{"type": "object", "properties": {"q": {"type": "string"}}}
+```
+
+A non-object schema the gateway has to wrap, before and after. The definitions move to the root so `#/$defs/Item` still resolves:
+
+```json
+{"type": "array", "items": {"$ref": "#/$defs/Item"}, "$defs": {"Item": {"type": "string"}}}
+```
+
+```json
+{"type": "object",
+ "properties": {"value": {"type": "array", "items": {"$ref": "#/$defs/Item"}}},
+ "$defs": {"Item": {"type": "string"}}}
+```
+
 ### Minor 11. `elicitationId` and `notifications/elicitation/complete` removed
 
 **Status:** supported.
 
 **100 level.** In the new revision a client learns that an outside step, such as signing in, finished by retrying its request. The gateway's 2026-07-28 consent prompt works that way. Older clients keep the older form.
 
-**200 level.** The `input_required` consent prompt carries no `elicitationId` and the gateway sends no completion notification; its own `requestState` marks the retry. The `-32042` URL elicitation for `2025-11-25` clients keeps its `elicitationId`, which that revision defines.
+**200 level.** The `input_required` consent prompt has no `elicitationId` field and the gateway sends no completion notification; its own `requestState` marks the retry. The connect link still carries an `elicitationId` query parameter, which the gateway's connect page uses. The `-32042` URL elicitation for `2025-11-25` clients keeps its `elicitationId`, which that revision defines.
 
 ### Minor 12. Error code renumbering
 
