@@ -51,7 +51,7 @@ Each entry has a status, a **100 level** explanation (what it means in plain wor
 
 **100 level.** A 2026-07-28 client never opens a session, so it has no session id to send. The gateway serves it without one on both route types, and handshake-era clients keep using sessions as before.
 
-**200 level.** On a direct route the proxy holds no session state; it forwards `Mcp-Session-Id` when a handshake-era client sends one. On a virtual route the router recognizes a 2026-07-28 request by its `_meta` protocol version or a `2026-` `MCP-Protocol-Version` header and stops requiring a session. To reach handshake-era backends, which still need one, the router creates its own client session for that user and virtual server, caches it, and checks it on every use. The client never sees it. A 2026-07-28 backend gets no session at all. Any `Mcp-Session-Id` a 2026-07-28 client sends is ignored.
+**200 level.** On a direct route the proxy holds no session state; it forwards `Mcp-Session-Id` when a handshake-era client sends one. On a virtual route the router recognizes a 2026-07-28 request by its `_meta` protocol version or a `2026-` `MCP-Protocol-Version` header and stops requiring a session. To reach handshake-era backends, which still need one, the router creates its own client session for that user and virtual server, caches it, and checks it on every use. The client never sees it. A 2026-07-28 backend gets no session at all. The router ignores any `Mcp-Session-Id` a 2026-07-28 client sends.
 
 ### Major 2. No `initialize` handshake; version and capabilities travel in `_meta`
 
@@ -72,7 +72,7 @@ Each entry has a status, a **100 level** explanation (what it means in plain wor
 - On a direct route the request goes to the backend, which answers for itself. A handshake-era backend answers "method not found", and a client in auto mode falls back to `initialize`.
 - Before a user has connected their account for an egress server, the gateway answers `server/discover` with `-32601` on purpose. Clients in auto mode, the SDK default, then fall back to `initialize`, and the gateway's local handshake answer carries the connect instructions.
 - The router sends `server/discover` to each backend before its first call and caches the backend's protocol era for 5 minutes per backend.
-- The health check (`registry/health/service.py`) sends `server/discover` first. A `supportedVersions` answer or a 2026-07-28 error code marks a live 2026-07-28 server. Anything else falls back to the `initialize` and `ping` check, and a handshake-era answer is remembered for an hour so later checks skip the extra request.
+- The health check (`registry/health/service.py`) sends `server/discover` first. A `supportedVersions` answer or a 2026-07-28 error code marks a live 2026-07-28 server. Anything else falls back to the `initialize` and `ping` check, and the health check remembers a handshake-era answer for an hour so later checks skip the extra request.
 - Tool discovery (`registry/core/mcp_client.py`) uses the MCP SDK 2.x client in auto mode, which asks `server/discover` and falls back to `initialize`.
 
 ### Major 4. `subscriptions/listen` replaces the GET stream and `resources/subscribe`
@@ -108,7 +108,7 @@ Each entry has a status, a **100 level** explanation (what it means in plain wor
 **200 level.**
 - Both route types forward an `input_required` result and the retry with its `inputResponses` and `requestState` unchanged, so the backend's own checks on its `requestState` still apply.
 - For an egress server before consent, with `EGRESS_CONSENT_USE_ELICITATION=true`, a `tools/call`, `prompts/get` or `resources/read` from a 2026-07-28 client that declares `elicitation.url` gets an `input_required` result holding one URL-mode `elicitation/create` with the connect link, and a gateway `requestState` that starts with `mcpgw-egress-consent.`.
-- On the retry, `_strip_gateway_consent_retry()` in `auth_server/server.py` removes the gateway's `requestState` and `inputResponses` before the body is authorized and forwarded, so the gateway checks the same bytes it sends and the upstream never sees a prompt it did not send. A declined or cancelled prompt ends with an `isError` result carrying the link.
+- On the retry, `_strip_gateway_consent_retry()` in `auth_server/server.py` removes the gateway's `requestState` and `inputResponses` before the gateway authorizes and forwards the body, so it checks the same bytes it sends and the upstream never sees a prompt it did not send. A declined or cancelled prompt ends with an `isError` result carrying the link.
 - With the setting off (the default), every client gets the `isError` result with the link, as before. See [egress credential vault](egress-credential-vault.md).
 
 ### Major 8. Every result carries `resultType`
@@ -127,7 +127,7 @@ Each entry has a status, a **100 level** explanation (what it means in plain wor
 
 **Status:** no change needed.
 
-**100 level.** Nothing changes. The gateway never resumed broken streams.
+**100 level.** The gateway never resumed broken streams, so nothing changes.
 
 **200 level.** The direct-route proxy and the virtual router collect each backend response before replying and never handled `Last-Event-ID`.
 
@@ -163,7 +163,7 @@ Each entry has a status, a **100 level** explanation (what it means in plain wor
 
 **100 level.** A 2026-07-28 client copies the method and the tool name into HTTP headers. The gateway checks that the headers and the body agree, because it authorizes the body while a server may act on the headers. On virtual servers it also sets these headers itself when it calls a 2026-07-28 backend.
 
-**200 level.** `docker/lua/capture_body.lua` runs before authorization on every MCP route and compares `Mcp-Method` with the body's method, `Mcp-Name` (base64 form decoded) with `params.name` or `params.uri`, and `MCP-Protocol-Version` with the `_meta` version. A mismatch gets HTTP 400 and `-32020`. Requests without these headers, which covers every handshake-era client, are not checked. For 2026-07-28 backends the router sets the headers from the exact body it sends and adds `Mcp-Param-*` headers from the backend's `x-mcp-header` tool annotations, dropping any tool whose annotation breaks the spec's rules. See [scopes](scopes.md#mcp-2026-07-28-request-headers).
+**200 level.** `docker/lua/capture_body.lua` runs before authorization on every MCP route and compares `Mcp-Method` with the body's method, `Mcp-Name` (base64 form decoded) with `params.name` or `params.uri`, and `MCP-Protocol-Version` with the `_meta` version. A mismatch gets HTTP 400 and `-32020`. nginx skips the check for requests without these headers, which covers every handshake-era client. For 2026-07-28 backends the router sets the headers from the exact body it sends and adds `Mcp-Param-*` headers from the backend's `x-mcp-header` tool annotations, dropping any tool whose annotation breaks the spec's rules. See [scopes](scopes.md#mcp-2026-07-28-request-headers).
 
 ### Minor 5. `ttlMs` and `cacheScope` on cacheable results
 
@@ -171,7 +171,7 @@ Each entry has a status, a **100 level** explanation (what it means in plain wor
 
 **100 level.** Lists and resource reads now say how long a client may reuse them and whether a shared cache may store them. When the gateway filters a list per user, it marks the list private.
 
-**200 level.** Lists the virtual router builds for 2026-07-28 clients carry `cacheScope: "private"` and `ttlMs: 60000`. On a direct route, a per-user filtered `tools/list` that a backend marks `"public"` is rewritten to `"private"`. Two cases are not covered yet; see [known gaps](#known-gaps).
+**200 level.** Lists the virtual router builds for 2026-07-28 clients carry `cacheScope: "private"` and `ttlMs: 60000`. On a direct route, the auth server rewrites `cacheScope: "public"` to `"private"` on a `tools/list` it filters per user. Two cases are not covered yet; see [known gaps](#known-gaps).
 
 ### Minor 6. Resource not found is `-32602`
 
@@ -187,7 +187,7 @@ Each entry has a status, a **100 level** explanation (what it means in plain wor
 
 **100 level.** When the gateway signs a user in to a provider such as GitHub, the provider's reply can name who issued it. An operator can record the expected issuer for a server, and the gateway then refuses a reply that names a different one.
 
-**200 level.** `expected_issuer` is an optional field on a server's egress and discovery OAuth configuration (API, CLI and server forms). The gateway records it in the encrypted consent state when consent begins. The shared callback `/oauth2/egress/callback` reads `iss`, and `_check_response_issuer()` in `registry/egress_auth/service.py` refuses a reply whose `iss` differs, before the code exchange. A reply without `iss` is accepted. The user login flow gives each identity provider its own callback URL, which RFC 9207 accepts as a defense on its own. See [egress credential vault](egress-credential-vault.md#setting-expected_issuer).
+**200 level.** `expected_issuer` is an optional field on a server's egress and discovery OAuth configuration (API, CLI and server forms). The gateway records it in the encrypted consent state when consent begins. The shared callback `/oauth2/egress/callback` reads `iss`, and `_check_response_issuer()` in `registry/egress_auth/service.py` refuses a reply whose `iss` differs, before the code exchange. The callback accepts a reply without `iss`. The user login flow gives each identity provider its own callback URL, which RFC 9207 accepts as a defense on its own. See [egress credential vault](egress-credential-vault.md#setting-expected_issuer).
 
 ### Minor 8. `application_type` in client registration
 
@@ -201,7 +201,7 @@ Each entry has a status, a **100 level** explanation (what it means in plain wor
 
 **Status:** supported.
 
-**100 level.** A saved credential must only be used with the sign-in server that issued it. The gateway records where each egress credential came from and stops using it if the server's sign-in settings change.
+**100 level.** A client may use a saved credential only with the sign-in server that issued it. The gateway records where each egress credential came from and stops using it if the server's sign-in settings change.
 
 **200 level.** Each stored egress credential records `bound_token_url`, the provider's token endpoint captured when consent began. The callback refuses a code if the endpoint changed during consent, and every vend and refresh refuses a credential whose server now uses a different token endpoint, which sends the user back through consent.
 
@@ -211,7 +211,7 @@ Each entry has a status, a **100 level** explanation (what it means in plain wor
 
 **100 level.** Tool argument descriptions may now use the full JSON Schema language. The gateway keeps them intact when it passes them on.
 
-**200 level.** The schema normalization used for virtual servers (`_ensure_mcp_compliant_schema` in `registry/core/nginx_service.py` and `_ensure_mcp_schema` in the router) leaves an object schema alone, narrows a type list such as `["object", "null"]` to `"object"` (the root type must be `"object"`), and moves `$defs` and `definitions` to the root when a non-object schema has to be wrapped, so `#/$defs/...` references still resolve. Tools found by health-loop discovery keep their schema whichever key stored it (`registry/utils/tool_schema.py`). The gateway does not resolve `$ref`; clients do.
+**200 level.** The schema normalization used for virtual servers (`_ensure_mcp_compliant_schema` in `registry/core/nginx_service.py` and `_ensure_mcp_schema` in the router) leaves an object schema alone, narrows a type list such as `["object", "null"]` to `"object"` (the root type must be `"object"`), and moves `$defs` and `definitions` to the root when it has to wrap a non-object schema, so `#/$defs/...` references still resolve. Tools found by health-loop discovery keep their schema whichever key stored it (`registry/utils/tool_schema.py`). The gateway does not resolve `$ref`; clients do.
 
 ### Minor 11. `elicitationId` and `notifications/elicitation/complete` removed
 
@@ -227,7 +227,7 @@ Each entry has a status, a **100 level** explanation (what it means in plain wor
 
 **100 level.** Some error codes moved to new numbers. The gateway uses the new numbers when it answers 2026-07-28 clients.
 
-**200 level.** Header mismatch is `-32020` (nginx and the virtual router) and unsupported protocol version is `-32022` (virtual router). The gateway never sends `-32021` itself. The health check treats any of `-32020`, `-32021` and `-32022` as proof of a live 2026-07-28 server. The `-32042` URL elicitation is only sent to handshake-era clients.
+**200 level.** Header mismatch is `-32020` (nginx and the virtual router) and unsupported protocol version is `-32022` (virtual router). The gateway never sends `-32021` itself. The health check treats any of `-32020`, `-32021` and `-32022` as proof of a live 2026-07-28 server. The gateway sends the `-32042` URL elicitation only to handshake-era clients.
 
 ## Deprecated features
 
@@ -243,9 +243,9 @@ Each entry has a status, a **100 level** explanation (what it means in plain wor
 
 **Status:** still routed; warning on SSE-only registration.
 
-**100 level.** The older way of connecting is on its way out. The gateway still supports it, and registering a server that offers only that transport now writes a warning to the log.
+**100 level.** The spec now deprecates the older HTTP+SSE way of connecting. The gateway still supports it, and registering a server that offers only that transport now writes a warning to the log.
 
-**200 level.** `register_server` logs a warning when `supported_transports` is exactly `["sse"]`, naming 2027-07-28 as the earliest date support may be removed (the spec's twelve-month deprecation window). See [API reference](api-reference.md).
+**200 level.** `register_server` logs a warning when `supported_transports` is exactly `["sse"]`, naming 2027-07-28 as the earliest date the gateway may drop support (the spec's twelve-month deprecation window). See [API reference](api-reference.md).
 
 ### Deprecated 3. `includeContext` values `"thisServer"` and `"allServers"`
 
@@ -259,9 +259,9 @@ Each entry has a status, a **100 level** explanation (what it means in plain wor
 
 **Status:** both available.
 
-**100 level.** Clients should identify themselves with a published description document instead of registering on the fly. The registry publishes such a document for itself, and MCP clients can still register dynamically with the gateway's identity provider.
+**100 level.** Clients should identify themselves with a published description document. Registering a new client at each sign-in is deprecated. The registry publishes such a document for itself, and MCP clients can still register dynamically with the gateway's identity provider.
 
-**200 level.** The registry's CIMD document is served at `/oauth/client-metadata.json` when enabled. Dynamic Client Registration for MCP clients stays available through the identity provider; see [Keycloak MCP client guide](keycloak-mcp-clients.md).
+**200 level.** The registry serves its CIMD document at `/oauth/client-metadata.json` when the feature is on. Dynamic Client Registration for MCP clients stays available through the identity provider; see [Keycloak MCP client guide](keycloak-mcp-clients.md).
 
 ## Other changes in the release
 
@@ -281,22 +281,22 @@ The schema fix for `number` types and the governance and process changes (the fe
 
 ## Known gaps
 
-- **`subscriptions/listen` and live progress.** Needs a streaming relay on both route types; designed separately.
-- **`ttlMs` and `cacheScope` in two places.** The auth server's pre-consent lists and `resources/read` results the virtual router forwards from handshake-era backends lack them. A client that validates them strictly rejects those answers.
+- **`subscriptions/listen` and live progress.** They need a streaming relay on both route types, which has its own design.
+- **`ttlMs` and `cacheScope` in two places.** The auth server's pre-consent lists and `resources/read` results the virtual router forwards from handshake-era backends lack them. A client that checks for them rejects those answers.
 - **Not-found error code on virtual routes.** The router answers `-32601` where 2026-07-28 uses `-32602`.
-- **One place for protocol rules.** Result shaping and protocol constants are spread across several files; [#1997](https://github.com/agentic-community/mcp-gateway-registry/issues/1997) moves them into one helper and one constants module per language.
+- **One place for protocol rules.** Several files each apply the result rules and keep their own protocol constants; [#1997](https://github.com/agentic-community/mcp-gateway-registry/issues/1997) moves them into one helper and one constants module per language.
 
 ## Upgrade notes
 
-- A scope with `tools: ["*"]` now grants every tool for `tools/call` only, not every MCP method. A custom scope that relied on the old behavior for a method it does not list, such as `resources/read` or `prompts/get`, gets 403 for that method until the method is added. `server/discover` and `notifications/*` are allowed for any scope that grants access to the server. See [scopes](scopes.md).
-- MCP request bodies up to 1 MB are authorized. Larger tool calls used to fail with a 500 above about 10 KB.
+- A scope with `tools: ["*"]` now grants every tool for `tools/call` and no other method. A custom scope that relied on the old behavior for a method it does not list, such as `resources/read` or `prompts/get`, gets 403 for that method until someone adds it. Any scope that grants access to a server allows `server/discover` and `notifications/*` on it. See [scopes](scopes.md).
+- The gateway now authorizes MCP request bodies up to 1 MB. Tool calls above about 10 KB used to fail with a 500.
 
 ## Testing against a live gateway
 
 - `tests/e2e/mcp_client_matrix.py` calls one tool per route with a handshake-era client and with the MCP SDK 2.x in legacy, auto and 2026-07-28 modes.
 - `tests/e2e/mcp_2026_gateway_checks.py` checks `server/discover`, header and body mismatch rejection, `cacheScope`, and the 401 and 403 challenges.
 
-Both exit non-zero on an unexpected result. The upstream servers they use are registered from `cli/examples/` (`mcp-everything.json`, `pingmcp-modern.json`, `pingmcp-dual.json`, `virtual-server-mcp-compat.json`).
+Both exit non-zero on an unexpected result. Register the upstream servers they use from `cli/examples/` (`mcp-everything.json`, `pingmcp-modern.json`, `pingmcp-dual.json`, `virtual-server-mcp-compat.json`).
 
 ## Related documentation
 
