@@ -493,6 +493,8 @@ The schema fix for `number` types and the governance and process changes (the fe
 
 ## Upgrade notes
 
+For what to check before upgrading and how to troubleshoot afterwards, see [What changes when I upgrade to a release with MCP 2026-07-28 support?](faq/upgrading-to-mcp-2026-07-28.md).
+
 - A scope with `tools: ["*"]` now grants every tool for `tools/call` and no other method. A custom scope that relied on the old behavior for a method it does not list, such as `resources/read` or `prompts/get`, gets 403 for that method until someone adds it. Any scope that grants access to a server allows `server/discover` and `notifications/*` on it. See [scopes](scopes.md).
 - The gateway now authorizes MCP request bodies up to 1 MB. Tool calls above about 10 KB used to fail with a 500.
 

@@ -7,6 +7,7 @@ Common questions and answers about the MCP Gateway Registry.
 - [What is MCP and why do I need a gateway?](what-is-mcp-and-gateway.md)
 - [How do I deploy and register MCP servers and agents?](deploying-and-registering-servers-agents.md)
 - [What changes when I upgrade to a release with the gateway generic proxy?](gateway-proxy-backwards-compatibility.md)
+- [What changes when I upgrade to a release with MCP 2026-07-28 support?](upgrading-to-mcp-2026-07-28.md)
 
 ## Tool and Agent Discovery
 
