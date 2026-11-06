@@ -136,8 +136,9 @@ Before deploying to production, ensure:
 sudo useradd -m -s /bin/bash metrics
 sudo su - metrics
 
-# Install uv and dependencies
-curl -LsSf https://astral.sh/uv/install.sh | sh
+# Install uv and dependencies (pipx needs: sudo apt-get install -y pipx)
+pipx install uv==0.13.5
+pipx ensurepath
 source ~/.bashrc
 ```
 
@@ -392,9 +393,8 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Install uv
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh
-ENV PATH="/root/.local/bin:$PATH"
+# Install uv from its pinned image
+COPY --from=ghcr.io/astral-sh/uv:0.13.5 /uv /uvx /usr/local/bin/
 
 WORKDIR /app
 
