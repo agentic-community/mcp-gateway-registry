@@ -698,6 +698,17 @@ sanitizer that isn't called) is equivalent to no check.
   NOT a valid "hardening" here — CSRF is defended separately by the CSRF token,
   not by `SameSite=Strict`. Leave a comment at the `set_cookie` site so a future
   reader does not "tighten" it and break login.
+- **A session cookie can be tossed from a sibling subdomain.** Any other host
+  under the parent domain can set a cookie with the session cookie's name.
+  Beside the real one, the browser sends both, in an order the tossing host
+  controls, and two readers that pick differently act as two sessions on one
+  request. Refuse a duplicated session cookie in every reader of both services
+  through one parser that matches the exact name, and make a read that
+  bypasses it fail closed. A tossed cookie with the real cookie's Domain and
+  Path replaces it instead, putting the browser in the attacker's session, and
+  refusing duplicates cannot see that. Never record the `Cookie` header,
+  including through OpenTelemetry header capture ([Cookie Security
+  Design](design/cookie-security-design.md#duplicate-session-cookies)).
 - **Bind the OAuth2/OIDC authorization-code flow to the specific login.** A valid
   signature is necessary but not sufficient — a correctly-signed id_token minted
   for a different login can be replayed/injected. Send a per-login `nonce` on the
@@ -1174,11 +1185,15 @@ the drift between copies is the hole.
   `@router.(post|put|patch|delete)` handler that depends on the session-cookie
   auth dependency — `enhanced_auth` AND `nginx_proxied_auth`, which falls back to
   the cookie — and mutates state) and close every gap. `verify_csrf_token_flexible`
-  correctly NO-OPS for non-cookie (Bearer/CLI) callers, so it is safe to add to a
-  route even if some callers are non-browser. It reads the token from the
-  `X-CSRF-Token` header OR a `csrf_token` form field, so a JSON-body route works
-  fine via the header. Skip only routes authed purely by `validate_internal_auth`
-  / internal-token (not browser/cookie surfaces).
+  correctly NO-OPS for a caller with no session cookie at all (Bearer/CLI), so it
+  is safe to add to a route even if some callers are non-browser. A request that
+  carries the session cookie, even a duplicated one or one that does not
+  resolve, gets a 403 unless it presents the token of the session it resolves
+  to: skipping CSRF because the registry could not read a session rests on
+  `/validate` agreeing, and a transient store error breaks that. It reads the
+  token from the `X-CSRF-Token` header OR a `csrf_token` form field, so a
+  JSON-body route works fine via the header. Skip only routes authed purely by
+  `validate_internal_auth` / internal-token (not browser/cookie surfaces).
 - **Cookie-authenticated proxy requests → `registry/common/request_origin.py`.** A browser attaches the session cookie to a request any site makes, and an MCP client cannot send a CSRF token. So every MCP, virtual, agent and proxy request authenticated by the cookie goes through `origin_refusal()` at `/validate` (`_refuse_cross_origin_cookie_request` in `auth_server/server.py`), before any scope check or token mint. Trusted origins come only from configuration (`AUTH_SERVER_EXTERNAL_URL`, `REGISTRY_URL`), never from `Host` or `X-Forwarded-*`. A missing `Origin` passes only on GET/HEAD/OPTIONS; `null`, malformed and foreign values always fail. Parse an origin with `normalize_origin()`, the same parser the CORS allowlist uses (#1996).
 - **Internal service-to-service auth → `registry/auth/internal.py`.**
   `generate_internal_token()` to mint, `validate_internal_auth` /

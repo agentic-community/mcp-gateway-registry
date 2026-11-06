@@ -8,7 +8,6 @@ from typing import Annotated, Any
 import httpx
 from fastapi import (
     APIRouter,
-    Cookie,
     Depends,
     Form,
     Header,
@@ -32,6 +31,10 @@ from ..auth.csrf import (
 )
 from ..auth.dependencies import enhanced_auth, nginx_proxied_auth
 from ..auth.internal import validate_internal_auth
+from ..auth.session_cookie import (
+    SessionCookie,
+    request_session_cookie,
+)
 from ..auth.tool_filter import filter_tools_for_user
 from ..common.log_redaction import redact_mapping, redact_url
 from ..constants import VALID_AUTH_SCHEMES, DeploymentType, HealthStatus
@@ -785,12 +788,14 @@ async def _perform_security_scan_on_registration(
 async def read_root(
     request: Request,
     query: str | None = None,
-    session: Annotated[str | None, Cookie(alias=settings.session_cookie_name)] = None,
+    session: SessionCookie = None,
 ):
     """Main dashboard page showing services based on user permissions."""
     # Check authentication first and redirect if not authenticated
     if not session:
         logger.info("No session cookie at root route, redirecting to login")
+        # A refused duplicate gets both variants expired by
+        # SessionCookieIsolationMiddleware.
         return RedirectResponse(url="/login", status_code=302)
 
     try:
@@ -4128,7 +4133,7 @@ async def generate_user_token(
         from ..auth.dependencies import get_user_session_data
 
         try:
-            session_cookie = request.cookies.get(settings.session_cookie_name)
+            session_cookie = request_session_cookie(request)
             logger.info(f"Session cookie present: {bool(session_cookie)}")
             session_data = await get_user_session_data(session_cookie)
             logger.info(

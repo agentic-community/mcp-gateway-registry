@@ -69,6 +69,7 @@ from registry.auth.dependencies import (
 
 # Import domain routers
 from registry.auth.routes import router as auth_router
+from registry.auth.session_cookie import SessionCookieIsolationMiddleware
 
 # Import core configuration
 from registry.core.aws_credential_posture import log_aws_credential_posture
@@ -1234,6 +1235,19 @@ if settings.audit_log_enabled:
         log_health_checks=settings.audit_log_health_checks,
         log_static_assets=settings.audit_log_static_assets,
     )
+
+# Added last, so it is the outermost of the registry's own middleware and runs
+# before the audit middleware and every other registry component that could
+# read cookies. OpenTelemetry's ASGI middleware, added by instrument_app above
+# or by the opentelemetry-instrument wrapper, wraps the whole stack and runs
+# before it, so OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_REQUEST must
+# never list Cookie: OTel would record the raw session cookie. This middleware
+# reads the session cookie once through the shared reader, caches the result in
+# the scope, and removes the session cookie from the Cookie header fields passed
+# on, so a handler that reads it any other way than request_session_cookie gets
+# nothing. When it refused a duplicated session cookie, it also adds the expiry
+# of both session cookie variants to whatever response the request gets.
+app.add_middleware(SessionCookieIsolationMiddleware)
 
 # Register API routers with /api prefix
 app.include_router(system_router, tags=["System"])  # /api/version, /api/stats

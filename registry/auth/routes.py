@@ -5,7 +5,7 @@ import urllib.parse
 from typing import Annotated
 
 import httpx
-from fastapi import APIRouter, Cookie, Depends, Request, status
+from fastapi import APIRouter, Depends, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
@@ -25,6 +25,13 @@ from registry.observability.meters import (
 from ..audit.context import set_audit_action
 from ..core.config import settings
 from .csrf import generate_csrf_token, verify_csrf_token_flexible
+from .session_cookie import (
+    SessionCookie,
+    clear_session_cookie,
+    request_session_cookie,
+    request_session_cookie_copies,
+    session_cookie_refused,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +42,14 @@ _ROOT_PATH: str = os.environ.get("ROOT_PATH", "").rstrip("/")
 # few seconds it is down, and the user should not stare at a blank page — the
 # local session is already invalidated by that point, so we fall back to /login.
 _S2S_LOGOUT_TIMEOUT_SECONDS: float = 5.0
+
+# Logout by GET of a duplicated session cookie needs no authentication or CSRF
+# token (a POST fails CSRF, since the refused cookie resolves to no session), so
+# it resolves each distinct copy at most once and at most this many copies.
+# A browser holds one cookie per name, Domain and Path, so a real browser sends
+# a handful of copies at most; the cap bounds the session-store reads one
+# request can cause.
+_MAX_LOGOUT_SESSION_COPIES: int = 8
 
 
 def _fallback_external_host() -> str:
@@ -84,6 +99,60 @@ def _resolve_trusted_host(request: Request) -> str:
             host,
         )
     return _fallback_external_host()
+
+
+async def _delete_duplicated_sessions(
+    request: Request,
+) -> None:
+    """Delete the server-side session of every valid copy of a duplicated session cookie.
+
+    Neither copy is trusted as the caller's session, but the browser asked to
+    sign out, so every session a copy names ends. A copy counts only when
+    ``resolve_session_from_cookie`` accepts its signature and finds its
+    session; an unsigned, forged, expired or unknown copy is ignored. Identical
+    copies resolve once, and only the first ``_MAX_LOGOUT_SESSION_COPIES``
+    distinct copies resolve at all, because this path runs without
+    authentication or CSRF. The log carries the counts, never a value.
+
+    Args:
+        request: The logout request whose session cookie was refused.
+    """
+    from .dependencies import resolve_session_from_cookie
+    from .session_store import delete_session
+
+    copies = request_session_cookie_copies(request)
+    distinct = list(dict.fromkeys(copies))
+    if len(distinct) > _MAX_LOGOUT_SESSION_COPIES:
+        logger.warning(
+            "Logout received %d distinct session cookie copies; ignoring %d beyond the cap of %d",
+            len(distinct),
+            len(distinct) - _MAX_LOGOUT_SESSION_COPIES,
+            _MAX_LOGOUT_SESSION_COPIES,
+        )
+        distinct = distinct[:_MAX_LOGOUT_SESSION_COPIES]
+    session_ids: set[str] = set()
+    for cookie_copy in distinct:
+        session_data = await resolve_session_from_cookie(cookie_copy)
+        session_id = (session_data or {}).get("session_id")
+        if session_id:
+            session_ids.add(session_id)
+
+    deleted = 0
+    for session_id in session_ids:
+        try:
+            await delete_session(session_id)
+            deleted += 1
+        except Exception as e:
+            logger.warning(
+                f"Best-effort session_store delete failed during logout: {type(e).__name__}"
+            )
+    logger.info(
+        "Logout received the session cookie %d times; %d copies named a live session, "
+        "%d sessions deleted",
+        len(copies),
+        len(session_ids),
+        deleted,
+    )
 
 
 def _build_external_url(
@@ -241,7 +310,7 @@ async def oauth2_callback(request: Request, error: str = None, details: str = No
 
         # If we reach here, the auth server should have set the session cookie
         # Verify the session is valid by resolving it against the server-side store.
-        session_cookie = request.cookies.get(settings.session_cookie_name)
+        session_cookie = request_session_cookie(request)
         if session_cookie:
             from .dependencies import resolve_session_from_cookie
 
@@ -265,9 +334,15 @@ async def oauth2_callback(request: Request, error: str = None, details: str = No
 
 async def logout_handler(
     request: Request,
-    session: Annotated[str | None, Cookie(alias=settings.session_cookie_name)] = None,
+    session: SessionCookie = None,
 ):
-    """Shared logout logic for both GET and POST requests"""
+    """Shared logout logic for both GET and POST requests.
+
+    Every response expires the session cookie in both variants (host-only and
+    on SESSION_COOKIE_DOMAIN). A session cookie sent more than once arrives as
+    None: neither copy is trusted as the caller's session, so there is no IdP
+    logout, but every session a validly signed copy names is deleted.
+    """
     # Set audit action for logout
     set_audit_action(request, "logout", "auth", description="User logged out")
 
@@ -301,18 +376,12 @@ async def logout_handler(
                 await delete_session(session_id)
             except Exception as e:
                 logger.warning(f"Best-effort session_store delete failed during logout: {e}")
+        elif session_cookie_refused(request):
+            await _delete_duplicated_sessions(request)
 
-        # Clear local session cookie. Must match (name, domain, path) of the
-        # Set-Cookie used by auth_server to create the cookie, or the browser
-        # will ignore the deletion. secure=False is intentional: an expired
-        # empty cookie has no secrets, and secure=True on an HTTP request
-        # would cause the browser to reject the Set-Cookie header entirely.
+        # Clear local session cookie after the server record is gone.
         response = RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
-        response.delete_cookie(
-            settings.session_cookie_name,
-            path="/",
-            domain=settings.session_cookie_domain,
-        )
+        clear_session_cookie(response, request)
 
         # If user was logged in via OAuth2, terminate the IdP session too.
         #
@@ -431,11 +500,7 @@ async def logout_handler(
 
             logger.debug(f"Redirecting browser after {provider} logout")
             response = RedirectResponse(url=redirect_target, status_code=status.HTTP_303_SEE_OTHER)
-            response.delete_cookie(
-                settings.session_cookie_name,
-                path="/",
-                domain=settings.session_cookie_domain,
-            )
+            clear_session_cookie(response, request)
 
         logger.info("User logged out.")
         return response
@@ -444,18 +509,14 @@ async def logout_handler(
         logger.error(f"Error during logout: {e}")
         # Fallback to simple logout
         response = RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
-        response.delete_cookie(
-            settings.session_cookie_name,
-            path="/",
-            domain=settings.session_cookie_domain,
-        )
+        clear_session_cookie(response, request)
         return response
 
 
 @router.get("/logout")
 async def logout_get(
     request: Request,
-    session: Annotated[str | None, Cookie(alias=settings.session_cookie_name)] = None,
+    session: SessionCookie = None,
 ):
     """Handle logout via GET request (for URL navigation)"""
     return await logout_handler(request, session)
@@ -464,7 +525,7 @@ async def logout_get(
 @router.post("/logout")
 async def logout_post(
     request: Request,
-    session: Annotated[str | None, Cookie(alias=settings.session_cookie_name)] = None,
+    session: SessionCookie = None,
     _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ):
     """Handle logout via POST request (for forms with CSRF validation)"""
@@ -487,7 +548,7 @@ async def get_auth_config():
 @router.get("/csrf-token")
 async def get_csrf_token(
     request: Request,
-    session: Annotated[str | None, Cookie(alias=settings.session_cookie_name)] = None,
+    session: SessionCookie = None,
 ):
     """API endpoint to get a CSRF token for React/SPA applications.
 

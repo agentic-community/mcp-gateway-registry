@@ -910,7 +910,9 @@ Set it with the checkbox in the server edit form, `registry_management.py egress
   The service enforces single-use (replay guard), TTL, the browser binding below,
   and an account-swap guard: the browser that completes the provider redirect
   must hold a live registry session for the same principal that started the
-  consent. A callback with no session cookie, or one that no longer resolves, is
+  consent. A callback with no session cookie, one that no longer resolves, or
+  two session cookies (see [duplicate session
+  cookies](design/cookie-security-design.md#duplicate-session-cookies)) is
   refused (HTTP 401, "you are not signed in") and stores nothing. The callback
   consumes the state's nonce once, right after it decodes the state and before
   any other check, so the code and state left in a refusing browser's history

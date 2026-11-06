@@ -187,10 +187,10 @@ class AuditMiddleware(BaseHTTPMiddleware):
         Returns:
             Credential type: 'session_cookie', 'bearer_token', or 'none'
         """
-        from ..core.config import settings
+        from ..auth.session_cookie import request_session_cookie
 
-        # Check for session cookie (use configured cookie name)
-        if request.cookies.get(settings.session_cookie_name):
+        # Check for session cookie (sent once; a duplicated one is refused)
+        if request_session_cookie(request):
             return "session_cookie"
 
         # Check for bearer token
@@ -212,10 +212,10 @@ class AuditMiddleware(BaseHTTPMiddleware):
         Returns:
             Raw credential value (will be masked), or None
         """
-        from ..core.config import settings
+        from ..auth.session_cookie import request_session_cookie
 
-        # Check for session cookie (use configured cookie name)
-        session = request.cookies.get(settings.session_cookie_name)
+        # Check for session cookie (sent once; a duplicated one is refused)
+        session = request_session_cookie(request)
         if session:
             return session  # Will be masked by validator
 
@@ -235,13 +235,13 @@ class AuditMiddleware(BaseHTTPMiddleware):
         record. Strictly read-only: must not mutate request.state, extend the
         session, or issue any cookie.
 
-        Returns None on missing, tampered, expired, or legacy-format cookies
-        so callers can stamp anonymous identity.
+        Returns None on missing, duplicated, tampered, expired, or legacy-format
+        cookies so callers can stamp anonymous identity.
         """
         from ..auth.dependencies import resolve_session_from_cookie
-        from ..core.config import settings
+        from ..auth.session_cookie import request_session_cookie
 
-        session = request.cookies.get(settings.session_cookie_name)
+        session = request_session_cookie(request)
         if not session:
             return None
 

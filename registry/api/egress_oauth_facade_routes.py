@@ -100,9 +100,9 @@ async def _optional_session(request: Request) -> dict | None:
     """Read the browser's gateway session, or None so /connect can bounce to login.
 
     Resolved by ``browser_session_context`` from the session cookie alone (a
-    bearer or internal token names no browser). A session store or scope lookup
-    that fails reads as None too, so it bounces to login, and the login round
-    trip retries it."""
+    bearer or internal token names no browser). A session cookie sent more than
+    once reads as None, so it bounces to login too, and so does a session store
+    or scope lookup that fails: the login round trip retries it."""
     try:
         return await browser_session_context(request)
     except Exception as exc:

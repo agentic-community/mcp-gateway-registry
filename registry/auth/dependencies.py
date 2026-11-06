@@ -1,7 +1,7 @@
 import logging
 from typing import Annotated, Any
 
-from fastapi import Cookie, Depends, Header, HTTPException, Request, status
+from fastapi import Depends, Header, HTTPException, Request, status
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from ..common.log_redaction import redact_headers, redact_mapping
@@ -16,6 +16,10 @@ from .privileged_constants import ADMIN_ACTION_PREFIXES, is_admin_conferring_act
 from .proxied_token import (
     _api_auth_request_enabled,
     verify_registry_ui_token,
+)
+from .session_cookie import (
+    SessionCookie,
+    request_session_cookie,
 )
 from .session_store import resolve_session as _store_resolve_session
 
@@ -61,11 +65,13 @@ async def resolve_session_from_cookie(
 
 
 async def get_current_user(
-    session: Annotated[str | None, Cookie(alias=settings.session_cookie_name)] = None,
+    session: SessionCookie = None,
 ) -> str:
     """Get the username for the authenticated user.
 
-    Raises 401 for missing, tampered, expired, or legacy-format cookies.
+    Raises 401 for missing, tampered, expired, or legacy-format cookies, and for
+    a session cookie the request carried more than once (``SessionCookie`` is
+    None then).
     """
     data = await resolve_session_from_cookie(session)
     if data is None or not data.get("username"):
@@ -76,7 +82,7 @@ async def get_current_user(
 
 
 async def get_user_session_data(
-    session: Annotated[str | None, Cookie(alias=settings.session_cookie_name)] = None,
+    session: SessionCookie = None,
 ) -> dict[str, Any]:
     """Get the full session record for the authenticated user.
 
@@ -523,14 +529,14 @@ async def user_can_access_server(server_name: str, user_scopes: list[str]) -> bo
 
 
 async def api_auth(
-    session: Annotated[str | None, Cookie(alias=settings.session_cookie_name)] = None,
+    session: SessionCookie = None,
 ) -> str:
     """API authentication dependency that returns the username."""
     return await get_current_user(session)
 
 
 async def web_auth(
-    session: Annotated[str | None, Cookie(alias=settings.session_cookie_name)] = None,
+    session: SessionCookie = None,
 ) -> str:
     """Web authentication dependency that returns the username."""
     return await get_current_user(session)
@@ -726,7 +732,7 @@ async def _context_from_internal_token(
 
 async def enhanced_auth(
     request: Request,
-    session: Annotated[str | None, Cookie(alias=settings.session_cookie_name)] = None,
+    session: SessionCookie = None,
 ) -> dict[str, Any]:
     """
     Enhanced authentication dependency that returns full user context.
@@ -773,17 +779,19 @@ async def browser_session_context(
 
     For routes that act only for a signed-in browser: starting or completing an
     egress consent (initiate, ``/oauth2/egress/connect`` and the consent
-    callback). It reads the session cookie and resolves it with
-    ``enhanced_auth`` against the session store, and nothing else: an
-    ``X-Internal-Token-Registry``, a bearer and the identity headers are never
-    read, so a caller holding a token, real or forged, but no session cookie
-    gets no browser context.
+    callback). It reads the session cookie through the shared reader
+    (``request_session_cookie``) and resolves it with ``enhanced_auth`` against
+    the session store, and nothing else: an ``X-Internal-Token-Registry``, a
+    bearer and the identity headers are never read, so a caller holding a
+    token, real or forged, but no session cookie gets no browser context. A
+    session cookie sent more than once reads as absent, as ``/validate`` also
+    refuses it.
 
     Args:
         request: The incoming request.
 
     Returns:
-        The session's user context, or None when the request carries no
+        The session's user context, or None when the request carries no usable
         session cookie or it does not resolve to a live OAuth2 session.
 
     Raises:
@@ -791,7 +799,7 @@ async def browser_session_context(
             unresolvable session (a failing scope lookup, for example)
             propagates, so the caller can tell an outage from "not signed in".
     """
-    session = request.cookies.get(settings.session_cookie_name)
+    session = request_session_cookie(request)
     if not session:
         return None
     try:
@@ -802,9 +810,7 @@ async def browser_session_context(
 
 async def nginx_proxied_auth(
     request: Request,
-    session: Annotated[
-        str | None, Cookie(alias=settings.session_cookie_name, include_in_schema=False)
-    ] = None,
+    session: SessionCookie = None,
     x_user: Annotated[str | None, Header(alias="X-User", include_in_schema=False)] = None,
     x_username: Annotated[str | None, Header(alias="X-Username", include_in_schema=False)] = None,
     x_scopes: Annotated[str | None, Header(alias="X-Scopes", include_in_schema=False)] = None,

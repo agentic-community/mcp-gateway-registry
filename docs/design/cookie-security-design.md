@@ -18,14 +18,15 @@ The MCP Gateway Registry supports authentication through both traditional userna
 
 This implementation is designed for **single-tenant deployments** where:
 - All subdomains are owned and controlled by a single organization
-- Cross-subdomain cookie sharing is a desired feature, not a security risk
 - Users authenticate once and access multiple services on different subdomains
+
+Sharing the session cookie across subdomains is a feature these deployments may want, but it has a cost. Every host under the shared domain receives the cookie, and any of them can set a cookie with its name, so one compromised or user-content host can sign users out or, with a matching Domain and Path, put a browser in a session of its choosing. See [Duplicate session cookies](#duplicate-session-cookies).
 
 ## Cookie Security Configuration
 
 ### Environment Variables
 
-Two key environment variables control cookie security behavior:
+Three key environment variables control cookie security behavior:
 
 1. **`SESSION_COOKIE_SECURE`** (default: `false`)
    - Set to `true` in production deployments with HTTPS
@@ -44,6 +45,9 @@ Two key environment variables control cookie security behavior:
      - Single domain (`mcpgateway.ddns.net`): Leave unset or set to `""`
      - Cross-subdomain (`auth.example.com`, `registry.example.com`): Set to `.example.com`
      - Multi-level domains (`registry.region-1.corp.company.internal`): Set to `.corp.company.internal` if cross-subdomain sharing needed
+
+3. **`SESSION_COOKIE_NAME`** (default: `mcp_gateway_session`)
+   - The cookie name both services use: the auth server sets it at login, and the registry and `/validate` read it. Both services refuse to start when it is empty, is not an RFC 6265 token, or starts with `__Host-` or `__Secure-` in any case.
 
 ### HTTPS Termination Detection
 
@@ -79,6 +83,31 @@ The implementation sets the following security flags on all session cookies:
 | `secure` | Configurable | Ensures HTTPS-only transmission in production |
 | `path` | `"/"` | Explicitly scopes cookie to entire domain |
 | `domain` | Configurable | Enables cross-subdomain sharing when needed |
+
+<a id="duplicate-session-cookies"></a>
+### Duplicate session cookies
+
+When the `Cookie` header carries the session cookie name more than once, the auth server's `/validate` and every registry read of the session cookie treat the request as having no session cookie. They refuse two copies with equal values too, and log one warning with the count (never a value). `/validate` then tries the request's other credentials, such as a bearer token, exactly as it would with no cookie. Both services read the header with one function, `single_session_cookie` in `registry/common/session_cookie.py`, which matches the exact name, so a cookie such as `old_mcp_gateway_session` is not the session.
+
+Neither copy is safe to pick. A browser orders cookies of one name by longer `Path` first and then by older creation time, so whoever sets the second cookie can make theirs come first or last. The two services could also pick different copies, because Starlette's `request.cookies` keeps the last one and a parser that stops at the first match keeps the first.
+
+Both services read every `Cookie` header field, not only the first. HTTP/2 lets a client send each cookie in its own field, and a proxy that does not join them passes the fields on separately, so a reader of the first field alone would miss a session cookie, or a duplicate of it, in a later field. Both join the fields in arrival order with `join_cookie_fields` from the same module before parsing. Starlette's `request.cookies` also reads every field, but keeps the last value for a name.
+
+In the registry a read that bypasses the shared reader fails closed. `SessionCookieIsolationMiddleware` in `registry/auth/session_cookie.py` is the outermost of the registry's own middleware, so it runs before the audit middleware, every other registry middleware and every route. It reads the session cookie once through the shared reader, caches the result in the request scope, and removes every session cookie pair from the `Cookie` header fields it passes on, for HTTP requests and WebSocket handshakes alike. Every other cookie, the egress consent cookies included, keeps its bytes. `request_session_cookie` answers from the cache, while `request.cookies.get(settings.session_cookie_name)` or a FastAPI `Cookie(alias=...)` parameter gets None. OpenTelemetry's ASGI middleware, which `FastAPIInstrumentor.instrument_app` or the `opentelemetry-instrument` wrapper adds, wraps the whole app and runs first, so it sees the raw `Cookie` header. It records request headers only when `OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_REQUEST` lists them. Never list `Cookie` there, in either service: every span would carry the session cookie. No compose file, Helm chart, Terraform module or `.env.example` in this repository sets that variable.
+
+A browser that sends a duplicated session cookie is signed out. `SessionCookieIsolationMiddleware` adds the expiry of the host-only cookie and the one on `SESSION_COOKIE_DOMAIN`, both at `Path=/`, to every response the registry gives such a request (a 401 from a session check, a 403 from CSRF, the dashboard's redirect to `/login`), unless the response already sets or expires the session cookie, as logout does on every sign-out.
+
+CSRF never skips a request that carries the session cookie. `verify_csrf_token_flexible` and `verify_csrf_token_header_only` in `registry/auth/csrf.py` skip the check only when the request has no session cookie at all, as a bearer-only client does. A request with the cookie, sent once or more, must resolve to a session and present that session's token, or it gets a 403. Skipping CSRF because the registry could not resolve a cookie would rest on `/validate` agreeing that the cookie is no session, and a transient session store error in the registry breaks that agreement.
+
+Logout with a duplicated session cookie also ends the server-side sessions behind it. It checks each copy's signature with the session signer and deletes the session of every copy that verifies and names a live session; an unsigned, forged or expired copy is ignored. Neither copy counts as the caller's session, so this logout starts no sign-out at the identity provider. The browser's logout link is a `GET`, which needs no authentication or CSRF token, so the registry reads the session store once per distinct copy and for at most 8 distinct copies, in the order they arrived. When a request carries more, the registry logs how many it ignored. The log records how many copies came and how many sessions were deleted, never a value. A logout `POST` with a duplicated cookie fails CSRF, gets the expiries, and ends no session.
+
+Changing `SESSION_COOKIE_DOMAIN` can leave a second cookie in a browser. A move from host-only to a domain fixes itself: the registry expires both copies on its next response, and the user signs in again. A move from one domain to another, or from a domain back to host-only, leaves the old domain's cookie in place, because the gateway no longer knows that domain and cannot expire it. Under nginx, `/validate` refuses most such requests before they reach the registry, so the browser's cookies change at the next sign-in or sign-out.
+
+A cookie another host tosses on a parent domain the gateway does not name, beside the gateway's host-only cookie, is worse. The gateway cannot expire a cookie on a domain it does not name, and every new login sets the gateway's cookie beside it again, so the user is signed out on every request until they clear the site's cookies in the browser or the tossed cookie expires.
+
+| Symptom | Cause and fix |
+|---------|---------------|
+| Users are signed out again and again after `SESSION_COOKIE_DOMAIN` changed; logs show `Refused the session cookie: the Cookie header carries it 2 times` | The browser still holds the session cookie for the old domain beside the new one, and the gateway cannot expire a domain it no longer names. Each user deletes the site's cookies for the old domain in the browser, then signs in again. If the warning appears without a domain change, another host under the parent domain is setting the cookie. |
 
 ## Security Considerations
 
@@ -224,6 +253,12 @@ The cookie security implementation is found in:
   - Comprehensive security comments explaining single-tenant model
   - Conditional domain attribute application
   - All security flags properly set
+
+- **Shared reader:** `registry/common/session_cookie.py`
+  - `single_session_cookie` and `join_cookie_fields`: the one reader of the `Cookie` header
+
+- **Registry read and expiry:** `registry/auth/session_cookie.py`
+  - `request_session_cookie`, `clear_session_cookie` and `SessionCookieIsolationMiddleware`
 
 ## Monitoring and Validation
 

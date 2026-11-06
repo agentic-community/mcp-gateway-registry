@@ -111,7 +111,8 @@ wait_for_service() {
 generate_session_cookie() {
     local secret_key=$1
     local cookie_file=$2
-    local cookie_name="mcp_gateway_session"
+    # The registry reads the session cookie under SESSION_COOKIE_NAME.
+    local cookie_name="${SESSION_COOKIE_NAME:-mcp_gateway_session}"
 
     print_info "Generating session cookie using SECRET_KEY..."
 
