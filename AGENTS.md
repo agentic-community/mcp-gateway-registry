@@ -339,7 +339,13 @@ working in those areas.
   on a different host or nonstandard port without publishing it as agent `url`.
 - **Injection:** sanitize at EVERY interpolation site AND validate at the source
   (a sanitizer that exists but isn't called is worthless); `re.escape` user input
-  in regex/`$regex` queries.
+  in regex/`$regex` queries. Neutralize spreadsheet formulas in EVERY CSV export,
+  server (`_csv_safe`) and browser (`frontend/src/utils/csvSafe.ts`); AG Grid's
+  own CSV export neutralizes nothing.
+- **Operator-supplied files:** check and read a served file through ONE
+  descriptor (`O_NOFOLLOW`, then re-resolve and match the inode), never a path
+  handed to `FileResponse` later; bound an archive's raw header count and
+  decompressed size, skipped entries included.
 - **Authorization:** deny by default; never treat a broad/execute scope as admin;
   enforce ownership server-side before every mutation across the whole endpoint
   family; `dict.get("k")` not `getattr(dict, "k")`; no substring matching for

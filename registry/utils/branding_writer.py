@@ -21,10 +21,13 @@ import logging
 import os
 import sys
 import tarfile
+import zlib
 from pathlib import Path
 
 from registry.utils.branding_files import (
+    MAX_BRANDING_ARCHIVE_ENTRIES,
     MAX_BRANDING_ARCHIVE_FILES,
+    MAX_BRANDING_ARCHIVE_TAR_BYTES,
     MAX_BRANDING_ARCHIVE_TOTAL_BYTES,
     branding_content_type,
 )
@@ -51,6 +54,8 @@ _HOW_TO_BUILD: str = (
     "Build the value from the branding folder with "
     "`tar -czf - -C ./branding . | base64 | tr -d '\\n'`."
 )
+# zlib window bits that accept exactly one gzip member (header and trailer).
+_GZIP_WBITS: int = 16 + zlib.MAX_WBITS
 
 
 class BrandingArchiveError(Exception):
@@ -69,16 +74,68 @@ def _decode_archive(
         The raw .tar.gz bytes.
 
     Raises:
-        BrandingArchiveError: If the value is not valid base64.
+        BrandingArchiveError: If the value is not valid base64 or decodes to
+            more than ``MAX_BRANDING_ARCHIVE_TAR_BYTES``.
     """
     compact = "".join(archive_b64.split())
     try:
-        return base64.b64decode(compact, validate=True)
+        archive_bytes = base64.b64decode(compact, validate=True)
     except (binascii.Error, ValueError) as e:
         raise BrandingArchiveError(
             f"{ARCHIVE_ENV_VAR} is not valid base64 ({e}). Set it to the base64 "
             f"encoding of a .tar.gz of the branding folder. {_HOW_TO_BUILD}"
         ) from e
+    if len(archive_bytes) > MAX_BRANDING_ARCHIVE_TAR_BYTES:
+        raise BrandingArchiveError(
+            f"{ARCHIVE_ENV_VAR}: archive is {len(archive_bytes)} bytes, larger than the "
+            f"{MAX_BRANDING_ARCHIVE_TAR_BYTES} byte limit. Shrink or remove large images "
+            "and fonts."
+        )
+    return archive_bytes
+
+
+def _decompress_archive(
+    archive_bytes: bytes,
+) -> bytes:
+    """Gunzip the archive, stopping at ``MAX_BRANDING_ARCHIVE_TAR_BYTES``.
+
+    The whole tar stream is bounded here, before tarfile parses any header, so
+    a gzip bomb or an oversized pax or long-name record costs at most the
+    limit. Trailing NUL bytes after the gzip stream are accepted: bsdtar (the
+    macOS ``tar``) pads its output to a 10240-byte record.
+
+    Args:
+        archive_bytes: The raw .tar.gz bytes.
+
+    Returns:
+        The uncompressed tar stream.
+
+    Raises:
+        BrandingArchiveError: If the data is not one complete gzip stream or
+            decompresses past the limit.
+    """
+    decompressor = zlib.decompressobj(wbits=_GZIP_WBITS)
+    try:
+        tar_bytes = decompressor.decompress(archive_bytes, MAX_BRANDING_ARCHIVE_TAR_BYTES + 1)
+    except zlib.error as e:
+        raise BrandingArchiveError(
+            f"{ARCHIVE_ENV_VAR} does not decode to a readable .tar.gz archive ({e}). "
+            f"{_HOW_TO_BUILD}"
+        ) from e
+    if len(tar_bytes) > MAX_BRANDING_ARCHIVE_TAR_BYTES:
+        raise BrandingArchiveError(
+            f"{ARCHIVE_ENV_VAR}: archive decompresses to more than "
+            f"{MAX_BRANDING_ARCHIVE_TAR_BYTES} bytes. Shrink or remove large images and fonts."
+        )
+    if not decompressor.eof:
+        raise BrandingArchiveError(
+            f"{ARCHIVE_ENV_VAR}: the .tar.gz archive is truncated. {_HOW_TO_BUILD}"
+        )
+    if decompressor.unused_data.strip(b"\0"):
+        raise BrandingArchiveError(
+            f"{ARCHIVE_ENV_VAR}: unexpected data after the gzip stream. {_HOW_TO_BUILD}"
+        )
+    return tar_bytes
 
 
 def _normalize_member_name(
@@ -101,7 +158,6 @@ def _normalize_member_name(
         return None
     name = raw_name.removeprefix("./")
     if name.startswith("._") or name == ".DS_Store":
-        logger.info("Branding: skipping macOS metadata member %r", raw_name)
         return None
     return name
 
@@ -141,14 +197,67 @@ def _validate_member(
         )
 
 
+def _collect_members(
+    tar: tarfile.TarFile,
+) -> list[tuple[str, tarfile.TarInfo]]:
+    """Walk every tar header and return the members to extract.
+
+    Every header counts toward ``MAX_BRANDING_ARCHIVE_ENTRIES`` and every
+    declared size toward ``MAX_BRANDING_ARCHIVE_TOTAL_BYTES``, skipped ones
+    included, so entries the writer ignores cannot make it do unbounded work.
+
+    Args:
+        tar: The open archive.
+
+    Returns:
+        Normalized names paired with their members, in archive order.
+
+    Raises:
+        BrandingArchiveError: On any rule violation.
+    """
+    members: list[tuple[str, tarfile.TarInfo]] = []
+    seen_names: set[str] = set()
+    entries = 0
+    total_bytes = 0
+    while (member := tar.next()) is not None:
+        entries += 1
+        if entries > MAX_BRANDING_ARCHIVE_ENTRIES:
+            raise BrandingArchiveError(
+                f"{ARCHIVE_ENV_VAR}: archive has more than {MAX_BRANDING_ARCHIVE_ENTRIES} "
+                f"entries. Include only the branding files. {_HOW_TO_BUILD}"
+            )
+        total_bytes += member.size
+        if total_bytes > MAX_BRANDING_ARCHIVE_TOTAL_BYTES:
+            raise BrandingArchiveError(
+                f"{ARCHIVE_ENV_VAR}: archive contents exceed "
+                f"{MAX_BRANDING_ARCHIVE_TOTAL_BYTES} bytes uncompressed. "
+                "Shrink or remove large images and fonts."
+            )
+        name = _normalize_member_name(member)
+        if name is None:
+            continue
+        _validate_member(member, name, seen_names)
+        seen_names.add(name)
+        members.append((name, member))
+        if len(members) > MAX_BRANDING_ARCHIVE_FILES:
+            raise BrandingArchiveError(
+                f"{ARCHIVE_ENV_VAR}: archive has more than "
+                f"{MAX_BRANDING_ARCHIVE_FILES} files. Remove unused files "
+                "from the branding folder."
+            )
+    skipped = entries - len(members)
+    if skipped:
+        logger.info("Branding: skipped %d archive root and macOS metadata entries", skipped)
+    return members
+
+
 def _read_validated_members(
     archive_bytes: bytes,
 ) -> dict[str, bytes]:
     """Validate every archive member, then read the contents.
 
-    Members are checked as the headers are read, and the count and total size
-    limits are enforced before the next member is reached, so an oversized or
-    hostile archive is rejected without decompressing all of it.
+    The archive is decompressed under a fixed size cap first, then every
+    header is checked before any member is read.
 
     Args:
         archive_bytes: The raw .tar.gz bytes.
@@ -159,34 +268,10 @@ def _read_validated_members(
     Raises:
         BrandingArchiveError: On any rule violation or unreadable archive.
     """
-    members: list[tuple[str, tarfile.TarInfo]] = []
-    seen_names: set[str] = set()
-    total_bytes = 0
+    tar_bytes = _decompress_archive(archive_bytes)
     try:
-        with tarfile.open(fileobj=io.BytesIO(archive_bytes), mode="r:gz") as tar:
-            while (member := tar.next()) is not None:
-                # Skipped members count too: reaching the next header means
-                # decompressing their data, so the size cap must bound it.
-                total_bytes += member.size
-                if total_bytes > MAX_BRANDING_ARCHIVE_TOTAL_BYTES:
-                    raise BrandingArchiveError(
-                        f"{ARCHIVE_ENV_VAR}: archive contents exceed "
-                        f"{MAX_BRANDING_ARCHIVE_TOTAL_BYTES} bytes uncompressed. "
-                        "Shrink or remove large images and fonts."
-                    )
-                name = _normalize_member_name(member)
-                if name is None:
-                    continue
-                _validate_member(member, name, seen_names)
-                seen_names.add(name)
-                members.append((name, member))
-                if len(members) > MAX_BRANDING_ARCHIVE_FILES:
-                    raise BrandingArchiveError(
-                        f"{ARCHIVE_ENV_VAR}: archive has more than "
-                        f"{MAX_BRANDING_ARCHIVE_FILES} files. Remove unused files "
-                        "from the branding folder."
-                    )
-
+        with tarfile.open(fileobj=io.BytesIO(tar_bytes), mode="r:") as tar:
+            members = _collect_members(tar)
             contents: dict[str, bytes] = {}
             for name, member in members:
                 extracted = tar.extractfile(member)

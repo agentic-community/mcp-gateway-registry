@@ -7,6 +7,7 @@ that folder from a base64 tar.gz archive. Both paths apply the same name and
 extension rules, defined once here.
 """
 
+import os
 import re
 import stat
 from pathlib import Path
@@ -35,9 +36,16 @@ BRANDING_CONTENT_TYPES: dict[str, str] = {
 # Largest single branding file the registry serves.
 MAX_BRANDING_FILE_BYTES: int = 2 * 1024 * 1024
 
-# Archive limits for UI_BRANDING_ARCHIVE_B64.
+# Archive limits for UI_BRANDING_ARCHIVE_B64. FILES counts accepted branding
+# files and TOTAL_BYTES their declared sizes. ENTRIES counts every tar header,
+# including the skipped root entry and macOS metadata (each file may carry an
+# AppleDouble "._" twin). TAR_BYTES bounds both the decoded .tar.gz and the
+# decompressed tar stream: the file payload plus room for headers, pax records
+# and block padding, so a gzip bomb stops at a fixed size.
 MAX_BRANDING_ARCHIVE_FILES: int = 32
 MAX_BRANDING_ARCHIVE_TOTAL_BYTES: int = 2 * 1024 * 1024
+MAX_BRANDING_ARCHIVE_ENTRIES: int = 4 * MAX_BRANDING_ARCHIVE_FILES
+MAX_BRANDING_ARCHIVE_TAR_BYTES: int = 2 * MAX_BRANDING_ARCHIVE_TOTAL_BYTES
 
 # Served when the file is absent, so the UI never sees a 404 for these.
 DEFAULT_BRANDING_FILES: dict[str, bytes] = {
@@ -92,51 +100,124 @@ def branding_response_headers(
     return headers
 
 
-def resolve_branding_file(
-    branding_dir: Path,
+def _resolve_inside(
+    base: Path,
     name: str,
 ) -> Path:
-    """Resolve a validated branding name to a servable file inside the folder.
+    """Resolve ``base / name`` and require the target to stay inside ``base``.
+
+    Args:
+        base: The already-resolved branding folder.
+        name: A validated bare branding file name.
+
+    Returns:
+        The resolved path, which may not exist.
+
+    Raises:
+        BrandingFileRefusedError: If resolving fails or leaves the folder.
+    """
+    try:
+        resolved = (base / name).resolve()
+    except (OSError, RuntimeError) as e:
+        raise BrandingFileRefusedError(f"cannot resolve path: {e}") from e
+    if not resolved.is_relative_to(base) or resolved == base:
+        raise BrandingFileRefusedError("resolves outside the branding folder")
+    return resolved
+
+
+def _read_open_file(
+    fd: int,
+) -> tuple[os.stat_result, bytes]:
+    """Check an open descriptor is a small regular file and read all of it.
+
+    Args:
+        fd: Descriptor opened read-only.
+
+    Returns:
+        The descriptor's stat result and the file contents.
+
+    Raises:
+        BrandingFileRefusedError: If it is not a regular file, is too large,
+            or cannot be read.
+    """
+    try:
+        stat_result = os.fstat(fd)
+        if not stat.S_ISREG(stat_result.st_mode):
+            raise BrandingFileRefusedError("not a regular file")
+        if stat_result.st_size > MAX_BRANDING_FILE_BYTES:
+            raise BrandingFileRefusedError(
+                f"file is {stat_result.st_size} bytes, larger than the "
+                f"{MAX_BRANDING_FILE_BYTES} byte limit"
+            )
+        chunks: list[bytes] = []
+        remaining = MAX_BRANDING_FILE_BYTES + 1
+        while remaining > 0 and (chunk := os.read(fd, remaining)):
+            chunks.append(chunk)
+            remaining -= len(chunk)
+    except OSError as e:
+        raise BrandingFileRefusedError(f"cannot read file: {e}") from e
+    data = b"".join(chunks)
+    # The file can grow after fstat; the cap applies to what was read.
+    if len(data) > MAX_BRANDING_FILE_BYTES:
+        raise BrandingFileRefusedError(
+            f"file grew past the {MAX_BRANDING_FILE_BYTES} byte limit while being read"
+        )
+    return stat_result, data
+
+
+def read_branding_file(
+    branding_dir: Path,
+    name: str,
+) -> bytes:
+    """Read a validated branding name from inside the branding folder.
 
     Symlinks are followed, and the final target must stay inside the resolved
     branding folder. Kubernetes ConfigMap keys are symlinks into a
     ``..<timestamp>/`` directory inside the same folder, so they pass.
+
+    The file is checked and read through one descriptor, so a path swapped
+    after the containment check cannot change what is served. The final
+    component is opened with ``O_NOFOLLOW`` (a symlink swapped in fails) and
+    ``O_NONBLOCK`` (a FIFO swapped in cannot hang the worker). A swapped
+    parent directory is caught after the open: the name is resolved again and
+    must still land inside the folder on the same inode as the descriptor.
 
     Args:
         branding_dir: The configured branding folder (may not exist).
         name: A name that already passed :func:`branding_content_type`.
 
     Returns:
-        The resolved path of a regular file no larger than
-        ``MAX_BRANDING_FILE_BYTES``.
+        The file contents, at most ``MAX_BRANDING_FILE_BYTES`` long.
 
     Raises:
         FileNotFoundError: If the file (or the whole folder) does not exist.
         BrandingFileRefusedError: If the file escapes the folder, is not a
-            regular file, is too large, or cannot be inspected.
+            regular file, is too large, changes while being opened, or cannot
+            be read.
     """
     try:
         base = branding_dir.resolve()
-        resolved = (base / name).resolve()
     except (OSError, RuntimeError) as e:
-        raise BrandingFileRefusedError(f"cannot resolve path: {e}") from e
-
-    if not resolved.is_relative_to(base) or resolved == base:
-        raise BrandingFileRefusedError("resolves outside the branding folder")
+        raise BrandingFileRefusedError(f"cannot resolve branding folder: {e}") from e
+    resolved = _resolve_inside(base, name)
 
     # FileNotFoundError propagates: the caller serves a default or a 404.
     try:
-        stat_result = resolved.stat()
+        fd = os.open(resolved, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except FileNotFoundError:
         raise
     except OSError as e:
-        raise BrandingFileRefusedError(f"cannot stat file: {e}") from e
+        raise BrandingFileRefusedError(f"cannot open file: {e}") from e
 
-    if not stat.S_ISREG(stat_result.st_mode):
-        raise BrandingFileRefusedError("not a regular file")
-    if stat_result.st_size > MAX_BRANDING_FILE_BYTES:
-        raise BrandingFileRefusedError(
-            f"file is {stat_result.st_size} bytes, larger than the "
-            f"{MAX_BRANDING_FILE_BYTES} byte limit"
-        )
-    return resolved
+    try:
+        stat_result, data = _read_open_file(fd)
+    finally:
+        os.close(fd)
+
+    try:
+        current = _resolve_inside(base, name).stat()
+    except OSError as e:
+        raise BrandingFileRefusedError(f"file changed while being opened: {e}") from e
+    if (current.st_dev, current.st_ino) != (stat_result.st_dev, stat_result.st_ino):
+        raise BrandingFileRefusedError("file changed while being opened")
+    return data

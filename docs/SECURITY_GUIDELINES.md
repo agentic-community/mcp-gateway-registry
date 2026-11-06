@@ -370,6 +370,7 @@ sanitizer that isn't called) is equivalent to no check.
   return the handler's error shape, do not raise. Query parameters are lower risk
   (they don't traverse the path), but still reject absolute (`/`-leading) and
   `..`-containing values as defense-in-depth.
+- **Neutralize spreadsheet formulas in every CSV export, including CSV the browser builds.** Audit records and registry data hold caller-authored strings (request paths, usernames, upstream error text). A cell that starts with `=`, `+`, `-`, `@`, tab or CR, also after leading whitespace, runs as a formula when an admin opens the file in Excel, Calc or Sheets (`=HYPERLINK` exfiltration, DDE prompts). The server export applies `_csv_safe` in `registry/audit/routes.py`; a client-side export (AG Grid `exportDataAsCsv`) bypasses it and must apply `frontend/src/utils/csvSafe.ts` through `processCellCallback`. AG Grid's default CSV output does not neutralize anything. Keep the two implementations' prefix rules identical.
 
 ## Authorization & ownership
 
@@ -894,6 +895,11 @@ surface.
   `react/jsx-no-script-url` lint rule so regressions are caught. (Server-side
   template `innerHTML`/inline-`onclick` is a separate sink — guard it too.)
 
+## Files served from, or unpacked into, a configurable folder
+
+- **Check and read a served file through one descriptor.** Resolving a path, checking it, and then handing the path to `FileResponse` leaves a window in which a writer can swap the file or a parent directory for a symlink to anything the process can read, such as `/proc/self/environ`. Open the final component with `O_NOFOLLOW | O_NONBLOCK`, `fstat` the descriptor, read from it, then resolve the name again and require the same `(st_dev, st_ino)` inside the folder. `read_branding_file` in `registry/utils/branding_files.py` is the worked example; it still follows Kubernetes ConfigMap `..data` symlinks because they resolve inside the folder.
+- **Bound everything an archive makes you do, not just the files you keep.** Count every tar header, including entries you skip (archive root, macOS `._*` metadata), and cap the decoded input and the decompressed stream before `tarfile` parses a header: a gzip bomb or a huge pax or long-name record is otherwise read in full. Log skipped entries as one count, not one line each. Never use `extractall`; write accepted regular files yourself with `O_EXCL | O_NOFOLLOW`. `registry/utils/branding_writer.py` is the worked example.
+
 ## Deployment surface & insecure-by-default config
 
 - **Publish sensitive ports on loopback, not `0.0.0.0`.** In compose/dev stacks,
@@ -1130,6 +1136,8 @@ the drift between copies is the hole.
   `MCP_SCANNER_LLM_API_KEY`) or stdin. When an unavoidable third-party tool only
   accepts the secret on argv, keep it off every hop you control and record the
   external constraint as a scoped residual (see FOLLOWUPS F-19/F-20).
+- **CSV export → neutralize formulas with the shared helper.** Server: `_csv_safe` in `registry/audit/routes.py`. Browser: `csvSafe` / `processCsvCell` in `frontend/src/utils/csvSafe.ts`, passed as AG Grid's `processCellCallback`.
+- **Serving a file from an operator-supplied folder → `read_branding_file` pattern** in `registry/utils/branding_files.py` (single descriptor, `O_NOFOLLOW`, post-open inode check). Do not return a path for `FileResponse` to open later.
 
 When you add a NEW canonical helper, list it here so the next agent reaches for
 it instead of rebuilding it.

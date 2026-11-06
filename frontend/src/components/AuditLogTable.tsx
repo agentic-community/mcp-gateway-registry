@@ -35,6 +35,7 @@ import {
 import type { AuditFilters } from './AuditFilterBar';
 import type { AuditEvent } from '../types/audit';
 import { buildAuditQueryParams } from '../utils/auditQuery';
+import { processCsvCell } from '../utils/csvSafe';
 import { AUDIT_COLUMNS, DEFAULT_COL_DEF } from './audit/auditColumns';
 import type { AuditRow } from './audit/auditColumns';
 import 'ag-grid-community/styles/ag-grid.css';
@@ -299,7 +300,10 @@ const AuditLogTable: React.FC<AuditLogTableProps> = ({
 
   const exportView = () => {
     const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
-    gridApiRef.current?.exportDataAsCsv({ fileName: `audit-${filters.stream}-${stamp}.csv` });
+    gridApiRef.current?.exportDataAsCsv({
+      fileName: `audit-${filters.stream}-${stamp}.csv`,
+      processCellCallback: processCsvCell,
+    });
   };
 
   const loaded = rows.length;
