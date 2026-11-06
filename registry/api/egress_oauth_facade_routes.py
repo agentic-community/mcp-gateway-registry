@@ -18,7 +18,8 @@ SECURITY MODEL
   consent is the SESSION principal, never anything the client asserts. This is
   the elicitation anti-phishing requirement: a stolen connect URL opened by a
   different user cannot bind a token to the elicited user (the provider-leg AEAD
-  state binds the token write to the authenticated principal). When no session
+  state binds the token write to the authenticated principal, and to the
+  browser that opened the URL through a per-consent cookie). When no session
   exists (first IDE use), it redirects the browser through the gateway's
   login for the configured ``AUTH_PROVIDER`` and returns to ``/connect``.
 - ``/connect`` takes NO client-side OAuth parameters (no redirect_uri / PKCE /
@@ -33,9 +34,13 @@ from urllib.parse import urlencode
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
-from registry.auth.dependencies import nginx_proxied_auth
+from registry.auth.dependencies import browser_session_context
 from registry.core.config import settings
 from registry.egress_auth import as_facade
+from registry.egress_auth.browser_binding import (
+    new_browser_binding,
+    set_consent_cookie,
+)
 from registry.egress_auth.factory import get_egress_auth_service
 from registry.egress_auth.service import EgressAuthError, vault_principal
 from registry.services.server_service import server_service
@@ -92,18 +97,16 @@ def _feature_on() -> bool:
 
 
 async def _optional_session(request: Request) -> dict | None:
-    """Read the gateway session, returning None instead of raising when there is
-    no valid session (so /connect can bounce to login).
+    """Read the browser's gateway session, or None so /connect can bounce to login.
 
-    ``nginx_proxied_auth`` declares ``session`` as a FastAPI ``Cookie(...)``
-    parameter that is only populated by dependency injection. Since we call it
-    directly (not as a route dependency), we must extract the session cookie off
-    the request and pass it explicitly -- otherwise it always sees ``session=None``
-    and reports "no session" even when the cookie is present (the login-loop bug)."""
-    session = request.cookies.get(settings.session_cookie_name)
+    Resolved by ``browser_session_context`` from the session cookie alone (a
+    bearer or internal token names no browser). A session store or scope lookup
+    that fails reads as None too, so it bounces to login, and the login round
+    trip retries it."""
     try:
-        return await nginx_proxied_auth(request, session=session)
-    except Exception:
+        return await browser_session_context(request)
+    except Exception as exc:
+        logger.warning("egress connect: session lookup failed (%s) -> login", type(exc).__name__)
         return None
 
 
@@ -149,10 +152,11 @@ async def egress_connect(
          be a real authenticated user, and the provider-leg AEAD state binds the
          token write to THIS principal -- a stolen connect URL opened by a
          different user cannot bind a token to the elicited user.
-      3. 302 the browser to the provider consent (``build_consent_url``). The
-         existing ``/oauth2/egress/callback`` stores the token and shows the
-         close-tab page; the client then retries the original tool call (same
-         bearer) and the vend now HITs.
+      3. 302 the browser to the provider consent (``build_consent_url``) and set
+         this consent's cookie on that redirect, so only this browser can
+         complete it. The existing ``/oauth2/egress/callback`` stores the token
+         and shows the close-tab page; the client then retries the original tool
+         call (same bearer) and the vend now HITs.
     """
     if purpose not in ("egress", "discovery"):
         return JSONResponse(
@@ -278,6 +282,7 @@ async def egress_connect(
     # Provider consent leg, via the existing web Connected-Accounts path: the
     # callback stores the token + shows the close-tab page. No client-side code
     # exchange -- the client just retries the original tool call.
+    binding = new_browser_binding()
     try:
         provider_authorize_url = await get_egress_auth_service().build_consent_url(
             auth_method=auth_method,
@@ -288,6 +293,7 @@ async def egress_connect(
             egress_oauth=oauth_cfg,
             purpose=purpose,
             server=server_info,
+            browser_binding=binding.digest,
         )
     except ValueError:
         # 503 with "temporarily_unavailable": the registration is incomplete on
@@ -321,7 +327,9 @@ async def egress_connect(
         egress_user_id,
         server_path,
     )
-    return RedirectResponse(provider_authorize_url, status_code=302)
+    redirect = RedirectResponse(provider_authorize_url, status_code=302)
+    set_consent_cookie(redirect, request, binding)
+    return redirect
 
 
 # --------------------------------------------------------------------------- #

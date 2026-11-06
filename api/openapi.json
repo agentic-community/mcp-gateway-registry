@@ -20410,17 +20410,6 @@
             "title": "Consent Required",
             "default": false
           },
-          "authorize_url": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Authorize Url"
-          },
           "connect_url": {
             "anyOf": [
               {
@@ -20431,7 +20420,7 @@
               }
             ],
             "title": "Connect Url",
-            "description": "Session-verified gateway front door for MCP URL-mode elicitation (``GET /oauth2/egress/connect?server=<path>``). The mcp_proxy hop puts this in the ``elicitation/create`` ``url`` field. Unlike ``authorize_url`` (the provider-direct URL), this route re-verifies the opener's gateway session against the elicited principal (anti-phishing) and needs NO client-side OAuth/DCR -- so it works with providers like Entra that do not support RFC 7591 DCR."
+            "description": "Session-verified gateway front door for MCP URL-mode elicitation (``GET /oauth2/egress/connect?server=<path>``). The mcp_proxy hop puts this in the ``elicitation/create`` ``url`` field. This route re-verifies the opener's gateway session against the elicited principal (anti-phishing), binds the consent to the opener's browser, and needs NO client-side OAuth/DCR -- so it works with providers like Entra that do not support RFC 7591 DCR."
           },
           "request_state": {
             "anyOf": [
@@ -20539,7 +20528,7 @@
         },
         "type": "object",
         "title": "EgressTokenResponse",
-        "description": "Vend result. ``access_token`` is None on a clean miss (consent required).\n\nOn a consent-required miss for a properly egress-configured server, the\nregistry builds the provider ``authorize_url`` so mcp_proxy can return it to\nthe caller (the user clicks it to connect). ``authorize_url`` is None when\nthe server isn't egress-configured / the caller isn't a per-user principal\n(nothing to connect)."
+        "description": "Vend result. ``access_token`` is None on a clean miss (consent required).\n\nOn a consent-required miss for a properly egress-configured server, the\nregistry returns ``connect_url`` so mcp_proxy can send the user to connect.\nNo provider authorize URL is returned: a consent must start in the browser\nthat finishes it, and the vend has no browser. ``connect_url`` is None when\nthe server isn't egress-configured / the caller isn't a per-user principal\n(nothing to connect)."
       },
       "ErrorResponse": {
         "properties": {

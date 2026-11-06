@@ -9,8 +9,13 @@ storage_backend whenever the feature is enabled, so the repo is always present.
 
 import logging
 
+from pymongo.errors import PyMongoError
+
 from registry.core.config import settings
-from registry.egress_auth.service import EgressAuthService
+from registry.egress_auth.service import (
+    EgressAuthService,
+    ReplayGuardUnavailable,
+)
 from registry.secrets.factory import get_secret_store
 
 logger = logging.getLogger(__name__)
@@ -25,7 +30,17 @@ class _MongoReplayGuard:
         self._repo = repo
 
     async def check_and_consume(self, nonce: str, ttl_seconds: int) -> bool:
-        return await self._repo.consume_nonce(nonce, ttl_seconds)
+        """Record ``nonce`` as used; see ``ReplayGuard``.
+
+        Raises:
+            ReplayGuardUnavailable: The database failed, so the nonce may be live.
+        """
+        try:
+            return await self._repo.consume_nonce(nonce, ttl_seconds)
+        except PyMongoError as exc:
+            raise ReplayGuardUnavailable(
+                f"replay store failed recording a state nonce: {type(exc).__name__}"
+            ) from exc
 
 
 class _MongoLeaseManager:

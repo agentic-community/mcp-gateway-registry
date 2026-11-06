@@ -9398,7 +9398,7 @@ def _egress_consent_response(
     from such a retry; "decline" or "cancel" ends the round trip with the
     baseline result.
     """
-    connect_url = vend.get("connect_url") or vend.get("authorize_url") or ""
+    connect_url = vend.get("connect_url") or ""
     provider = vend.get("provider") or "the provider"
     message = f"Connect your {provider} account to use this server."
     # A short, unique correlation handle for this elicitation. It is only an
@@ -10093,7 +10093,7 @@ async def mcp_proxy(
                     incoming_payload,
                     listed_tools=stored_tools,
                 )
-            elif vend and (vend.get("connect_url") or vend.get("authorize_url")):
+            elif vend and vend.get("connect_url"):
                 # Egress is configured for this server but the user has no usable
                 # token, and the upstream is itself an OAuth resource server that
                 # 401s every call (including initialize). Break the handshake
@@ -10139,7 +10139,7 @@ async def mcp_proxy(
                     req_id,
                     incoming_payload,
                     "oauth",
-                    connect_url=vend.get("connect_url") or vend.get("authorize_url") or "",
+                    connect_url=vend.get("connect_url") or "",
                     provider=provider,
                     listed_tools=listed_tools,
                 )

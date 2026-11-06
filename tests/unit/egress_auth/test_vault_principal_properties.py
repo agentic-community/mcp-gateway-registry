@@ -38,11 +38,7 @@ from urllib.parse import (
 )
 
 import pytest
-from fastapi import (
-    FastAPI,
-    HTTPException,
-    status,
-)
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from hypothesis import (
     HealthCheck,
@@ -103,7 +99,8 @@ _UPSTREAM = "https://api.githubcopilot.com/mcp"
 _AUTHORIZE_URL = "https://github.com/login/oauth/authorize?x=1"
 _SESSION_COOKIE = "live-session"
 _REGISTRY_URL = "https://gw.example.com"
-# The TestClient origin plus the /api prefix the router is mounted under.
+# The TestClient origin plus the /api prefix the router is mounted under, so the
+# consent cookie's callback path is the path these tests request.
 _CALLBACK_BASE_URL = "http://testserver/api"
 
 # A key left out of the user context entirely, as opposed to present with None.
@@ -267,6 +264,9 @@ class _RecordingService:
         self.calls.append(("build_consent_url", kwargs))
         return _AUTHORIZE_URL
 
+    async def begin_callback(self, state: OAuthState) -> None:
+        self.calls.append(("begin_callback", {"state": state}))
+
     async def handle_callback(self, **kwargs) -> EgressConnection:
         self.calls.append(("handle_callback", kwargs))
         return EgressConnection(provider="github", server_path=_OAUTH_SERVER_PATH)
@@ -357,19 +357,19 @@ def _mount_egress_routes(
 ) -> TestClient:
     """Mount the egress-auth router with every request resolving to ``holder['ctx']``.
 
-    The callback resolves the browser's session by calling ``nginx_proxied_auth``
-    with the session cookie it read, so the module attribute is replaced too,
-    not only the dependency the other routes take. A request without the
-    client's session cookie has no session.
+    Initiate and the callback resolve the browser's session by calling
+    ``browser_session_context``, so the module attribute is replaced too, not
+    only the ``nginx_proxied_auth`` dependency the other routes take. A request
+    without the client's session cookie has no browser session.
     """
     servers = _servers()
 
     async def _get_server_info(path, include_credentials=False):
         return deepcopy(servers.get(path))
 
-    async def _cookie_session(request, session=None):
-        if session != _SESSION_COOKIE:
-            raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="no session")
+    async def _browser_session(request):
+        if request.cookies.get(routes.settings.session_cookie_name) != _SESSION_COOKIE:
+            return None
         return dict(holder["ctx"])
 
     original_auth_dependency = routes.nginx_proxied_auth
@@ -380,7 +380,7 @@ def _mount_egress_routes(
         routes.server_service, "get_all_servers", AsyncMock(return_value=deepcopy(servers))
     )
     monkeypatch.setattr(routes, "get_egress_auth_service", lambda: svc)
-    monkeypatch.setattr(routes, "nginx_proxied_auth", _cookie_session)
+    monkeypatch.setattr(routes, "browser_session_context", _browser_session)
     monkeypatch.setattr(oauth_engine, "_post_token", _fake_post_token)
 
     app = FastAPI()
@@ -541,8 +541,9 @@ def test_initiate_binds_the_consent_to_the_model_principal(egress_routes, caller
 def test_callback_compares_the_model_principal_of_the_live_session(egress_routes, caller, is_admin):
     """Property: the callback's account-swap principal is the model principal.
 
-    The callback hands ``handle_callback`` the principal of the live session,
-    or an empty one when the session owns none, which matches no state.
+    The callback consumes the state first (``begin_callback``). With no
+    principal it then answers with the sign-in page and never calls
+    ``handle_callback``.
     """
     ctx = _caller_context(caller, is_admin)
     egress_routes.act_as(ctx)
@@ -554,10 +555,14 @@ def test_callback_compares_the_model_principal_of_the_live_session(egress_routes
     )
 
     names = [name for name, _ in egress_routes.svc.calls]
-    assert r.status_code == 200, r.text
-    assert names == ["handle_callback"]
-    kwargs = egress_routes.svc.calls[0][1]
-    assert (kwargs["current_auth_method"], kwargs["current_user_id"]) == (expected or ("", ""))
+    if expected is None:
+        assert r.status_code == 401, r.text
+        assert "not signed in" in r.text
+        assert names == ["begin_callback"]
+    else:
+        assert r.status_code == 200, r.text
+        assert names == ["begin_callback", "handle_callback"]
+        assert egress_routes.svc.calls[1][1]["principal"] == expected
 
 
 @pytest.mark.unit
@@ -949,13 +954,13 @@ def facade_route(monkeypatch) -> _FacadeHarness:
             },
         }
 
-    async def _session(request, session=None):
+    async def _session(request):
         return dict(holder["ctx"])
 
     monkeypatch.setattr(facade.settings, "egress_auth_enabled", True)
     monkeypatch.setattr(facade.settings, "registry_url", _REGISTRY_URL)
     monkeypatch.setattr(facade.server_service, "get_server_info", _get_server_info)
-    monkeypatch.setattr(facade, "nginx_proxied_auth", _session)
+    monkeypatch.setattr(facade, "browser_session_context", _session)
     monkeypatch.setattr(facade, "get_egress_auth_service", lambda: svc)
 
     app = FastAPI()

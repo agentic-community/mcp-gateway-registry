@@ -111,6 +111,7 @@ graph TB
 | `registry/egress_auth/oauth_engine.py` | PKCE generation, `build_authorize_url`, `exchange_code`, `refresh_token`; per-provider token-response parsers and auth styles. |
 | `registry/egress_auth/providers.py` | `PROVIDER_REGISTRY` (GitHub, Google, Atlassian, Microsoft, Slack) + `resolve_provider` for custom OIDC. |
 | `registry/egress_auth/state_codec.py` | AEAD (AES-256-GCM) encrypt/decrypt of the short-lived OAuth `state` blob — hides the PKCE verifier from the URL/logs. |
+| `registry/egress_auth/browser_binding.py` | The per-consent cookie that binds a consent to the browser that started it: secret, digest, cookie name, set, compare, clear. |
 | `registry/egress_auth/fallback_key.py` | `username_fallback_key`, the namespaced vault `user_id` for a login with no account id; only the auth-server's login callback calls it, and it stores the result on the subject-less session. |
 | `registry/egress_auth/session_vault_user.py` | `session_vault_user_id`, the one reader of a session's vault key, used by the auth-server's cookie path, the token mint and the registry's `enhanced_auth`. |
 | `registry/egress_auth/as_facade.py` | Helpers to test whether a server is egress-configured. |
@@ -154,7 +155,7 @@ sequenceDiagram
     V->>S: get_valid_token(auth_method, user, provider, server)
     S->>K: read vault entry
     K-->>S: miss
-    S-->>V: consent_required + authorize_url + connect_url + request_state
+    S-->>V: consent_required + connect_url + request_state
     V-->>P: EgressTokenResponse(consent_required=true)
     Note over P,C: The gateway answers initialize, ping and the list methods itself.<br/>tools/list returns one connect_mcpgw_[server] tool, followed by the server's<br/>stored tools when the server opts in. -32042 fires on<br/>tools/call (including the connect tool), prompts/get and resources/read.
     P-->>C: JSON-RPC -32042 URLElicitationRequiredError (mode=url, url=connect_url)
@@ -165,14 +166,14 @@ sequenceDiagram
     alt no gateway session
         F-->>B: 302 /oauth2/login/keycloak (then back)
     end
-    F->>S: build_consent_url(session principal, server config)
+    F->>S: build_consent_url(session principal, server config, browser binding)
     S-->>F: provider authorize_url (PKCE S256 + AEAD state)
-    F-->>B: 302 authorize_url
+    F-->>B: 302 authorize_url + Set-Cookie egress_consent_[digest]
     B->>TP: authorize (user approves)
     TP-->>B: 302 /api/oauth2/egress/callback?code&state
     B->>F: callback
     F->>S: handle_callback(code, state)
-    S->>S: verify state (TTL, single-use, account-swap)
+    S->>S: verify state (single-use, TTL, browser binding, account-swap)
     S->>TP: exchange code -> access+refresh token
     S->>K: put_token(...)
     S-->>B: "Connected. Close this tab and retry."
@@ -208,11 +209,12 @@ Key points:
 
 ### Why not point the client straight at the provider?
 
-The vend response actually carries **two** URLs: `authorize_url` (the
-provider-direct OAuth URL) and `connect_url` (the gateway's own
-`/oauth2/egress/connect` front door). The mcp_proxy hop deliberately puts
-**`connect_url`** (not `authorize_url`) in the `-32042`
-URLElicitationRequiredError `url` field. A natural question is: since the
+The vend response carries one URL, `connect_url` (the gateway's own
+`/oauth2/egress/connect` front door), and the mcp_proxy hop puts it in the `-32042`
+URLElicitationRequiredError `url` field. Earlier releases also returned the
+provider authorize URL as `authorize_url`; the vend no longer builds one, because a
+consent has to start in the browser that finishes it and the vend has no browser.
+A natural question is: since the
 callback returns to the gateway anyway,
 why not just hand the client the provider's authorize URL directly? Three
 reasons make the gateway hop mandatory rather than incidental:
@@ -234,6 +236,8 @@ reasons make the gateway hop mandatory rather than incidental:
    asserts. This checkpoint binds "the human who consented" to "the user the
    token is vaulted for." Without it, a leaked or relayed elicitation URL could
    cause user A's third-party token to be stored against user B's vault key.
+   The same response sets the consent cookie (see "Browser binding" under
+   [Security model](#security-model)), which only a gateway route can do.
 
 3. **DCR-free provider support.** Driving the provider's authorize URL directly
    would require the client to be a registered OAuth client at that provider
@@ -419,6 +423,8 @@ first segment after it (see the layout below). Any value other than `oauth2` (`b
 
 **Sessions created before this release.** Earlier releases did not store the vault key (`egress_user`) on the session, and the gateway no longer falls back to the session's `subject`. Until the user signs in again, a session created before the upgrade has no vault key: initiate and PAT submit return 403, the connection list is empty, and the vend refuses a token minted from it after the upgrade. Sessions last at most `session.max_age_seconds` in `oauth2_providers.yml` (8 hours by default), and signing out and back in ends the gap sooner.
 
+**Consents in flight.** A consent state now carries the digest of the starting browser's consent cookie, and the callback refuses a state without one. A consent started before the upgrade fails at the callback with "this is not the browser that started it"; the user connects again. States expire after `EGRESS_STATE_TTL_SECONDS` (600 by default), so this lasts at most that long.
+
 ```
 per-principal prefix:   {prefix}/enc(auth_method)/enc(user_id)
 OpenBao entry path:     {prefix}/enc(auth_method)/enc(user_id)/enc(provider)/enc(server_path)
@@ -496,7 +502,7 @@ prefix; the AS facade is mounted at root and registered only when
 
 | Method | Path | Auth | Purpose |
 |--------|------|------|---------|
-| `POST` | `/api/egress-auth/initiate` | user session | Web-only: begin consent for the current user; returns the provider `authorize_url`. |
+| `POST` | `/api/egress-auth/initiate` | the browser's own registry session | Web-only, and enforced: begin consent for the current user; returns the provider `authorize_url` and sets the consent cookie that binds the consent to the calling browser. The caller's context must be the session its session cookie names, so a bearer caller (which skips CSRF) gets 403 and no state. MCP clients connect through `connect_url` instead. |
 | `GET` | `/api/egress-auth/connections` | user session | List the user's connected accounts (tokens stripped). |
 | `DELETE` | `/api/egress-auth/connections/{provider}/{server_path}` | user session + CSRF | Revoke a connection. |
 
@@ -504,8 +510,8 @@ prefix; the AS facade is mounted at root and registered only when
 
 | Method | Path | Auth | Purpose |
 |--------|------|------|---------|
-| `GET` | `/oauth2/egress/connect` | gateway session (bounces to login if none) | AS-facade front door for MCP URL-mode elicitation; 302s to the provider. |
-| `GET` | `/api/oauth2/egress/callback` | none (the AEAD `state` is the authority) | Provider redirect target; verifies state, exchanges the code, stores the token. |
+| `GET` | `/oauth2/egress/connect` | gateway session (bounces to login if none) | AS-facade front door for MCP URL-mode elicitation; sets the consent cookie and 302s to the provider. |
+| `GET` | `/api/oauth2/egress/callback` | none (the AEAD `state` and the consent cookie are the authority) | Provider redirect target; verifies state and the browser binding, exchanges the code, stores the token, and expires the consent cookie. |
 
 ---
 
@@ -519,7 +525,7 @@ and `AUTH_SERVER_NGINX_MARKER_SECRET`.
 |---------|---------|---------|
 | `EGRESS_AUTH_ENABLED` | `false` | Master switch. When true, requires a Mongo-family `STORAGE_BACKEND` and a non-empty `EGRESS_OAUTH_CALLBACK_BASE_URL` (validated at startup). |
 | `SECRET_STORE_BACKEND` | `openbao` | Vault backend: `openbao` \| `secrets-manager`. |
-| `EGRESS_OAUTH_CALLBACK_BASE_URL` | `""` | Public base URL for the callback (`{base}/oauth2/egress/callback`). Typically the gateway's external URL. |
+| `EGRESS_OAUTH_CALLBACK_BASE_URL` | `""` | Public base URL for the callback (`{base}/oauth2/egress/callback`). Typically the gateway's external URL. The browser must send both its registry session cookie and the consent cookie to this host, so use the host that serves initiate and `/oauth2/egress/connect`, or a parent domain covered by `SESSION_COOKIE_DOMAIN`. Otherwise every consent is refused. |
 | `EGRESS_TOKEN_REFRESH_SKEW_SECONDS` | `300` | Refresh a vaulted token this many seconds before expiry. |
 | `EGRESS_REFRESH_WORKER_INTERVAL_SECONDS` | `120` | Background proactive-refresh scan interval; `0` disables the sweep. |
 | `EGRESS_STATE_TTL_SECONDS` | `600` | Lifetime of the AEAD-encrypted OAuth consent state. |
@@ -901,7 +907,37 @@ Set it with the checkbox in the server edit form, `registry_management.py egress
   under the **session** principal, not any client-asserted identity.
 - **State confidentiality.** The OAuth `state` is AES-256-GCM encrypted (not
   merely signed) so the PKCE verifier never appears in a URL, `Referer`, or log.
-  The service enforces TTL, single-use (replay guard), and an account-swap guard.
+  The service enforces single-use (replay guard), TTL, the browser binding below,
+  and an account-swap guard: the browser that completes the provider redirect
+  must hold a live registry session for the same principal that started the
+  consent. A callback with no session cookie, or one that no longer resolves, is
+  refused (HTTP 401, "you are not signed in") and stores nothing. The callback
+  consumes the state's nonce once, right after it decodes the state and before
+  any other check, so the code and state left in a refusing browser's history
+  cannot be replayed from another browser.
+- **Browser binding.** A consent completes only in the browser that started it
+  (RFC 9700 section 4.7). `POST /api/egress-auth/initiate` and
+  `/oauth2/egress/connect` set a cookie named `egress_consent_<digest prefix>`
+  holding a fresh 32-byte secret, and the state carries its SHA-256. Each consent
+  gets its own cookie, so connections started in parallel tabs all complete. The
+  cookie is HttpOnly and SameSite=Lax (the provider's redirect back is a
+  top-level cross-site GET), Secure when `SESSION_COOKIE_SECURE` is on and the
+  request came over HTTPS, scoped to the callback path and to
+  `SESSION_COOKIE_DOMAIN`, and lives for the state TTL. The callback compares
+  the digest in constant time before the code exchange and expires the cookie on
+  every response. This stops account injection: without it, anyone holding a
+  state bound to user V (an agent with V's bearer, or V's browser history) could
+  finish the provider step with their own account and send V's browser to the
+  callback, so V's vault would hold their account. The principal check alone
+  passes in that case, because V's browser is live as V. Only a browser gets the
+  secret: initiate, `/oauth2/egress/connect` and the callback resolve the caller
+  from the session cookie alone (`browser_session_context`), never from a bearer
+  or an internal token. A
+  provider redirect with no code (`?error=access_denied&state=...` after the user
+  cancels) also burns the state and expires the cookie. The callback host must
+  receive the browser's registry session and consent cookies: serve it on the host
+  of initiate and `/oauth2/egress/connect`, or under a shared
+  `SESSION_COOKIE_DOMAIN`.
 - **Per-user isolation.** Tokens are namespaced by `(auth_method, user_id,
   provider, server_path)`, where `user_id` is the caller's OIDC `sub` (see
   [Vault key scheme](#vault-key-scheme)); a `network-trusted`/static caller named
@@ -962,6 +998,12 @@ Set it with the checkbox in the server edit form, `registry_management.py egress
 | Connected, but a `tools/call` asks to reconnect after a backend URL change | Destination binding: changing a server's `proxy_pass_url`, `mcp_endpoint` (or a custom provider's `custom_token_url`) invalidates credentials bound to the old destination. **Reconnect once** (from Connected Accounts) to rebind. Adding a *new version* at a URL that was not registered when you connected only requires a reconnect for calls routed to that new version; existing routes are unaffected. Promoting a version never requires a reconnect. |
 | After upgrading to the exact-destination-binding release, every connection asks to reconnect once | Credentials stored before the upgrade carry an empty or origin-only binding (for example `https://api.example.com` instead of `https://api.example.com/mcp`), which does not match the exact outbound URL — a deliberate one-time forced reconnect (`oauth_user` → connect nudge, `pat` → "submit a PAT"; a designated discovery identity must reconnect too, and its server reports unhealthy discovery until then), mirroring the `sub`-keying migration above. |
 | "Connection failed" on the consent callback; registry logs `state user mismatch` | The account-swap guard saw the consent-initiate principal differ from the callback's live-session principal. Almost always the session predates the `sub`-persisting login — **log out and back in**, then reconnect, so the cookie session carries the `subject` the initiate leg bound the state to. |
+| "Connection not saved: you are not signed in" on the consent callback (HTTP 401) | The provider redirect landed in a browser with no live registry session (a different browser or profile, a private window, or the session expired during consent). The refusal also uses up that consent attempt, so reloading the page or opening its URL elsewhere fails too. Sign in to the registry in the browser you use for consent, then connect again. |
+| "Connection not saved: this is not the browser that started it" on the consent callback (HTTP 400) | The provider redirect landed in a browser that does not hold the consent cookie: the connection was started in another browser or profile, the link was copied to another browser, or the consent started before the upgrade (see "Consents in flight" under [The canonical `user_id`](#the-canonical-user_id-oidc-sub)). The refusal uses up that consent attempt. Start connecting again in the browser that will finish it. A browser that drops cookies for the gateway, or a `SESSION_COOKIE_DOMAIN` that does not cover the callback host, fails the same way. |
+| "Connection not saved: the provider did not approve it" on the consent callback (HTTP 400) | The provider sent the browser back without an authorization code, usually because the user cancelled at the provider or the provider rejected the request (its `error` query parameter says which). The callback burns that consent attempt. Connect again. |
+| "Connection not saved: the registry is temporarily unavailable" on the consent callback (HTTP 503); registry logs `egress callback refused ... replay store failed recording a state nonce` | The registry could not reach its MongoDB or DocumentDB database to mark the consent attempt as used, so it exchanged no code and saved nothing. The page also deletes that attempt's consent cookie, so the same link cannot finish later. Check the registry's database connection, then connect again. |
+| "Connection not saved: the registry is temporarily unavailable" on the consent callback (HTTP 503); registry logs `egress callback failed unexpectedly` | The callback hit an error it has no specific handling for, such as a failure while resolving the browser's session or reading the server registration. It returns this page instead of a 500 and deletes that attempt's consent cookie, so the same link cannot finish later. The log line names the server, the purpose and the error type, with the traceback. Fix the cause it names, then connect again. |
+| `POST /api/egress-auth/initiate` returns 403 "connecting an account must start from a signed-in browser session" | The request carried no usable registry session cookie (a bearer token alone, for example). Only the browser's own session may start a consent, because the consent cookie must land in that browser, so initiate reads the session cookie and nothing else; a bearer beside the cookie changes nothing. Connect from Connected Accounts in the browser, or open the `connect_url` the gateway hands an MCP client. |
 | A login fails with HTTP 401 and the auth-server logs `yielded a subject shaped like a username-fallback vault key` | The provider's `subject_claim` returned a value that starts with `name:`, the prefix of username-fallback vault keys (see [When the key falls back to the username](#when-the-key-falls-back-to-the-username)). Point `subject_claim` at the provider's immutable account id, which users cannot choose. |
 | Vend returns 401 from auth-server, or every registry API call returns 401 | Marker secret mismatch. Ensure `AUTH_SERVER_NGINX_MARKER_SECRET` matches on registry + auth-server, and nginx sets it on `/validate`. The auth-server logs `nginx marker missing/mismatched` for each refused mint. |
 | OpenBao reads fail with permission denied | The role token lapsed. The store re-authenticates and retries once; persistent failure means a real policy/role gap — verify the `mcp-egress` policy and the role binding to the registry ServiceAccount. |
@@ -984,8 +1026,9 @@ auth-server overlap short (for example `maxSurge: 1`, `maxUnavailable: 0`).
 - **Expect intermittent 401s on some routes until every auth-server replica is new:** nested and federated
   registrations (`/peer/remote`), virtual-server backend routes, and pinned direct versions. They are bound by their
   full path, route mode and version only once both sides are upgraded.
-- **In-flight OAuth consents** started before the registry upgrade fail at the callback ("state carries no approved
-  destinations"); the user starts the connection again.
+- **In-flight OAuth consents** started before the registry upgrade fail at the callback: a state with no browser
+  binding shows "this is not the browser that started it", and an older state with no approved destinations shows
+  "Could not complete the connection". The user starts the connection again.
 - **Stale version pins on credentialed backends fail closed.** A virtual tool mapping on an egress-brokered backend
   pinned to a version that backend no longer has gets no credential and a 502 (plain backends dispatch to their active
   endpoint whatever the pin, as before). The registry logs `Tool ... pins version ..., which ... does not have` when it
