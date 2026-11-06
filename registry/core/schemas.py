@@ -526,8 +526,8 @@ class OAuthDiscoveryConfig(BaseModel):
     # Reuses the provider-config shape the shared consent/refresh engine already
     # accepts (build_consent_url / get_valid_token). Independent of egress_oauth.
     oauth: EgressOAuthConfig | None = Field(default=None)
-    # Vault principal to borrow: the ingress auth_method + canonical user id
-    # (OIDC sub, else username) recorded when the identity was designated.
+    # Vault principal to borrow: the canonical auth_method and the designee's
+    # vault user id (``vault_principal``) recorded when the identity was designated.
     auth_method: str = Field(default="")
     user_id: str = Field(default="")
     # Non-secret display fields for the config view / audit.

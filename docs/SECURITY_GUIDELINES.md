@@ -680,6 +680,17 @@ sanitizer that isn't called) is equivalent to no check.
   handler exchanges the code inline, a `state` comparison that runs later in the
   calling flow is dead code; gate the exchange itself and fail closed when
   `state` is missing/absent/mismatched or no authorization request is in flight.
+- **A reserved key prefix is a namespace only if no input can carry it.**
+  Prefixing username-fallback vault keys with `name:` keeps them apart from
+  account ids only while no account id starts with `name:`. A provider whose
+  `subject_claim` names a user-chosen value can return one, and that user then
+  reads the fallback user's bucket. Refuse the prefix wherever an outside value
+  becomes a key: the login (`_require_login_subject`), an IdP bearer's account
+  id (`_canonical_egress_user`) and a mint request that names no session
+  (`_reconcile_context_against_session`), all through one predicate
+  (`is_fallback_shaped` in `registry/egress_auth/fallback_key.py`). Exempt only
+  values the gateway wrote: a session's stored key, and the `egress_user` the
+  session-backed mint stamps on a `self_signed` token.
 - **Cross-resource permission confusion: one entity type's access grant must
   never gate a different entity type.** A skill-listing fast-path keyed on
   `accessible_agents` (an agent grant) let a broad agent grant expose private
@@ -845,6 +856,23 @@ sanitizer that isn't called) is equivalent to no check.
   reuse window (`EGRESS_OBO_CACHE_MAX_TTL_SECONDS`). A data-plane service that starts caching credentials also gets the
   narrowest store access that works: an in-process handle clamped to its own namespace, plus a backend policy scoped to
   that namespace's path, created only when the feature is on.
+- **Key per-user secrets on the IdP's immutable account id, derived the same way
+  on every path.** The egress vault keyed Cognito browser sessions on the Cognito
+  username, which Cognito frees for reuse when the user is deleted, so a new user
+  created under the old name inherited the old user's vaulted provider tokens. A
+  raw Okta access token keyed on its `sub`, the user's editable login, while the
+  browser session keyed on the immutable user id; moving a login to another user
+  moved the connections with it. Key a stored secret on the value the IdP never
+  reassigns (`sub` for most OIDC providers, `uid` on an Okta access token), and
+  give each path one named function: the login computes and stores a session's
+  key (`_login_vault_user_id`), every session reader takes it from there
+  (`session_vault_user_id`), a bearer's comes from `_canonical_egress_user`, and
+  the registry routes and the vend address the vault through `vault_principal`.
+  Refuse an OIDC login that yields no such id, since a fallback to a name
+  reopens the hole. Test the
+  derivation as properties over generated accounts: two accounts with distinct
+  ids never share a key even when every other claim matches, one account keeps
+  its key when its profile changes, and every path agrees.
 
 ## Identity-provider self-registration (DCR)
 

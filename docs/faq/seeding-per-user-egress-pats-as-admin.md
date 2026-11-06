@@ -166,6 +166,8 @@ uv run python api/registry_management.py \
 
   When in doubt, have the target user self-submit once from the **Connected Accounts** page (which resolves their `sub` automatically) and confirm the vend works; after that, admin on-behalf updates use the same `sub`.
 
+- **A user whose login has no subject.** A GitHub, Google or custom provider login whose response maps no account id keys the vault on `name:<provider>:<username>` instead of a `sub` (see [When the key falls back to the username](../egress-credential-vault.md#when-the-key-falls-back-to-the-username)). To seed a PAT for such a user, send that whole value as `sub`, for example `--sub "name:github:alice"`, with `--auth-method oauth2`. The provider part is percent-encoded, so a provider name containing `:` or `%` appears encoded.
+
 ## How the injected credential is chosen
 
 At vend time the gateway derives the header from the server's Backend Authentication (one upstream, one header contract):

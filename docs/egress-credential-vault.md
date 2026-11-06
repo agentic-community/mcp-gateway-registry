@@ -111,6 +111,8 @@ graph TB
 | `registry/egress_auth/oauth_engine.py` | PKCE generation, `build_authorize_url`, `exchange_code`, `refresh_token`; per-provider token-response parsers and auth styles. |
 | `registry/egress_auth/providers.py` | `PROVIDER_REGISTRY` (GitHub, Google, Atlassian, Microsoft, Slack) + `resolve_provider` for custom OIDC. |
 | `registry/egress_auth/state_codec.py` | AEAD (AES-256-GCM) encrypt/decrypt of the short-lived OAuth `state` blob — hides the PKCE verifier from the URL/logs. |
+| `registry/egress_auth/fallback_key.py` | `username_fallback_key`, the namespaced vault `user_id` for a login with no account id; only the auth-server's login callback calls it, and it stores the result on the subject-less session. |
+| `registry/egress_auth/session_vault_user.py` | `session_vault_user_id`, the one reader of a session's vault key, used by the auth-server's cookie path, the token mint and the registry's `enhanced_auth`. |
 | `registry/egress_auth/as_facade.py` | Helpers to test whether a server is egress-configured. |
 | `registry/egress_auth/factory.py` | Singleton service wiring; binds the Mongo replay-guard + cross-replica refresh lease (falls back to in-process for single-replica dev). |
 | `registry/secrets/interfaces.py` | `SecretStoreBase` ABC: `put_token` / `get_token` / `delete_token` / `list_for_user`. |
@@ -311,25 +313,28 @@ Accounts. Remove it through the server's discovery config
 
 ### The canonical `user_id` (OIDC `sub`)
 
-`user_id` is the caller's **OIDC `sub`**, not their display username. The `sub`
-is present in both id_tokens and access_tokens for every OIDC provider and is
-stable per `(user, gateway app)`. Keying on the display name instead would break
-on Entra, whose **access** tokens omit `preferred_username`: a DCR client's
-bearer token would key on `sub` while the browser-consent leg keyed on the
-email, so the token would be written and read under different ids and every vend
-would miss.
+`user_id` is the caller's **immutable account id at the IdP**, not their display
+username or any other name the account can change or a later account can take.
+For most providers that id is the OIDC `sub`. Keying on the display name instead
+would break on Entra, whose **access** tokens omit `preferred_username`: a DCR
+client's bearer token would key on `sub` while the browser-consent leg keyed on
+the email, so the token would be written and read under different ids and every
+vend would miss. A reusable name also hands one account's vaulted tokens to the
+next account that holds it.
 
-The canonical id is derived once in the auth-server (`_canonical_egress_user`:
-`sub` → persisted session `subject` → `username` fallback) and carried to the
-registry as an `egress_user` claim on the internal tokens. So that the browser
-consent-write path (which reaches the registry through the cookie session, not
-an internal token) resolves the same value, the auth-server persists the
-id_token `sub` into the session record at login and both the auth-server and
-registry session stores return it. All four identity points — vend, consent
-initiate, the OAuth callback's account-swap guard, and list/disconnect — key on
-this one value.
+| Provider | `user_id` | Notes |
+|----------|-----------|-------|
+| Keycloak, Auth0 | token `sub` | The browser login stores the id_token `sub`; a bearer token keys on its own `sub`. |
+| Entra | token `sub` | As for Keycloak, but Entra issues a different `sub` per application; see [Entra: one key per application](#entra-one-key-per-application). |
+| Cognito | token `sub` (a UUID) | The login reads it from the verified access token, or from the `sub` attribute boto3 `GetUser` returns when JWT verification is unavailable. A `GetUser` response without `sub` fails validation, and the login then takes `sub` from the userInfo endpoint. It is never the Cognito username: Cognito frees a username when its user is deleted, and a new user created under that name would otherwise read the old user's connections. |
+| Okta | access token `uid` when it is a non-empty string; on a client-credentials token, `sub` | An Okta user access token carries the user's login (editable, often an email) in `sub` and the immutable user id in `uid`. The id_token carries that user id as `sub`, so both paths agree. A client-credentials token has no `uid` and is issued to itself, so its `sub` equals its `cid` and it keys on that client id. A user token whose `uid` is missing, empty or not a string has no key, and the vend refuses it rather than key on the login in `sub`. `uid` is read only from tokens the Okta provider validated. |
+| PingFederate | token `sub` | The deployment decides what `sub` holds. Map it to the same immutable attribute (for example the directory object GUID) in both the OpenID Connect policy, which builds the id_token, and the access token manager, which builds the bearer token. Different attributes split the browser and bearer paths; a mutable one such as email gives a renamed user's connections to the next holder of the address. |
+| GitHub, Google | userinfo `id` (`subject_claim: "id"`) | Their userinfo endpoints have no `sub`. |
 
-Non-OIDC callers with no `sub` fall back to the username and are unaffected.
+The auth-server derives the canonical id (`_canonical_egress_user`: the Okta account id on an Okta bearer, else `sub`; a bearer with neither gets no key) and carries it to the registry as an `egress_user` claim on the internal tokens. A browser session gets its key once, at login: the callback stores the account id, or for a login with none the username fallback key, on the session record as `egress_user`. The browser consent-write path reaches the registry through the cookie session rather than an internal token, so every reader of a session's key reads that stored field through one function, `session_vault_user_id` (`registry/egress_auth/session_vault_user.py`): the auth-server's cookie path, the token mint and the registry's `enhanced_auth`. The two services read the session record through separate session stores, and since no other session field feeds the key, a field that one store returns and the other does not cannot split it. All four identity points (vend, consent initiate, the OAuth callback's account-swap guard, and list/disconnect) key on this one value.
+
+A caller whose login yields no account id falls back to a namespaced username key; see [When the key falls back to the username](#when-the-key-falls-back-to-the-username) for who reaches that step and what it costs.
+The registry never applies a fallback of its own to an internal token: `vault_principal` reads `egress_user` alone, so a caller the auth-server gives an empty key is refused by every registry vault route as well as by the vend.
 Two places deliberately fail closed rather than cross identifier namespaces: a
 gateway-minted `self_signed` token with no `egress_user` claim resolves to the
 empty string (its `sub` is the login username by construction, not the OIDC sub),
@@ -339,15 +344,80 @@ otherwise-silent "consent succeeds, then 0 tools" failure visible; a token
 minted before the claim existed is refused for at most one token lifetime and
 the next mint carries the claim.
 
-The session subject comes from the IdP at login: the id_token `sub` (Auth0 and
-the other id_token providers), or the userinfo field named by the provider's
+The session subject comes from the IdP at login: the id_token `sub` for
+Keycloak, Entra, Okta, Auth0 and PingFederate, the access token `sub` for
+Cognito, or, on the userinfo fallback, the field named by the provider's
 `subject_claim` (default `sub`; `id` for GitHub and Google, whose userinfo
-endpoints have no `sub`). A provider that yields no subject logs a warning at
-login, and its bearer tokens are refused at the per-user vend. Auth0, GitHub, and
-Google sessions created before the subject was captured keyed their grants on the
-username; those users sign in again and reconnect each egress server once.
+endpoints have no `sub`). A Keycloak, Cognito, Entra, Okta, Auth0 or
+PingFederate login that yields no subject is refused with HTTP 401 and creates
+no session, because the vault would otherwise key that user on the username.
+The auth-server refuses a login through any other provider the same way when
+its token response carries an id_token, since an id_token marks the provider
+as OpenID Connect. A GitHub, Google or custom provider login with no id_token
+and no subject still succeeds and logs a warning, and its bearer tokens are
+refused at the per-user vend. Auth0, GitHub, and Google sessions created
+before the subject was captured keyed their grants on the username; those
+users sign in again and reconnect each egress server once.
 `auth_method` still canonicalizes across IdP methods (see below), so the full
 key is stable regardless of how the same human authenticated.
+
+**Upgrading to immutable-id keying.** Two groups of callers find their existing
+connections gone and reconnect each egress server once from Connected Accounts:
+
+- Cognito users who sign in through the access-token path (the default when
+  `COGNITO_USER_POOL_ID` is set). Earlier releases stored their session subject
+  as the Cognito username, so their connections sit under the username. A
+  bearer validated through the boto3 `GetUser` fallback moves from the username
+  to the `sub` as well.
+- Clients that present a raw Okta access token. Their connections sit under the
+  user's Okta login, and the vault now keys them on `uid`.
+
+The old entries stay in the secret store. After the upgrade no Okta user token
+or session keys on the login (Okta sessions always stored the user id, and the
+tokens minted from them carry it), so login-keyed entries are unreadable. Cognito username-keyed
+entries stay readable for a bounded time: a token the gateway minted from a
+Cognito session before the upgrade carries the username as `egress_user` until
+its `exp`, at most `MCP_TOKEN_MAX_TTL_HOURS` (24 hours by default) after the
+mint. A session created before the upgrade has no vault key at all (see
+"Sessions created before this release" below). To end it sooner, delete the
+username-keyed entries: decode the `user_id` segment of each entry path
+(base64url, see the layout below) and remove the entries whose value is not a
+Cognito `sub` UUID. Deleting sessions does not revoke tokens already minted,
+which are stateless JWTs and stay valid until they expire.
+
+**Discovery designations made before the upgrade.** A discovery identity designated by a Cognito user names that user's
+Cognito username, and one designated with a raw Okta access token names the Okta login. The designee now has the Cognito
+`sub` (or the Okta `uid`) as their principal, so `/oauth2/egress/connect?purpose=discovery` refuses them. Saving the
+server's discovery config again does not help: `PUT /api/servers/{path}/oauth-discovery` keeps an existing designation
+that names someone other than the caller, so that one admin's edit cannot take another's designation. To re-designate,
+the server owner or an admin sends `DELETE /api/servers/{path}/oauth-discovery`, then the designee sends the `PUT` and
+connects again. The registry does not match the old name to the new id on its own, because a reused username is the case
+the new key closes. A designation made by a user whose login maps no subject (a GitHub, Google or custom login) names
+the bare username, while that user's principal is now `name:<provider>:<username>`; the same `DELETE` then `PUT`
+re-designates them.
+
+**OIDC logins that now fail.** Earlier releases let a login that mapped no subject through with a warning. This release
+refuses it with HTTP 401 ("Login response did not identify the account") for Keycloak, Cognito, Entra, Okta, Auth0 and
+PingFederate, and for any provider whose token response carries an id_token, including Google and any provider you
+added. A deployment that hits this locks out every user of that provider. It happens, for example, when a Keycloak or
+Okta client does not request the `openid` scope, so the login falls back to userInfo, or when a custom mapping names a
+`subject_claim` the response lacks. Before you upgrade, search the auth-server logs for `yielded no subject`. Each line
+names a provider. Fix that provider's `subject_claim`, or its scopes so the IdP returns an id_token, before the upgrade.
+
+**PATs left under another `auth_method`.** Earlier releases stored a PAT an admin submitted on another user's behalf (
+`PUT /api/servers/{path}/egress-pat` with `sub` and `auth_method`) under the `auth_method` the admin sent, such as
+`keycloak` or `jwt`. The vend reads only the `oauth2` bucket, so those PATs never reached an upstream, and since this
+release no route reads them at all. To find them, list the entries under the configured prefix and base64url-decode the
+first segment after it (see the layout below). Any value other than `oauth2` (`b2F1dGgy`) or the discovery segment (
+`ZGlzY292ZXJ5`) marks such an entry. Submit the PAT again, which stores it under `oauth2`, then delete the old entry.
+
+**Bearer callers the vend already refused.** Earlier releases of the registry keyed a caller with an empty `egress_user` on its login name: an Okta user access token without a usable `uid`, and a gateway-minted token without an `egress_user` claim. The vend refused those callers, but initiate, the connection list, disconnect and PAT submit used the login. Every registry vault route now refuses them too (403 from initiate and PAT submit, an empty list). Entries they wrote stay in the secret store under the login and nothing reads them.
+
+**Bearer tokens without `sub`.** Earlier releases keyed a provider access token that carries no `sub` (a Keycloak client without the `basic` client scope issues one) on its username, which an admin can rename and a later account can take. Such a token now has no vault key: the vend and every registry vault route refuse it, and PATs stored under the username stay in the secret store unread. Add the `basic` client scope (or map `sub` into the provider's access token), or give the client a gateway-minted token.
+
+**Username-fallback keys.** A session with no subject used to key on the bare username. It now keys on `name:<provider>:<username>` (see [When the key falls back to the username](#when-the-key-falls-back-to-the-username)), so users of a GitHub, Google or custom login that maps no subject find their connections gone and reconnect each egress server once. The old entries stay under the bare username. A token minted from such a session now carries the session's fallback key; a token minted before the upgrade carries none and is refused until the user generates a new one.
+
+**Sessions created before this release.** Earlier releases did not store the vault key (`egress_user`) on the session, and the gateway no longer falls back to the session's `subject`. Until the user signs in again, a session created before the upgrade has no vault key: initiate and PAT submit return 403, the connection list is empty, and the vend refuses a token minted from it after the upgrade. Sessions last at most `session.max_age_seconds` in `oauth2_providers.yml` (8 hours by default), and signing out and back in ends the gap sooner.
 
 ```
 per-principal prefix:   {prefix}/enc(auth_method)/enc(user_id)
@@ -360,6 +430,46 @@ base64url is used deliberately over percent-encoding: hvac re-quotes the path it
 is given, turning a percent-encoded `/` (`%2F`) into `%252F` on the wire, which
 defeats OpenBao path routing. base64url has no reserved characters and survives
 unchanged.
+
+### When the key falls back to the username
+
+The auth-server's login callback computes this key once for a session that carries no stable account id and stores it on the session as `egress_user`. Every reader of the session takes it from there (see [The canonical `user_id`](#the-canonical-user_id-oidc-sub)), so the consent the callback writes lands where the vend reads. The callback is the only caller of `username_fallback_key` (`registry/egress_auth/fallback_key.py`), so the `<provider>` part of every fallback key is a login provider key from `oauth2_providers.yml`. Before the vault keyed on `sub`, every user was keyed on the username; the fallback kept those callers on a key built from it when `sub` keying arrived. `vault_principal`, which every registry vault route uses, has no fallback.
+
+The key is `name:<provider>:<username>`, with the provider percent-encoded so it cannot contain `:`. Every identity provider shares the `(oauth2, user_id)` namespace, and a bare username could equal an account id another provider issues (a PingFederate `sub` that holds an email, or a GitHub login made of digits). The prefix keeps fallback keys apart from every account id, and the encoding keeps two providers' users apart. Account ids are never prefixed.
+
+Nothing stops an identity provider from returning an account id that starts with `name:` when its `subject_claim` names a value users choose (a self-service `preferred_username`, for example). So the auth-server refuses any login whose subject starts with `name:` (HTTP 401, logged as `yielded a subject shaped like a username-fallback vault key`), and `_canonical_egress_user` keys such an id on nothing when an IdP bearer carries it. A user of such a provider who sets that value to `name:github:alice` cannot sign in, and so cannot read the connections of the GitHub fallback user with that key.
+
+A gateway-minted (`self_signed`) token is the one bearer that may carry a fallback key in `egress_user`, because only the gateway writes that claim. `/internal/tokens` stamps the stored key of the session the request names, a fallback key included, and drops a fallback-shaped `egress_user` or `subject` from a request that names no session. So a token carries `name:github:alice` only when it was minted from that user's own session.
+
+An admin seeding a PAT on behalf of a fallback user (`PUT /api/servers/{path}/egress-pat`) sends the whole key as `sub`, for example `name:github:alice`, with `auth_method` `oauth2`.
+
+Callers that reach it today:
+
+- A browser session from a provider without OpenID Connect handling (GitHub, Google, or a provider you add to
+  `oauth2_providers.yml`) whose token response carries no id_token and whose userinfo response has no field named by the
+  provider's `subject_claim`. The login succeeds and the auth-server logs
+  `OAuth2 login via <provider> yielded no subject`. Consent, the connection list and disconnect then key on
+  `name:<provider>:<username>`, and so does a token minted from that session ("Generate token" in the UI), so an MCP
+  client holding it uses the connections the user saved in the browser.
+
+Callers that never reach it:
+
+- Keycloak, Cognito, Entra, Okta, Auth0 and PingFederate logins, and any login whose token response carries an id_token. These are refused when they yield no subject.
+- `network-trusted` (static API key) and `federation-static` callers. They carry only a name, but every vault route refuses a non-per-user `auth_method` before it reads or writes the vault, so a static key named `alice` cannot reach a user's connections. A token `/internal/tokens` mints for a `network-trusted` caller keeps that method in its `auth_method` claim, and the auth-server stamps the claim's method onto the internal tokens, so the minted token cannot reach them either.
+- Bearer tokens that carry no account id: an Okta user access token without a usable `uid`, a gateway-minted token without `egress_user`, and a provider access token without `sub` (the validators accept one). The auth-server gives them an empty key instead of the login, and the vend and every registry vault route refuse them. A token `/internal/tokens` mints without a session never carries a fallback key.
+
+The cost: on this path the vault key is whatever the provider's `username_claim` returns. If the provider lets an account change that value, or lets a later account take it (a renamable login, an email address), the account that holds the name next reads the connections stored under it. This is the exposure the Cognito username had. Before you turn on per-user egress (`EGRESS_AUTH_ENABLED=true`) for such a provider, set its `subject_claim` to the provider's immutable account id (GitHub and Google already use `id`), sign in once and confirm the auth-server log has no `yielded no subject` line for it.
+
+### Entra: one key per application
+
+Entra's `sub` is immutable and never reassigned, so it cannot give one account's connections to another. It is also pairwise: Microsoft documents it as "unique to a particular application ID", so one user receives a different `sub` in each application ([access token claims](https://learn.microsoft.com/en-us/entra/identity-platform/access-token-claims-reference)).
+
+The browser login stores the `sub` that Entra issued to the gateway's own app registration. Which tokens agree with it:
+
+- Tokens the gateway mints from a browser session through `POST /internal/tokens` (the UI's "Generate token") carry the session's key in `egress_user`. An Entra login always yields a subject, so for Entra these always agree. (A token minted from a GitHub, Google or custom session with no subject carries that session's fallback key; see [When the key falls back to the username](#when-the-key-falls-back-to-the-username).)
+- An Entra access token issued through a different app registration, such as a separate client registered for a CLI or an agent, can carry a different `sub`. Its vend reads an empty bucket and asks the user to connect. The connect link completes in the browser, under the browser session's key, so the vend for that client misses again and the user is asked to connect on every call. Nothing crosses to another user; that client never reaches the user's connections.
+
+Entra's `oid` claim is the same across applications, but the vault keeps `sub`: moving to `oid` would change every Entra user's key and force everyone to reconnect. If a client keeps asking to connect after the user already connected in the browser, give it a gateway-minted token instead of its own Entra token.
 
 ---
 
@@ -844,9 +954,15 @@ Set it with the checkbox in the server edit form, `registry_management.py egress
 | Connected, but the client still shows only the connect tool or no tools | The client cached the pre-consent tool list. Reconnect the server in the client. If the auth-server log still shows `has no token`, the account was connected under a different identity: the Registry UI session and the MCP client must sign in as the same user. |
 | Consent loops (re-asked every call) | Usually an `auth_method` mismatch between consent-write and vend-read — confirm the IdP method canonicalizes to `oauth2`. Or the stored refresh token is dead (provider revoked it) → re-consent. |
 | Connected once, but tools still show empty / vend logs "has no token" | The consent-write and vend paths keyed the vault on different `user_id`s. Since keying moved to the OIDC `sub` (see [Vault key scheme](#vault-key-scheme)), an existing connection created under the old display-name key is invisible to the new `sub`-keyed lookup. Fix: **disconnect and reconnect once** (from Connected Accounts), which re-writes the entry under the `sub`. On Entra this reconnect must follow a fresh gateway login so the session carries the persisted `subject`. |
+| After upgrading to immutable-id keying, Cognito users (or clients presenting a raw Okta access token) are asked to connect again | Their connections were stored under the Cognito username or the Okta login, and the vault now keys on the Cognito `sub` or the Okta `uid` (see [The canonical `user_id`](#the-canonical-user_id-oidc-sub)). **Reconnect once** from Connected Accounts. The old entries stay in the secret store; that section says how long a pre-upgrade token can still read them and how to delete them. |
+| On Entra, a client asks to connect on every call although the user already connected in the browser | The client presents an Entra access token from a different app registration, and Entra issues a different `sub` per application, so its vend keys on a different `user_id` (see [Entra: one key per application](#entra-one-key-per-application)). Give the client a gateway-minted token ("Generate token" in the UI) instead of its own Entra token. |
+| The auth-server logs `OAuth2 login via <provider> yielded no subject` | A GitHub, Google or custom provider login with no id_token mapped no account id, so that user's connections key on the username (see [When the key falls back to the username](#when-the-key-falls-back-to-the-username)). Set the provider's `subject_claim` to its immutable account id before relying on per-user egress. When the line ends in `refusing the login`, the login was OpenID Connect and failed; see the next row. |
+| Every login through one provider fails with HTTP 401 "Login response did not identify the account" | The provider is OpenID Connect (a known OIDC provider, or its token response carried an id_token) and its response mapped no subject. Earlier releases let these logins through with a warning (see "OIDC logins that now fail" under [The canonical `user_id`](#the-canonical-user_id-oidc-sub)). Fix the provider's `subject_claim`, or request the `openid` scope so the IdP returns an id_token with `sub`. |
+| After the upgrade, the designated discovery identity is refused at `/oauth2/egress/connect?purpose=discovery`, and saving the discovery config again does not change that | The designation names the designee's old Cognito username or Okta login, and the save keeps an existing designation that is not the caller's. The server owner or an admin sends `DELETE /api/servers/{path}/oauth-discovery`; the designee then sends the `PUT` and connects again. |
 | Connected, but a `tools/call` asks to reconnect after a backend URL change | Destination binding: changing a server's `proxy_pass_url`, `mcp_endpoint` (or a custom provider's `custom_token_url`) invalidates credentials bound to the old destination. **Reconnect once** (from Connected Accounts) to rebind. Adding a *new version* at a URL that was not registered when you connected only requires a reconnect for calls routed to that new version; existing routes are unaffected. Promoting a version never requires a reconnect. |
 | After upgrading to the exact-destination-binding release, every connection asks to reconnect once | Credentials stored before the upgrade carry an empty or origin-only binding (for example `https://api.example.com` instead of `https://api.example.com/mcp`), which does not match the exact outbound URL — a deliberate one-time forced reconnect (`oauth_user` → connect nudge, `pat` → "submit a PAT"; a designated discovery identity must reconnect too, and its server reports unhealthy discovery until then), mirroring the `sub`-keying migration above. |
 | "Connection failed" on the consent callback; registry logs `state user mismatch` | The account-swap guard saw the consent-initiate principal differ from the callback's live-session principal. Almost always the session predates the `sub`-persisting login — **log out and back in**, then reconnect, so the cookie session carries the `subject` the initiate leg bound the state to. |
+| A login fails with HTTP 401 and the auth-server logs `yielded a subject shaped like a username-fallback vault key` | The provider's `subject_claim` returned a value that starts with `name:`, the prefix of username-fallback vault keys (see [When the key falls back to the username](#when-the-key-falls-back-to-the-username)). Point `subject_claim` at the provider's immutable account id, which users cannot choose. |
 | Vend returns 401 from auth-server, or every registry API call returns 401 | Marker secret mismatch. Ensure `AUTH_SERVER_NGINX_MARKER_SECRET` matches on registry + auth-server, and nginx sets it on `/validate`. The auth-server logs `nginx marker missing/mismatched` for each refused mint. |
 | OpenBao reads fail with permission denied | The role token lapsed. The store re-authenticates and retries once; persistent failure means a real policy/role gap — verify the `mcp-egress` policy and the role binding to the registry ServiceAccount. |
 | `decrypt` errors on client secret | `SECRET_KEY` was rotated after the server's egress config was saved. Re-save the egress config with the client secret. |

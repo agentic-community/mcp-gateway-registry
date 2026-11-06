@@ -7,6 +7,8 @@ account-swap).
 """
 
 import pytest
+from hypothesis import assume, given, settings
+from hypothesis import strategies as st
 
 from registry.egress_auth import oauth_engine, service, state_codec
 from registry.egress_auth.schemas import StoredToken
@@ -140,6 +142,36 @@ class TestCanonicalAuthMethod:
         # is_per_user_auth_method() still rejects them at vend time.
         assert canonical_auth_method({"method": method}) == method
 
+    def test_self_signed_folds_its_own_auth_method_claim(self):
+        # A self-signed JWT (UI 'generate token', or the egress OAuth-facade
+        # /token mint) reports method='self_signed' (the FORMAT) and carries the
+        # principal's method as its own verified claim. The vault keys on the
+        # principal method, so a user who consents through a cookie session
+        # (bucket 'oauth2') vends with a minted token from the same bucket.
+        vr = {"method": "self_signed", "data": {"auth_method": "oauth2"}}
+        assert canonical_auth_method(vr) == "oauth2"
+
+    def test_self_signed_token_minted_for_a_static_key_stays_non_per_user(self):
+        # /internal/tokens also mints for network-trusted callers (a
+        # REGISTRY_API_TOKEN key) and stamps that method; folding the format
+        # into oauth2 would hand the static key a per-user bucket.
+        vr = {"method": "self_signed", "data": {"auth_method": "network-trusted"}}
+        assert canonical_auth_method(vr) == "network-trusted"
+
+    @pytest.mark.parametrize(
+        "data",
+        [None, {}, {"auth_method": None}, {"auth_method": 7}, {"auth_method": "self_signed"}],
+        ids=repr,
+    )
+    def test_self_signed_without_a_usable_claim_owns_no_bucket(self, data):
+        # Every mint stamps the claim, so a token without a usable one names no
+        # principal method and must not fall into the per-user bucket.
+        assert canonical_auth_method({"method": "self_signed", "data": data}) == ""
+
+    @pytest.mark.parametrize("vr", [{}, {"method": None}, {"method": ""}], ids=repr)
+    def test_missing_method_is_empty(self, vr):
+        assert canonical_auth_method(vr) == ""
+
     @pytest.mark.parametrize(
         "method,expected",
         [
@@ -154,6 +186,75 @@ class TestCanonicalAuthMethod:
     )
     def test_per_user_classification(self, method, expected):
         assert is_per_user_auth_method(method) is expected
+
+
+_CANONICAL_METHOD_SAMPLES = st.one_of(
+    st.sampled_from(
+        [
+            "oauth2",
+            "session_cookie",
+            "self_signed",
+            "jwt",
+            "boto3",
+            "keycloak",
+            "entra",
+            "cognito",
+            "okta",
+            "auth0",
+            "pingfederate",
+            "network-trusted",
+            "federation-static",
+            "",
+        ]
+    ),
+    st.text(max_size=16),
+)
+_CLAIM_SHAPES = st.one_of(
+    st.none(),
+    _CANONICAL_METHOD_SAMPLES,
+    st.integers(),
+    st.booleans(),
+    st.lists(st.text(max_size=4), max_size=2),
+)
+_PURE_SETTINGS = settings(
+    max_examples=200, derandomize=True, database=None, report_multiple_bugs=False
+)
+
+
+@pytest.mark.unit
+@_PURE_SETTINGS
+@given(claim=_CLAIM_SHAPES)
+def test_self_signed_canonicalizes_as_its_claim_would(claim):
+    """A self-signed result maps to what its ``auth_method`` claim maps to on its own.
+
+    For every claim shape, a ``self_signed`` result whose claim is a string
+    other than ``self_signed`` canonicalizes like a result reporting that
+    method directly; any other claim (absent, non-string, ``self_signed``)
+    yields ``""``, which no per-user check accepts.
+    """
+    result = canonical_auth_method({"method": "self_signed", "data": {"auth_method": claim}})
+
+    if isinstance(claim, str) and claim != "self_signed":
+        assert result == canonical_auth_method({"method": claim})
+    else:
+        assert result == ""
+
+
+@pytest.mark.unit
+@_PURE_SETTINGS
+@given(method=_CANONICAL_METHOD_SAMPLES, claim=_CLAIM_SHAPES)
+def test_only_self_signed_reads_the_auth_method_claim(method, claim):
+    """Outside ``self_signed``, the ``auth_method`` claim never changes the result.
+
+    For every other method and claim shape, the result equals the result with
+    no ``data`` at all: per-user IdP methods fold into ``oauth2`` and the rest
+    pass through unchanged.
+    """
+    assume(method != "self_signed")
+    with_claim = canonical_auth_method({"method": method, "data": {"auth_method": claim}})
+
+    assert with_claim == canonical_auth_method({"method": method})
+    assert with_claim in ("oauth2", method)
 
 
 @pytest.mark.unit

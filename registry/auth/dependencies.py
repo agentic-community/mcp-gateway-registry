@@ -6,6 +6,7 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from ..common.log_redaction import redact_headers, redact_mapping
 from ..core.config import settings
+from ..egress_auth.session_vault_user import session_vault_user_id
 from .access_resolver import (
     get_user_accessible_tools,  # noqa: F401 - re-exported for external callers
     resolve_scope_access,
@@ -562,6 +563,12 @@ async def _derive_user_context(
     `auth_method == "federation-static"` short-circuits to a no-access
     context (federation static tokens get scoped access via separate routing,
     not registry-side derivation).
+
+    `egress_user` is passed through unchanged, never replaced by `username`:
+    the auth-server computed it (the session's key stored at login, which
+    `enhanced_auth` reads through `session_vault_user_id`, or the
+    `_canonical_egress_user` claim on an internal token), and an empty value
+    marks a caller that owns no per-user vault bucket.
     """
     if auth_method == "federation-static":
         return {
@@ -572,7 +579,7 @@ async def _derive_user_context(
             "scopes": scopes,
             "auth_method": auth_method,
             "provider": provider,
-            "egress_user": egress_user or username,
+            "egress_user": egress_user,
             "session_id": session_id,
             "accessible_servers": [],
             "accessible_tools": {},
@@ -598,10 +605,10 @@ async def _derive_user_context(
         "scopes": scopes,
         "auth_method": auth_method,
         "provider": provider,
-        # egress_user is the canonical per-user egress vault id (OIDC sub when
-        # available, else username). The consent-write path keys the vault on
+        # egress_user is the canonical per-user egress vault id, resolved before
+        # this point (see the docstring). The consent-write path keys the vault on
         # it so it matches the vend path's egress_user claim. See #933.
-        "egress_user": egress_user or username,
+        "egress_user": egress_user,
         # session_id is the opaque server-side identifier — used by template
         # callers to mint CSRF tokens via generate_csrf_token(session_id).
         "session_id": session_id,
@@ -694,8 +701,9 @@ async def _context_from_internal_token(
             provider=session_data.get("provider", "local"),
             session_id=session_id,
             client_id=claims.get("client_id") or "",
-            # The auth_server stamps the canonical egress user (OIDC sub) into
-            # the token; prefer it so the consent-write vault key matches vend.
+            # The auth_server stamps the session's vault key into the token
+            # (_canonical_egress_user, which reads the session through
+            # session_vault_user_id); use it as is so consent-write matches vend.
             egress_user=claims.get("egress_user") or "",
             # Human-readable email for audit records (from the session or claim).
             email=session_data.get("email") or claims.get("email") or "",
@@ -741,10 +749,12 @@ async def enhanced_auth(
         auth_method=auth_method,
         provider=session_data.get("provider", "local"),
         session_id=session_data.get("session_id"),
-        # Canonical egress vault id (OIDC sub persisted at login). Keeps the
-        # consent-write path (which reaches enhanced_auth via the callback's
-        # cookie, no internal token) keyed the same as the vend path. See #933.
-        egress_user=session_data.get("subject") or "",
+        # The vault key the auth_server stored on the session at login, read
+        # through the same session_vault_user_id the auth_server's
+        # _canonical_egress_user uses for this session. This path has no
+        # internal token (the consent callback and /oauth2/egress/connect
+        # resolve the cookie directly). See #933.
+        egress_user=session_vault_user_id(session_data),
         # Human-readable email for audit records (session store persists it).
         email=session_data.get("email") or "",
     )
