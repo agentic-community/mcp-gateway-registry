@@ -140,7 +140,7 @@ function RegistrySection<T extends { path: string }>({
       </button>
 
       {expanded && (
-        <div className="p-4 bg-white dark:bg-gray-800 overflow-visible">{grid}</div>
+        <div className="p-4 bg-canvas overflow-visible">{grid}</div>
       )}
     </div>
   );

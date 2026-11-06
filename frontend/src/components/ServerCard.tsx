@@ -11,6 +11,7 @@ import {
   ShieldExclamationIcon,
   TrashIcon,
   InformationCircleIcon,
+  XMarkIcon,
 } from '@heroicons/react/24/outline';
 import PlugIcon from './icons/PlugIcon';
 import { isSafeUrl } from '../utils/safeUrl';
@@ -863,8 +864,8 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
                   </div>
                 </button>
               ) : (
-                <div className="flex items-center gap-2 text-gray-400 dark:text-gray-500">
-                  <div className="p-1.5 bg-gray-50 dark:bg-gray-800 rounded">
+                <div className="flex items-center gap-2 text-fg-subtle">
+                  <div className="p-1.5 bg-gray-500/10 rounded">
                     <WrenchScrewdriverIcon className="h-4 w-4" />
                   </div>
                   <div>
@@ -886,14 +887,14 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
               )}
               {server.mcp_server_version && (
                 <span
-                  className="inline-flex items-center px-2 py-0.5 text-xs font-medium bg-gray-50 text-gray-600 dark:bg-gray-800 dark:text-gray-400 rounded"
+                  className="inline-flex items-center px-2 py-0.5 text-xs font-medium bg-gray-500/10 text-fg-muted rounded"
                   title={
                     server.mcp_server_version_previous
                       ? `MCP Server Version: ${server.mcp_server_version} (previously ${server.mcp_server_version_previous})`
                       : `MCP Server Version: ${server.mcp_server_version}`
                   }
                 >
-                  <span className="text-gray-400 dark:text-gray-500 mr-1">srv</span>
+                  <span className="text-fg-subtle mr-1">srv</span>
                   {server.mcp_server_version}
                   {server.mcp_server_version_updated_at &&
                     (Date.now() - new Date(server.mcp_server_version_updated_at).getTime()) < 24 * 60 * 60 * 1000 && (
@@ -925,7 +926,7 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
             <>
               {/* Last Updated (source timestamp) */}
               {server.source_updated_at && (
-                <div className="text-xs text-gray-500 dark:text-gray-300 flex items-center gap-1.5">
+                <div className="text-xs text-fg-muted flex items-center gap-1.5">
                   <ClockIcon className="h-3.5 w-3.5" />
                   <span title={new Date(server.source_updated_at).toLocaleString()}>
                     {formatRelativeTime(server.source_updated_at)}
@@ -937,7 +938,7 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
               {(() => {
                 const timeText = formatTimeSince(server.last_checked_time);
                 return server.last_checked_time && timeText && !server.source_updated_at ? (
-                  <div className="text-xs text-gray-500 dark:text-gray-300 flex items-center gap-1.5">
+                  <div className="text-xs text-fg-muted flex items-center gap-1.5">
                     <ClockIcon className="h-3.5 w-3.5" />
                     <span>{timeText}</span>
                   </div>
@@ -952,7 +953,7 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
                 <button
                   onClick={handleRefreshHealth}
                   disabled={loadingRefresh}
-                  className="p-2.5 text-gray-500 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg transition-all duration-200 disabled:opacity-50"
+                  className="p-2.5 text-fg-subtle hover:text-blue-600 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg transition-all duration-200 disabled:opacity-50"
                   title="Refresh health status"
                   aria-label={`Refresh health status for ${server.name}`}
                 >
@@ -988,11 +989,11 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
           }}
         >
           <div
-            className="bg-white dark:bg-gray-800 rounded-xl p-6 max-w-2xl w-full mx-4 max-h-[80vh] overflow-auto"
+            className="bg-surface-overlay border border-line shadow-xl rounded-xl p-6 max-w-2xl w-full mx-4 max-h-[80vh] overflow-auto"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+              <h3 className="text-lg font-semibold text-fg">
                 Tools for {server.name}
               </h3>
               <button
@@ -1000,9 +1001,10 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
                   setShowTools(false);
                   setExpandedDescriptions(new Set());
                 }}
-                className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+                className="btn-icon"
+                aria-label="Close"
               >
-                ✕
+                <XMarkIcon className="h-5 w-5" />
               </button>
             </div>
 
@@ -1026,15 +1028,15 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
                       className={`border rounded-lg p-4 ${
                         tool.blocked
                           ? 'border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-950/30'
-                          : 'border-gray-200 dark:border-gray-700'
+                          : 'border-line'
                       }`}
                     >
                       <div className="flex items-start justify-between gap-3 mb-2">
                           <h4
                             className={`font-medium flex items-center gap-2 ${
                               tool.blocked
-                                ? 'text-gray-500 dark:text-gray-400 line-through'
-                                : 'text-gray-900 dark:text-white'
+                                ? 'text-fg-subtle line-through'
+                                : 'text-fg'
                             }`}
                           >
                             {tool.name}
@@ -1046,7 +1048,7 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
                           </h4>
                         {canToggle && !isArdDiscovery && (
                           <div className="flex items-center gap-2 shrink-0">
-                            <span className="text-xs text-gray-500 dark:text-gray-400">
+                            <span className="text-xs text-fg-subtle">
                               {tool.blocked ? 'Blocked' : 'Enabled'}
                             </span>
                             <ToggleSwitch
@@ -1072,7 +1074,7 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
                       )}
                       {tool.description && (
                         <div className="mb-2">
-                          <p className={`text-sm text-gray-600 dark:text-gray-300 ${!isExpanded ? 'line-clamp-2' : ''}`}>
+                          <p className={`text-sm text-fg-muted ${!isExpanded ? 'line-clamp-2' : ''}`}>
                             {tool.description}
                           </p>
                           {tool.description.length > 150 && (
@@ -1087,10 +1089,10 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
                       )}
                       {tool.schema && (
                         <details className="text-xs">
-                          <summary className="cursor-pointer text-gray-500 dark:text-gray-300">
+                          <summary className="cursor-pointer text-fg-muted">
                             View Schema
                           </summary>
-                          <pre className="mt-2 p-3 bg-gray-50 dark:bg-gray-900 border dark:border-gray-700 rounded overflow-x-auto text-gray-900 dark:text-gray-100">
+                          <pre className="mt-2 p-3 bg-surface-muted border border-line rounded overflow-x-auto text-fg">
                             {JSON.stringify(tool.schema, null, 2)}
                           </pre>
                         </details>
@@ -1099,11 +1101,11 @@ const ServerCard: React.FC<ServerCardProps> = React.memo(({ server, onToggle, on
                   );
                 })
               ) : server.enabled && (server.status === 'healthy' || server.status === 'healthy-auth-expired') ? (
-                <p className="text-gray-500 dark:text-gray-300">
+                <p className="text-fg-muted">
                   No tools available to you on this server. Ask your administrator if you need access.
                 </p>
               ) : (
-                <p className="text-gray-500 dark:text-gray-300">No tools available for this server.</p>
+                <p className="text-fg-muted">No tools available for this server.</p>
               )}
             </div>
           </div>

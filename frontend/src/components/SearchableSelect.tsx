@@ -157,7 +157,7 @@ const SearchableSelect: React.FC<SearchableSelectProps> = ({
     <div ref={containerRef} className="relative">
       {/* Input field */}
       <div className="relative">
-        <MagnifyingGlassIcon className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
+        <MagnifyingGlassIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-fg-subtle" />
         <input
           ref={inputRef}
           type="text"
@@ -167,16 +167,14 @@ const SearchableSelect: React.FC<SearchableSelectProps> = ({
           onKeyDown={handleKeyDown}
           placeholder={placeholder}
           disabled={disabled}
-          className={`w-full pl-9 pr-8 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg
-                     bg-white dark:bg-gray-900 text-gray-900 dark:text-white
-                     focus:ring-2 ${focusColor || 'focus:ring-purple-500'} focus:border-transparent
-                     disabled:opacity-50 disabled:cursor-not-allowed`}
+          className={`input pl-9 pr-8 ${focusColor ?? ''}`}
         />
         {value && !disabled && (
           <button
             type="button"
             onClick={handleClear}
-            className="absolute right-2 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600"
+            aria-label="Clear selection"
+            className="absolute right-2 top-1/2 -translate-y-1/2 rounded text-fg-subtle hover:text-fg"
           >
             <XMarkIcon className="h-4 w-4" />
           </button>
@@ -194,10 +192,9 @@ const SearchableSelect: React.FC<SearchableSelectProps> = ({
             left: menuRect.left,
             width: menuRect.width,
           }}
-          className="z-50 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700
-                     rounded-lg shadow-lg max-h-60 overflow-y-auto">
+          className="z-50 max-h-60 overflow-y-auto rounded-lg border border-line bg-surface-overlay py-1 shadow-lg">
           {isLoading ? (
-            <div className="px-3 py-2 text-sm text-gray-400">Loading...</div>
+            <div className="px-3 py-2 text-sm text-fg-subtle">Loading...</div>
           ) : (
             <>
               {/* Special options (e.g., "* All servers") */}
@@ -206,18 +203,18 @@ const SearchableSelect: React.FC<SearchableSelectProps> = ({
                   key={option.value}
                   type="button"
                   onClick={() => handleSelect(option.value)}
-                  className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-700
-                             ${value === option.value ? 'bg-purple-50 dark:bg-purple-900/20' : ''}`}
+                  className={`w-full px-3 py-2 text-left text-sm hover:bg-surface-hover
+                             ${value === option.value ? 'bg-accent-soft' : ''}`}
                 >
-                  <span className="font-medium text-purple-600 dark:text-purple-400">{option.label}</span>
+                  <span className="font-medium text-accent-text">{option.label}</span>
                   {option.description && (
-                    <span className="ml-2 text-gray-400 text-xs">{option.description}</span>
+                    <span className="ml-2 text-xs text-fg-subtle">{option.description}</span>
                   )}
                 </button>
               ))}
 
               {specialOptions.length > 0 && filteredOptions.length > 0 && (
-                <div className="border-t border-gray-200 dark:border-gray-700" />
+                <div className="my-1 border-t border-line" />
               )}
 
               {/* Filtered options. With `allowCustom` the typed text is itself a
@@ -229,13 +226,13 @@ const SearchableSelect: React.FC<SearchableSelectProps> = ({
                   <button
                     type="button"
                     onClick={() => handleSelect(searchQuery.trim())}
-                    className="w-full text-left px-3 py-2 text-sm text-gray-900 dark:text-white hover:bg-gray-100 dark:hover:bg-gray-700"
+                    className="w-full px-3 py-2 text-left text-sm text-fg hover:bg-surface-hover"
                   >
                     Search for "{searchQuery.trim()}"
-                    <span className="ml-2 text-xs text-gray-400">press Enter</span>
+                    <span className="ml-2 text-xs text-fg-subtle">press Enter</span>
                   </button>
                 ) : (
-                  <div className="px-3 py-2 text-sm text-gray-400">
+                  <div className="px-3 py-2 text-sm text-fg-subtle">
                     {searchQuery ? 'No matches found' : emptyMessage || 'No options available'}
                   </div>
                 )
@@ -245,14 +242,14 @@ const SearchableSelect: React.FC<SearchableSelectProps> = ({
                     key={option.value}
                     type="button"
                     onClick={() => handleSelect(option.value)}
-                    className={`w-full text-left px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-700
-                               ${value === option.value ? 'bg-purple-50 dark:bg-purple-900/20' : ''}`}
+                    className={`w-full px-3 py-2 text-left hover:bg-surface-hover
+                               ${value === option.value ? 'bg-accent-soft' : ''}`}
                   >
-                    <div className="text-sm text-gray-900 dark:text-white truncate">
+                    <div className="truncate text-sm text-fg">
                       {option.label}
                     </div>
                     {option.description && (
-                      <div className="text-xs text-gray-500 dark:text-gray-400 truncate">
+                      <div className="truncate text-xs text-fg-muted">
                         {_truncateWords(option.description, maxDescriptionWords)}
                       </div>
                     )}
@@ -261,7 +258,7 @@ const SearchableSelect: React.FC<SearchableSelectProps> = ({
               )}
 
               {filteredOptions.length > 50 && (
-                <div className="px-3 py-2 text-xs text-gray-400 text-center border-t border-gray-200 dark:border-gray-700">
+                <div className="border-t border-line px-3 py-2 text-center text-xs text-fg-subtle">
                   Showing first 50 results. Type to filter.
                 </div>
               )}

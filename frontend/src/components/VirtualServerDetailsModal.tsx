@@ -142,8 +142,8 @@ const VirtualServerDetailsModal: React.FC<VirtualServerDetailsModalProps> = ({
               </p>
               {loading ? (
                 <div className="flex items-center justify-center py-4">
-                  <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-teal-600"></div>
-                  <span className="ml-2 text-sm text-gray-500">Loading tool details...</span>
+                  <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-teal-600 dark:border-teal-400"></div>
+                  <span className="ml-2 text-sm text-fg-subtle">Loading tool details...</span>
                 </div>
               ) : (
                 <ul className="space-y-2">
@@ -175,7 +175,7 @@ const VirtualServerDetailsModal: React.FC<VirtualServerDetailsModalProps> = ({
                               {backendTools.map((tool) => (
                                 <li
                                   key={tool.alias || tool.tool_name}
-                                  className="px-4 py-3 bg-white dark:bg-gray-800"
+                                  className="px-4 py-3 bg-surface"
                                 >
                                   <div className="flex items-start justify-between gap-2">
                                     <div className="flex-1 min-w-0">

@@ -425,7 +425,7 @@ const SkillCard: React.FC<SkillCardProps> = React.memo(({
                 )}
               </div>
 
-              <code className="text-xs text-gray-600 dark:text-gray-300 bg-gray-50 dark:bg-gray-800/50 px-2 py-1 rounded font-mono">
+              <code className="text-xs text-fg-muted bg-gray-500/10 px-2 py-1 rounded font-mono">
                 {skill.path}
               </code>
               {skill.version && (
@@ -532,7 +532,7 @@ const SkillCard: React.FC<SkillCardProps> = React.memo(({
                 </span>
               ))}
               {skill.tags.length > 3 && (
-                <span className="px-2 py-1 text-xs font-medium bg-gray-50 dark:bg-gray-800 text-gray-600 dark:text-gray-300 rounded">
+                <span className="px-2 py-1 text-xs font-medium bg-gray-500/10 text-fg-muted rounded">
                   +{skill.tags.length - 3}
                 </span>
               )}
@@ -695,7 +695,7 @@ const SkillCard: React.FC<SkillCardProps> = React.memo(({
                 <button
                   onClick={handleRefreshHealth}
                   disabled={loadingHealthCheck}
-                  className="p-2.5 text-gray-500 hover:text-amber-600 dark:hover:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-900/20 rounded-lg transition-all duration-200 disabled:opacity-50"
+                  className="p-2.5 text-fg-subtle hover:text-amber-600 dark:hover:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-900/20 rounded-lg transition-all duration-200 disabled:opacity-50"
                   title="Check SKILL.md accessibility"
                   aria-label={`Check health for ${skill.name}`}
                 >
@@ -715,7 +715,7 @@ const SkillCard: React.FC<SkillCardProps> = React.memo(({
                     }}
                     className="sr-only peer"
                   />
-                  <div className={`relative w-12 h-6 rounded-full transition-colors duration-200 ease-in-out ${
+                  <div className={`relative w-12 h-6 rounded-full transition-colors duration-200 ease-in-out peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-focus ${
                     skill.is_enabled
                       ? 'bg-amber-600'
                       : 'bg-gray-300 dark:bg-gray-600'
@@ -733,15 +733,15 @@ const SkillCard: React.FC<SkillCardProps> = React.memo(({
 
       {/* Skill Details Modal */}
       {showDetails && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white dark:bg-gray-800 rounded-lg p-6 w-full max-w-4xl max-h-[90vh] overflow-y-auto">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+          <div className="bg-surface-overlay border border-line shadow-xl rounded-lg p-6 w-full max-w-4xl max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+              <h3 className="text-lg font-semibold text-fg">
                 {skill.name}
               </h3>
               <button
                 onClick={() => setShowDetails(false)}
-                className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                className="btn-icon"
               >
                 <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -875,7 +875,7 @@ const SkillCard: React.FC<SkillCardProps> = React.memo(({
                 );
               })()
             ) : (
-              <div className="text-center py-12 text-gray-500">
+              <div className="text-center py-12 text-fg-muted">
                 <p>Could not load SKILL.md content.</p>
                 <p className="mt-2 text-sm">
                   Try visiting the{' '}

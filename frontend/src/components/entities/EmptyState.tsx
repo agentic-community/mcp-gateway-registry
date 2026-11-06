@@ -9,7 +9,7 @@ import clsx from 'clsx';
 export type EmptyStateTone = 'neutral' | 'cyan' | 'amber' | 'teal' | 'error';
 
 const TONE_CLASSES: Record<EmptyStateTone, string> = {
-  neutral: 'bg-gray-50 dark:bg-gray-800',
+  neutral: 'bg-surface-muted border border-line',
   cyan: 'bg-cyan-50 dark:bg-cyan-900/20 border border-cyan-200 dark:border-cyan-800',
   amber: 'bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800',
   teal: 'bg-teal-50 dark:bg-teal-900/20 border border-teal-200 dark:border-teal-800',
@@ -44,7 +44,7 @@ const EmptyState: React.FC<EmptyStateProps> = ({
       <div
         className={clsx(
           'text-lg mb-2',
-          tone === 'error' ? 'text-red-500' : 'text-gray-400',
+          tone === 'error' ? 'text-red-500' : 'text-fg-subtle',
         )}
       >
         {title}
@@ -55,7 +55,7 @@ const EmptyState: React.FC<EmptyStateProps> = ({
             'text-sm',
             tone === 'error'
               ? 'text-red-600 dark:text-red-400'
-              : 'text-gray-500 dark:text-gray-300',
+              : 'text-fg-muted',
           )}
         >
           {subtitle}

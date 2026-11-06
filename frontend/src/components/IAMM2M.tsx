@@ -295,7 +295,7 @@ const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
   if (view === 'credentials' && credentials) {
     return (
       <div className="space-y-6">
-        <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+        <h2 className="text-lg font-semibold text-fg">
           IAM &gt; M2M Accounts &gt; Credentials
         </h2>
 
@@ -307,29 +307,29 @@ const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <div>
-                <span className="text-xs text-gray-500 dark:text-gray-400">Client ID</span>
-                <p className="text-sm font-mono text-gray-900 dark:text-white">{credentials.client_id}</p>
+                <span className="text-xs text-fg-subtle">Client ID</span>
+                <p className="text-sm font-mono text-fg">{credentials.client_id}</p>
               </div>
               <button onClick={() => copyToClipboard(credentials.client_id, 'Client ID')}
-                className="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200" title="Copy">
+                className="p-1 text-fg-subtle hover:text-fg" title="Copy">
                 <ClipboardDocumentIcon className="h-4 w-4" />
               </button>
             </div>
 
             <div className="flex items-center justify-between">
               <div>
-                <span className="text-xs text-gray-500 dark:text-gray-400">Client Secret</span>
-                <p className="text-sm font-mono text-gray-900 dark:text-white">
+                <span className="text-xs text-fg-subtle">Client Secret</span>
+                <p className="text-sm font-mono text-fg">
                   {showSecret ? credentials.client_secret : '••••••••••••••••'}
                 </p>
               </div>
               <div className="flex items-center space-x-1">
                 <button onClick={() => setShowSecret(!showSecret)}
-                  className="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200" title={showSecret ? 'Hide' : 'Show'}>
+                  className="p-1 text-fg-subtle hover:text-fg" title={showSecret ? 'Hide' : 'Show'}>
                   {showSecret ? <EyeSlashIcon className="h-4 w-4" /> : <EyeIcon className="h-4 w-4" />}
                 </button>
                 <button onClick={() => copyToClipboard(credentials.client_secret, 'Client Secret')}
-                  className="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200" title="Copy">
+                  className="p-1 text-fg-subtle hover:text-fg" title="Copy">
                   <ClipboardDocumentIcon className="h-4 w-4" />
                 </button>
               </div>
@@ -345,7 +345,7 @@ const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
 
         <button
           onClick={() => { setCredentials(null); setShowSecret(false); setView('list'); refetch(); }}
-          className="flex items-center text-sm text-purple-600 dark:text-purple-400 hover:underline"
+          className="flex items-center text-sm text-accent-text hover:underline"
         >
           <ArrowLeftIcon className="h-4 w-4 mr-1" />
           Back to M2M Accounts List
@@ -359,18 +359,18 @@ const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
     return (
       <div className="space-y-6">
         <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+          <h2 className="text-lg font-semibold text-fg">
             IAM &gt; M2M Accounts &gt; Edit "{editTarget.name}"
           </h2>
           <button onClick={() => { setFormGroups(new Set()); setEditTarget(null); setErrors({}); setView('list'); }}
-            className="flex items-center text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200">
+            className="flex items-center text-sm text-fg-subtle hover:text-fg">
             <ArrowLeftIcon className="h-4 w-4 mr-1" /> Back to List
           </button>
         </div>
 
         <div className="space-y-4 max-w-lg">
           <div>
-            <label className="block text-sm text-gray-600 dark:text-gray-400 mb-2">Groups *</label>
+            <label className="block text-sm text-fg-muted mb-2">Groups *</label>
             <div className="relative mb-2">
               <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
               <input
@@ -378,23 +378,23 @@ const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
                 value={groupSearch}
                 onChange={(e) => setGroupSearch(e.target.value)}
                 placeholder="Search groups..."
-                className="w-full pl-10 pr-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                className="input pl-10 py-1.5"
               />
             </div>
             <div className={`space-y-2 max-h-48 overflow-y-auto rounded-lg p-3 ${
-              errors.groups ? 'border-2 border-red-500' : 'border border-gray-200 dark:border-gray-700'
+              errors.groups ? 'border-2 border-red-500' : 'border border-line'
             }`}>
               {groups.length === 0 ? (
-                <p className="text-xs text-gray-400">No groups available</p>
+                <p className="text-xs text-fg-subtle">No groups available</p>
               ) : filteredGroups.length === 0 ? (
-                <p className="text-xs text-gray-400">No groups match "{groupSearch}"</p>
+                <p className="text-xs text-fg-subtle">No groups match "{groupSearch}"</p>
               ) : (
                 filteredGroups.map((g) => (
                   <label key={g.name} className="flex items-center space-x-2 cursor-pointer">
                     <input type="checkbox" checked={formGroups.has(g.name)}
                       onChange={() => { toggleCreateGroup(g.name); if (errors.groups) setErrors((p) => ({ ...p, groups: undefined })); }}
-                      className="rounded border-gray-300 dark:border-gray-600 text-purple-600 focus:ring-purple-500" />
-                    <span className="text-sm text-gray-700 dark:text-gray-300">{g.name}</span>
+                      className="rounded border-line-strong text-purple-600 focus:ring-focus" />
+                    <span className="text-sm text-fg-muted">{g.name}</span>
                   </label>
                 ))
               )}
@@ -403,13 +403,13 @@ const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
           </div>
         </div>
 
-        <div className="flex justify-end space-x-3 pt-4 border-t border-gray-200 dark:border-gray-700">
+        <div className="flex justify-end space-x-3 pt-4 border-t border-line">
           <button onClick={() => { setFormGroups(new Set()); setEditTarget(null); setErrors({}); setGroupSearch(''); setView('list'); }}
-            className="px-4 py-2 text-sm text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-800">
+            className="btn-secondary">
             Cancel
           </button>
           <button onClick={handleUpdate} disabled={isUpdating}
-            className="px-4 py-2 text-sm text-white bg-purple-600 rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed">
+            className="btn-primary">
             {isUpdating ? 'Updating...' : 'Update Groups'}
           </button>
         </div>
@@ -422,34 +422,34 @@ const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
     return (
       <div className="space-y-6">
         <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+          <h2 className="text-lg font-semibold text-fg">
             IAM &gt; M2M Accounts &gt; Create
           </h2>
           <button onClick={() => { resetCreateForm(); setView('list'); }}
-            className="flex items-center text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200">
+            className="flex items-center text-sm text-fg-subtle hover:text-fg">
             <ArrowLeftIcon className="h-4 w-4 mr-1" /> Back to List
           </button>
         </div>
 
         <div className="space-y-4 max-w-lg">
           <div>
-            <label className="block text-sm text-gray-600 dark:text-gray-400 mb-1">Name *</label>
+            <label className="block text-sm text-fg-muted mb-1">Name *</label>
             <input type="text" value={formName}
               onChange={(e) => { setFormName(e.target.value); if (errors.name) setErrors((p) => ({ ...p, name: undefined })); }}
               placeholder="e.g. ci-pipeline"
-              className={`w-full px-3 py-2 border rounded-lg bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:ring-2 focus:ring-purple-500 focus:border-transparent ${
-                errors.name ? 'border-red-500' : 'border-gray-300 dark:border-gray-600'
+              className={`input ${
+                errors.name ? 'border-red-500' : 'border-line-strong'
               }`} />
             {errors.name && <p className="mt-1 text-sm text-red-500">{errors.name}</p>}
           </div>
           <div>
-            <label className="block text-sm text-gray-600 dark:text-gray-400 mb-1">Description (optional)</label>
+            <label className="block text-sm text-fg-muted mb-1">Description (optional)</label>
             <input type="text" value={formDescription} onChange={(e) => setFormDescription(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:ring-2 focus:ring-purple-500 focus:border-transparent" />
+              className="input" />
           </div>
 
           <div>
-            <label className="block text-sm text-gray-600 dark:text-gray-400 mb-2">Groups *</label>
+            <label className="block text-sm text-fg-muted mb-2">Groups *</label>
             <div className="relative mb-2">
               <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
               <input
@@ -457,23 +457,23 @@ const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
                 value={groupSearch}
                 onChange={(e) => setGroupSearch(e.target.value)}
                 placeholder="Search groups..."
-                className="w-full pl-10 pr-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                className="input pl-10 py-1.5"
               />
             </div>
             <div className={`space-y-2 max-h-48 overflow-y-auto rounded-lg p-3 ${
-              errors.groups ? 'border-2 border-red-500' : 'border border-gray-200 dark:border-gray-700'
+              errors.groups ? 'border-2 border-red-500' : 'border border-line'
             }`}>
               {groups.length === 0 ? (
-                <p className="text-xs text-gray-400">No groups available</p>
+                <p className="text-xs text-fg-subtle">No groups available</p>
               ) : filteredGroups.length === 0 ? (
-                <p className="text-xs text-gray-400">No groups match "{groupSearch}"</p>
+                <p className="text-xs text-fg-subtle">No groups match "{groupSearch}"</p>
               ) : (
                 filteredGroups.map((g) => (
                   <label key={g.name} className="flex items-center space-x-2 cursor-pointer">
                     <input type="checkbox" checked={formGroups.has(g.name)}
                       onChange={() => { toggleCreateGroup(g.name); if (errors.groups) setErrors((p) => ({ ...p, groups: undefined })); }}
-                      className="rounded border-gray-300 dark:border-gray-600 text-purple-600 focus:ring-purple-500" />
-                    <span className="text-sm text-gray-700 dark:text-gray-300">{g.name}</span>
+                      className="rounded border-line-strong text-purple-600 focus:ring-focus" />
+                    <span className="text-sm text-fg-muted">{g.name}</span>
                   </label>
                 ))
               )}
@@ -482,13 +482,13 @@ const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
           </div>
         </div>
 
-        <div className="flex justify-end space-x-3 pt-4 border-t border-gray-200 dark:border-gray-700">
+        <div className="flex justify-end space-x-3 pt-4 border-t border-line">
           <button onClick={() => { resetCreateForm(); setGroupSearch(''); setView('list'); }}
-            className="px-4 py-2 text-sm text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-800">
+            className="btn-secondary">
             Cancel
           </button>
           <button onClick={handleCreate} disabled={isCreating}
-            className="px-4 py-2 text-sm text-white bg-purple-600 rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed">
+            className="btn-primary">
             {isCreating ? 'Creating...' : 'Create Account'}
           </button>
         </div>
@@ -501,16 +501,16 @@ const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
     return (
       <div className="space-y-6">
         <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+          <h2 className="text-lg font-semibold text-fg">
             IAM &gt; M2M Accounts &gt; Register Existing Client
           </h2>
           <button onClick={() => { resetRegisterForm(); setView('list'); }}
-            className="flex items-center text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200">
+            className="flex items-center text-sm text-fg-subtle hover:text-fg">
             <ArrowLeftIcon className="h-4 w-4 mr-1" /> Back to List
           </button>
         </div>
 
-        <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4 text-sm text-gray-700 dark:text-gray-300">
+        <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4 text-sm text-fg-muted">
           Register a <code className="font-mono">client_id</code> that already exists in your
           IdP so the registry can attach groups to it. No IdP Admin API call is made; supply
           the client secret to your application out-of-band.
@@ -518,33 +518,33 @@ const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
 
         <div className="space-y-4 max-w-lg">
           <div>
-            <label className="block text-sm text-gray-600 dark:text-gray-400 mb-1">Client ID *</label>
+            <label className="block text-sm text-fg-muted mb-1">Client ID *</label>
             <input type="text" value={registerClientId}
               onChange={(e) => { setRegisterClientId(e.target.value); if (registerErrors.clientId) setRegisterErrors((p) => ({ ...p, clientId: undefined })); }}
               placeholder="e.g. my-pipeline-client"
-              className={`w-full px-3 py-2 border rounded-lg bg-white dark:bg-gray-900 text-gray-900 dark:text-white font-mono focus:ring-2 focus:ring-purple-500 focus:border-transparent ${
-                registerErrors.clientId ? 'border-red-500' : 'border-gray-300 dark:border-gray-600'
+              className={`input font-mono ${
+                registerErrors.clientId ? 'border-red-500' : 'border-line-strong'
               }`} />
             {registerErrors.clientId && <p className="mt-1 text-sm text-red-500">{registerErrors.clientId}</p>}
           </div>
           <div>
-            <label className="block text-sm text-gray-600 dark:text-gray-400 mb-1">Client Name *</label>
+            <label className="block text-sm text-fg-muted mb-1">Client Name *</label>
             <input type="text" value={registerClientName}
               onChange={(e) => { setRegisterClientName(e.target.value); if (registerErrors.clientName) setRegisterErrors((p) => ({ ...p, clientName: undefined })); }}
               placeholder="Human-readable name"
-              className={`w-full px-3 py-2 border rounded-lg bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:ring-2 focus:ring-purple-500 focus:border-transparent ${
-                registerErrors.clientName ? 'border-red-500' : 'border-gray-300 dark:border-gray-600'
+              className={`input ${
+                registerErrors.clientName ? 'border-red-500' : 'border-line-strong'
               }`} />
             {registerErrors.clientName && <p className="mt-1 text-sm text-red-500">{registerErrors.clientName}</p>}
           </div>
           <div>
-            <label className="block text-sm text-gray-600 dark:text-gray-400 mb-1">Description (optional)</label>
+            <label className="block text-sm text-fg-muted mb-1">Description (optional)</label>
             <input type="text" value={registerDescription} onChange={(e) => setRegisterDescription(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:ring-2 focus:ring-purple-500 focus:border-transparent" />
+              className="input" />
           </div>
 
           <div>
-            <label className="block text-sm text-gray-600 dark:text-gray-400 mb-2">Groups *</label>
+            <label className="block text-sm text-fg-muted mb-2">Groups *</label>
             <div className="relative mb-2">
               <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
               <input
@@ -552,23 +552,23 @@ const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
                 value={groupSearch}
                 onChange={(e) => setGroupSearch(e.target.value)}
                 placeholder="Search groups..."
-                className="w-full pl-10 pr-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                className="input pl-10 py-1.5"
               />
             </div>
             <div className={`space-y-2 max-h-48 overflow-y-auto rounded-lg p-3 ${
-              registerErrors.groups ? 'border-2 border-red-500' : 'border border-gray-200 dark:border-gray-700'
+              registerErrors.groups ? 'border-2 border-red-500' : 'border border-line'
             }`}>
               {groups.length === 0 ? (
-                <p className="text-xs text-gray-400">No groups available</p>
+                <p className="text-xs text-fg-subtle">No groups available</p>
               ) : filteredGroups.length === 0 ? (
-                <p className="text-xs text-gray-400">No groups match "{groupSearch}"</p>
+                <p className="text-xs text-fg-subtle">No groups match "{groupSearch}"</p>
               ) : (
                 filteredGroups.map((g) => (
                   <label key={g.name} className="flex items-center space-x-2 cursor-pointer">
                     <input type="checkbox" checked={registerGroups.has(g.name)}
                       onChange={() => { toggleRegisterGroup(g.name); if (registerErrors.groups) setRegisterErrors((p) => ({ ...p, groups: undefined })); }}
-                      className="rounded border-gray-300 dark:border-gray-600 text-purple-600 focus:ring-purple-500" />
-                    <span className="text-sm text-gray-700 dark:text-gray-300">{g.name}</span>
+                      className="rounded border-line-strong text-purple-600 focus:ring-focus" />
+                    <span className="text-sm text-fg-muted">{g.name}</span>
                   </label>
                 ))
               )}
@@ -577,13 +577,13 @@ const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
           </div>
         </div>
 
-        <div className="flex justify-end space-x-3 pt-4 border-t border-gray-200 dark:border-gray-700">
+        <div className="flex justify-end space-x-3 pt-4 border-t border-line">
           <button onClick={() => { resetRegisterForm(); setView('list'); }}
-            className="px-4 py-2 text-sm text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-800">
+            className="btn-secondary">
             Cancel
           </button>
           <button onClick={handleRegister} disabled={isRegistering}
-            className="px-4 py-2 text-sm text-white bg-purple-600 rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed">
+            className="btn-primary">
             {isRegistering ? 'Registering...' : 'Register'}
           </button>
         </div>
@@ -595,32 +595,32 @@ const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h2 className="text-lg font-semibold text-gray-900 dark:text-white">IAM &gt; M2M Accounts</h2>
+        <h2 className="text-lg font-semibold text-fg">IAM &gt; M2M Accounts</h2>
         <div className="flex items-center space-x-2">
-          <button onClick={refetch} className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200" title="Refresh">
+          <button onClick={refetch} className="btn-icon" title="Refresh">
             <ArrowPathIcon className="h-5 w-5" />
           </button>
           <button onClick={() => setShowCreateHelp((v) => !v)}
-            className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
+            className="btn-icon"
             title="Help: which button should I use?"
             aria-label="Help">
             <InformationCircleIcon className="h-5 w-5" />
           </button>
           <button onClick={() => { resetRegisterForm(); setView('register'); }}
-            className="flex items-center px-3 py-2 text-sm text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-800"
+            className="btn-secondary gap-1 px-3"
             title="Register a client_id that already exists in your IdP (no IdP Admin API token required)">
-            <PlusIcon className="h-4 w-4 mr-1" /> Register existing client
+            <PlusIcon className="h-4 w-4" /> Register existing client
           </button>
           <button onClick={() => setView('create')}
-            className="flex items-center px-3 py-2 text-sm text-white bg-purple-600 rounded-lg hover:bg-purple-700"
+            className="btn-primary gap-1 px-3"
             title="Create a new M2M account via the IdP (requires IdP Admin API token)">
-            <PlusIcon className="h-4 w-4 mr-1" /> Create M2M Account
+            <PlusIcon className="h-4 w-4" /> Create M2M Account
           </button>
         </div>
       </div>
 
       {showCreateHelp && (
-        <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-blue-50 dark:bg-blue-900/20 p-4 text-sm text-gray-700 dark:text-gray-300 space-y-2">
+        <div className="rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/20 p-4 text-sm text-fg-muted space-y-2">
           <p>
             <strong>Create M2M Account</strong> creates a new client application inside
             your IdP (Keycloak, Entra, Okta, Auth0, PingFederate) via its Admin API and returns the
@@ -643,7 +643,7 @@ const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
         <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
         <input type="text" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
           placeholder="Search M2M accounts..."
-          className="w-full pl-10 pr-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-900 text-gray-900 dark:text-white text-sm focus:ring-2 focus:ring-purple-500 focus:border-transparent" />
+          className="input pl-10 pr-4" />
       </div>
 
       <ListStateBoundary
@@ -659,13 +659,13 @@ const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-gray-200 dark:border-gray-700">
-                <th className="text-left py-3 px-4 font-medium text-gray-500 dark:text-gray-400">Name</th>
-                <th className="text-left py-3 px-4 font-medium text-gray-500 dark:text-gray-400">Provider</th>
-                <th className="text-left py-3 px-4 font-medium text-gray-500 dark:text-gray-400">Groups</th>
-                <th className="text-left py-3 px-4 font-medium text-gray-500 dark:text-gray-400">Rate-limit Groups</th>
-                <th className="text-left py-3 px-4 font-medium text-gray-500 dark:text-gray-400">Registered by</th>
-                <th className="text-right py-3 px-4 font-medium text-gray-500 dark:text-gray-400">Action</th>
+              <tr className="border-b border-line">
+                <th className="text-left py-3 px-4 font-medium text-fg-subtle">Name</th>
+                <th className="text-left py-3 px-4 font-medium text-fg-subtle">Provider</th>
+                <th className="text-left py-3 px-4 font-medium text-fg-subtle">Groups</th>
+                <th className="text-left py-3 px-4 font-medium text-fg-subtle">Rate-limit Groups</th>
+                <th className="text-left py-3 px-4 font-medium text-fg-subtle">Registered by</th>
+                <th className="text-right py-3 px-4 font-medium text-fg-subtle">Action</th>
               </tr>
             </thead>
             <tbody>
@@ -673,10 +673,10 @@ const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
                 const isManual = c.provider === 'manual';
                 return (
                   <React.Fragment key={c.client_id}>
-                    <tr className="table-row border-b border-gray-100 dark:border-gray-800">
-                      <td className="py-3 px-4 text-gray-900 dark:text-white font-medium">
+                    <tr className="table-row border-b border-line">
+                      <td className="py-3 px-4 text-fg font-medium">
                         <div>{c.name}</div>
-                        <div className="text-xs text-gray-400 font-mono">{c.client_id}</div>
+                        <div className="text-xs text-fg-subtle font-mono">{c.client_id}</div>
                       </td>
                       <td className="py-3 px-4">
                         <ProviderBadge provider={c.provider} />
@@ -688,7 +688,7 @@ const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
                               {g}
                             </span>
                           ))}
-                          {(!c.groups || c.groups.length === 0) && <span className="text-gray-400 text-xs">{'—'}</span>}
+                          {(!c.groups || c.groups.length === 0) && <span className="text-fg-subtle text-xs">{'—'}</span>}
                         </div>
                       </td>
                       <td className="py-3 px-4">
@@ -703,10 +703,10 @@ const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
                         />
                       </td>
                       <td
-                        className="py-3 px-4 text-sm text-gray-600 dark:text-gray-400"
+                        className="py-3 px-4 text-sm text-fg-muted"
                         title={c.created_at ? `Created at ${c.created_at}` : undefined}
                       >
-                        {c.created_by || <span className="text-gray-400">{'—'}</span>}
+                        {c.created_by || <span className="text-fg-subtle">{'—'}</span>}
                       </td>
                       <td className="py-3 px-4 text-right">
                         <div className="flex items-center justify-end space-x-2">
@@ -714,7 +714,7 @@ const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
                             onClick={() => handleEdit(c)}
                             disabled={!isManual}
                             aria-disabled={!isManual}
-                            className="p-1 text-gray-400 hover:text-purple-500 dark:hover:text-purple-400 disabled:opacity-40 disabled:cursor-not-allowed"
+                            className="p-1 text-fg-subtle hover:text-accent-text disabled:opacity-40 disabled:cursor-not-allowed"
                             title={isManual ? 'Edit groups' : 'Managed by IdP sync; cannot edit here'}
                           >
                             <PencilIcon className="h-4 w-4" />
@@ -723,7 +723,7 @@ const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
                             onClick={() => setDeleteTarget(c.client_id)}
                             disabled={!isManual}
                             aria-disabled={!isManual}
-                            className="p-1 text-gray-400 hover:text-red-500 dark:hover:text-red-400 disabled:opacity-40 disabled:cursor-not-allowed"
+                            className="p-1 text-fg-subtle hover:text-red-500 dark:hover:text-red-400 disabled:opacity-40 disabled:cursor-not-allowed"
                             title={isManual ? 'Delete account' : 'Managed by IdP sync; cannot delete here'}
                           >
                             <TrashIcon className="h-4 w-4" />

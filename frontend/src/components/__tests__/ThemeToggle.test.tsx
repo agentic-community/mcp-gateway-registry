@@ -10,30 +10,41 @@ const renderToggle = () =>
     </ThemeProvider>,
   );
 
+const choose = (label: string) => {
+  fireEvent.click(screen.getByRole('button', { name: 'Appearance' }));
+  fireEvent.click(screen.getByRole('menuitem', { name: label }));
+};
+
 describe('ThemeToggle', () => {
   beforeEach(() => {
     localStorage.clear();
     document.documentElement.className = '';
-    delete (window as any).matchMedia;
+    Reflect.deleteProperty(window, 'matchMedia');
   });
 
-  it('shows the "switch to light" control in dark mode', () => {
-    // No matchMedia -> defaults to dark.
+  it('applies and persists an explicit light choice', () => {
+    // No matchMedia -> system resolves to dark.
     renderToggle();
-    expect(
-      screen.getByRole('button', { name: 'Switch to light mode' }),
-    ).toBeInTheDocument();
-  });
-
-  it('flips mode and label when clicked', () => {
-    renderToggle();
-    const button = screen.getByRole('button', { name: 'Switch to light mode' });
-    fireEvent.click(button);
+    choose('Light');
 
     expect(document.documentElement.classList.contains('dark')).toBe(false);
     expect(localStorage.getItem('theme')).toBe('light');
-    expect(
-      screen.getByRole('button', { name: 'Switch to dark mode' }),
-    ).toBeInTheDocument();
+  });
+
+  it('returns to following the system and forgets the saved choice', () => {
+    localStorage.setItem('theme', 'light');
+    renderToggle();
+    choose('System');
+
+    expect(document.documentElement.classList.contains('dark')).toBe(true);
+    expect(localStorage.getItem('theme')).toBeNull();
+  });
+
+  it('toggles the high-contrast palette without changing the mode', () => {
+    renderToggle();
+    choose('High contrast');
+
+    expect(document.documentElement.classList.contains('high-contrast')).toBe(true);
+    expect(document.documentElement.classList.contains('dark')).toBe(true);
   });
 });

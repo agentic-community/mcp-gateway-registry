@@ -24,6 +24,7 @@ import DuplicateCheckModal from '../components/DuplicateCheckModal';
 import { useDuplicateCheck } from '../hooks/useDuplicateCheck';
 import type { ExistingEntity } from '../types/duplicateCheck';
 import {
+  CHECKBOX,
   FIELD,
   LABEL,
   ProxyField,
@@ -993,10 +994,10 @@ const RegisterPage: React.FC = () => {
           <div className="flex gap-2">
             <button
               type="button"
-              className={`flex-1 px-4 py-2 rounded-md border ${
+              className={`flex-1 px-4 py-2 rounded-md border transition-colors ${
                 serverForm.deployment === 'remote'
-                  ? 'bg-purple-600 text-white border-purple-600'
-                  : 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600'
+                  ? 'bg-accent text-accent-fg border-accent'
+                  : 'bg-surface text-fg border-line-strong hover:bg-surface-hover'
               }`}
               onClick={() => setServerForm(prev => ({ ...prev, deployment: 'remote' }))}
             >
@@ -1004,10 +1005,10 @@ const RegisterPage: React.FC = () => {
             </button>
             <button
               type="button"
-              className={`flex-1 px-4 py-2 rounded-md border ${
+              className={`flex-1 px-4 py-2 rounded-md border transition-colors ${
                 serverForm.deployment === 'local'
-                  ? 'bg-purple-600 text-white border-purple-600'
-                  : 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white border-gray-300 dark:border-gray-600'
+                  ? 'bg-accent text-accent-fg border-accent'
+                  : 'bg-surface text-fg border-line-strong hover:bg-surface-hover'
               }`}
               onClick={() =>
                 setServerForm(prev => ({
@@ -1247,7 +1248,7 @@ const RegisterPage: React.FC = () => {
                     const updated = serverForm.custom_headers.filter((_, i) => i !== idx);
                     setServerForm(prev => ({ ...prev, custom_headers: updated }));
                   }}
-                  className="px-3 py-2 text-sm text-red-600 hover:text-red-800 dark:text-red-400"
+                  className="px-3 py-2 text-sm text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300"
                 >
                   Remove
                 </button>
@@ -1262,7 +1263,7 @@ const RegisterPage: React.FC = () => {
                     custom_headers: [...(prev.custom_headers || []), { name: '', value: '' }],
                   }));
                 }}
-                className="text-sm text-blue-600 hover:text-blue-800 dark:text-blue-400"
+                className="text-sm text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
               >
                 + Add header
               </button>
@@ -1422,9 +1423,7 @@ const RegisterPage: React.FC = () => {
                   ...prev,
                   supported_protocol: e.target.checked ? 'a2a' : 'other'
                 }))}
-                className="h-4 w-4 rounded border-gray-300 text-cyan-600
-                           focus:ring-cyan-500 dark:border-gray-600
-                           dark:bg-gray-700"
+                className={CHECKBOX}
               />
               <span className="text-sm text-gray-700 dark:text-gray-300">
                 This agent supports the A2A protocol
@@ -1435,7 +1434,7 @@ const RegisterPage: React.FC = () => {
             Check if this agent implements the
             <a href="https://a2a-protocol.org/latest/specification/"
                target="_blank" rel="noopener noreferrer"
-               className="text-cyan-600 hover:underline ml-1">
+               className="text-cyan-600 dark:text-cyan-400 hover:underline ml-1">
               A2A (Agent-to-Agent) protocol
             </a>.
             The A2A agent card schema is used for all agents as a standardized representation.
@@ -1456,7 +1455,6 @@ const RegisterPage: React.FC = () => {
             onIsProxiedChange={(v) => setAgentForm(prev => ({ ...prev, is_proxied: v }))}
             proxyTargetUrl={agentForm.proxy_target_url}
             onProxyTargetUrlChange={(v) => setAgentForm(prev => ({ ...prev, proxy_target_url: v }))}
-            accent="cyan"
           />
         </div>
 
@@ -1588,7 +1586,7 @@ const RegisterPage: React.FC = () => {
           <label className="flex items-center">
             <input
               type="checkbox"
-              className="h-4 w-4 text-purple-600 focus:ring-purple-500 border-gray-300 rounded"
+              className={CHECKBOX}
               checked={agentForm.streaming}
               onChange={(e) => setAgentForm(prev => ({ ...prev, streaming: e.target.checked }))}
             />
@@ -1691,7 +1689,7 @@ const RegisterPage: React.FC = () => {
         <CloudArrowUpIcon className="mx-auto h-12 w-12 text-gray-400" />
         <div className="mt-4">
           <label htmlFor="json-upload" className="cursor-pointer">
-            <span className="text-purple-600 dark:text-purple-400 hover:text-purple-500 font-medium">
+            <span className="text-accent-text hover:underline font-medium">
               Upload a file
             </span>
             <span className="text-gray-500 dark:text-gray-400"> or drag and drop</span>
@@ -1854,25 +1852,25 @@ const RegisterPage: React.FC = () => {
             onClick={() => setRegistrationType('server')}
             className={`relative flex items-center p-4 border-2 rounded-lg transition-all ${
               registrationType === 'server'
-                ? 'border-purple-500 bg-purple-50 dark:bg-purple-900/30'
-                : 'border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600'
+                ? 'border-accent bg-accent-soft'
+                : 'border-line bg-surface hover:border-line-strong'
             } ${!canRegisterServer ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
           >
             <ServerIcon className={`h-8 w-8 ${
-              registrationType === 'server' ? 'text-purple-600' : 'text-gray-400'
+              registrationType === 'server' ? 'text-accent-text' : 'text-fg-subtle'
             }`} />
             <div className="ml-4 text-left">
               <p className={`font-medium ${
-                registrationType === 'server' ? 'text-purple-900 dark:text-purple-100' : 'text-gray-900 dark:text-white'
+                registrationType === 'server' ? 'text-accent-soft-fg' : 'text-fg'
               }`}>
                 MCP Server
               </p>
-              <p className="text-sm text-gray-500 dark:text-gray-400">
+              <p className="text-sm text-fg-muted">
                 Model Context Protocol server
               </p>
             </div>
             {registrationType === 'server' && (
-              <CheckCircleIcon className="absolute top-3 right-3 h-5 w-5 text-purple-600" />
+              <CheckCircleIcon className="absolute top-3 right-3 h-5 w-5 text-accent-text" />
             )}
           </button>
 
@@ -1882,25 +1880,25 @@ const RegisterPage: React.FC = () => {
             onClick={() => setRegistrationType('agent')}
             className={`relative flex items-center p-4 border-2 rounded-lg transition-all ${
               registrationType === 'agent'
-                ? 'border-purple-500 bg-purple-50 dark:bg-purple-900/30'
-                : 'border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600'
+                ? 'border-accent bg-accent-soft'
+                : 'border-line bg-surface hover:border-line-strong'
             } ${!canRegisterAgent ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
           >
             <CpuChipIcon className={`h-8 w-8 ${
-              registrationType === 'agent' ? 'text-purple-600' : 'text-gray-400'
+              registrationType === 'agent' ? 'text-accent-text' : 'text-fg-subtle'
             }`} />
             <div className="ml-4 text-left">
               <p className={`font-medium ${
-                registrationType === 'agent' ? 'text-purple-900 dark:text-purple-100' : 'text-gray-900 dark:text-white'
+                registrationType === 'agent' ? 'text-accent-soft-fg' : 'text-fg'
               }`}>
                 A2A Agent
               </p>
-              <p className="text-sm text-gray-500 dark:text-gray-400">
+              <p className="text-sm text-fg-muted">
                 Agent-to-Agent protocol agent
               </p>
             </div>
             {registrationType === 'agent' && (
-              <CheckCircleIcon className="absolute top-3 right-3 h-5 w-5 text-purple-600" />
+              <CheckCircleIcon className="absolute top-3 right-3 h-5 w-5 text-accent-text" />
             )}
           </button>
         </div>
@@ -1917,8 +1915,8 @@ const RegisterPage: React.FC = () => {
             onClick={() => setRegistrationMode('form')}
             className={`flex items-center px-4 py-2 rounded-lg border transition-all ${
               registrationMode === 'form'
-                ? 'border-purple-500 bg-purple-50 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300'
-                : 'border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 hover:border-gray-300 dark:hover:border-gray-600'
+                ? 'border-accent bg-accent-soft text-accent-soft-fg'
+                : 'border-line bg-surface text-fg-muted hover:border-line-strong hover:bg-surface-hover'
             }`}
           >
             <DocumentTextIcon className="h-5 w-5 mr-2" />
@@ -1929,8 +1927,8 @@ const RegisterPage: React.FC = () => {
             onClick={() => setRegistrationMode('json')}
             className={`flex items-center px-4 py-2 rounded-lg border transition-all ${
               registrationMode === 'json'
-                ? 'border-purple-500 bg-purple-50 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300'
-                : 'border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 hover:border-gray-300 dark:hover:border-gray-600'
+                ? 'border-accent bg-accent-soft text-accent-soft-fg'
+                : 'border-line bg-surface text-fg-muted hover:border-line-strong hover:bg-surface-hover'
             }`}
           >
             <CloudArrowUpIcon className="h-5 w-5 mr-2" />
@@ -1940,7 +1938,7 @@ const RegisterPage: React.FC = () => {
       </div>
 
       {/* Form Content */}
-      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
+      <div className="card p-6">
         {registrationMode === 'form' ? (
           registrationType === 'server' ? renderServerForm() : renderAgentForm()
         ) : (

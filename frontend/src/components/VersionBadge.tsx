@@ -53,7 +53,7 @@ const VersionBadge: React.FC<VersionBadgeProps> = ({
         inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded
         ${hasMultipleVersions
           ? 'bg-indigo-50 text-indigo-700 hover:bg-indigo-100 dark:bg-indigo-900/30 dark:text-indigo-300 dark:hover:bg-indigo-900/50 cursor-pointer'
-          : 'bg-gray-50 text-gray-600 dark:bg-gray-800 dark:text-gray-400 cursor-default'
+          : 'bg-gray-500/10 text-fg-muted cursor-default'
         }
         transition-colors duration-200
       `}

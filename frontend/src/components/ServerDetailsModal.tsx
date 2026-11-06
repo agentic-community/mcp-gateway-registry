@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import axios from 'axios';
-import { ClipboardDocumentIcon, CheckIcon } from '@heroicons/react/24/outline';
 import DetailsModal from './DetailsModal';
 import ResourceBoundTokenButton from './ResourceBoundTokenButton';
+import { CopyButton, FieldReferenceGrid } from './modals';
+import { CHECKBOX } from './formFields';
 
 interface ServerDetailsModalProps {
   server: any;
@@ -35,7 +36,6 @@ const ServerDetailsModal: React.FC<ServerDetailsModalProps> = ({
   authToken,
 }) => {
   const storedDetails = fullDetails || server;
-  const [copied, setCopied] = useState(false);
 
   // When checked, show and copy the canonical server.json projection
   // (GET /api/servers/{path}/server.json) instead of the stored document.
@@ -85,20 +85,6 @@ const ServerDetailsModal: React.FC<ServerDetailsModalProps> = ({
     }
   };
 
-  const handleCopy = async () => {
-    try {
-      if (onCopy && !useCanonical) {
-        await onCopy(dataToShow);
-      } else {
-        await navigator.clipboard.writeText(JSON.stringify(dataToShow, null, 2));
-      }
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch (err) {
-      console.error('Failed to copy server JSON:', err);
-    }
-  };
-
   return (
     <DetailsModal
       title={`${server?.name || 'Server'} - Full Details (JSON)`}
@@ -129,43 +115,28 @@ const ServerDetailsModal: React.FC<ServerDetailsModalProps> = ({
 
         <div className="space-y-2">
           <div className="flex items-center justify-between">
-            <h4 className="font-medium text-gray-900 dark:text-white">
+            <h4 className="font-medium text-fg">
               {useCanonical ? 'Canonical server.json:' : 'Server JSON Schema:'}
             </h4>
             <div className="flex items-center gap-4">
               <label
-                className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 cursor-pointer select-none"
+                className="flex items-center gap-2 text-sm text-fg-muted cursor-pointer select-none"
                 title="Show and copy the canonical server.json, compliant with the official Model Context Protocol (MCP) server schema"
               >
                 <input
                   type="checkbox"
                   checked={useCanonical}
                   onChange={(e) => handleToggleCanonical(e.target.checked)}
-                  className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                  className={CHECKBOX}
                 />
                 Canonical
               </label>
-              <button
-                onClick={handleCopy}
+              <CopyButton
+                getText={() => JSON.stringify(dataToShow, null, 2)}
+                onCopy={onCopy && !useCanonical ? () => onCopy(dataToShow) : undefined}
                 disabled={useCanonical && canonicalLoading}
-                className={`flex items-center gap-2 px-3 py-2 text-white rounded-lg transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed ${
-                  copied
-                    ? 'bg-green-600'
-                    : 'bg-blue-600 hover:bg-blue-700'
-                }`}
-              >
-                {copied ? (
-                  <>
-                    <CheckIcon className="h-4 w-4" />
-                    Copied
-                  </>
-                ) : (
-                  <>
-                    <ClipboardDocumentIcon className="h-4 w-4" />
-                    Copy JSON
-                  </>
-                )}
-              </button>
+                label="Copy JSON"
+              />
             </div>
           </div>
 
@@ -180,68 +151,37 @@ const ServerDetailsModal: React.FC<ServerDetailsModalProps> = ({
             <p className="text-sm text-red-600 dark:text-red-400">{canonicalError}</p>
           )}
 
-          <pre className="p-4 bg-gray-50 dark:bg-gray-900 border dark:border-gray-700 rounded-lg overflow-x-auto text-xs text-gray-900 dark:text-gray-100 max-h-[30vh] overflow-y-auto">
+          <pre className="p-4 bg-surface-muted border border-line rounded-lg overflow-x-auto text-xs text-fg max-h-[30vh] overflow-y-auto">
             {useCanonical && canonicalLoading
               ? 'Loading canonical server.json...'
               : JSON.stringify(dataToShow, null, 2)}
           </pre>
         </div>
 
-        <div className="bg-gray-50 dark:bg-gray-900 border dark:border-gray-700 rounded-lg p-4">
-          <h4 className="font-medium text-gray-900 dark:text-white mb-3">Field Reference</h4>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-            <div>
-              <h5 className="font-medium text-gray-700 dark:text-gray-300 mb-2">Core Fields</h5>
-              <ul className="space-y-1 text-gray-600 dark:text-gray-400">
-                <li>
-                  <code className="bg-gray-200 dark:bg-gray-700 px-1 rounded">name</code> - Server
-                  display name
-                </li>
-                <li>
-                  <code className="bg-gray-200 dark:bg-gray-700 px-1 rounded">path</code> - Registry
-                  path
-                </li>
-                <li>
-                  <code className="bg-gray-200 dark:bg-gray-700 px-1 rounded">description</code> -
-                  Server purpose
-                </li>
-                <li>
-                  <code className="bg-gray-200 dark:bg-gray-700 px-1 rounded">mcp_endpoint</code> -
-                  MCP endpoint URL
-                </li>
-                <li>
-                  <code className="bg-gray-200 dark:bg-gray-700 px-1 rounded">status</code> -
-                  Lifecycle status (active/deprecated/draft/beta)
-                </li>
-              </ul>
-            </div>
-            <div>
-              <h5 className="font-medium text-gray-700 dark:text-gray-300 mb-2">Metadata Fields</h5>
-              <ul className="space-y-1 text-gray-600 dark:text-gray-400">
-                <li>
-                  <code className="bg-gray-200 dark:bg-gray-700 px-1 rounded">enabled</code> -
-                  Server enabled state
-                </li>
-                <li>
-                  <code className="bg-gray-200 dark:bg-gray-700 px-1 rounded">tags</code> -
-                  Categorization tags
-                </li>
-                <li>
-                  <code className="bg-gray-200 dark:bg-gray-700 px-1 rounded">num_tools</code> -
-                  Number of tools
-                </li>
-                <li>
-                  <code className="bg-gray-200 dark:bg-gray-700 px-1 rounded">provider</code> -
-                  Source registry information
-                </li>
-                <li>
-                  <code className="bg-gray-200 dark:bg-gray-700 px-1 rounded">source_created_at</code>{' '}
-                  - Creation timestamp
-                </li>
-              </ul>
-            </div>
-          </div>
-        </div>
+        <FieldReferenceGrid
+          columns={[
+            {
+              heading: 'Core Fields',
+              fields: [
+                { name: 'name', description: 'Server display name' },
+                { name: 'path', description: 'Registry path' },
+                { name: 'description', description: 'Server purpose' },
+                { name: 'mcp_endpoint', description: 'MCP endpoint URL' },
+                { name: 'status', description: 'Lifecycle status (active/deprecated/draft/beta)' },
+              ],
+            },
+            {
+              heading: 'Metadata Fields',
+              fields: [
+                { name: 'enabled', description: 'Server enabled state' },
+                { name: 'tags', description: 'Categorization tags' },
+                { name: 'num_tools', description: 'Number of tools' },
+                { name: 'provider', description: 'Source registry information' },
+                { name: 'source_created_at', description: 'Creation timestamp' },
+              ],
+            },
+          ]}
+        />
       </div>
     </DetailsModal>
   );

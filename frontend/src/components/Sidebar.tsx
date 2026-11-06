@@ -1,4 +1,5 @@
 import React, { Fragment, useEffect, useState } from 'react';
+import clsx from 'clsx';
 import { Dialog, Transition } from '@headlessui/react';
 import { Link, useLocation } from 'react-router-dom';
 import {
@@ -14,10 +15,14 @@ import {
   ArrowDownTrayIcon,
   TagIcon,
   LinkIcon,
+  ShieldCheckIcon,
+  WrenchScrewdriverIcon,
+  EyeIcon,
 } from '@heroicons/react/24/outline';
 import { useAuth } from '../contexts/AuthContext';
 import axios from 'axios';
 import { isEgressAuthEnabled } from '../utils/egressAuth';
+import { DESKTOP_QUERY, useMediaQuery } from '../hooks/useMediaQuery';
 
 interface SidebarProps {
   sidebarOpen: boolean;
@@ -35,11 +40,48 @@ interface SidebarProps {
   onTagSelect: (tag: string) => void;
 }
 
+const NAV_ITEM_CLASS =
+  'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors';
+const NAV_ITEM_IDLE = 'text-fg-muted hover:bg-surface-hover hover:text-fg';
+const NAV_ITEM_ACTIVE = 'bg-accent-soft text-accent-soft-fg';
+
+
+interface AccessUser {
+  is_admin?: boolean;
+  can_modify_servers?: boolean;
+  auth_method?: string;
+  provider?: string;
+}
+
+
+/** Access level of the signed-in user, shown under their name. */
+const AccessLevel: React.FC<{ user: AccessUser }> = ({ user }) => {
+  const level = user.is_admin
+    ? { label: 'Admin access', icon: ShieldCheckIcon, tone: 'text-emerald-600 dark:text-emerald-400' }
+    : user.can_modify_servers
+      ? { label: 'Modify access', icon: WrenchScrewdriverIcon, tone: 'text-blue-600 dark:text-blue-400' }
+      : { label: 'Read-only access', icon: EyeIcon, tone: 'text-fg-muted' };
+  const Icon = level.icon;
+  return (
+    <div className={clsx('flex items-center gap-1.5 text-xs font-medium', level.tone)}>
+      <Icon className="h-3.5 w-3.5" />
+      <span>{level.label}</span>
+      {user.auth_method === 'oauth2' && user.provider && (
+        <span className="font-normal text-fg-subtle">({user.provider})</span>
+      )}
+    </div>
+  );
+};
+
 
 const Sidebar: React.FC<SidebarProps> = ({ sidebarOpen, setSidebarOpen, stats, activeFilter, setActiveFilter, availableTags, selectedTags, onTagSelect }) => {
   // const { stats, activeFilter, setActiveFilter } = useServerStats();
   const { user } = useAuth();
   const location = useLocation();
+  const isDesktop = useMediaQuery(DESKTOP_QUERY);
+  const closeOnMobile = () => {
+    if (!isDesktop) setSidebarOpen(false);
+  };
   const [showScopes, setShowScopes] = useState(false);
   const [tagDropdownOpen, setTagDropdownOpen] = useState(false);
   const [tagSearch, setTagSearch] = useState('');
@@ -81,11 +123,6 @@ const Sidebar: React.FC<SidebarProps> = ({ sidebarOpen, setSidebarOpen, stats, a
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
-
-  // Debug logging
-  useEffect(() => {
-    console.log('Sidebar state changed:', sidebarOpen);
-  }, [sidebarOpen]);
 
   // Scope descriptions mapping
   const getScopeDescription = (scope: string) => {
@@ -159,256 +196,174 @@ const fetchAdminTokens = async () => {
     URL.revokeObjectURL(url);
   };
 
+  const scopesToggle = user && !user.is_admin && user.scopes && user.scopes.length > 0 && (
+    <div className="mt-2">
+      <button
+        type="button"
+        onClick={() => setShowScopes(!showScopes)}
+        aria-expanded={showScopes}
+        className="flex w-full items-center justify-between py-1 text-xs text-fg-muted transition-colors hover:text-fg"
+      >
+        <span>Scopes ({user.scopes.length})</span>
+        {showScopes ? <ChevronUpIcon className="h-3 w-3" /> : <ChevronDownIcon className="h-3 w-3" />}
+      </button>
+
+      {showScopes && (
+        <div className="mt-2 max-h-32 space-y-2 overflow-y-auto">
+          {user.scopes.map((scope) => (
+            <div key={scope} className="rounded-md border border-line bg-surface p-2 text-xs">
+              <div className="font-medium text-fg">{scope}</div>
+              <div className="mt-0.5 text-fg-muted">{getScopeDescription(scope)}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+
+  const userCard = (showTokenButton: boolean) =>
+    user && (
+      <div className="rounded-xl border border-line bg-surface-muted p-3">
+        <div className="mb-1 truncate text-sm font-semibold text-fg" title={user.username}>
+          {user.username}
+        </div>
+        <AccessLevel user={user} />
+
+        {showTokenButton && (
+          <div className="mt-3">
+            <button
+              type="button"
+              onClick={fetchAdminTokens}
+              disabled={loading}
+              className="btn-secondary w-full py-1.5 text-xs"
+            >
+              {loading ? (
+                <>
+                  <div className="h-3 w-3 animate-spin rounded-full border-2 border-line border-t-accent" />
+                  <span>Loading...</span>
+                </>
+              ) : (
+                <>
+                  <KeyIcon className="h-3.5 w-3.5" />
+                  <span>Get JWT Token</span>
+                </>
+              )}
+            </button>
+            {error && <p className="mt-1 text-xs text-danger-soft-fg">{error}</p>}
+          </div>
+        )}
+
+        {scopesToggle}
+      </div>
+    );
+
+  const sectionHeading = (icon: React.ReactNode, label: string) => (
+    <div className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-fg-subtle">
+      {icon}
+      <h3>{label}</h3>
+    </div>
+  );
+
   const sidebarContent = (
     <div className="flex h-full flex-col">
-      {/* Conditional Content */}
       {isTokenPage ? (
         /* Token Page - Show navigation and user info */
-        <div className="flex-1 p-4 md:p-6">
-          {/* Navigation Links */}
-          <div className="space-y-2 mb-6">
-            <Link
-              to="/"
-              className="flex items-center space-x-3 px-3 py-2 rounded-lg text-sm transition-colors focus:outline-none focus:ring-2 focus:ring-purple-500 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
-              onClick={() => window.innerWidth < 768 && setSidebarOpen(false)} // Only close on mobile
-              tabIndex={0}
-            >
+        <div className="flex-1 space-y-6 p-4 md:p-5">
+          <nav className="space-y-1" aria-label="Token pages">
+            <Link to="/" className={clsx(NAV_ITEM_CLASS, NAV_ITEM_IDLE)} onClick={closeOnMobile}>
               <ArrowLeftIcon className="h-4 w-4" />
               <span>Back to Dashboard</span>
             </Link>
-
-            <Link
-              to="/generate-token"
-              className="flex items-center space-x-3 px-3 py-2 rounded-lg text-sm transition-colors focus:outline-none focus:ring-2 focus:ring-purple-500 bg-purple-100 dark:bg-purple-900 text-purple-700 dark:text-purple-300"
-              tabIndex={0}
-            >
+            <Link to="/generate-token" className={clsx(NAV_ITEM_CLASS, NAV_ITEM_ACTIVE)} aria-current="page">
               <KeyIcon className="h-4 w-4" />
               <span>Generate Token</span>
             </Link>
-
             {egressEnabled && (
-              <Link
-                to="/connected-accounts"
-                className="flex items-center space-x-3 px-3 py-2 rounded-lg text-sm transition-colors focus:outline-none focus:ring-2 focus:ring-purple-500 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
-                onClick={() => window.innerWidth < 768 && setSidebarOpen(false)}
-                tabIndex={0}
-              >
+              <Link to="/connected-accounts" className={clsx(NAV_ITEM_CLASS, NAV_ITEM_IDLE)} onClick={closeOnMobile}>
                 <LinkIcon className="h-4 w-4" />
                 <span>Connected Accounts</span>
               </Link>
             )}
-          </div>
+          </nav>
 
-          {/* User Access Information */}
-          {user && (
-            <div className="p-3 bg-gray-50 dark:bg-gray-800 rounded-lg mb-6">
-              <div className="text-sm">
-                <div className="font-medium text-gray-900 dark:text-white mb-1">
-                  {user.username}
-                </div>
-                <div className="text-xs text-gray-600 dark:text-gray-300 mb-2">
-                  {user.is_admin ? (
-                    <span className="text-green-600 dark:text-green-400">🔑 Admin Access</span>
-                  ) : user.can_modify_servers ? (
-                    <span className="text-blue-600 dark:text-blue-400">⚙️ Modify Access</span>
-                  ) : (
-                    <span className="text-gray-600 dark:text-gray-300">👁️ Read-only Access</span>
-                  )}
-                  {user.auth_method === 'oauth2' && user.provider && (
-                    <span className="ml-1">({user.provider})</span>
-                  )}
-                </div>
+          {userCard(false)}
 
-                {/* Scopes toggle */}
-                {!user.is_admin && user.scopes && user.scopes.length > 0 && (
-                  <div>
-                    <button
-                      onClick={() => setShowScopes(!showScopes)}
-                      className="flex items-center justify-between w-full text-xs text-gray-500 dark:text-gray-300 hover:text-gray-700 dark:hover:text-gray-100 transition-colors py-1"
-                    >
-                      <span>Scopes ({user.scopes.length})</span>
-                      {showScopes ? (
-                        <ChevronUpIcon className="h-3 w-3" />
-                      ) : (
-                        <ChevronDownIcon className="h-3 w-3" />
-                      )}
-                    </button>
-
-                    {showScopes && (
-                      <div className="mt-2 space-y-2 max-h-32 overflow-y-auto">
-                        {user.scopes.map((scope) => (
-                          <div key={scope} className="bg-blue-50 dark:bg-blue-900/20 p-2 rounded text-xs">
-                            <div className="font-medium text-blue-800 dark:text-blue-200">
-                              {scope}
-                            </div>
-                            <div className="text-blue-600 dark:text-blue-300 mt-1">
-                              {getScopeDescription(scope)}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* Token Generation Help */}
-          <div className="text-center">
-            <KeyIcon className="h-12 w-12 text-purple-600 mx-auto mb-4" />
-            <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-2">Token Generation</h3>
-            <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+          <div className="rounded-xl border border-dashed border-line p-4 text-center">
+            <KeyIcon className="mx-auto mb-3 h-10 w-10 text-accent-text" />
+            <h3 className="mb-1 text-sm font-semibold text-fg">Token Generation</h3>
+            <p className="mb-3 text-xs text-fg-muted">
               Create personal access tokens for programmatic access to MCP servers
             </p>
-            <div className="text-xs text-gray-500 dark:text-gray-400 space-y-1">
-              <p>• Tokens inherit your current permissions</p>
-              <p>• Configure expiration time and scopes</p>
-              <p>• Use tokens for programmatic access</p>
-            </div>
+            <ul className="space-y-1 text-left text-xs text-fg-subtle">
+              <li>Tokens inherit your current permissions</li>
+              <li>Configure expiration time and scopes</li>
+              <li>Use tokens for programmatic access</li>
+            </ul>
           </div>
         </div>
       ) : (
         /* Dashboard - Show user info, filters and stats */
         <>
-          {/* User Info Header */}
-          <div className="p-4 md:p-6 border-b border-gray-200 dark:border-gray-700">
-            {/* User Access Information */}
-            {user && (
-              <div className="p-3 bg-gray-50 dark:bg-gray-800 rounded-lg">
-                <div className="text-sm">
-                  <div className="font-medium text-gray-900 dark:text-white mb-1">
-                    {user.username}
-                  </div>
-                  <div className="text-xs text-gray-600 dark:text-gray-300 mb-2">
-                    {user.is_admin ? (
-                      <span className="text-green-600 dark:text-green-400">🔑 Admin Access</span>
-                    ) : user.can_modify_servers ? (
-                      <span className="text-blue-600 dark:text-blue-400">⚙️ Modify Access</span>
-                    ) : (
-                      <span className="text-gray-600 dark:text-gray-300">👁️ Read-only Access</span>
-                    )}
-                    {user.auth_method === 'oauth2' && user.provider && (
-                      <span className="ml-1">({user.provider})</span>
-                    )}
-                  </div>
-
-                  {/* JWT Token Button - Available to all users */}
-                  <div className="mb-2">
-                    <button
-                      onClick={fetchAdminTokens}
-                      disabled={loading}
-                      className="w-full flex items-center justify-center space-x-2 px-3 py-2 rounded-lg text-xs font-medium transition-colors bg-purple-100 dark:bg-purple-900 text-purple-700 dark:text-purple-300 hover:bg-purple-200 dark:hover:bg-purple-800 disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      {loading ? (
-                        <>
-                          <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-purple-700 dark:border-purple-300"></div>
-                          <span>Loading...</span>
-                        </>
-                      ) : (
-                        <>
-                          <KeyIcon className="h-3 w-3" />
-                          <span>Get JWT Token</span>
-                        </>
-                      )}
-                    </button>
-                    {error && (
-                      <p className="mt-1 text-xs text-red-600 dark:text-red-400">{error}</p>
-                    )}
-                  </div>
-
-                  {/* Scopes toggle */}
-                  {!user.is_admin && user.scopes && user.scopes.length > 0 && (
-                    <div>
-                      <button
-                        onClick={() => setShowScopes(!showScopes)}
-                        className="flex items-center justify-between w-full text-xs text-gray-500 dark:text-gray-300 hover:text-gray-700 dark:hover:text-gray-100 transition-colors py-1"
-                      >
-                        <span>Scopes ({user.scopes.length})</span>
-                        {showScopes ? (
-                          <ChevronUpIcon className="h-3 w-3" />
-                        ) : (
-                          <ChevronDownIcon className="h-3 w-3" />
-                        )}
-                      </button>
-
-                      {showScopes && (
-                        <div className="mt-2 space-y-2 max-h-32 overflow-y-auto">
-                          {user.scopes.map((scope) => (
-                            <div key={scope} className="bg-blue-50 dark:bg-blue-900/20 p-2 rounded text-xs">
-                              <div className="font-medium text-blue-800 dark:text-blue-200">
-                                {scope}
-                              </div>
-                              <div className="text-blue-600 dark:text-blue-300 mt-1">
-                                {getScopeDescription(scope)}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
+          <div className="border-b border-line p-4 md:p-5">{userCard(true)}</div>
 
           {/* Filters Section */}
-          <div className="flex-1 p-4 md:p-6">
-            <div className="flex items-center space-x-2 mb-4">
-              <FunnelIcon className="h-4 w-4 text-gray-600 dark:text-gray-400" />
-              <h3 className="text-sm font-medium text-gray-900 dark:text-white">Filter Services</h3>
-            </div>
+          <div className="flex-1 p-4 md:p-5">
+            {sectionHeading(<FunnelIcon className="h-4 w-4" />, 'Filter Services')}
 
-            <div className="space-y-2">
-              {filters.map((filter) => (
-                <button
-                  key={filter.key}
-                  onClick={() => setActiveFilter(filter.key)}
-                  className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors focus:outline-none focus:ring-2 focus:ring-purple-500 ${
-                    activeFilter === filter.key
-                      ? 'bg-primary-100 dark:bg-primary-900 text-primary-700 dark:text-primary-300 border border-primary-200 dark:border-primary-800'
-                      : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800'
-                  }`}
-                  tabIndex={0}
-                >
-                  <div className="flex items-center justify-between">
+            <div className="space-y-1">
+              {filters.map((filter) => {
+                const active = activeFilter === filter.key;
+                return (
+                  <button
+                    key={filter.key}
+                    type="button"
+                    onClick={() => setActiveFilter(filter.key)}
+                    aria-pressed={active}
+                    className={clsx(NAV_ITEM_CLASS, 'w-full justify-between', active ? NAV_ITEM_ACTIVE : NAV_ITEM_IDLE)}
+                  >
                     <span>{filter.label}</span>
-                    <span className="text-xs bg-gray-200 dark:bg-gray-700 px-2 py-1 rounded-full">
+                    <span
+                      className={clsx(
+                        'rounded-full px-2 py-0.5 text-xs tabular-nums',
+                        active ? 'bg-surface/60 text-accent-soft-fg' : 'bg-surface-hover text-fg-muted',
+                      )}
+                    >
                       {stats[filter.count as keyof typeof stats]}
                     </span>
-                  </div>
-                </button>
-              ))}
+                  </button>
+                );
+              })}
 
               {/* Deprecated toggle - separate from main filters */}
-              <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-700">
+              <div className="mt-3 border-t border-line pt-3">
                 <button
+                  type="button"
                   onClick={() => setActiveFilter(activeFilter === 'deprecated' ? 'all' : 'deprecated')}
-                  className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors focus:outline-none focus:ring-2 focus:ring-purple-500 ${
+                  aria-pressed={activeFilter === 'deprecated'}
+                  className={clsx(
+                    NAV_ITEM_CLASS,
+                    'w-full',
                     activeFilter === 'deprecated'
-                      ? 'bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300 border border-orange-200 dark:border-orange-800'
-                      : 'text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800'
-                  }`}
-                  tabIndex={0}
+                      ? 'bg-orange-50 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300'
+                      : NAV_ITEM_IDLE,
+                  )}
                 >
                   <span>{activeFilter === 'deprecated' ? 'Showing deprecated' : 'Also show deprecated'}</span>
                 </button>
               </div>
             </div>
-
           </div>
 
           {/* Tags Section */}
           {availableTags.length > 0 && (
-            <div className="border-t border-gray-200 dark:border-gray-700 p-4 md:p-6">
-              <div className="flex items-center space-x-2 mb-3">
-                <TagIcon className="h-4 w-4 text-gray-600 dark:text-gray-400" />
-                <h3 className="text-sm font-medium text-gray-900 dark:text-white">Filter by Tag</h3>
+            <div className="border-t border-line p-4 md:p-5">
+              <div className="flex items-center justify-between">
+                {sectionHeading(<TagIcon className="h-4 w-4" />, 'Filter by Tag')}
                 {selectedTags.length > 0 && (
                   <button
+                    type="button"
                     onClick={() => selectedTags.forEach(t => onTagSelect(t))}
-                    className="text-xs text-purple-600 dark:text-purple-400 hover:underline ml-auto"
+                    className="mb-3 text-xs font-medium text-accent-text hover:underline"
                   >
                     Clear all
                   </button>
@@ -421,12 +376,13 @@ const fetchAdminTokens = async () => {
                   {selectedTags.map((tag) => (
                     <span
                       key={tag}
-                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300"
+                      className="inline-flex items-center gap-1 rounded-full bg-accent-soft px-2.5 py-1 text-xs font-medium text-accent-soft-fg"
                     >
                       {tag}
                       <button
+                        type="button"
                         onClick={() => onTagSelect(tag)}
-                        className="hover:text-purple-900 dark:hover:text-purple-100 focus:outline-none"
+                        className="rounded-full hover:text-fg"
                         aria-label={`Remove tag ${tag}`}
                       >
                         <XMarkIcon className="h-3 w-3" />
@@ -478,13 +434,15 @@ const fetchAdminTokens = async () => {
                           setTagDropdownOpen(false);
                         }
                       }}
-                      className="w-full px-3 py-1.5 text-xs rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                      aria-label="Search tags"
+                      className="input py-1.5 text-xs"
                     />
                     {tagDropdownOpen && (
-                      <div className="absolute z-50 mt-1 w-full max-h-40 overflow-y-auto rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 shadow-lg">
+                      <div className="absolute z-50 mt-1 max-h-40 w-full overflow-y-auto rounded-lg border border-line bg-surface-overlay py-1 shadow-lg">
                         {filteredTags.map((tag, idx) => (
                           <button
                             key={tag}
+                            type="button"
                             onClick={() => {
                               onTagSelect(tag);
                               setTagSearch('');
@@ -492,17 +450,16 @@ const fetchAdminTokens = async () => {
                               setTagDropdownOpen(false);
                             }}
                             onMouseEnter={() => setTagHighlightIndex(idx)}
-                            className={`w-full text-left px-3 py-1.5 text-xs transition-colors ${
-                              idx === tagHighlightIndex
-                                ? 'bg-purple-50 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300'
-                                : 'text-gray-700 dark:text-gray-300 hover:bg-purple-50 dark:hover:bg-purple-900/30 hover:text-purple-700 dark:hover:text-purple-300'
-                            }`}
+                            className={clsx(
+                              'w-full px-3 py-1.5 text-left text-xs transition-colors',
+                              idx === tagHighlightIndex ? 'bg-accent-soft text-accent-soft-fg' : 'text-fg-muted',
+                            )}
                           >
                             {tag}
                           </button>
                         ))}
                         {filteredTags.length === 0 && (
-                          <div className="px-3 py-2 text-xs text-gray-400 dark:text-gray-500">
+                          <div className="px-3 py-2 text-xs text-fg-subtle">
                             No matching tags
                           </div>
                         )}
@@ -515,30 +472,22 @@ const fetchAdminTokens = async () => {
           )}
 
           {/* Statistics Section */}
-          <div className="border-t border-gray-200 dark:border-gray-700 p-4 md:p-6">
-            <div className="flex items-center space-x-2 mb-4">
-              <ChartBarIcon className="h-5 w-5 text-gray-500" />
-              <h3 className="text-sm font-medium text-gray-900 dark:text-white">Statistics</h3>
-            </div>
+          <div className="border-t border-line p-4 md:p-5">
+            {sectionHeading(<ChartBarIcon className="h-4 w-4" />, 'Statistics')}
 
-            <div className="grid grid-cols-2 gap-3">
-              <div className="text-center p-3 bg-gray-50 dark:bg-gray-800 rounded-lg">
-                <div className="text-xl font-semibold text-gray-900 dark:text-white">{stats.total}</div>
-                <div className="text-xs text-gray-500 dark:text-gray-300">Total</div>
-              </div>
-              <div className="text-center p-3 bg-green-50 dark:bg-green-900/20 rounded-lg">
-                <div className="text-xl font-semibold text-green-600 dark:text-green-400">{stats.enabled}</div>
-                <div className="text-xs text-green-600 dark:text-green-400">Enabled</div>
-              </div>
-              <div className="text-center p-3 bg-gray-50 dark:bg-gray-800 rounded-lg">
-                <div className="text-xl font-semibold text-gray-500 dark:text-gray-300">{stats.disabled}</div>
-                <div className="text-xs text-gray-500 dark:text-gray-300">Disabled</div>
-              </div>
-              <div className="text-center p-3 bg-red-50 dark:bg-red-900/20 rounded-lg">
-                <div className="text-xl font-semibold text-red-600 dark:text-red-400">{stats.withIssues}</div>
-                <div className="text-xs text-red-600 dark:text-red-400">Issues</div>
-              </div>
-            </div>
+            <dl className="grid grid-cols-2 gap-2">
+              {[
+                { label: 'Total', value: stats.total, tone: 'text-fg' },
+                { label: 'Enabled', value: stats.enabled, tone: 'text-emerald-600 dark:text-emerald-400' },
+                { label: 'Disabled', value: stats.disabled, tone: 'text-fg-muted' },
+                { label: 'Issues', value: stats.withIssues, tone: 'text-red-600 dark:text-red-400' },
+              ].map(({ label, value, tone }) => (
+                <div key={label} className="rounded-xl border border-line bg-surface-muted px-3 py-2.5">
+                  <dt className="text-xs text-fg-subtle">{label}</dt>
+                  <dd className={clsx('text-xl font-semibold tabular-nums', tone)}>{value}</dd>
+                </div>
+              ))}
+            </dl>
           </div>
         </>
       )}
@@ -548,7 +497,7 @@ const fetchAdminTokens = async () => {
   return (
     <>
       {/* Mobile sidebar only */}
-      {window.innerWidth < 768 && (
+      {!isDesktop && (
         <Transition.Root show={sidebarOpen} as={Fragment}>
           <Dialog as="div" className="relative z-50" onClose={setSidebarOpen}>
             <Transition.Child
@@ -560,7 +509,7 @@ const fetchAdminTokens = async () => {
               leaveFrom="opacity-100"
               leaveTo="opacity-0"
             >
-              <div className="fixed inset-0 bg-gray-900/80" />
+              <div className="fixed inset-0 bg-gray-950/60 backdrop-blur-sm" />
             </Transition.Child>
 
             <div className="fixed inset-0 flex">
@@ -595,7 +544,7 @@ const fetchAdminTokens = async () => {
                     </div>
                   </Transition.Child>
 
-                  <div className="flex grow flex-col gap-y-5 overflow-y-auto bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700">
+                  <div className="flex grow flex-col overflow-y-auto border-r border-line bg-surface">
                     {sidebarContent}
                   </div>
                 </Dialog.Panel>
@@ -606,7 +555,7 @@ const fetchAdminTokens = async () => {
       )}
 
       {/* Desktop sidebar only */}
-      {window.innerWidth >= 768 && (
+      {isDesktop && (
         <Transition show={sidebarOpen} as={Fragment}>
           <Transition.Child
             as={Fragment}
@@ -617,9 +566,9 @@ const fetchAdminTokens = async () => {
             leaveFrom="translate-x-0"
             leaveTo="-translate-x-full"
           >
-            <div className="fixed left-0 top-16 bottom-0 z-40 w-64 lg:w-72 xl:w-80 bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 overflow-y-auto">
+            <aside className="fixed bottom-0 left-0 top-16 z-40 w-64 overflow-y-auto border-r border-line bg-surface lg:w-72 xl:w-80">
               {sidebarContent}
-            </div>
+            </aside>
           </Transition.Child>
         </Transition>
       )}
@@ -636,7 +585,7 @@ const fetchAdminTokens = async () => {
             leaveFrom="opacity-100"
             leaveTo="opacity-0"
           >
-            <div className="fixed inset-0 bg-black bg-opacity-25" />
+            <div className="fixed inset-0 bg-gray-950/50 backdrop-blur-sm" />
           </Transition.Child>
 
           <div className="fixed inset-0 overflow-y-auto">
@@ -650,10 +599,10 @@ const fetchAdminTokens = async () => {
                 leaveFrom="opacity-100 scale-100"
                 leaveTo="opacity-0 scale-95"
               >
-                <Dialog.Panel className="w-full max-w-3xl transform overflow-hidden rounded-2xl bg-white dark:bg-gray-800 p-6 text-left align-middle shadow-xl transition-all">
+                <Dialog.Panel className="w-full max-w-3xl transform overflow-hidden rounded-2xl border border-line bg-surface-overlay p-6 text-left align-middle shadow-xl transition-all">
                   <Dialog.Title
                     as="h3"
-                    className="text-lg font-medium leading-6 text-gray-900 dark:text-white mb-4"
+                    className="mb-4 text-lg font-semibold leading-6 text-fg"
                   >
                     JWT Access Token
                   </Dialog.Title>
@@ -661,10 +610,11 @@ const fetchAdminTokens = async () => {
                   {tokenData && (
                     <div className="space-y-4">
                       {/* Action Buttons */}
-                      <div className="flex space-x-2">
+                      <div className="flex gap-2">
                         <button
+                          type="button"
                           onClick={handleCopyTokens}
-                          className="flex items-center space-x-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm"
+                          className="btn-primary"
                         >
                           {copied ? (
                             <>
@@ -679,8 +629,9 @@ const fetchAdminTokens = async () => {
                           )}
                         </button>
                         <button
+                          type="button"
                           onClick={handleDownloadTokens}
-                          className="flex items-center space-x-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm"
+                          className="btn-secondary"
                         >
                           <ArrowDownTrayIcon className="h-4 w-4" />
                           <span>Download JSON</span>
@@ -692,7 +643,7 @@ const fetchAdminTokens = async () => {
                           configurable (MCP_TOKEN_DEFAULT_TTL_HOURS), so read it
                           from the response rather than hardcoding a value. */}
                       {typeof tokenData?.tokens?.expires_in === 'number' && (
-                        <p className="text-sm text-gray-600 dark:text-gray-300">
+                        <p className="text-sm text-fg-muted">
                           This token expires in{' '}
                           <span className="font-medium">
                             {(() => {
@@ -707,8 +658,8 @@ const fetchAdminTokens = async () => {
                       )}
 
                       {/* Token Data Display */}
-                      <div className="bg-gray-50 dark:bg-gray-900 rounded-lg p-4 max-h-96 overflow-y-auto">
-                        <pre className="text-xs text-gray-800 dark:text-gray-200 whitespace-pre-wrap break-all">
+                      <div className="max-h-96 overflow-y-auto rounded-lg border border-line bg-surface-muted p-4">
+                        <pre className="whitespace-pre-wrap break-all font-mono text-xs text-fg">
                           {JSON.stringify(tokenData, null, 2)}
                         </pre>
                       </div>
@@ -716,8 +667,9 @@ const fetchAdminTokens = async () => {
                       {/* Close Button */}
                       <div className="flex justify-end">
                         <button
+                          type="button"
                           onClick={() => setShowTokenModal(false)}
-                          className="px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-800 transition-colors text-sm"
+                          className="btn-secondary"
                         >
                           Close
                         </button>

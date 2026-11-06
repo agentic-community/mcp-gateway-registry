@@ -1,7 +1,14 @@
 import React, { useState } from 'react';
-import { KeyIcon, ClipboardIcon, CheckIcon, ExclamationTriangleIcon } from '@heroicons/react/24/outline';
+import {
+  KeyIcon,
+  ClipboardIcon,
+  ClipboardDocumentListIcon,
+  CheckIcon,
+  ExclamationTriangleIcon,
+} from '@heroicons/react/24/outline';
 import axios from 'axios';
 import { useAuth } from '../contexts/AuthContext';
+import { fieldClass } from '../components/formFields/formClasses';
 
 const TokenGeneration: React.FC = () => {
   const { user } = useAuth();
@@ -136,7 +143,7 @@ const TokenGeneration: React.FC = () => {
       <div className="flex-1 overflow-y-auto min-h-0">
         <div className="max-w-4xl mx-auto space-y-4 pb-6">
           {/* Current User Permissions - Compact */}
-          <div className="card p-4 bg-gray-50 dark:bg-gray-800">
+          <div className="card p-4">
             <h3 className="text-base font-semibold text-gray-900 dark:text-white mb-2">Your Current Permissions</h3>
             <div className="mb-2">
               <span className="text-xs font-medium text-gray-700 dark:text-gray-300">Current Scopes:</span>
@@ -220,7 +227,7 @@ const TokenGeneration: React.FC = () => {
                           value="current"
                           checked={formData.scopeMethod === 'current'}
                           onChange={(e) => setFormData(prev => ({ ...prev, scopeMethod: e.target.value as 'current' | 'custom' }))}
-                          className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                          className="h-4 w-4 border-line-strong bg-surface text-accent focus:ring-focus"
                         />
                         <div>
                           <div className="text-sm font-medium text-gray-900 dark:text-white">
@@ -239,7 +246,7 @@ const TokenGeneration: React.FC = () => {
                           value="custom"
                           checked={formData.scopeMethod === 'custom'}
                           onChange={(e) => setFormData(prev => ({ ...prev, scopeMethod: e.target.value as 'current' | 'custom' }))}
-                          className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                          className="h-4 w-4 border-line-strong bg-surface text-accent focus:ring-focus"
                         />
                         <div>
                           <div className="text-sm font-medium text-gray-900 dark:text-white">
@@ -260,7 +267,7 @@ const TokenGeneration: React.FC = () => {
                         </label>
                         <textarea
                           id="customScopes"
-                          className={`input h-24 font-mono text-xs ${scopeValidationError ? 'border-red-300 focus:border-red-500 focus:ring-red-500' : ''}`}
+                          className={`${fieldClass(scopeValidationError !== null)} h-24 font-mono text-xs`}
                           placeholder={`["mcp-servers-restricted/read", "mcp-registry-user"]`}
                           value={formData.customScopes}
                           onChange={(e) => setFormData(prev => ({ ...prev, customScopes: e.target.value }))}
@@ -322,19 +329,19 @@ const TokenGeneration: React.FC = () => {
 
               {/* Token Display */}
               <div className="relative mb-4">
-                <div className="bg-white dark:bg-gray-800 p-4 rounded-lg border border-green-200 dark:border-green-700">
-                  <code className="text-sm font-mono break-all text-gray-900 dark:text-gray-100">
+                <div className="bg-surface-muted p-4 pr-12 rounded-lg border border-green-200 dark:border-green-700">
+                  <code className="text-sm font-mono break-all text-fg">
                     {generatedToken}
                   </code>
                 </div>
 
                 <button
                   onClick={handleCopyToken}
-                  className="absolute top-2 right-2 p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded hover:bg-gray-100 dark:hover:bg-gray-700"
+                  className="btn-icon absolute top-2 right-2"
                   title={copied ? 'Copied!' : 'Copy token'}
                 >
                   {copied ? (
-                    <CheckIcon className="h-4 w-4 text-green-600" />
+                    <CheckIcon className="h-4 w-4 text-green-600 dark:text-green-400" />
                   ) : (
                     <ClipboardIcon className="h-4 w-4" />
                   )}
@@ -342,7 +349,7 @@ const TokenGeneration: React.FC = () => {
               </div>
 
               {/* Token Details */}
-              <div className="space-y-2 text-sm mb-4">
+              <div className="space-y-2 text-sm text-fg mb-4">
                 <p><strong>Expires:</strong> {new Date(Date.now() + tokenDetails.token_data.expires_in * 1000).toLocaleString()}</p>
                 <p><strong>Scopes:</strong> {tokenDetails.requested_scopes.join(', ')}</p>
                 {tokenDetails.token_data.description && (
@@ -352,7 +359,10 @@ const TokenGeneration: React.FC = () => {
 
               {/* Usage Instructions */}
               <div className="p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg mb-4">
-                <h4 className="text-sm font-semibold text-blue-900 dark:text-blue-100 mb-2">📋 Usage Instructions</h4>
+                <h4 className="flex items-center gap-1.5 text-sm font-semibold text-blue-900 dark:text-blue-100 mb-2">
+                  <ClipboardDocumentListIcon className="h-4 w-4" aria-hidden="true" />
+                  Usage Instructions
+                </h4>
                 <p className="text-sm text-blue-800 dark:text-blue-200 mb-2">Use this token in your API requests:</p>
                 <code className="block text-sm bg-blue-100 dark:bg-blue-900/40 p-2 rounded font-mono text-blue-900 dark:text-blue-100">
                   Authorization: Bearer YOUR_TOKEN_HERE
@@ -362,8 +372,9 @@ const TokenGeneration: React.FC = () => {
 
               {/* Security Warning */}
               <div className="p-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
-                <p className="text-sm text-yellow-800 dark:text-yellow-200">
-                  <strong>⚠️ Important:</strong> This token will not be shown again. Save it securely!
+                <p className="flex items-start gap-1.5 text-sm text-yellow-800 dark:text-yellow-200">
+                  <ExclamationTriangleIcon className="h-4 w-4 mt-0.5 flex-shrink-0" aria-hidden="true" />
+                  <span><strong>Important:</strong> This token will not be shown again. Save it securely!</span>
                 </p>
               </div>
             </div>

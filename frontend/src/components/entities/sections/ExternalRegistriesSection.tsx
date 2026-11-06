@@ -58,15 +58,15 @@ const ExternalRegistriesSection: React.FC<ExternalRegistriesSectionProps> = ({
 
       {/* Source tabs - only show when there are sources */}
       {availableSources.length > 0 && (
-        <div className="flex border-b border-gray-200 dark:border-gray-700 mb-6">
+        <div className="flex border-b border-line mb-6">
           {availableSources.map((source) => (
             <button
               key={source}
               onClick={() => onSelectSource(source)}
-              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors flex items-center gap-1.5 ${
+              className={`px-4 py-2 -mb-px text-sm font-medium border-b-2 transition-colors flex items-center gap-1.5 ${
                 activeSource === source
-                  ? 'border-green-500 text-green-600 dark:text-green-400'
-                  : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:border-gray-300 dark:hover:border-gray-600'
+                  ? 'border-accent text-accent-text'
+                  : 'border-transparent text-fg-muted hover:text-fg hover:border-line-strong'
               }`}
             >
               {sourceLabels[source] || source}
@@ -86,11 +86,11 @@ const ExternalRegistriesSection: React.FC<ExternalRegistriesSectionProps> = ({
       )}
 
       {nothingToShow ? (
-        <div className="text-center py-12 bg-gray-50 dark:bg-gray-800 rounded-lg border border-dashed border-gray-300 dark:border-gray-600">
-          <div className="text-gray-400 text-lg mb-2">
+        <div className="text-center py-12 bg-surface-muted rounded-lg border border-dashed border-line-strong">
+          <div className="text-fg-subtle text-lg mb-2">
             {hasAnyExternal ? 'No Results Found' : 'No External Registries Available'}
           </div>
-          <p className="text-gray-500 dark:text-gray-300 text-sm max-w-md mx-auto">
+          <p className="text-fg-muted text-sm max-w-md mx-auto">
             {hasAnyExternal
               ? 'Press Enter in the search bar to search semantically'
               : 'External registry integrations (Anthropic, AWS Agents, and more) will appear here when configured'}

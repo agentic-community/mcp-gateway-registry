@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import axios from 'axios';
 import DetailsModal from './DetailsModal';
-import { LABEL } from './formFields';
+import { CHECKBOX, FIELD, LABEL } from './formFields';
 
 
 /**
@@ -64,15 +64,9 @@ const SOURCE_TITLES: Record<RegistrySourceType, string> = {
 
 
 /**
- * Input classes for this modal. Uses the ring-2 / rounded-lg / placeholder
- * treatment (distinct from the standard entity-modal field), so it stays local
- * rather than using the shared FIELD. The label, however, is the shared one.
+ * Field classes for this modal: the shared FIELD/LABEL strings.
  */
-const INPUT_CLASS =
-  'w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg ' +
-  'bg-white dark:bg-gray-900 text-gray-900 dark:text-white ' +
-  'focus:ring-2 focus:ring-purple-500 focus:border-transparent ' +
-  'placeholder-gray-400 dark:placeholder-gray-500 text-sm';
+const INPUT_CLASS = FIELD;
 
 const LABEL_CLASS = LABEL;
 
@@ -474,8 +468,7 @@ const AddRegistryEntryModal: React.FC<AddRegistryEntryModalProps> = ({
                       checked={awsForm.descriptor_types.includes(dtype)}
                       onChange={() => handleDescriptorToggle(dtype)}
                       disabled={isSubmitting}
-                      className="rounded border-gray-300 dark:border-gray-600
-                                 text-purple-600 focus:ring-purple-500"
+                      className={CHECKBOX}
                     />
                     <span className="text-sm text-gray-700 dark:text-gray-300">{dtype}</span>
                   </label>
@@ -592,19 +585,14 @@ const AddRegistryEntryModal: React.FC<AddRegistryEntryModalProps> = ({
             type="button"
             onClick={handleClose}
             disabled={isSubmitting}
-            className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300
-                       bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600
-                       rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700
-                       disabled:opacity-50 transition-colors"
+            className="btn-secondary"
           >
             Cancel
           </button>
           <button
             type="submit"
             disabled={isSubmitting}
-            className="px-4 py-2 text-sm font-medium text-white bg-purple-600
-                       rounded-lg hover:bg-purple-700 disabled:opacity-50
-                       disabled:cursor-not-allowed transition-colors"
+            className="btn-primary"
           >
             {isSubmitting ? 'Adding...' : 'Add'}
           </button>

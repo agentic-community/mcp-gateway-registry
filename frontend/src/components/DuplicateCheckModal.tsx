@@ -85,7 +85,7 @@ const EntityCard: React.FC<{
 
   if (isRedacted) {
     return (
-      <li className="border border-gray-200 dark:border-gray-700 rounded-lg p-3 bg-gray-50 dark:bg-gray-900">
+      <li className="border border-dashed border-line-strong rounded-lg p-3 bg-surface-muted">
         <p className="text-sm italic text-gray-500 dark:text-gray-400">
           A {ENTITY_LABEL[entity.entity_type]} at this URL is already
           registered, but you don&apos;t have permission to view it.
@@ -97,7 +97,7 @@ const EntityCard: React.FC<{
   }
 
   return (
-    <li className="border border-gray-200 dark:border-gray-700 rounded-lg p-3 bg-white dark:bg-gray-800">
+    <li className="border border-line rounded-lg p-3 bg-surface-muted">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
@@ -107,7 +107,7 @@ const EntityCard: React.FC<{
             <code className="text-xs text-gray-500 dark:text-gray-400 truncate">
               {entity.path}
             </code>
-            <span className="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-200">
+            <span className="text-xs px-2 py-0.5 rounded-full bg-surface-hover text-fg-muted">
               {ENTITY_LABEL[entity.entity_type]}
             </span>
           </div>
@@ -130,7 +130,7 @@ const EntityCard: React.FC<{
         <button
           type="button"
           onClick={onPick}
-          className="flex-shrink-0 inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700"
+          className="btn-secondary flex-shrink-0 gap-1 px-2.5 py-1.5 text-xs"
         >
           View
           <ArrowTopRightOnSquareIcon className="h-3.5 w-3.5" />

@@ -11,6 +11,7 @@ import {
   DiscoveryIdentityFields,
   type AuthScheme,
   FIELD,
+  CHECKBOX,
   LABEL,
 } from '../../formFields';
 import Button from '../../Button';
@@ -134,9 +135,13 @@ const ServerEditModal: React.FC<ServerEditModalProps> = ({
   // which requires a gateway, and local (stdio) servers have no HTTP egress.
   const egressFeatureAvailable = egressEnabled && withGateway && form.deployment !== 'local';
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-      <div className="bg-white dark:bg-gray-800 rounded-lg p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
-        <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+      <div
+        role="dialog"
+        aria-modal="true"
+        className="bg-surface-overlay border border-line shadow-xl rounded-xl p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto"
+      >
+        <h3 className="text-lg font-semibold text-fg mb-4">
           Edit Server: {serverName}
         </h3>
 
@@ -162,7 +167,7 @@ const ServerEditModal: React.FC<ServerEditModalProps> = ({
               enough to require re-registration). */}
           <div>
             <label className={LABEL}>Deployment</label>
-            <div className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-gray-50 dark:bg-gray-900 text-gray-700 dark:text-gray-300">
+            <div className="px-3 py-2 text-sm border border-line rounded-lg bg-surface-muted text-fg-muted">
               {form.deployment === 'local' ? 'Local (stdio)' : 'Remote (HTTP)'}
             </div>
           </div>
@@ -316,8 +321,8 @@ const ServerEditModal: React.FC<ServerEditModalProps> = ({
                     }}
                     className={`text-sm ${
                       discoveryConnectable
-                        ? 'text-purple-600 hover:text-purple-800 dark:text-purple-400'
-                        : 'text-gray-400 cursor-not-allowed dark:text-gray-500'
+                        ? 'text-accent-text hover:underline'
+                        : 'text-fg-subtle cursor-not-allowed'
                     }`}
                   >
                     Connect account for discovery
@@ -360,7 +365,7 @@ const ServerEditModal: React.FC<ServerEditModalProps> = ({
                   onChange={() =>
                     setForm((prev) => ({ ...prev, oauth_discovery_enabled: false }))
                   }
-                  className="h-4 w-4 rounded border-amber-400"
+                  className={CHECKBOX}
                 />
                 Remove the discovery identity when I save
               </label>
@@ -619,7 +624,7 @@ const ServerEditModal: React.FC<ServerEditModalProps> = ({
                     updated[idx] = { ...updated[idx], name: e.target.value };
                     setForm((prev) => ({ ...prev, custom_headers: updated }));
                   }}
-                  className={`flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-purple-500 focus:border-purple-500 text-sm`}
+                  className={`flex-1 ${FIELD}`}
                 />
                 <input
                   type="text"
@@ -630,7 +635,7 @@ const ServerEditModal: React.FC<ServerEditModalProps> = ({
                     updated[idx] = { ...updated[idx], value: e.target.value };
                     setForm((prev) => ({ ...prev, custom_headers: updated }));
                   }}
-                  className={`flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-purple-500 focus:border-purple-500 text-sm`}
+                  className={`flex-1 ${FIELD}`}
                 />
                 <button
                   type="button"
@@ -638,7 +643,7 @@ const ServerEditModal: React.FC<ServerEditModalProps> = ({
                     const updated = form.custom_headers.filter((_, i) => i !== idx);
                     setForm((prev) => ({ ...prev, custom_headers: updated }));
                   }}
-                  className="px-3 py-2 text-sm text-red-600 hover:text-red-800 dark:text-red-400"
+                  className="px-3 py-2 text-sm text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300"
                 >
                   Remove
                 </button>
@@ -653,7 +658,7 @@ const ServerEditModal: React.FC<ServerEditModalProps> = ({
                     custom_headers: [...prev.custom_headers, { name: '', value: '' }],
                   }));
                 }}
-                className="text-sm text-purple-600 hover:text-purple-800 dark:text-purple-400"
+                className="text-sm text-accent-text hover:underline"
               >
                 + Add header
               </button>
@@ -665,7 +670,7 @@ const ServerEditModal: React.FC<ServerEditModalProps> = ({
             <input
               type="text"
               value={form.path}
-              className="block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-300"
+              className={`${FIELD} bg-surface-muted text-fg-muted`}
               disabled
             />
           </div>

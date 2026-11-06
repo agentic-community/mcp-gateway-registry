@@ -155,15 +155,15 @@ const VirtualServerList: React.FC<VirtualServerListProps> = ({ onShowToast }) =>
     return (
       <div className="space-y-4">
         <div className="flex items-center justify-between">
-          <div className="h-8 w-48 bg-gray-200 dark:bg-gray-700 rounded animate-pulse" />
-          <div className="h-10 w-40 bg-gray-200 dark:bg-gray-700 rounded animate-pulse" />
+          <div className="h-8 w-48 bg-surface-hover rounded animate-pulse" />
+          <div className="h-10 w-40 bg-surface-hover rounded animate-pulse" />
         </div>
-        <div className="h-10 w-64 bg-gray-200 dark:bg-gray-700 rounded animate-pulse" />
+        <div className="h-10 w-64 bg-surface-hover rounded animate-pulse" />
         <div className="space-y-2">
           {[1, 2, 3].map((i) => (
             <div
               key={i}
-              className="h-16 bg-gray-200 dark:bg-gray-700 rounded animate-pulse"
+              className="h-16 bg-surface-hover rounded animate-pulse"
             />
           ))}
         </div>
@@ -176,10 +176,10 @@ const VirtualServerList: React.FC<VirtualServerListProps> = ({ onShowToast }) =>
     return (
       <div className="text-center py-12">
         <ExclamationCircleIcon className="h-12 w-12 mx-auto text-red-500 mb-4" />
-        <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-2">
+        <h3 className="text-lg font-medium text-fg mb-2">
           Failed to Load Virtual Servers
         </h3>
-        <p className="text-gray-500 dark:text-gray-400 mb-4">{error}</p>
+        <p className="text-fg-subtle mb-4">{error}</p>
         <button
           onClick={refreshData}
           className="px-4 py-2 bg-teal-600 text-white rounded-lg hover:bg-teal-700"
@@ -195,18 +195,17 @@ const VirtualServerList: React.FC<VirtualServerListProps> = ({ onShowToast }) =>
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+          <h2 className="text-lg font-semibold text-fg">
             Virtual MCP Servers
           </h2>
-          <p className="text-sm text-gray-500 dark:text-gray-400">
+          <p className="text-sm text-fg-subtle">
             Manage virtual servers that aggregate tools from multiple backends
           </p>
         </div>
         <div className="flex items-center gap-2">
           <button
             onClick={refreshData}
-            className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300
-                       hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+            className="btn-icon"
             title="Refresh"
           >
             <ArrowPathIcon className="h-5 w-5" />
@@ -232,17 +231,15 @@ const VirtualServerList: React.FC<VirtualServerListProps> = ({ onShowToast }) =>
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           placeholder="Search virtual servers..."
-          className="w-full pl-10 pr-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg
-                     bg-white dark:bg-gray-800 text-gray-900 dark:text-white
-                     focus:ring-2 focus:ring-teal-500 focus:border-transparent"
+          className="input pl-10 pr-4"
         />
       </div>
 
       {/* Table */}
       {filteredServers.length === 0 ? (
-        <div className="text-center py-12 bg-gray-50 dark:bg-gray-900/50 rounded-lg">
+        <div className="text-center py-12 bg-surface-muted rounded-lg">
           <svg
-            className="h-12 w-12 mx-auto text-gray-400 dark:text-gray-600 mb-4"
+            className="h-12 w-12 mx-auto text-fg-subtle mb-4"
             fill="none"
             viewBox="0 0 24 24"
             stroke="currentColor"
@@ -254,10 +251,10 @@ const VirtualServerList: React.FC<VirtualServerListProps> = ({ onShowToast }) =>
               d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2"
             />
           </svg>
-          <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-2">
+          <h3 className="text-lg font-medium text-fg mb-2">
             {searchQuery ? 'No matching virtual servers' : 'No virtual servers configured'}
           </h3>
-          <p className="text-gray-500 dark:text-gray-400 mb-4">
+          <p className="text-fg-subtle mb-4">
             {searchQuery
               ? 'Try a different search term'
               : 'Create a virtual server to aggregate tools from multiple backends'}
@@ -273,30 +270,30 @@ const VirtualServerList: React.FC<VirtualServerListProps> = ({ onShowToast }) =>
         </div>
       ) : (
         <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
-            <thead className="bg-gray-50 dark:bg-gray-900">
+          <table className="min-w-full divide-y divide-line">
+            <thead className="bg-surface-muted">
               <tr>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                <th className="px-4 py-3 text-left text-xs font-medium text-fg-subtle uppercase tracking-wider">
                   Name
                 </th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                <th className="px-4 py-3 text-left text-xs font-medium text-fg-subtle uppercase tracking-wider">
                   Path
                 </th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                <th className="px-4 py-3 text-left text-xs font-medium text-fg-subtle uppercase tracking-wider">
                   Tools
                 </th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                <th className="px-4 py-3 text-left text-xs font-medium text-fg-subtle uppercase tracking-wider">
                   Backends
                 </th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                <th className="px-4 py-3 text-left text-xs font-medium text-fg-subtle uppercase tracking-wider">
                   Status
                 </th>
-                <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                <th className="px-4 py-3 text-right text-xs font-medium text-fg-subtle uppercase tracking-wider">
                   Actions
                 </th>
               </tr>
             </thead>
-            <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
+            <tbody className="bg-surface divide-y divide-line">
               {filteredServers.map((server) => (
                 <tr
                   key={server.path}
@@ -304,22 +301,22 @@ const VirtualServerList: React.FC<VirtualServerListProps> = ({ onShowToast }) =>
                 >
                   <td className="px-4 py-4 whitespace-nowrap">
                     <div className="flex flex-col">
-                      <span className="text-sm font-medium text-gray-900 dark:text-white">
+                      <span className="text-sm font-medium text-fg">
                         {server.server_name}
                       </span>
                       {server.description && (
-                        <span className="text-xs text-gray-500 dark:text-gray-400 truncate max-w-[200px]">
+                        <span className="text-xs text-fg-subtle truncate max-w-[200px]">
                           {server.description}
                         </span>
                       )}
                     </div>
                   </td>
                   <td className="px-4 py-4 whitespace-nowrap">
-                    <code className="text-sm text-gray-600 dark:text-gray-300 font-mono">
+                    <code className="text-sm text-fg-muted font-mono">
                       {server.path}
                     </code>
                   </td>
-                  <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-600 dark:text-gray-300">
+                  <td className="px-4 py-4 whitespace-nowrap text-sm text-fg-muted">
                     {server.tool_count}
                   </td>
                   <td className="px-4 py-4 whitespace-nowrap">
@@ -327,13 +324,13 @@ const VirtualServerList: React.FC<VirtualServerListProps> = ({ onShowToast }) =>
                       {server.backend_paths.slice(0, 2).map((bp) => (
                         <span
                           key={bp}
-                          className="px-2 py-0.5 text-xs font-mono bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded"
+                          className="px-2 py-0.5 text-xs font-mono bg-surface-hover text-fg-muted rounded"
                         >
                           {bp}
                         </span>
                       ))}
                       {server.backend_paths.length > 2 && (
-                        <span className="px-2 py-0.5 text-xs bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400 rounded">
+                        <span className="px-2 py-0.5 text-xs bg-surface-hover text-fg-subtle rounded">
                           +{server.backend_paths.length - 2}
                         </span>
                       )}
@@ -344,7 +341,7 @@ const VirtualServerList: React.FC<VirtualServerListProps> = ({ onShowToast }) =>
                       className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
                         server.is_enabled
                           ? 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-400'
-                          : 'bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200'
+                          : 'bg-surface-hover text-fg-muted'
                       }`}
                     >
                       {server.is_enabled ? 'Enabled' : 'Disabled'}
@@ -410,9 +407,9 @@ const VirtualServerList: React.FC<VirtualServerListProps> = ({ onShowToast }) =>
       {/* Form modal */}
       {showForm && editingPath && editingServerLoading && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl p-8 flex flex-col items-center">
+          <div className="bg-surface-overlay border border-line rounded-lg shadow-xl p-8 flex flex-col items-center">
             <ArrowPathIcon className="h-8 w-8 text-teal-500 animate-spin mb-3" />
-            <p className="text-sm text-gray-600 dark:text-gray-300">Loading server data...</p>
+            <p className="text-sm text-fg-muted">Loading server data...</p>
           </div>
         </div>
       )}
@@ -435,15 +432,15 @@ const VirtualServerList: React.FC<VirtualServerListProps> = ({ onShowToast }) =>
           aria-modal="true"
           aria-label="Delete virtual server confirmation"
         >
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full mx-4 p-6">
-            <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
+          <div className="bg-surface-overlay border border-line rounded-lg shadow-xl max-w-md w-full mx-4 p-6">
+            <h3 className="text-lg font-semibold text-fg mb-2">
               Delete Virtual Server
             </h3>
-            <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+            <p className="text-sm text-fg-muted mb-4">
               This action is irreversible. The virtual server and all its tool
               mappings will be permanently removed.
             </p>
-            <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">
+            <p className="text-sm text-fg-muted mb-3">
               Type <strong>{deleteTarget.server_name}</strong> to confirm:
             </p>
             <input
@@ -452,8 +449,7 @@ const VirtualServerList: React.FC<VirtualServerListProps> = ({ onShowToast }) =>
               onChange={(e) => setTypedName(e.target.value)}
               placeholder={deleteTarget.server_name}
               disabled={isDeleting}
-              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg
-                         bg-white dark:bg-gray-900 text-gray-900 dark:text-white mb-4"
+              className="input mb-4"
               onKeyDown={(e) => {
                 if (e.key === 'Escape') {
                   setDeleteTarget(null);
@@ -469,19 +465,17 @@ const VirtualServerList: React.FC<VirtualServerListProps> = ({ onShowToast }) =>
                   setTypedName('');
                 }}
                 disabled={isDeleting}
-                className="px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200
-                           rounded-lg hover:bg-gray-300 dark:hover:bg-gray-800 disabled:opacity-50"
+                className="btn-secondary"
               >
                 Cancel
               </button>
               <button
                 onClick={handleDelete}
                 disabled={typedName !== deleteTarget.server_name || isDeleting}
-                className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700
-                           disabled:opacity-50 disabled:cursor-not-allowed flex items-center"
+                className="btn-danger"
               >
                 {isDeleting && (
-                  <ArrowPathIcon className="h-4 w-4 mr-2 animate-spin" />
+                  <ArrowPathIcon className="h-4 w-4 animate-spin" />
                 )}
                 Delete
               </button>

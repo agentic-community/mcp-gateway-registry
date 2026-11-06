@@ -1,6 +1,6 @@
 import React from 'react';
 import FormField from './FormField';
-import { fieldClass, FIELD_FOCUS } from './formClasses';
+import { CHECKBOX, FIELD } from './formClasses';
 
 interface ProxyFieldProps {
   /** Whether the entity is served through the gateway generic proxy. */
@@ -15,7 +15,6 @@ interface ProxyFieldProps {
    * (MCP servers, agents), so the target field is optional.
    */
   targetRequired?: boolean;
-  accent?: keyof typeof FIELD_FOCUS;
   /** Validation error for the target URL. */
   error?: string | null;
   /**
@@ -42,7 +41,6 @@ const ProxyField: React.FC<ProxyFieldProps> = ({
   proxyTargetUrl,
   onProxyTargetUrlChange,
   targetRequired = false,
-  accent = 'purple',
   error,
   clientUrl,
 }) => {
@@ -59,7 +57,7 @@ const ProxyField: React.FC<ProxyFieldProps> = ({
             type="checkbox"
             checked={isProxied}
             onChange={(e) => onIsProxiedChange(e.target.checked)}
-            className="h-4 w-4 rounded border-gray-300 dark:border-gray-600"
+            className={CHECKBOX}
           />
           {/* Action label, NOT a state readout: a checkbox label names what
               checking it DOES. The prior state text flipped to "Not proxied"
@@ -106,7 +104,7 @@ const ProxyField: React.FC<ProxyFieldProps> = ({
             type="url"
             value={proxyTargetUrl}
             onChange={(e) => onProxyTargetUrlChange(e.target.value)}
-            className={fieldClass(accent)}
+            className={FIELD}
             placeholder="https://backend.example.com/"
           />
           {showTargetWarning && (

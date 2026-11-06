@@ -146,11 +146,11 @@ const RateLimitGroupsEditor: React.FC<RateLimitGroupsEditorProps> = ({
           </span>
         ))}
         {rateChips.length === 0 && !isQuarantined && (
-          <span className="text-gray-400 text-xs">{'—'}</span>
+          <span className="text-fg-subtle text-xs">{'—'}</span>
         )}
         <button
           onClick={() => setEditing(true)}
-          className="ml-2 p-1 text-gray-400 hover:text-blue-600 dark:hover:text-blue-400"
+          className="ml-2 p-1 text-fg-subtle hover:text-accent-text"
           title="Edit rate-limit groups"
         >
           <PencilIcon className="h-3.5 w-3.5" />
@@ -162,7 +162,7 @@ const RateLimitGroupsEditor: React.FC<RateLimitGroupsEditorProps> = ({
             className={`p-1 disabled:opacity-50 ${
               isQuarantined
                 ? 'text-red-500 hover:text-red-700 dark:hover:text-red-300'
-                : 'text-gray-400 hover:text-red-600 dark:hover:text-red-400'
+                : 'text-fg-subtle hover:text-red-600 dark:hover:text-red-400'
             }`}
             title={
               isQuarantined
@@ -196,7 +196,7 @@ const RateLimitGroupsEditor: React.FC<RateLimitGroupsEditorProps> = ({
           </span>
         ))}
         {selected.size === 0 && (
-          <span className="text-xs text-gray-400 italic">No rate-limit groups</span>
+          <span className="text-xs text-fg-subtle italic">No rate-limit groups</span>
         )}
       </div>
 
@@ -217,14 +217,14 @@ const RateLimitGroupsEditor: React.FC<RateLimitGroupsEditorProps> = ({
         <button
           onClick={handleSave}
           disabled={isSaving}
-          className="flex items-center px-3 py-1 text-xs text-white bg-blue-600 rounded hover:bg-blue-700 disabled:opacity-50"
+          className="btn-primary gap-1 px-3 py-1 text-xs"
         >
-          <CheckIcon className="h-3 w-3 mr-1" />
+          <CheckIcon className="h-3 w-3" />
           {isSaving ? 'Saving...' : 'Save'}
         </button>
         <button
           onClick={() => setEditing(false)}
-          className="px-3 py-1 text-xs text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200"
+          className="btn-ghost px-3 py-1 text-xs"
         >
           Cancel
         </button>

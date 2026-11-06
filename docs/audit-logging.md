@@ -488,11 +488,12 @@ Estimated storage (without compression):
 
 Administrators can view audit logs in the Registry UI:
 
-1. Navigate to **Settings** > **Audit** > **Audit Logs**
-2. Select log stream: **Registry API** or **MCP Access**
-3. Apply filters (time range, username, operation, status)
-4. Click any row to view full event details
-5. Export filtered results as JSONL or CSV
+1. Open **Settings** > **Audit** > **Audit Logs**.
+2. Pick a log stream: **Registry API**, **MCP Access** or **Token Mints**.
+3. Set server filters (time range, username, operation, resource, status). The grid loads a batch of matching events, 1,000 by default, and **Load more** fetches the next batch.
+4. Type in the search box (or press `/`) to filter the loaded events across every column, including hidden ones such as request ID and client IP. Each column also has its own filter and sort, and the **Columns** menu shows or hides columns.
+5. Click a row to open the full event in a side panel.
+6. Use **Export view** to download the rows on screen as CSV, or the **JSONL** and **CSV** buttons to export every event that matches the server filters.
 
 ### API Access
 

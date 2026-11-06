@@ -115,13 +115,13 @@ const FieldRow: React.FC<{
 }> = ({ field, searchTerm, copiedKey, onCopy }) => (
   <div
     key={field.key}
-    className="flex items-center justify-between px-4 py-2.5 hover:bg-gray-50 dark:hover:bg-gray-700"
+    className="flex items-center justify-between px-4 py-2.5 hover:bg-surface-hover"
   >
     <div className="flex-1 min-w-0 mr-4">
-      <div className="text-xs text-gray-500 dark:text-gray-400 font-mono truncate">
+      <div className="text-xs text-fg-subtle font-mono truncate">
         {highlightMatch(field.key, searchTerm)}
       </div>
-      <div className="text-sm text-gray-900 dark:text-white">
+      <div className="text-sm text-fg">
         {highlightMatch(field.label, searchTerm)}
       </div>
     </div>
@@ -129,13 +129,13 @@ const FieldRow: React.FC<{
       <span
         className={`text-sm font-mono ${
           field.is_masked
-            ? 'text-gray-400 dark:text-gray-400 italic'
-            : 'text-gray-700 dark:text-gray-300'
+            ? 'text-fg-subtle italic'
+            : 'text-fg-muted'
         }`}
       >
         {highlightMatch(field.value, searchTerm)}
         {field.unit && !field.is_masked && (
-          <span className="text-xs text-gray-400 dark:text-gray-400 ml-1">
+          <span className="text-xs text-fg-subtle ml-1">
             {field.unit}
           </span>
         )}
@@ -143,14 +143,14 @@ const FieldRow: React.FC<{
       {!field.is_masked && field.raw_value !== null && (
         <button
           onClick={() => onCopy(field.key, String(field.raw_value))}
-          className="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+          className="p-1 rounded text-fg-subtle hover:bg-gray-200 hover:text-fg dark:hover:bg-gray-600 transition-colors"
           aria-label={`Copy ${field.label} value`}
           title="Copy value"
         >
           {copiedKey === field.key ? (
             <CheckIcon className="h-4 w-4 text-green-500" />
           ) : (
-            <ClipboardIcon className="h-4 w-4 text-gray-400 dark:text-gray-400" />
+            <ClipboardIcon className="h-4 w-4" />
           )}
         </button>
       )}
@@ -171,33 +171,33 @@ const ConfigGroupPanel: React.FC<ConfigGroupPanelProps> = ({
     (group.subgroups?.reduce((s, sg) => s + sg.fields.length, 0) || 0);
 
   return (
-    <div className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
+    <div className="border border-line rounded-lg overflow-hidden">
       {/* Group header */}
       <button
         onClick={onToggle}
         aria-expanded={expanded}
         aria-controls={panelId}
         className="w-full flex items-center justify-between px-4 py-3
-                   bg-gray-50 dark:bg-gray-900 hover:bg-gray-100 dark:hover:bg-gray-700
+                   bg-surface-muted hover:bg-surface-hover
                    transition-colors text-left"
       >
         <div className="flex items-center space-x-2">
           {expanded ? (
-            <ChevronDownIcon className="h-4 w-4 text-gray-500 dark:text-gray-400" />
+            <ChevronDownIcon className="h-4 w-4 text-fg-subtle" />
           ) : (
-            <ChevronRightIcon className="h-4 w-4 text-gray-500 dark:text-gray-400" />
+            <ChevronRightIcon className="h-4 w-4 text-fg-subtle" />
           )}
-          <span className="text-sm font-medium text-gray-900 dark:text-white">
+          <span className="text-sm font-medium text-fg">
             {highlightMatch(group.title, searchTerm)}
           </span>
         </div>
         <div className="flex items-center space-x-2">
           {group.subgroups && group.subgroups.length > 0 && (
-            <span className="text-xs text-gray-500 dark:text-gray-400 bg-gray-200 dark:bg-gray-700 px-2 py-0.5 rounded-full">
+            <span className="text-xs text-fg-muted bg-gray-200 dark:bg-gray-800 px-2 py-0.5 rounded-full">
               {group.subgroups.length} {group.subgroups.length === 1 ? 'provider' : 'providers'}
             </span>
           )}
-          <span className="text-xs text-gray-500 dark:text-gray-400 bg-gray-200 dark:bg-gray-700 px-2 py-0.5 rounded-full">
+          <span className="text-xs text-fg-muted bg-gray-200 dark:bg-gray-800 px-2 py-0.5 rounded-full">
             {totalFields} {totalFields === 1 ? 'field' : 'fields'}
           </span>
         </div>
@@ -208,7 +208,7 @@ const ConfigGroupPanel: React.FC<ConfigGroupPanelProps> = ({
         <div id={panelId} role="region">
           {/* Top-level fields */}
           {group.fields.length > 0 && (
-            <div className="divide-y divide-gray-100 dark:divide-gray-700/50">
+            <div className="divide-y divide-gray-100 dark:divide-gray-700/50 border-t border-line">
               {group.fields.map((field) => (
                 <FieldRow
                   key={field.key}
@@ -224,15 +224,15 @@ const ConfigGroupPanel: React.FC<ConfigGroupPanelProps> = ({
           {/* Subgroups */}
           {group.subgroups?.map((sg) => (
             <div key={sg.id}>
-              <div className="px-4 py-2 bg-gray-100 dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700">
-                <span className="text-xs font-semibold text-gray-600 dark:text-gray-300 uppercase tracking-wider">
+              <div className="px-4 py-2 bg-gray-100/70 dark:bg-gray-900/50 border-t border-line">
+                <span className="text-xs font-semibold text-fg-muted uppercase tracking-wider">
                   {highlightMatch(sg.title, searchTerm)}
                 </span>
-                <span className="text-xs text-gray-400 dark:text-gray-400 ml-2">
+                <span className="text-xs text-fg-subtle ml-2">
                   {sg.fields.length} {sg.fields.length === 1 ? 'field' : 'fields'}
                 </span>
               </div>
-              <div className="divide-y divide-gray-100 dark:divide-gray-700/50">
+              <div className="divide-y divide-gray-100 dark:divide-gray-700/50 border-t border-line">
                 {sg.fields.map((field) => (
                   <FieldRow
                     key={field.key}
@@ -413,13 +413,13 @@ const ConfigPanel: React.FC<ConfigPanelProps> = ({ onError, showToast }) => {
     return (
       <div className="text-center py-12" data-testid="config-error">
         <ExclamationCircleIcon className="h-12 w-12 mx-auto text-red-500 mb-4" />
-        <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-2">
+        <h3 className="text-lg font-medium text-fg mb-2">
           Failed to Load Configuration
         </h3>
-        <p className="text-gray-500 dark:text-gray-400 mb-4">{error}</p>
+        <p className="text-fg-subtle mb-4">{error}</p>
         <button
           onClick={fetchConfig}
-          className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors"
+          className="btn-primary"
         >
           Retry
         </button>
@@ -436,7 +436,7 @@ const ConfigPanel: React.FC<ConfigPanelProps> = ({ onError, showToast }) => {
       {/* Header row */}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center space-x-3">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+          <h2 className="text-lg font-semibold text-fg">
             System Configuration
           </h2>
           {config.is_local_dev && (
@@ -455,22 +455,20 @@ const ConfigPanel: React.FC<ConfigPanelProps> = ({ onError, showToast }) => {
           <div className="relative">
             <button
               onClick={() => setExportOpen((o) => !o)}
-              className="flex items-center px-3 py-2 text-sm border border-gray-300 dark:border-gray-600
-                         rounded-lg bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200
-                         hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+              className="btn-secondary px-3"
               aria-label="Export configuration"
             >
-              <ArrowDownTrayIcon className="h-4 w-4 mr-1.5" />
+              <ArrowDownTrayIcon className="h-4 w-4" />
               Export
             </button>
             {exportOpen && (
-              <div className="absolute right-0 mt-1 w-48 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg z-10">
+              <div className="absolute right-0 mt-1 w-48 bg-surface-overlay border border-line rounded-lg shadow-lg z-10 py-1">
                 {EXPORT_OPTIONS.map((opt) => (
                   <button
                     key={opt.format}
                     onClick={() => handleExport(opt.format)}
-                    className="w-full text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-200
-                               hover:bg-gray-100 dark:hover:bg-gray-700 first:rounded-t-lg last:rounded-b-lg"
+                    className="w-full text-left px-4 py-2 text-sm text-fg-muted
+                               hover:bg-surface-hover hover:text-fg"
                   >
                     {opt.label}
                   </button>
@@ -482,17 +480,13 @@ const ConfigPanel: React.FC<ConfigPanelProps> = ({ onError, showToast }) => {
           {/* Expand / Collapse */}
           <button
             onClick={expandAll}
-            className="px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg
-                       bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200
-                       hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+            className="btn-secondary px-3"
           >
             Expand All
           </button>
           <button
             onClick={collapseAll}
-            className="px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg
-                       bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200
-                       hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+            className="btn-secondary px-3"
           >
             Collapse All
           </button>
@@ -500,9 +494,7 @@ const ConfigPanel: React.FC<ConfigPanelProps> = ({ onError, showToast }) => {
           {/* Refresh */}
           <button
             onClick={fetchConfig}
-            className="p-2 border border-gray-300 dark:border-gray-600 rounded-lg
-                       bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200
-                       hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+            className="btn-secondary p-2"
             aria-label="Refresh configuration"
             title="Refresh"
           >
@@ -540,21 +532,19 @@ const ConfigPanel: React.FC<ConfigPanelProps> = ({ onError, showToast }) => {
 
       {/* Search */}
       <div className="relative">
-        <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
+        <MagnifyingGlassIcon className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-fg-subtle" />
         <input
           type="text"
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
           placeholder="Search configuration..."
           aria-label="Search configuration"
-          className="w-full pl-10 pr-10 py-2 border border-gray-300 dark:border-gray-600 rounded-lg
-                     bg-white dark:bg-gray-800 text-gray-900 dark:text-white
-                     focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+          className="input pl-10 pr-10"
         />
         {searchTerm && (
           <button
             onClick={() => setSearchTerm('')}
-            className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+            className="absolute right-3 top-1/2 -translate-y-1/2 text-fg-subtle hover:text-fg"
             aria-label="Clear search"
           >
             <XMarkIcon className="h-5 w-5" />
@@ -564,7 +554,7 @@ const ConfigPanel: React.FC<ConfigPanelProps> = ({ onError, showToast }) => {
 
       {/* Search results count */}
       {searchTerm.trim() && filteredGroups.length > 0 && (
-        <p className="text-sm text-gray-500 dark:text-gray-400" data-testid="search-count">
+        <p className="text-sm text-fg-subtle" data-testid="search-count">
           {totalMatchingFields} {totalMatchingFields === 1 ? 'field' : 'fields'} in{' '}
           {filteredGroups.length} {filteredGroups.length === 1 ? 'group' : 'groups'}
         </p>
@@ -573,7 +563,7 @@ const ConfigPanel: React.FC<ConfigPanelProps> = ({ onError, showToast }) => {
       {/* No results */}
       {searchTerm.trim() && filteredGroups.length === 0 && (
         <div className="text-center py-8" data-testid="no-results">
-          <p className="text-gray-500 dark:text-gray-400">
+          <p className="text-fg-subtle">
             No configuration fields match "<span className="font-medium">{searchTerm}</span>"
           </p>
         </div>
@@ -595,12 +585,12 @@ const ConfigPanel: React.FC<ConfigPanelProps> = ({ onError, showToast }) => {
       </div>
 
       {/* Legend */}
-      <div className="flex items-center space-x-4 text-xs text-gray-400 dark:text-gray-400 pt-2 border-t border-gray-200 dark:border-gray-700">
+      <div className="flex items-center space-x-4 text-xs text-fg-subtle pt-2 border-t border-line">
         <span>
-          <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded">****</code> = masked sensitive value
+          <code className="bg-gray-100 dark:bg-gray-900 px-1 rounded">****</code> = masked sensitive value
         </span>
         <span>
-          <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded">(not set)</code> = not configured
+          <code className="bg-gray-100 dark:bg-gray-900 px-1 rounded">(not set)</code> = not configured
         </span>
       </div>
     </div>

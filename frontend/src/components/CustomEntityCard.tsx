@@ -87,9 +87,9 @@ const CustomEntityCard: React.FC<CustomEntityCardProps> = ({
   const listFields = descriptor.fields.filter((f) => f.show_in_list);
 
   return (
-    <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4 flex flex-col gap-3 shadow-sm hover:shadow-md transition-shadow">
+    <div className="card hover:border-line-strong p-4 flex flex-col gap-3 hover:shadow-md transition-shadow">
       <div className="flex items-start justify-between gap-2">
-        <h3 className="text-base font-semibold text-gray-900 dark:text-white truncate">
+        <h3 className="text-base font-semibold text-fg truncate">
           {record.name}
         </h3>
         <div className="flex items-center gap-1 flex-shrink-0">
@@ -118,7 +118,7 @@ const CustomEntityCard: React.FC<CustomEntityCardProps> = ({
       </div>
 
       {record.description && (
-        <p className="text-sm text-gray-600 dark:text-gray-400 line-clamp-2">
+        <p className="text-sm text-fg-muted line-clamp-2">
           {record.description}
         </p>
       )}
@@ -127,10 +127,10 @@ const CustomEntityCard: React.FC<CustomEntityCardProps> = ({
         <dl className="grid grid-cols-1 gap-1 text-sm">
           {listFields.map((field) => (
             <div key={field.name} className="flex gap-2">
-              <dt className="text-gray-500 dark:text-gray-400 flex-shrink-0">
+              <dt className="text-fg-subtle flex-shrink-0">
                 {labelFor(field)}:
               </dt>
-              <dd className="text-gray-900 dark:text-white truncate">
+              <dd className="text-fg truncate">
                 {formatValue(field, record.attributes[field.name])}
               </dd>
             </div>
@@ -140,7 +140,7 @@ const CustomEntityCard: React.FC<CustomEntityCardProps> = ({
 
       <TagList tags={record.tags} accent={ACCENT} prefix="#" className="gap-1" />
 
-      <div className="flex items-center justify-between gap-1 mt-auto pt-2 border-t border-gray-100 dark:border-gray-700">
+      <div className="flex items-center justify-between gap-1 mt-auto pt-2 border-t border-line">
         <StarRatingWidget
           resourceType="custom"
           path={record.path}
@@ -161,7 +161,7 @@ const CustomEntityCard: React.FC<CustomEntityCardProps> = ({
           <button
             type="button"
             onClick={() => onView(record)}
-            className="p-2 text-gray-400 hover:text-teal-600 dark:hover:text-teal-400 rounded-lg transition-colors"
+            className="btn-icon"
             aria-label="View details"
           >
             <InformationCircleIcon className="h-4 w-4" />
@@ -171,7 +171,7 @@ const CustomEntityCard: React.FC<CustomEntityCardProps> = ({
               <button
                 type="button"
                 onClick={() => onEdit(record)}
-                className="p-2 text-gray-400 hover:text-teal-600 dark:hover:text-teal-400 rounded-lg transition-colors"
+                className="btn-icon"
                 aria-label="Edit"
               >
                 <PencilIcon className="h-4 w-4" />
@@ -179,7 +179,7 @@ const CustomEntityCard: React.FC<CustomEntityCardProps> = ({
               <button
                 type="button"
                 onClick={() => onDelete(record)}
-                className="p-2 text-gray-400 hover:text-red-500 rounded-lg transition-colors"
+                className="btn-icon hover:text-red-500"
                 aria-label="Delete"
               >
                 <TrashIcon className="h-4 w-4" />

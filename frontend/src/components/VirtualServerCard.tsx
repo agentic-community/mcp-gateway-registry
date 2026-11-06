@@ -158,7 +158,7 @@ const VirtualServerCard: React.FC<VirtualServerCardProps> = ({
                 </span>
               </div>
 
-              <code className="text-xs text-gray-600 dark:text-gray-300 bg-gray-50 dark:bg-gray-800/50 px-2 py-1 rounded font-mono">
+              <code className="text-xs text-fg-muted bg-gray-500/10 px-2 py-1 rounded font-mono">
                 {server.path}
               </code>
             </div>
@@ -214,7 +214,7 @@ const VirtualServerCard: React.FC<VirtualServerCardProps> = ({
                 </span>
               ))}
               {server.tags.length > 3 && (
-                <span className="px-2 py-1 text-xs font-medium bg-gray-50 dark:bg-gray-800 text-gray-600 dark:text-gray-300 rounded">
+                <span className="px-2 py-1 text-xs font-medium bg-gray-500/10 text-fg-muted rounded">
                   +{server.tags.length - 3}
                 </span>
               )}
@@ -257,8 +257,8 @@ const VirtualServerCard: React.FC<VirtualServerCardProps> = ({
                   </div>
                 </button>
               ) : (
-                <div className="flex items-center gap-2 text-gray-400 dark:text-gray-500">
-                  <div className="p-1.5 bg-gray-50 dark:bg-gray-800 rounded">
+                <div className="flex items-center gap-2 text-fg-subtle">
+                  <div className="p-1.5 bg-gray-500/10 rounded">
                     <WrenchScrewdriverIcon className="h-4 w-4" />
                   </div>
                   <div>
@@ -296,7 +296,7 @@ const VirtualServerCard: React.FC<VirtualServerCardProps> = ({
                   className="sr-only peer"
                   aria-label={`Enable ${server.server_name}`}
                 />
-                <div className={`relative w-12 h-6 rounded-full transition-colors duration-200 ease-in-out ${
+                <div className={`relative w-12 h-6 rounded-full transition-colors duration-200 ease-in-out peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-focus ${
                   server.is_enabled
                     ? 'bg-teal-600'
                     : 'bg-gray-300 dark:bg-gray-600'
@@ -314,14 +314,14 @@ const VirtualServerCard: React.FC<VirtualServerCardProps> = ({
       {/* Tools Modal */}
       {showTools && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
-          <div className="bg-white dark:bg-gray-800 rounded-xl p-6 max-w-2xl w-full mx-4 max-h-[80vh] overflow-auto">
+          <div className="bg-surface-overlay border border-line shadow-xl rounded-xl p-6 max-w-2xl w-full mx-4 max-h-[80vh] overflow-auto">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+              <h3 className="text-lg font-semibold text-fg">
                 Tools for {server.server_name}
               </h3>
               <button
                 onClick={() => setShowTools(false)}
-                className="p-2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700"
+                className="btn-icon"
               >
                 <XMarkIcon className="h-5 w-5" />
               </button>
@@ -330,7 +330,7 @@ const VirtualServerCard: React.FC<VirtualServerCardProps> = ({
             {loadingTools ? (
               <div className="flex items-center justify-center py-8">
                 <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-teal-600"></div>
-                <span className="ml-3 text-gray-500">Loading tools...</span>
+                <span className="ml-3 text-fg-muted">Loading tools...</span>
               </div>
             ) : tools.length > 0 ? (
               <div className="space-y-3">
@@ -339,18 +339,18 @@ const VirtualServerCard: React.FC<VirtualServerCardProps> = ({
                   const isBackendExpanded = expandedBackends[backend];
 
                   return (
-                    <div key={backend} className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
+                    <div key={backend} className="border border-line rounded-lg overflow-hidden">
                       <button
                         onClick={() => toggleBackend(backend)}
-                        className="w-full flex items-center justify-between px-4 py-3 bg-gray-50 dark:bg-gray-900/50 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors text-left"
+                        className="w-full flex items-center justify-between px-4 py-3 bg-surface-muted hover:bg-surface-hover transition-colors text-left"
                       >
                         <div className="flex items-center gap-2">
                           {isBackendExpanded ? (
-                            <ChevronDownIcon className="h-4 w-4 text-gray-500" />
+                            <ChevronDownIcon className="h-4 w-4 text-fg-subtle" />
                           ) : (
-                            <ChevronRightIcon className="h-4 w-4 text-gray-500" />
+                            <ChevronRightIcon className="h-4 w-4 text-fg-subtle" />
                           )}
-                          <span className="text-sm font-mono text-gray-700 dark:text-gray-200">
+                          <span className="text-sm font-mono text-fg">
                             {backend}
                           </span>
                         </div>
@@ -360,7 +360,7 @@ const VirtualServerCard: React.FC<VirtualServerCardProps> = ({
                       </button>
 
                       {isBackendExpanded && (
-                        <ul className="border-t border-gray-200 dark:border-gray-700 divide-y divide-gray-100 dark:divide-gray-800">
+                        <ul className="border-t border-line divide-y divide-line">
                           {backendTools.map((tool) => {
                             const isToolExpanded = expandedTools[tool.name];
                             const hasDetails = tool.description || (tool.input_schema && Object.keys(tool.input_schema).length > 0);
@@ -368,12 +368,12 @@ const VirtualServerCard: React.FC<VirtualServerCardProps> = ({
                             return (
                               <li
                                 key={tool.name}
-                                className="bg-white dark:bg-gray-800"
+                                className="bg-surface-overlay"
                               >
                                 {/* Tool header - clickable to expand */}
                                 <button
                                   onClick={() => hasDetails && toggleTool(tool.name)}
-                                  className={`w-full px-4 py-3 text-left ${hasDetails ? 'cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/50' : 'cursor-default'}`}
+                                  className={`w-full px-4 py-3 text-left ${hasDetails ? 'cursor-pointer hover:bg-surface-hover' : 'cursor-default'}`}
                                   disabled={!hasDetails}
                                 >
                                   <div className="flex items-start justify-between gap-2">
@@ -386,7 +386,7 @@ const VirtualServerCard: React.FC<VirtualServerCardProps> = ({
                                         )
                                       )}
                                       {!hasDetails && <div className="w-3" />}
-                                      <span className="font-medium text-sm text-gray-900 dark:text-white">
+                                      <span className="font-medium text-sm text-fg">
                                         {tool.name}
                                       </span>
                                       {tool.original_name && tool.name !== tool.original_name && (
@@ -422,7 +422,7 @@ const VirtualServerCard: React.FC<VirtualServerCardProps> = ({
                                           <summary className="cursor-pointer text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 font-medium">
                                             View Schema
                                           </summary>
-                                          <pre className="mt-2 p-3 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded overflow-x-auto text-gray-800 dark:text-gray-200">
+                                          <pre className="mt-2 p-3 bg-surface-muted border border-line rounded overflow-x-auto text-fg">
                                             {JSON.stringify(tool.input_schema, null, 2)}
                                           </pre>
                                         </details>
@@ -454,7 +454,7 @@ const VirtualServerCard: React.FC<VirtualServerCardProps> = ({
                 })}
               </div>
             ) : (
-              <p className="text-gray-500 dark:text-gray-300 text-center py-8">
+              <p className="text-fg-muted text-center py-8">
                 No tools available for this virtual server.
               </p>
             )}

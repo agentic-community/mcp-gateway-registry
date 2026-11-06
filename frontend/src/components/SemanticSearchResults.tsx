@@ -71,7 +71,7 @@ const ToolSchemaModal: React.FC<ToolSchemaModalProps> = ({
           </div>
           <button
             onClick={onClose}
-            className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 rounded-lg transition-colors"
+            className="btn-icon"
           >
             <XMarkIcon className="h-5 w-5" />
           </button>
@@ -159,7 +159,7 @@ const ServerDetailsModal: React.FC<ServerDetailsModalProps> = ({
           </div>
           <button
             onClick={onClose}
-            className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 rounded-lg transition-colors"
+            className="btn-icon"
           >
             <XMarkIcon className="h-5 w-5" />
           </button>
@@ -332,7 +332,7 @@ const SkillContentModal: React.FC<SkillContentModalProps> = ({
           </div>
           <button
             onClick={onClose}
-            className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 rounded-lg transition-colors"
+            className="btn-icon"
           >
             <XMarkIcon className="h-5 w-5" />
           </button>
@@ -390,7 +390,7 @@ const SkillContentModal: React.FC<SkillContentModalProps> = ({
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-amber-600"></div>
             </div>
           ) : error ? (
-            <div className="text-center py-12 text-gray-500">
+            <div className="text-center py-12 text-fg-muted">
               <p className="text-red-500">{error}</p>
               {skill.skill_md_url && (
                 <p className="mt-2 text-sm">
@@ -434,7 +434,7 @@ const SkillContentModal: React.FC<SkillContentModalProps> = ({
               </div>
             </>
           ) : (
-            <div className="text-center py-12 text-gray-500">
+            <div className="text-center py-12 text-fg-muted">
               <p>Could not load SKILL.md content.</p>
             </div>
           )}
@@ -502,7 +502,7 @@ const VirtualServerDetailsModal: React.FC<VirtualServerDetailsModalProps> = ({
           </div>
           <button
             onClick={onClose}
-            className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 rounded-lg transition-colors"
+            className="btn-icon"
           >
             <XMarkIcon className="h-5 w-5" />
           </button>
@@ -592,7 +592,7 @@ const VirtualServerDetailsModal: React.FC<VirtualServerDetailsModalProps> = ({
                       <button
                         type="button"
                         onClick={() => toggleToolExpand(tool.tool_name)}
-                        className="w-full p-3 text-left hover:bg-gray-100 dark:hover:bg-gray-800/50 transition-colors"
+                        className="w-full p-3 text-left hover:bg-gray-100 dark:hover:bg-gray-700/60 transition-colors"
                       >
                         <div className="flex items-center justify-between">
                           <span className="font-medium text-gray-900 dark:text-white">{tool.tool_name}</span>
@@ -904,7 +904,7 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
         <section className="space-y-4">
           <div className="flex items-center justify-between">
             <h4 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
-              Matching Servers <span className="text-sm font-normal text-gray-500">({servers.length})</span>
+              Matching Servers <span className="text-sm font-normal text-fg-subtle">({servers.length})</span>
             </h4>
           </div>
           <div
@@ -1057,7 +1057,7 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
         <section className="space-y-4">
           <div className="flex items-center justify-between">
             <h4 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
-              Matching Tools <span className="text-sm font-normal text-gray-500">({tools.length})</span>
+              Matching Tools <span className="text-sm font-normal text-fg-subtle">({tools.length})</span>
             </h4>
           </div>
           <div
@@ -1107,7 +1107,7 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
         <section className="space-y-4">
           <div className="flex items-center justify-between">
             <h4 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
-              Matching Agents <span className="text-sm font-normal text-gray-500">({agents.length})</span>
+              Matching Agents <span className="text-sm font-normal text-fg-subtle">({agents.length})</span>
             </h4>
           </div>
           <div
@@ -1232,7 +1232,7 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
         <section className="space-y-4">
           <div className="flex items-center justify-between">
             <h4 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
-              Matching Skills <span className="text-sm font-normal text-gray-500">({skills.length})</span>
+              Matching Skills <span className="text-sm font-normal text-fg-subtle">({skills.length})</span>
             </h4>
           </div>
           <div
@@ -1311,7 +1311,7 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
         <section className="space-y-4">
           <div className="flex items-center justify-between">
             <h4 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
-              Matching Virtual Servers <span className="text-sm font-normal text-gray-500">({virtualServers.length})</span>
+              Matching Virtual Servers <span className="text-sm font-normal text-fg-subtle">({virtualServers.length})</span>
             </h4>
           </div>
           <div
@@ -1333,7 +1333,7 @@ const SemanticSearchResults: React.FC<SemanticSearchResultsProps> = ({
         <section className="space-y-4">
           <div className="flex items-center justify-between">
             <h4 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
-              Matching Custom Entities <span className="text-sm font-normal text-gray-500">({custom.length})</span>
+              Matching Custom Entities <span className="text-sm font-normal text-fg-subtle">({custom.length})</span>
             </h4>
           </div>
           <div

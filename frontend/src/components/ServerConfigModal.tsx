@@ -1,5 +1,5 @@
 import React, { useCallback, useState, useEffect } from 'react';
-import { ClipboardDocumentIcon, KeyIcon } from '@heroicons/react/24/outline';
+import { ClipboardDocumentIcon, KeyIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import PlugIcon from './icons/PlugIcon';
 import axios from 'axios';
 import type { Server } from './ServerCard';
@@ -12,6 +12,14 @@ import {
   disconnect as disconnectEgress,
   type EgressCardState,
 } from '../utils/egressAuth';
+
+/** Copy buttons: brand primary, switching to green for the "Copied!" flash. */
+function copyButtonClass(copied: boolean, compact = false): string {
+  const size = compact ? 'px-3 py-1.5' : 'px-3';
+  return copied
+    ? `btn-base bg-green-600 text-white shadow-sm ${size}`
+    : `btn-primary ${size}`;
+}
 
 const IDE_LABELS = {
   'cursor': 'Cursor',
@@ -149,7 +157,7 @@ function EgressConnectCallout({
           type="button"
           disabled={busy}
           onClick={startConnect}
-          className="ml-auto flex-shrink-0 rounded-md bg-purple-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-purple-700 disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-purple-500"
+          className="btn-primary ml-auto flex-shrink-0 px-3 py-1.5"
         >
           {busy ? 'Opening…' : warn ? `Reconnect ${providerLabel}` : `Connect ${providerLabel} account`}
         </button>
@@ -883,16 +891,17 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
 
   return (
     <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
-      <div className="bg-white dark:bg-gray-800 rounded-xl p-6 max-w-3xl w-full mx-4 max-h-[80vh] overflow-auto">
+      <div
+        role="dialog"
+        aria-modal="true"
+        className="bg-surface-overlay border border-line shadow-xl rounded-xl p-6 max-w-3xl w-full mx-4 max-h-[80vh] overflow-auto"
+      >
         <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+          <h3 className="text-lg font-semibold text-fg">
             MCP Configuration for {server.name}
           </h3>
-          <button
-            onClick={onClose}
-            className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
-          >
-            ✕
+          <button onClick={onClose} className="btn-icon" aria-label="Close">
+            <XMarkIcon className="h-5 w-5" />
           </button>
         </div>
 
@@ -985,7 +994,7 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
                 {!tokenLoading && (
                   <button
                     onClick={fetchJwtToken}
-                    className="flex items-center gap-1 px-2 py-1 text-xs bg-blue-600 hover:bg-blue-700 text-white rounded transition-colors"
+                    className="btn-primary gap-1 px-2 py-1 text-xs rounded-md"
                     title="Generate new token"
                   >
                     <KeyIcon className="h-3 w-3" />
@@ -1039,7 +1048,7 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
             </div>
           )}
 
-          <div className="bg-gray-50 dark:bg-gray-900 border dark:border-gray-700 rounded-lg p-4">
+          <div className="bg-surface-muted border border-line rounded-lg p-4">
             <h4 className="font-medium text-gray-900 dark:text-white mb-3">Select your IDE/Tool:</h4>
             <div className="flex flex-wrap gap-2">
               {enabledIDEs.map((ide) => (
@@ -1048,15 +1057,15 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
                   onClick={() => setSelectedIDE(ide)}
                   className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
                     selectedIDE === ide
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-800'
+                      ? 'bg-accent text-accent-fg shadow-sm'
+                      : 'bg-surface border border-line text-fg-muted hover:bg-surface-hover hover:text-fg'
                   }`}
                 >
                   {IDE_LABELS[ide]}
                 </button>
               ))}
             </div>
-            <p className="text-xs text-gray-600 dark:text-gray-400 mt-2">
+            <p className="text-xs text-fg-muted mt-2">
               Configuration format optimized for {IDE_LABELS[selectedIDE]} integration
             </p>
           </div>
@@ -1067,11 +1076,7 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
                 <h4 className="font-medium text-gray-900 dark:text-white">CLI Command:</h4>
                 <button
                   onClick={copyCommandToClipboard}
-                  className={`flex items-center gap-2 px-3 py-2 text-white rounded-lg transition-colors duration-200 ${
-                    copied
-                      ? 'bg-green-700'
-                      : 'bg-green-600 hover:bg-green-700'
-                  }`}
+                  className={copyButtonClass(copied)}
                 >
                   <ClipboardDocumentIcon className="h-4 w-4" />
                   {copied ? 'Copied!' : 'Copy Command'}
@@ -1114,9 +1119,7 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
                 <h4 className="font-medium text-gray-900 dark:text-white">Command:</h4>
                 <button
                   onClick={() => copyCurlToClipboard(generateCodexCommand())}
-                  className={`flex items-center gap-2 px-3 py-2 text-white rounded-lg transition-colors duration-200 ${
-                    copied ? 'bg-green-700' : 'bg-green-600 hover:bg-green-700'
-                  }`}
+                  className={copyButtonClass(copied)}
                 >
                   <ClipboardDocumentIcon className="h-4 w-4" />
                   {copied ? 'Copied!' : 'Copy Command'}
@@ -1146,9 +1149,7 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
                   <h4 className="font-medium text-gray-900 dark:text-white">Step 1: Initialize session</h4>
                   <button
                     onClick={() => copyCurlToClipboard(generateCurlCommands().initCmd)}
-                    className={`flex items-center gap-2 px-3 py-1.5 text-sm text-white rounded-lg transition-colors duration-200 ${
-                      copied ? 'bg-green-700' : 'bg-green-600 hover:bg-green-700'
-                    }`}
+                    className={copyButtonClass(copied, true)}
                   >
                     <ClipboardDocumentIcon className="h-3 w-3" />
                     {copied ? 'Copied!' : 'Copy'}
@@ -1163,9 +1164,7 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
                   <h4 className="font-medium text-gray-900 dark:text-white">Step 2: List tools</h4>
                   <button
                     onClick={() => copyCurlToClipboard(generateCurlCommands().toolsCmd)}
-                    className={`flex items-center gap-2 px-3 py-1.5 text-sm text-white rounded-lg transition-colors duration-200 ${
-                      copied ? 'bg-green-700' : 'bg-green-600 hover:bg-green-700'
-                    }`}
+                    className={copyButtonClass(copied, true)}
                   >
                     <ClipboardDocumentIcon className="h-3 w-3" />
                     {copied ? 'Copied!' : 'Copy'}
@@ -1191,11 +1190,7 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
                 <h4 className="font-medium text-gray-900 dark:text-white">Configuration YAML:</h4>
                 <button
                   onClick={copyGooseConfigToClipboard}
-                  className={`flex items-center gap-2 px-3 py-2 text-white rounded-lg transition-colors duration-200 ${
-                    copied
-                      ? 'bg-green-700'
-                      : 'bg-green-600 hover:bg-green-700'
-                  }`}
+                  className={copyButtonClass(copied)}
                 >
                   <ClipboardDocumentIcon className="h-4 w-4" />
                   {copied ? 'Copied!' : 'Copy to Clipboard'}
@@ -1218,11 +1213,7 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
                 <h4 className="font-medium text-gray-900 dark:text-white">Configuration JSON:</h4>
                 <button
                   onClick={copyConfigToClipboard}
-                  className={`flex items-center gap-2 px-3 py-2 text-white rounded-lg transition-colors duration-200 ${
-                    copied
-                      ? 'bg-green-700'
-                      : 'bg-green-600 hover:bg-green-700'
-                  }`}
+                  className={copyButtonClass(copied)}
                 >
                   <ClipboardDocumentIcon className="h-4 w-4" />
                   {copied ? 'Copied!' : 'Copy to Clipboard'}
@@ -1238,11 +1229,7 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
                 <h4 className="font-medium text-gray-900 dark:text-white">Configuration JSON:</h4>
                 <button
                   onClick={copyConfigToClipboard}
-                  className={`flex items-center gap-2 px-3 py-2 text-white rounded-lg transition-colors duration-200 ${
-                    copied
-                      ? 'bg-green-700'
-                      : 'bg-green-600 hover:bg-green-700'
-                  }`}
+                  className={copyButtonClass(copied)}
                 >
                   <ClipboardDocumentIcon className="h-4 w-4" />
                   {copied ? 'Copied!' : 'Copy to Clipboard'}

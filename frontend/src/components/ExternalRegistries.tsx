@@ -338,10 +338,10 @@ const ExternalRegistries: React.FC<ExternalRegistriesProps> = ({ onShowToast }) 
     return (
       <div className="text-center py-12">
         <ExclamationCircleIcon className="mx-auto h-12 w-12 text-red-400" />
-        <h3 className="mt-2 text-lg font-medium text-gray-900 dark:text-white">{error}</h3>
+        <h3 className="mt-2 text-lg font-medium text-fg">{error}</h3>
         <button
           onClick={fetchConfig}
-          className="mt-4 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700"
+          className="mt-4 btn-primary"
         >
           Retry
         </button>
@@ -354,10 +354,10 @@ const ExternalRegistries: React.FC<ExternalRegistriesProps> = ({ onShowToast }) 
     return (
       <div className="text-center py-12">
         <CloudIcon className="mx-auto h-12 w-12 text-gray-400" />
-        <h3 className="mt-2 text-lg font-medium text-gray-900 dark:text-white">
+        <h3 className="mt-2 text-lg font-medium text-fg">
           No Federation Configuration
         </h3>
-        <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
+        <p className="mt-1 text-sm text-fg-subtle">
           Federation configuration has not been set up yet.
           Use the CLI or API to create a federation config.
         </p>
@@ -377,10 +377,10 @@ const ExternalRegistries: React.FC<ExternalRegistriesProps> = ({ onShowToast }) 
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h2 className="text-xl font-semibold text-gray-900 dark:text-white">
+          <h2 className="text-xl font-semibold text-fg">
             External Registries
           </h2>
-          <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
+          <p className="mt-1 text-sm text-fg-subtle">
             {enabledSources.length} source{enabledSources.length !== 1 ? 's' : ''} configured
             {lastSyncTime && (
               <span className="ml-2">
@@ -392,12 +392,9 @@ const ExternalRegistries: React.FC<ExternalRegistriesProps> = ({ onShowToast }) 
         <button
           onClick={handleSyncAll}
           disabled={syncing !== null || enabledSources.length === 0}
-          className="inline-flex items-center px-4 py-2 border border-transparent text-sm
-                     font-medium rounded-lg shadow-sm text-white bg-purple-600
-                     hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed
-                     transition-colors"
+          className="btn-primary"
         >
-          <ArrowPathIcon className={`h-4 w-4 mr-2 ${syncing === 'all' ? 'animate-spin' : ''}`} />
+          <ArrowPathIcon className={`h-4 w-4 ${syncing === 'all' ? 'animate-spin' : ''}`} />
           {syncing === 'all' ? 'Syncing...' : 'Sync All'}
         </button>
       </div>
@@ -481,8 +478,8 @@ function _renderAgentCoreCard(
   return (
     <div className={`border rounded-lg p-5 ${
       agentcore.enabled
-        ? 'border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800'
-        : 'border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 opacity-60'
+        ? 'border-line bg-surface'
+        : 'border-line bg-surface-muted opacity-60'
     }`}>
       {/* Card header */}
       <div className="flex items-center justify-between mb-4">
@@ -491,14 +488,14 @@ function _renderAgentCoreCard(
             <CpuChipIcon className="h-5 w-5 text-orange-600 dark:text-orange-400" />
           </div>
           <div>
-            <h3 className="text-lg font-medium text-gray-900 dark:text-white">
+            <h3 className="text-lg font-medium text-fg">
               AWS Agent Registry
             </h3>
             <div className="flex items-center space-x-2 mt-0.5">
               <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
                 agentcore.enabled
                   ? 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300'
-                  : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400'
+                  : 'bg-surface-hover text-fg-muted'
               }`}>
                 {agentcore.enabled ? 'Enabled' : 'Disabled'}
               </span>
@@ -515,23 +512,17 @@ function _renderAgentCoreCard(
           <div className="flex items-center space-x-2">
             <button
               onClick={onAdd}
-              className="inline-flex items-center px-3 py-1.5 text-sm font-medium rounded-lg
-                         border border-gray-300 dark:border-gray-600 text-gray-700
-                         dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700
-                         transition-colors"
+              className="btn-secondary px-3 py-1.5"
             >
-              <PlusIcon className="h-4 w-4 mr-1.5" />
+              <PlusIcon className="h-4 w-4" />
               Add
             </button>
             <button
               onClick={() => onSync('aws_registry')}
               disabled={syncing !== null}
-              className="inline-flex items-center px-3 py-1.5 text-sm font-medium rounded-lg
-                         border border-gray-300 dark:border-gray-600 text-gray-700
-                         dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700
-                         disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              className="btn-secondary px-3 py-1.5"
             >
-              <ArrowPathIcon className={`h-4 w-4 mr-1.5 ${syncing === 'aws_registry' ? 'animate-spin' : ''}`} />
+              <ArrowPathIcon className={`h-4 w-4 ${syncing === 'aws_registry' ? 'animate-spin' : ''}`} />
               {syncing === 'aws_registry' ? 'Syncing...' : 'Sync'}
             </button>
           </div>
@@ -543,26 +534,26 @@ function _renderAgentCoreCard(
         <div className="space-y-3">
           <div className="grid grid-cols-2 gap-4 text-sm">
             <div>
-              <span className="text-gray-500 dark:text-gray-400">Region:</span>
-              <span className="ml-2 text-gray-900 dark:text-white font-mono text-xs">
+              <span className="text-fg-subtle">Region:</span>
+              <span className="ml-2 text-fg font-mono text-xs">
                 {agentcore.aws_region}
               </span>
             </div>
             <div>
-              <span className="text-gray-500 dark:text-gray-400">Sync interval:</span>
-              <span className="ml-2 text-gray-900 dark:text-white">
+              <span className="text-fg-subtle">Sync interval:</span>
+              <span className="ml-2 text-fg">
                 {agentcore.sync_interval_minutes} min
               </span>
             </div>
             <div>
-              <span className="text-gray-500 dark:text-gray-400">Timeout:</span>
-              <span className="ml-2 text-gray-900 dark:text-white">
+              <span className="text-fg-subtle">Timeout:</span>
+              <span className="ml-2 text-fg">
                 {agentcore.sync_timeout_seconds}s
               </span>
             </div>
             <div>
-              <span className="text-gray-500 dark:text-gray-400">Concurrency:</span>
-              <span className="ml-2 text-gray-900 dark:text-white">
+              <span className="text-fg-subtle">Concurrency:</span>
+              <span className="ml-2 text-fg">
                 {agentcore.max_concurrent_fetches}
               </span>
             </div>
@@ -571,18 +562,17 @@ function _renderAgentCoreCard(
           {/* Registry list */}
           {agentcore.registries.length > 0 && (
             <div className="mt-3">
-              <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+              <h4 className="text-sm font-medium text-fg-muted mb-2">
                 Registries ({agentcore.registries.length})
               </h4>
               <div className="space-y-2">
                 {agentcore.registries.map((reg, idx) => (
                   <div
                     key={idx}
-                    className="bg-gray-50 dark:bg-gray-900 rounded-lg p-3 border border-gray-100
-                               dark:border-gray-700"
+                    className="bg-surface-muted rounded-lg p-3 border border-line"
                   >
                     <div className="flex items-start justify-between">
-                      <div className="font-mono text-xs text-gray-700 dark:text-gray-300 break-all">
+                      <div className="font-mono text-xs text-fg-muted break-all">
                         {reg.registry_id}
                       </div>
                       <button
@@ -598,18 +588,18 @@ function _renderAgentCoreCard(
                     <div className="flex flex-wrap gap-2 mt-2">
                       {reg.aws_region && (
                         <span className="inline-flex items-center px-2 py-0.5 rounded text-xs
-                                         bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-400">
+                                         bg-surface border border-line text-fg-muted">
                           {reg.aws_region}
                         </span>
                       )}
                       {reg.aws_account_id && (
                         <span className="inline-flex items-center px-2 py-0.5 rounded text-xs
-                                         bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-400">
+                                         bg-surface border border-line text-fg-muted">
                           Account: {reg.aws_account_id}
                         </span>
                       )}
                       <span className="inline-flex items-center px-2 py-0.5 rounded text-xs
-                                       bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-400">
+                                       bg-surface border border-line text-fg-muted">
                         Status: {reg.sync_status_filter}
                       </span>
                       {reg.descriptor_types.map((dt) => (
@@ -624,7 +614,7 @@ function _renderAgentCoreCard(
                       ))}
                     </div>
                     {reg.assume_role_arn && (
-                      <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                      <div className="mt-1 text-xs text-fg-subtle">
                         Role: <span className="font-mono">{_truncateArn(reg.assume_role_arn)}</span>
                       </div>
                     )}
@@ -679,8 +669,8 @@ function _renderAnthropicCard(
   return (
     <div className={`border rounded-lg p-5 ${
       anthropic.enabled
-        ? 'border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800'
-        : 'border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 opacity-60'
+        ? 'border-line bg-surface'
+        : 'border-line bg-surface-muted opacity-60'
     }`}>
       {/* Card header */}
       <div className="flex items-center justify-between mb-4">
@@ -689,14 +679,14 @@ function _renderAnthropicCard(
             <SparklesIcon className="h-5 w-5 text-purple-600 dark:text-purple-400" />
           </div>
           <div>
-            <h3 className="text-lg font-medium text-gray-900 dark:text-white">
+            <h3 className="text-lg font-medium text-fg">
               Anthropic
             </h3>
             <div className="flex items-center space-x-2 mt-0.5">
               <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
                 anthropic.enabled
                   ? 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300'
-                  : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400'
+                  : 'bg-surface-hover text-fg-muted'
               }`}>
                 {anthropic.enabled ? 'Enabled' : 'Disabled'}
               </span>
@@ -713,23 +703,17 @@ function _renderAnthropicCard(
           <div className="flex items-center space-x-2">
             <button
               onClick={onAdd}
-              className="inline-flex items-center px-3 py-1.5 text-sm font-medium rounded-lg
-                         border border-gray-300 dark:border-gray-600 text-gray-700
-                         dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700
-                         transition-colors"
+              className="btn-secondary px-3 py-1.5"
             >
-              <PlusIcon className="h-4 w-4 mr-1.5" />
+              <PlusIcon className="h-4 w-4" />
               Add
             </button>
             <button
               onClick={() => onSync('anthropic')}
               disabled={syncing !== null}
-              className="inline-flex items-center px-3 py-1.5 text-sm font-medium rounded-lg
-                         border border-gray-300 dark:border-gray-600 text-gray-700
-                         dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700
-                         disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              className="btn-secondary px-3 py-1.5"
             >
-              <ArrowPathIcon className={`h-4 w-4 mr-1.5 ${syncing === 'anthropic' ? 'animate-spin' : ''}`} />
+              <ArrowPathIcon className={`h-4 w-4 ${syncing === 'anthropic' ? 'animate-spin' : ''}`} />
               {syncing === 'anthropic' ? 'Syncing...' : 'Sync'}
             </button>
           </div>
@@ -740,8 +724,8 @@ function _renderAnthropicCard(
       {anthropic.enabled && (
         <div className="space-y-3">
           <div className="text-sm">
-            <span className="text-gray-500 dark:text-gray-400">Endpoint:</span>
-            <span className="ml-2 text-gray-900 dark:text-white font-mono text-xs">
+            <span className="text-fg-subtle">Endpoint:</span>
+            <span className="ml-2 text-fg font-mono text-xs">
               {anthropic.endpoint}
             </span>
           </div>
@@ -749,7 +733,7 @@ function _renderAnthropicCard(
           {/* Server list */}
           {anthropic.servers.length > 0 && (
             <div>
-              <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+              <h4 className="text-sm font-medium text-fg-muted mb-2">
                 Servers ({anthropic.servers.length})
               </h4>
               <div className="flex flex-wrap gap-2">
@@ -757,8 +741,7 @@ function _renderAnthropicCard(
                   <span
                     key={srv.name}
                     className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-mono
-                               bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300
-                               border border-gray-200 dark:border-gray-600"
+                               bg-surface-muted text-fg-muted border border-line"
                   >
                     <ServerStackIcon className="h-3.5 w-3.5 mr-1.5 text-gray-400" />
                     {srv.name}
@@ -811,8 +794,8 @@ function _renderAsorCard(
   return (
     <div className={`border rounded-lg p-5 ${
       asor.enabled
-        ? 'border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800'
-        : 'border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 opacity-60'
+        ? 'border-line bg-surface'
+        : 'border-line bg-surface-muted opacity-60'
     }`}>
       {/* Card header */}
       <div className="flex items-center justify-between mb-4">
@@ -821,14 +804,14 @@ function _renderAsorCard(
             <GlobeIcon className="h-5 w-5 text-blue-600 dark:text-blue-400" />
           </div>
           <div>
-            <h3 className="text-lg font-medium text-gray-900 dark:text-white">
+            <h3 className="text-lg font-medium text-fg">
               ASOR
             </h3>
             <div className="flex items-center space-x-2 mt-0.5">
               <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
                 asor.enabled
                   ? 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300'
-                  : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400'
+                  : 'bg-surface-hover text-fg-muted'
               }`}>
                 {asor.enabled ? 'Enabled' : 'Disabled'}
               </span>
@@ -845,23 +828,17 @@ function _renderAsorCard(
           <div className="flex items-center space-x-2">
             <button
               onClick={onAdd}
-              className="inline-flex items-center px-3 py-1.5 text-sm font-medium rounded-lg
-                         border border-gray-300 dark:border-gray-600 text-gray-700
-                         dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700
-                         transition-colors"
+              className="btn-secondary px-3 py-1.5"
             >
-              <PlusIcon className="h-4 w-4 mr-1.5" />
+              <PlusIcon className="h-4 w-4" />
               Add
             </button>
             <button
               onClick={() => onSync('asor')}
               disabled={syncing !== null}
-              className="inline-flex items-center px-3 py-1.5 text-sm font-medium rounded-lg
-                         border border-gray-300 dark:border-gray-600 text-gray-700
-                         dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700
-                         disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              className="btn-secondary px-3 py-1.5"
             >
-              <ArrowPathIcon className={`h-4 w-4 mr-1.5 ${syncing === 'asor' ? 'animate-spin' : ''}`} />
+              <ArrowPathIcon className={`h-4 w-4 ${syncing === 'asor' ? 'animate-spin' : ''}`} />
               {syncing === 'asor' ? 'Syncing...' : 'Sync'}
             </button>
           </div>
@@ -873,8 +850,8 @@ function _renderAsorCard(
         <div className="space-y-3">
           {asor.endpoint && (
             <div className="text-sm">
-              <span className="text-gray-500 dark:text-gray-400">Endpoint:</span>
-              <span className="ml-2 text-gray-900 dark:text-white font-mono text-xs">
+              <span className="text-fg-subtle">Endpoint:</span>
+              <span className="ml-2 text-fg font-mono text-xs">
                 {asor.endpoint}
               </span>
             </div>
@@ -882,7 +859,7 @@ function _renderAsorCard(
 
           {asor.agents.length > 0 && (
             <div>
-              <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+              <h4 className="text-sm font-medium text-fg-muted mb-2">
                 Agents ({asor.agents.length})
               </h4>
               <div className="flex flex-wrap gap-2">
@@ -890,8 +867,7 @@ function _renderAsorCard(
                   <span
                     key={agent.id}
                     className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-mono
-                               bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300
-                               border border-gray-200 dark:border-gray-600"
+                               bg-surface-muted text-fg-muted border border-line"
                   >
                     {agent.id}
                     <button
@@ -942,8 +918,8 @@ function _renderAiCatalogCard(
   return (
     <div className={`border rounded-lg p-5 ${
       aiCatalog.enabled
-        ? 'border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800'
-        : 'border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 opacity-60'
+        ? 'border-line bg-surface'
+        : 'border-line bg-surface-muted opacity-60'
     }`}>
       {/* Card header */}
       <div className="flex items-center justify-between mb-4">
@@ -952,17 +928,17 @@ function _renderAiCatalogCard(
             <GlobeIcon className="h-5 w-5 text-teal-600 dark:text-teal-400" />
           </div>
           <div>
-            <h3 className="text-lg font-medium text-gray-900 dark:text-white">
+            <h3 className="text-lg font-medium text-fg">
               ARD Catalog (ai-catalog.json)
             </h3>
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+            <p className="text-xs text-fg-subtle mt-0.5">
               Crawl external ai-catalog.json documents and index their entries (ARD federation).
             </p>
             <div className="flex items-center space-x-2 mt-1">
               <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
                 aiCatalog.enabled
                   ? 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300'
-                  : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400'
+                  : 'bg-surface-hover text-fg-muted'
               }`}>
                 {aiCatalog.enabled ? 'Enabled' : 'Disabled'}
               </span>
@@ -979,23 +955,17 @@ function _renderAiCatalogCard(
           <div className="flex items-center space-x-2">
             <button
               onClick={onAdd}
-              className="inline-flex items-center px-3 py-1.5 text-sm font-medium rounded-lg
-                         border border-gray-300 dark:border-gray-600 text-gray-700
-                         dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700
-                         transition-colors"
+              className="btn-secondary px-3 py-1.5"
             >
-              <PlusIcon className="h-4 w-4 mr-1.5" />
+              <PlusIcon className="h-4 w-4" />
               Add
             </button>
             <button
               onClick={() => onSync('ai_catalog')}
               disabled={syncing !== null}
-              className="inline-flex items-center px-3 py-1.5 text-sm font-medium rounded-lg
-                         border border-gray-300 dark:border-gray-600 text-gray-700
-                         dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700
-                         disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              className="btn-secondary px-3 py-1.5"
             >
-              <ArrowPathIcon className={`h-4 w-4 mr-1.5 ${syncing === 'ai_catalog' ? 'animate-spin' : ''}`} />
+              <ArrowPathIcon className={`h-4 w-4 ${syncing === 'ai_catalog' ? 'animate-spin' : ''}`} />
               {syncing === 'ai_catalog' ? 'Syncing...' : 'Sync'}
             </button>
           </div>
@@ -1007,26 +977,26 @@ function _renderAiCatalogCard(
         <div className="space-y-3">
           <div className="grid grid-cols-2 gap-4 text-sm">
             <div>
-              <span className="text-gray-500 dark:text-gray-400">Max depth:</span>
-              <span className="ml-2 text-gray-900 dark:text-white">
+              <span className="text-fg-subtle">Max depth:</span>
+              <span className="ml-2 text-fg">
                 {aiCatalog.max_depth}
               </span>
             </div>
             <div>
-              <span className="text-gray-500 dark:text-gray-400">Sync interval:</span>
-              <span className="ml-2 text-gray-900 dark:text-white">
+              <span className="text-fg-subtle">Sync interval:</span>
+              <span className="ml-2 text-fg">
                 {aiCatalog.sync_interval_minutes} min
               </span>
             </div>
             <div>
-              <span className="text-gray-500 dark:text-gray-400">Fetch timeout:</span>
-              <span className="ml-2 text-gray-900 dark:text-white">
+              <span className="text-fg-subtle">Fetch timeout:</span>
+              <span className="ml-2 text-fg">
                 {aiCatalog.fetch_timeout_seconds}s
               </span>
             </div>
             <div>
-              <span className="text-gray-500 dark:text-gray-400">Trust enforcement:</span>
-              <span className="ml-2 text-gray-900 dark:text-white">
+              <span className="text-fg-subtle">Trust enforcement:</span>
+              <span className="ml-2 text-fg">
                 {aiCatalog.trust_enforcement}
               </span>
             </div>
@@ -1035,18 +1005,17 @@ function _renderAiCatalogCard(
           {/* Source list */}
           {aiCatalog.sources.length > 0 && (
             <div className="mt-3">
-              <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+              <h4 className="text-sm font-medium text-fg-muted mb-2">
                 Sources ({aiCatalog.sources.length})
               </h4>
               <div className="space-y-2">
                 {aiCatalog.sources.map((source, idx) => (
                   <div
                     key={idx}
-                    className="bg-gray-50 dark:bg-gray-900 rounded-lg p-3 border border-gray-100
-                               dark:border-gray-700"
+                    className="bg-surface-muted rounded-lg p-3 border border-line"
                   >
                     <div className="flex items-start justify-between">
-                      <div className="font-mono text-xs text-gray-700 dark:text-gray-300 break-all">
+                      <div className="font-mono text-xs text-fg-muted break-all">
                         {source.source_id}
                       </div>
                       <button
@@ -1062,7 +1031,7 @@ function _renderAiCatalogCard(
                     <div className="flex flex-wrap gap-2 mt-2">
                       {(source.uri || source.domain) && (
                         <span className="inline-flex items-center px-2 py-0.5 rounded text-xs
-                                         bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-400">
+                                         bg-surface border border-line text-fg-muted">
                           {source.uri || source.domain}
                         </span>
                       )}

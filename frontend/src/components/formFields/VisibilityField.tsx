@@ -1,6 +1,6 @@
 import React from 'react';
 import FormField from './FormField';
-import { fieldClass, FIELD_FOCUS } from './formClasses';
+import { FIELD } from './formClasses';
 
 export type Visibility = 'public' | 'private' | 'group-restricted';
 
@@ -10,7 +10,6 @@ interface VisibilityFieldProps {
   /** Comma-separated allowed groups (shown only for group-restricted). */
   allowedGroups: string;
   onAllowedGroupsChange: (value: string) => void;
-  accent?: keyof typeof FIELD_FOCUS;
 }
 
 /**
@@ -24,7 +23,6 @@ const VisibilityField: React.FC<VisibilityFieldProps> = ({
   onChange,
   allowedGroups,
   onAllowedGroupsChange,
-  accent = 'purple',
 }) => {
   return (
     <>
@@ -32,7 +30,7 @@ const VisibilityField: React.FC<VisibilityFieldProps> = ({
         <select
           value={value}
           onChange={(e) => onChange(e.target.value as Visibility)}
-          className={fieldClass(accent)}
+          className={FIELD}
         >
           <option value="private">Private</option>
           <option value="public">Public</option>
@@ -49,7 +47,7 @@ const VisibilityField: React.FC<VisibilityFieldProps> = ({
             type="text"
             value={allowedGroups}
             onChange={(e) => onAllowedGroupsChange(e.target.value)}
-            className={fieldClass(accent)}
+            className={FIELD}
             placeholder="e.g. finance-team, engineering"
           />
           {allowedGroups.trim() === '' && (

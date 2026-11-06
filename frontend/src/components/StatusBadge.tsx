@@ -31,7 +31,7 @@ const STATUS_CONFIG: Record<
     label: 'Draft',
     tooltip: 'This item is in draft mode and not yet ready for production',
     colorClasses:
-      'bg-gray-50 text-gray-700 dark:bg-gray-800 dark:text-gray-300',
+      'bg-gray-500/15 text-gray-700 dark:text-gray-300',
   },
   beta: {
     label: 'Beta',

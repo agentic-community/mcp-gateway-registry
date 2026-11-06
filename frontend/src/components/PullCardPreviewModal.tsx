@@ -65,15 +65,15 @@ const PullCardPreviewModal: React.FC<PullCardPreviewModalProps> = ({
           role="dialog"
           aria-modal="true"
           aria-label={`Pull agent card for ${agentName}`}
-          className="relative bg-white dark:bg-gray-800 rounded-xl shadow-2xl max-w-2xl w-full max-h-[80vh] flex flex-col"
+          className="relative bg-surface-overlay border border-line rounded-xl shadow-2xl max-w-2xl w-full max-h-[80vh] flex flex-col"
         >
           {/* Header */}
-          <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700">
-            <h3 className="text-lg font-bold text-gray-900 dark:text-white">
+          <div className="px-6 py-4 border-b border-line">
+            <h3 className="text-lg font-bold text-fg">
               Pull Agent Card: {agentName}
             </h3>
             {result && (
-              <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+              <p className="text-sm text-fg-muted mt-1">
                 Source: {result.remote_card_url}
               </p>
             )}
@@ -84,17 +84,17 @@ const PullCardPreviewModal: React.FC<PullCardPreviewModalProps> = ({
             {loading && (
               <div className="flex items-center justify-center py-8">
                 <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-cyan-600" />
-                <span className="ml-3 text-gray-500">Fetching remote card...</span>
+                <span className="ml-3 text-fg-muted">Fetching remote card...</span>
               </div>
             )}
 
             {result && !result.has_changes && (
               <div className="text-center py-8">
-                <p className="text-gray-500 dark:text-gray-400">
+                <p className="text-fg-muted">
                   No changes detected. The local card matches the remote card.
                 </p>
                 {remoteVersion && (
-                  <p className="text-xs text-gray-400 dark:text-gray-500 mt-2">
+                  <p className="text-xs text-fg-subtle mt-2">
                     Remote card version: {String(remoteVersion)}
                   </p>
                 )}
@@ -103,15 +103,15 @@ const PullCardPreviewModal: React.FC<PullCardPreviewModalProps> = ({
 
             {result && result.has_changes && (
               <div className="space-y-4">
-                <p className="text-sm text-gray-600 dark:text-gray-300">
+                <p className="text-sm text-fg-muted">
                   {result.changes.length} field(s) will be updated:
                 </p>
                 {result.changes.map((change, idx) => (
                   <div
                     key={idx}
-                    className="border border-gray-200 dark:border-gray-700 rounded-lg p-3"
+                    className="border border-line rounded-lg p-3"
                   >
-                    <div className="font-mono text-sm font-bold text-gray-800 dark:text-gray-200 mb-2">
+                    <div className="font-mono text-sm font-bold text-fg mb-2">
                       {change.field}
                     </div>
                     <div className="grid grid-cols-2 gap-3">
@@ -139,18 +139,18 @@ const PullCardPreviewModal: React.FC<PullCardPreviewModalProps> = ({
           </div>
 
           {/* Footer */}
-          <div className="px-6 py-4 border-t border-gray-200 dark:border-gray-700 flex justify-end gap-3">
+          <div className="px-6 py-4 border-t border-line flex justify-end gap-3">
             <button
               ref={closeButtonRef}
               onClick={onClose}
-              className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg transition-colors"
+              className="btn-secondary"
             >
               Cancel
             </button>
             {result && result.has_changes && (
               <button
                 onClick={onApply}
-                className="px-4 py-2 text-sm font-medium text-white bg-cyan-600 hover:bg-cyan-700 rounded-lg transition-colors"
+                className="btn-base text-white bg-cyan-600 hover:bg-cyan-700"
               >
                 Apply Changes
               </button>

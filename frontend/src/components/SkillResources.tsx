@@ -249,18 +249,18 @@ function ResourceItem({
   const isPreviewable = TEXT_PREVIEWABLE_TYPES.has(resource.type);
 
   return (
-    <div className="flex items-center justify-between py-2 px-3 border-b border-gray-200 dark:border-gray-700 last:border-b-0 hover:bg-gray-50 dark:hover:bg-gray-800">
+    <div className="flex items-center justify-between py-2 px-3 border-b border-line last:border-b-0 hover:bg-surface-hover">
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
-          <span className="font-mono text-sm text-gray-900 dark:text-gray-100 truncate">
+          <span className="font-mono text-sm text-fg truncate">
             {resource.path}
           </span>
           {resource.language && (
-            <span className="px-2 py-0.5 text-xs font-semibold rounded bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300">
+            <span className="px-2 py-0.5 text-xs font-semibold rounded bg-surface-muted text-fg-muted">
               {resource.language}
             </span>
           )}
-          <span className="text-xs text-gray-500 dark:text-gray-400">
+          <span className="text-xs text-fg-muted">
             {_formatSize(resource.size_bytes)}
           </span>
         </div>
@@ -276,7 +276,7 @@ function ResourceItem({
             type="button"
             onClick={() => onPreview(resource)}
             aria-label={`View ${resource.path}`}
-            className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded text-amber-700 dark:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-900/30"
+            className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded text-amber-700 dark:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-500/10"
           >
             <EyeIcon className="h-4 w-4" />
             View
@@ -287,7 +287,7 @@ function ResourceItem({
           onClick={_onDownload}
           disabled={downloading}
           aria-label={`Download ${resource.path}`}
-          className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed"
+          className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded text-fg-muted hover:bg-surface-muted hover:text-fg disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <ArrowDownTrayIcon className="h-4 w-4" />
           {downloading ? 'Downloading…' : 'Download'}
@@ -327,24 +327,24 @@ function ResourceGroup({
   const sorted = _sortByPath(resources);
 
   return (
-    <div className="rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
+    <div className="rounded-lg border border-line overflow-hidden">
       <button
         type="button"
         onClick={() => setExpanded((e) => !e)}
         aria-expanded={expanded}
-        className="w-full flex items-center justify-between px-3 py-2 bg-gray-50 dark:bg-gray-900/50 hover:bg-gray-100 dark:hover:bg-gray-800 text-left"
+        className="w-full flex items-center justify-between px-3 py-2 bg-surface-muted hover:bg-surface-hover text-left"
       >
-        <span className="font-medium text-gray-800 dark:text-gray-200">
-          {label} <span className="text-gray-500 dark:text-gray-400">({resources.length})</span>
+        <span className="font-medium text-fg">
+          {label} <span className="text-fg-muted">({resources.length})</span>
         </span>
         {expanded ? (
-          <ChevronDownIcon className="h-4 w-4 text-gray-500 dark:text-gray-400" />
+          <ChevronDownIcon className="h-4 w-4 text-fg-muted" />
         ) : (
-          <ChevronRightIcon className="h-4 w-4 text-gray-500 dark:text-gray-400" />
+          <ChevronRightIcon className="h-4 w-4 text-fg-muted" />
         )}
       </button>
       {expanded && (
-        <div className="bg-white dark:bg-gray-900">
+        <div className="bg-surface">
           {sorted.map((r) => (
             <ResourceItem
               key={r.path}
@@ -416,13 +416,13 @@ function ResourcePreview({
         <button
           type="button"
           onClick={onBack}
-          className="inline-flex items-center gap-1 px-2 py-1 rounded text-amber-700 dark:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-900/30"
+          className="inline-flex items-center gap-1 px-2 py-1 rounded text-amber-700 dark:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-500/10"
         >
           <ArrowLeftIcon className="h-4 w-4" />
           Back to SKILL.md
         </button>
-        <span className="text-gray-400 dark:text-gray-500">›</span>
-        <span className="font-mono text-gray-700 dark:text-gray-300 truncate">
+        <span className="text-fg-subtle">›</span>
+        <span className="font-mono text-fg-muted truncate">
           {resource.path}
         </span>
       </div>
@@ -439,7 +439,7 @@ function ResourcePreview({
           <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: safeMarkdownAnchor }}>{content}</ReactMarkdown>
         </div>
       ) : (
-        <pre className="bg-gray-100 dark:bg-gray-900 rounded p-4 overflow-x-auto text-xs">
+        <pre className="bg-surface-muted text-fg rounded p-4 overflow-x-auto text-xs">
           <code>{content}</code>
         </pre>
       )}
@@ -606,9 +606,9 @@ function SkillResourcesInner({
   return (
     <div className="mb-6">
       <div className="flex items-center justify-between mb-2">
-        <h3 className="text-sm font-semibold text-gray-800 dark:text-gray-200">
+        <h3 className="text-sm font-semibold text-fg">
           Resources{' '}
-          <span className="font-normal text-gray-500 dark:text-gray-400">
+          <span className="font-normal text-fg-muted">
             ({all.length} {all.length === 1 ? 'file' : 'files'}, {_formatSize(totalSize)})
           </span>
         </h3>
@@ -625,12 +625,12 @@ function SkillResourcesInner({
         </button>
       </div>
 
-      <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
+      <p className="text-xs text-fg-muted mb-3">
         Download all bundles classified resources only — files outside{' '}
-        <code className="px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-900">references/</code>,{' '}
-        <code className="px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-900">scripts/</code>,{' '}
-        <code className="px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-900">agents/</code>, and{' '}
-        <code className="px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-900">assets/</code> are not
+        <code className="px-1 py-0.5 rounded bg-surface-muted text-fg">references/</code>,{' '}
+        <code className="px-1 py-0.5 rounded bg-surface-muted text-fg">scripts/</code>,{' '}
+        <code className="px-1 py-0.5 rounded bg-surface-muted text-fg">agents/</code>, and{' '}
+        <code className="px-1 py-0.5 rounded bg-surface-muted text-fg">assets/</code> are not
         included.
       </p>
 

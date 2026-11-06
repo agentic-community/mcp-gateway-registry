@@ -132,7 +132,7 @@ const QuarantinePanel: React.FC<QuarantinePanelProps> = ({ onShowToast, isAdmin 
         <div className="flex items-center justify-between mb-2">
           <div className="flex items-center gap-2">
             <ExclamationTriangleIcon className="h-5 w-5 text-red-600 dark:text-red-400" />
-            <span className="font-medium text-gray-900 dark:text-white">{title}</span>
+            <span className="font-medium text-fg">{title}</span>
             <span className="text-xs px-2 py-0.5 rounded-full bg-red-100 dark:bg-red-900/40 text-red-800 dark:text-red-300">
               {members.length} member{members.length === 1 ? '' : 's'}
             </span>
@@ -150,17 +150,17 @@ const QuarantinePanel: React.FC<QuarantinePanelProps> = ({ onShowToast, isAdmin 
           </button>
         </div>
         {members.length === 0 ? (
-          <p className="text-xs text-gray-500 dark:text-gray-400">Nothing quarantined.</p>
+          <p className="text-xs text-fg-subtle">Nothing quarantined.</p>
         ) : (
           <ul className="divide-y divide-red-100 dark:divide-red-900/40">
             {members.map((m) => (
               <li key={`${m.subject_type}:${m.subject}`} className="flex items-center justify-between py-1.5">
-                <span className="font-mono text-xs text-gray-800 dark:text-gray-200">
+                <span className="font-mono text-xs text-fg">
                   {m.subject_type}:{m.subject}
                 </span>
                 <button
                   onClick={() => handleRemove(m)}
-                  className="flex items-center gap-1 text-xs text-gray-500 hover:text-red-600"
+                  className="flex items-center gap-1 text-xs text-fg-subtle hover:text-red-600 dark:hover:text-red-400"
                   title="Remove from quarantine"
                 >
                   <TrashIcon className="h-4 w-4" />
@@ -179,11 +179,11 @@ const QuarantinePanel: React.FC<QuarantinePanelProps> = ({ onShowToast, isAdmin 
   const targetAddControl = isAdmin ? (
     <div className="mt-3 border-t border-red-100 dark:border-red-900/40 pt-3 space-y-2">
       <div className="flex items-center gap-2">
-        <span className="text-xs text-gray-500 dark:text-gray-400">Quarantine a:</span>
+        <span className="text-xs text-fg-subtle">Quarantine a:</span>
         <select
           value={targetKind}
           onChange={(e) => setTargetKind(e.target.value as 'server' | 'agent')}
-          className="text-xs rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-white px-2 py-1"
+          className="input w-auto py-1 pl-2 pr-8 text-xs"
         >
           <option value="server">server</option>
           <option value="agent">agent</option>
@@ -203,7 +203,7 @@ const QuarantinePanel: React.FC<QuarantinePanelProps> = ({ onShowToast, isAdmin 
             : 'Add a server to quarantine… (e.g. mcpgw)'
         }
       />
-      <p className="text-[11px] text-gray-400">
+      <p className="text-[11px] text-fg-subtle">
         Blocks ALL traffic to this target for every caller (admins included). Use the bare
         name/path segment the request routes to (e.g. <code>mcpgw</code>).
       </p>
@@ -213,8 +213,8 @@ const QuarantinePanel: React.FC<QuarantinePanelProps> = ({ onShowToast, isAdmin 
   return (
     <div className="space-y-3">
       <div>
-        <h3 className="text-md font-semibold text-gray-900 dark:text-white">Quarantine (kill switch)</h3>
-        <p className="text-xs text-gray-500 dark:text-gray-400">
+        <h3 className="text-md font-semibold text-fg">Quarantine (kill switch)</h3>
+        <p className="text-xs text-fg-subtle">
           A quarantined caller or target has ALL of its data-plane traffic dropped immediately (a
           hard block, not a rate). Quarantine a caller (admin only) from the Users or M2M pages via
           the block icon on each row; quarantine a target (server/agent) using the control in the
@@ -223,7 +223,7 @@ const QuarantinePanel: React.FC<QuarantinePanelProps> = ({ onShowToast, isAdmin 
         </p>
       </div>
       {isLoading ? (
-        <p className="text-sm text-gray-500 dark:text-gray-400">Loading…</p>
+        <p className="text-sm text-fg-subtle">Loading…</p>
       ) : (
         <div className="grid gap-3 md:grid-cols-2">
           {renderGroup('Quarantined callers', QUARANTINE_CALLER_GROUP, callers)}
@@ -233,14 +233,14 @@ const QuarantinePanel: React.FC<QuarantinePanelProps> = ({ onShowToast, isAdmin 
 
       {confirmToggle && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="max-w-md rounded-lg bg-white dark:bg-gray-800 p-6 shadow-xl">
+          <div className="max-w-md rounded-lg border border-line bg-surface-overlay p-6 shadow-xl">
             <div className="flex items-center gap-2 mb-3">
               <ExclamationTriangleIcon className="h-6 w-6 text-red-600 dark:text-red-400" />
-              <h4 className="font-semibold text-gray-900 dark:text-white">
+              <h4 className="font-semibold text-fg">
                 {confirmToggle.enable ? 'Enable' : 'Disable'} kill switch
               </h4>
             </div>
-            <p className="text-sm text-gray-600 dark:text-gray-300 mb-4">
+            <p className="text-sm text-fg-muted mb-4">
               {confirmToggle.enable
                 ? `Enabling ${confirmToggle.group} re-activates the kill switch: all of its members' traffic will be dropped again.`
                 : `Disabling ${confirmToggle.group} turns the kill switch OFF for ALL its members — their traffic will flow again even though they remain listed.`}
@@ -248,13 +248,13 @@ const QuarantinePanel: React.FC<QuarantinePanelProps> = ({ onShowToast, isAdmin 
             <div className="flex justify-end gap-3">
               <button
                 onClick={() => setConfirmToggle(null)}
-                className="px-3 py-1.5 rounded-md border border-gray-300 dark:border-gray-600 text-sm text-gray-700 dark:text-gray-200"
+                className="btn-secondary px-3 py-1.5"
               >
                 Cancel
               </button>
               <button
                 onClick={applyToggle}
-                className="px-3 py-1.5 rounded-md bg-red-600 text-white text-sm hover:bg-red-700"
+                className="btn-danger px-3 py-1.5"
               >
                 {confirmToggle.enable ? 'Enable' : 'Disable'}
               </button>
