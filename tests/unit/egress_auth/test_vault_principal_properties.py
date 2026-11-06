@@ -52,6 +52,7 @@ from hypothesis import strategies as st
 import registry.api.egress_auth_routes as routes
 import registry.api.egress_oauth_facade_routes as facade
 import registry.api.server_routes as server_routes
+from registry.auth.session_cookie import request_session_cookie
 from registry.egress_auth import (
     oauth_engine,
     state_codec,
@@ -368,7 +369,7 @@ def _mount_egress_routes(
         return deepcopy(servers.get(path))
 
     async def _browser_session(request):
-        if request.cookies.get(routes.settings.session_cookie_name) != _SESSION_COOKIE:
+        if request_session_cookie(request) != _SESSION_COOKIE:
             return None
         return dict(holder["ctx"])
 

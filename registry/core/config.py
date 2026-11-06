@@ -11,6 +11,10 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from registry.common.request_origin import normalize_origin
 from registry.common.secret_key import validate_secret_key
+from registry.common.session_cookie import (
+    DEFAULT_SESSION_COOKIE_NAME,
+    check_session_cookie_name,
+)
 from registry.constants import (
     MAX_EMBEDDINGS_EXTRA_HEADERS,
     REGISTRY_MANAGED_EMBEDDINGS_HEADERS,
@@ -185,7 +189,10 @@ class Settings(BaseSettings):
 
     # Auth settings
     secret_key: str = ""
-    session_cookie_name: str = "mcp_gateway_session"
+    # Read by both services (the auth server shares this class), so both set and
+    # read the session cookie under this one SESSION_COOKIE_NAME. Validated in
+    # __init__ so both services refuse a name a browser would not keep.
+    session_cookie_name: str = DEFAULT_SESSION_COOKIE_NAME
     session_max_age_seconds: int = 60 * 60 * 8  # 8 hours
     # Secure-by-default: the session cookie carries the Secure flag so browsers
     # only transmit it over HTTPS. Operators running a plain-HTTP local dev
@@ -1581,7 +1588,7 @@ class Settings(BaseSettings):
             "state-changing verb (anything but GET/HEAD/OPTIONS) on a generic "
             "route is refused (403 at /validate, before any token mint) if the "
             "caller authenticated with a session cookie rather than a Bearer "
-            "token. A browser carrying only an ambient mcp_gateway_session cookie "
+            "token. A browser carrying only an ambient session cookie "
             "therefore cannot perform cross-site DELETE/PUT/PATCH; programmatic "
             "Bearer callers are unaffected. Relax only for a trusted same-site "
             "deployment. Consumed by the auth-server."
@@ -2497,6 +2504,9 @@ class Settings(BaseSettings):
         self._validate_egress_auth_config()
         self._validate_embeddings_extra_header_slots()
         self._validate_embeddings_model_name()
+        # The auth server reads these same fields, so both services set and read
+        # the session cookie under one name.
+        self.session_cookie_name = check_session_cookie_name(self.session_cookie_name)
 
     def _raw_embeddings_extra_header_slots(self) -> list[tuple[int, str]]:
         """Return (slot number, stripped value) for every populated header slot."""

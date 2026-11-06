@@ -134,6 +134,11 @@ from registry.common.request_origin import (
 )
 from registry.common.scopes_loader import reload_scopes_config
 from registry.common.secret_key import validate_secret_key, validate_signing_secret
+from registry.common.session_cookie import (
+    join_cookie_fields,
+    session_cookie_values,
+    single_session_cookie,
+)
 from registry.core.config import settings
 from registry.egress_auth.fallback_key import is_fallback_shaped, username_fallback_key
 from registry.egress_auth.service import canonical_auth_method
@@ -1342,7 +1347,7 @@ def _generic_write_csrf_refused(
       - the caller authenticated with an ambient session cookie (not a Bearer
         token a programmatic client sets explicitly).
 
-    A browser carrying only an mcp_gateway_session cookie therefore cannot make a
+    A browser carrying only a session cookie therefore cannot make a
     cross-site DELETE/PUT/PATCH to a proxied resource; Bearer callers are exempt.
     """
     if not (is_generic_request and require_bearer):
@@ -4364,7 +4369,8 @@ async def validate_request(request: Request):
                 headers={"WWW-Authenticate": "Bearer", "Connection": "close"},
             )
 
-        cookie_header = request.headers.get("Cookie", "")
+        # Every Cookie field, so a cookie an HTTP/2 client sent in a later field counts.
+        cookie_header = join_cookie_fields(request.headers.getlist("cookie"))
         body = request.headers.get("X-Body")
         # capture_body.lua sets this when the request body was too large to buffer
         # in memory and spilled to a temp file, so no X-Body could be captured.
@@ -4514,8 +4520,12 @@ async def validate_request(request: Request):
         logger.debug("Server Name from URL: %s", server_name_from_url)
 
         # Only activate static token auth when there is no session cookie
-        # (UI uses cookies, CLI uses Bearer)
-        has_session_cookie = cookie_header and "mcp_gateway_session=" in cookie_header
+        # (UI uses cookies, CLI uses Bearer). A session cookie the header carries
+        # more than once is refused and counts as none: another host under the
+        # parent domain can add the second one, so neither can be trusted.
+        session_cookie_name = settings.session_cookie_name
+        session_cookie = single_session_cookie(cookie_header, session_cookie_name)
+        has_session_cookie = session_cookie is not None
 
         # Federation static token auth: scoped access to federation/peer endpoints only
         # Check this BEFORE the full admin static token
@@ -4696,7 +4706,7 @@ async def validate_request(request: Request):
         entra_graph_groups_resolved = False
 
         # Log which cookie names are present on the inbound /validate request.
-        # Distinguishes "browser didn't send mcp_gateway_session" (cookie scope
+        # Distinguishes "browser didn't send the session cookie" (cookie scope
         # / jar collision) from "nginx stripped it" (sub-request config drift)
         # when diagnosing spurious 401s.
         if cookie_header:
@@ -4707,21 +4717,16 @@ async def validate_request(request: Request):
                     if c.strip() and "=" in c
                 }
             )
-            mgs_count = cookie_header.count("mcp_gateway_session=")
             logger.info(
                 f"Cookie names present: {cookie_names} "
-                f"(mcp_gateway_session occurrences: {mgs_count})"
+                f"({session_cookie_name} occurrences: "
+                f"{len(session_cookie_values(cookie_header, session_cookie_name))})"
             )
 
-        # FIRST: Check for session cookie if present
-        if "mcp_gateway_session=" in cookie_header:
+        # FIRST: Check for session cookie if present (and sent once).
+        if session_cookie is not None:
             logger.info("Session cookie detected, attempting session validation")
-            # Extract cookie value
-            cookie_value = None
-            for cookie in cookie_header.split(";"):
-                if cookie.strip().startswith("mcp_gateway_session="):
-                    cookie_value = cookie.strip().split("=", 1)[1]
-                    break
+            cookie_value = session_cookie
 
             if cookie_value:
                 try:
@@ -7758,7 +7763,7 @@ async def oauth2_callback(
         )
 
         cookie_params = {
-            "key": "mcp_gateway_session",  # Same as registry SESSION_COOKIE_NAME
+            "key": settings.session_cookie_name,  # SESSION_COOKIE_NAME, as the registry reads it
             "value": registry_session,
             "max_age": session_max_age,
             "httponly": OAUTH2_CONFIG.get("session", {}).get("httponly", True),

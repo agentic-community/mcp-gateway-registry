@@ -1895,9 +1895,11 @@ async def _complete_callback(
     # unresolvable one: otherwise a consent link minted by one user and opened in
     # another (unauthenticated) browser stores the second browser's upstream
     # token in the first user's bucket. The browser's session comes from its
-    # session cookie only (browser_session_context). Compare on the vault
-    # principal so the guard matches the principal the consent state was bound
-    # to at initiate.
+    # session cookie only (browser_session_context); a session cookie sent more
+    # than once is refused like a missing one: another host under the parent
+    # domain can add the second, and the browser's order of the two is that
+    # host's to choose. Compare on the vault principal so the guard matches the
+    # principal the consent state was bound to at initiate.
     ctx = await browser_session_context(request)
     principal = vault_principal(ctx) if ctx is not None else None
     if principal is None:

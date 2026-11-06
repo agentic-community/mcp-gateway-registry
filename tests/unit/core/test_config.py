@@ -901,6 +901,28 @@ class TestSettingsSessionCookie:
         # Assert
         assert settings.session_cookie_domain == ".example.com"
 
+    @pytest.mark.parametrize(
+        "configured",
+        [
+            pytest.param("", id="empty"),
+            pytest.param("__Host-session", id="host-prefix"),
+            pytest.param("__secure-session", id="secure-prefix"),
+            pytest.param("my;session", id="separator"),
+            pytest.param("my session", id="space"),
+        ],
+    )
+    def test_refuses_to_start_with_an_unusable_session_cookie_name(
+        self, monkeypatch, configured
+    ) -> None:
+        """A SESSION_COOKIE_NAME browsers would not keep stops settings from loading.
+
+        The registry and the auth server both build this class at startup.
+        """
+        monkeypatch.setenv("SESSION_COOKIE_NAME", configured)
+
+        with pytest.raises(ValueError, match="SESSION_COOKIE_NAME"):
+            Settings(_env_file=None)
+
     def test_session_max_age_default(self) -> None:
         """Test that session_max_age_seconds has correct default."""
         # Act

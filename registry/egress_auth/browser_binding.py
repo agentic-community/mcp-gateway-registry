@@ -29,6 +29,7 @@ from fastapi import (
     Response,
 )
 
+from registry.common.session_cookie import session_cookie_secure_flag
 from registry.core.config import settings
 from registry.utils.request_utils import is_request_https
 
@@ -70,11 +71,13 @@ def _consent_cookie_secure(
 ) -> bool:
     """Return whether a set or expiry of the consent cookie carries Secure.
 
-    Secure on HTTPS when ``SESSION_COOKIE_SECURE`` is true, never on plain
-    HTTP, where a browser drops a Secure cookie. The set and the expiry both
-    use this, so the browser matches the expiry to the cookie it holds.
+    The session cookie's rule: on HTTPS when ``SESSION_COOKIE_SECURE`` is
+    true, never on plain HTTP.
     """
-    return settings.session_cookie_secure and is_request_https(request)
+    return session_cookie_secure_flag(
+        is_https=is_request_https(request),
+        setting_secure=settings.session_cookie_secure,
+    )
 
 
 def binding_digest(
@@ -165,7 +168,7 @@ def set_consent_cookie(
 
     Attributes follow the session cookie and ``oauth2_temp_session``: HttpOnly;
     SameSite=Lax, because the provider's redirect back is a top-level
-    cross-site GET; Secure on HTTPS when ``SESSION_COOKIE_SECURE`` is true
+    cross-site GET; the session cookie's Secure rule
     (``_consent_cookie_secure``); the session cookie's
     ``SESSION_COOKIE_DOMAIN``, so the cookie reaches the callback host
     whenever the session cookie does. Path is the callback's path and Max-Age

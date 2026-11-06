@@ -547,6 +547,94 @@ def test_account_injection_into_the_principals_browser_writes_nothing(consent_ap
     )
 
 
+def _duplicated_session_header(
+    browser: TestClient,
+    first: str,
+    second: str,
+) -> dict[str, str]:
+    """Return a ``Cookie`` header with two session cookies and the browser's consent cookies.
+
+    Args:
+        browser: The browser whose consent cookies to keep.
+        first: The session cookie the browser sends first.
+        second: The session cookie it sends second.
+
+    Returns:
+        The header, which replaces the browser's jar for the request.
+    """
+    name = routes.settings.session_cookie_name
+    pairs = [f"{name}={first}", f"{name}={second}"]
+    pairs.extend(f"{key}={value}" for key, value in _consent_cookies(browser).items())
+    return {"Cookie": "; ".join(pairs)}
+
+
+# The consenting user's live session beside another live one, in either order.
+_DUPLICATED_SESSIONS = [
+    pytest.param((_CONSENTING_COOKIE, _OTHER_COOKIE), id="consenting-first"),
+    pytest.param((_OTHER_COOKIE, _CONSENTING_COOKIE), id="consenting-last"),
+]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("start", _CONSENT_STARTS)
+@pytest.mark.parametrize("sessions", _DUPLICATED_SESSIONS)
+def test_callback_refuses_a_duplicated_session_cookie(consent_app, start, sessions):
+    """The starting browser sending its session cookie twice completes nothing.
+
+    Another host under the parent domain can add a second session cookie, and
+    the browser's order of the two is the attacker's to choose, so the callback
+    refuses to pick one and asks the user to sign in.
+    """
+    app, store = consent_app
+    browser = _browser(app, _CONSENTING_COOKIE)
+    state_blob, _ = _start_consent(browser, start)
+
+    response = browser.get(
+        _CALLBACK_PATH,
+        params={"code": "provider-code", "state": state_blob},
+        headers=_duplicated_session_header(browser, *sessions),
+    )
+
+    assert response.status_code == 401, response.text
+    assert store.writes == [], f"a duplicated session cookie completed a consent: {store.writes}"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("sessions", _DUPLICATED_SESSIONS)
+def test_initiate_refuses_a_duplicated_session_cookie(consent_app, sessions):
+    """A duplicated session cookie is not the browser's own session at initiate."""
+    app, _ = consent_app
+    browser = _browser(app, None)
+
+    response = browser.post(
+        "/api/egress-auth/initiate",
+        json={"server_path": _SERVER_PATH},
+        headers=_duplicated_session_header(browser, *sessions),
+    )
+
+    assert response.status_code == 403, response.text
+    assert dict(response.cookies) == {}, response.headers.get_list("set-cookie")
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("sessions", _DUPLICATED_SESSIONS)
+def test_connect_sends_a_duplicated_session_cookie_to_login(consent_app, sessions):
+    """The connect route treats a duplicated session cookie as no session: back to login."""
+    app, _ = consent_app
+    browser = _browser(app, None)
+
+    response = browser.get(
+        "/oauth2/egress/connect",
+        params={"server": _SERVER_PATH},
+        headers=_duplicated_session_header(browser, *sessions),
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302, response.text
+    assert "/oauth2/login/" in response.headers["location"], response.headers["location"]
+    assert dict(response.cookies) == {}, response.headers.get_list("set-cookie")
+
+
 @pytest.mark.unit
 def test_consent_cookie_completes_only_its_own_consent(consent_app):
     """The cookie one consent set never completes a different consent.

@@ -15,6 +15,7 @@ URL returned in the Location header. These tests verify:
     auth_server_external_url (which sits behind the WAF).
 """
 
+from http.cookies import Morsel, SimpleCookie
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest
@@ -241,3 +242,61 @@ class TestLogoutHandlerS2S:
 
         instance.get.assert_not_called()
         assert response.headers["location"] == "/login"
+
+
+def _session_cookie_clears(response) -> list[tuple[str, Morsel]]:
+    """Return every ``Set-Cookie`` a logout response sent, parsed, as (name, morsel)."""
+    cleared = []
+    for header in response.headers.getlist("set-cookie"):
+        parsed = SimpleCookie()
+        parsed.load(header)
+        cleared.extend(parsed.items())
+    return cleared
+
+
+class TestLogoutClearsTheCookieTheLoginSet:
+    """Logout deletes the session cookie in every variant login may have set.
+
+    A browser ignores a deletion whose name, Path or Domain differ from the
+    cookie's, so the deletion expires the host-only cookie and, when
+    SESSION_COOKIE_DOMAIN is set, the one on that domain, so a cookie kept
+    from before a domain change goes too.
+    """
+
+    _PATHS = [
+        pytest.param({"auth_method": "session", "session_id": "s"}, None, id="local-logout"),
+        pytest.param(None, None, id="idp-logout"),
+        pytest.param(None, Exception("session store down"), id="error-fallback"),
+    ]
+
+    async def _logout(self, session_data, resolve_error):
+        factory, _ = _mock_s2s_client(_s2s_response())
+        resolve = AsyncMock(return_value=session_data or _oauth2_session())
+        if resolve_error is not None:
+            resolve.side_effect = resolve_error
+        with (
+            patch.object(routes, "httpx") as mock_httpx,
+            patch("registry.auth.dependencies.resolve_session_from_cookie", new=resolve),
+            patch("registry.auth.session_store.delete_session", new=AsyncMock(return_value=True)),
+        ):
+            mock_httpx.AsyncClient = factory
+            return await logout_handler(_make_request(), session="cookie-value")
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("session_data", "resolve_error"), _PATHS)
+    async def test_clears_the_host_only_cookie_and_the_one_on_its_domain(
+        self, monkeypatch, session_data, resolve_error
+    ):
+        monkeypatch.setattr(routes.settings, "session_cookie_name", _SESSION_COOKIE)
+        monkeypatch.setattr(routes.settings, "session_cookie_domain", ".example.com")
+        monkeypatch.setattr(routes.settings, "session_cookie_secure", True)
+
+        response = await self._logout(session_data, resolve_error)
+
+        cleared = _session_cookie_clears(response)
+        assert sorted(morsel["domain"] for _, morsel in cleared) == ["", ".example.com"]
+        for name, morsel in cleared:
+            assert name == _SESSION_COOKIE
+            assert (morsel.value, morsel["max-age"], morsel["path"]) == ("", "0", "/")
+            # The request is HTTPS, so the expiry is Secure like the login's cookie.
+            assert morsel["secure"] is True
