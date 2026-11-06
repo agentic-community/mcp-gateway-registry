@@ -1,0 +1,72 @@
+/*
+ * Audit log grid styling (AuditLogTable.tsx).
+ *
+ * The grid uses AG Grid's static "legacy" stylesheets (ag-grid.css and the
+ * Quartz theme), bundled with this file, instead of AG Grid's JavaScript
+ * theming API. The JavaScript API injects <style> elements at runtime, which a
+ * Content-Security-Policy without 'unsafe-inline' blocks; static files only
+ * need style-src 'self'.
+ *
+ * Every color points at a design token from index.css, so the grid follows
+ * light, dark, high-contrast and branding themes with no JavaScript.
+ */
+/*
+ * The second selector covers the nested `ag-theme-quartz` element AG Grid
+ * creates for popups (column filters, menus). That element re-declares the
+ * stock Quartz values, so it needs the overrides too.
+ */
+.ag-theme-quartz.audit-grid,
+.audit-grid .ag-theme-quartz {
+  --ag-font-family: inherit;
+  --ag-font-size: 13px;
+  --ag-grid-size: 7px;
+  --ag-row-height: 40px;
+  --ag-header-height: 40px;
+  --ag-cell-horizontal-padding: 14px;
+  --ag-border-radius: 6px;
+  --ag-wrapper-border-radius: 0;
+
+  --ag-background-color: rgb(var(--color-surface));
+  --ag-foreground-color: rgb(var(--color-fg));
+  --ag-data-color: rgb(var(--color-fg));
+  --ag-secondary-foreground-color: rgb(var(--color-fg-subtle));
+  --ag-disabled-foreground-color: rgb(var(--color-fg-subtle) / 0.6);
+  --ag-header-background-color: rgb(var(--color-surface-muted));
+  --ag-header-foreground-color: rgb(var(--color-fg-muted));
+  --ag-control-panel-background-color: rgb(var(--color-surface-muted));
+  --ag-subheader-background-color: rgb(var(--color-surface-muted));
+  --ag-tooltip-background-color: rgb(var(--color-surface-overlay));
+
+  --ag-border-color: rgb(var(--color-line));
+  --ag-secondary-border-color: rgb(var(--color-line));
+  --ag-row-border-color: rgb(var(--color-line));
+  --ag-header-column-separator-display: block;
+  --ag-header-column-separator-color: rgb(var(--color-line));
+  --ag-header-column-resize-handle-color: rgb(var(--color-line-strong));
+
+  --ag-active-color: rgb(var(--color-accent));
+  --ag-checkbox-checked-color: rgb(var(--color-accent));
+  --ag-range-selection-border-color: rgb(var(--color-accent));
+  --ag-row-hover-color: rgb(var(--color-surface-hover) / 0.6);
+  --ag-selected-row-background-color: rgb(var(--color-accent-soft));
+  --ag-odd-row-background-color: rgb(var(--color-surface));
+
+  --ag-input-border-color: rgb(var(--color-line-strong));
+  --ag-input-focus-border-color: rgb(var(--color-accent));
+  --ag-input-focus-box-shadow: 0 0 0 3px rgb(var(--color-focus) / 0.25);
+  --ag-input-disabled-background-color: rgb(var(--color-surface-muted));
+
+  --ag-menu-background-color: rgb(var(--color-surface-overlay));
+  --ag-menu-border-color: rgb(var(--color-line));
+  --ag-panel-background-color: rgb(var(--color-surface-overlay));
+  --ag-panel-border-color: rgb(var(--color-line));
+  --ag-chip-background-color: rgb(var(--color-surface-hover));
+  --ag-chip-border-color: rgb(var(--color-line));
+
+  color-scheme: inherit;
+}
+
+/* The surrounding .card already draws the frame. */
+.ag-theme-quartz.audit-grid .ag-root-wrapper {
+  border: none;
+}

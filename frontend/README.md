@@ -70,7 +70,9 @@ Settings > Audit > Audit Logs shows events in an [AG Grid Community](https://www
 - "Export view" downloads the rows and columns on screen as CSV. The JSONL and CSV buttons at the top of the page export every event that matches the server filters.
 - Clicking a row opens the event in a side panel; `Escape` closes it.
 
-The grid registers only the AG Grid modules it uses (`ModuleRegistry.registerModules` at the top of `AuditLogTable.tsx`). If you use a new grid feature, register its module there; development builds log a warning that names the missing module. Grid colors come from `src/components/audit/auditGridTheme.ts`, which points every AG Grid theme parameter at the CSS tokens above. Per-stream column definitions live in `src/components/audit/auditColumns.tsx`.
+The grid registers only the AG Grid modules it uses (`ModuleRegistry.registerModules` at the top of `AuditLogTable.tsx`). If you use a new grid feature, register its module there; development builds log a warning that names the missing module. Per-stream column definitions live in `src/components/audit/auditColumns.tsx`.
+
+The grid is styled with AG Grid's static stylesheets (`ag-grid.css` and the Quartz theme), imported by `AuditLogTable.tsx` with `theme="legacy"`, rather than AG Grid's JavaScript theming API. The JavaScript API injects `<style>` elements at runtime, which a Content-Security-Policy without `'unsafe-inline'` blocks; static files need only `style-src 'self'`. `src/components/audit/auditGrid.css` maps AG Grid's `--ag-*` variables onto the design tokens, so the grid follows the mode, high contrast and branding themes. Keep it that way: do not pass a `Theme` object to the grid.
 
 ## Code splitting
 
