@@ -248,7 +248,7 @@ Provides real-time updates on the health status of all registered services.
 
 **URL:** `/api/health/ws/health_status`
 **Protocol:** WebSocket
-**Authentication:** Not required (public endpoint)
+**Authentication:** The session cookie, sent in the handshake's `Cookie` header. A browser sends it on a same-origin WebSocket by itself. The endpoint never reads a session from the URL query string, because URLs are written to access logs.
 **Response:** JSON messages with health status updates
 
 **Example using websocat:**
@@ -260,10 +260,10 @@ sudo wget -qO /usr/local/bin/websocat https://github.com/vi/websocat/releases/la
 sudo chmod +x /usr/local/bin/websocat
 ```
 
-Then connect to the WebSocket endpoint:
+Then connect to the WebSocket endpoint with your session cookie (copy its value from the browser's developer tools):
 
 ```bash
-websocat ws://localhost/api/health/ws/health_status
+websocat -H "Cookie: mcp_gateway_session=YOUR_SESSION_COOKIE" ws://localhost/api/health/ws/health_status
 ```
 
 This will display the JSON messages with health status updates in real-time in your terminal.
@@ -278,7 +278,8 @@ import websockets
 
 async def health_status_monitor():
     uri = "ws://localhost/api/health/ws/health_status"
-    async with websockets.connect(uri) as websocket:
+    headers = {"Cookie": "mcp_gateway_session=YOUR_SESSION_COOKIE"}
+    async with websockets.connect(uri, additional_headers=headers) as websocket:
         print("WebSocket connection established")
 
         while True:

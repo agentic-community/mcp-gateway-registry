@@ -19,7 +19,9 @@ async def websocket_endpoint(websocket: WebSocket):
     connection_added = False
     try:
         # WebSocket cookies are automatically included in handshake
-        # Validate session before accepting connection
+        # Validate session before accepting connection. The session cookie is
+        # the only credential read here: a session in the URL would land in
+        # access logs, so the query string is never consulted.
         session_cookie = None
 
         # Debug: Log WebSocket connection attempt
@@ -46,10 +48,6 @@ async def websocket_endpoint(websocket: WebSocket):
                         name, value = cookie_pair.strip().split("=", 1)
                         cookies[name] = value
                 session_cookie = cookies.get(settings.session_cookie_name)
-
-        # Alternative: Try to get from query parameters as fallback
-        if not session_cookie and hasattr(websocket, "query_params"):
-            session_cookie = websocket.query_params.get(settings.session_cookie_name)
 
         logger.debug(f"WebSocket session cookie found: {bool(session_cookie)}")
 
