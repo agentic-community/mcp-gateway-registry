@@ -493,7 +493,7 @@ Administrators can view audit logs in the Registry UI:
 3. Set server filters (time range, username, operation, resource, status). The grid loads a batch of matching events, 1,000 by default, and **Load more** fetches the next batch.
 4. Type in the search box (or press `/`) to filter the loaded events across every column, including hidden ones such as request ID and client IP. Each column also has its own filter and sort, and the **Columns** menu shows or hides columns.
 5. Click a row to open the full event in a side panel.
-6. Use **Export view** to download the rows on screen as CSV, or the **JSONL** and **CSV** buttons to export every event that matches the server filters.
+6. Use **Export view** to download the rows on screen as CSV, or the **JSONL** and **CSV** buttons to export every event that matches the server filters. Both CSV exports add a leading `'` to any text cell that starts with `=`, `+`, `-`, `@`, a tab or a carriage return (also after leading spaces), so a spreadsheet shows it as text instead of running it as a formula.
 
 ### API Access
 

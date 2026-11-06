@@ -196,7 +196,7 @@ ECS has no ConfigMaps, so you pass the folder as a base64-encoded `.tar.gz` in t
 tar -czf - -C ./branding . | base64 | tr -d '\n'
 ```
 
-The archive must contain only regular files at its top level, at most 32 of them and at most 2 MiB uncompressed. macOS metadata entries (`._*`, `.DS_Store`) are skipped. Any other problem stops the container at startup with a message that says what to fix. Changing the archive takes a new task deployment. You can set `UI_BRANDING_ARCHIVE_B64` on other surfaces too, but not together with a mounted folder: the container refuses to start when both are present.
+The archive must contain only regular files at its top level, at most 32 of them and at most 2 MiB uncompressed. macOS metadata entries (`._*`, `.DS_Store`) are skipped, but every entry counts toward a limit of 128 entries in total. The decoded archive and the tar stream inside it are each limited to 4 MiB. Any other problem stops the container at startup with a message that says what to fix. Changing the archive takes a new task deployment. You can set `UI_BRANDING_ARCHIVE_B64` on other surfaces too, but not together with a mounted folder: the container refuses to start when both are present.
 
 ## Path-based routing
 
@@ -206,7 +206,7 @@ Under a `ROOT_PATH` such as `/registry`, the UI requests `/registry/branding/...
 
 Only the people who deploy the registry should supply the branding folder. It gets the same trust as the RUM snippet (`docs/frontend-rum.md`): CSS can load images from other origins, and an attacker who controls `theme.css` could use that to leak what pages a user visits. The registry adds these limits:
 
-- It serves only allowed file names and extensions from inside the folder, and refuses anything that resolves outside it.
+- It serves only allowed file names and extensions from inside the folder, and refuses anything that resolves outside it. It checks and reads each file through one open file handle, so a file or folder swapped for a link while it is being read is refused rather than served.
 - It sends `X-Content-Type-Options: nosniff` on every file.
 - It sends a restrictive `Content-Security-Policy` with `sandbox` on SVG files, so script inside an SVG opened directly in a tab does not run.
 - The UI shows logos with `<img>`, which never runs script inside an SVG.

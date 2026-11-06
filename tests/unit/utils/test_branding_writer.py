@@ -6,6 +6,7 @@ must exit non-zero and leave the target folder untouched.
 """
 
 import base64
+import gzip
 import io
 import logging
 import os
@@ -17,7 +18,9 @@ import pytest
 
 from registry.utils import branding_writer
 from registry.utils.branding_files import (
+    MAX_BRANDING_ARCHIVE_ENTRIES,
     MAX_BRANDING_ARCHIVE_FILES,
+    MAX_BRANDING_ARCHIVE_TAR_BYTES,
     MAX_BRANDING_ARCHIVE_TOTAL_BYTES,
 )
 
@@ -191,10 +194,8 @@ class TestBrandingWriterSuccess:
             assert _run(monkeypatch, archive) == 0
 
         assert sorted(p.name for p in target_dir.iterdir()) == ["logo.svg"]
-        assert any(
-            record.levelno == logging.INFO and repr(metadata_name) in record.getMessage()
-            for record in caplog.records
-        )
+        skip_logs = [r.getMessage() for r in caplog.records if "skipped" in r.getMessage()]
+        assert skip_logs == ["Branding: skipped 1 archive root and macOS metadata entries"]
 
     def test_dot_slash_duplicate_of_bare_name_is_rejected(
         self,
@@ -350,6 +351,90 @@ class TestBrandingWriterRejects:
 
         assert list(target_dir.iterdir()) == []
         assert "exceed" in caplog.text
+
+    def test_rejects_too_many_skipped_entries(
+        self,
+        target_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        # Zero-sized entries the writer skips still cost a header parse each,
+        # so they count toward the entry cap.
+        members: list[tarfile.TarInfo | tuple[str, bytes]] = [("logo.svg", b"<svg/>")]
+        members += [(f"._f{i}.css", b"") for i in range(MAX_BRANDING_ARCHIVE_ENTRIES)]
+
+        with caplog.at_level(logging.INFO):
+            assert _run(monkeypatch, _archive_b64(members)) != 0
+
+        assert list(target_dir.iterdir()) == []
+        assert f"more than {MAX_BRANDING_ARCHIVE_ENTRIES} entries" in caplog.text
+        assert "skipped" not in caplog.text
+
+    def test_entry_limit_is_inclusive(
+        self,
+        target_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        members: list[tarfile.TarInfo | tuple[str, bytes]] = [("logo.svg", b"<svg/>")]
+        members += [(f"._f{i}.css", b"") for i in range(MAX_BRANDING_ARCHIVE_ENTRIES - 1)]
+
+        assert _run(monkeypatch, _archive_b64(members)) == 0
+        assert [p.name for p in target_dir.iterdir()] == ["logo.svg"]
+
+    def test_rejects_gzip_bomb_before_parsing(
+        self,
+        target_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        # Zeros compress about 1000:1, so the compressed value is small while
+        # the stream would pass the tar-stream cap.
+        bomb = gzip.compress(b"\0" * (MAX_BRANDING_ARCHIVE_TAR_BYTES + 1))
+        assert len(bomb) < MAX_BRANDING_ARCHIVE_TAR_BYTES
+
+        with caplog.at_level(logging.ERROR):
+            assert _run(monkeypatch, base64.b64encode(bomb).decode("ascii")) != 0
+
+        assert list(target_dir.iterdir()) == []
+        assert f"decompresses to more than {MAX_BRANDING_ARCHIVE_TAR_BYTES} bytes" in caplog.text
+
+    def test_rejects_oversize_encoded_archive(
+        self,
+        target_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        oversize = b"\0" * (MAX_BRANDING_ARCHIVE_TAR_BYTES + 1)
+
+        with caplog.at_level(logging.ERROR):
+            assert _run(monkeypatch, base64.b64encode(oversize).decode("ascii")) != 0
+
+        assert list(target_dir.iterdir()) == []
+        assert f"larger than the {MAX_BRANDING_ARCHIVE_TAR_BYTES} byte limit" in caplog.text
+
+    def test_rejects_data_after_gzip_stream(
+        self,
+        target_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        raw = base64.b64decode(_archive_b64([("theme.css", b"a{}")])) + b"junk"
+
+        with caplog.at_level(logging.ERROR):
+            assert _run(monkeypatch, base64.b64encode(raw).decode("ascii")) != 0
+
+        assert list(target_dir.iterdir()) == []
+        assert "unexpected data after the gzip stream" in caplog.text
+
+    def test_rejects_truncated_gzip_stream(
+        self,
+        target_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        raw = base64.b64decode(_archive_b64([("theme.css", b"a{}" * 1000)]))
+
+        assert _run(monkeypatch, base64.b64encode(raw[:-12]).decode("ascii")) != 0
+        assert list(target_dir.iterdir()) == []
 
     def test_rejects_duplicate_names(
         self,

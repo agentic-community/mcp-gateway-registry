@@ -113,7 +113,7 @@ from registry.utils.branding_files import (
     BrandingFileRefusedError,
     branding_content_type,
     branding_response_headers,
-    resolve_branding_file,
+    read_branding_file,
 )
 
 # Server start time tracking moved to registry/api/system_routes.py
@@ -1528,7 +1528,7 @@ async def serve_rum_js():
     methods=["GET", "HEAD"],
     include_in_schema=False,
 )
-async def serve_branding_file(
+def serve_branding_file(
     name: str,
 ) -> Response:
     """Serve a runtime UI branding file from the branding folder.
@@ -1541,7 +1541,8 @@ async def serve_branding_file(
     The ``path`` converter captures everything under /branding/ so names with
     a slash are rejected here with a 404 instead of reaching the SPA. Files are
     read from disk on every request (never cached in memory), so an edited
-    ConfigMap shows up without a restart.
+    ConfigMap shows up without a restart. The handler is sync so FastAPI runs
+    the file read in its threadpool rather than on the event loop.
 
     Args:
         name: Requested file name; must be a bare allowed branding file name.
@@ -1553,7 +1554,7 @@ async def serve_branding_file(
     Raises:
         HTTPException: 404 for a disallowed name, a missing file without a
             default, or a file that is refused (escapes the folder, too
-            large, not a regular file).
+            large, not a regular file, changed while being opened).
     """
     content_type = branding_content_type(name)
     if content_type is None:
@@ -1561,7 +1562,7 @@ async def serve_branding_file(
 
     headers = branding_response_headers(content_type)
     try:
-        file_path = resolve_branding_file(settings.branding_dir, name)
+        content = read_branding_file(settings.branding_dir, name)
     except FileNotFoundError:
         default_content = DEFAULT_BRANDING_FILES.get(name)
         if default_content is None:
@@ -1571,7 +1572,7 @@ async def serve_branding_file(
         logger.warning("Branding: refusing to serve %s: %s", name, e)
         raise HTTPException(status_code=404) from None
 
-    return FileResponse(file_path, media_type=content_type, headers=headers)
+    return Response(content=content, media_type=content_type, headers=headers)
 
 
 GATEWAY_PROXY_DISABLED_BODY: dict[str, str] = {

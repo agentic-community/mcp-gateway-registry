@@ -6,6 +6,7 @@ Tests point UI_BRANDING_DIR at a temporary folder by patching
 """
 
 import os
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -15,9 +16,51 @@ from fastapi.testclient import TestClient
 import registry.main as registry_main
 from registry.core.config import settings
 from registry.main import app
+from registry.utils import branding_files
 from registry.utils.branding_files import BRANDING_SVG_CSP, MAX_BRANDING_FILE_BYTES
 
 SVG_CONTENT: bytes = b'<svg xmlns="http://www.w3.org/2000/svg"><rect width="1" height="1"/></svg>'
+
+
+def _configmap_layout(
+    branding_dir: Path,
+    name: str,
+    content: bytes,
+) -> Path:
+    """Build the Kubernetes layout key -> ..data/key, ..data -> ..<timestamp>/."""
+    timestamp_dir = branding_dir / "..2026_11_06_00_00_00.000000000"
+    timestamp_dir.mkdir()
+    (timestamp_dir / name).write_bytes(content)
+    os.symlink(timestamp_dir.name, branding_dir / "..data")
+    os.symlink(Path("..data") / name, branding_dir / name)
+    return timestamp_dir
+
+
+def _swap_during_open(
+    monkeypatch: pytest.MonkeyPatch,
+    target: Path,
+    swap: Callable[[], None],
+    restore: Callable[[], None] | None,
+) -> None:
+    """Run ``swap`` just before the branding read opens ``target``.
+
+    This lands the replacement in the window between the containment check
+    and the open. ``restore`` (if given) runs right after the open, as an
+    attacker would to make a later re-check see the original file.
+    """
+    real_open = os.open
+
+    def _open(path, flags, *args, **kwargs):  # noqa: ANN001, ANN202 - os.open signature
+        if Path(path) != target:
+            return real_open(path, flags, *args, **kwargs)
+        swap()
+        try:
+            return real_open(path, flags, *args, **kwargs)
+        finally:
+            if restore is not None:
+                restore()
+
+    monkeypatch.setattr(branding_files.os, "open", _open)
 
 
 @pytest.fixture
@@ -289,6 +332,62 @@ class TestBrandingRouteSymlinks:
         assert response.status_code == status.HTTP_200_OK
         assert response.content == SVG_CONTENT
         assert response.headers["content-security-policy"] == BRANDING_SVG_CSP
+
+
+class TestBrandingRouteSwapDuringOpen:
+    """A path swapped after the containment check never serves outside content."""
+
+    def test_file_swapped_for_symlink_is_refused(
+        self,
+        branding_dir: Path,
+        client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        secret = branding_dir.parent / "secret.css"
+        secret.write_text("secret{}")
+        theme = branding_dir / "theme.css"
+        theme.write_text("a{}")
+
+        def _swap() -> None:
+            theme.unlink()
+            os.symlink(secret, theme)
+
+        _swap_during_open(monkeypatch, theme.resolve(), _swap, None)
+
+        response = client.get("/branding/theme.css")
+
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+        assert "secret" not in response.text
+
+    @pytest.mark.parametrize("swap_back", [False, True], ids=["left-swapped", "swapped-back"])
+    def test_parent_dir_swapped_for_symlink_is_refused(
+        self,
+        branding_dir: Path,
+        client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+        swap_back: bool,
+    ) -> None:
+        outside = branding_dir.parent / "outside"
+        outside.mkdir()
+        (outside / "theme.css").write_text("secret{}")
+        timestamp_dir = _configmap_layout(branding_dir, "theme.css", b"a{}")
+        parked = branding_dir.parent / "parked"
+
+        def _swap() -> None:
+            timestamp_dir.rename(parked)
+            os.symlink(outside, timestamp_dir)
+
+        def _restore() -> None:
+            timestamp_dir.unlink()
+            parked.rename(timestamp_dir)
+
+        target = (timestamp_dir / "theme.css").resolve()
+        _swap_during_open(monkeypatch, target, _swap, _restore if swap_back else None)
+
+        response = client.get("/branding/theme.css")
+
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+        assert "secret" not in response.text
 
 
 class TestBrandingRootPathRewrite:
