@@ -13,7 +13,9 @@ from registry.common.request_origin import normalize_origin
 from registry.common.secret_key import validate_secret_key
 from registry.common.session_cookie import (
     DEFAULT_SESSION_COOKIE_NAME,
+    check_host_prefix_settings,
     check_session_cookie_name,
+    effective_session_cookie_name,
 )
 from registry.constants import (
     MAX_EMBEDDINGS_EXTRA_HEADERS,
@@ -189,9 +191,10 @@ class Settings(BaseSettings):
 
     # Auth settings
     secret_key: str = ""
-    # Read by both services (the auth server shares this class), so both set and
-    # read the session cookie under this one SESSION_COOKIE_NAME. Validated in
-    # __init__ so both services refuse a name a browser would not keep.
+    # Read by both services (the auth server shares this class). The configured
+    # SESSION_COOKIE_NAME; every reader and writer of the cookie uses
+    # session_cookie_effective_name, which adds the __Host- prefix when it is on.
+    # Validated in __init__ so both services refuse a name a browser would not keep.
     session_cookie_name: str = DEFAULT_SESSION_COOKIE_NAME
     session_max_age_seconds: int = Field(
         default=60 * 60 * 8,
@@ -209,6 +212,16 @@ class Settings(BaseSettings):
     # decide through session_cookie_secure_flag.
     session_cookie_secure: bool = True
     session_cookie_domain: str | None = None  # e.g., ".example.com" for cross-subdomain sharing
+    session_cookie_host_prefix: bool = Field(
+        default=False,
+        description=(
+            "Name the session cookie __Host-<SESSION_COOKIE_NAME> and set it Secure, "
+            "Path=/ and without Domain, so no sibling subdomain can set or overwrite "
+            "it. Requires SESSION_COOKIE_SECURE=true and an empty SESSION_COOKIE_DOMAIN; "
+            "startup fails otherwise. Turning it on renames the cookie, which signs "
+            "every user out once. Read by the registry and the auth server."
+        ),
+    )
 
     # CORS allowlist. Comma-separated list of exact origins (scheme + host +
     # optional port) permitted to make credentialed cross-origin requests to
@@ -2543,7 +2556,13 @@ class Settings(BaseSettings):
         self._validate_embeddings_extra_header_slots()
         self._validate_embeddings_model_name()
         # The auth server reads these same fields, so both services set and read
-        # the session cookie under one name.
+        # the session cookie under one name, and both refuse to start with a
+        # __Host- prefix browsers would reject.
+        check_host_prefix_settings(
+            self.session_cookie_host_prefix,
+            self.session_cookie_secure,
+            self.session_cookie_domain,
+        )
         self.session_cookie_name = check_session_cookie_name(self.session_cookie_name)
         if not self.session_cookie_secure:
             # SESSION_COOKIE_SECURE alone decides Secure on HTTPS. A deployment that
@@ -2555,6 +2574,18 @@ class Settings(BaseSettings):
                 "deployment reachable over HTTPS; plain-HTTP development needs no change, "
                 "because the cookie is never Secure on plain HTTP."
             )
+
+    @property
+    def session_cookie_effective_name(self) -> str:
+        """The name both services set and read the session cookie under.
+
+        ``SESSION_COOKIE_NAME``, with ``__Host-`` in front when
+        ``SESSION_COOKIE_HOST_PREFIX`` is true.
+        """
+        return effective_session_cookie_name(
+            self.session_cookie_name,
+            self.session_cookie_host_prefix,
+        )
 
     def _raw_embeddings_extra_header_slots(self) -> list[tuple[int, str]]:
         """Return (slot number, stripped value) for every populated header slot."""

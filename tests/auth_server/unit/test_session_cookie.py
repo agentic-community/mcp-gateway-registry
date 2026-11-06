@@ -2,10 +2,10 @@
 
 The auth server sets the session cookie at login and reads it at ``/validate``;
 the registry reads it when it resolves a browser session (the egress consent
-routes, CSRF, logout). Both take its name from ``SESSION_COOKIE_NAME``. These
-tests drive the real login callback and ``/validate`` and the registry's own
-session check, with the default name and a configured one. The login takes the
-cookie's Domain
+routes, CSRF, logout). Both take its name from ``SESSION_COOKIE_NAME`` and
+``SESSION_COOKIE_HOST_PREFIX``. These tests drive the real login callback and
+``/validate`` and the registry's own session check, with the default name, a
+configured one, and the ``__Host-`` prefix. The login takes the cookie's Domain
 from ``SESSION_COOKIE_DOMAIN`` only, as the registry's logout does, and expires
 the host-only variant when it sets one with a Domain, so a browser that kept one
 from before a ``SESSION_COOKIE_DOMAIN`` change does not send two. Both services
@@ -18,13 +18,17 @@ Secure flag comes from ``SESSION_COOKIE_SECURE`` and its lifetime from
 from __future__ import annotations
 
 import asyncio
+import os
 import re
+import subprocess  # nosec B404 - runs the service imports in a fresh interpreter
+import sys
 import time
 from datetime import timedelta
 from http.cookies import (
     Morsel,
     SimpleCookie,
 )
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import (
@@ -60,28 +64,36 @@ _ACCOUNT_ID: str = "account-1"
 def _configure_session_cookie_name(
     monkeypatch: pytest.MonkeyPatch,
     configured: str | None,
+    host_prefix: bool = False,
 ) -> str:
     """Set the session cookie variables and load the name both services read.
 
     Args:
         monkeypatch: Sets the environment and the shared settings.
         configured: The ``SESSION_COOKIE_NAME`` value, or None to leave it unset.
+        host_prefix: Whether to set ``SESSION_COOKIE_HOST_PREFIX=true``, with the
+            Secure cookie and empty domain it requires.
 
     Returns:
-        The session cookie name.
+        The effective session cookie name, ``__Host-`` included when the prefix is on.
     """
     if configured is None:
         monkeypatch.delenv("SESSION_COOKIE_NAME", raising=False)
     else:
         monkeypatch.setenv("SESSION_COOKIE_NAME", configured)
+    if host_prefix:
+        monkeypatch.setenv("SESSION_COOKIE_HOST_PREFIX", "true")
+        monkeypatch.setenv("SESSION_COOKIE_SECURE", "true")
+        monkeypatch.delenv("SESSION_COOKIE_DOMAIN", raising=False)
     loaded = Settings()
     for field in (
         "session_cookie_name",
+        "session_cookie_host_prefix",
         "session_cookie_secure",
         "session_cookie_domain",
     ):
         monkeypatch.setattr(server_module.settings, field, getattr(loaded, field))
-    return loaded.session_cookie_name
+    return loaded.session_cookie_effective_name
 
 
 def _login_session_cookie(
@@ -205,6 +217,42 @@ def test_validate_ignores_a_session_cookie_under_another_name(monkeypatch):
     assert response.status_code == 401, response.text
 
 
+@pytest.mark.parametrize(
+    ("host_prefix", "name", "secure"),
+    [
+        pytest.param(False, _DEFAULT_NAME, False, id="prefix-off"),
+        pytest.param(True, f"__Host-{_DEFAULT_NAME}", True, id="prefix-on"),
+    ],
+)
+def test_host_prefix_decides_the_login_cookie_name_and_attributes(
+    monkeypatch, host_prefix, name, secure
+):
+    """The prefix names the cookie __Host-<name>: Secure, Path=/, no Domain.
+
+    The test client talks plain HTTP, so without the prefix the cookie is not
+    Secure, as today.
+    """
+    resolved = _configure_session_cookie_name(monkeypatch, None, host_prefix=host_prefix)
+
+    login = _login("keycloak", _ACCOUNT_ID, _COLLIDING_PROFILE)
+    morsel = _login_session_cookie(login.set_cookie_headers, resolved)
+
+    assert resolved == name
+    assert (bool(morsel["secure"]), morsel["path"], morsel["domain"]) == (secure, "/", "")
+    assert morsel["httponly"] is True
+
+
+def test_validate_and_registry_read_the_host_prefixed_cookie(monkeypatch):
+    """With the prefix on, /validate and the registry find the session under __Host-<name>."""
+    name = _configure_session_cookie_name(monkeypatch, None, host_prefix=True)
+
+    login = _login("keycloak", _ACCOUNT_ID, _COLLIDING_PROFILE)
+    hop = _validate_hop_tokens({"Cookie": f"{name}={login.cookie}"}, login.store)
+
+    assert login.cookie, login.set_cookie_headers
+    assert _registry_sees_browser_session(name, login.cookie, hop.registry_context, login.store)
+
+
 _EXAMPLE_DOMAIN: str = ".example.com"
 # A domain oauth2_providers.yml names at run time that SESSION_COOKIE_DOMAIN does
 # not. Startup refuses that pair; set after startup, the login must ignore it.
@@ -212,26 +260,31 @@ _YML_DOMAIN: str = ".other.example"
 
 
 @pytest.mark.parametrize(
-    ("configured_domain", "expected"),
+    ("host_prefix", "configured_domain", "expected"),
     [
-        pytest.param(None, [("set", "")], id="host-only"),
+        pytest.param(False, None, [("set", "")], id="host-only"),
         pytest.param(
+            False,
             _EXAMPLE_DOMAIN,
             [("set", _EXAMPLE_DOMAIN), ("expire", "")],
             id="domain-expires-the-host-only-cookie",
         ),
+        pytest.param(True, None, [("set", "")], id="host-prefix-has-one-variant"),
     ],
 )
-def test_login_expires_the_other_session_cookie_variant(monkeypatch, configured_domain, expected):
+def test_login_expires_the_other_session_cookie_variant(
+    monkeypatch, host_prefix, configured_domain, expected
+):
     """The login sets the session cookie on SESSION_COOKIE_DOMAIN and expires the other variant.
 
     A cookie set with a Domain and a host-only one are two cookies to the
     browser, so after ``SESSION_COOKIE_DOMAIN`` changes a browser holds both
     and sends both, which both services refuse. Setting one variant and
-    expiring the other at Path=/ leaves one. A ``session.domain`` in
-    ``oauth2_providers.yml`` plays no part.
+    expiring the other at Path=/ leaves one. A ``__Host-`` cookie never has a
+    Domain, so with the prefix there is nothing to expire. A ``session.domain``
+    in ``oauth2_providers.yml`` plays no part.
     """
-    name = _configure_session_cookie_name(monkeypatch, None)
+    name = _configure_session_cookie_name(monkeypatch, None, host_prefix=host_prefix)
     monkeypatch.setitem(server_module.OAUTH2_CONFIG["session"], "domain", _YML_DOMAIN)
     monkeypatch.setattr(server_module.settings, "session_cookie_domain", configured_domain)
 
@@ -287,31 +340,37 @@ def _browser_request(
     )
 
 
-# (SESSION_COOKIE_SECURE, request over HTTPS, the cookie is Secure).
+# (SESSION_COOKIE_HOST_PREFIX, SESSION_COOKIE_SECURE, request over HTTPS, the
+#  cookie is Secure). Settings refuse the prefix with SESSION_COOKIE_SECURE=false,
+#  so those rows are absent.
 _SECURE_FLAG_ROWS = [
-    pytest.param(True, True, True, id="setting-on-https"),
-    pytest.param(False, True, False, id="setting-off-https"),
-    pytest.param(True, False, False, id="setting-on-http"),
-    pytest.param(False, False, False, id="setting-off-http"),
+    pytest.param(False, True, True, True, id="setting-on-https"),
+    pytest.param(False, False, True, False, id="setting-off-https"),
+    pytest.param(False, True, False, False, id="setting-on-http"),
+    pytest.param(False, False, False, False, id="setting-off-http"),
+    pytest.param(True, True, True, True, id="prefix-https"),
+    pytest.param(True, True, False, True, id="prefix-http"),
 ]
 
 
-@pytest.mark.parametrize(("setting_secure", "https", "secure"), _SECURE_FLAG_ROWS)
+@pytest.mark.parametrize(("host_prefix", "setting_secure", "https", "secure"), _SECURE_FLAG_ROWS)
 def test_session_cookie_is_secure_on_https_exactly_when_the_setting_says(
-    monkeypatch, setting_secure, https, secure
+    monkeypatch, host_prefix, setting_secure, https, secure
 ):
     """Every set and expiry of the session cookie, in both services, carries one Secure flag.
 
     On HTTPS the cookie is Secure exactly when ``SESSION_COOKIE_SECURE`` is
     true. On plain HTTP it is never Secure, because a browser drops a Secure
-    Set-Cookie there. The login's cookie, the login's expiry of the host-only
-    variant and the registry's expiries (logout and a refused duplicate) all
-    follow it. A ``session.secure`` in the provider config plays no part, so it
-    is set to the opposite of the setting here.
+    Set-Cookie there, except with the ``__Host-`` prefix, which a browser
+    accepts only with Secure. The login's cookie, the login's expiry of the
+    host-only variant and the registry's expiries (logout and a refused
+    duplicate) all follow it. A ``session.secure`` in the provider config
+    plays no part, so it is set to the opposite of the setting here.
     """
-    name = _configure_session_cookie_name(monkeypatch, None)
+    name = _configure_session_cookie_name(monkeypatch, None, host_prefix=host_prefix)
     monkeypatch.setattr(server_module.settings, "session_cookie_secure", setting_secure)
-    monkeypatch.setattr(server_module.settings, "session_cookie_domain", _EXAMPLE_DOMAIN)
+    domain = None if host_prefix else _EXAMPLE_DOMAIN
+    monkeypatch.setattr(server_module.settings, "session_cookie_domain", domain)
     monkeypatch.setitem(server_module.OAUTH2_CONFIG["session"], "secure", not setting_secure)
 
     with patch.object(server_module, "is_request_https", return_value=https):
@@ -321,8 +380,8 @@ def test_session_cookie_is_secure_on_https_exactly_when_the_setting_says(
     clear_session_cookie(expiry, _browser_request(https))
     registry_expiries = _login_session_cookies(expiry.headers.getlist("set-cookie"), name)
 
-    assert len(login_cookies) == 2, login.set_cookie_headers
-    assert len(registry_expiries) == 2, registry_expiries
+    assert len(login_cookies) == (1 if host_prefix else 2), login.set_cookie_headers
+    assert len(registry_expiries) == (1 if host_prefix else 2), registry_expiries
     for morsel in login_cookies + registry_expiries:
         assert bool(morsel["secure"]) is secure, morsel.OutputString()
 
@@ -352,23 +411,24 @@ def _cookie_attributes(
     )
 
 
-# (SESSION_COOKIE_NAME, SESSION_COOKIE_SECURE, request over HTTPS,
-#  SESSION_COOKIE_DOMAIN, SESSION_MAX_AGE_SECONDS).
+# (SESSION_COOKIE_NAME, SESSION_COOKIE_HOST_PREFIX, SESSION_COOKIE_SECURE,
+#  request over HTTPS, SESSION_COOKIE_DOMAIN, SESSION_MAX_AGE_SECONDS).
 _ATTRIBUTE_ROWS = [
-    pytest.param(None, True, True, None, 28800, id="defaults-https"),
-    pytest.param(None, True, True, _EXAMPLE_DOMAIN, _LIFETIME, id="domain-https"),
-    pytest.param(_CUSTOM_NAME, False, True, _EXAMPLE_DOMAIN, 28800, id="secure-off-https"),
-    pytest.param(None, True, False, _EXAMPLE_DOMAIN, 28800, id="domain-http"),
-    pytest.param(_CUSTOM_NAME, True, True, None, _LIFETIME, id="custom-name-https"),
+    pytest.param(None, False, True, True, None, 28800, id="defaults-https"),
+    pytest.param(None, False, True, True, _EXAMPLE_DOMAIN, _LIFETIME, id="domain-https"),
+    pytest.param(_CUSTOM_NAME, False, False, True, _EXAMPLE_DOMAIN, 28800, id="secure-off-https"),
+    pytest.param(None, False, True, False, _EXAMPLE_DOMAIN, 28800, id="domain-http"),
+    pytest.param(_CUSTOM_NAME, True, True, True, None, _LIFETIME, id="prefix-https"),
+    pytest.param(None, True, True, False, None, 28800, id="prefix-http"),
 ]
 
 
 @pytest.mark.parametrize(
-    ("configured", "setting_secure", "https", "domain", "max_age"),
+    ("configured", "host_prefix", "setting_secure", "https", "domain", "max_age"),
     _ATTRIBUTE_ROWS,
 )
 def test_both_services_send_the_same_session_cookie_headers(
-    monkeypatch, configured, setting_secure, https, domain, max_age
+    monkeypatch, configured, host_prefix, setting_secure, https, domain, max_age
 ):
     """The login's cookie and expiries match the registry's expiries, header for header.
 
@@ -378,7 +438,7 @@ def test_both_services_send_the_same_session_cookie_headers(
     HttpOnly and SameSite. A browser ignores an expiry whose name, Domain or
     Path differ, so a split here leaves a user signed in after logout.
     """
-    name = _configure_session_cookie_name(monkeypatch, configured)
+    name = _configure_session_cookie_name(monkeypatch, configured, host_prefix=host_prefix)
     monkeypatch.setattr(server_module.settings, "session_cookie_secure", setting_secure)
     monkeypatch.setattr(server_module.settings, "session_cookie_domain", domain)
     monkeypatch.setattr(server_module.settings, "session_max_age_seconds", max_age)
@@ -395,8 +455,8 @@ def test_both_services_send_the_same_session_cookie_headers(
     login_expiries = [h for h in login_headers if not _login_session_cookies([h], name)[0].value]
 
     assert set_cookie["max-age"] == str(max_age)
-    assert set_cookie["domain"] == (domain or "")
-    assert len(registry_headers) == (2 if domain else 1), registry_headers
+    assert set_cookie["domain"] == ("" if host_prefix else domain or "")
+    assert len(registry_headers) == (2 if domain and not host_prefix else 1), registry_headers
     assert {_without_expires(h) for h in login_expiries} <= {
         _without_expires(h) for h in registry_headers
     }, (login_expiries, registry_headers)
@@ -621,3 +681,41 @@ def test_startup_accepts_the_shipped_yml_session_block(monkeypatch, session_keys
     _shipped_config_with_session(monkeypatch, **session_keys)
 
     assert "session" in server_module.load_oauth2_config()
+
+
+_REPO_ROOT: Path = Path(__file__).resolve().parents[3]
+# Each service's startup import, as its container runs it.
+_SERVICE_IMPORTS = [
+    pytest.param("import server", id="auth-server"),
+    pytest.param("import registry.main", id="registry"),
+]
+
+
+@pytest.mark.parametrize("service_import", _SERVICE_IMPORTS)
+def test_both_services_refuse_to_start_with_the_prefix_and_a_domain(service_import):
+    """With SESSION_COOKIE_HOST_PREFIX=true and a SESSION_COOKIE_DOMAIN, neither service starts.
+
+    A browser drops a ``__Host-`` cookie that carries a Domain, so nobody
+    could sign in. Each service is imported in a fresh interpreter, as its
+    container does at startup.
+    """
+    env = {
+        **os.environ,
+        "PYTHONPATH": os.pathsep.join([str(_REPO_ROOT), str(_REPO_ROOT / "auth_server")]),
+        "SESSION_COOKIE_HOST_PREFIX": "true",
+        "SESSION_COOKIE_SECURE": "true",
+        "SESSION_COOKIE_DOMAIN": _EXAMPLE_DOMAIN,
+    }
+
+    result = subprocess.run(  # nosec B603 - fixed interpreter and fixed import statement
+        [sys.executable, "-c", service_import],
+        cwd=_REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+
+    assert result.returncode != 0, result.stdout
+    assert "SESSION_COOKIE_HOST_PREFIX=true needs" in result.stderr, result.stderr[-2000:]
+    assert "SESSION_COOKIE_DOMAIN must be empty" in result.stderr, result.stderr[-2000:]

@@ -71,6 +71,16 @@ app:
   # the registry. global.sessionCookieDomain, which the stack chart sets,
   # takes precedence; this key applies only to a standalone install.
   sessionCookieDomain: ""
+  # Name the session cookie __Host-mcp_gateway_session (Secure, Path=/, no
+  # Domain) so no sibling subdomain can set or overwrite it. Requires
+  # sessionCookieSecure=true and an empty sessionCookieDomain; the chart then
+  # renders SESSION_COOKIE_DOMAIN empty. Set the same value on the registry.
+  # Turning it on signs every user out once. See docs/design/cookie-security-design.md.
+  # global.sessionCookieHostPrefix, which the stack chart sets, takes
+  # precedence; this key applies only to a standalone install. It has no
+  # default here so the stack chart can tell an override from the default.
+  # Default: false
+  # sessionCookieHostPrefix: false
   # Exact-match allowlist of OAuth login/logout redirect URIs (open-redirect
   # hardening). Comma-separated list of the FULL absolute callback/success/logout
   # URLs the deployment legitimately redirects to. When set, an absolute

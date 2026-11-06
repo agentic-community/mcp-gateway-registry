@@ -343,6 +343,10 @@ module "ecs_service_auth" {
           value = var.session_cookie_domain
         },
         {
+          name  = "SESSION_COOKIE_HOST_PREFIX"
+          value = tostring(var.session_cookie_host_prefix)
+        },
+        {
           # Exact-match allowlist of OAuth login/logout redirect URIs
           # (open-redirect hardening). Empty falls back to the weaker
           # cookie-domain heuristic.
@@ -1364,6 +1368,10 @@ module "ecs_service_registry" {
         {
           name  = "SESSION_COOKIE_DOMAIN"
           value = var.session_cookie_domain
+        },
+        {
+          name  = "SESSION_COOKIE_HOST_PREFIX"
+          value = tostring(var.session_cookie_host_prefix)
         },
         {
           name  = "TRUSTED_PROXY_HOPS"

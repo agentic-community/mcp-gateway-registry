@@ -479,6 +479,12 @@ variable "session_cookie_domain" {
   default     = ""
 }
 
+variable "session_cookie_host_prefix" {
+  description = "Name the session cookie __Host-<name> (Secure, Path=/, no Domain) so no sibling subdomain can set or overwrite it. Requires session_cookie_secure = true and an empty session_cookie_domain; terraform plan fails otherwise, as do the registry and auth-server at startup. Turning it on signs every user out once."
+  type        = bool
+  default     = false
+}
+
 variable "session_max_age_seconds" {
   description = "Browser session lifetime in seconds. It sets the auth server's session store TTL, the session cookie's Max-Age, and the registry's cookie signature max age, so it must be the same on the registry and the auth server; this module renders the one value into both task definitions. Default 28800 (8 hours)."
   type        = number

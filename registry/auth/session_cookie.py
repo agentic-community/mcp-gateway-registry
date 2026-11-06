@@ -92,7 +92,9 @@ def _read_scope(
     if cached is None:
         cookie_header = join_cookie_fields(headers.getlist("cookie"))
         cached = _SessionCookieRead(
-            values=tuple(session_cookie_values(cookie_header, settings.session_cookie_name))
+            values=tuple(
+                session_cookie_values(cookie_header, settings.session_cookie_effective_name)
+            )
         )
         if cached.refused:
             log_refused_session_cookie(len(cached.values))
@@ -165,10 +167,11 @@ def _session_cookie_attributes(
         The attributes the auth server's login uses for the same request.
     """
     return session_cookie_attributes(
-        name=settings.session_cookie_name,
+        name=settings.session_cookie_effective_name,
         is_https=is_request_https(connection),
         secure=settings.session_cookie_secure,
         domain=settings.session_cookie_domain,
+        host_prefix=settings.session_cookie_host_prefix,
         max_age=settings.session_max_age_seconds,
     )
 
@@ -329,7 +332,7 @@ class SessionCookieIsolationMiddleware:
             await self.app(scope, receive, send)
             return
         read = _read_scope(scope, Headers(scope=scope))
-        name = settings.session_cookie_name
+        name = settings.session_cookie_effective_name
         stripped = _without_session_pairs(scope["headers"], name)
         if stripped is not None:
             scope["headers"] = stripped

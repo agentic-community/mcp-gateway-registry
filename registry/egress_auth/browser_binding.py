@@ -72,11 +72,13 @@ def _consent_cookie_secure(
     """Return whether a set or expiry of the consent cookie carries Secure.
 
     The session cookie's rule: on HTTPS when ``SESSION_COOKIE_SECURE`` is
-    true, never on plain HTTP.
+    true, never on plain HTTP. The consent cookie has no ``__Host-`` name, so
+    the prefix plays no part.
     """
     return session_cookie_secure_flag(
         is_https=is_request_https(request),
         setting_secure=settings.session_cookie_secure,
+        host_prefix=False,
     )
 
 
@@ -168,8 +170,8 @@ def set_consent_cookie(
 
     Attributes follow the session cookie and ``oauth2_temp_session``: HttpOnly;
     SameSite=Lax, because the provider's redirect back is a top-level
-    cross-site GET; the session cookie's Secure rule
-    (``_consent_cookie_secure``); the session cookie's
+    cross-site GET; the session cookie's Secure rule without the ``__Host-``
+    prefix (``_consent_cookie_secure``); the session cookie's
     ``SESSION_COOKIE_DOMAIN``, so the cookie reaches the callback host
     whenever the session cookie does. Path is the callback's path and Max-Age
     is the state TTL, after which the state is refused anyway.

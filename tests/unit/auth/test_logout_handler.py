@@ -258,9 +258,11 @@ class TestLogoutClearsTheCookieTheLoginSet:
     """Logout deletes the session cookie in every variant login may have set.
 
     A browser ignores a deletion whose name, Path or Domain differ from the
-    cookie's, so the deletion expires the host-only cookie and, when
-    SESSION_COOKIE_DOMAIN is set, the one on that domain, so a cookie kept
-    from before a domain change goes too.
+    cookie's, and it refuses a ``__Host-`` Set-Cookie without Secure or with a
+    Domain, so the deletion follows SESSION_COOKIE_HOST_PREFIX. Without the
+    prefix it expires the host-only cookie and, when SESSION_COOKIE_DOMAIN is
+    set, the one on that domain, so a cookie kept from before a domain change
+    goes too.
     """
 
     _PATHS = [
@@ -284,7 +286,24 @@ class TestLogoutClearsTheCookieTheLoginSet:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(("session_data", "resolve_error"), _PATHS)
-    async def test_clears_the_host_only_cookie_and_the_one_on_its_domain(
+    async def test_prefix_on_clears_a_secure_host_only_cookie(
+        self, monkeypatch, session_data, resolve_error
+    ):
+        monkeypatch.setattr(routes.settings, "session_cookie_name", "mcp_gateway_session")
+        monkeypatch.setattr(routes.settings, "session_cookie_host_prefix", True)
+        monkeypatch.setattr(routes.settings, "session_cookie_secure", True)
+        monkeypatch.setattr(routes.settings, "session_cookie_domain", None)
+
+        response = await self._logout(session_data, resolve_error)
+
+        [(name, morsel)] = _session_cookie_clears(response)
+        assert name == "__Host-mcp_gateway_session"
+        assert (morsel["max-age"], morsel["path"], morsel["domain"]) == ("0", "/", "")
+        assert morsel["secure"] is True
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("session_data", "resolve_error"), _PATHS)
+    async def test_prefix_off_clears_the_host_only_cookie_and_the_one_on_its_domain(
         self, monkeypatch, session_data, resolve_error
     ):
         monkeypatch.setattr(routes.settings, "session_cookie_name", _SESSION_COOKIE)

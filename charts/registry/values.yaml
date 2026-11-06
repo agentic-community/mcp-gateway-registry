@@ -79,6 +79,17 @@ app:
   # global.sessionCookieDomain, which the stack chart sets, takes precedence;
   # this key applies only to a standalone install.
   sessionCookieDomain: ""
+  # Name the session cookie __Host-mcp_gateway_session (Secure, Path=/, no
+  # Domain) so no sibling subdomain can set or overwrite it. Requires a Secure
+  # session cookie (global.sessionCookieSecure, or global.ingress.tls=true when
+  # that global is unset) and an empty sessionCookieDomain; the chart then
+  # renders SESSION_COOKIE_DOMAIN empty. Set the same value on auth-server.
+  # Turning it on signs every user out once. See docs/design/cookie-security-design.md.
+  # global.sessionCookieHostPrefix, which the stack chart sets, takes
+  # precedence; this key applies only to a standalone install. It has no
+  # default here so the stack chart can tell an override from the default.
+  # Default: false
+  # sessionCookieHostPrefix: false
   # SESSION_COOKIE_SECURE has no app key here: global.sessionCookieSecure, which
   # the stack chart sets, decides it, and a standalone install without that
   # global follows global.ingress.tls.

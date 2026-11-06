@@ -401,7 +401,7 @@ def test_logout_post_refuses_a_duplicated_cookie_and_expires_it(registry_app, du
             "/api/auth/logout", headers={"Cookie": duplicated}, follow_redirects=False
         )
 
-    name = server_module.settings.session_cookie_name
+    name = server_module.settings.session_cookie_effective_name
     expiries = [h for h in response.headers.get_list("set-cookie") if h.startswith(f"{name}=")]
     assert response.status_code == 403, response.text
     assert expiries, response.headers

@@ -45,6 +45,7 @@ from registry.core.config import settings
 pytestmark = [pytest.mark.unit, pytest.mark.auth]
 
 _PLAIN_NAME: str = "mcp_gateway_session"
+_HOST_NAME: str = "__Host-" + _PLAIN_NAME
 _DOMAIN: str = ".example.com"
 
 
@@ -96,7 +97,7 @@ def test_no_route_reads_the_session_cookie_as_a_cookie_parameter():
             if dependant.call is request_session_cookie:
                 readers.add(path)
             for param in dependant.cookie_params:
-                if param.alias == settings.session_cookie_name:
+                if param.alias == settings.session_cookie_effective_name:
                     declared.append(f"{path}: {getattr(dependant.call, '__name__', '?')}")
 
     assert declared == []
@@ -114,18 +115,21 @@ def cookie_settings(
     request: pytest.FixtureRequest,
     monkeypatch: pytest.MonkeyPatch,
 ) -> str:
-    """Configure the session cookie name and domain; return the name."""
-    domain = request.param
+    """Configure the session cookie name, prefix and domain; return the effective name."""
+    host_prefix, domain = request.param
     monkeypatch.setattr(settings, "session_cookie_name", _PLAIN_NAME)
+    monkeypatch.setattr(settings, "session_cookie_host_prefix", host_prefix)
     monkeypatch.setattr(settings, "session_cookie_secure", True)
     monkeypatch.setattr(settings, "session_cookie_domain", domain)
-    return settings.session_cookie_name
+    return settings.session_cookie_effective_name
 
 
-# Domain -> the Domain of every session cookie expiry expected.
+# (host prefix, domain) -> the Domain of every session cookie expiry expected.
+# Startup refuses the prefix with a domain, so that pair is absent.
 _COOKIE_SETTINGS = [
-    pytest.param(None, {""}, id="host-only"),
-    pytest.param(_DOMAIN, {"", _DOMAIN}, id="domain"),
+    pytest.param((False, None), {""}, id="host-only"),
+    pytest.param((False, _DOMAIN), {"", _DOMAIN}, id="domain"),
+    pytest.param((True, None), {""}, id="host-prefix"),
 ]
 
 
@@ -172,7 +176,8 @@ def test_refused_browser_request_expires_both_session_cookies(
     """A browser route that refuses a duplicated session cookie expires every variant.
 
     With ``SESSION_COOKIE_DOMAIN`` set, that is the host-only cookie and the one
-    on the domain; otherwise only the host-only one.
+    on the domain; otherwise, and always with the ``__Host-`` prefix, only the
+    host-only one, which with the prefix is Secure.
     """
     from registry.main import app
 
@@ -185,6 +190,8 @@ def test_refused_browser_request_expires_both_session_cookies(
     assert response.status_code == status, response.text
     expiries = _session_cookie_expiries(response, cookie_settings)
     assert set(expiries) == domains
+    if cookie_settings == _HOST_NAME:
+        assert expiries[""]["secure"] is True
 
 
 @pytest.mark.parametrize(("method", "path", "status"), _BROWSER_ROUTES[:4])
@@ -197,14 +204,14 @@ def test_a_rejected_single_session_cookie_is_not_expired(monkeypatch, method, pa
     from registry.main import app
 
     monkeypatch.setattr(settings, "session_cookie_domain", _DOMAIN)
-    cookie_header = f"{settings.session_cookie_name}=not-a-signed-session"
+    cookie_header = f"{settings.session_cookie_effective_name}=not-a-signed-session"
 
     response = TestClient(app).request(
         method, path, headers={"Cookie": cookie_header}, follow_redirects=False
     )
 
     assert response.status_code == status, response.text
-    assert _session_cookie_expiries(response, settings.session_cookie_name) == {}
+    assert _session_cookie_expiries(response, settings.session_cookie_effective_name) == {}
 
 
 _PROBE_PATH: str = "/__session-cookie-probe"
@@ -216,7 +223,7 @@ def _probe_report(
     parameter: str | None,
 ) -> dict[str, Any]:
     """Report what a handler sees of the session cookie through each way of reading it."""
-    name = settings.session_cookie_name
+    name = settings.session_cookie_effective_name
     return {
         "starlette": connection.cookies.get(name),
         "parameter": parameter,
@@ -236,7 +243,7 @@ def probe_app() -> Iterator[Any]:
     """
     from registry.main import app
 
-    name = settings.session_cookie_name
+    name = settings.session_cookie_effective_name
 
     async def _http_probe(
         request: Request,
@@ -280,7 +287,7 @@ def test_handlers_see_no_session_cookie_but_the_shared_reader_does(probe_app):
     So a handler that reads the session cookie past the shared reader fails
     closed instead of picking one of two copies.
     """
-    name = settings.session_cookie_name
+    name = settings.session_cookie_effective_name
 
     report = _probe(probe_app, f"theme=dark; {name}=session-value")
 
@@ -311,7 +318,7 @@ def test_handlers_see_no_session_cookie_but_the_shared_reader_does(probe_app):
 )
 def test_other_cookies_reach_handlers_byte_identical(probe_app, cookie_fields, expected):
     """Only session cookie pairs leave the ``Cookie`` fields; every other pair keeps its bytes."""
-    name = settings.session_cookie_name
+    name = settings.session_cookie_effective_name
 
     report = _probe(probe_app, *(field.format(name=name) for field in cookie_fields))
 
@@ -327,7 +334,7 @@ def test_other_cookies_reach_handlers_byte_identical(probe_app, cookie_fields, e
 )
 def test_a_duplicated_session_cookie_is_still_refused(probe_app, cookie_fields):
     """Stripping the pairs does not hide a duplicate from the shared reader, which refuses it."""
-    name = settings.session_cookie_name
+    name = settings.session_cookie_effective_name
 
     report = _probe(probe_app, *(field.format(name=name) for field in cookie_fields))
 
@@ -338,7 +345,7 @@ def test_a_duplicated_session_cookie_is_still_refused(probe_app, cookie_fields):
 
 def test_websocket_handlers_see_no_session_cookie_but_the_shared_reader_does(probe_app):
     """A WebSocket handshake gets the same treatment as an HTTP request."""
-    name = settings.session_cookie_name
+    name = settings.session_cookie_effective_name
     headers = {"Cookie": f"{name}=session-value; theme=dark"}
 
     with TestClient(probe_app).websocket_connect(_WS_PROBE_PATH, headers=headers) as websocket:

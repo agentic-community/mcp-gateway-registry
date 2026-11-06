@@ -2,7 +2,8 @@
 
 A configured ``SESSION_COOKIE_NAME`` must be a name a browser stores and sends
 back unchanged, and must not carry a cookie prefix the browser gives special
-rules to. Both services check it with ``check_session_cookie_name``.
+rules to. Both services check it with ``check_session_cookie_name`` and name
+the cookie with ``effective_session_cookie_name``.
 
 Both services also read the session cookie from the raw ``Cookie`` header
 through ``single_session_cookie``, which refuses a header that carries the name
@@ -22,6 +23,7 @@ from hypothesis import strategies as st
 
 from registry.common.session_cookie import (
     check_session_cookie_name,
+    effective_session_cookie_name,
     single_session_cookie,
 )
 
@@ -47,18 +49,21 @@ _PAIR_SEPARATORS = st.sampled_from([";", "; ", " ;  "])
 
 @pytest.mark.unit
 @pytest.mark.parametrize(
-    ("configured", "expected"),
+    ("configured", "host_prefix", "expected"),
     [
-        pytest.param("custom_session", "custom_session", id="plain"),
-        pytest.param(" custom_session ", "custom_session", id="surrounding-whitespace"),
-        pytest.param("Session-Name.v2_x", "Session-Name.v2_x", id="token-punctuation"),
-        pytest.param("a!#$%&'*+^`|~z", "a!#$%&'*+^`|~z", id="token-symbols"),
-        pytest.param("my__Host-session", "my__Host-session", id="prefix-not-leading"),
+        pytest.param("custom_session", False, "custom_session", id="plain"),
+        pytest.param(" custom_session ", False, "custom_session", id="surrounding-whitespace"),
+        pytest.param("Session-Name.v2_x", False, "Session-Name.v2_x", id="token-punctuation"),
+        pytest.param("a!#$%&'*+^`|~z", False, "a!#$%&'*+^`|~z", id="token-symbols"),
+        pytest.param("my__Host-session", False, "my__Host-session", id="prefix-not-leading"),
+        pytest.param("custom_session", True, "__Host-custom_session", id="host-prefix-on"),
     ],
 )
-def test_accepts_a_cookie_token_name(configured, expected):
-    """A valid RFC 6265 token name is kept without its surrounding whitespace."""
-    assert check_session_cookie_name(configured) == expected
+def test_accepts_a_cookie_token_name(configured, host_prefix, expected):
+    """A valid RFC 6265 token name is kept, with __Host- in front when the prefix is on."""
+    name = check_session_cookie_name(configured)
+
+    assert effective_session_cookie_name(name, host_prefix) == expected
 
 
 @pytest.mark.unit
