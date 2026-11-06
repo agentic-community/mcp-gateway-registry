@@ -67,34 +67,34 @@ function _getAverageRating(
 function _getTypeBadge(type: ItemType) {
   if (type === 'server') {
     return {
-      bg: 'bg-indigo-50 text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-300',
+      bg: 'bg-server-50 text-server-700 dark:bg-server-500/15 dark:text-server-300',
       icon: ServerIcon,
       label: 'Server',
     };
   }
   if (type === 'virtual') {
     return {
-      bg: 'bg-teal-50 text-teal-700 dark:bg-teal-500/15 dark:text-teal-300',
+      bg: 'bg-virtual-50 text-virtual-700 dark:bg-virtual-500/15 dark:text-virtual-300',
       icon: Square3Stack3DIcon,
       label: 'Virtual',
     };
   }
   if (type === 'agent') {
     return {
-      bg: 'bg-cyan-50 text-cyan-700 dark:bg-cyan-500/15 dark:text-cyan-300',
+      bg: 'bg-agent-50 text-agent-700 dark:bg-agent-500/15 dark:text-agent-300',
       icon: CpuChipIcon,
       label: 'Agent',
     };
   }
   if (type === 'custom') {
     return {
-      bg: 'bg-teal-50 text-teal-700 dark:bg-teal-500/15 dark:text-teal-300',
+      bg: 'bg-custom-50 text-custom-700 dark:bg-custom-500/15 dark:text-custom-300',
       icon: Square3Stack3DIcon,
       label: 'Custom',
     };
   }
   return {
-    bg: 'bg-amber-50 text-amber-800 dark:bg-amber-500/15 dark:text-amber-300',
+    bg: 'bg-skill-50 text-skill-800 dark:bg-skill-500/15 dark:text-skill-300',
     icon: SparklesIcon,
     label: 'Skill',
   };
@@ -273,7 +273,7 @@ const DiscoverListRow: React.FC<DiscoverListRowProps> = ({
 
         {/* Tool count */}
         {fields.toolCount > 0 && (
-          <span className="hidden md:inline-flex items-center gap-1 text-xs text-blue-600 dark:text-blue-400 flex-shrink-0">
+          <span className="hidden md:inline-flex items-center gap-1 text-xs text-info-600 dark:text-info-400 flex-shrink-0">
             <WrenchScrewdriverIcon className="h-3 w-3" />
             {fields.toolCount}
           </span>
@@ -281,7 +281,7 @@ const DiscoverListRow: React.FC<DiscoverListRowProps> = ({
 
         {/* Rating */}
         {fields.rating > 0 && (
-          <span className="inline-flex items-center gap-1 text-xs text-amber-600 dark:text-yellow-400 flex-shrink-0">
+          <span className="inline-flex items-center gap-1 text-xs text-warning-600 dark:text-warning-400 flex-shrink-0">
             <StarIcon className="h-3 w-3" />
             {fields.rating.toFixed(1)}
             {fields.ratingCount > 0 && (

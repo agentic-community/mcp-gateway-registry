@@ -88,9 +88,9 @@ const StatusBar: React.FC<{ distribution: StatusDistribution }> = ({ distributio
   }
 
   const segments = [
-    { label: '2xx', count: distribution.status_2xx, color: 'bg-green-500', textColor: 'text-green-600 dark:text-green-400' },
-    { label: '4xx', count: distribution.status_4xx, color: 'bg-yellow-500', textColor: 'text-yellow-600 dark:text-yellow-400' },
-    { label: '5xx', count: distribution.status_5xx, color: 'bg-red-500', textColor: 'text-red-600 dark:text-red-400' },
+    { label: '2xx', count: distribution.status_2xx, color: 'bg-success-500', textColor: 'text-success-600 dark:text-success-400' },
+    { label: '4xx', count: distribution.status_4xx, color: 'bg-warning-500', textColor: 'text-warning-600 dark:text-warning-400' },
+    { label: '5xx', count: distribution.status_5xx, color: 'bg-danger-500', textColor: 'text-danger-600 dark:text-danger-400' },
   ];
 
   return (
@@ -277,13 +277,13 @@ const TimelineChart: React.FC<{
         )}
 
         {/* Area fill */}
-        <path d={areaPath} className="fill-blue-500/15 dark:fill-blue-400/15" />
+        <path d={areaPath} className="fill-info-500/15 dark:fill-info-400/15" />
 
         {/* Line */}
         <path
           d={linePath}
           fill="none"
-          className="stroke-blue-500 dark:stroke-blue-400"
+          className="stroke-info-500 dark:stroke-info-400"
           strokeWidth="2"
           strokeLinejoin="round"
           strokeLinecap="round"
@@ -298,7 +298,7 @@ const TimelineChart: React.FC<{
             r={hoverIndex === i ? 5 : (p.count > 0 ? 3.5 : 2)}
             className={
               p.count > 0
-                ? 'fill-blue-500 stroke-surface-muted dark:fill-blue-400'
+                ? 'fill-info-500 stroke-surface-muted dark:fill-info-400'
                 : 'fill-gray-300 stroke-surface-muted dark:fill-gray-600'
             }
             strokeWidth="1.5"
@@ -317,7 +317,7 @@ const TimelineChart: React.FC<{
             <g>
               <line
                 x1={hp.x} y1={PAD.top} x2={hp.x} y2={PAD.top + plotH}
-                className="stroke-blue-400/50"
+                className="stroke-info-400/50"
                 strokeWidth="1"
                 strokeDasharray="4,3"
               />
@@ -367,7 +367,7 @@ const TimelineChart: React.FC<{
       {hasPrior && (
         <div className="flex items-center justify-end gap-4 text-xs text-fg-subtle mt-1">
           <span className="flex items-center gap-1">
-            <span className="inline-block w-4 h-0.5 bg-blue-500 dark:bg-blue-400" />
+            <span className="inline-block w-4 h-0.5 bg-info-500 dark:bg-info-400" />
             This week
           </span>
           <span className="flex items-center gap-1">
@@ -548,7 +548,7 @@ const AuditStatistics: React.FC<AuditStatisticsProps> = ({ stream, days = 7, use
             </div>
           ) : error ? (
             <div className="text-center py-8">
-              <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
+              <p className="text-sm text-danger-600 dark:text-danger-400">{error}</p>
               <button
                 onClick={handleRefresh}
                 className="mt-2 text-sm font-medium text-accent-text hover:underline"
@@ -565,7 +565,7 @@ const AuditStatistics: React.FC<AuditStatisticsProps> = ({ stream, days = 7, use
                 </h4>
                 <BarChart
                   items={data.top_users.filter((u) => u.name !== 'anonymous')}
-                  color="bg-blue-500"
+                  color="bg-info-500"
                   emptyMessage="No user data"
                 />
                 {(() => {
@@ -592,7 +592,7 @@ const AuditStatistics: React.FC<AuditStatisticsProps> = ({ stream, days = 7, use
                   <h4 className="text-xs font-medium text-fg-subtle uppercase tracking-wider mb-2">
                     Top MCP Servers
                   </h4>
-                  <BarChart items={data.top_servers} color="bg-indigo-500" emptyMessage="No server data" />
+                  <BarChart items={data.top_servers} color="bg-server-500" emptyMessage="No server data" />
                 </div>
               )}
 

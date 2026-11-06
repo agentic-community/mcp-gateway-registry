@@ -29,6 +29,7 @@ from registry.schemas.proxy_mixin import (
     assert_proxy_target_resolvable,
     egress_guard_validator,
 )
+from registry.utils.branding_files import BRANDING_PATH_SEGMENT
 from registry.utils.metadata_limits import validate_metadata_limits
 
 # Configure logging with basicConfig
@@ -65,6 +66,14 @@ def _validate_path_format(
 
     if path.endswith("/") and len(path) > 1:
         raise ValueError("Path cannot end with '/' unless it is the root path")
+
+    # The first segment "branding" is the public UI branding route
+    # ({ROOT_PATH}/branding/<name>); keep it out of the entity path namespace.
+    if path.strip("/").split("/", 1)[0].lower() == BRANDING_PATH_SEGMENT:
+        raise ValueError(
+            f"Path '{path}' is reserved: the '/{BRANDING_PATH_SEGMENT}' prefix serves "
+            "the UI branding files. Choose a different path."
+        )
 
     return path
 

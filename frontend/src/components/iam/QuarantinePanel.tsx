@@ -128,12 +128,12 @@ const QuarantinePanel: React.FC<QuarantinePanelProps> = ({ onShowToast, isAdmin 
   ) => {
     const enabled = enabledByGroup[group];
     return (
-      <div className="rounded-lg border border-red-200 dark:border-red-900/50 bg-red-50/40 dark:bg-red-900/10 p-4">
+      <div className="rounded-lg border border-danger-200 dark:border-danger-900/50 bg-danger-50/40 dark:bg-danger-900/10 p-4">
         <div className="flex items-center justify-between mb-2">
           <div className="flex items-center gap-2">
-            <ExclamationTriangleIcon className="h-5 w-5 text-red-600 dark:text-red-400" />
+            <ExclamationTriangleIcon className="h-5 w-5 text-danger-600 dark:text-danger-400" />
             <span className="font-medium text-fg">{title}</span>
-            <span className="text-xs px-2 py-0.5 rounded-full bg-red-100 dark:bg-red-900/40 text-red-800 dark:text-red-300">
+            <span className="text-xs px-2 py-0.5 rounded-full bg-danger-100 dark:bg-danger-900/40 text-danger-800 dark:text-danger-300">
               {members.length} member{members.length === 1 ? '' : 's'}
             </span>
           </div>
@@ -141,8 +141,8 @@ const QuarantinePanel: React.FC<QuarantinePanelProps> = ({ onShowToast, isAdmin 
             onClick={() => setConfirmToggle({ group, enable: !enabled })}
             className={
               enabled
-                ? 'text-xs font-medium text-red-600 dark:text-red-400 hover:underline'
-                : 'text-xs font-medium text-green-600 dark:text-green-400 hover:underline'
+                ? 'text-xs font-medium text-danger-600 dark:text-danger-400 hover:underline'
+                : 'text-xs font-medium text-success-600 dark:text-success-400 hover:underline'
             }
             title={enabled ? 'Turn the kill switch OFF globally' : 'Turn the kill switch ON'}
           >
@@ -152,7 +152,7 @@ const QuarantinePanel: React.FC<QuarantinePanelProps> = ({ onShowToast, isAdmin 
         {members.length === 0 ? (
           <p className="text-xs text-fg-subtle">Nothing quarantined.</p>
         ) : (
-          <ul className="divide-y divide-red-100 dark:divide-red-900/40">
+          <ul className="divide-y divide-danger-100 dark:divide-danger-900/40">
             {members.map((m) => (
               <li key={`${m.subject_type}:${m.subject}`} className="flex items-center justify-between py-1.5">
                 <span className="font-mono text-xs text-fg">
@@ -160,7 +160,7 @@ const QuarantinePanel: React.FC<QuarantinePanelProps> = ({ onShowToast, isAdmin 
                 </span>
                 <button
                   onClick={() => handleRemove(m)}
-                  className="flex items-center gap-1 text-xs text-fg-subtle hover:text-red-600 dark:hover:text-red-400"
+                  className="flex items-center gap-1 text-xs text-fg-subtle hover:text-danger-600 dark:hover:text-danger-400"
                   title="Remove from quarantine"
                 >
                   <TrashIcon className="h-4 w-4" />
@@ -177,7 +177,7 @@ const QuarantinePanel: React.FC<QuarantinePanelProps> = ({ onShowToast, isAdmin 
 
   // Admin-only "add a target to quarantine" control, rendered inside the targets group.
   const targetAddControl = isAdmin ? (
-    <div className="mt-3 border-t border-red-100 dark:border-red-900/40 pt-3 space-y-2">
+    <div className="mt-3 border-t border-danger-100 dark:border-danger-900/40 pt-3 space-y-2">
       <div className="flex items-center gap-2">
         <span className="text-xs text-fg-subtle">Quarantine a:</span>
         <select
@@ -196,7 +196,7 @@ const QuarantinePanel: React.FC<QuarantinePanelProps> = ({ onShowToast, isAdmin 
         isLoading={targetKind === 'agent' ? agentsLoading : serversLoading}
         disabled={isAddingTarget}
         allowCustom
-        focusColor="focus:ring-red-500"
+        focusColor="focus:ring-danger-500"
         placeholder={
           targetKind === 'agent'
             ? 'Add an agent to quarantine… (e.g. /booking-agent)'
@@ -235,7 +235,7 @@ const QuarantinePanel: React.FC<QuarantinePanelProps> = ({ onShowToast, isAdmin 
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
           <div className="max-w-md rounded-lg border border-line bg-surface-overlay p-6 shadow-xl">
             <div className="flex items-center gap-2 mb-3">
-              <ExclamationTriangleIcon className="h-6 w-6 text-red-600 dark:text-red-400" />
+              <ExclamationTriangleIcon className="h-6 w-6 text-danger-600 dark:text-danger-400" />
               <h4 className="font-semibold text-fg">
                 {confirmToggle.enable ? 'Enable' : 'Disable'} kill switch
               </h4>

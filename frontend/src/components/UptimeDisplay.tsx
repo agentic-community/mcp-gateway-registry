@@ -108,16 +108,16 @@ const UptimeDisplay: React.FC = () => {
 
   const uptimeText = formatUptime(stats.uptime_seconds);
   const dbStatusColor = stats.database_status.status.toLowerCase() === 'healthy'
-    ? 'text-green-600 dark:text-green-400'
-    : 'text-red-600 dark:text-red-400';
+    ? 'text-success-600 dark:text-success-400'
+    : 'text-danger-600 dark:text-danger-400';
   const authStatusColor = stats.auth_status.status.toLowerCase() === 'healthy'
-    ? 'text-green-600 dark:text-green-400'
-    : 'text-red-600 dark:text-red-400';
+    ? 'text-success-600 dark:text-success-400'
+    : 'text-danger-600 dark:text-danger-400';
 
 
   return (
-    <div className="hidden md:flex items-center px-2.5 py-1 bg-green-50 dark:bg-green-900/20 rounded-md group relative">
-      <span className="text-xs font-medium text-green-700 dark:text-green-300">
+    <div className="hidden md:flex items-center px-2.5 py-1 bg-success-50 dark:bg-success-900/20 rounded-md group relative">
+      <span className="text-xs font-medium text-success-700 dark:text-success-300">
         Uptime: {uptimeText}
       </span>
 

@@ -13,10 +13,10 @@ type Renderer = ICellRendererParams<AuditRow>;
 const PILL = 'inline-flex items-center rounded-md px-1.5 py-0.5 text-xs font-medium tabular-nums';
 
 const TONE = {
-  success: 'bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-600/20 dark:bg-emerald-500/10 dark:text-emerald-300 dark:ring-emerald-400/20',
-  info: 'bg-blue-50 text-blue-700 ring-1 ring-inset ring-blue-600/20 dark:bg-blue-500/10 dark:text-blue-300 dark:ring-blue-400/20',
-  warning: 'bg-amber-50 text-amber-800 ring-1 ring-inset ring-amber-600/20 dark:bg-amber-500/10 dark:text-amber-300 dark:ring-amber-400/20',
-  danger: 'bg-red-50 text-red-700 ring-1 ring-inset ring-red-600/20 dark:bg-red-500/10 dark:text-red-300 dark:ring-red-400/20',
+  success: 'bg-success-50 text-success-700 ring-1 ring-inset ring-success-600/20 dark:bg-success-500/10 dark:text-success-300 dark:ring-success-400/20',
+  info: 'bg-info-50 text-info-700 ring-1 ring-inset ring-info-600/20 dark:bg-info-500/10 dark:text-info-300 dark:ring-info-400/20',
+  warning: 'bg-warning-50 text-warning-800 ring-1 ring-inset ring-warning-600/20 dark:bg-warning-500/10 dark:text-warning-300 dark:ring-warning-400/20',
+  danger: 'bg-danger-50 text-danger-700 ring-1 ring-inset ring-danger-600/20 dark:bg-danger-500/10 dark:text-danger-300 dark:ring-danger-400/20',
   neutral: 'bg-gray-100 text-gray-700 ring-1 ring-inset ring-gray-500/20 dark:bg-gray-500/10 dark:text-gray-300 dark:ring-gray-400/20',
   accent: 'bg-accent-soft text-accent-soft-fg ring-1 ring-inset ring-primary-500/20',
 } as const;
@@ -24,11 +24,11 @@ const TONE = {
 type Tone = keyof typeof TONE;
 
 const METHOD_TONE: Record<string, string> = {
-  GET: 'text-blue-600 dark:text-blue-400',
-  POST: 'text-emerald-600 dark:text-emerald-400',
-  PUT: 'text-amber-600 dark:text-amber-400',
-  PATCH: 'text-amber-600 dark:text-amber-400',
-  DELETE: 'text-red-600 dark:text-red-400',
+  GET: 'text-info-600 dark:text-info-400',
+  POST: 'text-success-600 dark:text-success-400',
+  PUT: 'text-warning-600 dark:text-warning-400',
+  PATCH: 'text-warning-600 dark:text-warning-400',
+  DELETE: 'text-danger-600 dark:text-danger-400',
 };
 
 const MCP_STATUS_TONE: Record<string, Tone> = {

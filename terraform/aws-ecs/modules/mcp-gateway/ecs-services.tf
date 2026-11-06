@@ -2148,6 +2148,15 @@ module "ecs_service_registry" {
             value = var.registry_rum_allowed_hosts
           }
         ] : [],
+        # Runtime UI branding archive (base64 .tar.gz), extracted into
+        # /app/branding by the registry entrypoint. Only emitted when set, so
+        # a default deployment keeps the stock branding.
+        var.ui_branding_archive_b64 != "" ? [
+          {
+            name  = "UI_BRANDING_ARCHIVE_B64"
+            value = var.ui_branding_archive_b64
+          }
+        ] : [],
         # Issue #1819: extra embeddings request headers. Empty list when the
         # map is unset, so a default deployment gets no new variables.
         local.embeddings_extra_header_env,

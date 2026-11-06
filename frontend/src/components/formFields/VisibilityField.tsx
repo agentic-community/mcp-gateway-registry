@@ -51,7 +51,7 @@ const VisibilityField: React.FC<VisibilityFieldProps> = ({
             placeholder="e.g. finance-team, engineering"
           />
           {allowedGroups.trim() === '' && (
-            <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+            <p className="mt-1 text-xs text-warning-600 dark:text-warning-400">
               At least one group is required for group-restricted visibility
             </p>
           )}

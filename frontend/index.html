@@ -3,28 +3,41 @@
   <head>
     <meta charset="utf-8" />
     <!--
-      Pre-paint theme bootstrap. Applies the saved (or OS) light/dark mode and
-      palette before the first paint so a light-mode user never sees a dark
-      flash. Storage keys and the dark default must match ThemeContext.tsx.
-      The registry ships no Content-Security-Policy; a deployment that adds one
-      must allow this inline script by hash.
+      Pre-paint theme bootstrap. Applies the mode, branding theme and contrast
+      before the first paint so a light-mode or branded user never sees the
+      default look flash. It mirrors ThemeContext.tsx (storage keys 'theme',
+      'themeName', 'contrast') and BrandingContext.tsx (the cached manifest in
+      'branding'); change them together. The registry ships no
+      Content-Security-Policy; a deployment that adds one must allow this
+      inline script by hash.
     -->
     <script>
       (function () {
         var root = document.documentElement;
-        var mode = null;
-        var palette = null;
-        try {
-          mode = localStorage.getItem('theme');
-          palette = localStorage.getItem('themeName');
-        } catch (e) {}
+        var read = function (key) {
+          try { return localStorage.getItem(key); } catch (e) { return null; }
+        };
+        var brand = {};
+        try { brand = JSON.parse(read('branding') || '{}') || {}; } catch (e) {}
+        var themes = Array.isArray(brand.themes) ? brand.themes : [];
+
+        var mode = brand.lockMode || read('theme') || brand.defaultMode;
         if (mode !== 'light' && mode !== 'dark') {
           mode = window.matchMedia && !window.matchMedia('(prefers-color-scheme: dark)').matches
             ? 'light'
             : 'dark';
         }
         root.classList.toggle('dark', mode === 'dark');
-        if (palette === 'high-contrast') {
+
+        var saved = read('themeName');
+        var contrast = read('contrast') === 'high' || saved === 'high-contrast';
+        var known = themes.some(function (t) { return t && t.id === saved; });
+        var name = saved === 'default' ? null : known ? saved : brand.defaultTheme;
+        if (typeof name === 'string' && /^[a-z][a-z0-9-]{0,31}$/.test(name) && name !== 'high-contrast') {
+          root.classList.add(name);
+          root.setAttribute('data-brand-theme', name);
+        }
+        if (contrast) {
           root.classList.add('high-contrast');
         }
       })();
@@ -41,6 +54,12 @@
     <title>AI Gateway & Registry</title>
   </head>
   <body>
+    <!--
+      Deployment branding (docs/ui-branding.md). In <body> so it comes after the
+      app's stylesheet in the cascade and its variable overrides win. The
+      registry serves an empty stylesheet when no branding is configured.
+    -->
+    <link rel="stylesheet" href="/branding/theme.css" />
     <noscript>You need to enable JavaScript to run this app.</noscript>
     <div id="root"></div>
     <script type="module" src="/src/index.tsx"></script>

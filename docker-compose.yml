@@ -590,6 +590,8 @@ services:
       - ${HOME}/mcp-gateway/models:/app/registry/models
       - ${HOME}/mcp-gateway/federation.json:/app/config/federation.json
       - ${HOME}/mcp-gateway/ssl:/etc/ssl:ro
+      # UI branding folder (manifest.json, theme.css, logos), read-only; see docs/ui-branding.md
+      - ${MCP_BRANDING_DIR:-./branding}:/app/branding:ro
       # AWS credentials are OPT-IN. Mounting the whole ~/.aws directory into an
       # internet-facing container exposes every profile/key to any RCE/SSRF in
       # the gateway. Prefer an IAM role or scoped AWS_* env vars. If you must

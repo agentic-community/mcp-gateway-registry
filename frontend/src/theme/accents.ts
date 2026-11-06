@@ -7,13 +7,14 @@
  * same regardless of which card it's on. Card *identity* is the accent's color;
  * the *rule* (accent drives all features) is uniform across every type.
  *
- * This is the single source of truth for card color. The theming phase
- * (runtime CSS variables) replaces the Tailwind color literals below with
- * `var(--accent-*)` references without touching any card or primitive — the
- * token names and the per-feature structure stay exactly as they are here.
+ * This is the single source of truth for card color. Each accent uses its
+ * entity ramp (`server-*`, `agent-*`, `skill-*`, `virtual-*`, `custom-*`),
+ * which resolves to CSS variables in index.css, so a branding theme.css can
+ * recolor every card of a type without touching any card or primitive. The
+ * token names are historical and stay as they are; they no longer name hues.
  */
 
-export type AccentToken = 'primary' | 'cyan' | 'amber' | 'teal' | 'neutral';
+export type AccentToken = 'primary' | 'cyan' | 'amber' | 'teal' | 'neutral' | 'custom';
 
 /** Class fragments for every accent-driven surface of a card. */
 export interface AccentClasses {
@@ -36,63 +37,78 @@ export interface AccentClasses {
 export const ACCENTS: Record<AccentToken, AccentClasses> = {
   primary: {
     container:
-      'bg-gradient-to-br from-purple-50 to-indigo-50 dark:from-purple-900/20 dark:to-indigo-900/20 border-2 border-purple-200 dark:border-purple-700 hover:border-purple-300 dark:hover:border-purple-600',
+      'bg-gradient-to-br from-server-50 to-server-50 dark:from-server-900/20 dark:to-server-900/20 border-2 border-server-200 dark:border-server-700 hover:border-server-300 dark:hover:border-server-600',
     footer:
-      'border-purple-100 dark:border-purple-800 bg-purple-50/50 dark:bg-purple-900/10',
-    divider: 'bg-purple-200 dark:bg-purple-600',
-    toggleOn: 'bg-purple-600',
-    tag: 'bg-purple-50 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300',
+      'border-server-100 dark:border-server-800 bg-server-50/50 dark:bg-server-900/10',
+    divider: 'bg-server-200 dark:bg-server-600',
+    toggleOn: 'bg-server-600',
+    tag: 'bg-server-50 dark:bg-server-900/30 text-server-700 dark:text-server-300',
     interactive:
-      'text-purple-600 hover:text-purple-700 dark:text-purple-400 dark:hover:text-purple-300 hover:bg-purple-50 dark:hover:bg-purple-900/20',
-    iconChip: 'bg-purple-50 dark:bg-purple-900/30',
+      'text-server-600 hover:text-server-700 dark:text-server-400 dark:hover:text-server-300 hover:bg-server-50 dark:hover:bg-server-900/20',
+    iconChip: 'bg-server-50 dark:bg-server-900/30',
   },
   cyan: {
     container:
-      'bg-gradient-to-br from-cyan-50 to-blue-50 dark:from-cyan-900/20 dark:to-blue-900/20 border-2 border-cyan-200 dark:border-cyan-700 hover:border-cyan-300 dark:hover:border-cyan-600',
+      'bg-gradient-to-br from-agent-50 to-agent-50 dark:from-agent-900/20 dark:to-agent-900/20 border-2 border-agent-200 dark:border-agent-700 hover:border-agent-300 dark:hover:border-agent-600',
     footer:
-      'border-cyan-100 dark:border-cyan-700 bg-cyan-50/50 dark:bg-cyan-900/30',
-    divider: 'bg-cyan-200 dark:bg-cyan-600',
-    toggleOn: 'bg-cyan-600',
-    tag: 'bg-cyan-50 dark:bg-cyan-900/30 text-cyan-700 dark:text-cyan-300',
+      'border-agent-100 dark:border-agent-700 bg-agent-50/50 dark:bg-agent-900/30',
+    divider: 'bg-agent-200 dark:bg-agent-600',
+    toggleOn: 'bg-agent-600',
+    tag: 'bg-agent-50 dark:bg-agent-900/30 text-agent-700 dark:text-agent-300',
     interactive:
-      'text-cyan-600 hover:text-cyan-700 dark:text-cyan-400 dark:hover:text-cyan-300 hover:bg-cyan-50 dark:hover:bg-cyan-900/20',
-    iconChip: 'bg-cyan-50 dark:bg-cyan-900/30',
+      'text-agent-600 hover:text-agent-700 dark:text-agent-400 dark:hover:text-agent-300 hover:bg-agent-50 dark:hover:bg-agent-900/20',
+    iconChip: 'bg-agent-50 dark:bg-agent-900/30',
   },
   amber: {
     container:
-      'bg-gradient-to-br from-amber-50 to-orange-50 dark:from-amber-900/20 dark:to-orange-900/20 border-2 border-amber-200 dark:border-amber-700 hover:border-amber-300 dark:hover:border-amber-600',
+      'bg-gradient-to-br from-skill-50 to-skill-50 dark:from-skill-900/20 dark:to-skill-900/20 border-2 border-skill-200 dark:border-skill-700 hover:border-skill-300 dark:hover:border-skill-600',
     footer:
-      'border-amber-100 dark:border-amber-700 bg-amber-50/50 dark:bg-amber-900/30',
-    divider: 'bg-amber-200 dark:bg-amber-600',
-    toggleOn: 'bg-amber-600',
-    tag: 'bg-amber-50 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300',
+      'border-skill-100 dark:border-skill-700 bg-skill-50/50 dark:bg-skill-900/30',
+    divider: 'bg-skill-200 dark:bg-skill-600',
+    toggleOn: 'bg-skill-600',
+    tag: 'bg-skill-50 dark:bg-skill-900/30 text-skill-700 dark:text-skill-300',
     interactive:
-      'text-amber-600 hover:text-amber-700 dark:text-amber-400 dark:hover:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-900/20',
-    iconChip: 'bg-amber-50 dark:bg-amber-900/30',
+      'text-skill-600 hover:text-skill-700 dark:text-skill-400 dark:hover:text-skill-300 hover:bg-skill-50 dark:hover:bg-skill-900/20',
+    iconChip: 'bg-skill-50 dark:bg-skill-900/30',
   },
   teal: {
     container:
-      'bg-gradient-to-br from-teal-50 to-cyan-50 dark:from-teal-900/20 dark:to-cyan-900/20 border-2 border-teal-200 dark:border-teal-700 hover:border-teal-300 dark:hover:border-teal-600',
+      'bg-gradient-to-br from-virtual-50 to-virtual-50 dark:from-virtual-900/20 dark:to-virtual-900/20 border-2 border-virtual-200 dark:border-virtual-700 hover:border-virtual-300 dark:hover:border-virtual-600',
     footer:
-      'border-teal-100 dark:border-teal-800 bg-teal-50/50 dark:bg-teal-900/10',
-    divider: 'bg-teal-200 dark:bg-teal-600',
-    toggleOn: 'bg-teal-600',
-    tag: 'bg-teal-50 dark:bg-teal-900/30 text-teal-700 dark:text-teal-300',
+      'border-virtual-100 dark:border-virtual-800 bg-virtual-50/50 dark:bg-virtual-900/10',
+    divider: 'bg-virtual-200 dark:bg-virtual-600',
+    toggleOn: 'bg-virtual-600',
+    tag: 'bg-virtual-50 dark:bg-virtual-900/30 text-virtual-700 dark:text-virtual-300',
     interactive:
-      'text-teal-600 hover:text-teal-700 dark:text-teal-400 dark:hover:text-teal-300 hover:bg-teal-50 dark:hover:bg-teal-900/20',
-    iconChip: 'bg-teal-50 dark:bg-teal-900/30',
+      'text-virtual-600 hover:text-virtual-700 dark:text-virtual-400 dark:hover:text-virtual-300 hover:bg-virtual-50 dark:hover:bg-virtual-900/20',
+    iconChip: 'bg-virtual-50 dark:bg-virtual-900/30',
   },
+  // Plain cards with no entity identity (ordinary MCP servers, and the default
+  // for card primitives). Its interactive color follows the info ramp.
   neutral: {
     container:
       'bg-surface border border-line hover:border-line-strong',
     footer:
       'border-line bg-surface-muted/50',
     divider: 'bg-gray-200 dark:bg-gray-600',
-    toggleOn: 'bg-blue-600',
-    tag: 'bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300',
+    toggleOn: 'bg-info-600',
+    tag: 'bg-info-50 dark:bg-info-900/30 text-info-700 dark:text-info-300',
     interactive:
-      'text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-900/20',
-    iconChip: 'bg-blue-50 dark:bg-blue-900/30',
+      'text-info-600 hover:text-info-700 dark:text-info-400 dark:hover:text-info-300 hover:bg-info-50 dark:hover:bg-info-900/20',
+    iconChip: 'bg-info-50 dark:bg-info-900/30',
+  },
+  // Custom entity types: neutral surface, interactive color from the custom ramp.
+  custom: {
+    container:
+      'bg-surface border border-line hover:border-line-strong',
+    footer:
+      'border-line bg-surface-muted/50',
+    divider: 'bg-gray-200 dark:bg-gray-600',
+    toggleOn: 'bg-custom-600',
+    tag: 'bg-custom-50 dark:bg-custom-900/30 text-custom-700 dark:text-custom-300',
+    interactive:
+      'text-custom-600 hover:text-custom-700 dark:text-custom-400 dark:hover:text-custom-300 hover:bg-custom-50 dark:hover:bg-custom-900/20',
+    iconChip: 'bg-custom-50 dark:bg-custom-900/30',
   },
 };
 
@@ -101,14 +117,14 @@ export const ACCENTS: Record<AccentToken, AccentClasses> = {
  * type renders the same color-coded identity:
  *   server → primary (purple/indigo)   agent → cyan
  *   skill → amber                       virtualServer → teal
- *   custom → neutral
+ *   custom → custom
  *
- * Custom entity types share the neutral accent (they have no fixed brand color).
+ * Ordinary (non-Anthropic) server cards use the neutral accent; see ServerCard.
  */
 export const ENTITY_ACCENTS = {
   server: 'primary',
   agent: 'cyan',
   skill: 'amber',
   virtualServer: 'teal',
-  custom: 'neutral',
+  custom: 'custom',
 } as const satisfies Record<string, AccentToken>;

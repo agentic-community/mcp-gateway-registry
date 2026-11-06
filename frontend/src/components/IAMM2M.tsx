@@ -299,8 +299,8 @@ const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
           IAM &gt; M2M Accounts &gt; Credentials
         </h2>
 
-        <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg p-6 space-y-4">
-          <p className="text-sm font-medium text-green-800 dark:text-green-200">
+        <div className="bg-success-50 dark:bg-success-900/20 border border-success-200 dark:border-success-800 rounded-lg p-6 space-y-4">
+          <p className="text-sm font-medium text-success-800 dark:text-success-200">
             M2M Account Created Successfully
           </p>
 
@@ -336,8 +336,8 @@ const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
             </div>
           </div>
 
-          <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded p-3">
-            <p className="text-xs text-yellow-800 dark:text-yellow-200">
+          <div className="bg-warning-50 dark:bg-warning-900/20 border border-warning-200 dark:border-warning-800 rounded p-3">
+            <p className="text-xs text-warning-800 dark:text-warning-200">
               Save these credentials now. The client secret cannot be retrieved later.
             </p>
           </div>
@@ -382,7 +382,7 @@ const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
               />
             </div>
             <div className={`space-y-2 max-h-48 overflow-y-auto rounded-lg p-3 ${
-              errors.groups ? 'border-2 border-red-500' : 'border border-line'
+              errors.groups ? 'border-2 border-danger-500' : 'border border-line'
             }`}>
               {groups.length === 0 ? (
                 <p className="text-xs text-fg-subtle">No groups available</p>
@@ -399,7 +399,7 @@ const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
                 ))
               )}
             </div>
-            {errors.groups && <p className="mt-1 text-sm text-red-500">{errors.groups}</p>}
+            {errors.groups && <p className="mt-1 text-sm text-danger-500">{errors.groups}</p>}
           </div>
         </div>
 
@@ -438,9 +438,9 @@ const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
               onChange={(e) => { setFormName(e.target.value); if (errors.name) setErrors((p) => ({ ...p, name: undefined })); }}
               placeholder="e.g. ci-pipeline"
               className={`input ${
-                errors.name ? 'border-red-500' : 'border-line-strong'
+                errors.name ? 'border-danger-500' : 'border-line-strong'
               }`} />
-            {errors.name && <p className="mt-1 text-sm text-red-500">{errors.name}</p>}
+            {errors.name && <p className="mt-1 text-sm text-danger-500">{errors.name}</p>}
           </div>
           <div>
             <label className="block text-sm text-fg-muted mb-1">Description (optional)</label>
@@ -461,7 +461,7 @@ const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
               />
             </div>
             <div className={`space-y-2 max-h-48 overflow-y-auto rounded-lg p-3 ${
-              errors.groups ? 'border-2 border-red-500' : 'border border-line'
+              errors.groups ? 'border-2 border-danger-500' : 'border border-line'
             }`}>
               {groups.length === 0 ? (
                 <p className="text-xs text-fg-subtle">No groups available</p>
@@ -478,7 +478,7 @@ const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
                 ))
               )}
             </div>
-            {errors.groups && <p className="mt-1 text-sm text-red-500">{errors.groups}</p>}
+            {errors.groups && <p className="mt-1 text-sm text-danger-500">{errors.groups}</p>}
           </div>
         </div>
 
@@ -510,7 +510,7 @@ const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
           </button>
         </div>
 
-        <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4 text-sm text-fg-muted">
+        <div className="bg-info-50 dark:bg-info-900/20 border border-info-200 dark:border-info-800 rounded-lg p-4 text-sm text-fg-muted">
           Register a <code className="font-mono">client_id</code> that already exists in your
           IdP so the registry can attach groups to it. No IdP Admin API call is made; supply
           the client secret to your application out-of-band.
@@ -523,9 +523,9 @@ const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
               onChange={(e) => { setRegisterClientId(e.target.value); if (registerErrors.clientId) setRegisterErrors((p) => ({ ...p, clientId: undefined })); }}
               placeholder="e.g. my-pipeline-client"
               className={`input font-mono ${
-                registerErrors.clientId ? 'border-red-500' : 'border-line-strong'
+                registerErrors.clientId ? 'border-danger-500' : 'border-line-strong'
               }`} />
-            {registerErrors.clientId && <p className="mt-1 text-sm text-red-500">{registerErrors.clientId}</p>}
+            {registerErrors.clientId && <p className="mt-1 text-sm text-danger-500">{registerErrors.clientId}</p>}
           </div>
           <div>
             <label className="block text-sm text-fg-muted mb-1">Client Name *</label>
@@ -533,9 +533,9 @@ const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
               onChange={(e) => { setRegisterClientName(e.target.value); if (registerErrors.clientName) setRegisterErrors((p) => ({ ...p, clientName: undefined })); }}
               placeholder="Human-readable name"
               className={`input ${
-                registerErrors.clientName ? 'border-red-500' : 'border-line-strong'
+                registerErrors.clientName ? 'border-danger-500' : 'border-line-strong'
               }`} />
-            {registerErrors.clientName && <p className="mt-1 text-sm text-red-500">{registerErrors.clientName}</p>}
+            {registerErrors.clientName && <p className="mt-1 text-sm text-danger-500">{registerErrors.clientName}</p>}
           </div>
           <div>
             <label className="block text-sm text-fg-muted mb-1">Description (optional)</label>
@@ -556,7 +556,7 @@ const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
               />
             </div>
             <div className={`space-y-2 max-h-48 overflow-y-auto rounded-lg p-3 ${
-              registerErrors.groups ? 'border-2 border-red-500' : 'border border-line'
+              registerErrors.groups ? 'border-2 border-danger-500' : 'border border-line'
             }`}>
               {groups.length === 0 ? (
                 <p className="text-xs text-fg-subtle">No groups available</p>
@@ -573,7 +573,7 @@ const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
                 ))
               )}
             </div>
-            {registerErrors.groups && <p className="mt-1 text-sm text-red-500">{registerErrors.groups}</p>}
+            {registerErrors.groups && <p className="mt-1 text-sm text-danger-500">{registerErrors.groups}</p>}
           </div>
         </div>
 
@@ -620,7 +620,7 @@ const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
       </div>
 
       {showCreateHelp && (
-        <div className="rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/20 p-4 text-sm text-fg-muted space-y-2">
+        <div className="rounded-lg border border-info-200 dark:border-info-800 bg-info-50 dark:bg-info-900/20 p-4 text-sm text-fg-muted space-y-2">
           <p>
             <strong>Create M2M Account</strong> creates a new client application inside
             your IdP (Keycloak, Entra, Okta, Auth0, PingFederate) via its Admin API and returns the
@@ -723,7 +723,7 @@ const IAMM2M: React.FC<IAMM2MProps> = ({ onShowToast }) => {
                             onClick={() => setDeleteTarget(c.client_id)}
                             disabled={!isManual}
                             aria-disabled={!isManual}
-                            className="p-1 text-fg-subtle hover:text-red-500 dark:hover:text-red-400 disabled:opacity-40 disabled:cursor-not-allowed"
+                            className="p-1 text-fg-subtle hover:text-danger-500 dark:hover:text-danger-400 disabled:opacity-40 disabled:cursor-not-allowed"
                             title={isManual ? 'Delete account' : 'Managed by IdP sync; cannot delete here'}
                           >
                             <TrashIcon className="h-4 w-4" />

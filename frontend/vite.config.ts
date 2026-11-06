@@ -34,6 +34,8 @@ export default defineConfig({
       '/auth': 'http://localhost:7860',
       '/oauth2': 'http://localhost:7860',
       '/.well-known': 'http://localhost:7860',
+      // Deployment branding (manifest.json, theme.css, logos) comes from the registry.
+      '/branding': 'http://localhost:7860',
     },
   },
 });

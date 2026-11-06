@@ -121,7 +121,7 @@ Controls registry-vs-gateway integration and which tabs render in the UI. See [`
 | Show Virtual Servers tab | `SHOW_VIRTUAL_SERVERS_TAB` | `show_virtual_servers_tab` | `registry.app.showVirtualServersTab` | — |
 | Show Skills tab | `SHOW_SKILLS_TAB` | `show_skills_tab` | `registry.app.showSkillsTab` | — |
 | Show Agents tab | `SHOW_AGENTS_TAB` | `show_agents_tab` | `registry.app.showAgentsTab` | — |
-| UI title override | `UI_TITLE` | `ui_title` | `registry.app.uiTitle` | Custom title shown in the UI header, login, and logout. Empty defers to the deployment-mode default (`AI Gateway & Registry` or `AI Registry`). |
+| UI title override | `UI_TITLE` | `ui_title` | `registry.app.uiTitle` | Custom title shown in the UI header, login, and logout. Empty defers to the deployment-mode default (`AI Gateway & Registry` or `AI Registry`). Logos, colors and themes are set separately through the branding folder (see Group 25b and [UI branding](ui-branding.md)). |
 | Disable built-in demo server | `DISABLE_AI_REGISTRY_TOOLS_SERVER` | `disable_ai_registry_tools_server` | `registry.app.disableAiRegistryToolsServer` | Prevent auto-registration of the built-in `airegistry-tools` demo server. |
 
 ---
@@ -714,6 +714,19 @@ Two independent checks run per call on `POST /api/{servers|agents|skills}/check-
 |-----------|-----------------|-----------------------|----------------------|---------|
 | RUM snippet **(secret)** | `RUM_SNIPPET_B64` | `registry_rum_snippet_b64` (plaintext, token-free) / `registry_rum_snippet_secret_arn` (Secrets Manager, token-bearing) | `registry.rumSnippetB64` (plaintext) or `extraEnv` + `secretKeyRef` (token-bearing) | Base64-encoded HTML snippet served as `/rum.js` and injected into the frontend `<head>` for browser Real User Monitoring (Splunk, Datadog, New Relic, Grafana Faro, etc.). Empty disables RUM (default no-op stub). Operator/deploy-time trust boundary: the value runs as JavaScript in every user's browser, so it must never be set from user input or a non-admin API. See [docs/frontend-rum.md](frontend-rum.md). |
 | RUM allowed script/beacon hosts | `RUM_ALLOWED_HOSTS` | `registry_rum_allowed_hosts` | `registry.rumAllowedHosts` | Comma-separated allowlist of hosts the RUM snippet may reference (script `src` and beacon endpoints). Startup validation fails closed (writes the empty stub, logs an error) if the decoded snippet references a host not on this list. Empty disables the check. Guardrail against misconfiguration/tampering, not a control against a trusted operator. |
+
+---
+
+## Group 25b - Runtime UI Branding
+
+| Parameter | Docker (`.env`) | Terraform (`.tfvars`) | Helm (`values.yaml`) | Purpose |
+|-----------|-----------------|-----------------------|----------------------|---------|
+| Branding folder (host) | `MCP_BRANDING_DIR` | | | Compose only. Host folder bind-mounted read-only at `/app/branding` in the registry container. Default `./branding`, which ships empty, so the stock look applies. The folder holds `manifest.json`, `theme.css`, logos, favicon and `.woff2` fonts, flat with no subdirectories. Served publicly at `/branding/<name>`. See [docs/ui-branding.md](ui-branding.md). |
+| Branding folder (container) | `UI_BRANDING_DIR` | | `registry.branding.mountPath` (the chart sets this variable from it) | Path inside the registry container the branding files are served from. Default `/app/branding`. Compose mounts `MCP_BRANDING_DIR` there, so it never needs setting; the Helm chart sets it when `branding.enabled` is `true`. Chart-reserved, so `extraEnv` and `extra_env/registry.env` reject it. |
+| Branding archive | `UI_BRANDING_ARCHIVE_B64` | `ui_branding_archive_b64` | `registry.extraEnv` | Base64 of a `.tar.gz` of the branding folder, extracted into `UI_BRANDING_DIR` at container start. Meant for surfaces with no folder mount (ECS). Build it with `tar -czf - -C ./branding . \| base64 \| tr -d '\n'`. Empty (default) does nothing. Startup fails with an actionable message on an invalid archive, or when the target folder already holds files (for example a mounted ConfigMap). Terraform validates it is base64 and at most 49152 characters (48 KiB), because ECS caps a whole task definition at 64 KiB. Not a secret. |
+| Branding ConfigMap enabled | | | `registry.branding.enabled` | Helm only. Default `false`. When `true`, mounts `branding.existingConfigMap` read-only as a directory at `branding.mountPath` (never `subPath`, so ConfigMap edits reach the pod without a restart) and sets `UI_BRANDING_DIR`. |
+| Branding ConfigMap name | | | `registry.branding.existingConfigMap` | Helm only. ConfigMap you create from the branding folder (`kubectl create configmap registry-branding --from-file=./branding/`); binary files land in `binaryData`. Required when `branding.enabled` is `true`, otherwise rendering fails. Keep it under the 1 MiB Kubernetes object limit. |
+| Branding mount path | | | `registry.branding.mountPath` | Helm only. Default `/app/branding`. Directory the ConfigMap is mounted at; also the value of `UI_BRANDING_DIR`. Must not be empty when enabled. |
 
 ---
 

@@ -97,7 +97,7 @@ const SkillsSection: React.FC<SkillsSectionProps> = ({
         <EmptyState tone="error" title="Failed to load skills" subtitle={error} />
       ) : loading ? (
         <div className="flex items-center justify-center py-12">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-amber-600"></div>
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-skill-600"></div>
         </div>
       ) : filteredCount === 0 ? (
         <EmptyState
@@ -114,7 +114,7 @@ const SkillsSection: React.FC<SkillsSectionProps> = ({
                   href="https://github.com/agentic-community/mcp-gateway-registry/blob/main/docs/faq/granting-skill-and-agent-discovery-permissions.md"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-amber-600 dark:text-amber-400 hover:underline"
+                  className="text-skill-600 dark:text-skill-400 hover:underline"
                 >
                   Learn more
                 </a>

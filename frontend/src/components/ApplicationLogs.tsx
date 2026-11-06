@@ -51,10 +51,10 @@ interface ApplicationLogsProps {
 
 const LEVEL_COLORS: Record<string, string> = {
   DEBUG: 'bg-gray-100 text-gray-700 dark:bg-gray-900 dark:text-gray-300',
-  INFO: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300',
-  WARNING: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-300',
-  ERROR: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300',
-  CRITICAL: 'bg-red-200 text-red-900 dark:bg-red-900/50 dark:text-red-200',
+  INFO: 'bg-info-100 text-info-700 dark:bg-info-900/30 dark:text-info-300',
+  WARNING: 'bg-warning-100 text-warning-700 dark:bg-warning-900/30 dark:text-warning-300',
+  ERROR: 'bg-danger-100 text-danger-700 dark:bg-danger-900/30 dark:text-danger-300',
+  CRITICAL: 'bg-danger-200 text-danger-900 dark:bg-danger-900/50 dark:text-danger-200',
 };
 
 const PAGE_SIZE = 50;
@@ -377,9 +377,9 @@ const ApplicationLogs: React.FC<ApplicationLogsProps> = ({ onShowToast }) => {
 
       {/* Error State */}
       {error && (
-        <div className="mb-6 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4 flex items-center gap-3">
-          <ExclamationTriangleIcon className="h-5 w-5 text-red-500 flex-shrink-0" />
-          <p className="text-sm text-red-700 dark:text-red-300">{error}</p>
+        <div className="mb-6 bg-danger-50 dark:bg-danger-900/20 border border-danger-200 dark:border-danger-800 rounded-lg p-4 flex items-center gap-3">
+          <ExclamationTriangleIcon className="h-5 w-5 text-danger-500 flex-shrink-0" />
+          <p className="text-sm text-danger-700 dark:text-danger-300">{error}</p>
         </div>
       )}
 

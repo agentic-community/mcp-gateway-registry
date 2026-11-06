@@ -95,11 +95,11 @@ const ServerDetailsModal: React.FC<ServerDetailsModalProps> = ({
       maxWidth="4xl"
     >
       <div className="space-y-4">
-        <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
-          <h4 className="font-medium text-blue-900 dark:text-blue-100 mb-2">
+        <div className="bg-info-50 dark:bg-info-900/20 border border-info-200 dark:border-info-800 rounded-lg p-4">
+          <h4 className="font-medium text-info-900 dark:text-info-100 mb-2">
             Complete Server Schema
           </h4>
-          <p className="text-sm text-blue-800 dark:text-blue-200">
+          <p className="text-sm text-info-800 dark:text-info-200">
             This is the complete MCP server definition stored in the registry. It includes all
             metadata, tools, authentication configuration, and runtime details.
           </p>
@@ -148,7 +148,7 @@ const ServerDetailsModal: React.FC<ServerDetailsModalProps> = ({
           )}
 
           {useCanonical && canonicalError && (
-            <p className="text-sm text-red-600 dark:text-red-400">{canonicalError}</p>
+            <p className="text-sm text-danger-600 dark:text-danger-400">{canonicalError}</p>
           )}
 
           <pre className="p-4 bg-surface-muted border border-line rounded-lg overflow-x-auto text-xs text-fg max-h-[30vh] overflow-y-auto">

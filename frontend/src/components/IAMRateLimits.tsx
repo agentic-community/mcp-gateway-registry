@@ -348,13 +348,13 @@ const IAMRateLimits: React.FC<IAMRateLimitsProps> = ({ onShowToast }) => {
                   {formMembers.map((m) => (
                     <span
                       key={m}
-                      className="inline-flex items-center gap-1 rounded-full bg-blue-100 dark:bg-blue-900/40 px-2.5 py-1 text-xs font-mono text-blue-800 dark:text-blue-200"
+                      className="inline-flex items-center gap-1 rounded-full bg-info-100 dark:bg-info-900/40 px-2.5 py-1 text-xs font-mono text-info-800 dark:text-info-200"
                     >
                       {m}
                       <button
                         type="button"
                         onClick={() => setFormMembers((prev) => prev.filter((x) => x !== m))}
-                        className="text-blue-500 hover:text-blue-700 dark:text-blue-300 dark:hover:text-blue-100"
+                        className="text-info-500 hover:text-info-700 dark:text-info-300 dark:hover:text-info-100"
                         aria-label={`Remove ${m}`}
                       >
                         <XMarkIcon className="h-3 w-3" />
@@ -525,11 +525,11 @@ const IAMRateLimits: React.FC<IAMRateLimitsProps> = ({ onShowToast }) => {
                     <td className="py-2 pr-4 font-mono text-xs text-fg">{d.name}</td>
                     <td className="py-2 pr-4 text-fg-muted">{limitSummary(d)}</td>
                     <td className="py-2 pr-4">
-                      <span className={d.enabled ? 'text-green-600 dark:text-green-400' : 'text-fg-subtle'}>
+                      <span className={d.enabled ? 'text-success-600 dark:text-success-400' : 'text-fg-subtle'}>
                         {d.enabled ? 'enabled' : 'disabled'}
                       </span>
                       {d.fail_closed && (
-                        <span className="ml-2 text-xs text-amber-600 dark:text-amber-400">fail-closed</span>
+                        <span className="ml-2 text-xs text-warning-600 dark:text-warning-400">fail-closed</span>
                       )}
                     </td>
                     <td className="py-2 pr-4">
@@ -550,7 +550,7 @@ const IAMRateLimits: React.FC<IAMRateLimitsProps> = ({ onShowToast }) => {
                         </button>
                         <button
                           onClick={() => setDeleteTarget(id)}
-                          className="text-fg-subtle hover:text-red-600"
+                          className="text-fg-subtle hover:text-danger-600"
                           title="Delete"
                         >
                           <TrashIcon className="h-4 w-4" />

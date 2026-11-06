@@ -161,7 +161,7 @@ const AuthSchemeFields: React.FC<AuthSchemeFieldsProps> = ({
               interactive OAuth consent, and vault a token nothing ever reads.
             */}
             {discoveryEnabled && scheme !== 'none' && (
-              <p className="mt-2 rounded border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 p-2 text-xs text-amber-800 dark:text-amber-300">
+              <p className="mt-2 rounded border border-warning-300 dark:border-warning-700 bg-warning-50 dark:bg-warning-900/20 p-2 text-xs text-warning-800 dark:text-warning-300">
                 <span className="font-semibold">Not in effect.</span> The{' '}
                 <span className="font-mono">{scheme}</span> credential above is this
                 server&apos;s discovery credential and takes precedence. Set the
@@ -173,7 +173,7 @@ const AuthSchemeFields: React.FC<AuthSchemeFieldsProps> = ({
         )}
 
         {oboDiscoveryActive && scheme === 'none' && (
-          <div className="rounded-md border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/20 p-3 text-xs text-blue-800 dark:text-blue-300">
+          <div className="rounded-md border border-info-200 dark:border-info-800 bg-info-50 dark:bg-info-900/20 p-3 text-xs text-info-800 dark:text-info-300">
             <p className="font-semibold mb-1">
               On-Behalf-Of server — discovery uses a gateway machine token
             </p>

@@ -104,7 +104,7 @@ const VersionSelectorModal: React.FC<VersionSelectorModalProps> = ({
   const getStatusBadge = (status: string, isDefault: boolean) => {
     if (isDefault) {
       return (
-        <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-semibold bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400 rounded-full">
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-semibold bg-success-100 text-success-700 dark:bg-success-900/30 dark:text-success-400 rounded-full">
           <CheckCircleIcon className="h-3 w-3" />
           ACTIVE
         </span>
@@ -114,14 +114,14 @@ const VersionSelectorModal: React.FC<VersionSelectorModalProps> = ({
     switch (status) {
       case 'deprecated':
         return (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 rounded-full">
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium bg-warning-100 text-warning-700 dark:bg-warning-900/30 dark:text-warning-400 rounded-full">
             <ExclamationTriangleIcon className="h-3 w-3" />
             deprecated
           </span>
         );
       case 'beta':
         return (
-          <span className="px-2 py-0.5 text-xs font-medium bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 rounded-full">
+          <span className="px-2 py-0.5 text-xs font-medium bg-info-100 text-info-700 dark:bg-info-900/30 dark:text-info-400 rounded-full">
             beta
           </span>
         );
@@ -167,7 +167,7 @@ const VersionSelectorModal: React.FC<VersionSelectorModalProps> = ({
                 className={`
                   border rounded-lg p-4 transition-all
                   ${isCurrentDefault
-                    ? 'border-green-300 bg-green-50/50 dark:border-green-700 dark:bg-green-900/20'
+                    ? 'border-success-300 bg-success-50/50 dark:border-success-700 dark:bg-success-900/20'
                     : 'border-line hover:border-line-strong'
                   }
                 `}
@@ -212,7 +212,7 @@ const VersionSelectorModal: React.FC<VersionSelectorModalProps> = ({
                   )}
 
                   {version.sunset_date && (
-                    <div className="text-amber-600 dark:text-amber-400">
+                    <div className="text-warning-600 dark:text-warning-400">
                       <span className="font-medium">Sunset:</span> {version.sunset_date}
                     </div>
                   )}

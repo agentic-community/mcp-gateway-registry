@@ -181,6 +181,10 @@ module "mcp_gateway" {
   registry_rum_snippet_secret_arn = var.registry_rum_snippet_secret_arn
   registry_rum_allowed_hosts      = var.registry_rum_allowed_hosts
 
+  # Optional base64 .tar.gz of the UI branding folder, rendered as
+  # UI_BRANDING_ARCHIVE_B64 on the registry container.
+  ui_branding_archive_b64 = var.ui_branding_archive_b64
+
   # Search query logging (debug only)
   search_log_query_text = var.search_log_query_text
 

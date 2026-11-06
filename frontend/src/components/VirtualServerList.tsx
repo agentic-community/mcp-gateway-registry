@@ -175,14 +175,14 @@ const VirtualServerList: React.FC<VirtualServerListProps> = ({ onShowToast }) =>
   if (error) {
     return (
       <div className="text-center py-12">
-        <ExclamationCircleIcon className="h-12 w-12 mx-auto text-red-500 mb-4" />
+        <ExclamationCircleIcon className="h-12 w-12 mx-auto text-danger-500 mb-4" />
         <h3 className="text-lg font-medium text-fg mb-2">
           Failed to Load Virtual Servers
         </h3>
         <p className="text-fg-subtle mb-4">{error}</p>
         <button
           onClick={refreshData}
-          className="px-4 py-2 bg-teal-600 text-white rounded-lg hover:bg-teal-700"
+          className="px-4 py-2 bg-virtual-600 text-white rounded-lg hover:bg-virtual-700"
         >
           Retry
         </button>
@@ -213,8 +213,8 @@ const VirtualServerList: React.FC<VirtualServerListProps> = ({ onShowToast }) =>
           {canModify && (
             <button
               onClick={handleCreate}
-              className="flex items-center px-4 py-2 bg-teal-600 text-white rounded-lg
-                         hover:bg-teal-700 transition-colors"
+              className="flex items-center px-4 py-2 bg-virtual-600 text-white rounded-lg
+                         hover:bg-virtual-700 transition-colors"
             >
               <PlusIcon className="h-5 w-5 mr-2" />
               Create Virtual Server
@@ -262,7 +262,7 @@ const VirtualServerList: React.FC<VirtualServerListProps> = ({ onShowToast }) =>
           {!searchQuery && canModify && (
             <button
               onClick={handleCreate}
-              className="px-4 py-2 bg-teal-600 text-white rounded-lg hover:bg-teal-700"
+              className="px-4 py-2 bg-virtual-600 text-white rounded-lg hover:bg-virtual-700"
             >
               Create First Virtual Server
             </button>
@@ -340,7 +340,7 @@ const VirtualServerList: React.FC<VirtualServerListProps> = ({ onShowToast }) =>
                     <span
                       className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
                         server.is_enabled
-                          ? 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-400'
+                          ? 'bg-success-100 dark:bg-success-900/30 text-success-800 dark:text-success-400'
                           : 'bg-surface-hover text-fg-muted'
                       }`}
                     >
@@ -364,7 +364,7 @@ const VirtualServerList: React.FC<VirtualServerListProps> = ({ onShowToast }) =>
                             <div
                               className={`relative w-9 h-5 rounded-full transition-colors duration-200 ${
                                 server.is_enabled
-                                  ? 'bg-teal-600'
+                                  ? 'bg-virtual-600'
                                   : 'bg-gray-300 dark:bg-gray-600'
                               }`}
                             >
@@ -379,17 +379,17 @@ const VirtualServerList: React.FC<VirtualServerListProps> = ({ onShowToast }) =>
                           </label>
                           <button
                             onClick={() => handleEdit(server)}
-                            className="px-3 py-1 text-xs font-medium text-teal-700 dark:text-teal-300
-                                       bg-teal-50 dark:bg-teal-900/20 rounded hover:bg-teal-100
-                                       dark:hover:bg-teal-900/40 transition-colors"
+                            className="px-3 py-1 text-xs font-medium text-virtual-700 dark:text-virtual-300
+                                       bg-virtual-50 dark:bg-virtual-900/20 rounded hover:bg-virtual-100
+                                       dark:hover:bg-virtual-900/40 transition-colors"
                           >
                             Edit
                           </button>
                           <button
                             onClick={() => setDeleteTarget(server)}
-                            className="px-3 py-1 text-xs font-medium text-red-700 dark:text-red-300
-                                       bg-red-50 dark:bg-red-900/20 rounded hover:bg-red-100
-                                       dark:hover:bg-red-900/40 transition-colors"
+                            className="px-3 py-1 text-xs font-medium text-danger-700 dark:text-danger-300
+                                       bg-danger-50 dark:bg-danger-900/20 rounded hover:bg-danger-100
+                                       dark:hover:bg-danger-900/40 transition-colors"
                           >
                             Delete
                           </button>
@@ -408,7 +408,7 @@ const VirtualServerList: React.FC<VirtualServerListProps> = ({ onShowToast }) =>
       {showForm && editingPath && editingServerLoading && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
           <div className="bg-surface-overlay border border-line rounded-lg shadow-xl p-8 flex flex-col items-center">
-            <ArrowPathIcon className="h-8 w-8 text-teal-500 animate-spin mb-3" />
+            <ArrowPathIcon className="h-8 w-8 text-virtual-500 animate-spin mb-3" />
             <p className="text-sm text-fg-muted">Loading server data...</p>
           </div>
         </div>

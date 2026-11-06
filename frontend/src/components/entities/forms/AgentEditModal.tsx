@@ -203,7 +203,7 @@ const AgentEditModal: React.FC<AgentEditModalProps> = ({
               placeholder='[{"id": "skill-1", "name": "My Skill", "description": "What this skill does"}]'
             />
             {skillsJsonError && (
-              <p className="mt-1 text-xs text-red-600 dark:text-red-400">{skillsJsonError}</p>
+              <p className="mt-1 text-xs text-danger-600 dark:text-danger-400">{skillsJsonError}</p>
             )}
             <p className="mt-1 text-xs text-fg-subtle">
               Each skill needs at least: id, name, description. Saving triggers a security rescan.
@@ -224,7 +224,7 @@ const AgentEditModal: React.FC<AgentEditModalProps> = ({
             <button
               type="submit"
               disabled={loading}
-              className="btn-base w-full bg-cyan-600 text-white shadow-sm hover:bg-cyan-700"
+              className="btn-base w-full bg-agent-600 text-white shadow-sm hover:bg-agent-700"
             >
               {loading ? 'Saving...' : 'Save Changes'}
             </button>

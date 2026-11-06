@@ -630,6 +630,17 @@ registry:
   #   key: ca-bundle.pem
   #   mountPath: /etc/ssl/mcp-gateway
 
+  # Runtime UI branding (logos, favicon, colors, named themes, fonts) without an
+  # image rebuild. Create the ConfigMap yourself from a branding folder:
+  #   kubectl create configmap registry-branding --from-file=./branding/
+  # The whole ConfigMap is mounted read-only at mountPath and the chart sets
+  # UI_BRANDING_DIR to it; edits reach the pod without a restart. See
+  # docs/ui-branding.md.
+  # branding:
+  #   enabled: true
+  #   existingConfigMap: registry-branding
+  #   mountPath: /app/branding
+
   # Extra env vars / envFrom sources appended to the registry container.
   # See charts/registry/values.yaml for validation rules, reserved names,
   # and footgun warnings. These values are forwarded to the registry

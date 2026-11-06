@@ -97,6 +97,14 @@
         {
           "selector": "CallExpression[callee.name='fetch'][arguments.0.callee.name='apiUrl']",
           "message": "Use the configured axios client instead of bare fetch(apiUrl(...)) so requests inherit withCredentials and identity is recorded in the audit log. Rule is intentionally narrow: it catches the fetch(apiUrl(...)) pattern that caused audit-anonymous regressions. A blanket fetch ban would false-positive on non-API fetches (external URLs, SKILL.md content)."
+        },
+        {
+          "selector": "Literal[value=/(^|\\s|:)(bg|text|border|ring|from|to|via|divide|fill|stroke|outline|decoration|placeholder|accent|caret|shadow)-(emerald|green|lime|red|rose|pink|fuchsia|amber|yellow|orange|blue|sky|indigo|cyan|teal|violet|slate|zinc|neutral|stone)-\\d/]",
+          "message": "Raw Tailwind hue classes cannot be rebranded. Use the theme tokens instead: success/warning/danger/info for status, server/agent/skill/virtual/custom for entity types, gray for neutrals, primary for the brand (frontend/README.md, Theming)."
+        },
+        {
+          "selector": "TemplateElement[value.raw=/(^|\\s|:)(bg|text|border|ring|from|to|via|divide|fill|stroke|outline|decoration|placeholder|accent|caret|shadow)-(emerald|green|lime|red|rose|pink|fuchsia|amber|yellow|orange|blue|sky|indigo|cyan|teal|violet|slate|zinc|neutral|stone)-\\d/]",
+          "message": "Raw Tailwind hue classes cannot be rebranded. Use the theme tokens instead: success/warning/danger/info for status, server/agent/skill/virtual/custom for entity types, gray for neutrals, primary for the brand (frontend/README.md, Theming)."
         }
       ]
     }

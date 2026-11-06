@@ -115,7 +115,7 @@ const ResourceBoundTokenButton: React.FC<ResourceBoundTokenButtonProps> = ({
       </div>
 
       {error && (
-        <p className="mt-3 text-xs text-red-700 dark:text-red-300 break-words">{error}</p>
+        <p className="mt-3 text-xs text-danger-700 dark:text-danger-300 break-words">{error}</p>
       )}
 
       {token && (
@@ -130,7 +130,7 @@ const ResourceBoundTokenButton: React.FC<ResourceBoundTokenButtonProps> = ({
               className="btn-icon absolute top-1 right-1"
             >
               {copied ? (
-                <CheckIcon className="h-4 w-4 text-green-600 dark:text-green-400" />
+                <CheckIcon className="h-4 w-4 text-success-600 dark:text-success-400" />
               ) : (
                 <ClipboardIcon className="h-4 w-4" />
               )}

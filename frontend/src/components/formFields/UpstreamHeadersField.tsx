@@ -162,7 +162,7 @@ const UpstreamHeadersField: React.FC<UpstreamHeadersFieldProps> = ({
                   type="button"
                   aria-label={`Remove header (row ${idx + 1})`}
                   onClick={() => remove(idx)}
-                  className="px-3 py-2 text-sm text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300"
+                  className="px-3 py-2 text-sm text-danger-600 hover:text-danger-800 dark:text-danger-400 dark:hover:text-danger-300"
                 >
                   Remove
                 </button>
@@ -196,14 +196,14 @@ const UpstreamHeadersField: React.FC<UpstreamHeadersFieldProps> = ({
                 </span>
               </label>
               {isAuth && h.overridable && (
-                <p className="text-xs text-amber-600 dark:text-amber-400">
+                <p className="text-xs text-warning-600 dark:text-warning-400">
                   The caller’s Authorization is forwarded to the backend. The
                   gateway credential is never leaked (an equal-token guard rejects
                   a request that reuses it).
                 </p>
               )}
               {err && (
-                <p className="text-xs text-red-600 dark:text-red-400">{err}</p>
+                <p className="text-xs text-danger-600 dark:text-danger-400">{err}</p>
               )}
             </div>
           );

@@ -55,20 +55,20 @@ const AuditEventDetail: React.FC<AuditEventDetailProps> = ({ event, onClose }) =
   };
 
   const getStatusColor = (statusCode: number): string => {
-    if (statusCode >= 200 && statusCode < 300) return 'text-green-600 dark:text-green-400';
-    if (statusCode >= 400 && statusCode < 500) return 'text-yellow-600 dark:text-yellow-400';
-    if (statusCode >= 500) return 'text-red-600 dark:text-red-400';
+    if (statusCode >= 200 && statusCode < 300) return 'text-success-600 dark:text-success-400';
+    if (statusCode >= 400 && statusCode < 500) return 'text-warning-600 dark:text-warning-400';
+    if (statusCode >= 500) return 'text-danger-600 dark:text-danger-400';
     return 'text-fg-muted';
   };
 
   const getMcpStatusColor = (status: string): string => {
     switch (status?.toLowerCase()) {
       case 'success':
-        return 'text-green-600 dark:text-green-400';
+        return 'text-success-600 dark:text-success-400';
       case 'error':
-        return 'text-red-600 dark:text-red-400';
+        return 'text-danger-600 dark:text-danger-400';
       case 'timeout':
-        return 'text-yellow-600 dark:text-yellow-400';
+        return 'text-warning-600 dark:text-warning-400';
       default:
         return 'text-fg-muted';
     }
@@ -97,7 +97,7 @@ const AuditEventDetail: React.FC<AuditEventDetailProps> = ({ event, onClose }) =
           >
             {copied ? (
               <>
-                <CheckIcon className="h-4 w-4 text-green-500" />
+                <CheckIcon className="h-4 w-4 text-success-500" />
                 <span>Copied!</span>
               </>
             ) : (
@@ -215,7 +215,7 @@ const AuditEventDetail: React.FC<AuditEventDetailProps> = ({ event, onClose }) =
 
       {/* MCP-specific summary row */}
       {isMcpEvent && (
-        <div className="px-4 py-3 border-b border-line grid grid-cols-2 md:grid-cols-4 gap-2 bg-blue-50/50 dark:bg-blue-900/10">
+        <div className="px-4 py-3 border-b border-line grid grid-cols-2 md:grid-cols-4 gap-2 bg-info-50/50 dark:bg-info-900/10">
           <div className="min-w-0 overflow-hidden">
             <div className="text-xs text-fg-subtle uppercase tracking-wider mb-1 truncate" title="MCP Server">
               Server

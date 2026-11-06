@@ -88,7 +88,7 @@ const VirtualServerDetailsModal: React.FC<VirtualServerDetailsModalProps> = ({
             <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
               {virtualServer.server_name}
             </h3>
-            <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-200 border border-teal-200 dark:border-teal-600">
+            <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-virtual-100 text-virtual-700 dark:bg-virtual-900/40 dark:text-virtual-200 border border-virtual-200 dark:border-virtual-600">
               VIRTUAL
             </span>
           </div>
@@ -125,7 +125,7 @@ const VirtualServerDetailsModal: React.FC<VirtualServerDetailsModalProps> = ({
                 {virtualServer.tags.map((tag) => (
                   <span
                     key={tag}
-                    className="px-2.5 py-1 text-xs rounded-full bg-teal-50 text-teal-700 dark:bg-teal-900/40 dark:text-teal-200"
+                    className="px-2.5 py-1 text-xs rounded-full bg-virtual-50 text-virtual-700 dark:bg-virtual-900/40 dark:text-virtual-200"
                   >
                     {tag}
                   </span>
@@ -142,7 +142,7 @@ const VirtualServerDetailsModal: React.FC<VirtualServerDetailsModalProps> = ({
               </p>
               {loading ? (
                 <div className="flex items-center justify-center py-4">
-                  <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-teal-600 dark:border-teal-400"></div>
+                  <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-virtual-600 dark:border-virtual-400"></div>
                   <span className="ml-2 text-sm text-fg-subtle">Loading tool details...</span>
                 </div>
               ) : (
@@ -164,7 +164,7 @@ const VirtualServerDetailsModal: React.FC<VirtualServerDetailsModalProps> = ({
                           }
                           badge={
                             hasToolDetails ? (
-                              <span className="px-2 py-0.5 text-xs bg-teal-100 dark:bg-teal-900/40 text-teal-700 dark:text-teal-300 rounded-full">
+                              <span className="px-2 py-0.5 text-xs bg-virtual-100 dark:bg-virtual-900/40 text-virtual-700 dark:text-virtual-300 rounded-full">
                                 {toolCount} tool{toolCount !== 1 ? 's' : ''}
                               </span>
                             ) : undefined
@@ -220,7 +220,7 @@ const VirtualServerDetailsModal: React.FC<VirtualServerDetailsModalProps> = ({
             <div className="flex items-center gap-2">
               <div className={`w-3 h-3 rounded-full ${
                 virtualServer.is_enabled
-                  ? 'bg-green-400 shadow-lg shadow-green-400/30'
+                  ? 'bg-success-400 shadow-lg shadow-success-400/30'
                   : 'bg-gray-300 dark:bg-gray-600'
               }`} />
               <span className="text-sm text-gray-700 dark:text-gray-300">
@@ -258,7 +258,7 @@ const VirtualServerDetailsModal: React.FC<VirtualServerDetailsModalProps> = ({
                 {virtualServer.supported_transports.map((transport) => (
                   <span
                     key={transport}
-                    className="px-2.5 py-1 text-xs rounded-full bg-blue-50 text-blue-700 dark:bg-blue-900/40 dark:text-blue-200"
+                    className="px-2.5 py-1 text-xs rounded-full bg-info-50 text-info-700 dark:bg-info-900/40 dark:text-info-200"
                   >
                     {transport}
                   </span>

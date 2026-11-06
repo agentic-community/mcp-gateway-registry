@@ -481,7 +481,7 @@ const SettingsPage: React.FC = () => {
           role="status"
           className={clsx(
             'fixed bottom-4 right-4 z-50 rounded-lg px-4 py-3 text-sm font-medium text-white shadow-lg transition-all duration-300',
-            toast.type === 'success' ? 'bg-emerald-600' : toast.type === 'error' ? 'bg-red-600' : 'bg-blue-600',
+            toast.type === 'success' ? 'bg-success-600' : toast.type === 'error' ? 'bg-danger-600' : 'bg-info-600',
           )}
         >
           {toast.message}

@@ -19,13 +19,13 @@ const STATUS_CONFIG: Record<
     label: 'Active',
     tooltip: 'This item is active and ready for use',
     colorClasses:
-      'bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-300',
+      'bg-success-50 text-success-700 dark:bg-success-900/30 dark:text-success-300',
   },
   deprecated: {
     label: 'Deprecated',
     tooltip: 'This item is deprecated and may be removed in the future',
     colorClasses:
-      'bg-orange-50 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300',
+      'bg-warning-50 text-warning-700 dark:bg-warning-900/30 dark:text-warning-300',
   },
   draft: {
     label: 'Draft',
@@ -37,7 +37,7 @@ const STATUS_CONFIG: Record<
     label: 'Beta',
     tooltip: 'This item is in beta testing phase',
     colorClasses:
-      'bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300',
+      'bg-info-50 text-info-700 dark:bg-info-900/30 dark:text-info-300',
   },
 };
 

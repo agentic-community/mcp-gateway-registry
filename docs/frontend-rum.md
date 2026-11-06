@@ -126,6 +126,12 @@ connect-src rum-ingest.<realm>.signalfx.com;
 
 Adjust the hosts to match your vendor. This applies only if you add a CSP; it is your responsibility, not the registry's.
 
+The UI itself needs three more allowances under a CSP, with or without RUM:
+
+- The inline script at the top of `index.html` applies the saved light/dark mode and theme before the first paint. Allow it by hash in `script-src`. The hash changes whenever that script changes, so compute it from the built file at deploy time rather than copying a value, for example by extracting the first `<script>` element's contents from `frontend/build/index.html` and running it through `openssl dgst -sha256 -binary | base64`.
+- The audit log grid (AG Grid) injects its theme as `<style>` elements, so `style-src` needs `'unsafe-inline'`. AG Grid accepts a `styleNonce` option instead, but the UI does not set one today.
+- Deployment branding (see [UI branding](ui-branding.md)) loads `theme.css`, logos and fonts from the registry's own origin, which `style-src 'self'`, `img-src 'self'` and `font-src 'self'` cover. Branding cannot point at other origins for logos or the favicon. A `url()` inside `theme.css` can, so if you allow other origins in `img-src` or `font-src`, those apply to it too.
+
 ## Development-mode note
 
 `RUM_SNIPPET_B64` is a deploy-time control and has no effect under `npm run dev`. The Vite dev server serves the committed stub `frontend/public/rum.js`, so RUM stays disabled in local development regardless of the variable.

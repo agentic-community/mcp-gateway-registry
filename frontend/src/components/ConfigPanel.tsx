@@ -85,7 +85,7 @@ function highlightMatch(text: string, term: string): React.ReactNode {
   return (
     <>
       {text.slice(0, idx)}
-      <mark className="bg-yellow-200 text-gray-900 dark:bg-yellow-600 dark:text-gray-900 rounded px-0.5">{text.slice(idx, idx + term.length)}</mark>
+      <mark className="bg-info-200 text-gray-900 dark:bg-info-300 dark:text-gray-900 rounded px-0.5">{text.slice(idx, idx + term.length)}</mark>
       {text.slice(idx + term.length)}
     </>
   );
@@ -148,7 +148,7 @@ const FieldRow: React.FC<{
           title="Copy value"
         >
           {copiedKey === field.key ? (
-            <CheckIcon className="h-4 w-4 text-green-500" />
+            <CheckIcon className="h-4 w-4 text-success-500" />
           ) : (
             <ClipboardIcon className="h-4 w-4" />
           )}
@@ -412,7 +412,7 @@ const ConfigPanel: React.FC<ConfigPanelProps> = ({ onError, showToast }) => {
   if (error) {
     return (
       <div className="text-center py-12" data-testid="config-error">
-        <ExclamationCircleIcon className="h-12 w-12 mx-auto text-red-500 mb-4" />
+        <ExclamationCircleIcon className="h-12 w-12 mx-auto text-danger-500 mb-4" />
         <h3 className="text-lg font-medium text-fg mb-2">
           Failed to Load Configuration
         </h3>
@@ -442,7 +442,7 @@ const ConfigPanel: React.FC<ConfigPanelProps> = ({ onError, showToast }) => {
           {config.is_local_dev && (
             <span
               className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium
-                         bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-300"
+                         bg-warning-100 text-warning-800 dark:bg-warning-900/40 dark:text-warning-300"
               data-testid="local-dev-badge"
             >
               Local Development Mode
@@ -506,17 +506,17 @@ const ConfigPanel: React.FC<ConfigPanelProps> = ({ onError, showToast }) => {
       {/* Recommended-but-optional settings left unset (nudge) */}
       {(config.recommendations ?? []).some((r) => !r.configured) && (
         <div
-          className="rounded-lg border border-yellow-300 bg-yellow-50 px-4 py-3
-                     dark:border-yellow-700/60 dark:bg-yellow-900/20"
+          className="rounded-lg border border-warning-300 bg-warning-50 px-4 py-3
+                     dark:border-warning-700/60 dark:bg-warning-900/20"
           data-testid="recommended-config-warning"
         >
           <div className="flex items-start space-x-2">
-            <ExclamationCircleIcon className="h-5 w-5 flex-shrink-0 text-yellow-600 dark:text-yellow-400" />
+            <ExclamationCircleIcon className="h-5 w-5 flex-shrink-0 text-warning-600 dark:text-warning-400" />
             <div className="space-y-1">
-              <p className="text-sm font-medium text-yellow-800 dark:text-yellow-200">
+              <p className="text-sm font-medium text-warning-800 dark:text-warning-200">
                 Recommended configuration not set
               </p>
-              <ul className="list-disc space-y-1 pl-5 text-sm text-yellow-800 dark:text-yellow-300">
+              <ul className="list-disc space-y-1 pl-5 text-sm text-warning-800 dark:text-warning-300">
                 {config.recommendations!
                   .filter((r) => !r.configured)
                   .map((r) => (

@@ -2,6 +2,12 @@ import React from 'react';
 import { render, screen, fireEvent } from '@testing-library/react';
 import ThemeToggle from '../ThemeToggle';
 import { ThemeProvider } from '../../contexts/ThemeContext';
+import { BrandingManifest, EMPTY_MANIFEST } from '../../branding/manifest';
+
+let mockManifest: BrandingManifest = EMPTY_MANIFEST;
+jest.mock('../../contexts/BrandingContext', () => ({
+  useBranding: () => ({ manifest: mockManifest, loaded: true }),
+}));
 
 const renderToggle = () =>
   render(
@@ -20,6 +26,7 @@ describe('ThemeToggle', () => {
     localStorage.clear();
     document.documentElement.className = '';
     Reflect.deleteProperty(window, 'matchMedia');
+    mockManifest = EMPTY_MANIFEST;
   });
 
   it('applies and persists an explicit light choice', () => {
@@ -46,5 +53,22 @@ describe('ThemeToggle', () => {
 
     expect(document.documentElement.classList.contains('high-contrast')).toBe(true);
     expect(document.documentElement.classList.contains('dark')).toBe(true);
+  });
+
+  it('offers the deployment themes and applies the chosen one', () => {
+    mockManifest = { ...EMPTY_MANIFEST, themes: [{ id: 'acme', label: 'Acme' }] };
+    renderToggle();
+    choose('Acme');
+
+    expect(document.documentElement.classList.contains('acme')).toBe(true);
+  });
+
+  it('hides the mode choices when branding locks the mode', () => {
+    mockManifest = { ...EMPTY_MANIFEST, lockMode: 'light' };
+    renderToggle();
+    fireEvent.click(screen.getByRole('button', { name: 'Appearance' }));
+
+    expect(screen.queryByRole('menuitem', { name: 'Dark' })).not.toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'High contrast' })).toBeInTheDocument();
   });
 });

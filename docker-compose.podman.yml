@@ -431,6 +431,8 @@ services:
       - ${HOME}/mcp-gateway/security_scans:/app/security_scans
       - ${HOME}/mcp-gateway/federation.json:/app/config/federation.json
       - ${HOME}/mcp-gateway/ssl:/etc/ssl:ro
+      # UI branding folder (manifest.json, theme.css, logos), read-only; see docs/ui-branding.md
+      - ${MCP_BRANDING_DIR:-./branding}:/app/branding:ro
       # Application log files (bind mount to host for Splunk ingestion, Issue #987)
       - /var/log/containers/ai-registry:/var/log/containers/ai-registry
     depends_on:

@@ -185,16 +185,16 @@ const ConnectedAccountsPage: React.FC = () => {
           title={copied ? 'Copied' : 'Copy'}
         >
           {copied ? (
-            <CheckIcon className="h-4 w-4 text-green-600 dark:text-green-400" />
+            <CheckIcon className="h-4 w-4 text-success-600 dark:text-success-400" />
           ) : (
             <ClipboardDocumentIcon className="h-4 w-4" />
           )}
         </button>
-        {copied && <span className="text-green-600 dark:text-green-400">Copied</span>}
+        {copied && <span className="text-success-600 dark:text-success-400">Copied</span>}
       </p>
 
       {error && (
-        <div className="flex items-center space-x-2 mb-4 p-3 rounded-lg bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-300">
+        <div className="flex items-center space-x-2 mb-4 p-3 rounded-lg bg-danger-50 dark:bg-danger-900/30 text-danger-700 dark:text-danger-300">
           <ExclamationTriangleIcon className="h-5 w-5 flex-shrink-0" />
           <span className="text-sm">{error}</span>
         </div>
@@ -302,7 +302,7 @@ const ConnectedAccountsPage: React.FC = () => {
               The token is stored write-only and never shown again. Maximum lifetime is 30 days.
             </p>
             {patExpiresAt && (
-              <p className="text-xs text-green-600 dark:text-green-400">
+              <p className="text-xs text-success-600 dark:text-success-400">
                 Token stored. Expires at {patExpiresAt}.
               </p>
             )}
@@ -342,7 +342,7 @@ const ConnectedAccountsPage: React.FC = () => {
                     {conn.server_path}
                   </span>
                   {conn.status !== 'active' && (
-                    <span className="text-xs px-2 py-0.5 rounded-full bg-yellow-100 dark:bg-yellow-900/40 text-yellow-800 dark:text-yellow-300">
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-warning-100 dark:bg-warning-900/40 text-warning-800 dark:text-warning-300">
                       {conn.status}
                     </span>
                   )}
@@ -355,7 +355,7 @@ const ConnectedAccountsPage: React.FC = () => {
               </div>
               <button
                 onClick={() => handleDisconnect(conn)}
-                className="btn-base flex-shrink-0 px-3 py-1.5 text-red-600 dark:text-red-400 hover:bg-red-50 hover:text-red-700 dark:hover:bg-red-500/10 dark:hover:text-red-300"
+                className="btn-base flex-shrink-0 px-3 py-1.5 text-danger-600 dark:text-danger-400 hover:bg-danger-50 hover:text-danger-700 dark:hover:bg-danger-500/10 dark:hover:text-danger-300"
                 aria-label={`Disconnect ${conn.provider} for ${conn.server_path}`}
               >
                 <TrashIcon className="h-4 w-4" />

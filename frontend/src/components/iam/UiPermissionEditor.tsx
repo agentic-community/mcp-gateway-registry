@@ -245,7 +245,7 @@ const UiPermissionEditor: React.FC<UiPermissionEditorProps> = ({
         servers/agents this group can list, read, and call — is set from the Server Access
         and Agents pickers above, not here.
       </p>
-      <p className="text-xs text-amber-600 dark:text-amber-400">
+      <p className="text-xs text-warning-600 dark:text-warning-400">
         Note: these permissions grant catalog-wide CRUD but never make the group a
         registry admin. Admin groups can only be created through the CLI scope
         import (see <code>cli/examples/</code>), not from this screen.

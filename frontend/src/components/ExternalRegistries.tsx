@@ -337,7 +337,7 @@ const ExternalRegistries: React.FC<ExternalRegistriesProps> = ({ onShowToast }) 
   if (error) {
     return (
       <div className="text-center py-12">
-        <ExclamationCircleIcon className="mx-auto h-12 w-12 text-red-400" />
+        <ExclamationCircleIcon className="mx-auto h-12 w-12 text-danger-400" />
         <h3 className="mt-2 text-lg font-medium text-fg">{error}</h3>
         <button
           onClick={fetchConfig}
@@ -484,8 +484,8 @@ function _renderAgentCoreCard(
       {/* Card header */}
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center space-x-3">
-          <div className="flex-shrink-0 p-2 bg-orange-100 dark:bg-orange-900/30 rounded-lg">
-            <CpuChipIcon className="h-5 w-5 text-orange-600 dark:text-orange-400" />
+          <div className="flex-shrink-0 p-2 bg-primary-100 dark:bg-primary-900/30 rounded-lg">
+            <CpuChipIcon className="h-5 w-5 text-primary-600 dark:text-primary-400" />
           </div>
           <div>
             <h3 className="text-lg font-medium text-fg">
@@ -494,14 +494,14 @@ function _renderAgentCoreCard(
             <div className="flex items-center space-x-2 mt-0.5">
               <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
                 agentcore.enabled
-                  ? 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300'
+                  ? 'bg-success-100 dark:bg-success-900/30 text-success-800 dark:text-success-300'
                   : 'bg-surface-hover text-fg-muted'
               }`}>
                 {agentcore.enabled ? 'Enabled' : 'Disabled'}
               </span>
               {agentcore.sync_on_startup && (
                 <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium
-                                 bg-blue-100 dark:bg-blue-900/30 text-blue-800 dark:text-blue-300">
+                                 bg-info-100 dark:bg-info-900/30 text-info-800 dark:text-info-300">
                   Sync on startup
                 </span>
               )}
@@ -578,8 +578,8 @@ function _renderAgentCoreCard(
                       <button
                         onClick={() => onRemove(reg.registry_id)}
                         disabled={deletingItem === reg.registry_id}
-                        className="ml-2 flex-shrink-0 p-0.5 text-gray-400 hover:text-red-500
-                                   dark:hover:text-red-400 disabled:opacity-50 transition-colors"
+                        className="ml-2 flex-shrink-0 p-0.5 text-gray-400 hover:text-danger-500
+                                   dark:hover:text-danger-400 disabled:opacity-50 transition-colors"
                         title="Remove registry"
                       >
                         <XMarkIcon className="h-4 w-4" />
@@ -626,15 +626,15 @@ function _renderAgentCoreCard(
 
           {/* Last sync results */}
           {lastSyncResults?.aws_registry && lastSyncResults.aws_registry.count > 0 && (
-            <div className="mt-3 p-3 bg-green-50 dark:bg-green-900/20 rounded-lg border
-                            border-green-200 dark:border-green-800">
+            <div className="mt-3 p-3 bg-success-50 dark:bg-success-900/20 rounded-lg border
+                            border-success-200 dark:border-success-800">
               <div className="flex items-center space-x-2">
-                <CheckCircleIcon className="h-4 w-4 text-green-600 dark:text-green-400" />
-                <span className="text-sm font-medium text-green-800 dark:text-green-300">
+                <CheckCircleIcon className="h-4 w-4 text-success-600 dark:text-success-400" />
+                <span className="text-sm font-medium text-success-800 dark:text-success-300">
                   Last sync: {lastSyncResults.aws_registry.count} items
                 </span>
               </div>
-              <div className="mt-1 text-xs text-green-700 dark:text-green-400">
+              <div className="mt-1 text-xs text-success-700 dark:text-success-400">
                 {lastSyncResults.aws_registry.servers.length > 0 && (
                   <span>Servers: {lastSyncResults.aws_registry.servers.length} </span>
                 )}
@@ -685,14 +685,14 @@ function _renderAnthropicCard(
             <div className="flex items-center space-x-2 mt-0.5">
               <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
                 anthropic.enabled
-                  ? 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300'
+                  ? 'bg-success-100 dark:bg-success-900/30 text-success-800 dark:text-success-300'
                   : 'bg-surface-hover text-fg-muted'
               }`}>
                 {anthropic.enabled ? 'Enabled' : 'Disabled'}
               </span>
               {anthropic.sync_on_startup && (
                 <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium
-                                 bg-blue-100 dark:bg-blue-900/30 text-blue-800 dark:text-blue-300">
+                                 bg-info-100 dark:bg-info-900/30 text-info-800 dark:text-info-300">
                   Sync on startup
                 </span>
               )}
@@ -748,7 +748,7 @@ function _renderAnthropicCard(
                     <button
                       onClick={() => onRemove(srv.name)}
                       disabled={deletingItem === srv.name}
-                      className="ml-1.5 text-gray-400 hover:text-red-500 dark:hover:text-red-400
+                      className="ml-1.5 text-gray-400 hover:text-danger-500 dark:hover:text-danger-400
                                  disabled:opacity-50 transition-colors"
                       title="Remove server"
                     >
@@ -762,11 +762,11 @@ function _renderAnthropicCard(
 
           {/* Last sync results */}
           {lastSyncResults?.anthropic && lastSyncResults.anthropic.count > 0 && (
-            <div className="mt-3 p-3 bg-green-50 dark:bg-green-900/20 rounded-lg border
-                            border-green-200 dark:border-green-800">
+            <div className="mt-3 p-3 bg-success-50 dark:bg-success-900/20 rounded-lg border
+                            border-success-200 dark:border-success-800">
               <div className="flex items-center space-x-2">
-                <CheckCircleIcon className="h-4 w-4 text-green-600 dark:text-green-400" />
-                <span className="text-sm font-medium text-green-800 dark:text-green-300">
+                <CheckCircleIcon className="h-4 w-4 text-success-600 dark:text-success-400" />
+                <span className="text-sm font-medium text-success-800 dark:text-success-300">
                   Last sync: {lastSyncResults.anthropic.count} servers
                 </span>
               </div>
@@ -800,8 +800,8 @@ function _renderAsorCard(
       {/* Card header */}
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center space-x-3">
-          <div className="flex-shrink-0 p-2 bg-blue-100 dark:bg-blue-900/30 rounded-lg">
-            <GlobeIcon className="h-5 w-5 text-blue-600 dark:text-blue-400" />
+          <div className="flex-shrink-0 p-2 bg-info-100 dark:bg-info-900/30 rounded-lg">
+            <GlobeIcon className="h-5 w-5 text-info-600 dark:text-info-400" />
           </div>
           <div>
             <h3 className="text-lg font-medium text-fg">
@@ -810,14 +810,14 @@ function _renderAsorCard(
             <div className="flex items-center space-x-2 mt-0.5">
               <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
                 asor.enabled
-                  ? 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300'
+                  ? 'bg-success-100 dark:bg-success-900/30 text-success-800 dark:text-success-300'
                   : 'bg-surface-hover text-fg-muted'
               }`}>
                 {asor.enabled ? 'Enabled' : 'Disabled'}
               </span>
               {asor.sync_on_startup && (
                 <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium
-                                 bg-blue-100 dark:bg-blue-900/30 text-blue-800 dark:text-blue-300">
+                                 bg-info-100 dark:bg-info-900/30 text-info-800 dark:text-info-300">
                   Sync on startup
                 </span>
               )}
@@ -873,7 +873,7 @@ function _renderAsorCard(
                     <button
                       onClick={() => onRemove(agent.id)}
                       disabled={deletingItem === agent.id}
-                      className="ml-1.5 text-gray-400 hover:text-red-500 dark:hover:text-red-400
+                      className="ml-1.5 text-gray-400 hover:text-danger-500 dark:hover:text-danger-400
                                  disabled:opacity-50 transition-colors"
                       title="Remove agent"
                     >
@@ -887,11 +887,11 @@ function _renderAsorCard(
 
           {/* Last sync results */}
           {lastSyncResults?.asor && lastSyncResults.asor.count > 0 && (
-            <div className="mt-3 p-3 bg-green-50 dark:bg-green-900/20 rounded-lg border
-                            border-green-200 dark:border-green-800">
+            <div className="mt-3 p-3 bg-success-50 dark:bg-success-900/20 rounded-lg border
+                            border-success-200 dark:border-success-800">
               <div className="flex items-center space-x-2">
-                <CheckCircleIcon className="h-4 w-4 text-green-600 dark:text-green-400" />
-                <span className="text-sm font-medium text-green-800 dark:text-green-300">
+                <CheckCircleIcon className="h-4 w-4 text-success-600 dark:text-success-400" />
+                <span className="text-sm font-medium text-success-800 dark:text-success-300">
                   Last sync: {lastSyncResults.asor.count} agents
                 </span>
               </div>
@@ -924,8 +924,8 @@ function _renderAiCatalogCard(
       {/* Card header */}
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center space-x-3">
-          <div className="flex-shrink-0 p-2 bg-teal-100 dark:bg-teal-900/30 rounded-lg">
-            <GlobeIcon className="h-5 w-5 text-teal-600 dark:text-teal-400" />
+          <div className="flex-shrink-0 p-2 bg-primary-100 dark:bg-primary-900/30 rounded-lg">
+            <GlobeIcon className="h-5 w-5 text-primary-600 dark:text-primary-400" />
           </div>
           <div>
             <h3 className="text-lg font-medium text-fg">
@@ -937,14 +937,14 @@ function _renderAiCatalogCard(
             <div className="flex items-center space-x-2 mt-1">
               <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
                 aiCatalog.enabled
-                  ? 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300'
+                  ? 'bg-success-100 dark:bg-success-900/30 text-success-800 dark:text-success-300'
                   : 'bg-surface-hover text-fg-muted'
               }`}>
                 {aiCatalog.enabled ? 'Enabled' : 'Disabled'}
               </span>
               {aiCatalog.sync_on_startup && (
                 <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium
-                                 bg-blue-100 dark:bg-blue-900/30 text-blue-800 dark:text-blue-300">
+                                 bg-info-100 dark:bg-info-900/30 text-info-800 dark:text-info-300">
                   Sync on startup
                 </span>
               )}
@@ -1021,8 +1021,8 @@ function _renderAiCatalogCard(
                       <button
                         onClick={() => onRemove(source.source_id)}
                         disabled={deletingItem === source.source_id}
-                        className="ml-2 flex-shrink-0 p-0.5 text-gray-400 hover:text-red-500
-                                   dark:hover:text-red-400 disabled:opacity-50 transition-colors"
+                        className="ml-2 flex-shrink-0 p-0.5 text-gray-400 hover:text-danger-500
+                                   dark:hover:text-danger-400 disabled:opacity-50 transition-colors"
                         title="Remove source"
                       >
                         <XMarkIcon className="h-4 w-4" />

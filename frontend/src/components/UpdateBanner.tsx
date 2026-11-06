@@ -44,13 +44,13 @@ export const UpdateBanner: React.FC = () => {
     <div
       role="region"
       aria-label="Update available"
-      className="mx-4 mt-4 rounded-xl border border-emerald-200 bg-emerald-50 p-3 sm:mx-6 lg:mx-8 dark:border-emerald-500/30 dark:bg-emerald-500/10"
+      className="mx-4 mt-4 rounded-xl border border-success-200 bg-success-50 p-3 sm:mx-6 lg:mx-8 dark:border-success-500/30 dark:bg-success-500/10"
     >
       <div className="flex items-center justify-between gap-3">
-        <p className="text-sm text-emerald-900 dark:text-emerald-100">
+        <p className="text-sm text-success-900 dark:text-success-100">
           A newer registry release is available:{' '}
           <span className="font-semibold">{data.latest}</span>{' '}
-          <span className="text-emerald-700 dark:text-emerald-300">(running {data.current})</span>
+          <span className="text-success-700 dark:text-success-300">(running {data.current})</span>
           {showLink && (
             <>
               {' · '}
@@ -58,7 +58,7 @@ export const UpdateBanner: React.FC = () => {
                 href={data.release_notes_url!}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="font-medium underline underline-offset-2 hover:text-emerald-700 dark:hover:text-emerald-50"
+                className="font-medium underline underline-offset-2 hover:text-success-700 dark:hover:text-success-50"
               >
                 Release notes
               </a>
@@ -68,7 +68,7 @@ export const UpdateBanner: React.FC = () => {
         <button
           type="button"
           onClick={handleDismiss}
-          className="shrink-0 rounded px-2 py-1 text-xs text-emerald-700 hover:text-emerald-900 dark:text-emerald-300 dark:hover:text-emerald-100"
+          className="shrink-0 rounded px-2 py-1 text-xs text-success-700 hover:text-success-900 dark:text-success-300 dark:hover:text-success-100"
         >
           Dismiss
         </button>

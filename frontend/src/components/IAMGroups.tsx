@@ -1040,7 +1040,7 @@ const IAMGroups: React.FC<IAMGroupsProps> = ({ onShowToast }) => {
                           role="status"
                           aria-label="Local-only group: PATCH and DELETE will not call the upstream identity provider. Recommended for tenants without Group.ReadWrite.All."
                           title="Local-only: PATCH and DELETE will not call the upstream IdP. Recommended for tenants without Group.ReadWrite.All."
-                          className="ml-2 inline-flex items-center px-2 py-0.5 text-xs rounded-full bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300"
+                          className="ml-2 inline-flex items-center px-2 py-0.5 text-xs rounded-full bg-warning-100 text-warning-800 dark:bg-warning-900/30 dark:text-warning-300"
                         >
                           Local-only
                         </span>
@@ -1049,7 +1049,7 @@ const IAMGroups: React.FC<IAMGroupsProps> = ({ onShowToast }) => {
                           role="status"
                           aria-label="IdP-managed group: PATCH and DELETE will call the upstream identity provider."
                           title="IdP-managed: this group is managed in the upstream identity provider."
-                          className="ml-2 inline-flex items-center px-2 py-0.5 text-xs rounded-full bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300"
+                          className="ml-2 inline-flex items-center px-2 py-0.5 text-xs rounded-full bg-info-100 text-info-800 dark:bg-info-900/30 dark:text-info-300"
                         >
                           IdP-managed
                         </span>
@@ -1072,7 +1072,7 @@ const IAMGroups: React.FC<IAMGroupsProps> = ({ onShowToast }) => {
                       </button>
                       <button
                         onClick={() => setDeleteTarget(group.name)}
-                        className="p-1 text-fg-subtle hover:text-red-500 dark:hover:text-red-400"
+                        className="p-1 text-fg-subtle hover:text-danger-500 dark:hover:text-danger-400"
                         title="Delete group"
                       >
                         <TrashIcon className="h-4 w-4" />

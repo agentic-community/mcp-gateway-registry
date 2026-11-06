@@ -348,7 +348,7 @@ const AddRegistryEntryModal: React.FC<AddRegistryEntryModalProps> = ({
               autoFocus
             />
             {errors.server_name && (
-              <p className="text-sm text-red-600 dark:text-red-400 mt-1">{errors.server_name}</p>
+              <p className="text-sm text-danger-600 dark:text-danger-400 mt-1">{errors.server_name}</p>
             )}
             <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
               The server identifier from the Anthropic MCP Registry
@@ -373,7 +373,7 @@ const AddRegistryEntryModal: React.FC<AddRegistryEntryModalProps> = ({
               autoFocus
             />
             {errors.agent_id && (
-              <p className="text-sm text-red-600 dark:text-red-400 mt-1">{errors.agent_id}</p>
+              <p className="text-sm text-danger-600 dark:text-danger-400 mt-1">{errors.agent_id}</p>
             )}
             <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
               The agent identifier from the ASOR registry
@@ -387,7 +387,7 @@ const AddRegistryEntryModal: React.FC<AddRegistryEntryModalProps> = ({
             {/* Registry ID (required) */}
             <div>
               <label className={LABEL_CLASS}>
-                Registry ID <span className="text-red-500">*</span>
+                Registry ID <span className="text-danger-500">*</span>
               </label>
               <input
                 type="text"
@@ -400,7 +400,7 @@ const AddRegistryEntryModal: React.FC<AddRegistryEntryModalProps> = ({
                 autoFocus
               />
               {errors.registry_id && (
-                <p className="text-sm text-red-600 dark:text-red-400 mt-1">{errors.registry_id}</p>
+                <p className="text-sm text-danger-600 dark:text-danger-400 mt-1">{errors.registry_id}</p>
               )}
             </div>
 
@@ -475,7 +475,7 @@ const AddRegistryEntryModal: React.FC<AddRegistryEntryModalProps> = ({
                 ))}
               </div>
               {errors.descriptor_types && (
-                <p className="text-sm text-red-600 dark:text-red-400 mt-1">
+                <p className="text-sm text-danger-600 dark:text-danger-400 mt-1">
                   {errors.descriptor_types}
                 </p>
               )}
@@ -505,7 +505,7 @@ const AddRegistryEntryModal: React.FC<AddRegistryEntryModalProps> = ({
             {/* Source ID (required) */}
             <div>
               <label className={LABEL_CLASS}>
-                Source ID <span className="text-red-500">*</span>
+                Source ID <span className="text-danger-500">*</span>
               </label>
               <input
                 type="text"
@@ -518,7 +518,7 @@ const AddRegistryEntryModal: React.FC<AddRegistryEntryModalProps> = ({
                 autoFocus
               />
               {errors.source_id && (
-                <p className="text-sm text-red-600 dark:text-red-400 mt-1">{errors.source_id}</p>
+                <p className="text-sm text-danger-600 dark:text-danger-400 mt-1">{errors.source_id}</p>
               )}
             </div>
 
@@ -552,7 +552,7 @@ const AddRegistryEntryModal: React.FC<AddRegistryEntryModalProps> = ({
                 placeholder="acme.com"
               />
               {errors.uri_or_domain && (
-                <p className="text-sm text-red-600 dark:text-red-400 mt-1">
+                <p className="text-sm text-danger-600 dark:text-danger-400 mt-1">
                   {errors.uri_or_domain}
                 </p>
               )}

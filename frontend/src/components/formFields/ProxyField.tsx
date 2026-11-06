@@ -70,17 +70,17 @@ const ProxyField: React.FC<ProxyFieldProps> = ({
       </FormField>
 
       {isProxied && (
-        <div className="rounded-md border border-cyan-200 bg-cyan-50 px-3 py-2 text-sm dark:border-cyan-800 dark:bg-cyan-900/20">
+        <div className="rounded-md border border-info-200 bg-info-50 px-3 py-2 text-sm dark:border-info-800 dark:bg-info-900/20">
           {clientUrl ? (
-            <p className="text-cyan-800 dark:text-cyan-200">
+            <p className="text-info-800 dark:text-info-200">
               Clients connect at{' '}
-              <code className="rounded bg-cyan-100 px-1 py-0.5 font-mono text-xs text-cyan-900 dark:bg-cyan-800/50 dark:text-cyan-100">
+              <code className="rounded bg-info-100 px-1 py-0.5 font-mono text-xs text-info-900 dark:bg-info-800/50 dark:text-info-100">
                 {clientUrl}
               </code>
               . The registry forwards this to the backend URL below.
             </p>
           ) : (
-            <p className="text-cyan-800 dark:text-cyan-200">
+            <p className="text-info-800 dark:text-info-200">
               A client URL (<code className="font-mono text-xs">/{'{prefix}'}/{'{type}'}/{'{name}'}</code>)
               is generated automatically when you save. Clients connect there; the registry forwards to
               the backend URL below.
@@ -108,7 +108,7 @@ const ProxyField: React.FC<ProxyFieldProps> = ({
             placeholder="https://backend.example.com/"
           />
           {showTargetWarning && (
-            <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+            <p className="mt-1 text-xs text-warning-600 dark:text-warning-400">
               A proxy target URL is required when proxying is enabled.
             </p>
           )}

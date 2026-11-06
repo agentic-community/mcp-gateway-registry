@@ -48,6 +48,15 @@
     {{- fail "registry.caBundle.mountPath must not be empty" }}
   {{- end }}
 {{- end }}
+{{- /* branding needs a ConfigMap to mount and a directory to mount it at. */ -}}
+{{- if .Values.branding.enabled }}
+  {{- if not .Values.branding.existingConfigMap }}
+    {{- fail "registry.branding.enabled is true but branding.existingConfigMap is not set. Create a ConfigMap holding the branding files (for example: kubectl create configmap registry-branding --from-file=./branding/) and name it here." }}
+  {{- end }}
+  {{- if not .Values.branding.mountPath }}
+    {{- fail "registry.branding.mountPath must not be empty" }}
+  {{- end }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -527,14 +536,31 @@ spec:
               {{- else }}
               value: ""
               {{- end }}
+            # UI branding folder (manifest.json, theme.css, logos, fonts). Points
+            # the registry at the mounted ConfigMap; rendered only when enabled,
+            # so the image default (/app/branding) applies otherwise.
+            {{- if .Values.branding.enabled }}
+            - name: UI_BRANDING_DIR
+              value: {{ .Values.branding.mountPath | quote }}
+            {{- end }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
-          {{- if .Values.caBundle.enabled }}
+          {{- if or .Values.caBundle.enabled .Values.branding.enabled }}
           volumeMounts:
+            {{- if .Values.caBundle.enabled }}
             - name: egress-forward-proxy-ca
               mountPath: {{ .Values.caBundle.mountPath | quote }}
               readOnly: true
+            {{- end }}
+            {{- if .Values.branding.enabled }}
+            # Whole ConfigMap as a directory, never subPath: subPath mounts do
+            # not receive ConfigMap updates, and branding edits must go live
+            # without a pod restart.
+            - name: ui-branding
+              mountPath: {{ .Values.branding.mountPath | quote }}
+              readOnly: true
+            {{- end }}
           {{- end }}
           livenessProbe:
             httpGet:
@@ -552,8 +578,9 @@ spec:
             periodSeconds: 5
             timeoutSeconds: 3
             failureThreshold: 3
-      {{- if .Values.caBundle.enabled }}
+      {{- if or .Values.caBundle.enabled .Values.branding.enabled }}
       volumes:
+        {{- if .Values.caBundle.enabled }}
         - name: egress-forward-proxy-ca
           {{- if .Values.caBundle.existingSecret }}
           secret:
@@ -568,4 +595,11 @@ spec:
               - key: {{ .Values.caBundle.key | quote }}
                 path: {{ .Values.caBundle.key | quote }}
           {{- end }}
+        {{- end }}
+        {{- if .Values.branding.enabled }}
+        # No items: list, so every data and binaryData key becomes a file.
+        - name: ui-branding
+          configMap:
+            name: {{ .Values.branding.existingConfigMap | quote }}
+        {{- end }}
       {{- end }}
