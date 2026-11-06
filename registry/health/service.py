@@ -841,9 +841,11 @@ class HealthMonitoringService:
             endpoint,
             time() + LEGACY_MCP_ERA_CACHE_SECONDS,
         )
+        # Log the redacted endpoint only: server_path comes from a record loaded
+        # with credentials, and CodeQL treats every value from it as sensitive.
         logger.debug(
-            f"Remembering {server_path} as handshake-era for "
-            f"{LEGACY_MCP_ERA_CACHE_SECONDS}s endpoint={redact_url(endpoint)}"
+            f"Remembering handshake-era answer for {LEGACY_MCP_ERA_CACHE_SECONDS}s "
+            f"endpoint={redact_url(endpoint)}"
         )
 
     def _forget_legacy_endpoint(
@@ -852,7 +854,7 @@ class HealthMonitoringService:
     ) -> None:
         """Drop the handshake-era entry, so the next check sends server/discover."""
         if server_path and self._legacy_mcp_endpoints.pop(server_path, None) is not None:
-            logger.debug(f"Forgot handshake-era entry for {server_path}")
+            logger.debug("Forgot a handshake-era entry after an unhealthy result")
 
     async def _send_server_discover(
         self,
@@ -927,7 +929,8 @@ class HealthMonitoringService:
         """
         if server_path and self._is_known_legacy_endpoint(server_path, endpoint):
             logger.debug(
-                f"Skipping server/discover for {server_path}: answered as handshake-era recently"
+                f"Skipping server/discover for {redact_url(endpoint)}: "
+                "answered as handshake-era recently"
             )
             return False
 
