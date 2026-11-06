@@ -48,6 +48,7 @@ except ImportError:
         tool_execution_total,
     )
 
+from registry.common.mcp_protocol import META_CLIENT_INFO_KEY, META_PROTOCOL_VERSION_KEY
 from registry.observability.label_bounding import LabelCardinalityLimiter, bool_label
 
 logger = logging.getLogger(__name__)
@@ -69,10 +70,6 @@ logger = logging.getLogger(__name__)
 _TOOL_EXECUTION_BOUNDED_ATTRS: frozenset[str] = frozenset(
     {"tool_name", "method", "client_name", "client_version", "server_name"}
 )
-
-# MCP 2026-07-28 request metadata keys (params._meta).
-META_PROTOCOL_VERSION_KEY: str = "io.modelcontextprotocol/protocolVersion"
-META_CLIENT_INFO_KEY: str = "io.modelcontextprotocol/clientInfo"
 
 # Protocol-latency attributes that need bounding. flow_step is a server-set enum;
 # server_name carries the same churn risk as above, on another histogram. The

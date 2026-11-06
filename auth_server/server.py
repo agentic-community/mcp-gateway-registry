@@ -118,6 +118,12 @@ from registry.audit.request_id import new_audit_request_id, sanitize_correlation
 from registry.audit.service import AuditLogger, NonDurableAuditError, enforce_durable_audit_sink
 from registry.audit.sink import emit_audit_event
 from registry.common.log_redaction import redact_url
+from registry.common.mcp_protocol import (
+    META_CLIENT_CAPABILITIES_KEY,
+    is_modern_request,
+    request_meta,
+    shape_result,
+)
 from registry.common.scopes_loader import reload_scopes_config
 from registry.common.secret_key import validate_secret_key, validate_signing_secret
 from registry.core.config import settings
@@ -8418,20 +8424,7 @@ _ELICITATION_PERMITTED_METHODS: frozenset[str] = frozenset(
 # Spec: https://modelcontextprotocol.io/specification/2026-07-28/changelog
 EGRESS_CONSENT_INPUT_KEY: str = "egress_connect"
 EGRESS_CONSENT_REQUEST_STATE_PREFIX: str = "mcpgw-egress-consent."
-_META_PROTOCOL_VERSION_KEY: str = "io.modelcontextprotocol/protocolVersion"
-_META_CLIENT_CAPABILITIES_KEY: str = "io.modelcontextprotocol/clientCapabilities"
 _CONSENT_DECLINE_ACTIONS: frozenset[str] = frozenset({"decline", "cancel"})
-
-
-def _request_meta(
-    payload: object,
-) -> dict:
-    """Return params._meta of a JSON-RPC request, or an empty dict."""
-    if not isinstance(payload, dict):
-        return {}
-    params = payload.get("params")
-    meta = params.get("_meta") if isinstance(params, dict) else None
-    return meta if isinstance(meta, dict) else {}
 
 
 def _client_accepts_url_input_request(
@@ -8443,11 +8436,9 @@ def _client_accepts_url_input_request(
     declared ``elicitation.url`` in its capabilities. A 2026-07-28 request
     carries the capabilities in ``params._meta`` on every call.
     """
-    meta = _request_meta(payload)
-    version = meta.get(_META_PROTOCOL_VERSION_KEY)
-    if not isinstance(version, str) or version < "2026-":
+    if not is_modern_request(payload):
         return False
-    capabilities = meta.get(_META_CLIENT_CAPABILITIES_KEY)
+    capabilities = request_meta(payload).get(META_CLIENT_CAPABILITIES_KEY)
     if not isinstance(capabilities, dict):
         return False
     elicitation = capabilities.get("elicitation")
@@ -8504,28 +8495,6 @@ def _input_required_consent_response(
             },
         },
     )
-
-
-def _is_modern_mcp_request(
-    payload: object,
-) -> bool:
-    """Whether a request carries MCP 2026-07-28 metadata in params._meta."""
-    version = _request_meta(payload).get(_META_PROTOCOL_VERSION_KEY)
-    return isinstance(version, str) and version >= "2026-"
-
-
-def _gateway_result(
-    result: dict,
-    payload: object,
-) -> dict:
-    """Mark a result the gateway built itself as complete for a 2026-07-28 client.
-
-    MCP 2026-07-28 requires resultType on every result, and the SDK rejects a
-    result without it. Older clients get the result unchanged.
-    """
-    if _is_modern_mcp_request(payload) and "resultType" not in result:
-        return {**result, "resultType": "complete"}
-    return result
 
 
 def _ingress_subject_token(request: "Request") -> str:
@@ -8798,8 +8767,9 @@ def _connect_tool_local_result(
         content={
             "jsonrpc": "2.0",
             "id": req_id,
-            "result": _gateway_result(
+            "result": shape_result(
                 {"content": [{"type": "text", "text": text}], "isError": False},
+                "tools/call",
                 incoming_payload,
             ),
         },
@@ -8846,7 +8816,7 @@ def _pre_consent_local_response(
             content={
                 "jsonrpc": "2.0",
                 "id": req_id,
-                "result": _gateway_result({}, incoming_payload),
+                "result": shape_result({}, method, incoming_payload),
             },
         )
     if method in _PRE_CONSENT_UNSUPPORTED_METHODS:
@@ -8869,7 +8839,7 @@ def _pre_consent_local_response(
         content={
             "jsonrpc": "2.0",
             "id": req_id,
-            "result": _gateway_result({result_key: items}, incoming_payload),
+            "result": shape_result({result_key: items}, method, incoming_payload),
         },
         headers={EGRESS_CONSENT_REQUIRED_HEADER: mode},
     )
@@ -8906,7 +8876,7 @@ def _pat_missing_response(
         content={
             "jsonrpc": "2.0",
             "id": req_id,
-            "result": _gateway_result(
+            "result": shape_result(
                 {
                     "content": [
                         {
@@ -8921,6 +8891,7 @@ def _pat_missing_response(
                     ],
                     "isError": True,
                 },
+                incoming_method,
                 incoming_payload,
             ),
         },
@@ -9105,7 +9076,7 @@ def _egress_consent_response(
             content={
                 "jsonrpc": "2.0",
                 "id": req_id,
-                "result": _gateway_result(
+                "result": shape_result(
                     {
                         "content": [
                             {
@@ -9120,6 +9091,7 @@ def _egress_consent_response(
                         ],
                         "isError": True,
                     },
+                    incoming_method,
                     incoming_payload,
                 ),
             },
