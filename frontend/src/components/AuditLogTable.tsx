@@ -37,7 +37,9 @@ import type { AuditEvent } from '../types/audit';
 import { buildAuditQueryParams } from '../utils/auditQuery';
 import { AUDIT_COLUMNS, DEFAULT_COL_DEF } from './audit/auditColumns';
 import type { AuditRow } from './audit/auditColumns';
-import { auditGridTheme } from './audit/auditGridTheme';
+import 'ag-grid-community/styles/ag-grid.css';
+import 'ag-grid-community/styles/ag-theme-quartz.css';
+import './audit/auditGrid.css';
 
 ModuleRegistry.registerModules([
   ClientSideRowModelModule,
@@ -393,10 +395,10 @@ const AuditLogTable: React.FC<AuditLogTableProps> = ({
       ) : null}
 
       {/* Grid */}
-      <div className="h-[min(70vh,44rem)] min-h-[26rem]">
+      <div className="ag-theme-quartz audit-grid h-[min(70vh,44rem)] min-h-[26rem]">
         <AgGridReact<AuditRow>
           key={filters.stream}
-          theme={auditGridTheme}
+          theme="legacy"
           rowData={rows}
           columnDefs={columnDefs}
           defaultColDef={DEFAULT_COL_DEF}
