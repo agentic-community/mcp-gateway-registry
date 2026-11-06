@@ -50,7 +50,7 @@ This guide provides a comprehensive, step-by-step walkthrough for setting up the
 **Other Requirements:**
 - **Node.js**: Version 20.x LTS - Install from https://nodejs.org/ or via Homebrew (not needed with `--prebuilt` flag)
 - **Python**: Version 3.14+ - Install via Homebrew (`brew install python@3.14`)
-- **UV Package Manager**: Install with `curl -LsSf https://astral.sh/uv/install.sh | sh`
+- **UV Package Manager**: Install via Homebrew (`brew install uv`)
 - **Git**: Usually pre-installed on macOS
 - **jq**: Install via Homebrew (`brew install jq`)
 
