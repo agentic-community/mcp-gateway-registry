@@ -2,10 +2,11 @@
 
 The auth server sets the session cookie at login and reads it at ``/validate``;
 the registry reads it on every browser request and deletes it at logout. Both
-must use one name, so both take it from ``Settings.session_cookie_name``
-(``SESSION_COOKIE_NAME``, checked by ``check_session_cookie_name``). Both set
-and expire it with the attributes ``session_cookie_attributes`` returns, so a
-browser matches every expiry to the cookie the login set.
+must use one name, so both take it from ``Settings.session_cookie_effective_name``,
+which ``effective_session_cookie_name`` computes from ``SESSION_COOKIE_NAME`` and
+``SESSION_COOKIE_HOST_PREFIX``. Both set and expire it with the attributes
+``session_cookie_attributes`` returns, so a browser matches every expiry to the
+cookie the login set.
 
 Both must also agree on which cookie is the session when the ``Cookie`` header
 carries the name more than once, so both read it with ``single_session_cookie``
@@ -31,6 +32,9 @@ from typing import (
 logger = logging.getLogger(__name__)
 
 DEFAULT_SESSION_COOKIE_NAME: str = "mcp_gateway_session"
+# A browser stores a cookie whose name starts with this only when it is Secure,
+# has Path=/ and has no Domain, so no sibling subdomain can set or overwrite it.
+HOST_COOKIE_PREFIX: str = "__Host-"
 # The session cookie's SameSite and HttpOnly attributes are fixed, not settings.
 # SameSite must be Lax: the login callback sets the cookie on a top-level
 # cross-site navigation back from the identity provider, and a browser drops a
@@ -77,7 +81,8 @@ def check_session_cookie_name(
         raise ValueError(
             f"SESSION_COOKIE_NAME={name!r} starts with a reserved cookie prefix. "
             "Browsers apply special rules to __Host- and __Secure- names that this "
-            "setting does not meet. Remove the prefix from the name."
+            "setting does not meet. Remove the prefix from the name, and set "
+            "SESSION_COOKIE_HOST_PREFIX=true for a __Host- session cookie."
         )
     invalid = sorted({ch for ch in name if not "!" <= ch <= "~" or ch in _COOKIE_NAME_SEPARATORS})
     if invalid:
@@ -90,24 +95,83 @@ def check_session_cookie_name(
     return name
 
 
+def effective_session_cookie_name(
+    name: str,
+    host_prefix: bool,
+) -> str:
+    """Return the name the session cookie is set and read under.
+
+    Args:
+        name: The ``SESSION_COOKIE_NAME`` value ``check_session_cookie_name`` accepted.
+        host_prefix: The ``SESSION_COOKIE_HOST_PREFIX`` value.
+
+    Returns:
+        ``name``, with ``__Host-`` in front when ``host_prefix`` is true.
+
+    Example:
+        >>> effective_session_cookie_name("custom_session", host_prefix=True)
+        '__Host-custom_session'
+    """
+    if host_prefix:
+        return HOST_COOKIE_PREFIX + name
+    return name
+
+
+def check_host_prefix_settings(
+    host_prefix: bool,
+    secure: bool,
+    domain: str | None,
+) -> None:
+    """Refuse a ``__Host-`` session cookie that browsers would not store.
+
+    Args:
+        host_prefix: The ``SESSION_COOKIE_HOST_PREFIX`` value.
+        secure: The ``SESSION_COOKIE_SECURE`` value.
+        domain: The ``SESSION_COOKIE_DOMAIN`` value.
+
+    Raises:
+        ValueError: ``host_prefix`` is true while ``secure`` is false or
+            ``domain`` is set.
+    """
+    if not host_prefix:
+        return
+    problems = []
+    if not secure:
+        problems.append("SESSION_COOKIE_SECURE must be true")
+    if (domain or "").strip():
+        problems.append("SESSION_COOKIE_DOMAIN must be empty")
+    if problems:
+        raise ValueError(
+            "SESSION_COOKIE_HOST_PREFIX=true needs a Secure session cookie with no "
+            f"Domain, but {' and '.join(problems)}. Browsers drop a __Host- cookie "
+            "otherwise, so nobody could sign in. Fix those variables on the registry "
+            "and the auth server, or set SESSION_COOKIE_HOST_PREFIX=false."
+        )
+
+
 def session_cookie_secure_flag(
     is_https: bool,
     setting_secure: bool,
+    host_prefix: bool,
 ) -> bool:
     """Return whether a Set-Cookie of the session cookie, or its expiry, carries Secure.
 
     Both services send every set and every expiry of the session cookie with
     this flag. On HTTPS the cookie is Secure exactly when
     ``SESSION_COOKIE_SECURE`` is true. On plain HTTP it is never Secure,
-    because a browser drops a Secure Set-Cookie sent over HTTP.
+    because a browser drops a Secure Set-Cookie sent over HTTP, except with
+    the ``__Host-`` prefix, which a browser accepts only with Secure.
 
     Args:
         is_https: Whether the browser reached the gateway over HTTPS.
         setting_secure: The ``SESSION_COOKIE_SECURE`` value.
+        host_prefix: The ``SESSION_COOKIE_HOST_PREFIX`` value.
 
     Returns:
         True when the cookie is Secure.
     """
+    if host_prefix:
+        return True
     return is_https and setting_secure
 
 
@@ -140,31 +204,38 @@ def session_cookie_attributes(
     is_https: bool,
     secure: bool,
     domain: str | None,
+    host_prefix: bool,
     max_age: int,
 ) -> SessionCookieAttributes:
     """Return the attributes both services set and expire the session cookie with.
 
     A browser ignores an expiry unless its name, Domain and Path match the
     cookie's, and keeps a host-only cookie and one with a Domain as two cookies.
-    The cookie has Path=/, the Domain ``SESSION_COOKIE_DOMAIN`` names,
-    SameSite=Lax, HttpOnly, and the Secure flag of
+    The cookie has Path=/, the Domain ``SESSION_COOKIE_DOMAIN`` names (none with
+    the ``__Host-`` prefix), SameSite=Lax, HttpOnly, and the Secure flag of
     ``session_cookie_secure_flag``. Each expiry carries the same attributes.
 
     Args:
-        name: The session cookie name.
+        name: The effective session cookie name.
         is_https: Whether the browser reached the gateway over HTTPS.
         secure: The ``SESSION_COOKIE_SECURE`` value.
         domain: The ``SESSION_COOKIE_DOMAIN`` value, or None when unset.
+        host_prefix: The ``SESSION_COOKIE_HOST_PREFIX`` value.
         max_age: The ``SESSION_MAX_AGE_SECONDS`` value.
 
     Returns:
         The set attributes and the expiry of every variant.
+
+    Raises:
+        ValueError: ``host_prefix`` is true with ``secure`` false or a domain,
+            which settings already refuse at startup.
     """
+    check_host_prefix_settings(host_prefix, secure, domain)
     cookie_domain = (domain or "").strip() or None
     shared: dict[str, Any] = {
         "key": name,
         "path": "/",
-        "secure": session_cookie_secure_flag(is_https, secure),
+        "secure": session_cookie_secure_flag(is_https, secure, host_prefix),
         "httponly": SESSION_COOKIE_HTTPONLY,
         "samesite": SESSION_COOKIE_SAMESITE,
     }

@@ -1050,7 +1050,7 @@ docker-compose restart keycloak
 
 #### Login Redirects Back to Login Page
 
-**Common causes**: a `SECRET_KEY` or `SESSION_COOKIE_NAME` that differs between the registry and the auth server. `SESSION_COOKIE_SECURE` does not cause this: the gateway never marks the cookie Secure on plain HTTP.
+**Common causes**: `SESSION_COOKIE_HOST_PREFIX=true` on plain HTTP, or a `SECRET_KEY` or `SESSION_COOKIE_NAME` that differs between the registry and the auth server. `SESSION_COOKIE_SECURE` does not cause this: the gateway never marks the cookie Secure on plain HTTP.
 
 **Symptoms**:
 - You enter username/password
@@ -1060,26 +1060,31 @@ docker-compose restart keycloak
 **Solution**:
 1. Check your `.env` file:
    ```bash
-   grep -E 'SESSION_COOKIE_NAME' .env
+   grep -E 'SESSION_COOKIE_HOST_PREFIX|SESSION_COOKIE_NAME' .env
    ```
 
-2. **Make the shared values agree**: the registry and the auth server need the same `SECRET_KEY` and `SESSION_COOKIE_NAME`.
+2. **For localhost (HTTP) access**, turn the prefix off:
+   ```bash
+   SESSION_COOKIE_HOST_PREFIX=false
+   ```
 
-3. **Verify in browser dev tools**:
+3. **Make the shared values agree**: the registry and the auth server need the same `SECRET_KEY` and `SESSION_COOKIE_NAME`.
+
+4. **Verify in browser dev tools**:
    - Open browser dev tools (F12)
    - Go to Application → Cookies → Your domain
    - Check if `mcp_gateway_session` cookie exists
    - For HTTP: `Secure` flag should be UNCHECKED
    - For HTTPS: `Secure` flag should be CHECKED
 
-4. **After fixing, rebuild and restart**:
+5. **After fixing, rebuild and restart**:
    ```bash
    docker compose down
    docker compose build --no-cache auth-server registry
    docker compose up -d
    ```
 
-**Why this happens**: A service whose `SECRET_KEY` or `SESSION_COOKIE_NAME` differs cannot read the cookie the other one set.
+**Why this happens**: A browser keeps a `__Host-` cookie only when it arrives Secure over HTTPS, so over `http://localhost` it drops the session cookie. A service whose `SECRET_KEY` or `SESSION_COOKIE_NAME` differs cannot read the cookie the other one set.
 
 #### Authentication Issues
 ```bash

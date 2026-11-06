@@ -22,6 +22,16 @@ global:
   ssrfAllowedCidrs: ""
   # Domain configuration - update this to your actual domain
   domain: "DOMAIN"
+  # Name the session cookie __Host-mcp_gateway_session (Secure, Path=/, no
+  # Domain) so no sibling subdomain can set or overwrite it. This one value
+  # sets SESSION_COOKIE_HOST_PREFIX for both the registry and the
+  # auth-server, which must agree. Requires global.ingress.tls=true,
+  # global.sessionCookieSecure=true, and an empty global.sessionCookieDomain;
+  # the subcharts then render SESSION_COOKIE_DOMAIN empty. Do not set
+  # registry.app.sessionCookieHostPrefix or auth-server.app.sessionCookieHostPrefix:
+  # the chart refuses one that differs from this value. Turning it on signs
+  # every user out once. See docs/design/cookie-security-design.md.
+  sessionCookieHostPrefix: false
   # Mark the session cookie Secure on HTTPS requests; it is never Secure on
   # plain HTTP. This one value sets SESSION_COOKIE_SECURE for both the registry
   # and the auth-server, which must agree. Do not set

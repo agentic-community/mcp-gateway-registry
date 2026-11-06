@@ -112,16 +112,17 @@ compare equal, and a large one is not written with an exponent.
 Refuse a subchart-level session setting that differs from its global. The
 registry and the auth-server must agree on every one: the auth-server stores
 the session and sets the cookie's name, Domain, Max-Age and Secure attribute,
-and the registry reads, checks and expires the same cookie. A split domain
-leaves the browser two cookies, which both services refuse, so the user is
-signed out on every request. Both subcharts render each setting from
+and the registry reads, checks and expires the same cookie. A split prefix lets
+/validate find the session while CSRF, consent and logout do not; a split
+domain leaves the browser two cookies, which both services refuse, so the user
+is signed out on every request. Both subcharts render each setting from
 global.<setting>, so the stack requires the globals, and a differing override
 is ignored by the subcharts and would read as if it took effect, so name it
 instead. An empty override is a subchart default (app.sessionCookieDomain
 ships empty) and is ignored. The registry has no app key for the Secure flag.
 */}}
 {{- define "mcp-gateway-registry-stack.validateSessionSettings" -}}
-{{- $checks := list (list "registry" "sessionMaxAgeSeconds" "SESSION_MAX_AGE_SECONDS") (list "auth-server" "sessionMaxAgeSeconds" "SESSION_MAX_AGE_SECONDS") (list "auth-server" "sessionCookieSecure" "SESSION_COOKIE_SECURE") (list "registry" "sessionCookieDomain" "SESSION_COOKIE_DOMAIN") (list "auth-server" "sessionCookieDomain" "SESSION_COOKIE_DOMAIN") -}}
+{{- $checks := list (list "registry" "sessionMaxAgeSeconds" "SESSION_MAX_AGE_SECONDS") (list "auth-server" "sessionMaxAgeSeconds" "SESSION_MAX_AGE_SECONDS") (list "auth-server" "sessionCookieSecure" "SESSION_COOKIE_SECURE") (list "registry" "sessionCookieHostPrefix" "SESSION_COOKIE_HOST_PREFIX") (list "auth-server" "sessionCookieHostPrefix" "SESSION_COOKIE_HOST_PREFIX") (list "registry" "sessionCookieDomain" "SESSION_COOKIE_DOMAIN") (list "auth-server" "sessionCookieDomain" "SESSION_COOKIE_DOMAIN") -}}
 {{- range $check := $checks -}}
 {{- $chart := index $check 0 -}}
 {{- $key := index $check 1 -}}

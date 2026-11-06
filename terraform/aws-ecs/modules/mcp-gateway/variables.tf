@@ -494,6 +494,12 @@ variable "session_cookie_domain" {
   default     = ""
 }
 
+variable "session_cookie_host_prefix" {
+  description = "Name the session cookie __Host-<name> (Secure, Path=/, no Domain). Requires session_cookie_secure = true and an empty session_cookie_domain."
+  type        = bool
+  default     = false
+}
+
 variable "session_max_age_seconds" {
   description = "Browser session lifetime in seconds: the auth server's session store TTL, the session cookie's Max-Age, and the registry's cookie signature max age. Rendered into both the registry and auth-server task definitions so the two always match."
   type        = number

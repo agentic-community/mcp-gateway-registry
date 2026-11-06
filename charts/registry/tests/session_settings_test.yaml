@@ -171,6 +171,22 @@ tests:
       - failedTemplate:
           errorPattern: 'global.sessionMaxAgeSeconds must be a positive integer number of seconds, got "8h"'
 
+  - it: refuses the prefix when the global makes the cookie non-Secure, naming the global
+    set:
+      app:
+        secretKey: "test-key-not-for-prod"  # pragma: allowlist secret
+        sessionCookieHostPrefix: true
+      egressAuth:
+        markerSecret: "test-marker-not-for-prod"  # pragma: allowlist secret
+      global:
+        domain: example.com
+        sessionCookieSecure: false
+        ingress:
+          tls: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "app.sessionCookieHostPrefix requires global.sessionCookieSecure=true: a __Host- cookie is Secure"
+
   - it: renders the app cookie domain on a standalone install
     set:
       app:
@@ -216,3 +232,19 @@ tests:
           path: data.SESSION_COOKIE_DOMAIN
           value: ".example.com"
           decodeBase64: true
+
+  - it: refuses the prefix with a global cookie domain, naming the global
+    set:
+      app:
+        secretKey: "test-key-not-for-prod"  # pragma: allowlist secret
+      egressAuth:
+        markerSecret: "test-marker-not-for-prod"  # pragma: allowlist secret
+      global:
+        domain: example.com
+        sessionCookieHostPrefix: true
+        sessionCookieDomain: ".example.com"
+        ingress:
+          tls: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "global.sessionCookieHostPrefix requires global.sessionCookieDomain to be empty"

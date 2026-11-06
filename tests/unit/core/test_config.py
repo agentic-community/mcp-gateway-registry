@@ -920,6 +920,71 @@ class TestSettingsSessionCookie:
         # Assert
         assert settings.session_cookie_domain == ".example.com"
 
+    def test_host_prefix_off_keeps_the_configured_name(self, monkeypatch) -> None:
+        """With SESSION_COOKIE_HOST_PREFIX unset the cookie name is unchanged."""
+        monkeypatch.delenv("SESSION_COOKIE_HOST_PREFIX", raising=False)
+        monkeypatch.delenv("SESSION_COOKIE_NAME", raising=False)
+
+        settings = Settings(_env_file=None)
+
+        assert settings.session_cookie_effective_name == "mcp_gateway_session"
+
+    def _prefixed_settings(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> Settings:
+        """Load settings with SESSION_COOKIE_HOST_PREFIX=true and a configured name."""
+        monkeypatch.setenv("SESSION_COOKIE_HOST_PREFIX", "true")
+        monkeypatch.setenv("SESSION_COOKIE_SECURE", "true")
+        monkeypatch.setenv("SESSION_COOKIE_NAME", "custom_session")
+        monkeypatch.delenv("SESSION_COOKIE_DOMAIN", raising=False)
+        return Settings(_env_file=None)
+
+    def test_host_prefix_on_prefixes_only_the_effective_name(self, monkeypatch) -> None:
+        """SESSION_COOKIE_HOST_PREFIX=true names the cookie __Host-<name>; the setting keeps <name>."""
+        settings = self._prefixed_settings(monkeypatch)
+
+        assert settings.session_cookie_name == "custom_session"
+        assert settings.session_cookie_effective_name == "__Host-custom_session"
+
+    def test_revalidating_prefixed_settings_accepts_their_own_name(self, monkeypatch) -> None:
+        """Settings rebuilt from a prefixed Settings' values load and name the same cookie.
+
+        A configured name that starts with __Host- is refused, so a field that
+        held the effective name would make its own values unloadable.
+        """
+        settings = self._prefixed_settings(monkeypatch)
+
+        again = Settings(_env_file=None, **settings.model_dump())
+
+        assert again.session_cookie_effective_name == settings.session_cookie_effective_name
+
+    @pytest.mark.parametrize(
+        ("secure", "domain", "named"),
+        [
+            pytest.param("false", None, "SESSION_COOKIE_SECURE", id="not-secure"),
+            pytest.param("true", ".example.com", "SESSION_COOKIE_DOMAIN", id="shared-domain"),
+        ],
+    )
+    def test_host_prefix_refuses_to_start_without_its_preconditions(
+        self, monkeypatch, secure, domain, named
+    ) -> None:
+        """The prefix needs a Secure cookie with no Domain, or settings refuse to load.
+
+        The registry and the auth server both build this class at startup.
+        """
+        monkeypatch.setenv("SESSION_COOKIE_HOST_PREFIX", "true")
+        monkeypatch.setenv("SESSION_COOKIE_SECURE", secure)
+        if domain is None:
+            monkeypatch.delenv("SESSION_COOKIE_DOMAIN", raising=False)
+        else:
+            monkeypatch.setenv("SESSION_COOKIE_DOMAIN", domain)
+
+        with pytest.raises(ValueError, match="SESSION_COOKIE_HOST_PREFIX") as raised:
+            Settings(_env_file=None)
+
+        assert named in str(raised.value)
+
     @pytest.mark.parametrize(
         "configured",
         [
@@ -938,6 +1003,7 @@ class TestSettingsSessionCookie:
         The registry and the auth server both build this class at startup.
         """
         monkeypatch.setenv("SESSION_COOKIE_NAME", configured)
+        monkeypatch.delenv("SESSION_COOKIE_HOST_PREFIX", raising=False)
 
         with pytest.raises(ValueError, match="SESSION_COOKIE_NAME"):
             Settings(_env_file=None)

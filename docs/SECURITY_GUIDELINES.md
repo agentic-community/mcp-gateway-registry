@@ -698,17 +698,18 @@ sanitizer that isn't called) is equivalent to no check.
   NOT a valid "hardening" here — CSRF is defended separately by the CSRF token,
   not by `SameSite=Strict`. Leave a comment at the `set_cookie` site so a future
   reader does not "tighten" it and break login.
-- **A session cookie can be tossed from a sibling subdomain.** Any other host
-  under the parent domain can set a cookie with the session cookie's name.
-  Beside the real one, the browser sends both, in an order the tossing host
-  controls, and two readers that pick differently act as two sessions on one
-  request. Refuse a duplicated session cookie in every reader of both services
-  through one parser that matches the exact name, and make a read that
-  bypasses it fail closed. A tossed cookie with the real cookie's Domain and
-  Path replaces it instead, putting the browser in the attacker's session, and
-  refusing duplicates cannot see that. Never record the `Cookie` header,
-  including through OpenTelemetry header capture ([Cookie Security
-  Design](design/cookie-security-design.md#duplicate-session-cookies)).
+- **A session cookie without the `__Host-` prefix can be tossed from a sibling
+  subdomain.** Any other host under the parent domain can set a cookie with the
+  session cookie's name. Beside the real one, the browser sends both, in an
+  order the tossing host controls, and two readers that pick differently act as
+  two sessions on one request. Refuse a duplicated session cookie in every
+  reader of both services through one parser that matches the exact name, and
+  make a read that bypasses it fail closed. A tossed cookie with the real
+  cookie's Domain and Path replaces it instead, putting the browser in the
+  attacker's session: only the `__Host-` prefix stops that, so turn it on
+  wherever the deployment needs no shared cookie domain. Never record the
+  `Cookie` header, including through OpenTelemetry header capture ([Cookie
+  Security Design](design/cookie-security-design.md#duplicate-session-cookies)).
 - **Bind the OAuth2/OIDC authorization-code flow to the specific login.** A valid
   signature is necessary but not sufficient — a correctly-signed id_token minted
   for a different login can be replayed/injected. Send a per-login `nonce` on the

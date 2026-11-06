@@ -274,6 +274,14 @@ session_cookie_secure = true
 # Default: Empty (cookie scoped to exact host only - safest option)
 session_cookie_domain = ""
 
+# Name the session cookie __Host-mcp_gateway_session (Secure, Path=/, no Domain)
+# so no sibling subdomain can set or overwrite it. Requires HTTPS,
+# session_cookie_secure = true and session_cookie_domain = ""; terraform plan
+# fails otherwise, as do the registry and auth-server at startup. Turning it on
+# signs every user out once.
+# Default: false
+session_cookie_host_prefix = false
+
 # Browser session lifetime in seconds. Sets the auth server's session store TTL,
 # the session cookie's Max-Age, and the registry's cookie signature max age.
 # The value must match on the registry and auth-server; this module renders it

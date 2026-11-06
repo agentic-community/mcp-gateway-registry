@@ -4550,7 +4550,7 @@ async def validate_request(request: Request):
         # (UI uses cookies, CLI uses Bearer). A session cookie the header carries
         # more than once is refused and counts as none: another host under the
         # parent domain can add the second one, so neither can be trusted.
-        session_cookie_name = settings.session_cookie_name
+        session_cookie_name = settings.session_cookie_effective_name
         session_cookie = single_session_cookie(cookie_header, session_cookie_name)
         has_session_cookie = session_cookie is not None
 
@@ -7817,14 +7817,16 @@ async def oauth2_callback(
         # load balancer or CloudFront, which is_request_https accounts for.
         is_https = is_request_https(request)
         # Every attribute, and the expiry of the other variant, comes from the
-        # function the registry's expiries use: SESSION_COOKIE_NAME, Path=/,
-        # SESSION_COOKIE_DOMAIN, Secure from SESSION_COOKIE_SECURE on HTTPS,
-        # SameSite=Lax, HttpOnly, and Max-Age SESSION_MAX_AGE_SECONDS.
+        # function the registry's expiries use: the effective name, Path=/,
+        # SESSION_COOKIE_DOMAIN (none with the __Host- prefix), Secure from
+        # SESSION_COOKIE_SECURE on HTTPS, SameSite=Lax, HttpOnly, and Max-Age
+        # SESSION_MAX_AGE_SECONDS.
         cookie = session_cookie_attributes(
-            name=settings.session_cookie_name,
+            name=settings.session_cookie_effective_name,
             is_https=is_https,
             secure=settings.session_cookie_secure,
             domain=settings.session_cookie_domain,
+            host_prefix=settings.session_cookie_host_prefix,
             max_age=session_max_age,
         )
         logger.info(

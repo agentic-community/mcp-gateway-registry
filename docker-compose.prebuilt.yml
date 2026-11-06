@@ -113,6 +113,8 @@ services:
       # value whenever the operator's .env did not set BUILD_VERSION,
       # which is the silent-fallback symptom this PR fixes.
       - SECRET_KEY=${SECRET_KEY}
+      # __Host- session cookie; needs HTTPS and no SESSION_COOKIE_DOMAIN. Same value on auth-server.
+      - SESSION_COOKIE_HOST_PREFIX=${SESSION_COOKIE_HOST_PREFIX:-false}
       # Browser session lifetime in seconds; must be positive. Same value on auth-server.
       - SESSION_MAX_AGE_SECONDS=${SESSION_MAX_AGE_SECONDS:-28800}
       # Per-user egress credential vault (off by default)
@@ -474,6 +476,8 @@ services:
       - TRUSTED_PROXY_HOPS=${TRUSTED_PROXY_HOPS:-1}
       - TRUSTED_EXTERNAL_HOSTS=${TRUSTED_EXTERNAL_HOSTS:-}
       - SECRET_KEY=${SECRET_KEY}
+      # __Host- session cookie; needs HTTPS and no SESSION_COOKIE_DOMAIN. Same value on registry.
+      - SESSION_COOKIE_HOST_PREFIX=${SESSION_COOKIE_HOST_PREFIX:-false}
       # Browser session lifetime in seconds; must be positive. Same value on registry.
       - SESSION_MAX_AGE_SECONDS=${SESSION_MAX_AGE_SECONDS:-28800}
       # MCP access-token lifetime (hours). auth-server mints + clamps to the

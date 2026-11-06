@@ -167,6 +167,7 @@ cat keycloak/setup/keycloak-client-secrets.txt
 |----------|-------------|---------|----------|---------|
 | `SESSION_COOKIE_SECURE` | Mark the session cookie Secure on HTTPS requests | `true` | ❌ | `true` |
 | `SESSION_COOKIE_DOMAIN` | Cookie domain for cross-subdomain sharing | `""` (single domain)<br/>`.example.com` (cross-subdomain) | ❌ | Empty |
+| `SESSION_COOKIE_HOST_PREFIX` | Name the session cookie `__Host-<name>` so another subdomain cannot set it; needs HTTPS, `SESSION_COOKIE_SECURE=true` and an empty `SESSION_COOKIE_DOMAIN` (see [Cookie Security Design](design/cookie-security-design.md#session-cookie-host-prefix)) | `false`<br/>`true` (single host over HTTPS) | ❌ | `false` |
 | `SESSION_MAX_AGE_SECONDS` | Browser session lifetime in seconds: the stored session's lifetime, the cookie's `Max-Age` and the oldest cookie signature either service accepts. Must be positive | `28800` | ❌ | `28800` |
 
 Set each of these to the same value on the registry and the auth server.
@@ -757,6 +758,7 @@ When using Keycloak as the authentication provider, the following configuration 
 ### Common Issues
 
 1. **Login redirects back to login page**
+   - **Check:** `SESSION_COOKIE_HOST_PREFIX=true` needs HTTPS; on plain HTTP the browser drops the `__Host-` cookie
    - **Check:** `SECRET_KEY` and `SESSION_COOKIE_NAME` are the same on the registry and the auth server
    - **Solution for production:** Ensure HTTPS is properly configured
    - **Check:** Browser dev tools → Application → Cookies (cookie should be present)

@@ -201,6 +201,7 @@ export class RegistryServiceStack extends cdk.Stack {
       AUTH0_MANAGEMENT_API_TOKEN: config.auth0.managementApiToken,
       SESSION_COOKIE_SECURE: String(config.session.cookieSecure),
       SESSION_COOKIE_DOMAIN: config.session.cookieDomain,
+      SESSION_COOKIE_HOST_PREFIX: String(config.session.cookieHostPrefix),
       // Session lifetime in seconds. Must match on the registry and the
       // auth-server; sharedEnv reaches both containers.
       SESSION_MAX_AGE_SECONDS: String(config.session.maxAgeSeconds),
