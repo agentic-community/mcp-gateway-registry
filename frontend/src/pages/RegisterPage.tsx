@@ -33,7 +33,7 @@ import {
   OAuthClientCredentialsFields,
   DiscoveryIdentityFields,
 } from '../components/formFields';
-import { pathFromName } from '../utils/slug';
+import { pathForRenamed, pathFromName } from '../utils/slug';
 import { isEgressAuthEnabled } from '../utils/egressAuth';
 import { useRegistryConfig } from '../hooks/useRegistryConfig';
 import Button from '../components/Button';
@@ -292,25 +292,23 @@ const RegisterPage: React.FC = () => {
     useState<'mcp_server' | 'a2a_agent'>('mcp_server');
 
 
-  const generatePath = useCallback((name: string): string => pathFromName(name), []);
-
-
+  // The path follows the name until the user edits it (see pathForRenamed).
   const handleServerNameChange = useCallback((name: string) => {
     setServerForm(prev => ({
       ...prev,
       name,
-      path: prev.path || generatePath(name),
+      path: pathForRenamed(prev.name, prev.path, name),
     }));
-  }, [generatePath]);
+  }, []);
 
 
   const handleAgentNameChange = useCallback((name: string) => {
     setAgentForm(prev => ({
       ...prev,
       name,
-      path: prev.path || generatePath(name),
+      path: pathForRenamed(prev.name, prev.path, name),
     }));
-  }, [generatePath]);
+  }, []);
 
 
   const validateServerForm = useCallback((): boolean => {
@@ -464,10 +462,10 @@ const RegisterPage: React.FC = () => {
           if (!parsed.server_name && !parsed.name && parsed.title) {
             parsed.name = parsed.title;
           }
-          // Derive path from name if not explicitly set
+          // Derive path from name if not explicitly set (same rule as the form,
+          // so later name edits keep following it)
           if (!parsed.path && parsed.name) {
-            const slug = parsed.name.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
-            parsed.path = '/' + slug;
+            parsed.path = pathFromName(parsed.name);
           }
           if (!parsed.proxy_pass_url && parsed.remotes?.[0]?.url) {
             parsed.proxy_pass_url = parsed.remotes[0].url;
@@ -988,7 +986,7 @@ const RegisterPage: React.FC = () => {
             onChange={(e) => setServerForm(prev => ({ ...prev, path: e.target.value }))}
             placeholder="/my-server"
           />
-          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Auto-generated from name, but can be customized</p>
+          <p className="mt-1 text-xs text-fg-subtle">Follows the name until you edit it, for example to avoid a duplicate path.</p>
           {errors.path && <p className={errorClass}>{errors.path}</p>}
         </div>
 
@@ -1373,7 +1371,7 @@ const RegisterPage: React.FC = () => {
         </div>
 
         <div>
-          <label className={labelClass}>Path (auto-generated)</label>
+          <label className={labelClass}>Path</label>
           <input
             type="text"
             className={`${inputClass} ${errors.path ? 'border-danger-500' : ''}`}
@@ -1381,7 +1379,7 @@ const RegisterPage: React.FC = () => {
             onChange={(e) => setAgentForm(prev => ({ ...prev, path: e.target.value }))}
             placeholder="/my-agent"
           />
-          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Leave empty to auto-generate from name</p>
+          <p className="mt-1 text-xs text-fg-subtle">Follows the name until you edit it. Clear it to let the registry choose the path.</p>
           {errors.path && <p className={errorClass}>{errors.path}</p>}
         </div>
 
