@@ -2209,22 +2209,57 @@ end
 -- ---------------------------------------------------------------------------
 print("forwarded results gain resultType for 2026-07-28 clients")
 do
-    local json = M._with_result_type('{"jsonrpc":"2.0","id":3,"result":{"content":[],"isError":false}}')
+    local json = M._with_modern_result_fields('{"jsonrpc":"2.0","id":3,"result":{"content":[],"isError":false}}', "tools/call")
     local decoded = cjson.decode(json)
     check(decoded.result.resultType == "complete", "a JSON result without resultType gets complete")
     check(json:find('"content":%[%]') ~= nil, "an empty content array stays an array")
 
-    local sse = M._with_result_type('event: message\ndata: {"jsonrpc":"2.0","id":4,"result":{"content":[{"type":"text","text":"x"}]}}\n\n')
+    local sse = M._with_modern_result_fields('event: message\ndata: {"jsonrpc":"2.0","id":4,"result":{"content":[{"type":"text","text":"x"}]}}\n\n', "tools/call")
     local data = sse:match("data: ([^\n]+)")
     check(cjson.decode(data).result.resultType == "complete", "an SSE data line gets resultType")
     check(sse:sub(1, 15) == "event: message\n" and sse:sub(-2) == "\n\n", "the SSE framing is kept")
 
     local kept = '{"jsonrpc":"2.0","id":5,"result":{"resultType":"input_required","inputRequests":{}}}'
-    check(M._with_result_type(kept) == kept, "an existing resultType is left alone")
+    check(M._with_modern_result_fields(kept, "tools/call") == kept, "an existing resultType is left alone")
 
     local err = '{"jsonrpc":"2.0","id":6,"error":{"code":-32602,"message":"bad"}}'
-    check(M._with_result_type(err) == err, "an error response is unchanged")
-    check(M._with_result_type("not json") == "not json", "a body that is not JSON is unchanged")
+    check(M._with_modern_result_fields(err, "tools/call") == err, "an error response is unchanged")
+    check(M._with_modern_result_fields("not json", "tools/call") == "not json", "a body that is not JSON is unchanged")
+end
+
+-- ---------------------------------------------------------------------------
+print("forwarded reads and router lists carry the 2026-07-28 cache fields")
+do
+    local read = M._with_modern_result_fields(
+        '{"jsonrpc":"2.0","id":8,"result":{"contents":[{"uri":"file:///a","text":"x"}]}}',
+        "resources/read")
+    local r = cjson.decode(read).result
+    check(r.resultType == "complete" and r.cacheScope == "private" and r.ttlMs == 0,
+        "a forwarded resources/read gains resultType, cacheScope private and ttlMs 0")
+
+    local own = '{"jsonrpc":"2.0","id":9,"result":{"contents":[],"resultType":"complete",'
+        .. '"cacheScope":"public","ttlMs":5000}}'
+    check(M._with_modern_result_fields(own, "resources/read") == own,
+        "a read that already has all three fields is left alone")
+
+    local call = cjson.decode(M._with_modern_result_fields(
+        '{"jsonrpc":"2.0","id":10,"result":{"content":[]}}', "tools/call")).result
+    check(call.resultType == "complete" and call.cacheScope == nil and call.ttlMs == nil,
+        "a tools/call result gets resultType only (not a cacheable method)")
+end
+
+print("unknown tools answer -32602 for 2026-07-28 clients and -32601 otherwise")
+do
+    local mapping = { tools = {}, tool_backend_map = {}, required_scopes = {} }
+    for _, case in ipairs({ { modern = true, code = -32602 }, { modern = false, code = -32601 } }) do
+        ngx.ctx.vr_modern_client = case.modern
+        ngx._last_body = nil
+        M._handle_tools_call(1, mapping, { name = "missing_tool", arguments = {} }, "", "vs-1", "srv")
+        local body = cjson.decode(ngx._last_body or "{}")
+        check(body.error and body.error.code == case.code,
+            "unknown tool code is " .. case.code .. " when modern=" .. tostring(case.modern))
+    end
+    ngx.ctx.vr_modern_client = nil
 end
 
 -- ---------------------------------------------------------------------------

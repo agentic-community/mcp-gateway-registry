@@ -4874,6 +4874,13 @@ class TestMcpProxyEndpointHeaderPassthrough:
         body = self._post_tokenless_call(payload, use_elicitation=False)
 
         assert body["result"]["resultType"] == "complete"
+        if method == "tools/list":
+            # A list the gateway answers before consent is per user and changes
+            # the moment the user connects, so it is private and not reused.
+            assert body["result"]["cacheScope"] == "private"
+            assert body["result"]["ttlMs"] == 0
+        else:
+            assert "cacheScope" not in body["result"]
 
     def test_baseline_consent_result_is_complete_for_modern_clients(self):
         body = self._post_tokenless_call(_modern_call(url_capable=False), use_elicitation=False)

@@ -66,6 +66,34 @@ local SUPPORTED_PROTOCOL_VERSIONS = {
 }
 local LATEST_PROTOCOL_VERSION = "2025-11-25"
 
+-- MCP 2026-07-28 protocol constants. These mirror registry/common/mcp_protocol.py
+-- (nginx Lua cannot import Python); tests/unit/test_mcp_protocol_parity.py fails
+-- if the two copies disagree.
+local MODERN_PROTOCOL_VERSION = "2026-07-28"
+local META_PROTOCOL_VERSION_KEY = "io.modelcontextprotocol/protocolVersion"
+local META_CLIENT_INFO_KEY = "io.modelcontextprotocol/clientInfo"
+local META_CLIENT_CAPABILITIES_KEY = "io.modelcontextprotocol/clientCapabilities"
+local META_SERVER_INFO_KEY = "io.modelcontextprotocol/serverInfo"
+local JSONRPC_METHOD_NOT_FOUND = -32601
+local JSONRPC_INVALID_PARAMS = -32602
+local JSONRPC_HEADER_MISMATCH = -32020
+local JSONRPC_UNSUPPORTED_PROTOCOL_VERSION = -32022
+-- Versions advertised by server/discover and in -32022 errors, newest first.
+local ADVERTISED_PROTOCOL_VERSIONS = {
+    "2026-07-28", "2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05",
+}
+-- Methods whose 2026-07-28 result must carry ttlMs and cacheScope (CacheableResult).
+local CACHEABLE_RESULT_METHODS = {
+    ["tools/list"] = true,
+    ["prompts/list"] = true,
+    ["resources/list"] = true,
+    ["resources/templates/list"] = true,
+    ["resources/read"] = true,
+}
+-- ttlMs for a cacheable result the router forwards without one: the router
+-- cannot judge how long a backend's answer stays valid, so it says "do not reuse".
+local NO_REUSE_TTL_MS = 0
+
 
 -- Resolve the authenticated user identity for the current request.
 -- Used both when creating sessions (_handle_initialize) and when enforcing
@@ -306,15 +334,6 @@ end
 
 
 -- Outcomes of the backend-bound authorization subrequest.
--- MCP 2026-07-28 protocol constants, shared by the client-facing path (route())
--- and the backend-facing path (_call_backend).
-local MODERN_PROTOCOL_VERSION = "2026-07-28"
-local META_PROTOCOL_VERSION_KEY = "io.modelcontextprotocol/protocolVersion"
-local META_CLIENT_INFO_KEY = "io.modelcontextprotocol/clientInfo"
-local META_CLIENT_CAPABILITIES_KEY = "io.modelcontextprotocol/clientCapabilities"
-local META_SERVER_INFO_KEY = "io.modelcontextprotocol/serverInfo"
-local JSONRPC_HEADER_MISMATCH = -32020
-local JSONRPC_UNSUPPORTED_PROTOCOL_VERSION = -32022
 local BASE64_SENTINEL_PREFIX = "=?base64?"
 local BASE64_SENTINEL_SUFFIX = "?="
 -- Methods whose target name (params.name or params.uri) is mirrored in Mcp-Name.
@@ -636,7 +655,6 @@ local LIST_UNSUPPORTED = "unsupported"
 local LIST_FAILED = "failed"
 local LIST_UNVERIFIED = "unverified"
 local LIST_DENIED = "denied"
-local JSONRPC_METHOD_NOT_FOUND = -32601
 
 
 -- Classify a 200 JSON-RPC list response body. A JSON-RPC error is the
@@ -1195,15 +1213,44 @@ end
 
 
 -- Handle tools/list method - proxy to backends for full metadata, with cache
+-- Add the fields a 2026-07-28 result must carry, keeping any the result has:
+-- resultType "complete", and for a cacheable method cacheScope "private" (what
+-- the router returns is per user) and ttlMs. The one place the router applies
+-- these rules, for the lists it builds and the results it forwards.
+-- Mirrors shape_result() in registry/common/mcp_protocol.py.
+local function _shape_modern_result(result, method, ttl_ms)
+    if result.resultType == nil then
+        result.resultType = "complete"
+    end
+    if CACHEABLE_RESULT_METHODS[method] then
+        if result.cacheScope == nil then
+            result.cacheScope = "private"
+        end
+        if result.ttlMs == nil then
+            result.ttlMs = ttl_ms
+        end
+    end
+    return result
+end
+
+
+-- 2026-07-28 reports an unknown tool, resource or prompt as invalid params
+-- (-32602); earlier clients keep the router's existing -32601.
+local function _not_found_code()
+    if ngx.ctx.vr_modern_client then
+        return JSONRPC_INVALID_PARAMS
+    end
+    return JSONRPC_METHOD_NOT_FOUND
+end
+
+
 -- The result object for a list the router builds. For a 2026-07-28 client it
 -- also carries resultType and the cache hints: the list is filtered per user
 -- (scopes, egress consent, blocked tools), so no shared cache may store it.
-local function _list_result(result_key, items, modern)
+local function _list_result(method, result_key, items, modern)
     local result = { [result_key] = _as_json_array(items) }
     if modern then
-        result.resultType = "complete"
-        result.cacheScope = "private"
-        result.ttlMs = ENRICHED_CACHE_TTL * 1000
+        _shape_modern_result(result, method, ENRICHED_CACHE_TTL * 1000)
     end
     return result
 end
@@ -1378,7 +1425,7 @@ local function _handle_tools_list(request_id, mapping, user_scopes_str, client_s
         end
     end
 
-    return _jsonrpc_result(request_id, _list_result("tools", tools, modern))
+    return _jsonrpc_result(request_id, _list_result("tools/list", "tools", tools, modern))
 end
 
 
@@ -1478,38 +1525,45 @@ end
 -- Returns the response body directly. Used for tools/call, resources/read, prompts/get.
 -- A cjson instance that decodes JSON arrays with the array metatable, so a
 -- re-encoded backend result keeps [] as [] (plain cjson writes an empty table
--- as {}). Used only to add resultType to forwarded results.
+-- as {}). Used only to add the 2026-07-28 fields to forwarded results.
 local cjson_keep_arrays = cjson.new()
 cjson_keep_arrays.decode_array_with_array_mt(true)
 
 
--- Add resultType "complete" to one JSON-RPC message, if it is a result that
--- lacks it. Returns the message text unchanged when nothing applies.
-local function _add_result_type(text)
+-- Add the 2026-07-28 result fields to one JSON-RPC message, if it is a result
+-- that lacks one. Returns the message text unchanged when nothing applies.
+local function _add_modern_result_fields(text, method)
     local ok, message = pcall(cjson_keep_arrays.decode, text)
-    if not ok or type(message) ~= "table" or type(message.result) ~= "table"
-        or message.result.resultType ~= nil then
+    if not ok or type(message) ~= "table" or type(message.result) ~= "table" then
         return text
     end
-    message.result.resultType = "complete"
+    local result = message.result
+    local had_all = result.resultType ~= nil
+        and (not CACHEABLE_RESULT_METHODS[method]
+            or (result.cacheScope ~= nil and result.ttlMs ~= nil))
+    if had_all then
+        return text
+    end
+    _shape_modern_result(result, method, NO_REUSE_TTL_MS)
     return cjson_keep_arrays.encode(message)
 end
 
 
--- MCP 2026-07-28 requires resultType on every result, and the SDK rejects a
--- result without it. A handshake-era backend never sends it, so add it when
--- the client spoke 2026-07-28. Handles a JSON body and SSE "data:" lines.
-local function _with_result_type(body)
+-- MCP 2026-07-28 requires resultType on every result, and ttlMs and cacheScope
+-- on cacheable ones; the SDK rejects a result without them. A handshake-era
+-- backend never sends them, so add them when the client spoke 2026-07-28.
+-- Handles a JSON body and SSE "data:" lines.
+local function _with_modern_result_fields(body, method)
     if type(body) ~= "string" or body == "" then
         return body
     end
     if body:sub(1, 1) == "{" then
-        return _add_result_type(body)
+        return _add_modern_result_fields(body, method)
     end
     local lines = {}
     for line in (body .. "\n"):gmatch("(.-)\n") do
         if line:sub(1, 6) == "data: " then
-            line = "data: " .. _add_result_type(line:sub(7))
+            line = "data: " .. _add_modern_result_fields(line:sub(7), method)
         end
         lines[#lines + 1] = line
     end
@@ -1564,7 +1618,7 @@ local function _proxy_to_backend(request_id, method_name, proxied_params,
         ngx.header["Content-Type"] = "application/json"
     end
     if ngx.ctx.vr_modern_client then
-        ngx.print(_with_result_type(res.body))
+        ngx.print(_with_modern_result_fields(res.body, method_name))
     else
         ngx.print(res.body)
     end
@@ -1787,7 +1841,7 @@ local function _handle_tools_call(request_id, mapping, params, user_scopes_str, 
     local tool_info = mapping.tool_backend_map and mapping.tool_backend_map[tool_name]
     if not tool_info then
         ngx.status = 200
-        ngx.say(_jsonrpc_error(request_id, -32601, "Tool not found: " .. tool_name))
+        ngx.say(_jsonrpc_error(request_id, _not_found_code(), "Tool not found: " .. tool_name))
         return
     end
 
@@ -1878,7 +1932,7 @@ local function _handle_resources_read(request_id, params, mapping, client_sessio
         mapping, client_session_id, server_id)
     if problem == "missing" then
         ngx.status = 200
-        ngx.say(_jsonrpc_error(request_id, -32601, "Resource not found: " .. uri))
+        ngx.say(_jsonrpc_error(request_id, _not_found_code(), "Resource not found: " .. uri))
         return
     end
     if not backend_loc then
@@ -1910,7 +1964,7 @@ local function _handle_prompts_get(request_id, params, mapping, client_session_i
         mapping, client_session_id, server_id)
     if problem == "missing" then
         ngx.status = 200
-        ngx.say(_jsonrpc_error(request_id, -32601, "Prompt not found: " .. name))
+        ngx.say(_jsonrpc_error(request_id, _not_found_code(), "Prompt not found: " .. name))
         return
     end
     if not backend_loc then
@@ -1946,10 +2000,6 @@ end
 -- The registry expires an idle client session after 1 hour; reuse the cached
 -- one for half of that and re-validate it before every use anyway.
 local MODERN_SESSION_CACHE_TTL = 1800
--- Versions advertised by server/discover and in -32022 errors, newest first.
-local ADVERTISED_PROTOCOL_VERSIONS = {
-    "2026-07-28", "2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05",
-}
 
 
 -- A request is 2026-07-28 when its _meta or its header names that era.
@@ -2360,7 +2410,7 @@ function _M.route()
             return
         end
         ngx.status = 200
-        ngx.say(_jsonrpc_result(request_id, _list_result("resources", resources, modern)))
+        ngx.say(_jsonrpc_result(request_id, _list_result("resources/list", "resources", resources, modern)))
 
     elseif method == "resources/templates/list" then
         -- Enforce server-level required_scopes
@@ -2378,7 +2428,7 @@ function _M.route()
             return
         end
         ngx.status = 200
-        ngx.say(_jsonrpc_result(request_id, _list_result("resourceTemplates", templates, modern)))
+        ngx.say(_jsonrpc_result(request_id, _list_result("resources/templates/list", "resourceTemplates", templates, modern)))
 
     elseif method == "resources/read" then
         -- Enforce server-level required_scopes
@@ -2405,7 +2455,7 @@ function _M.route()
             return
         end
         ngx.status = 200
-        ngx.say(_jsonrpc_result(request_id, _list_result("prompts", prompts, modern)))
+        ngx.say(_jsonrpc_result(request_id, _list_result("prompts/list", "prompts", prompts, modern)))
 
     elseif method == "prompts/get" then
         -- Enforce server-level required_scopes
@@ -2432,7 +2482,7 @@ if _G._VR_TEST then
     _M._proxy_list_to_backends = _proxy_list_to_backends
     _M._get_mapping = _get_mapping
     _M._ensure_mcp_schema = _ensure_mcp_schema
-    _M._with_result_type = _with_result_type
+    _M._with_modern_result_fields = _with_modern_result_fields
     _M._handle_resources_read = _handle_resources_read
     _M._append_mapping_tools_for_backend = _append_mapping_tools_for_backend
     _M._handle_tools_list = _handle_tools_list

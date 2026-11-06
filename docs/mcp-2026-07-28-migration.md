@@ -30,8 +30,8 @@ Each entry has a status, a **100 level** explanation (what it means in plain wor
 | Minor 2. OpenTelemetry trace context in `_meta` | Passed through |
 | Minor 3. Deterministic `tools/list` order | Supported |
 | Minor 4. `Mcp-Method`, `Mcp-Name`, `x-mcp-header` | Supported |
-| Minor 5. `ttlMs` and `cacheScope` on cacheable results | Partly supported (see [known gaps](#known-gaps)) |
-| Minor 6. Resource not found is `-32602` | Partly supported (see [known gaps](#known-gaps)) |
+| Minor 5. `ttlMs` and `cacheScope` on cacheable results | Supported |
+| Minor 6. Resource not found is `-32602` | Supported |
 | Minor 7. RFC 9207 `iss` check | Supported (opt-in per server) |
 | Minor 8. `application_type` in client registration | Supported |
 | Minor 9. Credentials bound to their authorization server | Supported |
@@ -228,7 +228,7 @@ The client's retry, and what the gateway forwards after removing its own two fie
 **200 level.**
 - Lists the virtual router builds carry `resultType: "complete"`, and so does its `server/discover` answer.
 - Results the router forwards from a handshake-era backend to a 2026-07-28 client gain `resultType: "complete"`, in a JSON body or in SSE `data:` lines. The router re-encodes them with a cjson instance that keeps `[]` as an array. An existing `resultType`, an error and a body that is not JSON pass through unchanged.
-- The auth server's own pre-consent answers (lists, `ping`, the connect tool's result, the consent result, the missing-PAT result) carry `resultType: "complete"` when the request is 2026-07-28.
+- The auth server's own pre-consent answers (lists, `ping`, the connect tool's result, the consent result, the missing-PAT result) carry `resultType: "complete"` when the request is 2026-07-28, and the lists also carry `cacheScope` and `ttlMs` (Minor 5).
 - On a direct route the backend's results pass through as the backend wrote them.
 
 
@@ -315,11 +315,16 @@ Mcp-Param-Region: us-east-1
 
 ### Minor 5. `ttlMs` and `cacheScope` on cacheable results
 
-**Status:** partly supported.
+**Status:** supported.
 
-**100 level.** Lists and resource reads now say how long a client may reuse them and whether a shared cache may store them. When the gateway filters a list per user, it marks the list private.
+**100 level.** Lists and resource reads now say how long a client may reuse them and whether a shared cache may store them. Every list or read the gateway builds or reshapes for a 2026-07-28 client is marked private, because what the gateway returns depends on the user.
 
-**200 level.** Lists the virtual router builds for 2026-07-28 clients carry `cacheScope: "private"` and `ttlMs: 60000`. On a direct route, the auth server rewrites `cacheScope: "public"` to `"private"` on a `tools/list` it filters per user. Two cases are not covered yet; see [known gaps](#known-gaps).
+**200 level.**
+- Lists the virtual router builds for 2026-07-28 clients carry `cacheScope: "private"` and `ttlMs: 60000`.
+- A `resources/read` result the router forwards from a handshake-era backend gains `cacheScope: "private"` and `ttlMs: 0`, because the router cannot tell how long the backend's answer stays valid. A result that already carries the fields keeps its own values.
+- The auth server's pre-consent lists carry `cacheScope: "private"` and `ttlMs: 0`, so a client asks again and sees the real tools once the user connects.
+- On a direct route, the auth server rewrites `cacheScope: "public"` to `"private"` on a `tools/list` it filters per user.
+- One function per language applies these rules: `shape_result()` in `registry/common/mcp_protocol.py` and `_shape_modern_result()` in the router.
 
 
 A list the virtual router builds for a 2026-07-28 client:
@@ -331,11 +336,15 @@ A list the virtual router builds for a 2026-07-28 client:
 
 ### Minor 6. Resource not found is `-32602`
 
-**Status:** partly supported.
+**Status:** supported.
 
-**100 level.** The error code for a missing resource changed. Direct routes pass the backend's own error through. Virtual servers still use the old code; see [known gaps](#known-gaps).
+**100 level.** The error code for a missing resource changed. Virtual servers use the new code for 2026-07-28 clients and the old one for older clients. Direct routes pass the backend's own error through.
 
-**200 level.** The virtual router answers an unknown tool, resource or prompt with `-32601` for every client.
+**200 level.** The virtual router answers an unknown tool, resource or prompt with `-32602` (invalid params) when the client speaks 2026-07-28, and with `-32601` otherwise.
+
+```json
+{"jsonrpc": "2.0", "id": 6, "error": {"code": -32602, "message": "Resource not found: file:///missing"}}
+```
 
 ### Minor 7. RFC 9207 `iss` in authorization responses
 
@@ -487,9 +496,6 @@ The schema fix for `number` types and the governance and process changes (the fe
 ## Known gaps
 
 - **`subscriptions/listen` and live progress.** They need a streaming relay on both route types, which has its own design.
-- **`ttlMs` and `cacheScope` in two places.** The auth server's pre-consent lists and `resources/read` results the virtual router forwards from handshake-era backends lack them. A client that checks for them rejects those answers.
-- **Not-found error code on virtual routes.** The router answers `-32601` where 2026-07-28 uses `-32602`.
-- **One place for protocol rules.** Several files each apply the result rules and keep their own protocol constants; [#1997](https://github.com/agentic-community/mcp-gateway-registry/issues/1997) moves them into one helper and one constants module per language.
 
 ## Upgrade notes
 

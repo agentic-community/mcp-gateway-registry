@@ -11,6 +11,13 @@ from fastapi import WebSocket
 from registry.constants import DeploymentType, HealthStatus
 
 from ..common.log_redaction import redact_url
+from ..common.mcp_protocol import (
+    META_CLIENT_CAPABILITIES_KEY,
+    META_CLIENT_INFO_KEY,
+    META_PROTOCOL_VERSION_KEY,
+    MODERN_ERROR_CODES,
+    MODERN_PROTOCOL_VERSION,
+)
 from ..core.backend_oauth import RESOLVED_BEARER_KEY as _BACKEND_OAUTH_TOKEN_KEY
 from ..core.backend_oauth import with_bearer as _with_backend_oauth
 from ..core.config import settings
@@ -42,9 +49,9 @@ DISCOVERY_IDENTITY_UNCONNECTED = "unhealthy: discovery identity designated but n
 # defines, proves a live modern server. Any other answer means a handshake-era
 # server (or no answer at all), and the probe falls back to initialize + ping.
 # Spec: https://modelcontextprotocol.io/specification/2026-07-28/server/discover
-MODERN_MCP_PROTOCOL_VERSION: str = "2026-07-28"
+MODERN_MCP_PROTOCOL_VERSION: str = MODERN_PROTOCOL_VERSION
 # HeaderMismatch, MissingRequiredClientCapability, UnsupportedProtocolVersion.
-MODERN_MCP_ERROR_CODES: frozenset[int] = frozenset({-32020, -32021, -32022})
+MODERN_MCP_ERROR_CODES: frozenset[int] = MODERN_ERROR_CODES
 # A DiscoverResult is a few hundred bytes. Stop reading well before a server
 # that streams forever could make the probe hold memory.
 MAX_DISCOVER_RESPONSE_BYTES: int = 65536
@@ -140,12 +147,12 @@ def _server_discover_request() -> tuple[dict[str, str], str]:
         "method": "server/discover",
         "params": {
             "_meta": {
-                "io.modelcontextprotocol/protocolVersion": MODERN_MCP_PROTOCOL_VERSION,
-                "io.modelcontextprotocol/clientInfo": {
+                META_PROTOCOL_VERSION_KEY: MODERN_MCP_PROTOCOL_VERSION,
+                META_CLIENT_INFO_KEY: {
                     "name": HEALTH_PROBE_CLIENT_NAME,
                     "version": HEALTH_PROBE_CLIENT_VERSION,
                 },
-                "io.modelcontextprotocol/clientCapabilities": {},
+                META_CLIENT_CAPABILITIES_KEY: {},
             }
         },
     }
