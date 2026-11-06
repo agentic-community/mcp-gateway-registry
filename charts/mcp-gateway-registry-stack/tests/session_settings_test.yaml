@@ -1,0 +1,234 @@
+suite: stack sets the session lifetime, cookie Secure flag and cookie domain once for both services
+release:
+  name: test
+  namespace: default
+# The registry and the auth-server must agree on SESSION_MAX_AGE_SECONDS,
+# SESSION_COOKIE_SECURE and SESSION_COOKIE_DOMAIN. global.sessionMaxAgeSeconds,
+# global.sessionCookieSecure and global.sessionCookieDomain are the one place
+# to set them.
+tests:
+  - it: renders the default lifetime and a Secure cookie in both secrets, even with TLS off
+    templates:
+      - charts/registry/templates/secret.yaml
+      - charts/auth-server/templates/secret.yaml
+    set:
+      global:
+        domain: example.com
+        ingress:
+          tls: false
+    asserts:
+      - equal:
+          path: data.SESSION_COOKIE_SECURE
+          value: "true"
+          decodeBase64: true
+        template: charts/registry/templates/secret.yaml
+      - equal:
+          path: data.SESSION_COOKIE_SECURE
+          value: "true"
+          decodeBase64: true
+        template: charts/auth-server/templates/secret.yaml
+      - equal:
+          path: data.SESSION_MAX_AGE_SECONDS
+          value: "28800"
+          decodeBase64: true
+        template: charts/registry/templates/secret.yaml
+      - equal:
+          path: data.SESSION_MAX_AGE_SECONDS
+          value: "28800"
+          decodeBase64: true
+        template: charts/auth-server/templates/secret.yaml
+
+  - it: renders a non-Secure cookie in both secrets when the global is off, even with TLS on
+    templates:
+      - charts/registry/templates/secret.yaml
+      - charts/auth-server/templates/secret.yaml
+    set:
+      global:
+        domain: example.com
+        sessionCookieSecure: false
+        ingress:
+          tls: true
+    asserts:
+      - equal:
+          path: data.SESSION_COOKIE_SECURE
+          value: "false"
+          decodeBase64: true
+        template: charts/registry/templates/secret.yaml
+      - equal:
+          path: data.SESSION_COOKIE_SECURE
+          value: "false"
+          decodeBase64: true
+        template: charts/auth-server/templates/secret.yaml
+
+  - it: renders global.sessionMaxAgeSeconds in both secrets
+    templates:
+      - charts/registry/templates/secret.yaml
+      - charts/auth-server/templates/secret.yaml
+    set:
+      global:
+        domain: example.com
+        sessionMaxAgeSeconds: 3600
+    asserts:
+      - equal:
+          path: data.SESSION_MAX_AGE_SECONDS
+          value: "3600"
+          decodeBase64: true
+        template: charts/registry/templates/secret.yaml
+      - equal:
+          path: data.SESSION_MAX_AGE_SECONDS
+          value: "3600"
+          decodeBase64: true
+        template: charts/auth-server/templates/secret.yaml
+
+  - it: refuses a registry lifetime override that differs from the global
+    templates:
+      - templates/validate-values.yaml
+    set:
+      global:
+        domain: example.com
+      registry:
+        app:
+          sessionMaxAgeSeconds: 3600
+    asserts:
+      - failedTemplate:
+          errorPattern: "registry.app.sessionMaxAgeSeconds is 3600 but global.sessionMaxAgeSeconds is 28800"
+
+  - it: refuses an auth-server lifetime override that differs from the global
+    templates:
+      - templates/validate-values.yaml
+    set:
+      global:
+        domain: example.com
+        sessionMaxAgeSeconds: 7200
+      auth-server:
+        app:
+          sessionMaxAgeSeconds: 28800
+    asserts:
+      - failedTemplate:
+          errorPattern: "auth-server.app.sessionMaxAgeSeconds is 28800 but global.sessionMaxAgeSeconds is 7200"
+
+  - it: refuses an auth-server Secure override that differs from the global
+    templates:
+      - templates/validate-values.yaml
+    set:
+      global:
+        domain: example.com
+      auth-server:
+        app:
+          sessionCookieSecure: false
+    asserts:
+      - failedTemplate:
+          errorPattern: "auth-server.app.sessionCookieSecure is false but global.sessionCookieSecure is true"
+
+  - it: accepts overrides that match the globals, comparing numbers and strings alike
+    templates:
+      - templates/validate-values.yaml
+    set:
+      global:
+        domain: example.com
+        sessionMaxAgeSeconds: 28800
+        sessionCookieSecure: true
+      registry:
+        app:
+          sessionMaxAgeSeconds: "28800"
+      auth-server:
+        app:
+          sessionMaxAgeSeconds: 28800
+          sessionCookieSecure: "true"
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: refuses an unset global lifetime
+    templates:
+      - templates/validate-values.yaml
+    set:
+      global:
+        domain: example.com
+        sessionMaxAgeSeconds: null
+    asserts:
+      - failedTemplate:
+          errorPattern: "global.sessionMaxAgeSeconds is not set"
+
+  - it: renders global.sessionCookieDomain in both secrets
+    templates:
+      - charts/registry/templates/secret.yaml
+      - charts/auth-server/templates/secret.yaml
+    set:
+      global:
+        domain: example.com
+        sessionCookieDomain: ".team.example.com"
+    asserts:
+      - equal:
+          path: data.SESSION_COOKIE_DOMAIN
+          value: ".team.example.com"
+          decodeBase64: true
+        template: charts/registry/templates/secret.yaml
+      - equal:
+          path: data.SESSION_COOKIE_DOMAIN
+          value: ".team.example.com"
+          decodeBase64: true
+        template: charts/auth-server/templates/secret.yaml
+
+  - it: renders the deployment domain in both secrets when the global is empty
+    templates:
+      - charts/registry/templates/secret.yaml
+      - charts/auth-server/templates/secret.yaml
+    set:
+      global:
+        domain: example.com
+    asserts:
+      - equal:
+          path: data.SESSION_COOKIE_DOMAIN
+          value: ".example.com"
+          decodeBase64: true
+        template: charts/registry/templates/secret.yaml
+      - equal:
+          path: data.SESSION_COOKIE_DOMAIN
+          value: ".example.com"
+          decodeBase64: true
+        template: charts/auth-server/templates/secret.yaml
+
+  - it: refuses a registry cookie domain override that differs from the global
+    templates:
+      - templates/validate-values.yaml
+    set:
+      global:
+        domain: example.com
+        sessionCookieDomain: ".example.com"
+      registry:
+        app:
+          sessionCookieDomain: "registry.example.com"
+    asserts:
+      - failedTemplate:
+          errorPattern: "registry.app.sessionCookieDomain is registry.example.com but global.sessionCookieDomain is .example.com"
+
+  - it: refuses an auth-server cookie domain override when the global is empty
+    templates:
+      - templates/validate-values.yaml
+    set:
+      global:
+        domain: example.com
+      auth-server:
+        app:
+          sessionCookieDomain: ".example.com"
+    asserts:
+      - failedTemplate:
+          errorPattern: "auth-server.app.sessionCookieDomain is .example.com but global.sessionCookieDomain is empty"
+
+  - it: accepts cookie domain overrides that match the global
+    templates:
+      - templates/validate-values.yaml
+    set:
+      global:
+        domain: example.com
+        sessionCookieDomain: ".example.com"
+      registry:
+        app:
+          sessionCookieDomain: ".example.com"
+      auth-server:
+        app:
+          sessionCookieDomain: ".example.com"
+    asserts:
+      - hasDocuments:
+          count: 0

@@ -266,6 +266,7 @@ cp terraform.tfvars.example terraform.tfvars
 | `registry_organization_name` | Organization that operates this registry. **Required** — same as above |
 | `documentdb_admin_username` / `documentdb_admin_password` | DocumentDB admin credentials. **Required when `storage_backend = "documentdb"` (the default).** Password min 8 chars |
 | `session_cookie_secure` | Set to `true` for HTTPS (all modes except development) |
+| `session_max_age_seconds` | Browser session lifetime in seconds (default `28800`, 8 hours). Sets the session store TTL, the cookie Max-Age and the registry's signature check; rendered into both the registry and auth-server task definitions so they always match. Must be a positive whole number |
 | `cors_allowed_origins` | Comma-separated exact browser origins allowed to make credentialed cross-origin API requests. Registry's own origin is always trusted; empty means same-origin only (no wildcard fallback) |
 | `grafana_admin_password` | Grafana admin password (required when `enable_observability = true`) |
 

@@ -880,6 +880,25 @@ class TestSettingsSessionCookie:
         # Assert
         assert settings.session_cookie_secure is True
 
+    @pytest.mark.parametrize(
+        ("secure", "warns"),
+        [("false", True), ("true", False)],
+    )
+    def test_startup_warns_when_the_session_cookie_is_not_secure(
+        self, monkeypatch, caplog, secure: str, warns: bool
+    ) -> None:
+        """SESSION_COOKIE_SECURE=false is logged at startup, since it drops Secure on HTTPS."""
+        # Arrange
+        monkeypatch.setenv("SESSION_COOKIE_SECURE", secure)
+
+        # Act
+        with caplog.at_level("WARNING", logger="registry.core.config"):
+            Settings()
+
+        # Assert
+        warned = any("SESSION_COOKIE_SECURE is false" in r.getMessage() for r in caplog.records)
+        assert warned is warns
+
     def test_session_cookie_domain_none_by_default(self) -> None:
         """Test that session_cookie_domain is None by default."""
         # Act
@@ -930,6 +949,20 @@ class TestSettingsSessionCookie:
 
         # Assert
         assert settings.session_max_age_seconds == 28800  # 8 hours in seconds
+
+    @pytest.mark.parametrize("lifetime", ["0", "-1", "-28800"])
+    def test_refuses_to_start_with_a_non_positive_session_lifetime(
+        self, monkeypatch, lifetime
+    ) -> None:
+        """A SESSION_MAX_AGE_SECONDS of zero or less stops settings from loading.
+
+        The registry and the auth server both build this class at startup, and
+        both take the session lifetime from it.
+        """
+        monkeypatch.setenv("SESSION_MAX_AGE_SECONDS", lifetime)
+
+        with pytest.raises(ValueError, match="SESSION_MAX_AGE_SECONDS"):
+            Settings(_env_file=None)
 
 
 # =============================================================================

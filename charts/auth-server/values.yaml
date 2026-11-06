@@ -47,12 +47,29 @@ app:
   # When deployed via mcp-gateway-registry-stack, the key is shared with registry.
   # Uncomment to use a specific key:
   # secretKey: "your-secure-key-here"
-  sessionCookieSecure: true
+  # Mark the session cookie Secure on HTTPS requests (SESSION_COOKIE_SECURE).
+  # It is never Secure on plain HTTP. Must match the registry.
+  # global.sessionCookieSecure, which the stack chart sets, takes precedence;
+  # this key applies only to a standalone install. It has no default here so
+  # the stack chart can tell an override from the default.
+  # Default: true
+  # sessionCookieSecure: true
+  # Session lifetime in seconds (SESSION_MAX_AGE_SECONDS): how long the
+  # auth-server stores a session and the session cookie Max-Age. Must be a
+  # positive integer and must match the registry, which accepts the cookie
+  # signature for the same time. global.sessionMaxAgeSeconds, which the stack
+  # chart sets, takes precedence; this key applies only to a standalone
+  # install. It has no default here so the stack chart can tell an override
+  # from the default. Unset, the chart renders no SESSION_MAX_AGE_SECONDS and
+  # the auth-server uses its built-in 8 hours, as the registry does.
+  # sessionMaxAgeSeconds:
   # Session cookie Domain attribute. Leave empty to default to
   # ".<global.domain>" (valid for all subdomains of the deployment
   # domain). Set to a specific hostname (e.g. "mcpregistry.example.com")
   # to scope the cookie tighter, or to a different parent
-  # (".team.example.com") if this stack lives under a subdomain.
+  # (".team.example.com") if this stack lives under a subdomain. Must match
+  # the registry. global.sessionCookieDomain, which the stack chart sets,
+  # takes precedence; this key applies only to a standalone install.
   sessionCookieDomain: ""
   # Exact-match allowlist of OAuth login/logout redirect URIs (open-redirect
   # hardening). Comma-separated list of the FULL absolute callback/success/logout

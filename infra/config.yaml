@@ -187,8 +187,14 @@ registry:
 
   # Session
   session:
-    cookieSecure: false
+    # Secure attribute on the session cookie over HTTPS (never set on plain
+    # HTTP). This stack always serves HTTPS, so keep it true.
+    cookieSecure: true
     cookieDomain: ""
+    # Browser session lifetime in seconds: the session store TTL, the session
+    # cookie's Max-Age and the registry's signature check. Rendered into both
+    # the registry and auth-server so they match. Must be a positive integer.
+    maxAgeSeconds: 28800
     # Exact-match allowlist of OAuth login/logout redirect URIs (open-redirect
     # hardening). Comma-separated absolute URLs. Empty falls back to the weaker
     # cookie-domain heuristic; set it to harden. Example:

@@ -137,6 +137,7 @@ module "mcp_gateway" {
   # Session cookie security configuration
   session_cookie_secure        = var.session_cookie_secure
   session_cookie_domain        = var.session_cookie_domain
+  session_max_age_seconds      = var.session_max_age_seconds
   oauth2_allowed_redirect_uris = var.oauth2_allowed_redirect_uris
   cors_allowed_origins         = var.cors_allowed_origins
   trusted_proxy_hops           = var.trusted_proxy_hops

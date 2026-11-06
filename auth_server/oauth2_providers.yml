@@ -147,14 +147,18 @@ providers:
     name_claim: "name"
     enabled: "${GOOGLE_ENABLED}"
 
-# Default session settings
+# Session settings. The session cookie's other values come from the environment of
+# the registry and the auth server, which must agree: SESSION_COOKIE_SECURE (Secure on
+# HTTPS), SESSION_MAX_AGE_SECONDS (lifetime, default 28800) and SESSION_COOKIE_NAME.
+# SameSite=Lax and HttpOnly are fixed. Do not add secure, max_age_seconds, cookie_name,
+# samesite or httponly here: the auth server refuses to start when one of them differs
+# from the value it uses.
 session:
-  max_age_seconds: 28800  # 8 hours
-  cookie_name: "mcp_oauth_session"
-  secure: true  # Set to false for development
-  httponly: true
-  samesite: "lax"
-  domain: "${SESSION_COOKIE_DOMAIN}"  # Set to your domain (with leading dot) to share cookies across subdomains, e.g., ".example.com"
+  # The session cookie's Domain comes from SESSION_COOKIE_DOMAIN only; the login and the
+  # registry's logout both use it. Set the domain there (with a leading dot to share the
+  # cookie across subdomains, e.g. ".example.com") and keep this line as shipped. The auth
+  # server refuses to start when this names a different domain.
+  domain: "${SESSION_COOKIE_DOMAIN}"
 
 # Registry integration settings
 registry:

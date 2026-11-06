@@ -193,11 +193,20 @@ class Settings(BaseSettings):
     # read the session cookie under this one SESSION_COOKIE_NAME. Validated in
     # __init__ so both services refuse a name a browser would not keep.
     session_cookie_name: str = DEFAULT_SESSION_COOKIE_NAME
-    session_max_age_seconds: int = 60 * 60 * 8  # 8 hours
-    # Secure-by-default: the session cookie carries the Secure flag so browsers
-    # only transmit it over HTTPS. Operators running a plain-HTTP local dev
-    # stack can explicitly opt out with SESSION_COOKIE_SECURE=false; every other
-    # deployment stays protected without extra configuration.
+    session_max_age_seconds: int = Field(
+        default=60 * 60 * 8,
+        description=(
+            "Browser session lifetime in seconds, default 8 hours. The auth server "
+            "stores the session for this long and gives the session cookie this "
+            "Max-Age; the registry and the auth server refuse a cookie signed longer "
+            "ago. Set the same value on both services. Must be positive."
+        ),
+    )
+    # Secure-by-default: on an HTTPS request the session cookie carries the
+    # Secure flag exactly when this is true. On plain HTTP it never does (a
+    # browser drops a Secure cookie set over HTTP), so a localhost stack needs
+    # no opt-out. The auth server's login and the registry's expiries both
+    # decide through session_cookie_secure_flag.
     session_cookie_secure: bool = True
     session_cookie_domain: str | None = None  # e.g., ".example.com" for cross-subdomain sharing
 
@@ -1420,6 +1429,35 @@ class Settings(BaseSettings):
             )
         return bounded
 
+    @field_validator("session_max_age_seconds")
+    @classmethod
+    def _require_positive_session_lifetime(
+        cls,
+        v: int,
+    ) -> int:
+        """Refuse a session lifetime of zero or less (fail closed).
+
+        Both services build these settings at startup, so either one refuses
+        to start rather than set cookies that expire at once or sign sessions
+        nobody can verify.
+
+        Args:
+            v: The configured lifetime in seconds.
+
+        Returns:
+            The lifetime, unchanged.
+
+        Raises:
+            ValueError: The lifetime is zero or negative.
+        """
+        if v <= 0:
+            raise ValueError(
+                f"SESSION_MAX_AGE_SECONDS must be a positive number of seconds, got {v}. "
+                "Set it to the browser session lifetime (default 28800, 8 hours) on the "
+                "registry and the auth server, or unset it."
+            )
+        return v
+
     # Demo server configuration
     disable_ai_registry_tools_server: bool = Field(
         default=False,
@@ -2507,6 +2545,16 @@ class Settings(BaseSettings):
         # The auth server reads these same fields, so both services set and read
         # the session cookie under one name.
         self.session_cookie_name = check_session_cookie_name(self.session_cookie_name)
+        if not self.session_cookie_secure:
+            # SESSION_COOKIE_SECURE alone decides Secure on HTTPS. A deployment that
+            # copied an old example with "false" would otherwise lose Secure without a
+            # trace, so say it at every start of both services.
+            logging.getLogger(__name__).warning(
+                "SESSION_COOKIE_SECURE is false: the session cookie is sent without the "
+                "Secure attribute even over HTTPS. Set SESSION_COOKIE_SECURE=true for any "
+                "deployment reachable over HTTPS; plain-HTTP development needs no change, "
+                "because the cookie is never Secure on plain HTTP."
+            )
 
     def _raw_embeddings_extra_header_slots(self) -> list[tuple[int, str]]:
         """Return (slot number, stripped value) for every populated header slot."""

@@ -113,6 +113,8 @@ services:
       # value whenever the operator's .env did not set BUILD_VERSION,
       # which is the silent-fallback symptom this PR fixes.
       - SECRET_KEY=${SECRET_KEY}
+      # Browser session lifetime in seconds; must be positive. Same value on auth-server.
+      - SESSION_MAX_AGE_SECONDS=${SESSION_MAX_AGE_SECONDS:-28800}
       # Per-user egress credential vault (off by default)
       - EGRESS_AUTH_ENABLED=${EGRESS_AUTH_ENABLED:-false}
       - SECRET_STORE_BACKEND=${SECRET_STORE_BACKEND:-openbao}
@@ -472,6 +474,8 @@ services:
       - TRUSTED_PROXY_HOPS=${TRUSTED_PROXY_HOPS:-1}
       - TRUSTED_EXTERNAL_HOSTS=${TRUSTED_EXTERNAL_HOSTS:-}
       - SECRET_KEY=${SECRET_KEY}
+      # Browser session lifetime in seconds; must be positive. Same value on registry.
+      - SESSION_MAX_AGE_SECONDS=${SESSION_MAX_AGE_SECONDS:-28800}
       # MCP access-token lifetime (hours). auth-server mints + clamps to the
       # configured max (bounded to a 7-day ceiling in code). Must match the
       # registry's values. Issue #1477.

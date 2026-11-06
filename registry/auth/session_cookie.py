@@ -19,7 +19,9 @@ ASGI middleware wraps the whole app and still sees the raw header, so
 
 The same middleware expires both session cookie variants on every response to a
 request whose session cookie was refused as a duplicate, unless the response
-already sets or expires the session cookie itself (logout does).
+already sets or expires the session cookie itself (logout does). Every expiry
+carries the attributes the auth server's login gives the cookie, from
+``session_cookie_attributes``.
 """
 
 import logging
@@ -41,9 +43,10 @@ from starlette.types import (
 )
 
 from ..common.session_cookie import (
+    SessionCookieAttributes,
     join_cookie_fields,
     log_refused_session_cookie,
-    session_cookie_secure_flag,
+    session_cookie_attributes,
     session_cookie_values,
 )
 from ..core.config import settings
@@ -149,6 +152,27 @@ def _without_session_pairs(
     return stripped if changed else None
 
 
+def _session_cookie_attributes(
+    connection: HTTPConnection,
+) -> SessionCookieAttributes:
+    """Return the session cookie attributes for a response to ``connection``.
+
+    Args:
+        connection: The request the response answers; it decides whether the
+            browser reached the gateway over HTTPS.
+
+    Returns:
+        The attributes the auth server's login uses for the same request.
+    """
+    return session_cookie_attributes(
+        name=settings.session_cookie_name,
+        is_https=is_request_https(connection),
+        secure=settings.session_cookie_secure,
+        domain=settings.session_cookie_domain,
+        max_age=settings.session_max_age_seconds,
+    )
+
+
 def _expiry_headers(
     connection: HTTPConnection,
 ) -> list[tuple[bytes, bytes]]:
@@ -250,23 +274,16 @@ def clear_session_cookie(
     Expiring both at Path=/ clears whichever the browser holds, including one
     left from before a SESSION_COOKIE_DOMAIN change. A cookie on a domain the
     deployment does not name, such as one another host under the parent domain
-    set, cannot be expired from here. Each expiry is Secure by
-    ``session_cookie_secure_flag``, the rule the egress consent cookie follows.
+    set, cannot be expired from here. Every expiry carries the attributes the
+    login gives the cookie (``session_cookie_attributes``).
 
     Args:
         response: The response to add the expiry to.
         connection: The request the response answers; it decides whether the
             browser reached the gateway over HTTPS.
     """
-    secure = session_cookie_secure_flag(
-        is_request_https(connection), settings.session_cookie_secure
-    )
-    domains: list[str | None] = [None]
-    configured_domain = (settings.session_cookie_domain or "").strip()
-    if configured_domain:
-        domains.append(configured_domain)
-    for domain in domains:
-        response.delete_cookie(settings.session_cookie_name, path="/", domain=domain, secure=secure)
+    for expiry in _session_cookie_attributes(connection).expiries:
+        response.delete_cookie(**expiry)
 
 
 class SessionCookieIsolationMiddleware:

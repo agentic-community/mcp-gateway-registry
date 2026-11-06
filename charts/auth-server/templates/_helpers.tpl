@@ -70,7 +70,8 @@ settings, so validate against the auth-server chart's effective setting here.
   {{- fail (printf "global.ingress.additionalHostnames must be a list, got %s %q (with --set use: 'global.ingress.additionalHostnames={a.example.com}')" (kindOf $raw) (toString $raw)) -}}
 {{- end -}}
 {{- $domain := .Values.global.domain | default "localhost" -}}
-{{- $cookieDomain := .Values.app.sessionCookieDomain | default (printf ".%s" $domain) -}}
+{{- $configuredDomain := include "auth-server.sessionSetting" (list . "sessionCookieDomain" (list "app" "sessionCookieDomain")) | fromJson -}}
+{{- $cookieDomain := $configuredDomain.value | default (printf ".%s" $domain) -}}
 {{- $apex := trimPrefix "." $cookieDomain | lower -}}
 {{- $hosts := list -}}
 {{- range $i, $hostname := $raw -}}
@@ -79,7 +80,7 @@ settings, so validate against the auth-server chart's effective setting here.
     {{- fail (printf "global.ingress.additionalHostnames[%d]: %q is not a bare lowercase DNS hostname (no scheme, port, path, wildcard, or hostname over 253 characters)" $i $hostname) -}}
   {{- end -}}
   {{- if not (or (eq $hostname $apex) (hasSuffix (printf ".%s" $apex) $hostname)) -}}
-    {{- fail (printf "global.ingress.additionalHostnames[%d]: %q is outside the effective session cookie domain %q; browser login cannot complete on it. Keep the hostname under that cookie domain, or set registry.app.sessionCookieDomain and auth-server.app.sessionCookieDomain to the same parent domain covering every hostname." $i $hostname $cookieDomain) -}}
+    {{- fail (printf "global.ingress.additionalHostnames[%d]: %q is outside the effective session cookie domain %q; browser login cannot complete on it. Keep the hostname under that cookie domain, or set %s to a parent domain covering every hostname." $i $hostname $cookieDomain $configuredDomain.key) -}}
   {{- end -}}
   {{- $hosts = append $hosts $hostname -}}
 {{- end -}}
@@ -155,4 +156,29 @@ Call as: {{ include "auth-server.valueOrDefault" (list .Values.egressAuth.httpPo
 {{- else -}}
 {{- toString $value -}}
 {{- end -}}
+{{- end -}}
+
+{{/*
+The effective value of a session setting and the value path it came from, as
+JSON {"value": ..., "key": ...}. The registry and the auth-server must agree on
+every session setting, so the stack chart sets each once as global.<name> and
+both charts render from that. The fallback path applies only when the global
+is unset, which is a standalone install of this chart. "value" is null when
+neither is set; "key" names the path for error messages.
+
+Call as: {{ include "auth-server.sessionSetting" (list . "sessionMaxAgeSeconds" (list "app" "sessionMaxAgeSeconds")) | fromJson }}
+*/}}
+{{- define "auth-server.sessionSetting" -}}
+{{- $values := (index . 0).Values -}}
+{{- $name := index . 1 -}}
+{{- $result := dict "value" (index $values.global $name) "key" (printf "global.%s" $name) -}}
+{{- if kindIs "invalid" $result.value -}}
+{{- $fallback := index . 2 -}}
+{{- $node := $values -}}
+{{- range $part := $fallback -}}
+{{- $node = index ($node | default dict) $part -}}
+{{- end -}}
+{{- $result = dict "value" $node "key" (join "." $fallback) -}}
+{{- end -}}
+{{- toJson $result -}}
 {{- end -}}

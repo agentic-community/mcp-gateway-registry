@@ -494,6 +494,17 @@ variable "session_cookie_domain" {
   default     = ""
 }
 
+variable "session_max_age_seconds" {
+  description = "Browser session lifetime in seconds: the auth server's session store TTL, the session cookie's Max-Age, and the registry's cookie signature max age. Rendered into both the registry and auth-server task definitions so the two always match."
+  type        = number
+  default     = 28800
+
+  validation {
+    condition     = var.session_max_age_seconds > 0 && floor(var.session_max_age_seconds) == var.session_max_age_seconds
+    error_message = "session_max_age_seconds must be a positive whole number of seconds (for example 28800 for 8 hours); the registry and auth-server refuse to start on 0 or a negative value."
+  }
+}
+
 variable "oauth2_allowed_redirect_uris" {
   description = "Comma-separated exact-match allowlist of OAuth login/logout redirect URIs (open-redirect hardening). When set, an absolute redirect_uri is accepted only if it exactly matches an entry; relative paths are always allowed. Empty falls back to the weaker cookie-domain heuristic."
   type        = string
