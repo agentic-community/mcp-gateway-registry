@@ -766,6 +766,40 @@ async def enhanced_auth(
     return user_context
 
 
+async def browser_session_context(
+    request: Request,
+) -> dict[str, Any] | None:
+    """Resolve the browser session the request's own session cookie names.
+
+    For routes that act only for a signed-in browser: starting or completing an
+    egress consent (initiate, ``/oauth2/egress/connect`` and the consent
+    callback). It reads the session cookie and resolves it with
+    ``enhanced_auth`` against the session store, and nothing else: an
+    ``X-Internal-Token-Registry``, a bearer and the identity headers are never
+    read, so a caller holding a token, real or forged, but no session cookie
+    gets no browser context.
+
+    Args:
+        request: The incoming request.
+
+    Returns:
+        The session's user context, or None when the request carries no
+        session cookie or it does not resolve to a live OAuth2 session.
+
+    Raises:
+        Exception: Any error other than the 401 ``enhanced_auth`` raises for an
+            unresolvable session (a failing scope lookup, for example)
+            propagates, so the caller can tell an outage from "not signed in".
+    """
+    session = request.cookies.get(settings.session_cookie_name)
+    if not session:
+        return None
+    try:
+        return await enhanced_auth(request, session)
+    except HTTPException:
+        return None
+
+
 async def nginx_proxied_auth(
     request: Request,
     session: Annotated[

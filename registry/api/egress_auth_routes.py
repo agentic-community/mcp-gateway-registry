@@ -26,28 +26,37 @@ from html import escape
 from typing import Annotated, Any
 from urllib.parse import urlencode, urlparse
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 from registry.auth.csrf import verify_csrf_token_flexible
-from registry.auth.dependencies import nginx_proxied_auth
+from registry.auth.dependencies import browser_session_context, nginx_proxied_auth
 from registry.auth.internal import validate_internal_auth
 from registry.auth.proxied_token import verify_generic_proxy_token, verify_mcp_proxy_token
 from registry.auth.resource_binding import mcp_proxy_route_binding
 from registry.common.log_redaction import redact_url
 from registry.core.config import settings
 from registry.core.schemas import _validate_obo_egress_config
+from registry.egress_auth.browser_binding import (
+    clear_consent_cookie,
+    new_browser_binding,
+    read_browser_secret,
+    set_consent_cookie,
+)
 from registry.egress_auth.factory import get_egress_auth_service
 from registry.egress_auth.providers import list_provider_names, resolve_provider
-from registry.egress_auth.schemas import StoredToken
+from registry.egress_auth.schemas import OAuthState, StoredToken
 from registry.egress_auth.service import (
+    ConsentStartedInAnotherBrowser,
     EgressAuthError,
     EgressAuthService,
+    ReplayGuardUnavailable,
     VaultPrincipal,
     vault_auth_method,
     vault_principal,
 )
+from registry.egress_auth.state_codec import InvalidState, decode_state
 from registry.egress_auth.upstream_binding import (
     linked_version,
     registered_destinations,
@@ -250,6 +259,104 @@ def _callback_url() -> str:
     return settings.egress_oauth_callback_base.rstrip("/") + "/oauth2/egress/callback"
 
 
+def _callback_sign_in_required() -> HTMLResponse:
+    """Response for a consent callback completed by a browser with no live session."""
+    return HTMLResponse(
+        "<h3>Connection not saved: you are not signed in.</h3>"
+        "<p>Sign in to the registry in this browser as the user who started the "
+        "connection, then start connecting again.</p>",
+        status_code=401,
+    )
+
+
+def _callback_server_not_configured() -> HTMLResponse:
+    """Response for a consent callback whose server or OAuth config is gone."""
+    return HTMLResponse("<h3>Connection failed: server not configured.</h3>", status_code=400)
+
+
+def _callback_no_code() -> HTMLResponse:
+    """Response for a provider redirect that carries no authorization code."""
+    return HTMLResponse(
+        "<h3>Connection not saved: the provider did not approve it.</h3>"
+        "<p>The sign-in at the provider was cancelled or failed. Start connecting "
+        "again to retry.</p>",
+        status_code=400,
+    )
+
+
+def _callback_other_browser() -> HTMLResponse:
+    """Response for a consent callback completed outside the browser that started it."""
+    return HTMLResponse(
+        "<h3>Connection not saved: this is not the browser that started it.</h3>"
+        "<p>A connection has to finish in the browser where you clicked connect. "
+        "A link copied to another browser, or opened after signing in again "
+        "elsewhere, cannot finish it. Start connecting again from this browser.</p>",
+        status_code=400,
+    )
+
+
+def _callback_temporarily_unavailable() -> HTMLResponse:
+    """Response for a consent callback the registry could not finish or burn safely."""
+    return HTMLResponse(
+        "<h3>Connection not saved: the registry is temporarily unavailable.</h3>"
+        "<p>The registry could not record this sign-in, so it saved nothing. "
+        "Wait a minute, then start connecting again.</p>",
+        status_code=503,
+    )
+
+
+def _callback_not_completed() -> HTMLResponse:
+    """Response for a consent the service refused: expired, replayed or misconfigured.
+
+    The reason goes to the registry log only: an ``EgressAuthError`` message can
+    carry internal detail (decryption hints, wrapped upstream errors). The page
+    names what an operator can act on instead. "Connection failed", the earlier
+    wording, read as a network fault and sent people to DNS, TLS and firewalls,
+    none of which is ever the cause once the request reached the registry.
+    """
+    return HTMLResponse(
+        "<h3>Could not complete the connection.</h3>"
+        "<p>The request reached the registry, so this is not a network problem. "
+        "Either the sign-in took too long and the request expired, or this "
+        "server's egress OAuth configuration is incomplete.</p>"
+        "<p>Close this tab and try connecting again. If it fails a second time, "
+        "check the server's egress OAuth client ID and client secret. An "
+        "administrator can find the specific reason in the registry logs.</p>",
+        status_code=400,
+    )
+
+
+def _refuse_after_unexpected_error(
+    st: OAuthState,
+    code_present: bool,
+    exc: Exception,
+) -> HTMLResponse:
+    """Log an error the callback does not handle and return the retryable 503 page.
+
+    The caller expires the consent cookie on the returned page, which is what
+    kills a state whose nonce the error kept from being consumed: without its
+    cookie the state fails the browser binding. An error after
+    ``begin_callback`` finds the nonce already consumed.
+
+    Args:
+        st: The decoded consent state.
+        code_present: Whether the provider sent an authorization code.
+        exc: The error the callback raised.
+
+    Returns:
+        The retryable 503 page.
+    """
+    logger.error(
+        "egress callback failed unexpectedly server=%s purpose=%s code_present=%s: %s",
+        st.server_path,
+        st.purpose,
+        code_present,
+        type(exc).__name__,
+        exc_info=exc,
+    )
+    return _callback_temporarily_unavailable()
+
+
 def _build_connect_url(server_path: str) -> str:
     """Build the session-verified elicitation front-door URL for a server.
 
@@ -397,23 +504,23 @@ class EgressTokenResponse(BaseModel):
     """Vend result. ``access_token`` is None on a clean miss (consent required).
 
     On a consent-required miss for a properly egress-configured server, the
-    registry builds the provider ``authorize_url`` so mcp_proxy can return it to
-    the caller (the user clicks it to connect). ``authorize_url`` is None when
+    registry returns ``connect_url`` so mcp_proxy can send the user to connect.
+    No provider authorize URL is returned: a consent must start in the browser
+    that finishes it, and the vend has no browser. ``connect_url`` is None when
     the server isn't egress-configured / the caller isn't a per-user principal
     (nothing to connect)."""
 
     access_token: str | None = None
     consent_required: bool = False
-    authorize_url: str | None = None
     connect_url: str | None = Field(
         default=None,
         description="Session-verified gateway front door for MCP URL-mode "
         "elicitation (``GET /oauth2/egress/connect?server=<path>``). The mcp_proxy "
-        "hop puts this in the ``elicitation/create`` ``url`` field. Unlike "
-        "``authorize_url`` (the provider-direct URL), this route re-verifies the "
-        "opener's gateway session against the elicited principal (anti-phishing) "
-        "and needs NO client-side OAuth/DCR -- so it works with providers like "
-        "Entra that do not support RFC 7591 DCR.",
+        "hop puts this in the ``elicitation/create`` ``url`` field. This route "
+        "re-verifies the opener's gateway session against the elicited principal "
+        "(anti-phishing), binds the consent to the opener's browser, and needs NO "
+        "client-side OAuth/DCR -- so it works with providers like Entra that do "
+        "not support RFC 7591 DCR.",
     )
     request_state: str | None = Field(
         default=None,
@@ -938,25 +1045,11 @@ async def vend_egress_token(
     if access_token is not None:
         return EgressTokenResponse(access_token=access_token)
 
-    # Miss: no usable token (never connected, or refresh dead). Build the consent
-    # URL so mcp_proxy can hand it back to the user to self-serve (the gateway
-    # triggers consent automatically rather than forwarding unauthenticated).
-    try:
-        authorize_url = await svc.build_consent_url(
-            auth_method=auth_method,
-            user_id=sub,
-            client_id_audit=claims.get("client_id") or "",
-            session_id="",
-            server_path=server_path,
-            egress_oauth=egress_oauth,
-            server=server,
-        )
-    except Exception as exc:  # bad provider config etc. -- still a clean miss
-        logger.warning(f"egress vend: could not build consent URL type={type(exc).__name__}")
-        authorize_url = None
-
-    # MCP URL-mode elicitation: a session-verified gateway front door the client
-    # opens verbatim (no client-side OAuth/DCR -- works with Entra). The matching
+    # Miss: no usable token (never connected, or refresh dead). Hand back the
+    # session-verified gateway front door (MCP URL-mode elicitation) the client
+    # opens verbatim; it starts the provider consent in the user's browser and
+    # binds it there. The vend builds no provider authorize URL: it has no
+    # browser to bind, so that consent could never complete. The matching
     # ``request_state`` is an AEAD blob the client echoes back on retry; it binds
     # the principal + server + issue time so a tampered/replayed/cross-user retry
     # is rejected (MRTR requestState integrity requirement).
@@ -972,7 +1065,6 @@ async def vend_egress_token(
 
     return EgressTokenResponse(
         consent_required=True,
-        authorize_url=authorize_url,
         connect_url=connect_url,
         request_state=request_state,
         provider=provider,
@@ -1606,10 +1698,19 @@ class InitiateRequest(BaseModel):
 async def initiate_consent(
     request: Request,
     body: InitiateRequest,
-    user_context: Annotated[dict, Depends(nginx_proxied_auth)],
+    response: Response,
     _csrf: Annotated[None, Depends(verify_csrf_token_flexible)] = None,
 ):
-    """Begin the OAuth consent for the current user; returns the authorize URL."""
+    """Begin the OAuth consent for the current user; returns the authorize URL.
+
+    Also sets this consent's cookie on the response, so the consent completes
+    only in the browser that called this route (the frontend's same-origin XHR
+    stores it in that browser). The caller is the request's own browser session
+    (``browser_session_context``: the session cookie, never a bearer or an
+    internal token), so a bearer caller, which skips CSRF, cannot get a state
+    bound to the user plus its matching consent secret. CSRF still applies to
+    the browser caller.
+    """
     _feature_enabled_or_404()
     server_path = body.server_path
     if not server_path.startswith("/"):
@@ -1624,6 +1725,14 @@ async def initiate_consent(
             status.HTTP_400_BAD_REQUEST, detail="server has no per-user egress auth configured"
         )
 
+    # Web-only, enforced: the consent cookie must land in the user's browser.
+    user_context = await browser_session_context(request)
+    if user_context is None:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            detail="connecting an account must start from a signed-in browser session",
+        )
+
     # The vault principal (canonical auth_method; the auth-server's egress_user)
     # must match the one the vend reads from the mcp-proxy token so one human maps
     # to one vault bucket regardless of token type / provider. See #933.
@@ -1633,6 +1742,7 @@ async def initiate_consent(
             status.HTTP_403_FORBIDDEN, detail="this caller cannot connect a per-user account"
         )
 
+    binding = new_browser_binding()
     try:
         url = await get_egress_auth_service().build_consent_url(
             auth_method=principal.auth_method,
@@ -1642,6 +1752,7 @@ async def initiate_consent(
             server_path=server_path,
             egress_oauth=server["egress_oauth"],
             server=server,
+            browser_binding=binding.digest,
         )
     except ValueError as exc:
         # 503, not 409: a linked version document is missing or has no endpoint,
@@ -1664,6 +1775,7 @@ async def initiate_consent(
                 "auth config and try again."
             ),
         ) from exc
+    set_consent_cookie(response, request, binding)
     return {"authorize_url": url}
 
 
@@ -1674,36 +1786,102 @@ async def egress_callback(
     state: str = "",
     iss: str = "",
 ):
-    """Provider redirect target. No ingress auth -- the signed+encrypted state is
-    the authority. Verifies state (TTL + single-use + account-swap), exchanges the
-    code, and stores the token. Reached via nginx -> registry (no /validate).
+    """Provider redirect target. No ingress auth (reached via nginx -> registry,
+    no /validate), so the browser's session cookie is resolved here: the token is
+    stored only when the browser that started the consent (it holds the consent
+    cookie) is authenticated as the principal bound in the signed+encrypted
+    state. Verifies state (single-use + TTL + browser binding + account-swap),
+    exchanges the code, and stores the token.
+
+    The state is decoded once, here, and its single-use nonce is consumed once,
+    right after, by ``EgressAuthService.begin_callback``: before the ``code``
+    check and before any other refusal, so every exit after it has already
+    burned the state (a provider error such as ``?error=access_denied`` sends
+    only the state). Every response after the decode expires that consent's
+    cookie. When the replay store cannot burn the state, or the callback raises
+    an error it does not handle, the response is a 503 that still expires the
+    cookie: without its cookie the state fails the browser binding, so nobody
+    can complete it.
 
     ``iss`` is the RFC 9207 issuer the provider names in its reply. It is checked
-    against the server's ``expected_issuer`` when one is configured."""
-    if not code or not state:
+    against the ``expected_issuer`` snapshot in the state when one is configured."""
+    if not state:
         return HTMLResponse("<h3>Connection failed: missing code/state.</h3>", status_code=400)
 
-    # The provider+server are bound in the signed state; we resolve the server's
-    # egress config to get client_id/secret for the code exchange. We decode the
-    # state-bound server_path indirectly via handle_callback, so fetch by the
-    # state after a light pre-decode is avoided -- instead the service needs the
-    # egress_oauth; resolve it from the state's server_path.
-    from registry.egress_auth.state_codec import InvalidState, decode_state
+    # Feature gate applies to BOTH purposes. Discovery borrows a vaulted per-user
+    # token, so EGRESS_AUTH_ENABLED is a hard requirement for it too; exempting it
+    # here previously let a discovery consent write into the egress vault on a
+    # deployment whose vend path was switched off. It runs before the decode so
+    # that every exit after the decode is one that expires the consent cookie.
+    _feature_enabled_or_404()
 
+    # The provider+server are bound in the signed state; the server's egress
+    # config (client_id/secret for the code exchange) is resolved from the state's
+    # server_path. The only decode of this state.
     try:
         st = decode_state(state)
     except InvalidState:
         return HTMLResponse("<h3>Connection failed: invalid state.</h3>", status_code=400)
 
-    # Feature gate applies to BOTH purposes. Discovery borrows a vaulted per-user
-    # token, so EGRESS_AUTH_ENABLED is a hard requirement for it too; exempting it
-    # here previously let a discovery consent write into the egress vault on a
-    # deployment whose vend path was switched off.
-    _feature_enabled_or_404()
+    try:
+        try:
+            await get_egress_auth_service().begin_callback(st)
+        except EgressAuthError as exc:
+            # Replayed, expired, or not a consent state: nothing to complete.
+            logger.warning(f"egress callback refused the state type={type(exc).__name__}")
+            response = _callback_no_code() if not code else _callback_not_completed()
+        else:
+            # The provider declined or failed (the user cancelled, for example)
+            # when there is no code; the state is already burned.
+            response = (
+                await _complete_callback(request, code, st, iss or None)
+                if code
+                else _callback_no_code()
+            )
+    except ReplayGuardUnavailable as exc:
+        # begin_callback runs before any code exchange or vault write, so neither
+        # happened. The message names only the database error type, never the
+        # nonce.
+        logger.error(
+            "egress callback refused server=%s purpose=%s code_present=%s: %s",
+            st.server_path,
+            st.purpose,
+            bool(code),
+            exc,
+        )
+        response = _callback_temporarily_unavailable()
+    except Exception as exc:
+        # Anything else (an unhandled error from session resolution, the server
+        # lookup, or the service) would otherwise escape as a 500 that keeps the
+        # consent cookie, and with it a state the browser binding still accepts.
+        response = _refuse_after_unexpected_error(st, bool(code), exc)
+    clear_consent_cookie(response, request, st.browser_binding)
+    return response
 
+
+async def _complete_callback(
+    request: Request,
+    code: str,
+    st: OAuthState,
+    response_issuer: str | None,
+) -> HTMLResponse:
+    """Run the callback checks for a consumed consent state and store the token.
+
+    The caller has already consumed the state's nonce (``begin_callback``), so
+    every refusal here only returns its page.
+
+    Args:
+        request: The callback request; carries the session and consent cookies.
+        code: The provider's authorization code.
+        st: The decoded consent state.
+        response_issuer: The RFC 9207 ``iss`` the provider sent, or None.
+
+    Returns:
+        The page to show: connected, or why the connection was not saved.
+    """
     server = await server_service.get_server_info(st.server_path, include_credentials=True)
     if not server:
-        return HTMLResponse("<h3>Connection failed: server not configured.</h3>", status_code=400)
+        return _callback_server_not_configured()
     # Resolve the code-exchange config from the state-bound purpose: discovery
     # uses the server's own backend-auth oauth config, egress uses egress_oauth.
     if st.purpose == "discovery":
@@ -1711,61 +1889,43 @@ async def egress_callback(
     else:
         oauth_cfg = server.get("egress_oauth")
     if not oauth_cfg:
-        return HTMLResponse("<h3>Connection failed: server not configured.</h3>", status_code=400)
-    # Account-swap guard: cross-check the live session principal when present.
-    # The provider redirect often lands in a fresh tab with a valid session
-    # cookie (same browser), in which case we enforce it; if there is no live
-    # session, the signed+single-use state remains the authority (handle_callback
-    # still enforces TTL + replay + the state-bound (user, auth_method)).
-    current_user = None
-    current_method = None
-    session_cookie = request.cookies.get(settings.session_cookie_name)
-    if session_cookie:
-        try:
-            # Pass the cookie explicitly: nginx_proxied_auth's `session` is a
-            # FastAPI Cookie(...) param only populated by dependency injection, so
-            # a direct call without it always sees session=None (the account-swap
-            # guard would silently never engage).
-            ctx = await nginx_proxied_auth(request, session=session_cookie)
-            # Compare on the vault principal so the account-swap guard matches
-            # the principal the consent state was bound to at initiate. A live
-            # session that owns no principal matches no state.
-            principal = vault_principal(ctx)
-            current_method, current_user = principal or ("", "")
-        except Exception:  # nosec B110 - best-effort auth context for account-swap guard
-            pass
+        return _callback_server_not_configured()
+    # Account-swap guard: the browser completing the provider redirect must be
+    # live as the principal bound in the state. Fail closed with no session or an
+    # unresolvable one: otherwise a consent link minted by one user and opened in
+    # another (unauthenticated) browser stores the second browser's upstream
+    # token in the first user's bucket. The browser's session comes from its
+    # session cookie only (browser_session_context). Compare on the vault
+    # principal so the guard matches the principal the consent state was bound
+    # to at initiate.
+    ctx = await browser_session_context(request)
+    principal = vault_principal(ctx) if ctx is not None else None
+    if principal is None:
+        return _callback_sign_in_required()
 
     try:
         conn = await get_egress_auth_service().handle_callback(
             code=code,
-            state_blob=state,
+            state=st,
             egress_oauth=oauth_cfg,
-            current_user_id=current_user,
-            current_auth_method=current_method,
-            response_issuer=iss or None,
+            principal=principal,
+            browser_secret=read_browser_secret(request, st.browser_binding),
+            response_issuer=response_issuer,
         )
+    except ConsentStartedInAnotherBrowser:
+        # Not a configuration fault: the browser holds no cookie for this consent.
+        # Either the link was carried to another browser, or someone else started
+        # the consent and is trying to land their provider account in this user's
+        # vault.
+        logger.warning("egress callback refused: consent completed outside its starting browser")
+        return _callback_other_browser()
     except EgressAuthError as exc:
         # Detail to server logs only. Do NOT reflect the exception text into the
         # browser response: EgressAuthError messages embed internal state (e.g.
         # decryption / SECRET_KEY hints, wrapped upstream errors) -- a
         # stack-trace/internal-detail exposure. Show a generic message.
-        #
-        # "Connection failed" was that generic message, and it cost real debugging
-        # time: it reads as a network fault, so the first place people look is DNS,
-        # TLS and firewalls, none of which are ever the cause here. By this point
-        # the request has arrived and been processed. Name the two things an
-        # operator can act on, and say where the reason is, without reproducing it.
         logger.warning(f"egress callback failed type={type(exc).__name__}")
-        return HTMLResponse(
-            "<h3>Could not complete the connection.</h3>"
-            "<p>The request reached the registry, so this is not a network problem. "
-            "Either the sign-in took too long and the request expired, or this "
-            "server's egress OAuth configuration is incomplete.</p>"
-            "<p>Close this tab and try connecting again. If it fails a second time, "
-            "check the server's egress OAuth client ID and client secret. An "
-            "administrator can find the specific reason in the registry logs.</p>",
-            status_code=400,
-        )
+        return _callback_not_completed()
     except SecretStoreError as exc:
         # The code exchange SUCCEEDED but persisting the token to the secret store
         # (Vault/OpenBao) failed — the store already retried transient blips (HA

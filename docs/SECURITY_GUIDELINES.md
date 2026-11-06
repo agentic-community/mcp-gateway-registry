@@ -680,6 +680,24 @@ sanitizer that isn't called) is equivalent to no check.
   handler exchanges the code inline, a `state` comparison that runs later in the
   calling flow is dead code; gate the exchange itself and fail closed when
   `state` is missing/absent/mismatched or no authorization request is in flight.
+- **Bind an OAuth consent to the browser that started it, and burn its state on
+  every exit.** A check that the finishing browser is signed in as the state's
+  principal does not stop account injection: whoever holds a state bound to user
+  V (an agent with V's bearer, V's browser history) finishes the provider step
+  with their own account and sends V's browser to the callback, and V's vault
+  then holds that account. PKCE does not help, because the verifier rides in the
+  state. Set a per-consent HttpOnly, `SameSite=Lax` cookie where the consent
+  starts, put its hash in the state, and refuse the callback before the code
+  exchange unless the browser presents the matching cookie. Name the cookie per
+  consent so parallel tabs all complete, and start a consent only for the
+  browser's own session cookie: a bearer skips CSRF and would get the state
+  together with its secret. A refusal that leaves the nonce live leaves a usable
+  `?code=...&state=...` in the refusing browser's history, which the minting
+  user's own browser can later complete, so consume the nonce once, right after
+  the state decodes and before the `code` check (RFC 9700 section 4.7, RFC 6749
+  section 10.12; `EgressAuthService.begin_callback`,
+  `registry/egress_auth/browser_binding.py`, `browser_session_context` in
+  `registry/auth/dependencies.py`).
 - **A reserved key prefix is a namespace only if no input can carry it.**
   Prefixing username-fallback vault keys with `name:` keeps them apart from
   account ids only while no account id starts with `name:`. A provider whose

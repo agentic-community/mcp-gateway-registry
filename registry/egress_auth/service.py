@@ -4,8 +4,9 @@ Ties together the provider table, the OAuth engine, the AEAD state codec, and
 the SecretStore. The SecretStore is the only persistence dependency for token
 material; a small ``ReplayGuard`` protocol covers single-use ``state`` nonces.
 
-Handles here: consent-URL build, callback handling (verify/decrypt state +
-account-swap guard + single-use nonce + code exchange + store), lazy-on-vend
+Handles here: consent-URL build, callback handling (single-use nonce + TTL in
+``begin_callback``; browser binding + account-swap guard + code exchange +
+store in ``handle_callback``; the route decodes the state once), lazy-on-vend
 refresh with an in-process single-flight lock, list, disconnect.
 
 Not handled here: the cross-replica Mongo lease lock, the egress injection in
@@ -22,6 +23,7 @@ from datetime import UTC, datetime
 from typing import Any, NamedTuple, Protocol
 
 from registry.egress_auth import oauth_engine
+from registry.egress_auth.browser_binding import browser_secret_matches
 from registry.egress_auth.providers import resolve_provider
 from registry.egress_auth.schemas import (
     EgressConnection,
@@ -30,7 +32,7 @@ from registry.egress_auth.schemas import (
     StoredToken,
     TokenEndpointAuthStyle,
 )
-from registry.egress_auth.state_codec import InvalidState, decode_state, encode_state
+from registry.egress_auth.state_codec import encode_state
 from registry.egress_auth.upstream_binding import registered_destinations
 from registry.secrets import keys
 from registry.secrets.interfaces import SecretStoreBase
@@ -95,11 +97,31 @@ def _check_response_issuer(
         raise EgressAuthError("authorization response issuer mismatch")
 
 
+class ConsentStartedInAnotherBrowser(EgressAuthError):
+    """The callback ran in a browser that did not start this consent.
+
+    Raised when the completing browser holds no consent cookie whose digest the
+    state carries, or the state binds no browser at all (minted before the
+    binding existed). The provider code may belong to anyone's account, so it
+    is never exchanged.
+    """
+
+
+class ReplayGuardUnavailable(Exception):
+    """The replay guard could not record a ``state`` nonce.
+
+    Raised when the store behind the guard fails (the database is unreachable,
+    for example). The nonce may still be live, so a caller must not exchange
+    the code or store anything for that state.
+    """
+
+
 class ReplayGuard(Protocol):
     """Single-use guard for OAuth ``state`` nonces (a Mongo-TTL-backed implementation backs this).
 
     ``check_and_consume`` returns True if the nonce was unused (and records it),
-    False if it has already been consumed (replay).
+    False if it has already been consumed (replay). It raises
+    ``ReplayGuardUnavailable`` when it cannot tell, because its store failed.
     """
 
     async def check_and_consume(self, nonce: str, ttl_seconds: int) -> bool: ...
@@ -399,12 +421,18 @@ class EgressAuthService:
         purpose: str = "egress",
         *,
         server: dict,
+        browser_binding: str,
     ) -> str:
         """Build the provider authorize URL with an AEAD-encrypted, single-use state.
 
         The destinations the user is approving are snapshot HERE, into the signed
         state, not re-read at the callback: a version added or retargeted while the
         user is away at the provider must not inherit an approval the user never saw.
+
+        ``browser_binding`` is the digest of the consent cookie the caller sets in
+        the browser that starts this consent (see ``browser_binding.py``). The
+        callback completes the consent only in a browser holding that cookie, so
+        call this only where a browser receives the response.
 
         Raises:
             EgressAuthError: the client secret is missing or undecryptable.
@@ -441,6 +469,7 @@ class EgressAuthService:
             approved_upstreams=approved_upstreams,
             token_url=cfg.token_url,
             expected_issuer=egress_oauth.get("expected_issuer") or None,
+            browser_binding=browser_binding,
         )
         return oauth_engine.build_authorize_url(
             cfg=cfg,
@@ -453,40 +482,37 @@ class EgressAuthService:
 
     # -- callback ------------------------------------------------------------- #
 
-    async def handle_callback(
+    async def begin_callback(
         self,
-        code: str,
-        state_blob: str,
-        egress_oauth: dict,
-        current_user_id: str | None = None,
-        current_auth_method: str | None = None,
-        response_issuer: str | None = None,
-    ) -> EgressConnection:
-        """Verify state, exchange the code, and store the token.
+        state: OAuthState,
+    ) -> None:
+        """Consume a decoded consent state's single-use nonce, then check the state.
 
-        Security checks before any token write:
-        - state decrypts/authenticates (AEAD) -- else InvalidState.
-        - state is within TTL.
-        - state nonce is single-use (replay guard).
-        - account-swap guard: the live principal (if provided) matches the
-          principal bound in the signed state -- bind to (user_id, auth_method),
-          NOT session_id (a legit "same user, new session" must still work).
-        - RFC 9207: when the state names an expected issuer, a reply whose
-          ``iss`` (``response_issuer``) differs is refused. A reply without
-          ``iss`` is accepted, since the gateway does not know whether the
-          provider sends it.
+        The callback route calls this once, right after it decodes the state and
+        before it looks at the provider ``code`` or anything else, so every exit
+        after it (a provider error, no session, the wrong browser, a gone server)
+        has already burned the state. The refusing browser's history keeps the
+        ``code`` and the ``state``; a live nonce would let that URL be replayed
+        within the TTL from a browser that is signed in as the consenting user.
+
+        After consuming the nonce it refuses a state that carries no approval
+        snapshot (minted before the snapshot existed, or the MRTR
+        ``request_state`` that reuses this codec), which would bind a credential
+        to nothing the user approved, and a state older than the state TTL.
+
+        Args:
+            state: The consent state the callback decoded.
+
+        Raises:
+            EgressAuthError: The nonce was already used (replay), or the state
+                is not a consent state, or it expired.
+            ReplayGuardUnavailable: The replay guard could not record the nonce;
+                the caller must not exchange the code or store anything.
         """
-        try:
-            state = decode_state(state_blob)
-        except InvalidState as exc:
-            raise EgressAuthError(f"invalid state: {exc}") from exc
-
-        # Only a consent state carries the approval snapshot. A state without one
-        # (pre-upgrade, or the MRTR request_state that reuses this codec) would bind
-        # a credential to nothing the user approved.
+        if not await self._replay.check_and_consume(state.nonce, self._state_ttl):
+            raise EgressAuthError("state already used (replay)")
         if not state.approved_upstreams or not state.token_url:
             raise EgressAuthError("state carries no approved destinations")
-        # TTL
         try:
             issued = datetime.fromisoformat(state.issued_at)
         except ValueError as exc:
@@ -494,14 +520,51 @@ class EgressAuthService:
         if (datetime.now(UTC) - issued).total_seconds() > self._state_ttl:
             raise EgressAuthError("state expired")
 
-        # Single-use
-        if not await self._replay.check_and_consume(state.nonce, self._state_ttl):
-            raise EgressAuthError("state already used (replay)")
+    async def handle_callback(
+        self,
+        code: str,
+        state: OAuthState,
+        egress_oauth: dict,
+        principal: VaultPrincipal,
+        *,
+        browser_secret: str | None,
+        response_issuer: str | None = None,
+    ) -> EgressConnection:
+        """Check the completing browser, exchange the code, and store the token.
 
-        # Account-swap guard (bind to canonical principal, not session_id)
-        if current_user_id is not None and current_user_id != state.user_id:
+        Call it only with a state ``begin_callback`` accepted: this method does
+        not consume the nonce or check the TTL again.
+
+        Security checks before any token write:
+        - browser binding: ``browser_secret`` (the consent cookie the completing
+          browser presented) must hash to the state's ``browser_binding``, so the
+          consent completes only in the browser that started it. Without this,
+          whoever holds a state bound to user V finishes the provider step with
+          their own account and makes V's browser load the callback, and V's
+          vault holds their account. A state without a binding is refused.
+        - account-swap guard: ``principal``, the completing browser's live vault
+          principal, must match the principal bound in the signed state. Bind to
+          (user_id, auth_method), NOT session_id (a legit "same user, new
+          session" must still work). The route refuses a browser with no live
+          principal before calling this.
+        - RFC 9207: when the state names an expected issuer, a reply whose
+          ``iss`` (``response_issuer``) differs is refused. A reply without
+          ``iss`` is accepted, since the gateway does not know whether the
+          provider sends it.
+        - token endpoint: the provider's live token URL must be the one the user
+          consented under.
+
+        Raises:
+            ConsentStartedInAnotherBrowser: the browser binding does not match.
+            EgressAuthError: any other refusal, or a failed code exchange.
+        """
+        if not browser_secret_matches(state.browser_binding, browser_secret):
+            raise ConsentStartedInAnotherBrowser("consent completed outside its starting browser")
+
+        # Account-swap guard (bind to canonical principal, not session_id).
+        if principal.user_id != state.user_id:
             raise EgressAuthError("state user mismatch")
-        if current_auth_method is not None and current_auth_method != state.auth_method:
+        if principal.auth_method != state.auth_method:
             raise EgressAuthError("state auth_method mismatch")
 
         _check_response_issuer(state.expected_issuer, response_issuer)

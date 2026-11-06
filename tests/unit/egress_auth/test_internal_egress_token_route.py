@@ -32,12 +32,14 @@ class _StubService:
     def __init__(self, token):
         self._token = token
         self.called = False
+        self.consent_urls_built = 0
 
     async def get_valid_token(self, **kwargs):
         self.called = True
         return self._token
 
     async def build_consent_url(self, **kwargs):
+        self.consent_urls_built += 1
         return "https://github.com/login/oauth/authorize?from=miss"
 
 
@@ -230,15 +232,17 @@ class TestInternalEgressTokenRoute:
         client = make_client(partial, _server())
         assert _post(client).status_code == 403
 
-    def test_vend_miss_returns_consent_url(self, make_client):
-        # On a miss for an egress-configured server, the vend builds + returns the
-        # authorize_url so mcp_proxy can hand it to the user (auto-consent trigger).
+    def test_vend_miss_mints_no_provider_consent_state(self, make_client):
+        # A consent state must be started in the browser that finishes it, so the
+        # vend (no browser) builds no provider authorize URL; the caller is sent
+        # to connect_url, which starts the consent in the user's browser.
         client = make_client(_claims(), _server(), vended_token=None)
         r = _post(client)
         body = r.json()
         assert body["consent_required"] is True
         assert body["access_token"] is None
-        assert body["authorize_url"] == "https://github.com/login/oauth/authorize?from=miss"
+        assert "authorize_url" not in body
+        assert client._svc.consent_urls_built == 0
 
     def test_vend_miss_returns_connect_url_and_request_state(self, make_client):
         # The URL-mode elicitation switch adds a session-verified connect_url
