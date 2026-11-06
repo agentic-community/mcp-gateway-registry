@@ -37,7 +37,7 @@ from registry.auth.dependencies import nginx_proxied_auth
 from registry.core.config import settings
 from registry.egress_auth import as_facade
 from registry.egress_auth.factory import get_egress_auth_service
-from registry.egress_auth.service import EgressAuthError, is_per_user_auth_method
+from registry.egress_auth.service import EgressAuthError, vault_principal
 from registry.services.server_service import server_service
 
 logger = logging.getLogger(__name__)
@@ -204,8 +204,14 @@ async def egress_connect(
     if user_context is None:
         return _login_bootstrap_redirect(request)
 
-    auth_method = user_context.get("auth_method") or ""
-    if not is_per_user_auth_method(auth_method):
+    # Bind the consent state to the vault principal (canonical auth_method; the
+    # auth-server's ``egress_user``, with no username fallback here): the SAME
+    # principal the vend, the vault, and the callback account-swap guard use.
+    # Using bare ``username`` here would bind the state to a different id than the
+    # callback resolves, so the guard would reject every callback with "state user
+    # mismatch" whenever egress_user is set.
+    principal = vault_principal(user_context)
+    if principal is None:
         return JSONResponse(
             {
                 "error": "access_denied",
@@ -225,12 +231,7 @@ async def egress_connect(
             status_code=403,
         )
 
-    # Bind the consent state to the canonical egress principal (OIDC-sub-based
-    # ``egress_user``, else ``username``) -- the SAME id the vend, the vault, and
-    # the callback account-swap guard use. Using bare ``username`` here would bind
-    # the state to a different id than the callback resolves, so the guard would
-    # reject every callback with "state user mismatch" whenever egress_user is set.
-    egress_user_id = user_context.get("egress_user") or user_context.get("username") or ""
+    auth_method, egress_user_id = principal
 
     # The consent must come from the DESIGNATED principal, not merely from someone
     # authorized to designate. handle_callback vaults at the consenting principal's
@@ -240,6 +241,8 @@ async def egress_connect(
     # only a log line, and the stray entry (recorded purpose='discovery') later
     # refuses that person's own egress connection for the same provider and server.
     if purpose == "discovery":
+        # The stored designation is already canonical: PUT .../oauth-discovery
+        # records it through the same vault_principal, so it compares directly.
         designated = (server_info or {}).get("oauth_discovery") or {}
         want_method = designated.get("auth_method") or ""
         want_user = designated.get("user_id") or ""

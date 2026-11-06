@@ -17,8 +17,9 @@ wraps it.
 import asyncio
 import logging
 import secrets
+from collections.abc import Mapping
 from datetime import UTC, datetime
-from typing import Protocol
+from typing import Any, NamedTuple, Protocol
 
 from registry.egress_auth import oauth_engine
 from registry.egress_auth.providers import resolve_provider
@@ -158,14 +159,16 @@ class _InProcessLeaseManager:
 
 # The single per-user egress bucket. Browser consent keys the vault on this
 # (the cookie session's auth_method is enforced == "oauth2"), so vend-read must
-# resolve here too for one human identity. Mirror of auth_server's
-# _EGRESS_CANONICAL_PER_USER_METHOD / _PER_USER_IDP_METHODS.
+# resolve here too for one human identity.
 _EGRESS_CANONICAL_PER_USER_METHOD: str = "oauth2"
+# Validator ``method`` values that all denote a human authenticated through the
+# per-user IdP: different token formats and provider names for one kind of
+# principal. ``self_signed`` is absent: a gateway-minted token folds by its own
+# ``auth_method`` claim instead (see canonical_auth_method).
 _PER_USER_IDP_METHODS: frozenset[str] = frozenset(
     {
         "oauth2",
         "session_cookie",
-        "self_signed",
         "jwt",
         "boto3",
         "keycloak",
@@ -176,22 +179,56 @@ _PER_USER_IDP_METHODS: frozenset[str] = frozenset(
         "pingfederate",
     }
 )
+# The validator ``method`` of a JWT this gateway minted and signed itself.
+_SELF_SIGNED_METHOD: str = "self_signed"
 
 
-def canonical_auth_method(validation_result: dict) -> str:
-    """The ONE canonical egress principal method.
+def canonical_auth_method(validation_result: Mapping[str, Any]) -> str:
+    """The ONE canonical egress principal method, for both services.
 
-    Different token FORMATS / IdP provider names denote the same kind of per-user
-    principal and must all canonicalize to a single vault bucket (``oauth2``) so
-    consent-write and vend-read agree. In particular a Dynamic-Client-Registration
-    bearer issued directly by the IdP reports ``method == "keycloak"`` (etc.),
-    which must fold into the same bucket the cookie-consent path wrote
-    (``oauth2``) -- otherwise the DCR vend misses and the user loops on consent.
-    NON-per-user methods (``federation-static``/``network-trusted``) and unknown
-    methods pass through raw so ``is_per_user_auth_method`` still rejects them.
-    Mirrors ``auth_server.server._canonical_auth_method``.
+    The auth server stamps this into both internal tokens ``/validate`` mints,
+    and the registry derives every vault principal through it
+    (``vault_principal``), so consent-write and vend-read agree on one bucket
+    for one human identity; otherwise the user loops on consent. Different
+    token formats and IdP provider names denote the same kind of per-user
+    principal and fold into the single per-user bucket (``oauth2``):
+
+    - ``session_cookie``: the browser cookie session, whose inner
+      ``auth_method`` is ``oauth2``. This is the consent-write side, so it
+      defines the bucket.
+    - ``keycloak``/``entra``/``cognito``/``okta``/``auth0``/``pingfederate``: a
+      bearer the per-user IdP issued directly, notably what a Dynamic Client
+      Registration client (Claude Code, Codex) presents. Without folding, its
+      vend keys on bucket ``keycloak`` while consent wrote ``oauth2``.
+    - ``jwt``/``boto3``: other per-user token formats.
+    - ``self_signed``: a JWT this gateway minted (UI "generate token", or the
+      egress OAuth-facade ``/token`` mint). It folds by its own verified
+      ``data.auth_method`` claim, not by the format: ``/internal/tokens`` mints
+      for ``network-trusted`` callers too (a REGISTRY_API_TOKEN or
+      REGISTRY_API_KEYS key) and stamps that method, so folding every
+      self-signed token into ``oauth2`` would hand a static key the per-user
+      bucket named like it. A missing, non-string or ``self_signed`` claim
+      yields ``""``, which no per-user check accepts.
+
+    Non-per-user methods (``federation-static``, ``network-trusted``) and
+    unknown methods pass through unchanged, so ``is_per_user_auth_method``
+    still rejects them.
+
+    Args:
+        validation_result: A validator result, or any mapping with ``method``
+            and, for a self-signed token, its verified claims under ``data``.
+
+    Returns:
+        The canonical method; ``""`` when there is none.
+
+    Example:
+        >>> canonical_auth_method({"method": "self_signed", "data": {"auth_method": "oauth2"}})
+        'oauth2'
     """
     method = validation_result.get("method") or ""
+    if method == _SELF_SIGNED_METHOD:
+        claim = (validation_result.get("data") or {}).get("auth_method")
+        method = claim if isinstance(claim, str) and claim != _SELF_SIGNED_METHOD else ""
     if method in _PER_USER_IDP_METHODS:
         return _EGRESS_CANONICAL_PER_USER_METHOD
     return method
@@ -202,6 +239,78 @@ def is_per_user_auth_method(auth_method: str) -> bool:
     if not auth_method or auth_method in NON_PER_USER_AUTH_METHODS:
         return False
     return auth_method in PER_USER_AUTH_METHODS
+
+
+class VaultPrincipal(NamedTuple):
+    """The ``(auth_method, user_id)`` pair a per-user vault bucket is keyed on."""
+
+    auth_method: str
+    user_id: str
+
+
+def vault_auth_method(user_context: Mapping[str, Any]) -> str | None:
+    """Return the canonical per-user method of a user context or verified claims.
+
+    The method half of ``vault_principal``. The vend checks it on its own,
+    before the user id, because an ``obo_exchange`` server needs a per-user
+    caller but never reads the vault.
+
+    Args:
+        user_context: A registry user context, or the verified claims of an
+            internal token (the same ``auth_method`` key).
+
+    Returns:
+        The canonical method, or None for a non-per-user, empty, unknown or
+        non-string method.
+    """
+    raw_method = user_context.get("auth_method")
+    auth_method = canonical_auth_method(
+        {"method": raw_method if isinstance(raw_method, str) else ""}
+    )
+    return auth_method if is_per_user_auth_method(auth_method) else None
+
+
+def vault_principal(user_context: Mapping[str, Any]) -> VaultPrincipal | None:
+    """Derive the per-user vault principal from a registry user context.
+
+    Every registry route that reads or writes the per-user vault keys on this:
+    consent-write, list, disconnect, PAT and discovery designation from a
+    request's user context, and the vend from the verified mcp-proxy token
+    claims, which carry the same two keys.
+
+    ``auth_method`` is canonicalized (``vault_auth_method``); a non-per-user,
+    empty, unknown or non-string method yields None. ``user_id`` is the
+    context's ``egress_user`` and nothing else: an absent, empty or
+    non-string value yields None, whatever ``username`` holds. The value was
+    resolved before the context was built: by the auth server's
+    ``_canonical_egress_user`` for everything that reaches the registry through
+    an internal token, and by ``session_vault_user_id`` for a raw session
+    cookie (``enhanced_auth``). Neither builds a username fallback key: only
+    the auth server's login (``_login_vault_user_id``) computes one, stores it
+    on the session, and every later reader takes it from there (see "When the
+    key falls back to the username" in ``docs/egress-credential-vault.md``).
+    The auth server leaves ``egress_user`` empty exactly for the callers it
+    refuses to key, so falling back here would key those callers on their
+    login name.
+
+    Args:
+        user_context: The verified ``nginx_proxied_auth`` user context, or the
+            verified claims of an mcp-proxy token.
+
+    Returns:
+        The vault principal, or None when the caller owns no per-user bucket.
+
+    Example:
+        >>> vault_principal({"auth_method": "keycloak", "egress_user": "sub-1"})
+        VaultPrincipal(auth_method='oauth2', user_id='sub-1')
+    """
+    auth_method = vault_auth_method(user_context)
+    if auth_method is None:
+        return None
+    user_id = user_context.get("egress_user")
+    if not isinstance(user_id, str) or not user_id:
+        return None
+    return VaultPrincipal(auth_method, user_id)
 
 
 class EgressAuthService:

@@ -12,8 +12,22 @@ from fastapi.testclient import TestClient
 
 import registry.api.egress_auth_routes as routes
 
-ADMIN = {"username": "admin", "is_admin": True, "auth_method": "oauth2", "client_id": "web"}
-USER = {"username": "alice", "is_admin": False, "auth_method": "oauth2", "client_id": "web"}
+# The auth-server resolves egress_user (the vault key) for every per-user caller;
+# the registry keys on it alone, with no username fallback.
+ADMIN = {
+    "username": "admin",
+    "egress_user": "sub-admin",
+    "is_admin": True,
+    "auth_method": "oauth2",
+    "client_id": "web",
+}
+USER = {
+    "username": "alice",
+    "egress_user": "sub-alice",
+    "is_admin": False,
+    "auth_method": "oauth2",
+    "client_id": "web",
+}
 STATIC = {"username": "ci-bot", "is_admin": False, "auth_method": "network-trusted"}
 
 

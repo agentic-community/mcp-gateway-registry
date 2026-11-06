@@ -144,8 +144,8 @@ class TestMintResourceBoundToken:
         assert "resource_type" not in claims
         assert "resource_id" not in claims
 
-    def test_user_token_stamps_egress_user_from_session_subject(self, auth_env_vars):
-        # A session-backed mint stamps the session's OIDC sub as egress_user so
+    def test_user_token_stamps_egress_user_from_the_session_key(self, auth_env_vars):
+        # A session-backed mint stamps the session's stored vault key as egress_user so
         # the vend keys the vault on the SAME id the browser-consent path wrote.
         # The token's `sub` stays the login username (unchanged).
         from unittest.mock import AsyncMock
@@ -173,6 +173,7 @@ class TestMintResourceBoundToken:
         session = {
             "username": "alice",
             "groups": ["mcp-registry-user"],
+            "egress_user": "oidc-sub-uuid",
             "subject": "oidc-sub-uuid",
         }
         with (

@@ -15,6 +15,7 @@ import registry.api.egress_oauth_facade_routes as facade
 REGISTRY_URL = "https://gw.example.com"
 USER = {
     "username": "alice",
+    "egress_user": "sub-alice",
     "auth_method": "oauth2",
     "client_id": "web",
     "groups": ["mcp-registry-user"],
@@ -272,10 +273,10 @@ class TestConnectDiscovery:
                 },
                 # A designation must exist before consent: connecting first would vault
                 # an entry nothing reads, which then blocks this principal's own egress
-                # consent for the same provider+server. USER has no egress_user, so the
-                # canonical principal is (oauth2, username).
+                # consent for the same provider+server. USER's canonical principal is
+                # (oauth2, egress_user).
                 "auth_method": "oauth2",
-                "user_id": "alice",
+                "user_id": "sub-alice",
                 "designated_by": "alice",
             },
         }

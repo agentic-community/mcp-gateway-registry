@@ -2614,8 +2614,18 @@ class TestOAuth2CallbackTokenStorage:
     # point of the server-side store is to keep the cookie small.
     COOKIE_SIZE_CEILING_BYTES = 512
 
-    def _call_oauth2_callback(self) -> tuple[dict, str]:
+    def _call_oauth2_callback(
+        self,
+        subject: str | None = "12345",
+        id_token: str | None = "mock-id-token",
+    ) -> tuple[dict, str]:
         """Drive the real oauth2_callback endpoint with create_session mocked.
+
+        Args:
+            subject: The subject map_user_info resolves, or None for none.
+            id_token: The id_token in the token response, or None to omit it.
+                A login whose token response carries an id_token is OIDC and
+                is refused without a subject.
 
         Returns (kwargs, session_cookie_value) so tests can assert what would
         have landed in the persistent record AND can verify the cookie value
@@ -2627,8 +2637,9 @@ class TestOAuth2CallbackTokenStorage:
             "access_token": "mock-access-token-value",
             "refresh_token": "mock-refresh-token-value",
             "expires_in": 3600,
-            "id_token": "mock-id-token",
         }
+        if id_token is not None:
+            mock_token_data["id_token"] = id_token
         mock_user_info = {
             "sub": "testuser",
             "email": "test@example.com",
@@ -2668,6 +2679,7 @@ class TestOAuth2CallbackTokenStorage:
                     "username": "testuser",
                     "email": "test@example.com",
                     "name": "Test User",
+                    "subject": subject,
                     "groups": [],
                 },
             ),
@@ -2689,10 +2701,11 @@ class TestOAuth2CallbackTokenStorage:
         return captured, session_cookie
 
     def test_login_without_subject_warns(self, caplog):
-        # The mocked map_user_info yields no subject: bearer tokens minted from
-        # this session will be refused at the egress vend, so say so at login.
+        # A GitHub login (no id_token) whose mapping yields no subject still
+        # logs in: bearer tokens minted from this session will be refused at the
+        # egress vend, so say so at login.
         with caplog.at_level("WARNING"):
-            kwargs, _cookie = self._call_oauth2_callback()
+            kwargs, _cookie = self._call_oauth2_callback(subject=None, id_token=None)
         assert kwargs["subject"] is None
         assert any("yielded no subject" in rec.getMessage() for rec in caplog.records)
 

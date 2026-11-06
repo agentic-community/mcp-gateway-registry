@@ -177,17 +177,20 @@ class TestSetPat:
         assert store.put_calls == []
 
     def test_admin_on_behalf_uses_target_auth_method_not_admins(self, client):
-        # The admin logs in via oauth2 but the target vends via jwt: the PAT must
-        # be stored under jwt (the target's partition), never the admin's oauth2.
+        # The admin authenticates with a static key, which owns no per-user bucket;
+        # the target vends via jwt. The PAT must land in the target's canonical
+        # partition (jwt folds into oauth2, the bucket the target's vend reads),
+        # whatever the admin's own method is.
+        static_admin = {**ADMIN, "auth_method": "network-trusted"}
         store = _StubStore()
-        c = client(ADMIN, server=_server(), store=store)
+        c = client(static_admin, server=_server(), store=store)
         r = c.put(
             "/api/servers/github/egress-pat",
             json=_put_body(sub="bob", auth_method="jwt"),
         )
         assert r.status_code == 200
         auth_method, user_id, _, _, _, _ = store.put_calls[0]
-        assert (auth_method, user_id) == ("jwt", "bob")
+        assert (auth_method, user_id) == ("oauth2", "bob")
 
     def test_admin_on_behalf_non_per_user_auth_method_403(self, client):
         # A non-per-user target auth_method can never own a per-user PAT.
@@ -381,7 +384,8 @@ class TestDeletePat:
         )
         assert r.status_code == 200
         kwargs = svc.delete_pat.await_args.kwargs
-        assert (kwargs["auth_method"], kwargs["user_id"]) == ("jwt", "bob")
+        # jwt folds into oauth2: the delete reaches the bucket the target vends from.
+        assert (kwargs["auth_method"], kwargs["user_id"]) == ("oauth2", "bob")
 
     def test_delete_admin_on_behalf_missing_auth_method_400(self, client):
         svc = AsyncMock()
