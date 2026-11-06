@@ -165,28 +165,15 @@ cat keycloak/setup/keycloak-client-secrets.txt
 
 | Variable | Description | Example | Required | Default |
 |----------|-------------|---------|----------|---------|
-| `SESSION_COOKIE_SECURE` | Enable HTTPS-only cookie transmission | `false` (localhost)<br/>`true` (production) | ✅ | `false` |
+| `SESSION_COOKIE_SECURE` | Mark the session cookie Secure on HTTPS requests | `true` | ❌ | `true` |
 | `SESSION_COOKIE_DOMAIN` | Cookie domain for cross-subdomain sharing | `""` (single domain)<br/>`.example.com` (cross-subdomain) | ❌ | Empty |
+| `SESSION_MAX_AGE_SECONDS` | Browser session lifetime in seconds: the stored session's lifetime, the cookie's `Max-Age` and the oldest cookie signature either service accepts. Must be positive | `28800` | ❌ | `28800` |
 
-#### SESSION_COOKIE_SECURE - Critical for Your Environment
+Set each of these to the same value on the registry and the auth server.
 
-**YOU MUST SET THIS CORRECTLY OR LOGIN WILL FAIL:**
+#### SESSION_COOKIE_SECURE
 
-**For Local Development (localhost via HTTP):**
-```bash
-SESSION_COOKIE_SECURE=false  # MUST be false
-```
-- Localhost runs over HTTP (not HTTPS)
-- Cookies with `secure=true` are ONLY sent over HTTPS
-- Setting this to `true` on localhost = **login will fail**
-
-**For Production with HTTPS:**
-```bash
-SESSION_COOKIE_SECURE=true  # MUST be true
-```
-- Production deployments use HTTPS
-- Cookies must have `secure=true` to prevent session hijacking
-- Setting this to `false` in production = **security vulnerability** ❌
+On an HTTPS request the session cookie is Secure exactly when `SESSION_COOKIE_SECURE` is `true`, which keeps a browser from sending it over plain HTTP. On a plain-HTTP request the gateway never marks the cookie Secure, because a browser would drop it, so a localhost stack signs in with the default `true`. Set it to `false` only if you want the cookie sent without Secure over HTTPS.
 
 #### SESSION_COOKIE_DOMAIN - When to Set This
 
@@ -770,8 +757,7 @@ When using Keycloak as the authentication provider, the following configuration 
 ### Common Issues
 
 1. **Login redirects back to login page**
-   - **Most Common Cause:** `SESSION_COOKIE_SECURE=true` but accessing via HTTP
-   - **Solution for localhost:** Set `SESSION_COOKIE_SECURE=false` in `.env`
+   - **Check:** `SECRET_KEY` and `SESSION_COOKIE_NAME` are the same on the registry and the auth server
    - **Solution for production:** Ensure HTTPS is properly configured
    - **Check:** Browser dev tools → Application → Cookies (cookie should be present)
    - **Check:** Server logs for `Auth server setting session cookie: secure=...`

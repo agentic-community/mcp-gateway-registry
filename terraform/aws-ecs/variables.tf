@@ -479,6 +479,17 @@ variable "session_cookie_domain" {
   default     = ""
 }
 
+variable "session_max_age_seconds" {
+  description = "Browser session lifetime in seconds. It sets the auth server's session store TTL, the session cookie's Max-Age, and the registry's cookie signature max age, so it must be the same on the registry and the auth server; this module renders the one value into both task definitions. Default 28800 (8 hours)."
+  type        = number
+  default     = 28800
+
+  validation {
+    condition     = var.session_max_age_seconds > 0 && floor(var.session_max_age_seconds) == var.session_max_age_seconds
+    error_message = "session_max_age_seconds must be a positive whole number of seconds (for example 28800 for 8 hours); the registry and auth-server refuse to start on 0 or a negative value."
+  }
+}
+
 variable "oauth2_allowed_redirect_uris" {
   description = "Comma-separated exact-match allowlist of OAuth login/logout redirect URIs (open-redirect hardening). When set, an absolute redirect_uri is accepted only if it exactly matches an entry; relative paths are always allowed. Empty falls back to the weaker cookie-domain heuristic."
   type        = string
@@ -2211,10 +2222,11 @@ variable "registry_extra_env" {
           "GATEWAY_GENERIC_STREAM_READ_TIMEOUT_SECONDS",
           "SEARCH_LOG_QUERY_TEXT",
           "SSRF_ALLOWED_CIDRS",
+          "SESSION_MAX_AGE_SECONDS",
         ], upper(trimspace(entry.name)))
       )
     ])
-    error_message = "registry_extra_env must not override Terraform-managed variables (AWS_EC2_METADATA_DISABLED, the canonical gateway_* generic-proxy variables, SEARCH_LOG_QUERY_TEXT, or SSRF_ALLOWED_CIDRS; use the matching Terraform variable instead)."
+    error_message = "registry_extra_env must not override Terraform-managed variables (AWS_EC2_METADATA_DISABLED, the canonical gateway_* generic-proxy variables, SEARCH_LOG_QUERY_TEXT, SSRF_ALLOWED_CIDRS, or SESSION_MAX_AGE_SECONDS; use the matching Terraform variable instead, so the registry and auth-server keep the same session lifetime)."
   }
 
   # Forward-proxy egress: NO_PROXY must exclude the cloud credential endpoints.
@@ -2271,9 +2283,10 @@ variable "auth_server_extra_env" {
         "GATEWAY_GENERIC_STREAM_MAX_BYTES",
         "AWS_EC2_METADATA_DISABLED",
         "SSRF_ALLOWED_CIDRS",
+        "SESSION_MAX_AGE_SECONDS",
       ], upper(trimspace(entry.name)))
     ])
-    error_message = "auth_server_extra_env must not override Terraform-managed generic-proxy, metadata-hardening or SSRF_ALLOWED_CIDRS variables; use the canonical variables instead."
+    error_message = "auth_server_extra_env must not override Terraform-managed generic-proxy, metadata-hardening, SSRF_ALLOWED_CIDRS, or session-lifetime (SESSION_MAX_AGE_SECONDS) variables; use the canonical variables instead."
   }
 
   # Forward-proxy egress: NO_PROXY must exclude the cloud credential endpoints.

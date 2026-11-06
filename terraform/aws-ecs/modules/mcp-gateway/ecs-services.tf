@@ -335,6 +335,10 @@ module "ecs_service_auth" {
           value = tostring(var.session_cookie_secure)
         },
         {
+          name  = "SESSION_MAX_AGE_SECONDS"
+          value = tostring(var.session_max_age_seconds)
+        },
+        {
           name  = "SESSION_COOKIE_DOMAIN"
           value = var.session_cookie_domain
         },
@@ -1352,6 +1356,10 @@ module "ecs_service_registry" {
         {
           name  = "SESSION_COOKIE_SECURE"
           value = tostring(var.session_cookie_secure)
+        },
+        {
+          name  = "SESSION_MAX_AGE_SECONDS"
+          value = tostring(var.session_max_age_seconds)
         },
         {
           name  = "SESSION_COOKIE_DOMAIN"

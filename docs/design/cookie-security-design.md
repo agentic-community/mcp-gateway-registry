@@ -26,13 +26,12 @@ Sharing the session cookie across subdomains is a feature these deployments may 
 
 ### Environment Variables
 
-Three key environment variables control cookie security behavior:
+Four environment variables control the session cookie. The registry and the auth server both read them from the shared settings in `registry/core/config.py`, so set the same values on both. The `session` block of `auth_server/oauth2_providers.yml` sets none of them.
 
-1. **`SESSION_COOKIE_SECURE`** (default: `false`)
-   - Set to `true` in production deployments with HTTPS
-   - When `true`, cookies are only transmitted over HTTPS connections
-   - Prevents man-in-the-middle (MITM) attacks and session hijacking
-   - **Production Requirement:** MUST be set to `true` when deployed with HTTPS
+1. **`SESSION_COOKIE_SECURE`** (default: `true`)
+   - On an HTTPS request the session cookie is Secure exactly when this is `true`. On plain HTTP it is never Secure, because a browser drops a Secure cookie set over HTTP.
+   - The login, the login's expiry of the host-only variant, the registry's logout and the registry's expiry of a refused duplicate all send the same flag.
+   - A localhost stack on plain HTTP works with the default `true`.
 
 2. **`SESSION_COOKIE_DOMAIN`** (default: `None` or empty string)
    - **MUST be explicitly configured** - no automatic domain inference
@@ -45,9 +44,18 @@ Three key environment variables control cookie security behavior:
      - Single domain (`mcpgateway.ddns.net`): Leave unset or set to `""`
      - Cross-subdomain (`auth.example.com`, `registry.example.com`): Set to `.example.com`
      - Multi-level domains (`registry.region-1.corp.company.internal`): Set to `.corp.company.internal` if cross-subdomain sharing needed
+   - **The only source of the session cookie's Domain:** the auth server's login sets the cookie on it, and the registry's logout expires the cookie on it. `session.domain` in `auth_server/oauth2_providers.yml` ships as `"${SESSION_COOKIE_DOMAIN}"` and is not read for the cookie.
 
-3. **`SESSION_COOKIE_NAME`** (default: `mcp_gateway_session`)
-   - The cookie name both services use: the auth server sets it at login, and the registry and `/validate` read it. Both services refuse to start when it is empty, is not an RFC 6265 token, or starts with `__Host-` or `__Secure-` in any case.
+3. **`SESSION_MAX_AGE_SECONDS`** (default: `28800`, 8 hours)
+   - The browser session lifetime. The auth server stores the session for this long and gives the cookie this `Max-Age`. The registry and the auth server both refuse a cookie signed longer ago.
+   - Both services refuse to start when it is 0 or negative.
+
+4. **`SESSION_COOKIE_NAME`** (default: `mcp_gateway_session`)
+   - The configured name. Both services refuse to start when it is empty, is not an RFC 6265 token, or starts with `__Host-` or `__Secure-` in any case.
+
+SameSite (`Lax`) and HttpOnly (on) are fixed. The login callback sets the cookie on the browser's redirect back from the identity provider, a top-level cross-site navigation, and a browser does not keep a `Strict` cookie there. HttpOnly keeps scripts on the page from reading the cookie.
+
+Earlier releases read `secure`, `max_age_seconds`, `samesite` and `httponly` from the yml `session` block. The auth server now refuses to start when that block contains any of those keys, `cookie_name`, or a `domain` other than the shipped `"${SESSION_COOKIE_DOMAIN}"` or empty, and its one message names each key and the variable to set instead. The yml ships in the image and no compose file, chart, Terraform module or CDK stack mounts it, so only an operator who mounts an edited copy sees this, even one copied unchanged from an earlier release. To upgrade, move a changed value to its variable and delete the key.
 
 ### HTTPS Termination Detection
 
@@ -57,19 +65,16 @@ Three key environment variables control cookie security behavior:
 - **Solution**: Auth server checks `X-Forwarded-Proto` header to detect original protocol
 - **Behavior**: Cookie `secure` flag is set based on **original request protocol**, not backend protocol
 
-**Code Logic** (`auth_server/server.py:1797-1803`):
+**Code Logic** (`session_cookie_attributes` in `registry/common/session_cookie.py`, called by the login in `auth_server/server.py` and by `clear_session_cookie` in `registry/auth/session_cookie.py`): one pure function returns the attributes the login sets the cookie with and the expiry of every variant a browser may hold (the host-only cookie, then the one on `SESSION_COOKIE_DOMAIN`). Every attribute but the value and `Max-Age` is the same on a set and on each expiry, so the two services' headers match byte for byte. Its Secure flag comes from:
 ```python
-x_forwarded_proto = request.headers.get("x-forwarded-proto", "")
-is_https = x_forwarded_proto == "https" or request.url.scheme == "https"
-
-# Only set secure=True if the original request was HTTPS
-cookie_secure_config = OAUTH2_CONFIG.get("session", {}).get("secure", False)
-cookie_secure = cookie_secure_config and is_https
+def session_cookie_secure_flag(is_https, setting_secure):
+    return is_https and setting_secure
 ```
 
+`is_https` is true when `X-Cloudfront-Forwarded-Proto` or `X-Forwarded-Proto` is `https`, or the request scheme is `https`. `setting_secure` is `SESSION_COOKIE_SECURE`. The egress consent cookie uses the same rule, on its set and on its expiry.
+
 **Important**:
-- If `SESSION_COOKIE_SECURE=true` but `is_https=False`, the secure flag will NOT be set
-- This prevents login failures when HTTPS termination is misconfigured
+- On plain HTTP the Secure flag is never set, whatever `SESSION_COOKIE_SECURE` says, so a misconfigured HTTPS termination does not break login.
 - Check server logs for `is_https=True` in production to verify HTTPS detection is working
 
 ### Cookie Security Flags
@@ -78,11 +83,14 @@ The implementation sets the following security flags on all session cookies:
 
 | Flag | Value | Purpose |
 |------|-------|---------|
-| `httponly` | `True` | Prevents JavaScript access, mitigating XSS attacks |
-| `samesite` | `"lax"` | Provides CSRF protection while allowing cross-site navigation |
-| `secure` | Configurable | Ensures HTTPS-only transmission in production |
+| `httponly` | `True` (fixed) | Prevents JavaScript access, mitigating XSS attacks |
+| `samesite` | `"lax"` (fixed) | Provides CSRF protection while allowing the login's cross-site redirect |
+| `secure` | `SESSION_COOKIE_SECURE`, on HTTPS only | Ensures HTTPS-only transmission in production |
+| `max_age` | `SESSION_MAX_AGE_SECONDS` | Ends the browser session when the stored session ends |
 | `path` | `"/"` | Explicitly scopes cookie to entire domain |
 | `domain` | Configurable | Enables cross-subdomain sharing when needed |
+
+On the Helm stack chart, the stack sets the Secure flag, the lifetime and the domain once for both the registry and the auth-server (`global.sessionCookieSecure`, `global.sessionMaxAgeSeconds`, `global.sessionCookieDomain`), because the two must agree, and refuses to render when a subchart's `app.` key for one of them is set to a different value. The registry and auth-server charts installed on their own read their `app.` keys instead, when no global is set. See [the parameter reference](../unified-parameter-reference.md) for every surface.
 
 <a id="duplicate-session-cookies"></a>
 ### Duplicate session cookies
@@ -95,13 +103,13 @@ Both services read every `Cookie` header field, not only the first. HTTP/2 lets 
 
 In the registry a read that bypasses the shared reader fails closed. `SessionCookieIsolationMiddleware` in `registry/auth/session_cookie.py` is the outermost of the registry's own middleware, so it runs before the audit middleware, every other registry middleware and every route. It reads the session cookie once through the shared reader, caches the result in the request scope, and removes every session cookie pair from the `Cookie` header fields it passes on, for HTTP requests and WebSocket handshakes alike. Every other cookie, the egress consent cookies included, keeps its bytes. `request_session_cookie` answers from the cache, while `request.cookies.get(settings.session_cookie_name)` or a FastAPI `Cookie(alias=...)` parameter gets None. OpenTelemetry's ASGI middleware, which `FastAPIInstrumentor.instrument_app` or the `opentelemetry-instrument` wrapper adds, wraps the whole app and runs first, so it sees the raw `Cookie` header. It records request headers only when `OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_REQUEST` lists them. Never list `Cookie` there, in either service: every span would carry the session cookie. No compose file, Helm chart, Terraform module or `.env.example` in this repository sets that variable.
 
-A browser that sends a duplicated session cookie is signed out. `SessionCookieIsolationMiddleware` adds the expiry of the host-only cookie and the one on `SESSION_COOKIE_DOMAIN`, both at `Path=/`, to every response the registry gives such a request (a 401 from a session check, a 403 from CSRF, the dashboard's redirect to `/login`), unless the response already sets or expires the session cookie, as logout does on every sign-out.
+A browser that sends a duplicated session cookie is signed out. `SessionCookieIsolationMiddleware` adds the expiry of the host-only cookie and the one on `SESSION_COOKIE_DOMAIN`, both at `Path=/`, to every response the registry gives such a request (a 401 from a session check, a 403 from CSRF, the dashboard's redirect to `/login`), unless the response already sets or expires the session cookie, as logout does on every sign-out. A login that sets the cookie on `SESSION_COOKIE_DOMAIN` also expires the host-only one. A host-only login happens only when `SESSION_COOKIE_DOMAIN` is empty, so it has no configured domain to expire.
 
 CSRF never skips a request that carries the session cookie. `verify_csrf_token_flexible` and `verify_csrf_token_header_only` in `registry/auth/csrf.py` skip the check only when the request has no session cookie at all, as a bearer-only client does. A request with the cookie, sent once or more, must resolve to a session and present that session's token, or it gets a 403. Skipping CSRF because the registry could not resolve a cookie would rest on `/validate` agreeing that the cookie is no session, and a transient session store error in the registry breaks that agreement.
 
 Logout with a duplicated session cookie also ends the server-side sessions behind it. It checks each copy's signature with the session signer and deletes the session of every copy that verifies and names a live session; an unsigned, forged or expired copy is ignored. Neither copy counts as the caller's session, so this logout starts no sign-out at the identity provider. The browser's logout link is a `GET`, which needs no authentication or CSRF token, so the registry reads the session store once per distinct copy and for at most 8 distinct copies, in the order they arrived. When a request carries more, the registry logs how many it ignored. The log records how many copies came and how many sessions were deleted, never a value. A logout `POST` with a duplicated cookie fails CSRF, gets the expiries, and ends no session.
 
-Changing `SESSION_COOKIE_DOMAIN` can leave a second cookie in a browser. A move from host-only to a domain fixes itself: the registry expires both copies on its next response, and the user signs in again. A move from one domain to another, or from a domain back to host-only, leaves the old domain's cookie in place, because the gateway no longer knows that domain and cannot expire it. Under nginx, `/validate` refuses most such requests before they reach the registry, so the browser's cookies change at the next sign-in or sign-out.
+Changing `SESSION_COOKIE_DOMAIN` can leave a second cookie in a browser. A move from host-only to a domain fixes itself at the next login. A move from one domain to another, or from a domain back to host-only, leaves the old domain's cookie in place, because the gateway no longer knows that domain and cannot expire it. Under nginx, `/validate` refuses most such requests before they reach the registry, so the browser's cookies change at the next sign-in or sign-out.
 
 A cookie another host tosses on a parent domain the gateway does not name, beside the gateway's host-only cookie, is worse. The gateway cannot expire a cookie on a domain it does not name, and every new login sets the gateway's cookie beside it again, so the user is signed out on every request until they clear the site's cookies in the browser or the tossed cookie expires.
 
@@ -128,10 +136,10 @@ This design is **SAFE** for:
    - Local development on `localhost` via HTTP
    - Configuration:
      ```bash
-     SESSION_COOKIE_SECURE=false  # MUST be false for HTTP
+     SESSION_COOKIE_SECURE=true   # The default; the cookie is never Secure on plain HTTP
      SESSION_COOKIE_DOMAIN=       # Leave unset/empty
      ```
-   - **Important:** Setting `SESSION_COOKIE_SECURE=true` on localhost will cause login to fail because cookies with `secure=true` are only sent over HTTPS, and localhost typically runs over HTTP.
+   - On plain HTTP the session cookie never carries Secure, so `SESSION_COOKIE_SECURE=true` does not break a localhost login.
 
 ### ⚠️ Unsafe Deployment Scenarios
 
@@ -176,7 +184,7 @@ If you need multi-tenant deployment, consider these alternatives:
 ### 1. Session Hijacking (MITM)
 - **Threat:** Attacker intercepts session cookies over unencrypted HTTP
 - **Mitigation:** `secure=True` flag in production
-- **Status:** ✅ Mitigated when `SESSION_COOKIE_SECURE=true`
+- **Status:** ✅ Mitigated on HTTPS unless `SESSION_COOKIE_SECURE` is `false`
 
 ### 2. Cross-Site Scripting (XSS)
 - **Threat:** Malicious JavaScript reads session cookies
@@ -185,8 +193,8 @@ If you need multi-tenant deployment, consider these alternatives:
 
 ### 3. Cross-Site Request Forgery (CSRF)
 - **Threat:** Malicious site triggers authenticated requests
-- **Mitigation:** `samesite="lax"` flag
-- **Status:** ✅ Always mitigated
+- **Mitigation:** a CSRF token bound to the session (`registry/auth/csrf.py`), required on every request that carries the session cookie; `samesite="lax"` is a second layer
+- **Status:** ✅ Mitigated on every route that depends on the CSRF check
 
 ### 4. Subdomain Cookie Theft (Single-Tenant)
 - **Threat:** Attacker controls a subdomain and steals cookies
@@ -239,23 +247,15 @@ AUTH_SERVER_EXTERNAL_URL=https://auth.example.com  # External URL
 
 The cookie security implementation is found in:
 
-- **Configuration:** `registry/core/config.py`
-  - `session_cookie_secure`: Controls HTTPS-only flag
-  - `session_cookie_domain`: Controls cross-subdomain sharing
+- **Configuration:** `registry/core/config.py`, read by both services
+  - `session_cookie_secure`, `session_cookie_domain`, `session_max_age_seconds` and `session_cookie_name`
 
-- **Auth Server Cookie Setting:** `auth_server/server.py` (lines 1800-1831)
-  - X-Forwarded-Proto detection for HTTPS termination at load balancer
-  - Explicit configuration only - no automatic domain inference
-  - Conditional secure flag based on both config AND actual protocol
-  - All security flags properly set
-
-- **Registry Cookie Setting:** `registry/auth/routes.py` (lines 139-158)
-  - Comprehensive security comments explaining single-tenant model
-  - Conditional domain attribute application
-  - All security flags properly set
-
-- **Shared reader:** `registry/common/session_cookie.py`
+- **Shared attributes and reader:** `registry/common/session_cookie.py`
+  - `session_cookie_attributes`: the set attributes and the expiry of every variant
   - `single_session_cookie` and `join_cookie_fields`: the one reader of the `Cookie` header
+
+- **Auth server cookie setting:** `oauth2_callback` in `auth_server/server.py`
+  - Sets the cookie with `session_cookie_attributes` and expires the other variant (`_expire_other_session_cookie_variant`)
 
 - **Registry read and expiry:** `registry/auth/session_cookie.py`
   - `request_session_cookie`, `clear_session_cookie` and `SessionCookieIsolationMiddleware`
@@ -267,14 +267,13 @@ The cookie security implementation is found in:
 The auth server logs detailed cookie configuration for debugging:
 
 ```python
-logger.info(f"Auth server setting session cookie: secure={cookie_secure} (config={cookie_secure_config}, is_https={is_https}), samesite={cookie_samesite}, domain={cookie_domain or 'not set'}, x-forwarded-proto={x_forwarded_proto}, request_scheme={request.url.scheme}")
+logger.info(f"Auth server setting session cookie: secure={cookie.set_cookie['secure']}, is_https={is_https}, domain={'configured' if cookie.set_cookie['domain'] else 'not set'}, x-forwarded-proto={request.headers.get('x-forwarded-proto', 'not set')}, request_scheme={request.url.scheme}")
 ```
 
 Key logging details:
-- **secure**: Final secure flag value (after protocol detection)
-- **config**: Configured SESSION_COOKIE_SECURE value
+- **secure**: The Secure flag the login sent, from `session_cookie_secure_flag`
 - **is_https**: Whether the original request was HTTPS (based on X-Forwarded-Proto or request scheme)
-- **domain**: Configured domain or "not set"
+- **domain**: Whether `SESSION_COOKIE_DOMAIN` is set
 - **x-forwarded-proto**: Load balancer protocol header
 - **request_scheme**: Direct request protocol
 

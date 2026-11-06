@@ -10,6 +10,7 @@ used for backward compatibility. Relative paths are always allowed.
 
 import pytest
 
+import auth_server.server as server
 from auth_server.server import (
     _evaluate_redirect,
     _get_allowed_redirect_uris,
@@ -83,7 +84,7 @@ class TestRedirectAllowlisted:
         )
         # A cookie domain that WOULD admit a malicious subdomain under the weak
         # fallback -- proving the allowlist overrides it.
-        monkeypatch.setenv("SESSION_COOKIE_DOMAIN", ".example.com")
+        monkeypatch.setattr(server.settings, "session_cookie_domain", ".example.com")
 
     def test_exact_match_allowed(self):
         assert _is_redirect_uri_allowed("https://registry.example.com/") is True
@@ -125,7 +126,7 @@ class TestRedirectFallbackWhenAllowlistUnset:
     @pytest.fixture(autouse=True)
     def _configure(self, monkeypatch):
         monkeypatch.delenv("OAUTH2_ALLOWED_REDIRECT_URIS", raising=False)
-        monkeypatch.setenv("SESSION_COOKIE_DOMAIN", ".example.com")
+        monkeypatch.setattr(server.settings, "session_cookie_domain", ".example.com")
 
     def test_within_cookie_domain_allowed(self):
         # Backward-compatible weak mode: any host within the cookie domain is
@@ -149,7 +150,7 @@ class TestEvaluateRedirectReason:
     @pytest.fixture(autouse=True)
     def _configure(self, monkeypatch):
         monkeypatch.setenv("OAUTH2_ALLOWED_REDIRECT_URIS", "https://registry.example.com/")
-        monkeypatch.delenv("SESSION_COOKIE_DOMAIN", raising=False)
+        monkeypatch.setattr(server.settings, "session_cookie_domain", None)
 
     def test_relative_allowed_reason(self):
         assert _evaluate_redirect("/dashboard") == (True, "relative")

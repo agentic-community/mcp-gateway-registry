@@ -1,9 +1,11 @@
-"""The session cookie name and reader, shared by the registry and the auth server.
+"""The session cookie name, attributes and reader, shared by the registry and the auth server.
 
 The auth server sets the session cookie at login and reads it at ``/validate``;
 the registry reads it on every browser request and deletes it at logout. Both
 must use one name, so both take it from ``Settings.session_cookie_name``
-(``SESSION_COOKIE_NAME``, checked by ``check_session_cookie_name``).
+(``SESSION_COOKIE_NAME``, checked by ``check_session_cookie_name``). Both set
+and expire it with the attributes ``session_cookie_attributes`` returns, so a
+browser matches every expiry to the cookie the login set.
 
 Both must also agree on which cookie is the session when the ``Cookie`` header
 carries the name more than once, so both read it with ``single_session_cookie``
@@ -21,10 +23,22 @@ This module imports no settings, so it works from its inputs only.
 """
 
 import logging
+from typing import (
+    Any,
+    NamedTuple,
+)
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_SESSION_COOKIE_NAME: str = "mcp_gateway_session"
+# The session cookie's SameSite and HttpOnly attributes are fixed, not settings.
+# SameSite must be Lax: the login callback sets the cookie on a top-level
+# cross-site navigation back from the identity provider, and a browser drops a
+# Strict cookie there, so nobody could sign in. CSRF is defended by the CSRF
+# token, not by SameSite=Strict. HttpOnly keeps the cookie away from scripts on
+# the page.
+SESSION_COOKIE_SAMESITE: str = "lax"
+SESSION_COOKIE_HTTPONLY: bool = True
 # Browsers give names starting with these special rules (matched without regard
 # to case), so a configured name must not start with one.
 _RESERVED_COOKIE_PREFIXES: tuple[str, ...] = ("__host-", "__secure-")
@@ -80,11 +94,11 @@ def session_cookie_secure_flag(
     is_https: bool,
     setting_secure: bool,
 ) -> bool:
-    """Return whether an expiry of the session cookie, or a consent cookie, carries Secure.
+    """Return whether a Set-Cookie of the session cookie, or its expiry, carries Secure.
 
-    The registry's expiries of the session cookie and the egress consent
-    cookie's set and expiry use this flag. On HTTPS a cookie is Secure exactly
-    when ``SESSION_COOKIE_SECURE`` is true. On plain HTTP it is never Secure,
+    Both services send every set and every expiry of the session cookie with
+    this flag. On HTTPS the cookie is Secure exactly when
+    ``SESSION_COOKIE_SECURE`` is true. On plain HTTP it is never Secure,
     because a browser drops a Secure Set-Cookie sent over HTTP.
 
     Args:
@@ -95,6 +109,72 @@ def session_cookie_secure_flag(
         True when the cookie is Secure.
     """
     return is_https and setting_secure
+
+
+class SessionCookieAttributes(NamedTuple):
+    """How to set the session cookie, and how to expire every copy a browser may hold.
+
+    Attributes:
+        set_cookie: Keyword arguments for ``Response.set_cookie``; add ``value``.
+        expiries: Keyword arguments for ``Response.delete_cookie``, one per
+            cookie a browser keeps under the name at Path=/: the host-only one,
+            then the one on ``SESSION_COOKIE_DOMAIN`` when it is set.
+    """
+
+    set_cookie: dict[str, Any]
+    expiries: tuple[dict[str, Any], ...]
+
+    def expiries_of_other_variants(self) -> tuple[dict[str, Any], ...]:
+        """Return the expiries of every variant except the one ``set_cookie`` sets.
+
+        A login sends these beside its cookie, so a browser that kept the other
+        variant from before a ``SESSION_COOKIE_DOMAIN`` change does not send two.
+        """
+        return tuple(
+            expiry for expiry in self.expiries if expiry["domain"] != self.set_cookie["domain"]
+        )
+
+
+def session_cookie_attributes(
+    name: str,
+    is_https: bool,
+    secure: bool,
+    domain: str | None,
+    max_age: int,
+) -> SessionCookieAttributes:
+    """Return the attributes both services set and expire the session cookie with.
+
+    A browser ignores an expiry unless its name, Domain and Path match the
+    cookie's, and keeps a host-only cookie and one with a Domain as two cookies.
+    The cookie has Path=/, the Domain ``SESSION_COOKIE_DOMAIN`` names,
+    SameSite=Lax, HttpOnly, and the Secure flag of
+    ``session_cookie_secure_flag``. Each expiry carries the same attributes.
+
+    Args:
+        name: The session cookie name.
+        is_https: Whether the browser reached the gateway over HTTPS.
+        secure: The ``SESSION_COOKIE_SECURE`` value.
+        domain: The ``SESSION_COOKIE_DOMAIN`` value, or None when unset.
+        max_age: The ``SESSION_MAX_AGE_SECONDS`` value.
+
+    Returns:
+        The set attributes and the expiry of every variant.
+    """
+    cookie_domain = (domain or "").strip() or None
+    shared: dict[str, Any] = {
+        "key": name,
+        "path": "/",
+        "secure": session_cookie_secure_flag(is_https, secure),
+        "httponly": SESSION_COOKIE_HTTPONLY,
+        "samesite": SESSION_COOKIE_SAMESITE,
+    }
+    expiries = [{**shared, "domain": None}]
+    if cookie_domain is not None:
+        expiries.append({**shared, "domain": cookie_domain})
+    return SessionCookieAttributes(
+        set_cookie={**shared, "domain": cookie_domain, "max_age": max_age},
+        expiries=tuple(expiries),
+    )
 
 
 def join_cookie_fields(

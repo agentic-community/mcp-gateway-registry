@@ -135,7 +135,9 @@ from registry.common.request_origin import (
 from registry.common.scopes_loader import reload_scopes_config
 from registry.common.secret_key import validate_secret_key, validate_signing_secret
 from registry.common.session_cookie import (
+    SessionCookieAttributes,
     join_cookie_fields,
+    session_cookie_attributes,
     session_cookie_values,
     single_session_cookie,
 )
@@ -1331,6 +1333,28 @@ def _refuse_cross_origin_cookie_request(
     )
 
 
+def _expire_other_session_cookie_variant(
+    response: Response,
+    cookie: SessionCookieAttributes,
+) -> None:
+    """Expire the host-only session cookie when the login callback set one with a Domain.
+
+    A browser keeps a host-only cookie and one with a Domain as two cookies, so
+    after ``SESSION_COOKIE_DOMAIN`` changes from empty to a domain it would send
+    both, and both services refuse a duplicated session cookie. The login takes
+    its Domain from ``SESSION_COOKIE_DOMAIN``, so a host-only login has no
+    configured domain whose cookie it could expire. A domain the deployment no
+    longer names, or one another host under the parent domain set, is unknown
+    here and stays.
+
+    Args:
+        response: The login callback response.
+        cookie: The session cookie attributes the login set the cookie with.
+    """
+    for expiry in cookie.expiries_of_other_variants():
+        response.delete_cookie(**expiry)
+
+
 def _generic_write_csrf_refused(
     is_generic_request: bool,
     http_verb: str,
@@ -1971,7 +1995,9 @@ def _evaluate_redirect(
             return True, "allowlist_match"
         return False, "not_in_allowlist"
 
-    cookie_domain = os.environ.get("SESSION_COOKIE_DOMAIN", "").strip()
+    # The login sets the session cookie on settings.session_cookie_domain, which
+    # also loads .env; os.environ would miss a domain set only there.
+    cookie_domain = (settings.session_cookie_domain or "").strip()
     allowed = _is_redirect_within_cookie_domain(url, cookie_domain, request)
     return allowed, "cookie_domain"
 
@@ -2325,9 +2351,10 @@ async def validate_session_cookie(cookie_value: str) -> dict[str, Any]:
         raise ValueError("Session cookie validation not configured")
 
     try:
-        # Decrypt cookie (max_age=28800 for 8 hours). The cookie now carries
-        # only an opaque session_id; the full record lives server-side.
-        payload = signer.loads(cookie_value, max_age=28800)
+        # The cookie carries only an opaque session_id; the full record lives
+        # server-side. SESSION_MAX_AGE_SECONDS bounds the signature's age, as
+        # in the registry.
+        payload = signer.loads(cookie_value, max_age=settings.session_max_age_seconds)
 
         # Reject legacy dict-payload cookies (forces re-login post-rollout).
         if not isinstance(payload, str):
@@ -6605,12 +6632,69 @@ def _resolve_okta_endpoints(
             okta[field] = Template(okta[field]).safe_substitute(OKTA_OAUTH2_BASE_URL=base)
 
 
+# The one session key oauth2_providers.yml ships, as shipped. It expands to
+# SESSION_COOKIE_DOMAIN, so it cannot disagree with the domain the login uses.
+_SESSION_DOMAIN_PLACEHOLDER: str = "${SESSION_COOKIE_DOMAIN}"
+# Every session cookie key an edited yml may still set, with what decides it now.
+_IGNORED_SESSION_KEYS: dict[str, str] = {
+    "secure": "set SESSION_COOKIE_SECURE",
+    "max_age_seconds": "set SESSION_MAX_AGE_SECONDS",
+    "cookie_name": "set SESSION_COOKIE_NAME",
+    "domain": "set SESSION_COOKIE_DOMAIN",
+    "samesite": "always SameSite=Lax",
+    "httponly": "always HttpOnly",
+}
+
+
+def _check_provider_session_block(
+    oauth2_config: dict[str, Any],
+) -> None:
+    """Refuse an oauth2_providers.yml ``session`` block that sets a cookie key the login ignores.
+
+    The shared settings are the one source of the session cookie, and SameSite
+    and HttpOnly are fixed, so a yml value would be ignored without notice.
+    The yml ships in the image and no deployment surface mounts it, so only an
+    operator who mounts an edited copy reaches this. The shipped
+    ``domain: "${SESSION_COOKIE_DOMAIN}"``, or an empty domain, loads.
+
+    Args:
+        oauth2_config: The provider configuration before environment expansion.
+
+    Raises:
+        ValueError: The block sets one of the keys; the message names each one
+            and the variable to set instead.
+    """
+    session = oauth2_config.get("session") or {}
+    ignored = [
+        key
+        for key in _IGNORED_SESSION_KEYS
+        if key in session
+        and not (
+            key == "domain" and str(session[key] or "").strip() in ("", _SESSION_DOMAIN_PLACEHOLDER)
+        )
+    ]
+    if ignored:
+        listed = "; ".join(f"session.{key} ({_IGNORED_SESSION_KEYS[key]})" for key in ignored)
+        raise ValueError(
+            "oauth2_providers.yml sets session cookie keys the auth server does not read: "
+            f"{listed}. Remove them from the session block, keep "
+            f'domain: "{_SESSION_DOMAIN_PLACEHOLDER}" as shipped, and set the variables on '
+            "the registry and the auth server."
+        )
+
+
 # Load OAuth2 providers configuration
 def load_oauth2_config():
-    """Load the OAuth2 providers configuration from oauth2_providers.yml"""
+    """Load the OAuth2 providers configuration from oauth2_providers.yml.
+
+    Raises:
+        ValueError: The configuration is unusable, for example a ``session``
+            block that sets a session cookie key the settings own.
+    """
     oauth2_file = Path(__file__).parent / "oauth2_providers.yml"
     with open(oauth2_file) as f:
         config = yaml.safe_load(f)
+    _check_provider_session_block(config)
 
     # Resolve only an active Entra provider; disabled settings cannot break
     # another IdP's login. Active Entra misconfiguration fails at startup.
@@ -7688,7 +7772,7 @@ async def oauth2_callback(
         # session_id in the browser cookie. This prevents cookie-size failures
         # for IdPs that return large groups claims (e.g. Entra ID with many
         # group memberships) and keeps id_token off the client entirely.
-        session_max_age = OAUTH2_CONFIG.get("session", {}).get("max_age_seconds", 28800)
+        session_max_age = settings.session_max_age_seconds
         # id_token is encrypted at rest server-side and required for OIDC SSO
         # logout (id_token_hint).
         from session_store import create_session
@@ -7729,54 +7813,25 @@ async def oauth2_callback(
             redirect_url = "/"
         response = RedirectResponse(url=redirect_url, status_code=302)
 
-        # Set registry-compatible session cookie
-        # Check if HTTPS is terminated at load balancer/CloudFront
+        # Set registry-compatible session cookie. HTTPS may be terminated at a
+        # load balancer or CloudFront, which is_request_https accounts for.
         is_https = is_request_https(request)
-
-        # Secure-by-default: the Secure flag is enabled unless an operator has
-        # explicitly set session.secure to false for a plain-HTTP local dev
-        # stack. A missing config key must NOT silently drop the flag, so the
-        # code-level fallback is True (fail closed). The flag is only actually
-        # emitted when the inbound request is HTTPS, because a browser rejects a
-        # Secure Set-Cookie sent over plain HTTP.
-        cookie_secure_config = OAUTH2_CONFIG.get("session", {}).get("secure", True)
-        cookie_secure = cookie_secure_config and is_https
-        # SameSite MUST remain "lax" for the OAuth login flow. The session
-        # cookie is set on the callback response, which is reached via a
-        # top-level cross-site navigation from the IdP. A "strict" cookie is
-        # NOT sent on such cross-site navigations, so the browser would drop it
-        # and login would silently fail. Do not "harden" this to Strict; CSRF
-        # is defended separately by the CSRF token, not by SameSite=Strict.
-        cookie_samesite = OAUTH2_CONFIG.get("session", {}).get("samesite", "lax")
-        cookie_domain = OAUTH2_CONFIG.get("session", {}).get("domain", "")
-
-        # Handle domain configuration - only use explicitly configured values
-        # Empty string or placeholder means no domain attribute (exact host only)
-        if not cookie_domain or cookie_domain == "${SESSION_COOKIE_DOMAIN}":
-            cookie_domain = None
-            logger.info("No cookie domain configured - cookie will be set for exact host only")
-        else:
-            logger.info("Using explicitly configured cookie domain")
-
-        logger.info(
-            f"Auth server setting session cookie: is_https={is_https}, domain={'configured' if cookie_domain else 'not set'}, x-forwarded-proto={request.headers.get('x-forwarded-proto', 'not set')}, request_scheme={request.url.scheme}"
+        # Every attribute, and the expiry of the other variant, comes from the
+        # function the registry's expiries use: SESSION_COOKIE_NAME, Path=/,
+        # SESSION_COOKIE_DOMAIN, Secure from SESSION_COOKIE_SECURE on HTTPS,
+        # SameSite=Lax, HttpOnly, and Max-Age SESSION_MAX_AGE_SECONDS.
+        cookie = session_cookie_attributes(
+            name=settings.session_cookie_name,
+            is_https=is_https,
+            secure=settings.session_cookie_secure,
+            domain=settings.session_cookie_domain,
+            max_age=session_max_age,
         )
-
-        cookie_params = {
-            "key": settings.session_cookie_name,  # SESSION_COOKIE_NAME, as the registry reads it
-            "value": registry_session,
-            "max_age": session_max_age,
-            "httponly": OAUTH2_CONFIG.get("session", {}).get("httponly", True),
-            "samesite": cookie_samesite,
-            "secure": cookie_secure,
-            "path": "/",  # Ensure cookie is sent for all paths
-        }
-
-        # Only set domain if configured or inferred (for cross-subdomain cookies)
-        if cookie_domain:
-            cookie_params["domain"] = cookie_domain
-
-        response.set_cookie(**cookie_params)
+        logger.info(
+            f"Auth server setting session cookie: secure={cookie.set_cookie['secure']}, is_https={is_https}, domain={'configured' if cookie.set_cookie['domain'] else 'not set'}, x-forwarded-proto={request.headers.get('x-forwarded-proto', 'not set')}, request_scheme={request.url.scheme}"
+        )
+        response.set_cookie(value=registry_session, **cookie.set_cookie)
+        _expire_other_session_cookie_variant(response, cookie)
 
         # Clear temporary OAuth2 session. The cookie was set without a
         # domain attribute, so delete must also omit domain to match.

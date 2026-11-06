@@ -96,6 +96,52 @@ subcharts render.
 {{- end -}}
 
 {{/*
+A value as a string for comparison. A whole number read from a values file
+arrives as a float, so 28800 from a file, 28800 from --set and "28800" all
+compare equal, and a large one is not written with an exponent.
+*/}}
+{{- define "mcp-gateway-registry-stack.valueString" -}}
+{{- if and (kindIs "float64" .) (eq . (float64 (int64 .))) -}}
+{{- int64 . -}}
+{{- else -}}
+{{- toString . -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Refuse a subchart-level session setting that differs from its global. The
+registry and the auth-server must agree on every one: the auth-server stores
+the session and sets the cookie's name, Domain, Max-Age and Secure attribute,
+and the registry reads, checks and expires the same cookie. A split domain
+leaves the browser two cookies, which both services refuse, so the user is
+signed out on every request. Both subcharts render each setting from
+global.<setting>, so the stack requires the globals, and a differing override
+is ignored by the subcharts and would read as if it took effect, so name it
+instead. An empty override is a subchart default (app.sessionCookieDomain
+ships empty) and is ignored. The registry has no app key for the Secure flag.
+*/}}
+{{- define "mcp-gateway-registry-stack.validateSessionSettings" -}}
+{{- $checks := list (list "registry" "sessionMaxAgeSeconds" "SESSION_MAX_AGE_SECONDS") (list "auth-server" "sessionMaxAgeSeconds" "SESSION_MAX_AGE_SECONDS") (list "auth-server" "sessionCookieSecure" "SESSION_COOKIE_SECURE") (list "registry" "sessionCookieDomain" "SESSION_COOKIE_DOMAIN") (list "auth-server" "sessionCookieDomain" "SESSION_COOKIE_DOMAIN") -}}
+{{- range $check := $checks -}}
+{{- $chart := index $check 0 -}}
+{{- $key := index $check 1 -}}
+{{- $envName := index $check 2 -}}
+{{- $global := index $.Values.global $key -}}
+{{- if kindIs "invalid" $global -}}
+{{- fail (printf "global.%s is not set. The stack sets %s for the registry and the auth-server from global.%s, so the two cannot disagree. Set global.%s." $key $envName $key $key) -}}
+{{- end -}}
+{{- $globalText := include "mcp-gateway-registry-stack.valueString" $global -}}
+{{- $override := dig "app" $key nil (index $.Values $chart | default dict) -}}
+{{- if not (kindIs "invalid" $override) -}}
+{{- $overrideText := include "mcp-gateway-registry-stack.valueString" $override -}}
+{{- if and (ne $overrideText "") (ne $overrideText $globalText) -}}
+{{- fail (printf "%s.app.%s is %s but global.%s is %s. The stack sets %s for the registry and the auth-server from global.%s only, so the two cannot disagree. Remove %s.app.%s and set global.%s." $chart $key $overrideText $key ($globalText | default "empty") $envName $key $chart $key $key) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Guard chart-generated random secret value.
 
 `global.generateSecrets: true` (the default) generates a random value,

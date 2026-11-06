@@ -295,6 +295,13 @@ export interface SessionConfig {
   /** Domain for session cookies */
   cookieDomain: string;
   /**
+   * Browser session lifetime in seconds: the auth server's session store TTL,
+   * the session cookie's Max-Age, and the registry's cookie signature max age.
+   * Rendered into both services' environments so the two always match. Must be
+   * a positive integer; both services refuse to start otherwise.
+   */
+  maxAgeSeconds: number;
+  /**
    * Comma-separated exact-match allowlist of OAuth login/logout redirect URIs
    * (open-redirect hardening). When set, an absolute redirect_uri is accepted
    * only if it exactly matches an entry; relative paths are always allowed.
@@ -589,6 +596,7 @@ export const DEFAULT_REGISTRY_CONFIG: RegistryConfig = {
   session: {
     cookieSecure: true,
     cookieDomain: '',
+    maxAgeSeconds: 28800,
     oauth2AllowedRedirectUris: '',
     oauthStoreTokensInSession: false,
   },
@@ -734,6 +742,16 @@ export function loadRegistryConfig(configPath: string): RegistryConfig {
         'Set them as environment variables before running cdk synth/deploy.',
       );
     }
+  }
+
+  // Both services refuse to start on a non-positive session lifetime; fail
+  // at synth instead of as crash-looping tasks.
+  const sessionMaxAge = config.session.maxAgeSeconds;
+  if (!Number.isInteger(sessionMaxAge) || sessionMaxAge <= 0) {
+    throw new Error(
+      `session.maxAgeSeconds must be a positive integer number of seconds (for example 28800 for 8 hours), got ${JSON.stringify(sessionMaxAge)}. ` +
+      'The registry and auth-server refuse to start on 0, a negative, or a non-integer value.',
+    );
   }
 
   // Keycloak sslRequired=external blocks admin ops over plain HTTP, so a
