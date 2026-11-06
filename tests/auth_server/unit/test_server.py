@@ -998,6 +998,90 @@ class TestValidateEndpoint:
             assert data["username"] == "testuser"
 
     @patch("auth_server.server.get_auth_provider")
+    def test_validate_ignores_forged_cognito_headers(
+        self,
+        mock_get_provider,
+        mock_cognito_provider,
+        auth_env_vars,
+        mock_scope_repository_with_data,
+    ):
+        """A request with forged X-User-Pool-Id/X-Client-Id/X-Region validates as one without."""
+        mock_get_provider.return_value = mock_cognito_provider
+        import auth_server.server as server_module
+
+        request_headers = {
+            "Authorization": "Bearer test-token",
+            "X-Original-URL": "https://example.com/test-server/mcp",
+        }
+        forged = {
+            "X-User-Pool-Id": "us-east-1_ATTACKERPOOL",
+            "X-Client-Id": "attacker-client",
+            "X-Region": "eu-west-1",
+        }
+        identity_headers = ("x-user", "x-username", "x-client-id", "x-scopes", "x-auth-method")
+        with patch(
+            "auth_server.server.get_scope_repository", return_value=mock_scope_repository_with_data
+        ):
+            client = TestClient(server_module.app)
+            plain = client.get("/validate", headers=request_headers)
+            with_forged = client.get("/validate", headers={**request_headers, **forged})
+
+        assert (with_forged.status_code, with_forged.json()) == (plain.status_code, plain.json())
+        assert {h: with_forged.headers.get(h) for h in identity_headers} == {
+            h: plain.headers.get(h) for h in identity_headers
+        }
+        assert (
+            mock_cognito_provider.validate_token.call_args_list[0]
+            == (mock_cognito_provider.validate_token.call_args_list[1])
+        )
+
+    @patch("auth_server.server.get_auth_provider")
+    def test_validate_refuses_a_provider_without_validate_token(
+        self,
+        mock_get_provider,
+        auth_env_vars,
+        mock_scope_repository_with_data,
+    ):
+        """A provider that cannot validate tokens fails closed instead of trusting client headers.
+
+        The removed fallback validated the bearer against whatever Cognito pool
+        and client the request named, so a caller could pick a pool it controls.
+        """
+        import auth_server.server as server_module
+
+        mock_get_provider.return_value = MagicMock(spec=["get_provider_info"])
+        header_validator = MagicMock(
+            return_value={
+                "valid": True,
+                "method": "cognito",
+                "username": "attacker",
+                "groups": [],
+                "scopes": [],
+                "client_id": "attacker-client",
+                "data": {},
+            }
+        )
+        with (
+            patch.object(server_module.validator, "validate_token", header_validator),
+            patch(
+                "auth_server.server.get_scope_repository",
+                return_value=mock_scope_repository_with_data,
+            ),
+        ):
+            response = TestClient(server_module.app, raise_server_exceptions=False).get(
+                "/validate",
+                headers={
+                    "Authorization": "Bearer attacker-pool-token",
+                    "X-Original-URL": "https://example.com/test-server/mcp",
+                    "X-User-Pool-Id": "us-east-1_ATTACKERPOOL",
+                    "X-Client-Id": "attacker-client",
+                },
+            )
+
+        assert response.status_code == 500, response.text
+        header_validator.assert_not_called()
+
+    @patch("auth_server.server.get_auth_provider")
     def test_validate_a2a_agent_request_allowed(
         self,
         mock_get_provider,

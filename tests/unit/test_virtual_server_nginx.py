@@ -810,6 +810,30 @@ class TestGenerateVirtualBackendLocations:
         assert 'set $backend_url "https://plain.example.com/mcp";' in auth_block
 
     @pytest.mark.asyncio
+    async def test_backend_authorization_blanks_the_client_cognito_headers(
+        self, mock_server_repository
+    ):
+        """The per-backend /validate location sends no client X-User-Pool-Id or X-Client-Id.
+
+        It proxies straight to the auth server with the client's request headers,
+        so it blanks the headers the shared /validate location blanks.
+        """
+        from registry.core.nginx_service import NginxConfigService
+
+        mock_server_repository.get.return_value = {
+            "is_enabled": True,
+            "proxy_pass_url": "https://plain.example.com/mcp",
+        }
+        vs = _make_vs_config(
+            tool_mappings=[ToolMapping(tool_name="t", backend_server_path="/plain")]
+        )
+        result = await NginxConfigService()._generate_virtual_backend_locations([vs])
+        auth_block = result.split("location = /_vs_auth_plain {", 1)[1].split("\n    }", 1)[0]
+
+        for header in ("X-User-Pool-Id", "X-Client-Id", "X-Region"):
+            assert f'proxy_set_header {header} "";' in auth_block, header
+
+    @pytest.mark.asyncio
     async def test_paths_differing_only_in_punctuation_get_distinct_locations(
         self, mock_server_repository
     ):
