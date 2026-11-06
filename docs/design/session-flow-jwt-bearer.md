@@ -148,9 +148,7 @@ forwarding the upstream request to the registry.
 |--------|---------|
 | `X-Authorization` (preferred) or `Authorization` | The gateway ingress bearer token. `X-Authorization` is the canonical custom header; `Authorization` is accepted too. Both are **ingress-only** and stripped on the egress hop (issue #1266) — neither is forwarded to an upstream (except the internal `airegistry-tools` relay). |
 | `Cookie` | If a session cookie is present and no Authorization header is set, the cookie path is used (rare; mostly browser SSE). |
-| `X-User-Pool-Id` | Cognito-specific — required to validate Cognito tokens against the right user pool. |
-| `X-Client-Id` | Cognito-specific — used to set the audience constraint. |
-| `X-Region` | Cognito-specific — defaults to `us-east-1`. |
+| `X-User-Pool-Id`, `X-Client-Id`, `X-Region` | Not read. nginx sends all three empty on `/validate`, so a value a client sends (older clients in `agents/client.py` and `credentials-provider/` still send them) never reaches the auth server. The Cognito provider takes its pool, client and region from its own configuration. |
 | `X-Original-URL` | The URL nginx is about to proxy to. Used for scope-vs-server access checks. |
 | `X-Body` | Optional captured request body. Used by tool-level access control (#1026) to inspect JSON-RPC method arguments. |
 | `Mcp-Session-Id` | Optional MCP session id — passed through to the audit logger. |
@@ -333,7 +331,7 @@ no-access context. Federation static tokens use a separate routing path
 
 ### 6.2 Cognito
 
-- Requires `X-User-Pool-Id` and `X-Client-Id` headers from nginx.
+- Takes the user pool, client id and region from the auth server's own Cognito settings, never from request headers.
 - Validates against the user pool's JWKS endpoint.
 - The `cognito:groups` claim populates the `groups` claim of `X-Internal-Token-Registry`.
 

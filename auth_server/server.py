@@ -4275,17 +4275,19 @@ async def validate_request(request: Request):
     Validate a request by extracting configuration from headers and validating the bearer token.
 
     Expected headers:
-    - Authorization: Bearer <token>
-    - X-User-Pool-Id: <user_pool_id>
-    - X-Client-Id: <client_id>
-    - X-Region: <region> (optional, defaults to us-east-1)
+    - Authorization: Bearer <token> (or X-Authorization), or the session cookie
     - X-Original-URL: <original_url> (optional, for scope validation)
+
+    The configured provider validates a bearer token with its own settings. The
+    request never chooses them: X-User-Pool-Id, X-Client-Id and X-Region are
+    ignored, and nginx sends them empty.
 
     Returns:
         HTTP 200 with user info headers if valid, HTTP 401/403 if invalid
 
     Raises:
-        HTTPException: If the token is missing, invalid, or configuration is incomplete
+        HTTPException: If the token is missing or invalid, or the configured
+            provider cannot validate tokens (500).
     """
 
     # Capture start time for MCP audit logging
@@ -4363,9 +4365,6 @@ async def validate_request(request: Request):
             )
 
         cookie_header = request.headers.get("Cookie", "")
-        user_pool_id = request.headers.get("X-User-Pool-Id")
-        client_id = request.headers.get("X-Client-Id")
-        region = request.headers.get("X-Region", "us-east-1")
         body = request.headers.get("X-Body")
         # capture_body.lua sets this when the request body was too large to buffer
         # in memory and spilled to a temp file, so no X-Body could be captured.
@@ -4506,13 +4505,9 @@ async def validate_request(request: Request):
         # Log specific headers for debugging with masked sensitive data
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
-                "Key Headers: Authorization=%s, Cookie=%s, "
-                "User-Pool-Id=%s, Client-Id=%s, Region=%s, Original-URL=%s",
+                "Key Headers: Authorization=%s, Cookie=%s, Original-URL=%s",
                 bool(authorization),
                 bool(cookie_header),
-                mask_sensitive_id(user_pool_id) if user_pool_id else "None",
-                mask_sensitive_id(client_id) if client_id else "None",
-                region,
                 original_url,
             )
 
@@ -4814,29 +4809,13 @@ async def validate_request(request: Request):
                             f"Token validation successful using {auth_provider.__class__.__name__}"
                         )
                     else:
-                        # Fallback to old validation for compatibility
-                        if not user_pool_id:
-                            logger.warning("Missing X-User-Pool-Id header for Cognito validation")
-                            raise HTTPException(
-                                status_code=400,
-                                detail="Missing X-User-Pool-Id header",
-                                headers={"Connection": "close"},
-                            )
-
-                        if not client_id:
-                            logger.warning("Missing X-Client-Id header for Cognito validation")
-                            raise HTTPException(
-                                status_code=400,
-                                detail="Missing X-Client-Id header",
-                                headers={"Connection": "close"},
-                            )
-
-                        # Use old validator for backward compatibility
-                        validation_result = validator.validate_token(
-                            access_token=access_token,
-                            user_pool_id=user_pool_id,
-                            client_id=client_id,
-                            region=region,
+                        # Every provider in providers/factory.py implements
+                        # validate_token. One that does not cannot validate the
+                        # bearer, so refuse it rather than trusting anything the
+                        # request says about how to validate it.
+                        raise RuntimeError(
+                            f"authentication provider {auth_provider.__class__.__name__} "
+                            "has no validate_token; refusing the bearer token"
                         )
 
             except ValueError as e:
@@ -5786,13 +5765,9 @@ async def get_auth_config():
         else:
             return {
                 "auth_type": "cognito",
-                "description": "Header-based Cognito token validation",
-                "required_headers": [
-                    "Authorization: Bearer <token>",
-                    "X-User-Pool-Id: <pool_id>",
-                    "X-Client-Id: <client_id>",
-                ],
-                "optional_headers": ["X-Region: <region> (default: us-east-1)"],
+                "description": "Cognito JWT token validation",
+                "required_headers": ["Authorization: Bearer <token>"],
+                "optional_headers": [],
                 "provider_info": provider_info,
             }
     except Exception as e:

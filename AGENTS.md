@@ -403,9 +403,13 @@ working in those areas.
   reads) via one shared helper, not just the reported endpoint. Mutation success
   responses, webhooks, lifecycle events, and exports must project a fresh recursive
   token-free copy; never serialize the encrypted storage object directly.
-- **Tokens/JWT:** never derive `verify_aud`/issuer/alg from an unverified claim:
-  enforce audience against a config allowlist, fail closed. Never auto-grant
-  groups/admin from a code-shipped mapping (config-driven, fail closed).
+- **Tokens/JWT:** never derive `verify_aud`/issuer/alg from an unverified claim,
+  and never let a request header (or query or body field) select how a request
+  is authenticated: the provider, pool, client, issuer and JWKS a credential is
+  checked against come from server config only (the `/validate` Cognito fallback
+  took them from `X-User-Pool-Id`/`X-Client-Id`). Enforce audience against a
+  config allowlist, fail closed. Never auto-grant groups/admin from a
+  code-shipped mapping (config-driven, fail closed).
 - **Admin ops:** refuse self-delete + last-admin removal/demotion (fail closed if
   the admin population can't be counted); audit admin-tier grants. A config/secrets
   export must deny sensitive values by default. Gate them behind a SEPARATE

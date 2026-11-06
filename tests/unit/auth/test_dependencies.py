@@ -1371,7 +1371,6 @@ class TestNginxProxiedAuth:
             x_username=None,
             x_scopes=None,
             x_auth_method=None,
-            x_client_id=None,
         )
 
         assert context["username"] == "session_user"
@@ -1406,7 +1405,6 @@ class TestNginxProxiedAuth:
                 x_username=None,
                 x_scopes=None,
                 x_auth_method=None,
-                x_client_id=None,
             )
         assert exc_info.value.status_code == 401
 

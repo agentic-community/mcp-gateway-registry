@@ -811,7 +811,6 @@ async def nginx_proxied_auth(
     x_auth_method: Annotated[
         str | None, Header(alias="X-Auth-Method", include_in_schema=False)
     ] = None,
-    x_client_id: Annotated[str | None, Header(alias="X-Client-Id", include_in_schema=False)] = None,
     x_internal_token: Annotated[
         str | None, Header(alias="X-Internal-Token-Registry", include_in_schema=False)
     ] = None,

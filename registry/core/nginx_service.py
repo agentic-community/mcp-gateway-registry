@@ -2627,6 +2627,11 @@ class NginxConfigService:
         proxy_set_header X-Generic-Has-Upstream-Auth "";
         proxy_set_header X-Internal-Token-Generic "";
         proxy_set_header X-Internal-Token-Registry "";
+        # Sent empty, as in the shared /validate location: the auth server
+        # ignores them and a client value must never reach it.
+        proxy_set_header X-User-Pool-Id "";
+        proxy_set_header X-Client-Id "";
+        proxy_set_header X-Region "";
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Authorization $http_x_authorization;
