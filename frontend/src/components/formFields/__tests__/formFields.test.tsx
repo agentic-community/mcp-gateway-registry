@@ -41,8 +41,8 @@ describe('FormField', () => {
 
 describe('fieldClass', () => {
   it('adds the error border when flagged', () => {
-    expect(fieldClass(true)).toContain('border-red-500');
-    expect(fieldClass()).not.toContain('border-red-500');
+    expect(fieldClass(true)).toContain('border-danger-500');
+    expect(fieldClass()).not.toContain('border-danger-500');
   });
 });
 

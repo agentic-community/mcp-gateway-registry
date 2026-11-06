@@ -132,7 +132,7 @@ const RateLimitGroupsEditor: React.FC<RateLimitGroupsEditorProps> = ({
     return (
       <div className="flex flex-wrap gap-1 items-center">
         {isQuarantined && (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300">
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-danger-100 dark:bg-danger-900/30 text-danger-700 dark:text-danger-300">
             <NoSymbolIcon className="h-3 w-3" />
             quarantined
           </span>
@@ -140,7 +140,7 @@ const RateLimitGroupsEditor: React.FC<RateLimitGroupsEditorProps> = ({
         {rateChips.map((g) => (
           <span
             key={g}
-            className="inline-block px-2 py-0.5 text-xs rounded-full bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300"
+            className="inline-block px-2 py-0.5 text-xs rounded-full bg-info-100 dark:bg-info-900/30 text-info-700 dark:text-info-300"
           >
             {g}
           </span>
@@ -161,8 +161,8 @@ const RateLimitGroupsEditor: React.FC<RateLimitGroupsEditorProps> = ({
             disabled={isQuarantining}
             className={`p-1 disabled:opacity-50 ${
               isQuarantined
-                ? 'text-red-500 hover:text-red-700 dark:hover:text-red-300'
-                : 'text-fg-subtle hover:text-red-600 dark:hover:text-red-400'
+                ? 'text-danger-500 hover:text-danger-700 dark:hover:text-danger-300'
+                : 'text-fg-subtle hover:text-danger-600 dark:hover:text-danger-400'
             }`}
             title={
               isQuarantined
@@ -183,13 +183,13 @@ const RateLimitGroupsEditor: React.FC<RateLimitGroupsEditorProps> = ({
         {Array.from(selected).map((g) => (
           <span
             key={g}
-            className="inline-flex items-center px-2 py-1 text-xs bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 rounded-full"
+            className="inline-flex items-center px-2 py-1 text-xs bg-info-100 dark:bg-info-900/30 text-info-700 dark:text-info-300 rounded-full"
           >
             {g}
             <button
               type="button"
               onClick={() => removeGroup(g)}
-              className="ml-1 hover:text-blue-900 dark:hover:text-blue-100"
+              className="ml-1 hover:text-info-900 dark:hover:text-info-100"
             >
               <XMarkIcon className="h-3 w-3" />
             </button>

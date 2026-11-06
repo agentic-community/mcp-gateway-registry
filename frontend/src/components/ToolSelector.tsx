@@ -197,7 +197,7 @@ const ToolSelector: React.FC<ToolSelectorProps> = ({
           )}
 
           {error && (
-            <div className="p-4 text-center text-sm text-red-500 dark:text-red-400">
+            <div className="p-4 text-center text-sm text-danger-500 dark:text-danger-400">
               {error}
             </div>
           )}
@@ -232,7 +232,7 @@ const ToolSelector: React.FC<ToolSelectorProps> = ({
                   {!areAllGroupToolsSelected(group) && (
                     <button
                       onClick={() => handleSelectAllFromGroup(group)}
-                      className="w-full text-left px-3 py-1.5 text-xs font-medium text-teal-600 dark:text-teal-400 hover:bg-teal-50 dark:hover:bg-teal-900/20 rounded transition-colors mb-1"
+                      className="w-full text-left px-3 py-1.5 text-xs font-medium text-virtual-600 dark:text-virtual-400 hover:bg-virtual-50 dark:hover:bg-virtual-900/20 rounded transition-colors mb-1"
                     >
                       Select All ({group.tools.length} tools)
                     </button>
@@ -248,7 +248,7 @@ const ToolSelector: React.FC<ToolSelectorProps> = ({
                         aria-selected={selected}
                         className={`w-full text-left px-3 py-2 text-sm rounded transition-colors mb-1 ${
                           selected
-                            ? 'bg-teal-50 dark:bg-teal-900/20 text-teal-600 dark:text-teal-400 cursor-default'
+                            ? 'bg-virtual-50 dark:bg-virtual-900/20 text-virtual-600 dark:text-virtual-400 cursor-default'
                             : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300'
                         }`}
                       >
@@ -258,7 +258,7 @@ const ToolSelector: React.FC<ToolSelectorProps> = ({
                             <PlusIcon className="h-4 w-4 text-gray-400" />
                           )}
                           {selected && (
-                            <span className="text-xs text-teal-500">Added</span>
+                            <span className="text-xs text-virtual-500">Added</span>
                           )}
                         </div>
                         {tool.description && (
@@ -324,7 +324,7 @@ const ToolSelector: React.FC<ToolSelectorProps> = ({
                     </button>
                     <button
                       onClick={() => handleRemoveTool(index)}
-                      className="p-1 text-gray-400 hover:text-red-500 rounded transition-colors"
+                      className="p-1 text-gray-400 hover:text-danger-500 rounded transition-colors"
                       title="Remove tool"
                     >
                       <XMarkIcon className="h-3.5 w-3.5" />

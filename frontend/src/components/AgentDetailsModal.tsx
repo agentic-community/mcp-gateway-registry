@@ -69,9 +69,9 @@ const AgentDetailsModal: React.FC<AgentDetailsModalProps> = ({
       maxWidth="4xl"
     >
       <div className="space-y-4">
-        <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
-          <h4 className="font-medium text-blue-900 dark:text-blue-100 mb-2">Complete Agent Schema</h4>
-          <p className="text-sm text-blue-800 dark:text-blue-200">
+        <div className="bg-info-50 dark:bg-info-900/20 border border-info-200 dark:border-info-800 rounded-lg p-4">
+          <h4 className="font-medium text-info-900 dark:text-info-100 mb-2">Complete Agent Schema</h4>
+          <p className="text-sm text-info-800 dark:text-info-200">
             This is the complete A2A agent definition stored in the registry. It includes all metadata, skills,
             security schemes, and configuration details.
           </p>
@@ -89,14 +89,14 @@ const AgentDetailsModal: React.FC<AgentDetailsModalProps> = ({
         {fullDetails?.supported_protocol === 'a2a' && fullDetails?.url && (() => {
           const cardUrl = getAgentCardUrl(fullDetails.url);
           return cardUrl ? (
-            <div className="bg-cyan-50 dark:bg-cyan-900/20 border border-cyan-200 dark:border-cyan-800 rounded-lg p-3 mt-2">
-              <p className="text-sm text-cyan-800 dark:text-cyan-200">
+            <div className="bg-agent-50 dark:bg-agent-900/20 border border-agent-200 dark:border-agent-800 rounded-lg p-3 mt-2">
+              <p className="text-sm text-agent-800 dark:text-agent-200">
                 <span className="font-medium">A2A Agent Card:</span>{' '}
                 <SafeLink
                   href={cardUrl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-cyan-600 dark:text-cyan-400 hover:underline break-all"
+                  className="text-agent-600 dark:text-agent-400 hover:underline break-all"
                 >
                   {cardUrl}
                 </SafeLink>

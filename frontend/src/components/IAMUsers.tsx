@@ -243,7 +243,7 @@ const IAMUsers: React.FC<IAMUsersProps> = ({ onShowToast }) => {
   // Helper: input border class based on error state
   const inputClass = (field: keyof FormErrors) =>
     `input ${
-      errors[field] ? 'border-red-500' : 'border-line-strong'
+      errors[field] ? 'border-danger-500' : 'border-line-strong'
     }`;
 
   // ─── Create View ──────────────────────────────────────────────
@@ -270,7 +270,7 @@ const IAMUsers: React.FC<IAMUsersProps> = ({ onShowToast }) => {
               onChange={(e) => { setFormUsername(e.target.value); clearError('username'); }}
               placeholder="e.g. jdoe"
               className={inputClass('username')} />
-            {errors.username && <p className="mt-1 text-sm text-red-500">{errors.username}</p>}
+            {errors.username && <p className="mt-1 text-sm text-danger-500">{errors.username}</p>}
           </div>
           <div>
             <label className="block text-sm text-fg-muted mb-1">Email *</label>
@@ -278,7 +278,7 @@ const IAMUsers: React.FC<IAMUsersProps> = ({ onShowToast }) => {
               onChange={(e) => { setFormEmail(e.target.value); clearError('email'); }}
               placeholder="user@example.com"
               className={inputClass('email')} />
-            {errors.email && <p className="mt-1 text-sm text-red-500">{errors.email}</p>}
+            {errors.email && <p className="mt-1 text-sm text-danger-500">{errors.email}</p>}
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div>
@@ -286,14 +286,14 @@ const IAMUsers: React.FC<IAMUsersProps> = ({ onShowToast }) => {
               <input type="text" value={formFirstName}
                 onChange={(e) => { setFormFirstName(e.target.value); clearError('first_name'); }}
                 className={inputClass('first_name')} />
-              {errors.first_name && <p className="mt-1 text-sm text-red-500">{errors.first_name}</p>}
+              {errors.first_name && <p className="mt-1 text-sm text-danger-500">{errors.first_name}</p>}
             </div>
             <div>
               <label className="block text-sm text-fg-muted mb-1">Last Name *</label>
               <input type="text" value={formLastName}
                 onChange={(e) => { setFormLastName(e.target.value); clearError('last_name'); }}
                 className={inputClass('last_name')} />
-              {errors.last_name && <p className="mt-1 text-sm text-red-500">{errors.last_name}</p>}
+              {errors.last_name && <p className="mt-1 text-sm text-danger-500">{errors.last_name}</p>}
             </div>
           </div>
           <div>
@@ -315,7 +315,7 @@ const IAMUsers: React.FC<IAMUsersProps> = ({ onShowToast }) => {
                 {showPassword ? <EyeSlashIcon className="h-4 w-4" /> : <EyeIcon className="h-4 w-4" />}
               </button>
             </div>
-            {errors.password && <p className="mt-1 text-sm text-red-500">{errors.password}</p>}
+            {errors.password && <p className="mt-1 text-sm text-danger-500">{errors.password}</p>}
           </div>
 
           {/* Group selection */}
@@ -437,7 +437,7 @@ const IAMUsers: React.FC<IAMUsersProps> = ({ onShowToast }) => {
                       />
                     </td>
                     <td className="py-3 px-4 text-right">
-                      <button onClick={() => setDeleteTarget(u.username)} className="p-1 text-fg-subtle hover:text-red-500 dark:hover:text-red-400" title="Delete user">
+                      <button onClick={() => setDeleteTarget(u.username)} className="p-1 text-fg-subtle hover:text-danger-500 dark:hover:text-danger-400" title="Delete user">
                         <TrashIcon className="h-4 w-4" />
                       </button>
                     </td>

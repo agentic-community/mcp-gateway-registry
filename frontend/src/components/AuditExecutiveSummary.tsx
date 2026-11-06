@@ -183,8 +183,8 @@ const ActiveCountColumn: React.FC<{
 const DeltaChip: React.FC<{ pct: number }> = ({ pct }) => {
   const isUp = pct >= 0;
   const colorClasses = isUp
-    ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
-    : 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400';
+    ? 'bg-success-100 text-success-700 dark:bg-success-900/30 dark:text-success-400'
+    : 'bg-danger-100 text-danger-700 dark:bg-danger-900/30 dark:text-danger-400';
   const sign = isUp ? '+' : '';
 
   return (
@@ -232,7 +232,7 @@ const TrafficSplitBar: React.FC<{ split: TrafficSplit }> = ({ split }) => {
         ) : null}
         {split.human_events > 0 ? (
           <div
-            className="bg-blue-500"
+            className="bg-info-500"
             style={{ width: `${split.human_pct}%` }}
             title={`Human: ${split.human_events.toLocaleString()} (${split.human_pct}%)`}
           />
@@ -301,7 +301,7 @@ const AuditExecutiveSummary: React.FC = () => {
           </div>
         ) : error ? (
           <div className="text-center py-8">
-            <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
+            <p className="text-sm text-danger-600 dark:text-danger-400">{error}</p>
             <button
               onClick={fetchSummary}
               className="mt-2 text-sm font-medium text-accent-text hover:underline"
@@ -429,7 +429,7 @@ const AuditExecutiveSummary: React.FC = () => {
                 misreads the split. Any non-web-UI access counts as an agent. */}
             <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-fg-subtle border-t border-line pt-3">
               <span className="flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 rounded-full bg-blue-500" />
+                <span className="w-2.5 h-2.5 rounded-full bg-info-500" />
                 People = interactive web UI sessions
               </span>
               <span className="flex items-center gap-1.5">

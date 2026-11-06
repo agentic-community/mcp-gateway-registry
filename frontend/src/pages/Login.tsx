@@ -94,7 +94,7 @@ const Login: React.FC = () => {
       <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
         <div className="card p-8">
           {error && (
-            <div className="p-4 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg dark:bg-red-900/30 dark:text-red-400 dark:border-red-800 flex items-start space-x-2 mb-6">
+            <div className="p-4 text-sm text-danger-700 bg-danger-50 border border-danger-200 rounded-lg dark:bg-danger-900/30 dark:text-danger-400 dark:border-danger-800 flex items-start space-x-2 mb-6">
               <ExclamationTriangleIcon className="h-5 w-5 flex-shrink-0 mt-0.5" />
               <span>{error}</span>
             </div>

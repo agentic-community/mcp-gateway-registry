@@ -11,14 +11,22 @@
  * channels so Tailwind opacity modifiers keep working (`bg-gray-900/50`).
  *
  * Two layers:
- *   1. Palette scales (`--gray-*`, `--primary-*`): the raw ramps Tailwind's
- *      `gray`, `primary` and `purple` utilities resolve to. One ramp serves both
- *      modes, the same way Tailwind's built-in palettes do: light mode paints
- *      with the low steps, dark mode with the high steps via `dark:` variants.
+ *   1. Palette ramps: the raw 50..950 scales Tailwind utilities resolve to.
+ *      `--gray-*` and `--primary-*` (also aliased as `purple`) are the neutral
+ *      and brand ramps. `--success-*`, `--warning-*`, `--danger-*` and
+ *      `--info-*` carry status meaning. `--server-*`, `--agent-*`, `--skill-*`,
+ *      `--virtual-*` and `--custom-*` color each registry entity type. One ramp
+ *      serves both modes, the same way Tailwind's built-in palettes do: light
+ *      mode paints with the low steps, dark mode with the high steps via
+ *      `dark:` variants.
  *   2. Semantic tokens (`--color-*`): role-named values that DO change per mode.
  *      New and shared surfaces (layout chrome, `.card`, `.input`, buttons, the
  *      audit grid) use these through the `canvas`, `surface`, `line`, `fg` and
  *      `accent` Tailwind colors so they never need a `dark:` twin.
+ *
+ * This list of variables is the public theming contract: a deployment's
+ * branding `theme.css` (docs/ui-branding.md) overrides these names and only
+ * these names. Renaming one is a breaking change.
  */
 @layer base {
   :root {
@@ -51,6 +59,122 @@
     --primary-900: 59 36 112;
     --primary-950: 36 21 74;
 
+    /* Status ramps. Defaults are the Tailwind palettes the UI used before tokens. */
+    --success-50: 236 253 245;
+    --success-100: 209 250 229;
+    --success-200: 167 243 208;
+    --success-300: 110 231 183;
+    --success-400: 52 211 153;
+    --success-500: 16 185 129;
+    --success-600: 5 150 105;
+    --success-700: 4 120 87;
+    --success-800: 6 95 70;
+    --success-900: 6 78 59;
+    --success-950: 2 44 34;
+
+    /* Warning (amber). */
+    --warning-50: 255 251 235;
+    --warning-100: 254 243 199;
+    --warning-200: 253 230 138;
+    --warning-300: 252 211 77;
+    --warning-400: 251 191 36;
+    --warning-500: 245 158 11;
+    --warning-600: 217 119 6;
+    --warning-700: 180 83 9;
+    --warning-800: 146 64 14;
+    --warning-900: 120 53 15;
+    --warning-950: 69 26 3;
+
+    /* Danger (red). */
+    --danger-50: 254 242 242;
+    --danger-100: 254 226 226;
+    --danger-200: 254 202 202;
+    --danger-300: 252 165 165;
+    --danger-400: 248 113 113;
+    --danger-500: 239 68 68;
+    --danger-600: 220 38 38;
+    --danger-700: 185 28 28;
+    --danger-800: 153 27 27;
+    --danger-900: 127 29 29;
+    --danger-950: 69 10 10;
+
+    /* Info (blue). */
+    --info-50: 239 246 255;
+    --info-100: 219 234 254;
+    --info-200: 191 219 254;
+    --info-300: 147 197 253;
+    --info-400: 96 165 250;
+    --info-500: 59 130 246;
+    --info-600: 37 99 235;
+    --info-700: 29 78 216;
+    --info-800: 30 64 175;
+    --info-900: 30 58 138;
+    --info-950: 23 37 84;
+
+    /* Entity ramps: one per registry entity type, used by cards and type badges. */
+    --agent-50: 236 254 255;
+    --agent-100: 207 250 254;
+    --agent-200: 165 243 252;
+    --agent-300: 103 232 249;
+    --agent-400: 34 211 238;
+    --agent-500: 6 182 212;
+    --agent-600: 8 145 178;
+    --agent-700: 14 116 144;
+    --agent-800: 21 94 117;
+    --agent-900: 22 78 99;
+    --agent-950: 8 51 68;
+
+    /* Agent skills (amber). */
+    --skill-50: 255 251 235;
+    --skill-100: 254 243 199;
+    --skill-200: 253 230 138;
+    --skill-300: 252 211 77;
+    --skill-400: 251 191 36;
+    --skill-500: 245 158 11;
+    --skill-600: 217 119 6;
+    --skill-700: 180 83 9;
+    --skill-800: 146 64 14;
+    --skill-900: 120 53 15;
+    --skill-950: 69 26 3;
+
+    /* Virtual MCP servers (teal). */
+    --virtual-50: 240 253 250;
+    --virtual-100: 204 251 241;
+    --virtual-200: 153 246 228;
+    --virtual-300: 94 234 212;
+    --virtual-400: 45 212 191;
+    --virtual-500: 20 184 166;
+    --virtual-600: 13 148 136;
+    --virtual-700: 15 118 110;
+    --virtual-800: 17 94 89;
+    --virtual-900: 19 78 74;
+    --virtual-950: 4 47 46;
+
+    /* Custom entity types (blue). */
+    --custom-50: 239 246 255;
+    --custom-100: 219 234 254;
+    --custom-200: 191 219 254;
+    --custom-300: 147 197 253;
+    --custom-400: 96 165 250;
+    --custom-500: 59 130 246;
+    --custom-600: 37 99 235;
+    --custom-700: 29 78 216;
+    --custom-800: 30 64 175;
+    --custom-900: 30 58 138;
+    --custom-950: 23 37 84;
+
+    /* MCP servers follow the brand unless a theme overrides them. */
+    --server-50: var(--primary-50);
+    --server-100: var(--primary-100);
+    --server-200: var(--primary-200);
+    --server-300: var(--primary-300);
+    --server-400: var(--primary-400);
+    --server-500: var(--primary-500);
+    --server-600: var(--primary-600);
+    --server-700: var(--primary-700);
+    --server-800: var(--primary-800);
+    --server-900: var(--primary-900);
+    --server-950: var(--primary-950);
     /* Semantic tokens, light mode. */
     --color-canvas: var(--gray-50);
     --color-surface: 255 255 255;
@@ -76,7 +200,13 @@
 
     --shadow-color: 16 24 40;
     --focus-ring-width: 2px;
+    /* Corner radius of buttons and inputs, and of cards (.btn-*, .input, .card). */
     --radius-control: 0.5rem;
+    --radius-card: 0.75rem;
+
+    /* Type. A branding theme can @font-face a font from its own folder and point these at it. */
+    --font-sans: 'Inter Variable', 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+    --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   }
 
   html.dark {
@@ -139,7 +269,7 @@
   }
 
   html {
-    font-family: 'Inter Variable', 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+    font-family: var(--font-sans);
     font-feature-settings: 'cv11', 'ss01';
     -webkit-text-size-adjust: 100%;
     text-rendering: optimizeLegibility;
@@ -190,7 +320,7 @@
 
 @layer components {
   .btn-base {
-    @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-medium
+    @apply inline-flex items-center justify-center gap-2 rounded-control px-4 py-2 text-sm font-medium
       transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-50;
   }
 
@@ -217,11 +347,11 @@
   }
 
   .card {
-    @apply rounded-xl border border-line bg-surface shadow-sm;
+    @apply rounded-card border border-line bg-surface shadow-sm;
   }
 
   .input {
-    @apply block w-full rounded-lg border border-line-strong bg-surface px-3 py-2 text-sm text-fg shadow-sm
+    @apply block w-full rounded-control border border-line-strong bg-surface px-3 py-2 text-sm text-fg shadow-sm
       placeholder:text-fg-subtle focus:border-accent focus:outline-none focus:ring-2 focus:ring-focus/40
       disabled:cursor-not-allowed disabled:opacity-60;
   }

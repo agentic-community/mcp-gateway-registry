@@ -58,8 +58,8 @@ const Toast: React.FC<ToastProps> = ({ message, type, onClose }) => {
     <div className="fixed top-4 right-4 z-50 animate-slide-in-top">
       <div className={`flex items-center p-4 rounded-lg shadow-lg border ${
         type === 'success'
-          ? 'bg-green-50 border-green-200 text-green-800 dark:bg-green-900/50 dark:border-green-700 dark:text-green-200'
-          : 'bg-red-50 border-red-200 text-red-800 dark:bg-red-900/50 dark:border-red-700 dark:text-red-200'
+          ? 'bg-success-50 border-success-200 text-success-800 dark:bg-success-900/50 dark:border-success-700 dark:text-success-200'
+          : 'bg-danger-50 border-danger-200 text-danger-800 dark:bg-danger-900/50 dark:border-danger-700 dark:text-danger-200'
       }`}>
         {type === 'success' ? (
           <CheckCircleIcon className="h-5 w-5 mr-3 flex-shrink-0" />
@@ -948,7 +948,7 @@ const RegisterPage: React.FC = () => {
   // to the previous local strings). errorClass keeps its text-sm/red-500 form.
   const inputClass = FIELD;
   const labelClass = LABEL;
-  const errorClass = "mt-1 text-sm text-red-500 dark:text-red-400";
+  const errorClass = "mt-1 text-sm text-danger-500 dark:text-danger-400";
 
 
   const renderServerForm = () => (
@@ -967,7 +967,7 @@ const RegisterPage: React.FC = () => {
           <input
             type="text"
             required
-            className={`${inputClass} ${errors.name ? 'border-red-500' : ''}`}
+            className={`${inputClass} ${errors.name ? 'border-danger-500' : ''}`}
             value={serverForm.name}
             onChange={(e) => handleServerNameChange(e.target.value)}
             placeholder="e.g., My Custom Server"
@@ -980,7 +980,7 @@ const RegisterPage: React.FC = () => {
           <input
             type="text"
             required
-            className={`${inputClass} ${errors.path ? 'border-red-500' : ''}`}
+            className={`${inputClass} ${errors.path ? 'border-danger-500' : ''}`}
             value={serverForm.path}
             onChange={(e) => setServerForm(prev => ({ ...prev, path: e.target.value }))}
             placeholder="/my-server"
@@ -1036,7 +1036,7 @@ const RegisterPage: React.FC = () => {
             <label className={labelClass}>Proxy URL *</label>
             <input
               type="url"
-              className={`${inputClass} ${errors.proxy_pass_url ? 'border-red-500' : ''}`}
+              className={`${inputClass} ${errors.proxy_pass_url ? 'border-danger-500' : ''}`}
               value={serverForm.proxy_pass_url}
               onChange={(e) => setServerForm(prev => ({ ...prev, proxy_pass_url: e.target.value }))}
               placeholder="http://localhost:8080"
@@ -1066,7 +1066,7 @@ const RegisterPage: React.FC = () => {
           <label className={labelClass}>Description *</label>
           <textarea
             required
-            className={`${inputClass} ${errors.description ? 'border-red-500' : ''}`}
+            className={`${inputClass} ${errors.description ? 'border-danger-500' : ''}`}
             rows={3}
             value={serverForm.description}
             onChange={(e) => setServerForm(prev => ({ ...prev, description: e.target.value }))}
@@ -1248,7 +1248,7 @@ const RegisterPage: React.FC = () => {
                     const updated = serverForm.custom_headers.filter((_, i) => i !== idx);
                     setServerForm(prev => ({ ...prev, custom_headers: updated }));
                   }}
-                  className="px-3 py-2 text-sm text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300"
+                  className="px-3 py-2 text-sm text-danger-600 hover:text-danger-800 dark:text-danger-400 dark:hover:text-danger-300"
                 >
                   Remove
                 </button>
@@ -1263,7 +1263,7 @@ const RegisterPage: React.FC = () => {
                     custom_headers: [...(prev.custom_headers || []), { name: '', value: '' }],
                   }));
                 }}
-                className="text-sm text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
+                className="text-sm text-info-600 hover:text-info-800 dark:text-info-400 dark:hover:text-info-300"
               >
                 + Add header
               </button>
@@ -1361,7 +1361,7 @@ const RegisterPage: React.FC = () => {
           <input
             type="text"
             required
-            className={`${inputClass} ${errors.name ? 'border-red-500' : ''}`}
+            className={`${inputClass} ${errors.name ? 'border-danger-500' : ''}`}
             value={agentForm.name}
             onChange={(e) => handleAgentNameChange(e.target.value)}
             placeholder="e.g., My AI Agent"
@@ -1373,7 +1373,7 @@ const RegisterPage: React.FC = () => {
           <label className={labelClass}>Path (auto-generated)</label>
           <input
             type="text"
-            className={`${inputClass} ${errors.path ? 'border-red-500' : ''}`}
+            className={`${inputClass} ${errors.path ? 'border-danger-500' : ''}`}
             value={agentForm.path}
             onChange={(e) => setAgentForm(prev => ({ ...prev, path: e.target.value }))}
             placeholder="/my-agent"
@@ -1387,7 +1387,7 @@ const RegisterPage: React.FC = () => {
           <input
             type="url"
             required
-            className={`${inputClass} ${errors.url ? 'border-red-500' : ''}`}
+            className={`${inputClass} ${errors.url ? 'border-danger-500' : ''}`}
             value={agentForm.url}
             onChange={(e) => setAgentForm(prev => ({ ...prev, url: e.target.value }))}
             placeholder="https://my-agent.example.com"
@@ -1400,7 +1400,7 @@ const RegisterPage: React.FC = () => {
           <label className={labelClass}>Description *</label>
           <textarea
             required
-            className={`${inputClass} ${errors.description ? 'border-red-500' : ''}`}
+            className={`${inputClass} ${errors.description ? 'border-danger-500' : ''}`}
             rows={3}
             value={agentForm.description}
             onChange={(e) => setAgentForm(prev => ({ ...prev, description: e.target.value }))}
@@ -1412,7 +1412,7 @@ const RegisterPage: React.FC = () => {
         {/* Supported Protocol */}
         <div className="md:col-span-2">
           <label className={labelClass}>
-            Supported Protocol <span className="text-red-500">*</span>
+            Supported Protocol <span className="text-danger-500">*</span>
           </label>
           <div className="flex items-center gap-4 mt-2">
             <label className="flex items-center gap-2 cursor-pointer">
@@ -1434,7 +1434,7 @@ const RegisterPage: React.FC = () => {
             Check if this agent implements the
             <a href="https://a2a-protocol.org/latest/specification/"
                target="_blank" rel="noopener noreferrer"
-               className="text-cyan-600 dark:text-cyan-400 hover:underline ml-1">
+               className="text-agent-600 dark:text-agent-400 hover:underline ml-1">
               A2A (Agent-to-Agent) protocol
             </a>.
             The A2A agent card schema is used for all agents as a standardized representation.
@@ -1509,7 +1509,7 @@ const RegisterPage: React.FC = () => {
         <div className="md:col-span-2">
           <label className={labelClass}>Skills (JSON array, optional)</label>
           <textarea
-            className={`${inputClass} font-mono text-xs ${errors.skills_json ? 'border-red-500 dark:border-red-400' : ''}`}
+            className={`${inputClass} font-mono text-xs ${errors.skills_json ? 'border-danger-500 dark:border-danger-400' : ''}`}
             rows={8}
             value={agentForm.skills_json}
             onChange={(e) => {
@@ -1526,7 +1526,7 @@ const RegisterPage: React.FC = () => {
             placeholder='[{"id": "skill-1", "name": "My Skill", "description": "What this skill does"}]'
           />
           {errors.skills_json && (
-            <p className="mt-1 text-xs text-red-600 dark:text-red-400">{errors.skills_json}</p>
+            <p className="mt-1 text-xs text-danger-600 dark:text-danger-400">{errors.skills_json}</p>
           )}
           <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
             Each skill needs at least: id, name, description.
@@ -1560,7 +1560,7 @@ const RegisterPage: React.FC = () => {
               Comma-separated list of groups that can access this agent
             </p>
             {agentForm.allowed_groups.trim() === '' && (
-              <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+              <p className="mt-1 text-xs text-warning-600 dark:text-warning-400">
                 At least one group is required for group-restricted visibility
               </p>
             )}
@@ -1721,14 +1721,14 @@ const RegisterPage: React.FC = () => {
 
       {/* MCP Registry Schema Notice */}
       {mcpRegistryNotice && (
-        <div className="bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-800 rounded-lg p-4">
+        <div className="bg-warning-50 dark:bg-warning-900/30 border border-warning-200 dark:border-warning-800 rounded-lg p-4">
           <div className="flex">
-            <InformationCircleIcon className="h-5 w-5 text-amber-500 flex-shrink-0" />
+            <InformationCircleIcon className="h-5 w-5 text-warning-500 flex-shrink-0" />
             <div className="ml-3">
-              <h4 className="text-sm font-medium text-amber-800 dark:text-amber-200">
+              <h4 className="text-sm font-medium text-warning-800 dark:text-warning-200">
                 MCP Registry Format Detected
               </h4>
-              <p className="mt-1 text-sm text-amber-700 dark:text-amber-300">
+              <p className="mt-1 text-sm text-warning-700 dark:text-warning-300">
                 {mcpRegistryNotice}
               </p>
             </div>
@@ -1737,14 +1737,14 @@ const RegisterPage: React.FC = () => {
       )}
 
       {/* Info Box */}
-      <div className="bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
+      <div className="bg-info-50 dark:bg-info-900/30 border border-info-200 dark:border-info-800 rounded-lg p-4">
         <div className="flex">
-          <InformationCircleIcon className="h-5 w-5 text-blue-400 flex-shrink-0" />
+          <InformationCircleIcon className="h-5 w-5 text-info-400 flex-shrink-0" />
           <div className="ml-3">
-            <h4 className="text-sm font-medium text-blue-800 dark:text-blue-200">
+            <h4 className="text-sm font-medium text-info-800 dark:text-info-200">
               About JSON Upload
             </h4>
-            <p className="mt-1 text-sm text-blue-700 dark:text-blue-300">
+            <p className="mt-1 text-sm text-info-700 dark:text-info-300">
               Upload a {registrationType === 'server' ? 'modelcard.json' : 'agentcard.json'} file to automatically populate the form fields.
               You can then review and modify the values before submitting.
             </p>
@@ -1781,18 +1781,18 @@ const RegisterPage: React.FC = () => {
   if (!canRegisterServer && !canRegisterAgent) {
     return (
       <div className="max-w-4xl mx-auto px-4 py-8">
-        <div className="bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-800 rounded-lg p-6 text-center">
-          <ExclamationCircleIcon className="mx-auto h-12 w-12 text-yellow-400" />
-          <h3 className="mt-4 text-lg font-medium text-yellow-800 dark:text-yellow-200">
+        <div className="bg-warning-50 dark:bg-warning-900/30 border border-warning-200 dark:border-warning-800 rounded-lg p-6 text-center">
+          <ExclamationCircleIcon className="mx-auto h-12 w-12 text-warning-400" />
+          <h3 className="mt-4 text-lg font-medium text-warning-800 dark:text-warning-200">
             Permission Required
           </h3>
-          <p className="mt-2 text-sm text-yellow-700 dark:text-yellow-300">
+          <p className="mt-2 text-sm text-warning-700 dark:text-warning-300">
             You do not have permission to register servers or agents.
             Please contact an administrator to request access.
           </p>
           <button
             onClick={() => navigate('/')}
-            className="mt-4 px-4 py-2 text-sm font-medium text-yellow-800 dark:text-yellow-200 bg-yellow-100 dark:bg-yellow-900 hover:bg-yellow-200 dark:hover:bg-yellow-800 rounded-md transition-colors"
+            className="mt-4 px-4 py-2 text-sm font-medium text-warning-800 dark:text-warning-200 bg-warning-100 dark:bg-warning-900 hover:bg-warning-200 dark:hover:bg-warning-800 rounded-md transition-colors"
           >
             Return to Dashboard
           </button>

@@ -54,7 +54,7 @@ const CopyButton: React.FC<CopyButtonProps> = ({
   };
 
   const solid = copied
-    ? 'btn-base bg-green-600 text-white shadow-sm px-3'
+    ? 'btn-base bg-success-600 text-white shadow-sm px-3'
     : 'btn-primary px-3';
   const subtle = clsx(
     'inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg transition-colors',
@@ -74,7 +74,7 @@ const CopyButton: React.FC<CopyButtonProps> = ({
         <>
           {variant === 'subtle' ? (
             <ClipboardDocumentCheckIcon
-              className={clsx(iconClass, 'text-green-600 dark:text-green-400')}
+              className={clsx(iconClass, 'text-success-600 dark:text-success-400')}
             />
           ) : (
             <CheckIcon className={iconClass} />

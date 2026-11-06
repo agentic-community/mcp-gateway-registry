@@ -12,6 +12,12 @@ const STEPS = [50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 950];
 
 const brand = ramp('primary', STEPS);
 
+/**
+ * A ramp plus optional role keys under one color name, e.g. `bg-danger-50`
+ * next to `bg-danger-soft`.
+ */
+const rampWith = (name, roles = {}) => ({ ...ramp(name, STEPS), ...roles });
+
 /** @type {import('tailwindcss').Config} */
 module.exports = {
   content: [
@@ -53,17 +59,32 @@ module.exports = {
           soft: channel('color-accent-soft'),
           'soft-fg': channel('color-accent-soft-fg'),
         },
-        danger: {
+        danger: rampWith('danger', {
           DEFAULT: channel('color-danger'),
           hover: channel('color-danger-hover'),
           soft: channel('color-danger-soft'),
           'soft-fg': channel('color-danger-soft-fg'),
-        },
+        }),
+        // Status and entity ramps (see index.css). Use these instead of raw
+        // Tailwind hues so a branding theme can recolor them; the ESLint
+        // no-restricted-syntax rule in package.json rejects raw hue classes.
+        success: ramp('success', STEPS),
+        warning: ramp('warning', STEPS),
+        info: ramp('info', STEPS),
+        server: ramp('server', STEPS),
+        agent: ramp('agent', STEPS),
+        skill: ramp('skill', STEPS),
+        virtual: ramp('virtual', STEPS),
+        custom: ramp('custom', STEPS),
         focus: channel('color-focus'),
       },
       fontFamily: {
-        sans: ['"Inter Variable"', 'Inter', 'ui-sans-serif', 'system-ui', '-apple-system', '"Segoe UI"', 'sans-serif'],
-        mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', 'monospace'],
+        sans: ['var(--font-sans)'],
+        mono: ['var(--font-mono)'],
+      },
+      borderRadius: {
+        control: 'var(--radius-control)',
+        card: 'var(--radius-card)',
       },
       boxShadow: {
         sm: '0 1px 2px 0 rgb(var(--shadow-color) / 0.06), 0 1px 3px 0 rgb(var(--shadow-color) / 0.08)',

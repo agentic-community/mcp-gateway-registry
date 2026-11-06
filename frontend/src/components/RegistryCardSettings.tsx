@@ -139,12 +139,12 @@ const RegistryCardSettings: React.FC<RegistryCardSettingsProps> = ({ onShowToast
 
   if (error && !card) {
     return (
-      <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-6">
-        <h3 className="font-medium text-red-900 dark:text-red-100 mb-2 flex items-center gap-2">
+      <div className="bg-danger-50 dark:bg-danger-900/20 border border-danger-200 dark:border-danger-800 rounded-lg p-6">
+        <h3 className="font-medium text-danger-900 dark:text-danger-100 mb-2 flex items-center gap-2">
           <InformationCircleIcon className="h-5 w-5" />
           Error Loading Registry Card
         </h3>
-        <p className="text-sm text-red-800 dark:text-red-200 mb-4">{error}</p>
+        <p className="text-sm text-danger-800 dark:text-danger-200 mb-4">{error}</p>
         <Button variant="danger" onClick={fetchRegistryCard}>
           Retry
         </Button>
@@ -167,42 +167,42 @@ const RegistryCardSettings: React.FC<RegistryCardSettingsProps> = ({ onShowToast
       </div>
 
       {/* Read-only Information */}
-      <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
-        <h3 className="font-medium text-blue-900 dark:text-blue-100 mb-3 flex items-center gap-2">
+      <div className="bg-info-50 dark:bg-info-900/20 border border-info-200 dark:border-info-800 rounded-lg p-4">
+        <h3 className="font-medium text-info-900 dark:text-info-100 mb-3 flex items-center gap-2">
           <InformationCircleIcon className="h-5 w-5" />
           Registry Information
         </h3>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
           <div>
-            <span className="text-blue-700 dark:text-blue-300 font-medium">Registry ID:</span>
-            <p className="text-blue-900 dark:text-blue-100 font-mono">{card.id}</p>
+            <span className="text-info-700 dark:text-info-300 font-medium">Registry ID:</span>
+            <p className="text-info-900 dark:text-info-100 font-mono">{card.id}</p>
           </div>
           <div>
-            <span className="text-blue-700 dark:text-blue-300 font-medium">Name:</span>
-            <p className="text-blue-900 dark:text-blue-100">{card.name}</p>
+            <span className="text-info-700 dark:text-info-300 font-medium">Name:</span>
+            <p className="text-info-900 dark:text-info-100">{card.name}</p>
           </div>
           <div>
-            <span className="text-blue-700 dark:text-blue-300 font-medium">Organization:</span>
-            <p className="text-blue-900 dark:text-blue-100">{card.organization_name}</p>
+            <span className="text-info-700 dark:text-info-300 font-medium">Organization:</span>
+            <p className="text-info-900 dark:text-info-100">{card.organization_name}</p>
           </div>
           <div>
-            <span className="text-blue-700 dark:text-blue-300 font-medium">Registry URL:</span>
-            <p className="text-blue-900 dark:text-blue-100 font-mono break-all">{card.registry_url}</p>
+            <span className="text-info-700 dark:text-info-300 font-medium">Registry URL:</span>
+            <p className="text-info-900 dark:text-info-100 font-mono break-all">{card.registry_url}</p>
           </div>
           <div>
-            <span className="text-blue-700 dark:text-blue-300 font-medium">Federation Endpoint:</span>
-            <p className="text-blue-900 dark:text-blue-100 font-mono break-all">{card.federation_endpoint}</p>
+            <span className="text-info-700 dark:text-info-300 font-medium">Federation Endpoint:</span>
+            <p className="text-info-900 dark:text-info-100 font-mono break-all">{card.federation_endpoint}</p>
           </div>
           <div>
-            <span className="text-blue-700 dark:text-blue-300 font-medium">API Version:</span>
-            <p className="text-blue-900 dark:text-blue-100">{card.federation_api_version}</p>
+            <span className="text-info-700 dark:text-info-300 font-medium">API Version:</span>
+            <p className="text-info-900 dark:text-info-100">{card.federation_api_version}</p>
           </div>
         </div>
       </div>
 
       {/* Authentication Configuration */}
-      <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg p-4">
-        <h3 className="font-medium text-green-900 dark:text-green-100 mb-3 flex items-center gap-2">
+      <div className="bg-success-50 dark:bg-success-900/20 border border-success-200 dark:border-success-800 rounded-lg p-4">
+        <h3 className="font-medium text-success-900 dark:text-success-100 mb-3 flex items-center gap-2">
           <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
           </svg>
@@ -210,30 +210,30 @@ const RegistryCardSettings: React.FC<RegistryCardSettingsProps> = ({ onShowToast
         </h3>
         <div className="space-y-3 text-sm">
           <div>
-            <span className="text-green-700 dark:text-green-300 font-medium">Supported Schemes:</span>
-            <p className="text-green-900 dark:text-green-100 mt-1">
+            <span className="text-success-700 dark:text-success-300 font-medium">Supported Schemes:</span>
+            <p className="text-success-900 dark:text-success-100 mt-1">
               {card.authentication.schemes.join(', ')}
             </p>
           </div>
           {card.authentication.oauth2_issuer && (
             <div>
-              <span className="text-green-700 dark:text-green-300 font-medium">OAuth2 Issuer:</span>
-              <p className="text-green-900 dark:text-green-100 font-mono break-all mt-1">
+              <span className="text-success-700 dark:text-success-300 font-medium">OAuth2 Issuer:</span>
+              <p className="text-success-900 dark:text-success-100 font-mono break-all mt-1">
                 {card.authentication.oauth2_issuer}
               </p>
             </div>
           )}
           {card.authentication.oauth2_token_endpoint && (
             <div>
-              <span className="text-green-700 dark:text-green-300 font-medium">OAuth2 Token Endpoint:</span>
-              <p className="text-green-900 dark:text-green-100 font-mono break-all mt-1">
+              <span className="text-success-700 dark:text-success-300 font-medium">OAuth2 Token Endpoint:</span>
+              <p className="text-success-900 dark:text-success-100 font-mono break-all mt-1">
                 {card.authentication.oauth2_token_endpoint}
               </p>
             </div>
           )}
           <div>
-            <span className="text-green-700 dark:text-green-300 font-medium">Scopes Supported:</span>
-            <p className="text-green-900 dark:text-green-100 mt-1">
+            <span className="text-success-700 dark:text-success-300 font-medium">Scopes Supported:</span>
+            <p className="text-success-900 dark:text-success-100 mt-1">
               {card.authentication.scopes_supported.join(', ')}
             </p>
           </div>
@@ -324,7 +324,7 @@ const RegistryCardSettings: React.FC<RegistryCardSettingsProps> = ({ onShowToast
         <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-sm">
           {Object.entries(card.capabilities).map(([key, value]) => (
             <div key={key} className="flex items-center gap-2">
-              <div className={`w-2 h-2 rounded-full ${value ? 'bg-green-500' : 'bg-gray-400'}`} />
+              <div className={`w-2 h-2 rounded-full ${value ? 'bg-success-500' : 'bg-gray-400'}`} />
               <span className="text-fg-muted">
                 {key.replace(/_/g, ' ')}
               </span>

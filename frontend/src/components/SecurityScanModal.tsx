@@ -63,10 +63,11 @@ interface StatusInfo {
 
 
 const SEVERITY_BOX_STYLES: Record<string, string> = {
-  critical: 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400 border-red-200 dark:border-red-700',
-  high: 'bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400 border-orange-200 dark:border-orange-700',
-  medium: 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400 border-amber-200 dark:border-amber-700',
-  low: 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400 border-blue-200 dark:border-blue-700',
+  critical: 'bg-danger-100 text-danger-800 dark:bg-danger-900/30 dark:text-danger-400 border-danger-200 dark:border-danger-700',
+  // high and medium share the warning ramp; high sits one step darker so the scale stays readable.
+  high: 'bg-warning-200 text-warning-900 dark:bg-warning-900/50 dark:text-warning-300 border-warning-300 dark:border-warning-600',
+  medium: 'bg-warning-100 text-warning-800 dark:bg-warning-900/30 dark:text-warning-400 border-warning-200 dark:border-warning-700',
+  low: 'bg-info-100 text-info-800 dark:bg-info-900/30 dark:text-info-400 border-info-200 dark:border-info-700',
 };
 
 
@@ -90,11 +91,11 @@ const _getStatusInfo = (scanResult: SecurityScanResult | null | undefined): Stat
 const _getStatusBannerClasses = (color: string): string => {
   switch (color) {
     case 'green':
-      return 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800';
+      return 'bg-success-50 dark:bg-success-900/20 border-success-200 dark:border-success-800';
     case 'amber':
-      return 'bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-800';
+      return 'bg-warning-50 dark:bg-warning-900/20 border-warning-200 dark:border-warning-800';
     case 'red':
-      return 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800';
+      return 'bg-danger-50 dark:bg-danger-900/20 border-danger-200 dark:border-danger-800';
     default:
       return 'bg-gray-50 dark:bg-gray-900/20 border-gray-200 dark:border-gray-700';
   }
@@ -104,11 +105,11 @@ const _getStatusBannerClasses = (color: string): string => {
 const _getStatusIconClasses = (color: string): string => {
   switch (color) {
     case 'green':
-      return 'text-green-600 dark:text-green-400';
+      return 'text-success-600 dark:text-success-400';
     case 'amber':
-      return 'text-amber-600 dark:text-amber-400';
+      return 'text-warning-600 dark:text-warning-400';
     case 'red':
-      return 'text-red-600 dark:text-red-400';
+      return 'text-danger-600 dark:text-danger-400';
     default:
       return 'text-gray-500 dark:text-gray-400';
   }
@@ -119,13 +120,13 @@ const _getSeverityBadgeClasses = (severity: string): string => {
   const severityLower = severity.toLowerCase();
   switch (severityLower) {
     case 'critical':
-      return 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400';
+      return 'bg-danger-100 text-danger-800 dark:bg-danger-900/30 dark:text-danger-400';
     case 'high':
-      return 'bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400';
+      return 'bg-warning-200 text-warning-900 dark:bg-warning-900/50 dark:text-warning-300';
     case 'medium':
-      return 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400';
+      return 'bg-warning-100 text-warning-800 dark:bg-warning-900/30 dark:text-warning-400';
     default:
-      return 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400';
+      return 'bg-info-100 text-info-800 dark:bg-info-900/30 dark:text-info-400';
   }
 };
 
@@ -250,7 +251,7 @@ const SecurityScanModal: React.FC<SecurityScanModalProps> = ({
                 </div>
               </div>
               {scanResult.scan_failed && scanResult.error_message && (
-                <div className="mt-3 p-3 bg-red-100 dark:bg-red-900/30 rounded text-sm text-red-800 dark:text-red-300">
+                <div className="mt-3 p-3 bg-danger-100 dark:bg-danger-900/30 rounded text-sm text-danger-800 dark:text-danger-300">
                   Error: {scanResult.error_message}
                 </div>
               )}
@@ -390,7 +391,7 @@ const SecurityScanModal: React.FC<SecurityScanModalProps> = ({
                                         </p>
                                       )}
                                       {finding.remediation && (
-                                        <p className="text-sm text-blue-600 dark:text-blue-400 mb-2">
+                                        <p className="text-sm text-info-600 dark:text-info-400 mb-2">
                                           <span className="font-medium">Fix: </span>{finding.remediation}
                                         </p>
                                       )}

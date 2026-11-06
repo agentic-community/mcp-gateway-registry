@@ -51,7 +51,7 @@ describe('VirtualServerCard (composed from card primitives)', () => {
     expect(screen.getByText('#beta')).toBeInTheDocument();
   });
 
-  it('shows the enabled status and a teal-accented toggle', () => {
+  it('shows the enabled status and a virtual-accented toggle', () => {
     const { container } = render(
       <VirtualServerCard
         virtualServer={baseServer}
@@ -63,7 +63,7 @@ describe('VirtualServerCard (composed from card primitives)', () => {
     );
     expect(screen.getByText('Enabled')).toBeInTheDocument();
     const track = container.querySelector('div.w-12');
-    expect(track?.className).toContain('bg-teal-600');
+    expect(track?.className).toContain('bg-virtual-600');
   });
 
   it('calls onToggle when the switch is flipped', () => {

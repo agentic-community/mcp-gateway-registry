@@ -76,12 +76,12 @@ const ProxyConnectButton: React.FC<ProxyConnectButtonProps> = ({
   const triggerClass = inline
     ? `flex items-center gap-1 text-sm transition-colors ${
         enabled
-          ? 'text-cyan-700 dark:text-cyan-300 hover:underline'
+          ? 'text-info-700 dark:text-info-300 hover:underline'
           : 'text-gray-400 dark:text-gray-500 cursor-not-allowed'
       }`
     : `p-2 rounded-lg transition-colors ${
         enabled
-          ? 'text-gray-400 hover:text-cyan-600 dark:hover:text-cyan-400'
+          ? 'text-gray-400 hover:text-info-600 dark:hover:text-info-400'
           : 'text-gray-300 dark:text-gray-600 cursor-not-allowed'
       }`;
 

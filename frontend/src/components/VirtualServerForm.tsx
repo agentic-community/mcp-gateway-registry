@@ -242,7 +242,7 @@ const VirtualServerForm: React.FC<VirtualServerFormProps> = ({
           <React.Fragment key={step.id}>
             {index > 0 && (
               <div className={`flex-1 h-0.5 mx-2 ${
-                isCompleted ? 'bg-teal-500' : 'bg-gray-300 dark:bg-gray-600'
+                isCompleted ? 'bg-virtual-500' : 'bg-gray-300 dark:bg-gray-600'
               }`} />
             )}
             <button
@@ -251,17 +251,17 @@ const VirtualServerForm: React.FC<VirtualServerFormProps> = ({
               disabled={!isClickable}
               className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
                 isActive
-                  ? 'bg-teal-100 dark:bg-teal-900/30 text-teal-700 dark:text-teal-300'
+                  ? 'bg-virtual-100 dark:bg-virtual-900/30 text-virtual-700 dark:text-virtual-300'
                   : isCompleted
-                  ? 'text-teal-600 dark:text-teal-400 hover:bg-teal-50 dark:hover:bg-teal-900/20 cursor-pointer'
+                  ? 'text-virtual-600 dark:text-virtual-400 hover:bg-virtual-50 dark:hover:bg-virtual-900/20 cursor-pointer'
                   : 'text-fg-subtle cursor-default'
               }`}
             >
               <span className={`flex items-center justify-center w-6 h-6 rounded-full text-xs font-bold ${
                 isActive
-                  ? 'bg-teal-600 text-white'
+                  ? 'bg-virtual-600 text-white'
                   : isCompleted
-                  ? 'bg-teal-500 text-white'
+                  ? 'bg-virtual-500 text-white'
                   : 'bg-surface border border-line-strong text-fg-subtle'
               }`}>
                 {isCompleted ? <CheckIcon className="h-3.5 w-3.5" /> : index + 1}
@@ -279,7 +279,7 @@ const VirtualServerForm: React.FC<VirtualServerFormProps> = ({
     <div className="space-y-6">
       <div>
         <label className="block text-sm font-medium text-fg-muted mb-1">
-          Name <span className="text-red-500">*</span>
+          Name <span className="text-danger-500">*</span>
         </label>
         <input
           type="text"
@@ -292,7 +292,7 @@ const VirtualServerForm: React.FC<VirtualServerFormProps> = ({
 
       <div>
         <label className="block text-sm font-medium text-fg-muted mb-1">
-          Path <span className="text-red-500">*</span>
+          Path <span className="text-danger-500">*</span>
         </label>
         <input
           type="text"
@@ -347,7 +347,7 @@ const VirtualServerForm: React.FC<VirtualServerFormProps> = ({
         <button
           type="button"
           onClick={() => setUseToolSelector(!useToolSelector)}
-          className="text-xs text-teal-600 dark:text-teal-400 hover:underline"
+          className="text-xs text-virtual-600 dark:text-virtual-400 hover:underline"
         >
           {useToolSelector ? 'Switch to manual entry' : 'Switch to tool picker'}
         </button>
@@ -397,7 +397,7 @@ const VirtualServerForm: React.FC<VirtualServerFormProps> = ({
               <button
                 type="button"
                 onClick={() => removeManualMapping(index)}
-                className="p-2 rounded-lg text-fg-subtle hover:bg-surface-hover hover:text-red-500 transition-colors"
+                className="p-2 rounded-lg text-fg-subtle hover:bg-surface-hover hover:text-danger-500 transition-colors"
               >
                 <TrashIcon className="h-4 w-4" />
               </button>
@@ -406,8 +406,8 @@ const VirtualServerForm: React.FC<VirtualServerFormProps> = ({
           <button
             type="button"
             onClick={addManualMapping}
-            className="flex items-center gap-2 px-3 py-2 text-sm text-teal-600 dark:text-teal-400
-                       hover:bg-teal-50 dark:hover:bg-teal-900/20 rounded-lg transition-colors"
+            className="flex items-center gap-2 px-3 py-2 text-sm text-virtual-600 dark:text-virtual-400
+                       hover:bg-virtual-50 dark:hover:bg-virtual-900/20 rounded-lg transition-colors"
           >
             <PlusIcon className="h-4 w-4" />
             Add Tool Mapping
@@ -629,8 +629,8 @@ const VirtualServerForm: React.FC<VirtualServerFormProps> = ({
         <div className="flex-1 overflow-y-auto p-6">
           {/* Validation error */}
           {validationError && (
-            <div className="mb-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
-              <p className="text-sm text-red-700 dark:text-red-300">
+            <div className="mb-4 p-3 bg-danger-50 dark:bg-danger-900/20 border border-danger-200 dark:border-danger-800 rounded-lg">
+              <p className="text-sm text-danger-700 dark:text-danger-300">
                 {validationError}
               </p>
             </div>
@@ -667,7 +667,7 @@ const VirtualServerForm: React.FC<VirtualServerFormProps> = ({
                 onClick={handleSubmit}
                 disabled={saving}
                 className="px-4 py-2 text-sm font-medium text-white
-                           bg-teal-600 rounded-lg hover:bg-teal-700 transition-colors
+                           bg-virtual-600 rounded-lg hover:bg-virtual-700 transition-colors
                            disabled:opacity-50 flex items-center gap-2"
               >
                 {saving && (
@@ -683,7 +683,7 @@ const VirtualServerForm: React.FC<VirtualServerFormProps> = ({
                 type="button"
                 onClick={goToNext}
                 className="px-4 py-2 text-sm font-medium text-white
-                           bg-teal-600 rounded-lg hover:bg-teal-700 transition-colors"
+                           bg-virtual-600 rounded-lg hover:bg-virtual-700 transition-colors"
               >
                 Next
               </button>

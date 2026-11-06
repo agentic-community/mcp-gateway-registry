@@ -107,6 +107,14 @@ from registry.services.scanner_llm_analyzer import (
 
 # Import services for initialization
 from registry.services.server_service import server_service
+from registry.utils.branding_files import (
+    BRANDING_PATH_SEGMENT,
+    DEFAULT_BRANDING_FILES,
+    BrandingFileRefusedError,
+    branding_content_type,
+    branding_response_headers,
+    resolve_branding_file,
+)
 
 # Server start time tracking moved to registry/api/system_routes.py
 # Setup logging using shared module (RotatingFileHandler + optional MongoDB)
@@ -1482,6 +1490,7 @@ def _build_cached_index_html() -> str | None:
     html_content = html_content.replace('="/static/', f'="{prefix}/static/')
     html_content = html_content.replace('="/favicon.ico"', f'="{prefix}/favicon.ico"')
     html_content = html_content.replace('="/rum.js"', f'="{prefix}/rum.js"')
+    html_content = html_content.replace('="/branding/', f'="{prefix}/branding/')
 
     # Inject <base> tag if not already present (for React Router relative links)
     if "<base" not in html_content:
@@ -1511,6 +1520,58 @@ async def serve_rum_js():
             headers=headers,
         )
     return FileResponse(rum_path, media_type="application/javascript", headers=headers)
+
+
+# Static UI assets, not an API: kept out of the OpenAPI schema (api/openapi.json).
+@app.api_route(
+    f"/{BRANDING_PATH_SEGMENT}/{{name:path}}",
+    methods=["GET", "HEAD"],
+    include_in_schema=False,
+)
+async def serve_branding_file(
+    name: str,
+) -> Response:
+    """Serve a runtime UI branding file from the branding folder.
+
+    Registered unconditionally (like /rum.js) so the route exists whether or
+    not the React build is present, and before the SPA catch-all so a
+    /branding/... request never falls through to index.html. Public: the login
+    page needs the logo and theme before anyone signs in.
+
+    The ``path`` converter captures everything under /branding/ so names with
+    a slash are rejected here with a 404 instead of reaching the SPA. Files are
+    read from disk on every request (never cached in memory), so an edited
+    ConfigMap shows up without a restart.
+
+    Args:
+        name: Requested file name; must be a bare allowed branding file name.
+
+    Returns:
+        The file, or the built-in default for a missing manifest.json or
+        theme.css.
+
+    Raises:
+        HTTPException: 404 for a disallowed name, a missing file without a
+            default, or a file that is refused (escapes the folder, too
+            large, not a regular file).
+    """
+    content_type = branding_content_type(name)
+    if content_type is None:
+        raise HTTPException(status_code=404)
+
+    headers = branding_response_headers(content_type)
+    try:
+        file_path = resolve_branding_file(settings.branding_dir, name)
+    except FileNotFoundError:
+        default_content = DEFAULT_BRANDING_FILES.get(name)
+        if default_content is None:
+            raise HTTPException(status_code=404) from None
+        return Response(content=default_content, media_type=content_type, headers=headers)
+    except BrandingFileRefusedError as e:
+        logger.warning("Branding: refusing to serve %s: %s", name, e)
+        raise HTTPException(status_code=404) from None
+
+    return FileResponse(file_path, media_type=content_type, headers=headers)
 
 
 GATEWAY_PROXY_DISABLED_BODY: dict[str, str] = {

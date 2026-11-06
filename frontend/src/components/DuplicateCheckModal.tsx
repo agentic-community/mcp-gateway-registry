@@ -186,9 +186,9 @@ const DuplicateCheckModal: React.FC<DuplicateCheckModalProps> = ({
       <div className="space-y-4">
         {hasCollision && (
           <>
-            <div className="flex items-start gap-3 p-3 rounded-lg bg-red-50 border border-red-200 dark:bg-red-900/30 dark:border-red-700">
-              <ExclamationTriangleIcon className="h-5 w-5 mt-0.5 text-red-600 dark:text-red-400 flex-shrink-0" />
-              <p className="text-sm text-red-800 dark:text-red-200">
+            <div className="flex items-start gap-3 p-3 rounded-lg bg-danger-50 border border-danger-200 dark:bg-danger-900/30 dark:border-danger-700">
+              <ExclamationTriangleIcon className="h-5 w-5 mt-0.5 text-danger-600 dark:text-danger-400 flex-shrink-0" />
+              <p className="text-sm text-danger-800 dark:text-danger-200">
                 The URL you&apos;re registering matches{' '}
                 {collisionWith.length === 1
                   ? 'an existing entry'
@@ -212,9 +212,9 @@ const DuplicateCheckModal: React.FC<DuplicateCheckModalProps> = ({
 
         {hasAdvisory && (
           <>
-            <div className="flex items-start gap-3 p-3 rounded-lg bg-blue-50 border border-blue-200 dark:bg-blue-900/30 dark:border-blue-700">
-              <InformationCircleIcon className="h-5 w-5 mt-0.5 text-blue-600 dark:text-blue-400 flex-shrink-0" />
-              <p className="text-sm text-blue-800 dark:text-blue-200">
+            <div className="flex items-start gap-3 p-3 rounded-lg bg-info-50 border border-info-200 dark:bg-info-900/30 dark:border-info-700">
+              <InformationCircleIcon className="h-5 w-5 mt-0.5 text-info-600 dark:text-info-400 flex-shrink-0" />
+              <p className="text-sm text-info-800 dark:text-info-200">
                 {hasCollision ? 'You may also want to consider these similar entries:' : (
                   <>
                     We found {describeMatches(advisoryMatches)} similar to

@@ -54,12 +54,12 @@ export const CloudProviderBanner: React.FC = () => {
     <div
       role="region"
       aria-label="Deployment environment"
-      className="mx-4 mt-4 rounded-xl border border-indigo-200 bg-indigo-50 p-4 sm:mx-6 lg:mx-8 dark:border-indigo-500/30 dark:bg-indigo-500/10"
+      className="mx-4 mt-4 rounded-xl border border-info-200 bg-info-50 p-4 sm:mx-6 lg:mx-8 dark:border-info-500/30 dark:bg-info-500/10"
     >
-      <p className="mb-1 text-sm font-medium text-indigo-900 dark:text-indigo-100">
+      <p className="mb-1 text-sm font-medium text-info-900 dark:text-info-100">
         Help us improve: where is this registry deployed?
       </p>
-      <p className="mb-3 text-xs text-indigo-700 dark:text-indigo-300">
+      <p className="mb-3 text-xs text-info-700 dark:text-info-300">
         Automatic detection could not identify this environment. Your answer is saved for this
         registry. To set it at deploy time instead, use <code className="font-mono">MCP_CLOUD_PROVIDER</code> (Docker or
         ECS) or <code className="font-mono">app.mcpCloudProvider</code> (Helm).
@@ -78,7 +78,7 @@ export const CloudProviderBanner: React.FC = () => {
         <button
           type="button"
           onClick={() => submit('declined')}
-          className="ml-1 rounded px-2 py-1 text-xs text-indigo-700 hover:text-indigo-900 dark:text-indigo-300 dark:hover:text-indigo-100"
+          className="ml-1 rounded px-2 py-1 text-xs text-info-700 hover:text-info-900 dark:text-info-300 dark:hover:text-info-100"
         >
           Dismiss
         </button>

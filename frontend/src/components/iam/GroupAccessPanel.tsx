@@ -238,7 +238,7 @@ const grantedPermCount = Object.entries(props.uiPermissions)
                               proxied={proxied}
                             />
                             {hasDestructive && (
-                              <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+                              <p className="mt-1 text-xs text-warning-600 dark:text-warning-400">
                                 Grants state-changing access (POST/PUT/PATCH/DELETE) to the
                                 proxied backend. "http:*" grants ALL HTTP verbs.
                               </p>
@@ -253,7 +253,7 @@ const grantedPermCount = Object.entries(props.uiPermissions)
                         <button
                           type="button"
                           onClick={() => props.onRemoveServerEntry(idx)}
-                          className="text-fg-subtle hover:text-red-500"
+                          className="text-fg-subtle hover:text-danger-500"
                           aria-label={`Remove server row ${idx + 1}`}
                         >
                           <XMarkIcon className="h-4 w-4" />

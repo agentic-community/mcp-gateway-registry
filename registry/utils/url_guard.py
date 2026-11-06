@@ -163,6 +163,7 @@ import httpx
 
 from ..common.log_redaction import redact_url
 from ..exceptions import UrlValidationError
+from .branding_files import BRANDING_PATH_SEGMENT
 
 if TYPE_CHECKING:
     from ..core.config import Settings
@@ -1510,14 +1511,17 @@ def validate_server_path(
     a mutating admin action masquerade as a health check and be dropped from the
     audit trail.
 
+    A path whose first segment is ``branding`` is also rejected: that prefix is
+    the public UI branding route, which a server location block would shadow.
+
     Args:
         path: The server path (e.g. ``/github``).
 
     Raises:
         UrlValidationError: If the path is empty, contains disallowed nginx
-            metacharacters, normalizes to an empty (slashes-only) path, or
+            metacharacters, normalizes to an empty (slashes-only) path,
             normalizes to a reserved cross-server wildcard or monitoring-route
-            name.
+            name, or starts with the reserved ``branding`` segment.
     """
     if not path or not isinstance(path, str):
         raise UrlValidationError(str(path), "server path is empty or not a string")
@@ -1553,6 +1557,16 @@ def validate_server_path(
         raise UrlValidationError(
             path,
             f"server path '{normalized}' is reserved (shadows a built-in monitoring route)",
+        )
+
+    # The first segment "branding" is the public UI branding route
+    # ({ROOT_PATH}/branding/<name>). A server there would get an nginx location
+    # block that shadows it (and puts it behind auth_request), so reserve it.
+    if normalized.split("/", 1)[0].lower() == BRANDING_PATH_SEGMENT:
+        raise UrlValidationError(
+            path,
+            f"server path '{normalized}' is reserved (the '/{BRANDING_PATH_SEGMENT}' "
+            "prefix serves the UI branding files)",
         )
 
 

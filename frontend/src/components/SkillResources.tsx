@@ -265,7 +265,7 @@ function ResourceItem({
           </span>
         </div>
         {downloadError && (
-          <div className="text-xs text-red-600 dark:text-red-400 mt-1" role="alert">
+          <div className="text-xs text-danger-600 dark:text-danger-400 mt-1" role="alert">
             {downloadError}
           </div>
         )}
@@ -276,7 +276,7 @@ function ResourceItem({
             type="button"
             onClick={() => onPreview(resource)}
             aria-label={`View ${resource.path}`}
-            className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded text-amber-700 dark:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-500/10"
+            className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded text-skill-700 dark:text-skill-300 hover:bg-skill-50 dark:hover:bg-skill-500/10"
           >
             <EyeIcon className="h-4 w-4" />
             View
@@ -416,7 +416,7 @@ function ResourcePreview({
         <button
           type="button"
           onClick={onBack}
-          className="inline-flex items-center gap-1 px-2 py-1 rounded text-amber-700 dark:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-500/10"
+          className="inline-flex items-center gap-1 px-2 py-1 rounded text-skill-700 dark:text-skill-300 hover:bg-skill-50 dark:hover:bg-skill-500/10"
         >
           <ArrowLeftIcon className="h-4 w-4" />
           Back to SKILL.md
@@ -427,15 +427,15 @@ function ResourcePreview({
         </span>
       </div>
       {error ? (
-        <div className="text-center py-8 text-red-600 dark:text-red-400">
+        <div className="text-center py-8 text-danger-600 dark:text-danger-400">
           Could not load resource: {error}
         </div>
       ) : content === null ? (
         <div className="flex items-center justify-center py-8">
-          <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-amber-600"></div>
+          <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-skill-600"></div>
         </div>
       ) : isMarkdown ? (
-        <div className="prose prose-sm dark:prose-invert max-w-none prose-headings:text-amber-800 dark:prose-headings:text-amber-200 prose-a:text-amber-600 dark:prose-a:text-amber-400">
+        <div className="prose prose-sm dark:prose-invert max-w-none prose-headings:text-skill-800 dark:prose-headings:text-skill-200 prose-a:text-skill-600 dark:prose-a:text-skill-400">
           <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ a: safeMarkdownAnchor }}>{content}</ReactMarkdown>
         </div>
       ) : (
@@ -617,7 +617,7 @@ function SkillResourcesInner({
           onClick={_onDownloadAllClick}
           disabled={cap.over || bundleStatus === 'preparing'}
           aria-label="Download all classified resources as a zip"
-          className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded bg-amber-600 hover:bg-amber-700 text-white disabled:opacity-50 disabled:cursor-not-allowed"
+          className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded bg-skill-600 hover:bg-skill-700 text-white disabled:opacity-50 disabled:cursor-not-allowed"
           title={cap.over ? cap.reason : undefined}
         >
           <ArrowDownTrayIcon className="h-4 w-4" />
@@ -647,8 +647,8 @@ function SkillResourcesInner({
           role="alert"
           className={`mb-3 px-3 py-2 rounded text-sm ${
             bundleStatus === 'error' || bundleStatus === 'over-cap'
-              ? 'bg-red-50 dark:bg-red-900/30 text-red-800 dark:text-red-200'
-              : 'bg-amber-50 dark:bg-amber-900/30 text-amber-800 dark:text-amber-200'
+              ? 'bg-danger-50 dark:bg-danger-900/30 text-danger-800 dark:text-danger-200'
+              : 'bg-warning-50 dark:bg-warning-900/30 text-warning-800 dark:text-warning-200'
           }`}
         >
           {bundleError}

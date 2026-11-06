@@ -727,6 +727,28 @@ variable "registry_rum_allowed_hosts" {
   default     = ""
 }
 
+# Runtime UI branding archive: base64 of a .tar.gz of the branding folder
+# (manifest.json, theme.css, logos, favicon, .woff2 fonts). The registry
+# entrypoint extracts it into /app/branding at startup, so an ECS deployment can
+# reskin the UI without a custom image. Not a secret, so it is a plain env
+# value. Capped at 48 KiB of base64 text (about 36 KiB of compressed archive):
+# ECS limits a whole task definition to 64 KiB, and this value shares that
+# budget with every other registry environment variable.
+variable "ui_branding_archive_b64" {
+  description = "Optional base64-encoded .tar.gz of the UI branding folder, extracted into /app/branding by the registry at startup. Empty (default) keeps the stock branding. At most 49152 characters (48 KiB) so the registry task definition stays under the ECS 64 KiB limit. Produce it with: tar -czf - -C ./branding . | base64 | tr -d '\\n'"
+  type        = string
+  default     = ""
+
+  validation {
+    condition = var.ui_branding_archive_b64 == "" || (
+      length(var.ui_branding_archive_b64) <= 49152
+      && length(var.ui_branding_archive_b64) % 4 == 0
+      && can(regex("^[A-Za-z0-9+/]+={0,2}$", var.ui_branding_archive_b64))
+    )
+    error_message = "ui_branding_archive_b64 must be empty or single-line standard base64 (A-Z, a-z, 0-9, +, /, up to two trailing =, length a multiple of 4) of at most 49152 characters (48 KiB). Build it with: tar -czf - -C ./branding . | base64 | tr -d '\\n'. If the archive is too large, shrink or drop images and fonts."
+  }
+}
+
 # =============================================================================
 # CLOUDFRONT CONFIGURATION (CloudFront HTTPS Support feature)
 # =============================================================================

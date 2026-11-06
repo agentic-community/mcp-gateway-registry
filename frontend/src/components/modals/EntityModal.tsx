@@ -135,11 +135,11 @@ const EntityModal: React.FC<EntityModalProps> = ({
 
         {/* Error State */}
         {!loading && error && (
-          <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4 mb-4">
-            <h4 className="font-medium text-red-900 dark:text-red-100 mb-1">
+          <div className="bg-danger-50 dark:bg-danger-900/20 border border-danger-200 dark:border-danger-800 rounded-lg p-4 mb-4">
+            <h4 className="font-medium text-danger-900 dark:text-danger-100 mb-1">
               Error Loading Details
             </h4>
-            <p className="text-sm text-red-800 dark:text-red-200">{error}</p>
+            <p className="text-sm text-danger-800 dark:text-danger-200">{error}</p>
           </div>
         )}
 

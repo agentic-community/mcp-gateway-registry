@@ -786,6 +786,19 @@ caBundle:
   existingSecret: "" # or a Secret, for operators who treat the chain as sensitive
   key: ca-bundle.pem # key within the ConfigMap or Secret
   mountPath: /etc/ssl/mcp-gateway # directory the volume is mounted at
+# Runtime UI branding (logos, favicon, colors, named themes, fonts) without an
+# image rebuild. Put the branding files (manifest.json, theme.css, images,
+# .woff2 fonts) in a ConfigMap you manage, binary files under binaryData:
+#   kubectl create configmap registry-branding --from-file=./branding/
+# The whole ConfigMap is mounted read-only as a directory at mountPath (never via
+# subPath, so an edited ConfigMap reaches the pod without a restart) and the
+# deployment sets UI_BRANDING_DIR to mountPath, so the path is never written
+# twice. The registry serves the files at /branding/<name>. Keep the ConfigMap
+# under the 1 MiB Kubernetes object limit. See docs/ui-branding.md.
+branding:
+  enabled: false
+  existingConfigMap: "" # required when enabled (a `fail` guard enforces it)
+  mountPath: /app/branding # directory the ConfigMap is mounted at
 extraEnv: []
 # Extra `envFrom:` sources appended to the container. Use this to inject
 # all keys from an external ConfigMap or Secret you manage (e.g. via

@@ -83,7 +83,7 @@ const PullCardPreviewModal: React.FC<PullCardPreviewModalProps> = ({
           <div className="px-6 py-4 overflow-y-auto flex-1">
             {loading && (
               <div className="flex items-center justify-center py-8">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-cyan-600" />
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-agent-600" />
                 <span className="ml-3 text-fg-muted">Fetching remote card...</span>
               </div>
             )}
@@ -116,18 +116,18 @@ const PullCardPreviewModal: React.FC<PullCardPreviewModalProps> = ({
                     </div>
                     <div className="grid grid-cols-2 gap-3">
                       <div>
-                        <span className="text-xs font-medium text-red-600 dark:text-red-400">
+                        <span className="text-xs font-medium text-danger-600 dark:text-danger-400">
                           Current
                         </span>
-                        <pre className="mt-1 text-xs bg-red-50 dark:bg-red-900/20 text-red-800 dark:text-red-200 p-2 rounded overflow-x-auto max-h-32">
+                        <pre className="mt-1 text-xs bg-danger-50 dark:bg-danger-900/20 text-danger-800 dark:text-danger-200 p-2 rounded overflow-x-auto max-h-32">
                           {formatValue(change.current_value)}
                         </pre>
                       </div>
                       <div>
-                        <span className="text-xs font-medium text-green-600 dark:text-green-400">
+                        <span className="text-xs font-medium text-success-600 dark:text-success-400">
                           Remote
                         </span>
-                        <pre className="mt-1 text-xs bg-green-50 dark:bg-green-900/20 text-green-800 dark:text-green-200 p-2 rounded overflow-x-auto max-h-32">
+                        <pre className="mt-1 text-xs bg-success-50 dark:bg-success-900/20 text-success-800 dark:text-success-200 p-2 rounded overflow-x-auto max-h-32">
                           {formatValue(change.remote_value)}
                         </pre>
                       </div>
@@ -150,7 +150,7 @@ const PullCardPreviewModal: React.FC<PullCardPreviewModalProps> = ({
             {result && result.has_changes && (
               <button
                 onClick={onApply}
-                className="btn-base text-white bg-cyan-600 hover:bg-cyan-700"
+                className="btn-base text-white bg-agent-600 hover:bg-agent-700"
               >
                 Apply Changes
               </button>

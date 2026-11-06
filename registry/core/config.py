@@ -215,6 +215,12 @@ class Settings(BaseSettings):
         description="Comma-separated allowlist of hosts the RUM snippet may reference (script src and beacon endpoints). If set, the snippet is rejected (fail closed) when it references any host not on the list. Empty disables the check.",
     )
 
+    # Runtime UI branding folder (logos, favicon, manifest.json, theme.css)
+    ui_branding_dir: str | None = Field(
+        default=None,
+        description="Directory holding the UI branding files served at {ROOT_PATH}/branding/<name>. Flat folder, no subdirectories. When unset, resolves to /app/branding in the container and ./branding in local dev. The entrypoint extracts UI_BRANDING_ARCHIVE_B64 into this directory when that variable is set.",
+    )
+
     # Auth settings
     secret_key: str = ""
     session_cookie_name: str = "mcp_gateway_session"
@@ -2746,6 +2752,19 @@ class Settings(BaseSettings):
         if self.is_local_dev:
             return Path.cwd() / "registry" / "templates"
         return self.container_registry_dir / "templates"
+
+    @property
+    def branding_dir(self) -> Path:
+        """Resolve the UI branding folder.
+
+        Resolution order: UI_BRANDING_DIR when set, else ./branding in local
+        dev mode, else /app/branding in the container.
+        """
+        if self.ui_branding_dir:
+            return Path(self.ui_branding_dir)
+        if self.is_local_dev:
+            return Path.cwd() / "branding"
+        return self.container_app_dir / "branding"
 
     @property
     def nginx_config_path(self) -> Path:

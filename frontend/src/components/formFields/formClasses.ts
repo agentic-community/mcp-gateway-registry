@@ -21,10 +21,10 @@ export const CHECKBOX =
 export const LABEL = 'block text-sm font-medium text-fg-muted mb-1';
 
 /** Inline validation-error text shown under a field. */
-export const FIELD_ERROR = 'mt-1 text-sm text-red-600 dark:text-red-400';
+export const FIELD_ERROR = 'mt-1 text-sm text-danger-600 dark:text-danger-400';
 
 /** Border applied to a field when it has a validation error. */
-export const FIELD_ERROR_BORDER = 'border-red-500 dark:border-red-400';
+export const FIELD_ERROR_BORDER = 'border-danger-500 dark:border-danger-400';
 
 /** Build field classes, optionally flagging an error state. */
 export function fieldClass(hasError = false): string {

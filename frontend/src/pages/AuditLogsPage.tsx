@@ -46,7 +46,7 @@ const AuditLogsPage: React.FC = () => {
     return (
       <div className="flex items-center justify-center p-4">
         <div className="card max-w-md p-8 text-center">
-          <ShieldExclamationIcon className="mx-auto mb-4 h-14 w-14 text-red-500" />
+          <ShieldExclamationIcon className="mx-auto mb-4 h-14 w-14 text-danger-500" />
           <h1 className="mb-2 text-xl font-semibold text-fg">Access Denied</h1>
           <p className="text-fg-muted">You need administrator privileges to view audit logs.</p>
         </div>

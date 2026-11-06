@@ -53,35 +53,35 @@ const STATUS_CONFIG = {
   verified: {
     label: 'ANS VERIFIED',
     Icon: ShieldCheckIcon,
-    badgeClasses: 'bg-gradient-to-r from-emerald-100 to-green-100 text-emerald-700 ' +
-      'dark:from-emerald-900/30 dark:to-green-900/30 dark:text-emerald-300 ' +
-      'border border-emerald-200 dark:border-emerald-600',
-    iconColor: 'text-emerald-600 dark:text-emerald-400',
-    modalBadgeClasses: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300',
+    badgeClasses: 'bg-gradient-to-r from-success-100 to-success-100 text-success-700 ' +
+      'dark:from-success-900/30 dark:to-success-900/30 dark:text-success-300 ' +
+      'border border-success-200 dark:border-success-600',
+    iconColor: 'text-success-600 dark:text-success-400',
+    modalBadgeClasses: 'bg-success-100 text-success-700 dark:bg-success-900/30 dark:text-success-300',
   },
   expired: {
     label: 'ANS EXPIRED',
     Icon: ExclamationTriangleIcon,
-    badgeClasses: 'bg-gradient-to-r from-yellow-100 to-amber-100 text-yellow-700 ' +
-      'dark:from-yellow-900/30 dark:to-amber-900/30 dark:text-yellow-300 ' +
-      'border border-yellow-200 dark:border-yellow-600',
-    iconColor: 'text-yellow-600 dark:text-yellow-400',
-    modalBadgeClasses: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-300',
+    badgeClasses: 'bg-gradient-to-r from-warning-100 to-warning-100 text-warning-700 ' +
+      'dark:from-warning-900/30 dark:to-warning-900/30 dark:text-warning-300 ' +
+      'border border-warning-200 dark:border-warning-600',
+    iconColor: 'text-warning-600 dark:text-warning-400',
+    modalBadgeClasses: 'bg-warning-100 text-warning-700 dark:bg-warning-900/30 dark:text-warning-300',
   },
   revoked: {
     label: 'ANS REVOKED',
     Icon: XCircleIcon,
-    badgeClasses: 'bg-gradient-to-r from-red-100 to-rose-100 text-red-700 ' +
-      'dark:from-red-900/30 dark:to-rose-900/30 dark:text-red-300 ' +
-      'border border-red-200 dark:border-red-600',
-    iconColor: 'text-red-600 dark:text-red-400',
-    modalBadgeClasses: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300',
+    badgeClasses: 'bg-gradient-to-r from-danger-100 to-danger-100 text-danger-700 ' +
+      'dark:from-danger-900/30 dark:to-danger-900/30 dark:text-danger-300 ' +
+      'border border-danger-200 dark:border-danger-600',
+    iconColor: 'text-danger-600 dark:text-danger-400',
+    modalBadgeClasses: 'bg-danger-100 text-danger-700 dark:bg-danger-900/30 dark:text-danger-300',
   },
   not_found: {
     label: 'ANS NOT FOUND',
     Icon: ExclamationTriangleIcon,
-    badgeClasses: 'bg-gradient-to-r from-gray-100 to-slate-100 text-gray-700 ' +
-      'dark:from-gray-900/30 dark:to-slate-900/30 dark:text-gray-300 ' +
+    badgeClasses: 'bg-gradient-to-r from-gray-100 to-gray-100 text-gray-700 ' +
+      'dark:from-gray-900/30 dark:to-gray-900/30 dark:text-gray-300 ' +
       'border border-gray-200 dark:border-gray-600',
     iconColor: 'text-gray-600 dark:text-gray-400',
     modalBadgeClasses: 'bg-gray-100 text-gray-700 dark:bg-gray-900/30 dark:text-gray-300',
@@ -89,11 +89,11 @@ const STATUS_CONFIG = {
   pending: {
     label: 'ANS PENDING',
     Icon: ShieldCheckIcon,
-    badgeClasses: 'bg-gradient-to-r from-blue-100 to-indigo-100 text-blue-700 ' +
-      'dark:from-blue-900/30 dark:to-indigo-900/30 dark:text-blue-300 ' +
-      'border border-blue-200 dark:border-blue-600',
-    iconColor: 'text-blue-600 dark:text-blue-400',
-    modalBadgeClasses: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300',
+    badgeClasses: 'bg-gradient-to-r from-info-100 to-info-100 text-info-700 ' +
+      'dark:from-info-900/30 dark:to-info-900/30 dark:text-info-300 ' +
+      'border border-info-200 dark:border-info-600',
+    iconColor: 'text-info-600 dark:text-info-400',
+    modalBadgeClasses: 'bg-info-100 text-info-700 dark:bg-info-900/30 dark:text-info-300',
   },
 };
 
@@ -189,7 +189,7 @@ const ANSCertificateModal: React.FC<ANSCertificateModalProps> = ({ ansMetadata, 
                 onClick={() => setShowRawJson(!showRawJson)}
                 className={`p-1.5 rounded-lg transition-colors ${
                   showRawJson
-                    ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-400'
+                    ? 'bg-info-100 text-info-700 dark:bg-info-900/30 dark:text-info-400'
                     : 'text-fg-subtle hover:text-fg hover:bg-surface-hover'
                 }`}
                 title="View raw ANS JSON"
@@ -210,7 +210,7 @@ const ANSCertificateModal: React.FC<ANSCertificateModalProps> = ({ ansMetadata, 
         {/* Raw JSON View */}
         {showRawJson && ansMetadata.raw_ans_response && (
           <div className="mb-4">
-            <pre className="text-[11px] font-mono bg-gray-950 text-green-400 p-4 rounded-lg overflow-x-auto max-h-[60vh]">
+            <pre className="text-[11px] font-mono bg-gray-950 text-success-400 p-4 rounded-lg overflow-x-auto max-h-[60vh]">
               {JSON.stringify(ansMetadata.raw_ans_response, null, 2)}
             </pre>
           </div>
@@ -261,7 +261,7 @@ const ANSCertificateModal: React.FC<ANSCertificateModalProps> = ({ ansMetadata, 
                   href={`https://${ansMetadata.domain}`}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-cyan-600 dark:text-cyan-400 hover:underline text-sm"
+                  className="text-info-600 dark:text-info-400 hover:underline text-sm"
                 >
                   {ansMetadata.domain}
                 </a>
@@ -278,7 +278,7 @@ const ANSCertificateModal: React.FC<ANSCertificateModalProps> = ({ ansMetadata, 
                   href={`https://${ansMetadata.domain}/.well-known/agent-card.json`}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-cyan-600 dark:text-cyan-400 hover:underline text-xs font-mono break-all"
+                  className="text-info-600 dark:text-info-400 hover:underline text-xs font-mono break-all"
                 >
                   https://{ansMetadata.domain}/.well-known/agent-card.json
                 </a>
@@ -367,12 +367,12 @@ const ANSCertificateModal: React.FC<ANSCertificateModalProps> = ({ ansMetadata, 
                           href={ep.url}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="text-cyan-600 dark:text-cyan-400 hover:underline font-mono truncate"
+                          className="text-info-600 dark:text-info-400 hover:underline font-mono truncate"
                         >
                           {ep.url}
                         </SafeLink>
                         {ep.protocol && (
-                          <span className="px-1.5 py-0.5 bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 rounded text-[10px] font-medium flex-shrink-0">
+                          <span className="px-1.5 py-0.5 bg-info-50 dark:bg-info-900/30 text-info-600 dark:text-info-400 rounded text-[10px] font-medium flex-shrink-0">
                             {ep.protocol}
                           </span>
                         )}
@@ -406,7 +406,7 @@ const ANSCertificateModal: React.FC<ANSCertificateModalProps> = ({ ansMetadata, 
                       {fn.tags && fn.tags.length > 0 && (
                         <div className="flex gap-1">
                           {fn.tags.map((tag, ti) => (
-                            <span key={ti} className="px-1 py-0.5 bg-cyan-50 dark:bg-cyan-900/30 text-cyan-600 dark:text-cyan-400 rounded text-[10px]">
+                            <span key={ti} className="px-1 py-0.5 bg-info-50 dark:bg-info-900/30 text-info-600 dark:text-info-400 rounded text-[10px]">
                               {tag}
                             </span>
                           ))}
@@ -434,7 +434,7 @@ const ANSCertificateModal: React.FC<ANSCertificateModalProps> = ({ ansMetadata, 
                         href={link.href}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="text-cyan-600 dark:text-cyan-400 hover:underline font-mono truncate"
+                        className="text-info-600 dark:text-info-400 hover:underline font-mono truncate"
                       >
                         {link.href}
                       </SafeLink>

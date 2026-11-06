@@ -101,7 +101,7 @@ const SkillFormModal: React.FC<SkillFormModalProps> = ({
                 type="button"
                 onClick={() => setAutoFill(!autoFill)}
                 className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                  autoFill ? 'bg-amber-600' : 'bg-gray-300 dark:bg-gray-600'
+                  autoFill ? 'bg-skill-600' : 'bg-gray-300 dark:bg-gray-600'
                 }`}
               >
                 <span
@@ -130,7 +130,7 @@ const SkillFormModal: React.FC<SkillFormModalProps> = ({
                   type="button"
                   onClick={onParse}
                   disabled={!form.skill_md_url || parseLoading}
-                  className="btn-base px-3 bg-amber-600 text-white shadow-sm hover:bg-amber-700 whitespace-nowrap"
+                  className="btn-base px-3 bg-skill-600 text-white shadow-sm hover:bg-skill-700 whitespace-nowrap"
                 >
                   {parseLoading ? 'Parsing...' : 'Parse'}
                 </button>
@@ -310,7 +310,7 @@ const SkillFormModal: React.FC<SkillFormModalProps> = ({
                 type="button"
                 onClick={onParse}
                 disabled={parseLoading}
-                className="btn-base mt-2 px-3 py-1.5 bg-amber-600 text-white shadow-sm hover:bg-amber-700"
+                className="btn-base mt-2 px-3 py-1.5 bg-skill-600 text-white shadow-sm hover:bg-skill-700"
               >
                 {parseLoading ? 'Parsing...' : 'Re-parse with global credentials'}
               </button>
@@ -343,7 +343,7 @@ const SkillFormModal: React.FC<SkillFormModalProps> = ({
                     type="button"
                     onClick={onParse}
                     disabled={parseLoading}
-                    className="btn-base px-3 bg-amber-600 text-white shadow-sm hover:bg-amber-700 whitespace-nowrap"
+                    className="btn-base px-3 bg-skill-600 text-white shadow-sm hover:bg-skill-700 whitespace-nowrap"
                   >
                     {parseLoading ? 'Parsing...' : 'Re-parse'}
                   </button>
@@ -396,7 +396,7 @@ const SkillFormModal: React.FC<SkillFormModalProps> = ({
             <button
               type="submit"
               disabled={loading}
-              className="btn-base w-full bg-amber-600 text-white shadow-sm hover:bg-amber-700"
+              className="btn-base w-full bg-skill-600 text-white shadow-sm hover:bg-skill-700"
             >
               {loading
                 ? editing

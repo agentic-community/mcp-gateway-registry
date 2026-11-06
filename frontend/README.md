@@ -4,7 +4,7 @@ The registry web UI: React 18, TypeScript, Vite and Tailwind CSS 3.
 
 ## Development
 
-You need Node.js 20 or newer and a registry backend on `http://localhost:7860`. The Vite dev server proxies `/api`, `/auth`, `/oauth2` and `/.well-known` to that address (see `vite.config.ts`).
+You need Node.js 20 or newer and a registry backend on `http://localhost:7860`. The Vite dev server proxies `/api`, `/auth`, `/oauth2`, `/.well-known` and `/branding` to that address (see `vite.config.ts`).
 
 ```bash
 npm ci
@@ -27,7 +27,7 @@ Every color comes from a CSS custom property declared in `src/index.css`, and `t
 
 There are two layers of tokens:
 
-- The palette ramps `--gray-*` and `--primary-*` back Tailwind's `gray`, `primary` and `purple` classes (`purple` is an alias of the brand ramp). Existing components style each mode with `dark:` variants on these, as before.
+- The palette ramps back Tailwind's color names: `gray` for neutrals, `primary` for the brand (`purple` is an alias), `success`, `warning`, `danger` and `info` for status, and `server`, `agent`, `skill`, `virtual` and `custom` for the registry entity types. Components style each mode with `dark:` variants on these. Raw Tailwind hues such as `text-red-600` or `bg-cyan-50` cannot be rebranded, so an ESLint rule (`no-restricted-syntax` in `package.json`) rejects them: write `text-danger-600` or `bg-agent-50` instead.
 - The semantic tokens change value per mode, so a class needs no `dark:` twin. Use them in new code:
 
 | Tailwind class | Use it for |
@@ -42,9 +42,22 @@ There are two layers of tokens:
 
 `src/index.css` also defines the shared component classes `.btn-primary`, `.btn-secondary`, `.btn-danger`, `.btn-ghost`, `.btn-icon`, `.card`, `.input` and `.label`. Reach for these before writing a new button or input by hand.
 
-The header's appearance menu offers Light, Dark and System, plus a High contrast toggle. `src/contexts/ThemeContext.tsx` stores an explicit choice in `localStorage` (`theme`, `themeName`). System follows the OS setting and stores nothing. A small inline script in `index.html` applies the saved mode before first paint, so a light-mode user never sees a dark flash. It shares the storage keys with `ThemeContext.tsx`, so change both together. The registry ships no Content-Security-Policy; if you add one, allow that script by hash.
+The header's appearance menu offers Light, Dark and System, any themes the deployment's branding defines, and a High contrast toggle that combines with all of them. `src/contexts/ThemeContext.tsx` stores explicit choices in `localStorage` (`theme`, `themeName`, `contrast`). System follows the OS setting and stores nothing. A small inline script in `index.html` applies the saved mode, theme and contrast before first paint, so a light-mode or branded user never sees the default look flash. It shares the storage keys with `ThemeContext.tsx` and `BrandingContext.tsx`, so change them together. The registry ships no Content-Security-Policy; if you add one, allow that script by hash.
 
-To add a palette theme, add an `html.<name>` block to `src/index.css` that overrides the variables, then list the name in `AVAILABLE_THEMES`.
+## Branding
+
+Deployments reskin the UI at runtime from a branding folder that the registry serves at `{ROOT_PATH}/branding/`. [docs/ui-branding.md](../docs/ui-branding.md) is the operator guide. The frontend side:
+
+- `src/contexts/BrandingContext.tsx` fetches `branding/manifest.json` once, validates it with `src/branding/manifest.ts`, applies the favicon and caches the result in `localStorage` (`branding`) for the pre-paint script.
+- `index.html` links `branding/theme.css` at the start of `<body>`, after the app's stylesheet, so its variable overrides win.
+- `Layout.tsx` shows the branded logos, and `ThemeContext.tsx` applies the manifest's default mode, mode lock, theme list and theme color.
+
+The CSS variables in `src/index.css` are the public contract `theme.css` overrides. Adding one is fine. Renaming or removing one breaks deployments that set it, so record it in the release notes and in docs/ui-branding.md. Some changes alter what an override does without renaming anything, and those need the docs updated too:
+
+- Giving a role variable a fixed value instead of a `var(--scale-step)` reference, or the reverse, changes the "Values that do not follow the color scales" table.
+- Moving the high-contrast rules, or changing which steps they replace, changes the "High contrast" section.
+- Switching a component to `rounded-control`/`rounded-card` (or the `.btn-*`, `.input` and `.card` classes), or away from them, changes which corners `--radius-*` reaches, listed under "Corners and fonts".
+- Changing a soft-tint value in `html.dark` means updating the blend constants in `scripts/generate-ui-theme.py` (`DARK_SURFACE`, `DARK_SOFT_BLEND_ALPHA`) to match.
 
 ## Audit log grid
 

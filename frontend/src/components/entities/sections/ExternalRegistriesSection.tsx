@@ -74,7 +74,7 @@ const ExternalRegistriesSection: React.FC<ExternalRegistriesSectionProps> = ({
                   built-in Anthropic/ASOR/AWS sources. */}
               {ardSourceSet.has(source) && (
                 <span
-                  className="px-1.5 py-0.5 text-[10px] font-semibold rounded-full bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300 border border-slate-200 dark:border-slate-600"
+                  className="px-1.5 py-0.5 text-[10px] font-semibold rounded-full bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300 border border-gray-200 dark:border-gray-600"
                   title="ARD (ai-catalog.json) registry"
                 >
                   ARD

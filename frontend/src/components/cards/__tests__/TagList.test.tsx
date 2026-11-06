@@ -31,12 +31,12 @@ describe('TagList', () => {
       <TagList
         tags={['security-pending']}
         tagClassName={(t) =>
-          t === 'security-pending' ? 'bg-amber-100' : undefined
+          t === 'security-pending' ? 'bg-warning-100' : undefined
         }
       />,
     );
     expect(screen.getByText('security-pending').className).toContain(
-      'bg-amber-100',
+      'bg-warning-100',
     );
   });
 });

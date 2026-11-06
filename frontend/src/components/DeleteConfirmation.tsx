@@ -65,27 +65,27 @@ const DeleteConfirmation: React.FC<DeleteConfirmationProps> = ({
   const entityTypeLabel = entityTypeLabels[entityType] || entityType;
 
   return (
-    <div className="p-4 bg-red-50 dark:bg-red-900/20 rounded-lg border border-red-200 dark:border-red-800">
-      <h4 className="text-red-800 dark:text-red-200 font-semibold mb-2">
+    <div className="p-4 bg-danger-50 dark:bg-danger-900/20 rounded-lg border border-danger-200 dark:border-danger-800">
+      <h4 className="text-danger-800 dark:text-danger-200 font-semibold mb-2">
         Delete {entityTypeLabel}
       </h4>
-      <p className="text-sm text-red-700 dark:text-red-300 mb-2">
+      <p className="text-sm text-danger-700 dark:text-danger-300 mb-2">
         This action is irreversible. This will permanently delete the {entityType}{' '}
         "<strong>{entityName}</strong>" and remove it from the registry.
       </p>
-      <p className="text-sm text-red-700 dark:text-red-300 mb-3">
+      <p className="text-sm text-danger-700 dark:text-danger-300 mb-3">
         Type <strong>{entityName}</strong> to confirm:
       </p>
       <input
         type="text"
         value={typedName}
         onChange={(e) => setTypedName(e.target.value)}
-        className="input mb-3 border-red-300 dark:border-red-700"
+        className="input mb-3 border-danger-300 dark:border-danger-700"
         placeholder={entityName}
         disabled={isDeleting}
       />
       {error && (
-        <p className="text-sm text-red-600 dark:text-red-400 mb-3">{error}</p>
+        <p className="text-sm text-danger-600 dark:text-danger-400 mb-3">{error}</p>
       )}
       <div className="flex gap-2 justify-end">
         <button

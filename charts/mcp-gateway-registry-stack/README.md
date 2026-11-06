@@ -251,6 +251,23 @@ default (`/`).
 
 **DNS Requirements:** Configure a single A/CNAME record for your domain pointing to your ingress load balancer.
 
+### UI Branding (optional)
+
+You can reskin the registry UI (colors, logos, favicon, extra themes, fonts) from a ConfigMap, without rebuilding the image. Put the branding files in a folder, then create the ConfigMap in the release namespace:
+
+```bash
+kubectl create configmap acme-branding -n MYNAMESPACE --from-file=./branding/
+```
+
+```yaml
+registry:
+  branding:
+    enabled: true
+    existingConfigMap: acme-branding
+```
+
+The registry mounts the ConfigMap read-only and serves its files at `{registry path}/branding/`. That path sits under the registry's own prefix, so the existing registry ingress covers it in both routing modes and you add no ingress rule. Edits to the ConfigMap reach running pods within a minute or two, with no restart. See [UI branding](../../docs/ui-branding.md) for what goes in the folder.
+
 ## Install
 
 Once the `values.yaml` file is updated and saved, run (substitute MYNAMESPACE for the namespace in which this should be

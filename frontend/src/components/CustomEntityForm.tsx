@@ -80,13 +80,13 @@ function ChipInput({
           <span
             key={chip}
             className="inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full
-                       bg-teal-100 dark:bg-teal-900/30 text-teal-700 dark:text-teal-300"
+                       bg-custom-100 dark:bg-custom-900/30 text-custom-700 dark:text-custom-300"
           >
             {chip}
             <button
               type="button"
               onClick={() => onChange(value.filter((c) => c !== chip))}
-              className="hover:text-red-500"
+              className="hover:text-danger-500"
               aria-label={`Remove ${chip}`}
             >
               <XMarkIcon className="h-3 w-3" />
@@ -445,8 +445,8 @@ const CustomEntityForm: React.FC<CustomEntityFormProps> = ({
 
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
           {formError && (
-            <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
-              <p className="text-sm text-red-700 dark:text-red-300">{formError}</p>
+            <div className="p-3 bg-danger-50 dark:bg-danger-900/20 border border-danger-200 dark:border-danger-800 rounded-lg">
+              <p className="text-sm text-danger-700 dark:text-danger-300">{formError}</p>
             </div>
           )}
 
@@ -551,7 +551,7 @@ const CustomEntityForm: React.FC<CustomEntityFormProps> = ({
             type="button"
             onClick={handleSubmit}
             disabled={saving}
-            className="btn-base bg-teal-600 text-white shadow-sm hover:bg-teal-700"
+            className="btn-base bg-custom-600 text-white shadow-sm hover:bg-custom-700"
           >
             {saving && (
               <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">

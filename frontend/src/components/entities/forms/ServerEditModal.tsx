@@ -344,7 +344,7 @@ const ServerEditModal: React.FC<ServerEditModalProps> = ({
               this the record is invisible AND unremovable from the UI. Unchecking here
               clears the flag, and save DELETEs it -- the one action still available. */}
           {!egressFeatureAvailable && form.oauth_discovery_enabled && (
-            <div className="rounded-md border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 p-3 text-xs text-amber-800 dark:text-amber-300">
+            <div className="rounded-md border border-warning-300 dark:border-warning-700 bg-warning-50 dark:bg-warning-900/20 p-3 text-xs text-warning-800 dark:text-warning-300">
               <p className="font-semibold mb-1">
                 Discovery identity configured, but not usable here
               </p>
@@ -643,7 +643,7 @@ const ServerEditModal: React.FC<ServerEditModalProps> = ({
                     const updated = form.custom_headers.filter((_, i) => i !== idx);
                     setForm((prev) => ({ ...prev, custom_headers: updated }));
                   }}
-                  className="px-3 py-2 text-sm text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300"
+                  className="px-3 py-2 text-sm text-danger-600 hover:text-danger-800 dark:text-danger-400 dark:hover:text-danger-300"
                 >
                   Remove
                 </button>

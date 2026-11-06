@@ -1,6 +1,7 @@
 import React, { Suspense, lazy } from 'react';
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import { AuthProvider } from './contexts/AuthContext';
+import { BrandingProvider } from './contexts/BrandingContext';
 import { ThemeProvider } from './contexts/ThemeContext';
 import Layout from './components/Layout';
 import ProtectedRoute from './components/ProtectedRoute';
@@ -20,6 +21,7 @@ const ConnectedAccountsPage = lazy(() => import('./pages/ConnectedAccountsPage')
 
 function App() {
   return (
+    <BrandingProvider>
     <ThemeProvider>
       <AuthProvider>
         <Router basename={getBasename()}>
@@ -68,6 +70,7 @@ function App() {
         </Router>
       </AuthProvider>
     </ThemeProvider>
+    </BrandingProvider>
   );
 }
 

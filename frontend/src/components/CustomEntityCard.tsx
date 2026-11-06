@@ -60,9 +60,9 @@ function visibilityIcon(visibility: string) {
 function visibilityColor(visibility: string): string {
   switch (visibility) {
     case 'public':
-      return 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400 border border-green-200 dark:border-green-700';
+      return 'bg-success-100 text-success-800 dark:bg-success-900/30 dark:text-success-400 border border-success-200 dark:border-success-700';
     case 'group-restricted':
-      return 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400 border border-blue-200 dark:border-blue-700';
+      return 'bg-info-100 text-info-800 dark:bg-info-900/30 dark:text-info-400 border border-info-200 dark:border-info-700';
     default:
       return 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-600';
   }
@@ -95,7 +95,7 @@ const CustomEntityCard: React.FC<CustomEntityCardProps> = ({
         <div className="flex items-center gap-1 flex-shrink-0">
           {record.is_proxied && (
             <span
-              className="px-2 py-0.5 text-xs font-semibold bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-300 rounded-full border border-cyan-200 dark:border-cyan-600"
+              className="px-2 py-0.5 text-xs font-semibold bg-info-100 text-info-700 dark:bg-info-900/30 dark:text-info-300 rounded-full border border-info-200 dark:border-info-600"
               title={
                 record.proxy_client_url
                   ? `Clients connect at ${record.proxy_client_url}` +
@@ -179,7 +179,7 @@ const CustomEntityCard: React.FC<CustomEntityCardProps> = ({
               <button
                 type="button"
                 onClick={() => onDelete(record)}
-                className="btn-icon hover:text-red-500"
+                className="btn-icon hover:text-danger-500"
                 aria-label="Delete"
               >
                 <TrashIcon className="h-4 w-4" />

@@ -150,7 +150,7 @@ const TokenGeneration: React.FC = () => {
               <div className="flex flex-wrap gap-1 mt-1">
                 {user?.scopes && user.scopes.length > 0 ? (
                   user.scopes.map((scope) => (
-                    <span key={scope} className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200">
+                    <span key={scope} className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-info-100 text-info-800 dark:bg-info-900 dark:text-info-200">
                       {scope}
                     </span>
                   ))
@@ -276,7 +276,7 @@ const TokenGeneration: React.FC = () => {
                           Enter a JSON array of scope names. Must be a subset of your current scopes.
                         </p>
                         {scopeValidationError && (
-                          <p className="mt-1 text-xs text-red-600 dark:text-red-400">
+                          <p className="mt-1 text-xs text-danger-600 dark:text-danger-400">
                             {scopeValidationError}
                           </p>
                         )}
@@ -307,10 +307,10 @@ const TokenGeneration: React.FC = () => {
 
               {/* Error Display */}
               {error && (
-                <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
+                <div className="p-3 bg-danger-50 dark:bg-danger-900/20 border border-danger-200 dark:border-danger-800 rounded-lg">
                   <div className="flex items-center space-x-2">
-                    <ExclamationTriangleIcon className="h-4 w-4 text-red-600 dark:text-red-400" />
-                    <span className="text-sm text-red-800 dark:text-red-200">{error}</span>
+                    <ExclamationTriangleIcon className="h-4 w-4 text-danger-600 dark:text-danger-400" />
+                    <span className="text-sm text-danger-800 dark:text-danger-200">{error}</span>
                   </div>
                 </div>
               )}
@@ -319,17 +319,17 @@ const TokenGeneration: React.FC = () => {
 
           {/* Generated Token Result */}
           {generatedToken && tokenDetails && (
-            <div className="card p-4 bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800">
+            <div className="card p-4 bg-success-50 dark:bg-success-900/20 border-success-200 dark:border-success-800">
               <div className="flex items-center space-x-2 mb-3">
-                <CheckIcon className="h-5 w-5 text-green-600 dark:text-green-400" />
-                <h3 className="text-lg font-semibold text-green-900 dark:text-green-100">
+                <CheckIcon className="h-5 w-5 text-success-600 dark:text-success-400" />
+                <h3 className="text-lg font-semibold text-success-900 dark:text-success-100">
                   Token Generated Successfully
                 </h3>
               </div>
 
               {/* Token Display */}
               <div className="relative mb-4">
-                <div className="bg-surface-muted p-4 pr-12 rounded-lg border border-green-200 dark:border-green-700">
+                <div className="bg-surface-muted p-4 pr-12 rounded-lg border border-success-200 dark:border-success-700">
                   <code className="text-sm font-mono break-all text-fg">
                     {generatedToken}
                   </code>
@@ -341,7 +341,7 @@ const TokenGeneration: React.FC = () => {
                   title={copied ? 'Copied!' : 'Copy token'}
                 >
                   {copied ? (
-                    <CheckIcon className="h-4 w-4 text-green-600 dark:text-green-400" />
+                    <CheckIcon className="h-4 w-4 text-success-600 dark:text-success-400" />
                   ) : (
                     <ClipboardIcon className="h-4 w-4" />
                   )}
@@ -358,21 +358,21 @@ const TokenGeneration: React.FC = () => {
               </div>
 
               {/* Usage Instructions */}
-              <div className="p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg mb-4">
-                <h4 className="flex items-center gap-1.5 text-sm font-semibold text-blue-900 dark:text-blue-100 mb-2">
+              <div className="p-4 bg-info-50 dark:bg-info-900/20 border border-info-200 dark:border-info-800 rounded-lg mb-4">
+                <h4 className="flex items-center gap-1.5 text-sm font-semibold text-info-900 dark:text-info-100 mb-2">
                   <ClipboardDocumentListIcon className="h-4 w-4" aria-hidden="true" />
                   Usage Instructions
                 </h4>
-                <p className="text-sm text-blue-800 dark:text-blue-200 mb-2">Use this token in your API requests:</p>
-                <code className="block text-sm bg-blue-100 dark:bg-blue-900/40 p-2 rounded font-mono text-blue-900 dark:text-blue-100">
+                <p className="text-sm text-info-800 dark:text-info-200 mb-2">Use this token in your API requests:</p>
+                <code className="block text-sm bg-info-100 dark:bg-info-900/40 p-2 rounded font-mono text-info-900 dark:text-info-100">
                   Authorization: Bearer YOUR_TOKEN_HERE
                 </code>
-                <p className="text-xs text-blue-600 dark:text-blue-300 mt-2">Replace YOUR_TOKEN_HERE with the token above.</p>
+                <p className="text-xs text-info-600 dark:text-info-300 mt-2">Replace YOUR_TOKEN_HERE with the token above.</p>
               </div>
 
               {/* Security Warning */}
-              <div className="p-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
-                <p className="flex items-start gap-1.5 text-sm text-yellow-800 dark:text-yellow-200">
+              <div className="p-4 bg-warning-50 dark:bg-warning-900/20 border border-warning-200 dark:border-warning-800 rounded-lg">
+                <p className="flex items-start gap-1.5 text-sm text-warning-800 dark:text-warning-200">
                   <ExclamationTriangleIcon className="h-4 w-4 mt-0.5 flex-shrink-0" aria-hidden="true" />
                   <span><strong>Important:</strong> This token will not be shown again. Save it securely!</span>
                 </p>

@@ -19,6 +19,8 @@ import { useServerStats } from '../hooks/useServerStats';
 import { useUiTitle } from '../hooks/useUiTitle';
 import { DESKTOP_QUERY, useMediaQuery } from '../hooks/useMediaQuery';
 import { useAuth } from '../contexts/AuthContext';
+import { useBranding } from '../contexts/BrandingContext';
+import { brandingAssetUrl } from '../branding/manifest';
 import logoOnLight from '../assets/icon-on-light.svg';
 import logoOnDark from '../assets/icon-on-dark.svg';
 
@@ -43,6 +45,11 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
 
   const [version, setVersion] = useState<string | null>(null);
   const { user, logout } = useAuth();
+  const { manifest } = useBranding();
+  // A branded logo may be a wordmark, so it keeps its aspect ratio. A
+  // deployment that ships only one logo uses it in both modes.
+  const brandLogoLight = manifest.logo.light ?? manifest.logo.dark;
+  const brandLogoDark = manifest.logo.dark ?? manifest.logo.light;
   const { stats, activeFilter, setActiveFilter } = useServerStats();
   const uiTitle = useUiTitle();
   const [availableTags, setAvailableTags] = useState<string[]>([]);
@@ -111,8 +118,16 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
 
             <Link to="/" className="flex min-w-0 items-center gap-2.5 rounded-lg pr-2 transition-opacity hover:opacity-80">
               {/* Each mode gets its own colored icon; never filter it to white. */}
-              <img src={logoOnLight} alt="" className="h-9 w-9 shrink-0 dark:hidden" />
-              <img src={logoOnDark} alt="" className="hidden h-9 w-9 shrink-0 dark:block" />
+              <img
+                src={brandLogoLight ? brandingAssetUrl(brandLogoLight) : logoOnLight}
+                alt={manifest.logo.alt ?? ''}
+                className={clsx('h-9 shrink-0 dark:hidden', brandLogoLight ? 'w-auto max-w-[10rem] object-contain' : 'w-9')}
+              />
+              <img
+                src={brandLogoDark ? brandingAssetUrl(brandLogoDark) : logoOnDark}
+                alt={manifest.logo.alt ?? ''}
+                className={clsx('hidden h-9 shrink-0 dark:block', brandLogoDark ? 'w-auto max-w-[10rem] object-contain' : 'w-9')}
+              />
               <span className="truncate text-lg font-semibold tracking-tight text-fg">{uiTitle}</span>
             </Link>
 

@@ -25,7 +25,7 @@ const Logout: React.FC = () => {
     <div className="min-h-screen bg-canvas flex flex-col justify-center py-12 sm:px-6 lg:px-8">
       <div className="sm:mx-auto sm:w-full sm:max-w-md">
         <div className="flex justify-center mb-6">
-          <CheckCircleIcon className="h-16 w-16 text-green-500 dark:text-green-400" />
+          <CheckCircleIcon className="h-16 w-16 text-success-500 dark:text-success-400" />
         </div>
         <h2 className="text-center text-3xl font-bold text-gray-900 dark:text-white">
           Successfully Logged Out

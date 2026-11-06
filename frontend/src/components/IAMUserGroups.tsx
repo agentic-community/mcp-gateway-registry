@@ -410,7 +410,7 @@ const IAMUserGroups: React.FC<IAMUserGroupsProps> = ({ onShowToast }) => {
         </div>
       </div>
 
-      <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-3 text-sm text-fg-muted">
+      <div className="bg-info-50 dark:bg-info-900/20 border border-info-200 dark:border-info-800 rounded-lg p-3 text-sm text-fg-muted">
         These records back the auth server's user-to-group fallback for IdPs
         that do not carry group memberships in JWTs (for example
         PingFederate). The auth server reads from this collection when the
@@ -565,7 +565,7 @@ const IAMUserGroups: React.FC<IAMUserGroupsProps> = ({ onShowToast }) => {
                               onClick={() => setDeleteTarget(u.username)}
                               disabled={!isManual}
                               aria-disabled={!isManual}
-                              className="p-1 text-fg-subtle hover:text-red-500 dark:hover:text-red-400 disabled:opacity-40 disabled:cursor-not-allowed"
+                              className="p-1 text-fg-subtle hover:text-danger-500 dark:hover:text-danger-400 disabled:opacity-40 disabled:cursor-not-allowed"
                               title={
                                 isManual
                                   ? 'Delete mapping'
@@ -655,12 +655,12 @@ const IAMUserGroups: React.FC<IAMUserGroupsProps> = ({ onShowToast }) => {
               placeholder="e.g. alice@example.com"
               className={`input font-mono ${
                 errors.username
-                  ? 'border-red-500'
+                  ? 'border-danger-500'
                   : 'border-line-strong'
               } ${opts.mode === 'edit' ? 'opacity-60 cursor-not-allowed' : ''}`}
             />
             {errors.username && (
-              <p className="mt-1 text-sm text-red-500">{errors.username}</p>
+              <p className="mt-1 text-sm text-danger-500">{errors.username}</p>
             )}
             {opts.mode === 'edit' && (
               <p className="mt-1 text-xs text-fg-subtle">
@@ -676,7 +676,7 @@ const IAMUserGroups: React.FC<IAMUserGroupsProps> = ({ onShowToast }) => {
             <div
               className={`flex flex-wrap items-center gap-1 px-2 py-1.5 border rounded-lg bg-surface shadow-sm focus-within:border-accent focus-within:ring-2 focus-within:ring-focus/40 ${
                 errors.groups
-                  ? 'border-red-500'
+                  ? 'border-danger-500'
                   : 'border-line-strong'
               }`}
               onClick={() => groupInputRef.current?.focus()}
@@ -718,7 +718,7 @@ const IAMUserGroups: React.FC<IAMUserGroupsProps> = ({ onShowToast }) => {
               />
             </div>
             {errors.groups && (
-              <p className="mt-1 text-sm text-red-500">{errors.groups}</p>
+              <p className="mt-1 text-sm text-danger-500">{errors.groups}</p>
             )}
             <p className="mt-1 text-xs text-fg-subtle">
               Press Enter or comma to add a tag. Backspace on an empty input
@@ -740,12 +740,12 @@ const IAMUserGroups: React.FC<IAMUserGroupsProps> = ({ onShowToast }) => {
               placeholder="alice@example.com"
               className={`input ${
                 errors.email
-                  ? 'border-red-500'
+                  ? 'border-danger-500'
                   : 'border-line-strong'
               }`}
             />
             {errors.email && (
-              <p className="mt-1 text-sm text-red-500">{errors.email}</p>
+              <p className="mt-1 text-sm text-danger-500">{errors.email}</p>
             )}
           </div>
 
@@ -804,12 +804,12 @@ const IAMUserGroups: React.FC<IAMUserGroupsProps> = ({ onShowToast }) => {
                     autoComplete="new-password"
                     className={`input ${
                       errors.pingfederatePassword
-                        ? 'border-red-500'
+                        ? 'border-danger-500'
                         : 'border-line-strong'
                     }`}
                   />
                   {errors.pingfederatePassword && (
-                    <p className="mt-1 text-sm text-red-500">
+                    <p className="mt-1 text-sm text-danger-500">
                       {errors.pingfederatePassword}
                     </p>
                   )}

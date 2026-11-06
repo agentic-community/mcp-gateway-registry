@@ -46,22 +46,22 @@ import { useEntityToggle } from '../hooks/useEntityToggle';
 import { filterEntities } from '../utils/entityFilters';
 import { upstreamHeaderRowError } from '../components/formFields';
 
-// Federated-registry header accents (local groups are always green/emerald).
+// Federated-registry header accents (local groups always use the success ramp).
 const SERVER_REGISTRY_ACCENT: RegistryAccent = {
   headerBg:
-    'bg-gradient-to-r from-cyan-50 to-blue-50 dark:from-cyan-900/20 dark:to-blue-900/20 hover:from-cyan-100 hover:to-blue-100 dark:hover:from-cyan-900/30 dark:hover:to-blue-900/30',
-  title: 'text-cyan-700 dark:text-cyan-300',
+    'bg-gradient-to-r from-info-50 to-info-50 dark:from-info-900/20 dark:to-info-900/20 hover:from-info-100 hover:to-info-100 dark:hover:from-info-900/30 dark:hover:to-info-900/30',
+  title: 'text-info-700 dark:text-info-300',
   resyncButton:
-    'text-cyan-600 dark:text-cyan-400 hover:text-cyan-800 dark:hover:text-cyan-200 hover:bg-cyan-100 dark:hover:bg-cyan-900/30',
+    'text-info-600 dark:text-info-400 hover:text-info-800 dark:hover:text-info-200 hover:bg-info-100 dark:hover:bg-info-900/30',
   border: 'border-gray-200 dark:border-gray-700',
 };
 const AGENT_REGISTRY_ACCENT: RegistryAccent = {
   headerBg:
-    'bg-gradient-to-r from-violet-50 to-purple-50 dark:from-violet-900/20 dark:to-purple-900/20 hover:from-violet-100 hover:to-purple-100 dark:hover:from-violet-900/30 dark:hover:to-purple-900/30',
-  title: 'text-violet-700 dark:text-violet-300',
+    'bg-gradient-to-r from-purple-50 to-purple-50 dark:from-purple-900/20 dark:to-purple-900/20 hover:from-purple-100 hover:to-purple-100 dark:hover:from-purple-900/30 dark:hover:to-purple-900/30',
+  title: 'text-purple-700 dark:text-purple-300',
   resyncButton:
-    'text-violet-600 dark:text-violet-400 hover:text-violet-800 dark:hover:text-violet-200 hover:bg-violet-100 dark:hover:bg-violet-900/30',
-  border: 'border-cyan-200 dark:border-cyan-700',
+    'text-purple-600 dark:text-purple-400 hover:text-purple-800 dark:hover:text-purple-200 hover:bg-purple-100 dark:hover:bg-purple-900/30',
+  border: 'border-agent-200 dark:border-agent-700',
 };
 
 // Dashboard view tabs share one brand accent so the active tab reads the same everywhere.
@@ -187,8 +187,8 @@ const Toast: React.FC<ToastProps> = ({ message, type, onClose }) => {
     <div className="fixed top-4 right-4 z-50 animate-slide-in-top">
       <div className={`flex items-center p-4 rounded-lg shadow-lg border ${
         type === 'success'
-          ? 'bg-green-50 border-green-200 text-green-800 dark:bg-green-900/50 dark:border-green-700 dark:text-green-200'
-          : 'bg-red-50 border-red-200 text-red-800 dark:bg-red-900/50 dark:border-red-700 dark:text-red-200'
+          ? 'bg-success-50 border-success-200 text-success-800 dark:bg-success-900/50 dark:border-success-700 dark:text-success-200'
+          : 'bg-danger-50 border-danger-200 text-danger-800 dark:bg-danger-900/50 dark:border-danger-700 dark:text-danger-200'
       }`}>
         {type === 'success' ? (
           <CheckCircleIcon className="h-5 w-5 mr-3 flex-shrink-0" />
@@ -2380,8 +2380,8 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
                         }}
                         className={`px-3 py-1.5 text-xs font-medium rounded-full transition-all hover:scale-105 ${
                           isLocal
-                            ? 'bg-green-100 text-green-700 hover:bg-green-200 dark:bg-green-900/30 dark:text-green-300 dark:hover:bg-green-900/50 border border-green-200 dark:border-green-700'
-                            : 'bg-cyan-100 text-cyan-700 hover:bg-cyan-200 dark:bg-cyan-900/30 dark:text-cyan-300 dark:hover:bg-cyan-900/50 border border-cyan-200 dark:border-cyan-700'
+                            ? 'bg-success-100 text-success-700 hover:bg-success-200 dark:bg-success-900/30 dark:text-success-300 dark:hover:bg-success-900/50 border border-success-200 dark:border-success-700'
+                            : 'bg-info-100 text-info-700 hover:bg-info-200 dark:bg-info-900/30 dark:text-info-300 dark:hover:bg-info-900/50 border border-info-200 dark:border-info-700'
                         }`}
                       >
                         {displayName}
@@ -2610,8 +2610,8 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
                         }}
                         className={`px-3 py-1.5 text-xs font-medium rounded-full transition-all hover:scale-105 ${
                           isLocal
-                            ? 'bg-green-100 text-green-700 hover:bg-green-200 dark:bg-green-900/30 dark:text-green-300 dark:hover:bg-green-900/50 border border-green-200 dark:border-green-700'
-                            : 'bg-violet-100 text-violet-700 hover:bg-violet-200 dark:bg-violet-900/30 dark:text-violet-300 dark:hover:bg-violet-900/50 border border-violet-200 dark:border-violet-700'
+                            ? 'bg-success-100 text-success-700 hover:bg-success-200 dark:bg-success-900/30 dark:text-success-300 dark:hover:bg-success-900/50 border border-success-200 dark:border-success-700'
+                            : 'bg-purple-100 text-purple-700 hover:bg-purple-200 dark:bg-purple-900/30 dark:text-purple-300 dark:hover:bg-purple-900/50 border border-purple-200 dark:border-purple-700'
                         }`}
                       >
                         {displayName}
@@ -2638,16 +2638,16 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
             )}
 
             {agentsError ? (
-              <div className="text-center py-12 bg-red-50 dark:bg-red-900/20 rounded-lg border border-red-200 dark:border-red-800">
-                <div className="text-red-500 text-lg mb-2">Failed to load agents</div>
-                <p className="text-red-600 dark:text-red-400 text-sm">{agentsError}</p>
+              <div className="text-center py-12 bg-danger-50 dark:bg-danger-900/20 rounded-lg border border-danger-200 dark:border-danger-800">
+                <div className="text-danger-500 text-lg mb-2">Failed to load agents</div>
+                <p className="text-danger-600 dark:text-danger-400 text-sm">{agentsError}</p>
               </div>
             ) : loading ? (
               <div className="flex items-center justify-center py-12">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-cyan-600"></div>
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-agent-600"></div>
               </div>
             ) : filteredAgents.length === 0 ? (
-              <div className="text-center py-12 bg-cyan-50 dark:bg-cyan-900/20 rounded-lg border border-cyan-200 dark:border-cyan-800">
+              <div className="text-center py-12 bg-agent-50 dark:bg-agent-900/20 rounded-lg border border-agent-200 dark:border-agent-800">
                 {!hasListAccess('list_agents') ? (
                   <>
                     <div className="text-fg-subtle text-lg mb-2">
@@ -2660,7 +2660,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
                         href="https://github.com/agentic-community/mcp-gateway-registry/blob/main/docs/faq/granting-skill-and-agent-discovery-permissions.md"
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="text-cyan-600 dark:text-cyan-400 hover:underline"
+                        className="text-agent-600 dark:text-agent-400 hover:underline"
                       >
                         Learn more
                       </a>
@@ -2910,7 +2910,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
   if (error && agentsError) {
     return (
       <div className="flex flex-col items-center justify-center h-64 space-y-4">
-        <div className="text-red-500 text-lg">Failed to load servers and agents</div>
+        <div className="text-danger-500 text-lg">Failed to load servers and agents</div>
         <p className="text-fg-muted text-center">{error}</p>
         <p className="text-fg-muted text-center">{agentsError}</p>
         <button
@@ -3165,7 +3165,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
                           Keyword search fallback
                         </h4>
                         {semanticError && (
-                          <span className="text-xs font-medium text-red-500">
+                          <span className="text-xs font-medium text-danger-500">
                             Showing local matches because semantic search is unavailable
                           </span>
                         )}
@@ -3346,7 +3346,7 @@ const Dashboard: React.FC<DashboardProps> = ({ activeFilter = 'all', setActiveFi
           <div className="bg-surface-overlay border border-line rounded-xl shadow-xl max-w-4xl w-full mx-4 max-h-[90vh] overflow-auto">
             {editingVirtualServerLoading ? (
               <div className="flex items-center justify-center py-16">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-teal-600"></div>
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-virtual-600"></div>
                 <span className="ml-3 text-fg-muted">Loading virtual server...</span>
               </div>
             ) : editingVirtualServer ? (

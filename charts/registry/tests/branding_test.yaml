@@ -1,0 +1,123 @@
+suite: runtime UI branding ConfigMap mount
+templates:
+  - deployment.yaml
+release:
+  name: test
+  namespace: default
+tests:
+  - it: renders no volume, no mount and no UI_BRANDING_DIR by default
+    asserts:
+      - isNull:
+          path: spec.template.spec.volumes
+      - isNull:
+          path: spec.template.spec.containers[0].volumeMounts
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          any: true
+          content:
+            name: UI_BRANDING_DIR
+
+  - it: mounts the whole ConfigMap read-only as a directory and points UI_BRANDING_DIR at it
+    set:
+      branding:
+        enabled: true
+        existingConfigMap: acme-branding
+    asserts:
+      - equal:
+          path: spec.template.spec.volumes
+          value:
+            - name: ui-branding
+              configMap:
+                name: acme-branding
+      # No subPath (it would freeze the files at pod start) and read-only.
+      - equal:
+          path: spec.template.spec.containers[0].volumeMounts
+          value:
+            - name: ui-branding
+              mountPath: /app/branding
+              readOnly: true
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: UI_BRANDING_DIR
+            value: /app/branding
+
+  - it: derives UI_BRANDING_DIR from a custom mountPath
+    set:
+      branding:
+        enabled: true
+        existingConfigMap: acme-branding
+        mountPath: /srv/branding
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].volumeMounts[0].mountPath
+          value: /srv/branding
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: UI_BRANDING_DIR
+            value: /srv/branding
+
+  - it: renders both volumes and both mounts when caBundle and branding are enabled
+    set:
+      caBundle:
+        enabled: true
+        existingConfigMap: corporate-ca
+      branding:
+        enabled: true
+        existingConfigMap: acme-branding
+    asserts:
+      - lengthEqual:
+          path: spec.template.spec.volumes
+          count: 2
+      - lengthEqual:
+          path: spec.template.spec.containers[0].volumeMounts
+          count: 2
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: ui-branding
+            configMap:
+              name: acme-branding
+      - equal:
+          path: spec.template.spec.volumes[0].configMap.name
+          value: corporate-ca
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: egress-forward-proxy-ca
+            mountPath: /etc/ssl/mcp-gateway
+            readOnly: true
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: ui-branding
+            mountPath: /app/branding
+            readOnly: true
+
+  - it: fails closed when enabled without a ConfigMap
+    set:
+      branding:
+        enabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "branding.existingConfigMap is not set"
+
+  - it: fails closed on an empty mountPath
+    set:
+      branding:
+        enabled: true
+        existingConfigMap: acme-branding
+        mountPath: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: "branding.mountPath must not be empty"
+
+  - it: rejects the chart-managed UI_BRANDING_DIR in extraEnv
+    set:
+      extraEnv:
+        - name: UI_BRANDING_DIR
+          value: /tmp/elsewhere
+    asserts:
+      - failedTemplate:
+          errorPattern: "\"UI_BRANDING_DIR\" is a reserved variable"

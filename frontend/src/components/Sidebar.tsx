@@ -57,9 +57,9 @@ interface AccessUser {
 /** Access level of the signed-in user, shown under their name. */
 const AccessLevel: React.FC<{ user: AccessUser }> = ({ user }) => {
   const level = user.is_admin
-    ? { label: 'Admin access', icon: ShieldCheckIcon, tone: 'text-emerald-600 dark:text-emerald-400' }
+    ? { label: 'Admin access', icon: ShieldCheckIcon, tone: 'text-success-600 dark:text-success-400' }
     : user.can_modify_servers
-      ? { label: 'Modify access', icon: WrenchScrewdriverIcon, tone: 'text-blue-600 dark:text-blue-400' }
+      ? { label: 'Modify access', icon: WrenchScrewdriverIcon, tone: 'text-info-600 dark:text-info-400' }
       : { label: 'Read-only access', icon: EyeIcon, tone: 'text-fg-muted' };
   const Icon = level.icon;
   return (
@@ -344,7 +344,7 @@ const fetchAdminTokens = async () => {
                     NAV_ITEM_CLASS,
                     'w-full',
                     activeFilter === 'deprecated'
-                      ? 'bg-orange-50 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300'
+                      ? 'bg-warning-50 text-warning-700 dark:bg-warning-900/30 dark:text-warning-300'
                       : NAV_ITEM_IDLE,
                   )}
                 >
@@ -478,9 +478,9 @@ const fetchAdminTokens = async () => {
             <dl className="grid grid-cols-2 gap-2">
               {[
                 { label: 'Total', value: stats.total, tone: 'text-fg' },
-                { label: 'Enabled', value: stats.enabled, tone: 'text-emerald-600 dark:text-emerald-400' },
+                { label: 'Enabled', value: stats.enabled, tone: 'text-success-600 dark:text-success-400' },
                 { label: 'Disabled', value: stats.disabled, tone: 'text-fg-muted' },
-                { label: 'Issues', value: stats.withIssues, tone: 'text-red-600 dark:text-red-400' },
+                { label: 'Issues', value: stats.withIssues, tone: 'text-danger-600 dark:text-danger-400' },
               ].map(({ label, value, tone }) => (
                 <div key={label} className="rounded-xl border border-line bg-surface-muted px-3 py-2.5">
                   <dt className="text-xs text-fg-subtle">{label}</dt>

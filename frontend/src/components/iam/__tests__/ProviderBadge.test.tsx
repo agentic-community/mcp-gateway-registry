@@ -10,7 +10,7 @@ describe('ProviderBadge', () => {
 
   it('highlights the manual provider distinctly from IdPs', () => {
     const { rerender } = render(<ProviderBadge provider="manual" />);
-    expect(screen.getByText('manual').className).toContain('bg-blue-100');
+    expect(screen.getByText('manual').className).toContain('bg-info-100');
     rerender(<ProviderBadge provider="okta" />);
     expect(screen.getByText('okta').className).toContain('bg-gray-100');
   });

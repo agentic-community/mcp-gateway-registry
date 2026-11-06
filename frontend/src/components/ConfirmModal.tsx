@@ -46,13 +46,13 @@ const ConfirmModal: React.FC<ConfirmModalProps> = ({
       <div className="flex flex-col items-center text-center space-y-4">
         <div className={`p-3 rounded-full ${
           isDestructive
-            ? 'bg-red-100 dark:bg-red-900/30'
-            : 'bg-yellow-100 dark:bg-yellow-900/30'
+            ? 'bg-danger-100 dark:bg-danger-900/30'
+            : 'bg-warning-100 dark:bg-warning-900/30'
         }`}>
           <ExclamationTriangleIcon className={`h-6 w-6 ${
             isDestructive
-              ? 'text-red-600 dark:text-red-400'
-              : 'text-yellow-600 dark:text-yellow-400'
+              ? 'text-danger-600 dark:text-danger-400'
+              : 'text-warning-600 dark:text-warning-400'
           }`} />
         </div>
 

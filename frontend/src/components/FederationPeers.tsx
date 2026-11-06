@@ -42,11 +42,11 @@ type PeerHealthStatus = 'healthy' | 'warning' | 'error' | 'unknown';
 function getHealthColorClasses(health: PeerHealthStatus): string {
   switch (health) {
     case 'healthy':
-      return 'bg-green-500';
+      return 'bg-success-500';
     case 'warning':
-      return 'bg-yellow-500';
+      return 'bg-warning-500';
     case 'error':
-      return 'bg-red-500';
+      return 'bg-danger-500';
     default:
       return 'bg-gray-400';
   }
@@ -186,7 +186,7 @@ const PeerActionMenu: React.FC<PeerActionMenuProps> = ({
                             onClick={onDelete}
                             className={`${
                               active ? 'bg-surface-hover' : ''
-                            } flex items-center w-full px-4 py-2 text-sm text-red-600 dark:text-red-400`}
+                            } flex items-center w-full px-4 py-2 text-sm text-danger-600 dark:text-danger-400`}
                           >
                             <TrashIcon className="h-4 w-4 mr-3" />
                             Delete
@@ -350,7 +350,7 @@ const FederationPeers: React.FC<FederationPeersProps> = ({ onShowToast }) => {
   if (error) {
     return (
       <div className="text-center py-12">
-        <ExclamationCircleIcon className="h-12 w-12 mx-auto text-red-500 mb-4" />
+        <ExclamationCircleIcon className="h-12 w-12 mx-auto text-danger-500 mb-4" />
         <h3 className="text-lg font-medium text-fg mb-2">
           Failed to Load Peers
         </h3>
