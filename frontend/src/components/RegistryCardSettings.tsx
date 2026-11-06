@@ -258,10 +258,7 @@ const RegistryCardSettings: React.FC<RegistryCardSettingsProps> = ({ onShowToast
             placeholder="Describe your registry's purpose and contents..."
             rows={3}
             maxLength={1000}
-            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg
-                     bg-white dark:bg-gray-700 text-gray-900 dark:text-white
-                     focus:ring-2 focus:ring-purple-500 focus:border-transparent
-                     placeholder-gray-400 dark:placeholder-gray-500"
+            className="input"
           />
           <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
             {formData.description.length}/1000 characters
@@ -279,10 +276,7 @@ const RegistryCardSettings: React.FC<RegistryCardSettingsProps> = ({ onShowToast
             value={formData.contact_email}
             onChange={(e) => setFormData({ ...formData, contact_email: e.target.value })}
             placeholder="contact@example.com"
-            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg
-                     bg-white dark:bg-gray-700 text-gray-900 dark:text-white
-                     focus:ring-2 focus:ring-purple-500 focus:border-transparent
-                     placeholder-gray-400 dark:placeholder-gray-500"
+            className="input"
           />
         </div>
 
@@ -297,10 +291,7 @@ const RegistryCardSettings: React.FC<RegistryCardSettingsProps> = ({ onShowToast
             value={formData.contact_url}
             onChange={(e) => setFormData({ ...formData, contact_url: e.target.value })}
             placeholder="https://example.com/contact"
-            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg
-                     bg-white dark:bg-gray-700 text-gray-900 dark:text-white
-                     focus:ring-2 focus:ring-purple-500 focus:border-transparent
-                     placeholder-gray-400 dark:placeholder-gray-500"
+            className="input"
           />
         </div>
       </div>
@@ -325,8 +316,8 @@ const RegistryCardSettings: React.FC<RegistryCardSettingsProps> = ({ onShowToast
       </div>
 
       {/* Capabilities */}
-      <div className="bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg p-4">
-        <h3 className="font-medium text-gray-900 dark:text-white mb-3 flex items-center gap-2">
+      <div className="bg-surface-muted border border-line rounded-lg p-4">
+        <h3 className="font-medium text-fg mb-3 flex items-center gap-2">
           <GlobeAltIcon className="h-5 w-5" />
           Capabilities
         </h3>
@@ -334,7 +325,7 @@ const RegistryCardSettings: React.FC<RegistryCardSettingsProps> = ({ onShowToast
           {Object.entries(card.capabilities).map(([key, value]) => (
             <div key={key} className="flex items-center gap-2">
               <div className={`w-2 h-2 rounded-full ${value ? 'bg-green-500' : 'bg-gray-400'}`} />
-              <span className="text-gray-700 dark:text-gray-300">
+              <span className="text-fg-muted">
                 {key.replace(/_/g, ' ')}
               </span>
             </div>

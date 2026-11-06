@@ -3,6 +3,7 @@ import type {
   LocalRuntimeFormData,
   LocalRuntimeFormType,
 } from '../utils/localRuntime';
+import { CHECKBOX, FIELD, FIELD_ERROR, LABEL } from './formFields';
 
 
 interface LocalRuntimeFormPanelProps {
@@ -31,12 +32,9 @@ interface LocalRuntimeFormPanelProps {
 }
 
 
-const DEFAULT_INPUT_CLASS =
-  'block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 ' +
-  'rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white ' +
-  'focus:ring-purple-500 focus:border-purple-500';
-const DEFAULT_LABEL_CLASS = 'block text-sm font-medium text-gray-700 dark:text-gray-200 mb-1';
-const DEFAULT_ERROR_CLASS = 'mt-1 text-sm text-red-500 dark:text-red-400';
+const DEFAULT_INPUT_CLASS = FIELD;
+const DEFAULT_LABEL_CLASS = LABEL;
+const DEFAULT_ERROR_CLASS = FIELD_ERROR;
 
 
 /**
@@ -185,7 +183,7 @@ const LocalRuntimeFormPanel: React.FC<LocalRuntimeFormPanelProps> = ({
               <button
                 type="button"
                 onClick={() => removeArg(idx)}
-                className="text-red-500 hover:text-red-700 px-2"
+                className="text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 px-2"
               >
                 ×
               </button>
@@ -239,6 +237,7 @@ const LocalRuntimeFormPanel: React.FC<LocalRuntimeFormPanelProps> = ({
               <label className="flex items-center gap-1 text-xs text-gray-700 dark:text-gray-300 whitespace-nowrap">
                 <input
                   type="checkbox"
+                  className={CHECKBOX}
                   checked={row.required}
                   onChange={(e) => updateEnvRow(idx, {
                     required: e.target.checked,
@@ -250,7 +249,7 @@ const LocalRuntimeFormPanel: React.FC<LocalRuntimeFormPanelProps> = ({
               <button
                 type="button"
                 onClick={() => removeEnvRow(idx)}
-                className="text-red-500 hover:text-red-700 px-2"
+                className="text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 px-2"
               >
                 ×
               </button>

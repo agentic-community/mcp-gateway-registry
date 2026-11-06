@@ -59,25 +59,24 @@ const MethodsPopover: React.FC<MethodsPopoverProps> = ({ methods, allMethods, on
         onClick={() => setOpen((o) => !o)}
         className={`inline-flex items-center gap-1 px-2.5 py-1 text-xs rounded-full border transition-colors
           ${open
-            ? 'border-purple-300 dark:border-purple-700 bg-purple-50 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300'
-            : 'border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:border-purple-400'}`}
+            ? 'border-accent bg-accent-soft text-accent-soft-fg'
+            : 'border-line-strong text-fg-muted hover:border-accent hover:text-fg'}`}
       >
         {summary}
         {open ? <ChevronUpIcon className="h-3 w-3" /> : <ChevronDownIcon className="h-3 w-3" />}
       </button>
       {open && (
-        <div className="absolute z-20 mt-1 left-0 w-56 max-h-64 overflow-y-auto rounded-lg border border-gray-200
-                        dark:border-gray-700 bg-white dark:bg-gray-800 shadow-lg p-3 space-y-1">
-          <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-1">Methods{proxied ? ' (HTTP verbs)' : ''}</p>
+        <div className="absolute z-20 mt-1 left-0 w-56 max-h-64 overflow-y-auto rounded-lg border border-line bg-surface-overlay shadow-lg p-3 space-y-1">
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-fg-subtle mb-1">Methods{proxied ? ' (HTTP verbs)' : ''}</p>
           {allMethods.map((method) => (
             <label key={method} className="flex items-center space-x-2 cursor-pointer py-0.5">
               <input
                 type="checkbox"
                 checked={methods.includes(method)}
                 onChange={() => onToggle(method)}
-                className="rounded border-gray-300 dark:border-gray-600 text-purple-600 focus:ring-purple-500 h-3 w-3"
+                className="rounded border-line-strong text-accent focus:ring-focus h-3 w-3"
               />
-              <span className="text-xs text-gray-600 dark:text-gray-400">{method}</span>
+              <span className="text-xs text-fg-muted">{method}</span>
             </label>
           ))}
         </div>
@@ -149,9 +148,9 @@ const grantedPermCount = Object.entries(props.uiPermissions)
   return (
     <div className="flex gap-4 items-start">
       {/* ── Tab rail ── */}
-      <div className="w-44 shrink-0 border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
-        <p className="px-3 py-2 text-[10px] font-semibold uppercase tracking-wide text-gray-400
-                      border-b border-gray-200 dark:border-gray-700">
+      <div className="w-44 shrink-0 border border-line rounded-lg overflow-hidden">
+        <p className="px-3 py-2 text-[10px] font-semibold uppercase tracking-wide text-fg-subtle
+                      bg-surface-muted border-b border-line">
           Access
         </p>
         {TAB_LABELS.map(({ id, label }) => (
@@ -161,15 +160,15 @@ const grantedPermCount = Object.entries(props.uiPermissions)
             onClick={() => setActiveTab(id)}
             className={`w-full flex items-center justify-between px-3 py-2 text-sm border-l-2 transition-colors
               ${activeTab === id
-                ? 'border-purple-600 bg-purple-50 dark:bg-purple-900/20 text-purple-800 dark:text-purple-300 font-medium'
-                : 'border-transparent text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800'}`}
+                ? 'border-accent bg-accent-soft text-accent-soft-fg font-medium'
+                : 'border-transparent text-fg-muted hover:bg-surface-hover hover:text-fg'}`}
           >
             {label}
             <span
               className={`text-[10px] px-2 py-0.5 rounded-full
                 ${activeTab === id
-                  ? 'bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300'
-                  : 'bg-gray-100 dark:bg-gray-800 text-gray-500'}`}
+                  ? 'bg-accent text-accent-fg'
+                  : 'bg-surface-hover text-fg-subtle'}`}
             >
               {counts[id]}
             </span>
@@ -178,22 +177,22 @@ const grantedPermCount = Object.entries(props.uiPermissions)
       </div>
 
       {/* ── Active tab content ── */}
-      <div className="flex-1 min-w-0 border border-gray-200 dark:border-gray-700 rounded-lg">
+      <div className="flex-1 min-w-0 border border-line rounded-lg">
         {activeTab === 'servers' && (
           <div>
-            <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-200 dark:border-gray-700">
-              <p className="text-sm font-medium text-gray-700 dark:text-gray-300">Server access</p>
+            <div className="flex items-center justify-between px-4 py-2.5 border-b border-line">
+              <p className="text-sm font-medium text-fg-muted">Server access</p>
               <button
                 type="button"
                 onClick={props.onAddServerEntry}
-                className="text-xs px-2.5 py-1 rounded-lg bg-purple-600 text-white hover:bg-purple-700"
+                className="btn-primary px-2.5 py-1 text-xs"
               >
                 + Add row
               </button>
             </div>
             <table className="w-full text-sm">
               <thead>
-                <tr className="text-left text-[10px] uppercase tracking-wide text-gray-400 border-b border-gray-200 dark:border-gray-700">
+                <tr className="text-left text-[10px] uppercase tracking-wide text-fg-subtle border-b border-line">
                   <th className="px-4 py-2 w-[38%] font-semibold">Server</th>
                   <th className="px-2 py-2 w-[22%] font-semibold">Methods</th>
                   <th className="px-2 py-2 font-semibold">Tools</th>
@@ -202,7 +201,7 @@ const grantedPermCount = Object.entries(props.uiPermissions)
               </thead>
               <tbody>
                 {props.serverAccess.map((entry, idx) => (
-                  <tr key={idx} className="border-b border-gray-100 dark:border-gray-800 align-top">
+                  <tr key={idx} className="border-b border-line align-top">
                     <td className="px-4 py-2">
                       <SearchableSelect
                         options={props.availableServers.map((s) => ({
@@ -254,7 +253,7 @@ const grantedPermCount = Object.entries(props.uiPermissions)
                         <button
                           type="button"
                           onClick={() => props.onRemoveServerEntry(idx)}
-                          className="text-gray-400 hover:text-red-500"
+                          className="text-fg-subtle hover:text-red-500"
                           aria-label={`Remove server row ${idx + 1}`}
                         >
                           <XMarkIcon className="h-4 w-4" />
@@ -265,7 +264,7 @@ const grantedPermCount = Object.entries(props.uiPermissions)
                 ))}
               </tbody>
             </table>
-            <p className="px-4 py-2 text-[11px] text-gray-400">
+            <p className="px-4 py-2 text-[11px] text-fg-subtle">
               Methods open a checkbox popover, collapsed to a chip summary.
             </p>
           </div>
@@ -273,8 +272,8 @@ const grantedPermCount = Object.entries(props.uiPermissions)
 
         {activeTab === 'agents' && (
           <div className="p-4 space-y-3">
-            <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
-              Agent access <span className="text-xs text-gray-400">(optional)</span>
+            <p className="text-sm font-medium text-fg-muted">
+              Agent access <span className="text-xs text-fg-subtle">(optional)</span>
             </p>
             {props.selectedAgents.length > 0 && (
               <div className="flex flex-wrap gap-2">
@@ -320,9 +319,9 @@ const grantedPermCount = Object.entries(props.uiPermissions)
 
         {activeTab === 'permissions' && (
           <div className="p-4 space-y-3">
-            <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
+            <p className="text-sm font-medium text-fg-muted">
               UI permissions{' '}
-              <span className="text-xs text-gray-400">
+              <span className="text-xs text-fg-subtle">
                 (mutation permissions and skill/custom-type discovery)
               </span>
             </p>

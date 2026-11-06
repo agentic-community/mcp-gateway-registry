@@ -36,7 +36,7 @@ const ToggleSwitch: React.FC<ToggleSwitchProps> = ({
       />
       <div
         className={clsx(
-          'relative w-12 h-6 rounded-full transition-colors duration-200 ease-in-out',
+          'relative w-12 h-6 rounded-full transition-colors duration-200 ease-in-out peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-focus',
           checked ? ACCENTS[accent].toggleOn : 'bg-gray-300 dark:bg-gray-600',
         )}
       >

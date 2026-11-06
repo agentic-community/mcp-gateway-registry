@@ -102,14 +102,14 @@ const MutationCheckbox: React.FC<{
 }> = ({ scopeKey, label, checked, onToggle }) => (
   <label
     htmlFor={`perm-${scopeKey}`}
-    className="flex items-center space-x-2 text-sm text-gray-700 dark:text-gray-300 cursor-pointer"
+    className="flex items-center space-x-2 text-sm text-fg-muted cursor-pointer"
   >
     <input
       id={`perm-${scopeKey}`}
       type="checkbox"
       checked={checked}
       onChange={(e) => onToggle(e.target.checked)}
-      className="h-4 w-4 rounded border-gray-300 dark:border-gray-600 text-purple-600 focus:ring-purple-500"
+      className="h-4 w-4 rounded border-line-strong text-purple-600 focus:ring-focus"
     />
     <span>{label}</span>
   </label>
@@ -145,17 +145,17 @@ const DiscoveryMultiSelect: React.FC<{
   return (
     <div className="space-y-1.5">
       <div className="flex items-center justify-between">
-        <label className="block text-xs font-medium text-gray-600 dark:text-gray-300">{label}</label>
+        <label className="block text-xs font-medium text-fg-muted">{label}</label>
         <label
           htmlFor={`all-${scopeKey}`}
-          className="flex items-center space-x-1.5 text-xs text-gray-500 dark:text-gray-400 cursor-pointer"
+          className="flex items-center space-x-1.5 text-xs text-fg-subtle cursor-pointer"
         >
           <input
             id={`all-${scopeKey}`}
             type="checkbox"
             checked={grantsAll}
             onChange={(e) => setAll(e.target.checked)}
-            className="h-3.5 w-3.5 rounded border-gray-300 dark:border-gray-600 text-purple-600 focus:ring-purple-500"
+            className="h-3.5 w-3.5 rounded border-line-strong text-purple-600 focus:ring-focus"
           />
           <span>All</span>
         </label>
@@ -168,13 +168,13 @@ const DiscoveryMultiSelect: React.FC<{
                 <span
                   key={name}
                   className="inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full
-                             bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200"
+                             bg-surface-hover text-fg"
                 >
                   {name}
                   <button
                     type="button"
                     onClick={() => removeNamed(name)}
-                    className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
+                    className="text-fg-subtle hover:text-fg"
                     aria-label={`Remove ${name}`}
                   >
                     <XMarkIcon className="h-3 w-3" />
@@ -195,7 +195,7 @@ const DiscoveryMultiSelect: React.FC<{
             focusColor={focusColor}
           />
           {options.length === 0 && (
-            <p className="text-[11px] text-gray-400">
+            <p className="text-[11px] text-fg-subtle">
               No records to pick from yet — type a specific name and press Enter to grant it,
               or use “All”.
             </p>
@@ -213,7 +213,7 @@ const UiPermissionEditor: React.FC<UiPermissionEditorProps> = ({
   entityScopeGroups,
   skillOptions,
   skillsLoading,
-  focusColor = 'purple',
+  focusColor,
 }) => {
   // MCP Server / Agent mutation scopes granted for the literal "all" confer
   // FULL registry admin on the whole group (see
@@ -239,7 +239,7 @@ const UiPermissionEditor: React.FC<UiPermissionEditorProps> = ({
 
   return (
     <div className="space-y-5 pl-6">
-      <p className="text-xs text-gray-500 dark:text-gray-400">
+      <p className="text-xs text-fg-subtle">
         These checkboxes grant catalog-wide CRUD (create/register, modify, delete, toggle)
         on MCP Servers and Agents. Per-server and per-agent authorization — which specific
         servers/agents this group can list, read, and call — is set from the Server Access
@@ -254,7 +254,7 @@ const UiPermissionEditor: React.FC<UiPermissionEditorProps> = ({
       {/* Mutation scopes — grant-for-all checkboxes, grouped by family. */}
       {MUTATION_GROUPS.map((group) => (
         <div key={group.family} className="space-y-2">
-          <p className="text-xs font-semibold text-gray-600 dark:text-gray-300 uppercase tracking-wide">
+          <p className="text-xs font-semibold text-fg-muted uppercase tracking-wide">
             {group.family}
           </p>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
@@ -274,7 +274,7 @@ const UiPermissionEditor: React.FC<UiPermissionEditorProps> = ({
       {/* Skills — list-discovery dropdown ABOVE the mutation checkboxes, same
           layout as the custom types below. */}
       <div className="space-y-2">
-        <p className="text-xs font-semibold text-gray-600 dark:text-gray-300 uppercase tracking-wide">
+        <p className="text-xs font-semibold text-fg-muted uppercase tracking-wide">
           Skills
         </p>
         <DiscoveryMultiSelect
@@ -304,7 +304,7 @@ const UiPermissionEditor: React.FC<UiPermissionEditorProps> = ({
         const listKey = `list_${group.typeName}_entity`;
         return (
           <div key={group.typeName} className="space-y-2">
-            <p className="text-xs font-semibold text-gray-600 dark:text-gray-300 uppercase tracking-wide">
+            <p className="text-xs font-semibold text-fg-muted uppercase tracking-wide">
               Custom Type: {group.displayName}
             </p>
             {/* list_<type>_entity is per-record aware: an "All" toggle plus a

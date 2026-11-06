@@ -242,8 +242,8 @@ const IAMUsers: React.FC<IAMUsersProps> = ({ onShowToast }) => {
 
   // Helper: input border class based on error state
   const inputClass = (field: keyof FormErrors) =>
-    `w-full px-3 py-2 border rounded-lg bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:ring-2 focus:ring-purple-500 focus:border-transparent ${
-      errors[field] ? 'border-red-500' : 'border-gray-300 dark:border-gray-600'
+    `input ${
+      errors[field] ? 'border-red-500' : 'border-line-strong'
     }`;
 
   // ─── Create View ──────────────────────────────────────────────
@@ -251,12 +251,12 @@ const IAMUsers: React.FC<IAMUsersProps> = ({ onShowToast }) => {
     return (
       <div className="space-y-6">
         <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+          <h2 className="text-lg font-semibold text-fg">
             IAM &gt; Users &gt; Create
           </h2>
           <button
             onClick={() => { resetForm(); setView('list'); }}
-            className="flex items-center text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+            className="flex items-center text-sm text-fg-subtle hover:text-fg"
           >
             <ArrowLeftIcon className="h-4 w-4 mr-1" />
             Back to List
@@ -265,7 +265,7 @@ const IAMUsers: React.FC<IAMUsersProps> = ({ onShowToast }) => {
 
         <div className="space-y-4 max-w-lg">
           <div>
-            <label className="block text-sm text-gray-600 dark:text-gray-400 mb-1">Username *</label>
+            <label className="block text-sm text-fg-muted mb-1">Username *</label>
             <input type="text" value={formUsername}
               onChange={(e) => { setFormUsername(e.target.value); clearError('username'); }}
               placeholder="e.g. jdoe"
@@ -273,7 +273,7 @@ const IAMUsers: React.FC<IAMUsersProps> = ({ onShowToast }) => {
             {errors.username && <p className="mt-1 text-sm text-red-500">{errors.username}</p>}
           </div>
           <div>
-            <label className="block text-sm text-gray-600 dark:text-gray-400 mb-1">Email *</label>
+            <label className="block text-sm text-fg-muted mb-1">Email *</label>
             <input type="email" value={formEmail}
               onChange={(e) => { setFormEmail(e.target.value); clearError('email'); }}
               placeholder="user@example.com"
@@ -282,14 +282,14 @@ const IAMUsers: React.FC<IAMUsersProps> = ({ onShowToast }) => {
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm text-gray-600 dark:text-gray-400 mb-1">First Name *</label>
+              <label className="block text-sm text-fg-muted mb-1">First Name *</label>
               <input type="text" value={formFirstName}
                 onChange={(e) => { setFormFirstName(e.target.value); clearError('first_name'); }}
                 className={inputClass('first_name')} />
               {errors.first_name && <p className="mt-1 text-sm text-red-500">{errors.first_name}</p>}
             </div>
             <div>
-              <label className="block text-sm text-gray-600 dark:text-gray-400 mb-1">Last Name *</label>
+              <label className="block text-sm text-fg-muted mb-1">Last Name *</label>
               <input type="text" value={formLastName}
                 onChange={(e) => { setFormLastName(e.target.value); clearError('last_name'); }}
                 className={inputClass('last_name')} />
@@ -297,7 +297,7 @@ const IAMUsers: React.FC<IAMUsersProps> = ({ onShowToast }) => {
             </div>
           </div>
           <div>
-            <label className="block text-sm text-gray-600 dark:text-gray-400 mb-1">Password *</label>
+            <label className="block text-sm text-fg-muted mb-1">Password *</label>
             <div className="relative">
               <input
                 type={showPassword ? 'text' : 'password'}
@@ -309,7 +309,7 @@ const IAMUsers: React.FC<IAMUsersProps> = ({ onShowToast }) => {
               <button
                 type="button"
                 onClick={() => setShowPassword(!showPassword)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-fg-subtle hover:text-fg"
                 title={showPassword ? 'Hide password' : 'Show password'}
               >
                 {showPassword ? <EyeSlashIcon className="h-4 w-4" /> : <EyeIcon className="h-4 w-4" />}
@@ -320,10 +320,10 @@ const IAMUsers: React.FC<IAMUsersProps> = ({ onShowToast }) => {
 
           {/* Group selection */}
           <div>
-            <label className="block text-sm text-gray-600 dark:text-gray-400 mb-2">Groups</label>
-            <div className="space-y-2 max-h-48 overflow-y-auto border border-gray-200 dark:border-gray-700 rounded-lg p-3">
+            <label className="block text-sm text-fg-muted mb-2">Groups</label>
+            <div className="space-y-2 max-h-48 overflow-y-auto border border-line rounded-lg p-3">
               {groups.length === 0 ? (
-                <p className="text-xs text-gray-400">No groups available</p>
+                <p className="text-xs text-fg-subtle">No groups available</p>
               ) : (
                 groups.map((g) => (
                   <label key={g.name} className="flex items-center space-x-2 cursor-pointer">
@@ -331,9 +331,9 @@ const IAMUsers: React.FC<IAMUsersProps> = ({ onShowToast }) => {
                       type="checkbox"
                       checked={formGroups.has(g.name)}
                       onChange={() => toggleGroup(g.name)}
-                      className="rounded border-gray-300 dark:border-gray-600 text-purple-600 focus:ring-purple-500"
+                      className="rounded border-line-strong text-purple-600 focus:ring-focus"
                     />
-                    <span className="text-sm text-gray-700 dark:text-gray-300">{g.name}</span>
+                    <span className="text-sm text-fg-muted">{g.name}</span>
                   </label>
                 ))
               )}
@@ -341,14 +341,14 @@ const IAMUsers: React.FC<IAMUsersProps> = ({ onShowToast }) => {
           </div>
         </div>
 
-        <div className="flex justify-end space-x-3 pt-4 border-t border-gray-200 dark:border-gray-700">
+        <div className="flex justify-end space-x-3 pt-4 border-t border-line">
           <button onClick={() => { resetForm(); setView('list'); }}
-            className="px-4 py-2 text-sm text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-800">
+            className="btn-secondary">
             Cancel
           </button>
           <button onClick={handleCreate}
             disabled={isCreating}
-            className="px-4 py-2 text-sm text-white bg-purple-600 rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed">
+            className="btn-primary">
             {isCreating ? 'Creating...' : 'Create User'}
           </button>
         </div>
@@ -360,14 +360,14 @@ const IAMUsers: React.FC<IAMUsersProps> = ({ onShowToast }) => {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h2 className="text-lg font-semibold text-gray-900 dark:text-white">IAM &gt; Users</h2>
+        <h2 className="text-lg font-semibold text-fg">IAM &gt; Users</h2>
         <div className="flex items-center space-x-2">
-          <button onClick={refetch} className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200" title="Refresh">
+          <button onClick={refetch} className="btn-icon" title="Refresh">
             <ArrowPathIcon className="h-5 w-5" />
           </button>
           <button onClick={() => setView('create')}
-            className="flex items-center px-3 py-2 text-sm text-white bg-purple-600 rounded-lg hover:bg-purple-700">
-            <PlusIcon className="h-4 w-4 mr-1" /> Create User
+            className="btn-primary gap-1 px-3">
+            <PlusIcon className="h-4 w-4" /> Create User
           </button>
         </div>
       </div>
@@ -376,7 +376,7 @@ const IAMUsers: React.FC<IAMUsersProps> = ({ onShowToast }) => {
         <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
         <input type="text" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
           placeholder="Search users..."
-          className="w-full pl-10 pr-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-900 text-gray-900 dark:text-white text-sm focus:ring-2 focus:ring-purple-500 focus:border-transparent" />
+          className="input pl-10 pr-4" />
       </div>
 
       <ListStateBoundary
@@ -390,22 +390,22 @@ const IAMUsers: React.FC<IAMUsersProps> = ({ onShowToast }) => {
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-gray-200 dark:border-gray-700">
-                <th className="text-left py-3 px-4 font-medium text-gray-500 dark:text-gray-400">Username</th>
-                <th className="text-left py-3 px-4 font-medium text-gray-500 dark:text-gray-400">Email</th>
-                <th className="text-left py-3 px-4 font-medium text-gray-500 dark:text-gray-400">Name</th>
-                <th className="text-left py-3 px-4 font-medium text-gray-500 dark:text-gray-400">Groups</th>
-                <th className="text-left py-3 px-4 font-medium text-gray-500 dark:text-gray-400">Rate-limit Groups</th>
-                <th className="text-right py-3 px-4 font-medium text-gray-500 dark:text-gray-400">Action</th>
+              <tr className="border-b border-line">
+                <th className="text-left py-3 px-4 font-medium text-fg-subtle">Username</th>
+                <th className="text-left py-3 px-4 font-medium text-fg-subtle">Email</th>
+                <th className="text-left py-3 px-4 font-medium text-fg-subtle">Name</th>
+                <th className="text-left py-3 px-4 font-medium text-fg-subtle">Groups</th>
+                <th className="text-left py-3 px-4 font-medium text-fg-subtle">Rate-limit Groups</th>
+                <th className="text-right py-3 px-4 font-medium text-fg-subtle">Action</th>
               </tr>
             </thead>
             <tbody>
               {filteredUsers.map((u) => (
                 <React.Fragment key={u.username}>
-                  <tr className="table-row border-b border-gray-100 dark:border-gray-800">
-                    <td className="py-3 px-4 text-gray-900 dark:text-white font-medium">{u.username}</td>
-                    <td className="py-3 px-4 text-gray-600 dark:text-gray-400">{u.email || '\u2014'}</td>
-                    <td className="py-3 px-4 text-gray-600 dark:text-gray-400">
+                  <tr className="table-row border-b border-line">
+                    <td className="py-3 px-4 text-fg font-medium">{u.username}</td>
+                    <td className="py-3 px-4 text-fg-muted">{u.email || '\u2014'}</td>
+                    <td className="py-3 px-4 text-fg-muted">
                       {[u.first_name, u.last_name].filter(Boolean).join(' ') || '\u2014'}
                     </td>
                     <td className="py-3 px-4">
@@ -415,10 +415,10 @@ const IAMUsers: React.FC<IAMUsersProps> = ({ onShowToast }) => {
                             {g}
                           </span>
                         ))}
-                        {(!u.groups || u.groups.length === 0) && <span className="text-gray-400 text-xs">{'\u2014'}</span>}
+                        {(!u.groups || u.groups.length === 0) && <span className="text-fg-subtle text-xs">{'\u2014'}</span>}
                         <button
                           onClick={() => startEditGroups(u.username, u.groups || [])}
-                          className="ml-2 p-1 text-gray-400 hover:text-purple-600 dark:hover:text-purple-400"
+                          className="ml-2 p-1 text-fg-subtle hover:text-accent-text"
                           title="Edit groups"
                         >
                           <PencilIcon className="h-3.5 w-3.5" />
@@ -437,7 +437,7 @@ const IAMUsers: React.FC<IAMUsersProps> = ({ onShowToast }) => {
                       />
                     </td>
                     <td className="py-3 px-4 text-right">
-                      <button onClick={() => setDeleteTarget(u.username)} className="p-1 text-gray-400 hover:text-red-500 dark:hover:text-red-400" title="Delete user">
+                      <button onClick={() => setDeleteTarget(u.username)} className="p-1 text-fg-subtle hover:text-red-500 dark:hover:text-red-400" title="Delete user">
                         <TrashIcon className="h-4 w-4" />
                       </button>
                     </td>
@@ -460,22 +460,22 @@ const IAMUsers: React.FC<IAMUsersProps> = ({ onShowToast }) => {
                       <td colSpan={6} className="p-4">
                         <div className="space-y-3">
                           <div className="flex items-center justify-between">
-                            <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                            <span className="text-sm font-medium text-fg-muted">
                               Edit Groups for {u.username}
                             </span>
                             <div className="flex items-center gap-2">
                               <button
                                 onClick={cancelEditGroups}
-                                className="px-3 py-1 text-xs text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200"
+                                className="btn-ghost px-3 py-1 text-xs"
                               >
                                 Cancel
                               </button>
                               <button
                                 onClick={handleSaveGroups}
                                 disabled={isSavingGroups}
-                                className="flex items-center px-3 py-1 text-xs text-white bg-purple-600 rounded hover:bg-purple-700 disabled:opacity-50"
+                                className="btn-primary gap-1 px-3 py-1 text-xs"
                               >
-                                <CheckIcon className="h-3 w-3 mr-1" />
+                                <CheckIcon className="h-3 w-3" />
                                 {isSavingGroups ? 'Saving...' : 'Save'}
                               </button>
                             </div>
@@ -499,7 +499,7 @@ const IAMUsers: React.FC<IAMUsersProps> = ({ onShowToast }) => {
                               </span>
                             ))}
                             {editGroups.size === 0 && (
-                              <span className="text-xs text-gray-400 italic">No groups assigned</span>
+                              <span className="text-xs text-fg-subtle italic">No groups assigned</span>
                             )}
                           </div>
 

@@ -5,6 +5,7 @@ import {
   TrashIcon,
   ArrowLeftIcon,
   PencilIcon,
+  XMarkIcon,
 } from '@heroicons/react/24/outline';
 import {
   useRateLimitDefinitions,
@@ -43,19 +44,15 @@ function apiError(err: any, fallback: string): string {
   return err?.response?.data?.detail || err?.message || fallback;
 }
 
-const inputBase =
-  'w-full px-3 py-2 border rounded-md bg-white dark:bg-gray-800 text-gray-900 ' +
-  'dark:text-white border-gray-300 dark:border-gray-600 focus:ring-2 focus:ring-blue-500';
-
 // Small at-a-glance stat tile for the summary row.
 const StatTile: React.FC<{ label: string; value: number; hint?: string }> = ({
   label,
   value,
   hint,
 }) => (
-  <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 px-4 py-3">
-    <div className="text-2xl font-semibold text-gray-900 dark:text-white">{value}</div>
-    <div className="text-xs text-gray-500 dark:text-gray-400" title={hint}>{label}</div>
+  <div className="rounded-lg border border-line bg-surface-muted px-4 py-3">
+    <div className="text-2xl font-semibold text-fg">{value}</div>
+    <div className="text-xs text-fg-subtle" title={hint}>{label}</div>
   </div>
 );
 
@@ -243,12 +240,12 @@ const IAMRateLimits: React.FC<IAMRateLimitsProps> = ({ onShowToast }) => {
     return (
       <div className="space-y-6">
         <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+          <h2 className="text-lg font-semibold text-fg">
             IAM &gt; Rate Limits &gt; {editingId ? 'Edit' : 'Create'}
           </h2>
           <button
             onClick={() => { resetForm(); setView('list'); }}
-            className="flex items-center text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+            className="flex items-center text-sm text-fg-subtle hover:text-fg"
           >
             <ArrowLeftIcon className="h-4 w-4 mr-1" />
             Back to List
@@ -257,7 +254,7 @@ const IAMRateLimits: React.FC<IAMRateLimitsProps> = ({ onShowToast }) => {
 
         <div className="space-y-4 max-w-lg">
           <div>
-            <label className="block text-sm text-gray-600 dark:text-gray-400 mb-1">Axis</label>
+            <label className="block text-sm text-fg-muted mb-1">Axis</label>
             <select
               value={formAxis}
               onChange={(e) => {
@@ -269,7 +266,7 @@ const IAMRateLimits: React.FC<IAMRateLimitsProps> = ({ onShowToast }) => {
                 setFormName('');
               }}
               disabled={!!editingId}
-              className={inputBase}
+              className="input pr-10"
             >
               <option value="caller">{AXIS_LABELS.caller} (a group of users/agents, across all targets)</option>
               <option value="caller_target">{AXIS_LABELS.caller_target} (each member gets an independent quota per target)</option>
@@ -279,12 +276,12 @@ const IAMRateLimits: React.FC<IAMRateLimitsProps> = ({ onShowToast }) => {
 
           {!isGroup && (
             <div>
-              <label className="block text-sm text-gray-600 dark:text-gray-400 mb-1">Target type</label>
+              <label className="block text-sm text-fg-muted mb-1">Target type</label>
               <select
                 value={formEntityType}
                 onChange={(e) => setFormEntityType(e.target.value)}
                 disabled={!!editingId}
-                className={inputBase}
+                className="input pr-10"
               >
                 {TARGET_ENTITY_TYPES.map((t) => (
                   <option key={t} value={t}>{TARGET_ENTITY_TYPE_LABELS[t] ?? t}</option>
@@ -294,7 +291,7 @@ const IAMRateLimits: React.FC<IAMRateLimitsProps> = ({ onShowToast }) => {
           )}
 
           <div>
-            <label className="block text-sm text-gray-600 dark:text-gray-400 mb-1">
+            <label className="block text-sm text-fg-muted mb-1">
               {isGroup || isServerGroup
                 ? 'Group name'
                 : 'Target name (server path / agent path)'}
@@ -307,11 +304,11 @@ const IAMRateLimits: React.FC<IAMRateLimitsProps> = ({ onShowToast }) => {
                 onChange={(e) => setFormName(e.target.value)}
                 disabled={!!editingId}
                 placeholder={isServerGroup ? 'e.g. fragile-backends' : 'e.g. rate-limited-testers'}
-                className={inputBase}
+                className="input"
               />
             ) : editingId ? (
               // On edit the name is immutable (part of the id); show it read-only.
-              <input type="text" value={formName} disabled className={inputBase} />
+              <input type="text" value={formName} disabled className="input" />
             ) : (
               // Typeahead of registered server/agent paths; allowCustom lets an
               // admin still enter a path not in the list.
@@ -332,7 +329,7 @@ const IAMRateLimits: React.FC<IAMRateLimitsProps> = ({ onShowToast }) => {
 
           {isServerGroup && (
             <div>
-              <label className="block text-sm text-gray-600 dark:text-gray-400 mb-1">
+              <label className="block text-sm text-fg-muted mb-1">
                 Servers in this group
               </label>
               {/* Add-a-server typeahead: each pick is appended as a removable chip. */}
@@ -357,16 +354,16 @@ const IAMRateLimits: React.FC<IAMRateLimitsProps> = ({ onShowToast }) => {
                       <button
                         type="button"
                         onClick={() => setFormMembers((prev) => prev.filter((x) => x !== m))}
-                        className="text-blue-500 hover:text-blue-700 dark:hover:text-blue-100"
+                        className="text-blue-500 hover:text-blue-700 dark:text-blue-300 dark:hover:text-blue-100"
                         aria-label={`Remove ${m}`}
                       >
-                        ×
+                        <XMarkIcon className="h-3 w-3" />
                       </button>
                     </span>
                   ))}
                 </div>
               )}
-              <p className="mt-2 text-xs text-gray-400">
+              <p className="mt-2 text-xs text-fg-subtle">
                 Each server in this group is limited to the Max requests/window below{' '}
                 <strong>individually</strong> (a separate bucket per server). This is NOT a
                 shared or pooled limit across the group.
@@ -375,7 +372,7 @@ const IAMRateLimits: React.FC<IAMRateLimitsProps> = ({ onShowToast }) => {
           )}
 
           <div>
-            <label className="block text-sm text-gray-600 dark:text-gray-400 mb-1">
+            <label className="block text-sm text-fg-muted mb-1">
               Window (seconds) — 1 to 86400
             </label>
             <input
@@ -383,9 +380,9 @@ const IAMRateLimits: React.FC<IAMRateLimitsProps> = ({ onShowToast }) => {
               value={formWindow}
               onChange={(e) => setFormWindow(Number(e.target.value))}
               disabled={!!editingId}
-              className={inputBase}
+              className="input"
             />
-            <p className="mt-1 text-xs text-gray-400">
+            <p className="mt-1 text-xs text-fg-subtle">
               Editing a definition keeps its axis/type/name/window (they form its id). Change those by
               deleting and recreating.
             </p>
@@ -394,7 +391,7 @@ const IAMRateLimits: React.FC<IAMRateLimitsProps> = ({ onShowToast }) => {
           {isGroup ? (
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm text-gray-600 dark:text-gray-400 mb-1">
+                <label className="block text-sm text-fg-muted mb-1">
                   User max/window
                 </label>
                 <input
@@ -402,11 +399,11 @@ const IAMRateLimits: React.FC<IAMRateLimitsProps> = ({ onShowToast }) => {
                   value={formUserMax}
                   onChange={(e) => setFormUserMax(e.target.value)}
                   placeholder="e.g. 25"
-                  className={inputBase}
+                  className="input"
                 />
               </div>
               <div>
-                <label className="block text-sm text-gray-600 dark:text-gray-400 mb-1">
+                <label className="block text-sm text-fg-muted mb-1">
                   Agent max/window
                 </label>
                 <input
@@ -414,32 +411,33 @@ const IAMRateLimits: React.FC<IAMRateLimitsProps> = ({ onShowToast }) => {
                   value={formAgentMax}
                   onChange={(e) => setFormAgentMax(e.target.value)}
                   placeholder="e.g. 15"
-                  className={inputBase}
+                  className="input"
                 />
               </div>
-              <p className="col-span-2 text-xs text-gray-400">
+              <p className="col-span-2 text-xs text-fg-subtle">
                 Set at least one. On windows ≤ 60s a floor applies (user ≥ 20/min, agent ≥ 10/min by
                 default) and values below it are rejected.
               </p>
             </div>
           ) : (
             <div>
-              <label className="block text-sm text-gray-600 dark:text-gray-400 mb-1">Max requests/window</label>
+              <label className="block text-sm text-fg-muted mb-1">Max requests/window</label>
               <input
                 type="number"
                 value={formTargetMax}
                 onChange={(e) => setFormTargetMax(e.target.value)}
                 placeholder="e.g. 500"
-                className={inputBase}
+                className="input"
               />
             </div>
           )}
 
-          <label className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400">
+          <label className="flex items-center gap-2 text-sm text-fg-muted">
             <input
               type="checkbox"
               checked={formFailClosed}
               onChange={(e) => setFormFailClosed(e.target.checked)}
+              className="rounded border-line-strong text-accent focus:ring-focus"
             />
             Fail closed (deny on backend error — security-critical limits only)
           </label>
@@ -448,13 +446,13 @@ const IAMRateLimits: React.FC<IAMRateLimitsProps> = ({ onShowToast }) => {
             <button
               onClick={handleSave}
               disabled={isSaving}
-              className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50"
+              className="btn-primary"
             >
               {isSaving ? 'Saving…' : editingId ? 'Update' : 'Create'}
             </button>
             <button
               onClick={() => { resetForm(); setView('list'); }}
-              className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-gray-700 dark:text-gray-200"
+              className="btn-secondary"
             >
               Cancel
             </button>
@@ -467,12 +465,12 @@ const IAMRateLimits: React.FC<IAMRateLimitsProps> = ({ onShowToast }) => {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h2 className="text-lg font-semibold text-gray-900 dark:text-white">IAM &gt; Rate Limits</h2>
+        <h2 className="text-lg font-semibold text-fg">IAM &gt; Rate Limits</h2>
         <button
           onClick={openCreate}
-          className="flex items-center px-3 py-2 bg-blue-600 text-white text-sm rounded-md hover:bg-blue-700"
+          className="btn-primary gap-1 px-3"
         >
-          <PlusIcon className="h-4 w-4 mr-1" />
+          <PlusIcon className="h-4 w-4" />
           New Rate Limit
         </button>
       </div>
@@ -495,7 +493,7 @@ const IAMRateLimits: React.FC<IAMRateLimitsProps> = ({ onShowToast }) => {
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           placeholder="Search by name or type"
-          className={`${inputBase} pl-9`}
+          className="input pl-9"
         />
       </div>
 
@@ -508,7 +506,7 @@ const IAMRateLimits: React.FC<IAMRateLimitsProps> = ({ onShowToast }) => {
         <div className="overflow-x-auto">
           <table className="min-w-full text-sm">
             <thead>
-              <tr className="text-left text-gray-500 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700">
+              <tr className="text-left text-fg-subtle border-b border-line">
                 <th className="py-2 pr-4">Axis</th>
                 <th className="py-2 pr-4">Type</th>
                 <th className="py-2 pr-4">Name</th>
@@ -521,13 +519,13 @@ const IAMRateLimits: React.FC<IAMRateLimitsProps> = ({ onShowToast }) => {
               {filtered.map((d) => {
                 const id = definitionId(d);
                 return (
-                  <tr key={id} className="border-b border-gray-100 dark:border-gray-800">
-                    <td className="py-2 pr-4 text-gray-700 dark:text-gray-300">{AXIS_LABELS[d.axis] ?? d.axis}</td>
-                    <td className="py-2 pr-4 text-gray-700 dark:text-gray-300">{d.entity_type}</td>
-                    <td className="py-2 pr-4 font-mono text-xs text-gray-900 dark:text-white">{d.name}</td>
-                    <td className="py-2 pr-4 text-gray-700 dark:text-gray-300">{limitSummary(d)}</td>
+                  <tr key={id} className="border-b border-line">
+                    <td className="py-2 pr-4 text-fg-muted">{AXIS_LABELS[d.axis] ?? d.axis}</td>
+                    <td className="py-2 pr-4 text-fg-muted">{d.entity_type}</td>
+                    <td className="py-2 pr-4 font-mono text-xs text-fg">{d.name}</td>
+                    <td className="py-2 pr-4 text-fg-muted">{limitSummary(d)}</td>
                     <td className="py-2 pr-4">
-                      <span className={d.enabled ? 'text-green-600 dark:text-green-400' : 'text-gray-400'}>
+                      <span className={d.enabled ? 'text-green-600 dark:text-green-400' : 'text-fg-subtle'}>
                         {d.enabled ? 'enabled' : 'disabled'}
                       </span>
                       {d.fail_closed && (
@@ -538,21 +536,21 @@ const IAMRateLimits: React.FC<IAMRateLimitsProps> = ({ onShowToast }) => {
                       <div className="flex items-center gap-3">
                         <button
                           onClick={() => openEdit(d)}
-                          className="text-gray-500 hover:text-blue-600"
+                          className="text-fg-subtle hover:text-accent-text"
                           title="Edit"
                         >
                           <PencilIcon className="h-4 w-4" />
                         </button>
                         <button
                           onClick={() => handleToggle(d)}
-                          className="text-xs text-gray-500 hover:text-blue-600"
+                          className="text-xs text-fg-subtle hover:text-accent-text"
                           title={d.enabled ? 'Disable' : 'Enable'}
                         >
                           {d.enabled ? 'Disable' : 'Enable'}
                         </button>
                         <button
                           onClick={() => setDeleteTarget(id)}
-                          className="text-gray-500 hover:text-red-600"
+                          className="text-fg-subtle hover:text-red-600"
                           title="Delete"
                         >
                           <TrashIcon className="h-4 w-4" />

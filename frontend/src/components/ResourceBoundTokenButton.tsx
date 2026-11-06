@@ -121,16 +121,16 @@ const ResourceBoundTokenButton: React.FC<ResourceBoundTokenButtonProps> = ({
       {token && (
         <div className="mt-3">
           <div className="relative">
-            <pre className="p-3 bg-white dark:bg-gray-900 border border-purple-200 dark:border-purple-700 rounded text-xs font-mono break-all whitespace-pre-wrap text-gray-900 dark:text-gray-100 max-h-32 overflow-y-auto pr-10">
+            <pre className="p-3 pr-12 bg-surface-muted border border-purple-200 dark:border-purple-700 rounded text-xs font-mono break-all whitespace-pre-wrap text-fg max-h-32 overflow-y-auto">
               {token}
             </pre>
             <button
               onClick={handleCopy}
               title={copied ? 'Copied!' : 'Copy token'}
-              className="absolute top-2 right-2 p-1 text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200"
+              className="btn-icon absolute top-1 right-1"
             >
               {copied ? (
-                <CheckIcon className="h-4 w-4 text-green-600" />
+                <CheckIcon className="h-4 w-4 text-green-600 dark:text-green-400" />
               ) : (
                 <ClipboardIcon className="h-4 w-4" />
               )}

@@ -92,8 +92,8 @@ const UptimeDisplay: React.FC = () => {
 
   if (error) {
     return (
-      <div className="hidden md:flex items-center px-2.5 py-1 bg-gray-50 dark:bg-gray-900/20 rounded-md">
-        <span className="text-xs font-medium text-gray-500 dark:text-gray-400">
+      <div className="hidden md:flex items-center px-2.5 py-1 bg-surface-muted border border-line rounded-md">
+        <span className="text-xs font-medium text-fg-subtle">
           Uptime: unavailable
         </span>
       </div>
@@ -123,7 +123,7 @@ const UptimeDisplay: React.FC = () => {
 
       {/* Tooltip on hover */}
       <div className="absolute right-0 top-full mt-2 w-80 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50">
-        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg ring-1 ring-black ring-opacity-5 p-4">
+        <div className="bg-surface-overlay rounded-lg shadow-lg border border-line p-4">
           <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-3">
             {uiTitle}
           </h3>

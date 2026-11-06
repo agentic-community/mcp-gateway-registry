@@ -84,9 +84,9 @@ export const ACCENTS: Record<AccentToken, AccentClasses> = {
   },
   neutral: {
     container:
-      'bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 hover:border-gray-200 dark:hover:border-gray-600',
+      'bg-surface border border-line hover:border-line-strong',
     footer:
-      'border-gray-100 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-900/30',
+      'border-line bg-surface-muted/50',
     divider: 'bg-gray-200 dark:bg-gray-600',
     toggleOn: 'bg-blue-600',
     tag: 'bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300',

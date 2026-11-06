@@ -109,7 +109,7 @@ const ProxyConnectButton: React.FC<ProxyConnectButtonProps> = ({
         {inline && <span>{label}</span>}
       </button>
       {inline && !enabled && (
-        <span className="text-xs text-gray-400 dark:text-gray-500" title={DISABLED_HINT}>
+        <span className="text-xs text-fg-subtle" title={DISABLED_HINT}>
           &mdash; {DISABLED_SUFFIX}
         </span>
       )}
@@ -119,12 +119,12 @@ const ProxyConnectButton: React.FC<ProxyConnectButtonProps> = ({
           aria-label="Connection details"
           className={`absolute ${
             inline ? 'left-0' : 'right-0'
-          } z-20 mt-1 w-80 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-lg p-3 text-left`}
+          } z-20 mt-1 w-80 rounded-lg border border-line bg-surface-overlay shadow-lg p-3 text-left`}
         >
-          <p className="text-xs font-semibold text-gray-900 dark:text-white mb-1">Connect</p>
-          <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Clients connect at:</p>
+          <p className="text-xs font-semibold text-fg mb-1">Connect</p>
+          <p className="text-xs text-fg-muted mb-1">Clients connect at:</p>
           <div className="flex items-start gap-2">
-            <code className="flex-1 text-xs break-all bg-gray-50 dark:bg-gray-900 rounded px-2 py-1 text-gray-800 dark:text-gray-200">
+            <code className="flex-1 text-xs break-all bg-surface-muted rounded px-2 py-1 text-fg">
               {fullUrl}
             </code>
             <CopyButton
@@ -136,19 +136,19 @@ const ProxyConnectButton: React.FC<ProxyConnectButtonProps> = ({
             />
           </div>
           {targetUrl && (
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-2 break-all">
+            <p className="text-xs text-fg-muted mt-2 break-all">
               Forwards to {targetUrl}
             </p>
           )}
           {connectNotes && (
             <p
-              className="text-xs text-gray-700 dark:text-gray-300 mt-2 whitespace-pre-wrap break-words max-h-40 overflow-y-auto rounded border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 px-2 py-1"
+              className="text-xs text-fg mt-2 whitespace-pre-wrap break-words max-h-40 overflow-y-auto rounded border border-line bg-surface-muted px-2 py-1"
               title={connectNotes}
             >
               {connectNotes}
             </p>
           )}
-          <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+          <p className="text-xs text-fg-muted mt-2">
             Send the gateway token in the X-Authorization header; the backend credential goes in
             Authorization.
           </p>

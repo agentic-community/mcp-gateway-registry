@@ -29,18 +29,18 @@ const CollapsibleSection: React.FC<CollapsibleSectionProps> = ({
   children,
 }) => {
   return (
-    <div className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
+    <div className="border border-line rounded-lg overflow-hidden">
       <button
         onClick={collapsible ? onToggle : undefined}
         disabled={!collapsible}
-        className="w-full flex items-center justify-between px-4 py-3 bg-gray-50 dark:bg-gray-900/50 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors text-left disabled:cursor-default"
+        className="w-full flex items-center justify-between px-4 py-3 bg-surface-muted hover:bg-surface-hover transition-colors text-left disabled:cursor-default disabled:hover:bg-surface-muted"
       >
         <div className="flex items-center gap-2 min-w-0">
           {collapsible ? (
             expanded ? (
-              <ChevronDownIcon className="h-4 w-4 text-gray-500 flex-shrink-0" />
+              <ChevronDownIcon className="h-4 w-4 text-fg-subtle flex-shrink-0" />
             ) : (
-              <ChevronRightIcon className="h-4 w-4 text-gray-500 flex-shrink-0" />
+              <ChevronRightIcon className="h-4 w-4 text-fg-subtle flex-shrink-0" />
             )
           ) : (
             <div className="w-4 flex-shrink-0" />

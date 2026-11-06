@@ -186,7 +186,7 @@ const CustomEntityTab: React.FC<CustomEntityTabProps> = ({
 
   if (loading && !descriptor) {
     return (
-      <div className="flex items-center justify-center py-16 text-gray-500 dark:text-gray-400">
+      <div className="flex items-center justify-center py-16 text-fg-muted">
         <ArrowPathIcon className="h-5 w-5 animate-spin mr-2" />
         Loading {displayName}…
       </div>
@@ -197,7 +197,7 @@ const CustomEntityTab: React.FC<CustomEntityTabProps> = ({
   if (notFound || !descriptor) {
     return (
       <div className="text-center py-16">
-        <p className="text-gray-500 dark:text-gray-400">
+        <p className="text-fg-muted">
           This type no longer exists — refresh to update your tabs.
         </p>
       </div>
@@ -210,7 +210,7 @@ const CustomEntityTab: React.FC<CustomEntityTabProps> = ({
       <div className="flex gap-4 items-center">
         <div className="relative flex-1">
           <div className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
-            <MagnifyingGlassIcon className="h-5 w-5 text-gray-400" />
+            <MagnifyingGlassIcon className="h-5 w-5 text-fg-subtle" />
           </div>
           <input
             type="text"
@@ -233,7 +233,7 @@ const CustomEntityTab: React.FC<CustomEntityTabProps> = ({
                 setCommittedQuery('');
               }}
               className="absolute inset-y-0 right-0 flex items-center pr-3
-                text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
+                text-fg-subtle hover:text-fg"
               aria-label="Clear search"
             >
               <XMarkIcon className="h-4 w-4" />
@@ -254,7 +254,7 @@ const CustomEntityTab: React.FC<CustomEntityTabProps> = ({
       {/* Results count (local listing only; semantic mode shows its own view) */}
       {!semanticEnabled && (
         <div className="flex items-center justify-between">
-          <p className="text-sm text-gray-500 dark:text-gray-300">
+          <p className="text-sm text-fg-muted">
             {visibleRecords.length === 0
               ? `Showing 0 ${displayName}`
               : `Showing ${safePage * PAGE_SIZE + 1}–${
@@ -262,7 +262,7 @@ const CustomEntityTab: React.FC<CustomEntityTabProps> = ({
                 } of ${visibleRecords.length} ${displayName}`}
           </p>
           {descriptor.description && (
-            <p className="text-xs text-gray-400 dark:text-gray-500">
+            <p className="text-xs text-fg-subtle">
               {descriptor.description}
             </p>
           )}
@@ -289,8 +289,8 @@ const CustomEntityTab: React.FC<CustomEntityTabProps> = ({
         />
       ) : visibleRecords.length === 0 ? (
         selectedTags.length > 0 || query ? (
-          <div className="text-center py-16 border border-dashed border-gray-300 dark:border-gray-700 rounded-xl">
-            <p className="text-gray-500 dark:text-gray-400">
+          <div className="text-center py-16 border border-dashed border-line-strong rounded-xl">
+            <p className="text-fg-muted">
               No {displayName} match your {query && selectedTags.length > 0
                 ? 'search and selected tags'
                 : query
@@ -299,15 +299,14 @@ const CustomEntityTab: React.FC<CustomEntityTabProps> = ({
             </p>
           </div>
         ) : (
-          <div className="text-center py-16 border border-dashed border-gray-300 dark:border-gray-700 rounded-xl">
-            <p className="text-gray-500 dark:text-gray-400 mb-4">
+          <div className="text-center py-16 border border-dashed border-line-strong rounded-xl">
+            <p className="text-fg-muted mb-4">
               No {displayName} yet — create one.
             </p>
             <button
               type="button"
               onClick={openCreate}
-              className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white
-                         bg-teal-600 rounded-lg hover:bg-teal-700 transition-colors"
+              className="btn-primary"
             >
               <PlusIcon className="h-4 w-4" />
               Create {labelFor({ name: descriptor.name })}
@@ -339,25 +338,19 @@ const CustomEntityTab: React.FC<CustomEntityTabProps> = ({
                 type="button"
                 onClick={() => setPage((p) => Math.max(0, p - 1))}
                 disabled={safePage === 0}
-                className="inline-flex items-center gap-1 px-3 py-1.5 text-sm font-medium rounded-lg
-                           text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700
-                           hover:bg-gray-200 dark:hover:bg-gray-800 transition-colors
-                           disabled:opacity-50 disabled:cursor-not-allowed"
+                className="btn-secondary px-3 py-1.5 gap-1"
               >
                 <ChevronLeftIcon className="h-4 w-4" />
                 Previous
               </button>
-              <span className="text-sm text-gray-500 dark:text-gray-400">
+              <span className="text-sm text-fg-muted">
                 Page {safePage + 1} of {totalPages}
               </span>
               <button
                 type="button"
                 onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
                 disabled={safePage >= totalPages - 1}
-                className="inline-flex items-center gap-1 px-3 py-1.5 text-sm font-medium rounded-lg
-                           text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700
-                           hover:bg-gray-200 dark:hover:bg-gray-800 transition-colors
-                           disabled:opacity-50 disabled:cursor-not-allowed"
+                className="btn-secondary px-3 py-1.5 gap-1"
               >
                 Next
                 <ChevronRightIcon className="h-4 w-4" />

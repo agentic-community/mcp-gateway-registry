@@ -1,12 +1,40 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="dark">
   <head>
     <meta charset="utf-8" />
+    <!--
+      Pre-paint theme bootstrap. Applies the saved (or OS) light/dark mode and
+      palette before the first paint so a light-mode user never sees a dark
+      flash. Storage keys and the dark default must match ThemeContext.tsx.
+      The registry ships no Content-Security-Policy; a deployment that adds one
+      must allow this inline script by hash.
+    -->
+    <script>
+      (function () {
+        var root = document.documentElement;
+        var mode = null;
+        var palette = null;
+        try {
+          mode = localStorage.getItem('theme');
+          palette = localStorage.getItem('themeName');
+        } catch (e) {}
+        if (mode !== 'light' && mode !== 'dark') {
+          mode = window.matchMedia && !window.matchMedia('(prefers-color-scheme: dark)').matches
+            ? 'light'
+            : 'dark';
+        }
+        root.classList.toggle('dark', mode === 'dark');
+        if (palette === 'high-contrast') {
+          root.classList.add('high-contrast');
+        }
+      })();
+    </script>
     <link rel="icon" href="/favicon.ico" sizes="32x32" />
     <link rel="icon" type="image/svg+xml" href="/src/assets/favicon.svg" />
     <link rel="apple-touch-icon" href="/src/assets/apple-touch-icon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#6b46c1" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#1d2939" />
     <meta name="description" content="AI Gateway & Registry - Manage your AI agents and MCP servers" />
     <!-- Optional Real User Monitoring hook. Content is provided at deploy time via RUM_SNIPPET_B64; an empty stub is served when unconfigured. -->
     <script src="/rum.js" crossorigin="anonymous"></script>

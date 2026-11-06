@@ -184,9 +184,7 @@ const ToolSelector: React.FC<ToolSelectorProps> = ({
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Search tools..."
               aria-label="Search available tools"
-              className="w-full pl-9 pr-4 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded
-                         bg-white dark:bg-gray-800 text-gray-900 dark:text-white
-                         focus:ring-2 focus:ring-teal-500 focus:border-transparent"
+              className="input pl-9 pr-4 py-1.5"
             />
           </div>
         </div>
@@ -346,9 +344,7 @@ const ToolSelector: React.FC<ToolSelectorProps> = ({
                       value={mapping.alias || ''}
                       onChange={(e) => handleAliasChange(index, e.target.value)}
                       placeholder="Tool alias (optional)"
-                      className="w-full px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded
-                                 bg-white dark:bg-gray-800 text-gray-900 dark:text-white
-                                 focus:ring-1 focus:ring-teal-500 focus:border-transparent"
+                      className="input px-2 py-1 text-xs"
                     />
                   </div>
                 )}
@@ -359,9 +355,7 @@ const ToolSelector: React.FC<ToolSelectorProps> = ({
                     <select
                       value={mapping.backend_version || ''}
                       onChange={(e) => handleVersionChange(index, e.target.value)}
-                      className="w-full px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded
-                                 bg-white dark:bg-gray-800 text-gray-900 dark:text-white
-                                 focus:ring-1 focus:ring-teal-500 focus:border-transparent"
+                      className="input pl-2 py-1 text-xs"
                     >
                       <option value="">Default version</option>
                       {catalogEntry.available_versions.map((v) => (

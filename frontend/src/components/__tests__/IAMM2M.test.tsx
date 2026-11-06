@@ -5,6 +5,10 @@ import axios from 'axios';
 import IAMM2M from '../IAMM2M';
 
 jest.mock('axios');
+// IAMM2M reads the signed-in user for admin-only quarantine actions.
+jest.mock('../../contexts/AuthContext', () => ({
+  useAuth: () => ({ user: null }),
+}));
 const mockedAxios = axios as jest.Mocked<typeof axios>;
 
 Object.assign(navigator, {

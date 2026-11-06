@@ -53,13 +53,12 @@ const CopyButton: React.FC<CopyButtonProps> = ({
     }
   };
 
-  const solid = clsx(
-    'flex items-center gap-2 px-3 py-2 text-white rounded-lg transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed',
-    copied ? 'bg-green-600' : 'bg-blue-600 hover:bg-blue-700',
-  );
+  const solid = copied
+    ? 'btn-base bg-green-600 text-white shadow-sm px-3'
+    : 'btn-primary px-3';
   const subtle = clsx(
     'inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg transition-colors',
-    'text-gray-600 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-800 disabled:opacity-50',
+    'text-fg-muted bg-gray-100 hover:bg-gray-200 hover:text-fg dark:bg-gray-700 dark:hover:bg-gray-600 disabled:opacity-50',
   );
 
   const iconClass = variant === 'subtle' ? 'h-4 w-4' : 'h-4 w-4';

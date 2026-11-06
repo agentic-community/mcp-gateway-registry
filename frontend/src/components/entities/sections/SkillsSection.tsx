@@ -69,13 +69,13 @@ const SkillsSection: React.FC<SkillsSectionProps> = ({
   return (
     <div className="mb-8">
       <div className="flex items-center justify-between mb-4">
-        <h2 className="text-xl font-bold text-gray-900 dark:text-white">Agent Skills</h2>
+        <h2 className="text-xl font-bold text-fg">Agent Skills</h2>
         {canModify && (
           <button
             onClick={onAddSkill}
-            className="inline-flex items-center px-3 py-1.5 text-sm font-medium text-white bg-amber-600 hover:bg-amber-700 rounded-lg transition-colors"
+            className="btn-primary"
           >
-            <PlusIcon className="h-4 w-4 mr-1" />
+            <PlusIcon className="h-4 w-4" />
             Add Skill
           </button>
         )}
@@ -129,9 +129,9 @@ const SkillsSection: React.FC<SkillsSectionProps> = ({
             hasListAccess && !isFiltered && canModify ? (
               <button
                 onClick={onAddSkill}
-                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-lg text-white bg-amber-600 hover:bg-amber-700 transition-colors"
+                className="btn-primary"
               >
-                <PlusIcon className="h-4 w-4 mr-2" />
+                <PlusIcon className="h-4 w-4" />
                 Register Skill
               </button>
             ) : undefined

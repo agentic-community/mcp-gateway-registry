@@ -562,7 +562,7 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({
                     </div>
                   )}
 
-                  <code className="text-xs text-gray-600 dark:text-gray-300 bg-gray-50 dark:bg-gray-800/50 px-2 py-1 rounded font-mono">
+                  <code className="text-xs text-fg-muted bg-gray-500/10 px-2 py-1 rounded font-mono">
                     {agent.path}
                   </code>
                   {agent.version && (
@@ -674,7 +674,7 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({
                     </span>
                   ))}
                   {agent.tags.length > 3 && (
-                    <span className="px-2 py-1 text-xs font-medium bg-gray-50 dark:bg-gray-800 text-gray-600 dark:text-gray-300 rounded">
+                    <span className="px-2 py-1 text-xs font-medium bg-gray-500/10 text-fg-muted rounded">
                       +{agent.tags.length - 3}
                     </span>
                   )}
@@ -774,7 +774,7 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({
                     <button
                       onClick={handleRefreshHealth}
                       disabled={loadingRefresh}
-                      className="p-2.5 text-gray-500 hover:text-cyan-600 dark:hover:text-cyan-400 hover:bg-cyan-50 dark:hover:bg-cyan-900/20 rounded-lg transition-all duration-200 disabled:opacity-50"
+                      className="p-2.5 text-fg-subtle hover:text-cyan-600 dark:hover:text-cyan-400 hover:bg-cyan-50 dark:hover:bg-cyan-900/20 rounded-lg transition-all duration-200 disabled:opacity-50"
                       title="Refresh agent health status"
                     >
                       <ArrowPathIcon className={`h-4 w-4 ${loadingRefresh ? 'animate-spin' : ''}`} />
@@ -786,7 +786,7 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({
                     <button
                       onClick={handlePullCard}
                       disabled={loadingPullCard}
-                      className="p-2.5 text-gray-500 hover:text-cyan-600 dark:hover:text-cyan-400 hover:bg-cyan-50 dark:hover:bg-cyan-900/20 rounded-lg transition-all duration-200 disabled:opacity-50"
+                      className="p-2.5 text-fg-subtle hover:text-cyan-600 dark:hover:text-cyan-400 hover:bg-cyan-50 dark:hover:bg-cyan-900/20 rounded-lg transition-all duration-200 disabled:opacity-50"
                       title="Pull latest agent card from remote"
                       aria-label="Pull latest agent card"
                     >
@@ -807,7 +807,7 @@ const AgentCard: React.FC<AgentCardProps> = React.memo(({
                         }}
                         className="sr-only peer"
                       />
-                      <div className={`relative w-12 h-6 rounded-full transition-colors duration-200 ease-in-out ${
+                      <div className={`relative w-12 h-6 rounded-full transition-colors duration-200 ease-in-out peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-focus ${
                         agent.enabled
                           ? 'bg-cyan-600'
                           : 'bg-gray-300 dark:bg-gray-600'

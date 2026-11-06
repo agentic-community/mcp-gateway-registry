@@ -76,7 +76,7 @@ const EntityModal: React.FC<EntityModalProps> = ({
 
   const titleNode =
     typeof title === 'string' ? (
-      <h3 className="text-lg font-semibold text-gray-900 dark:text-white truncate">
+      <h3 className="text-lg font-semibold text-fg truncate">
         {title}
       </h3>
     ) : (
@@ -92,10 +92,10 @@ const EntityModal: React.FC<EntityModalProps> = ({
     >
       <div
         className={clsx(
-          'bg-white dark:bg-gray-800 rounded-xl w-full mx-4',
+          'bg-surface-overlay border border-line rounded-xl shadow-xl w-full mx-4',
           MAX_WIDTH_CLASSES[maxWidth],
           flush
-            ? 'shadow-xl max-h-[85vh] flex flex-col'
+            ? 'max-h-[85vh] flex flex-col'
             : 'p-6 max-h-[80vh] overflow-auto',
         )}
         role="dialog"
@@ -106,7 +106,7 @@ const EntityModal: React.FC<EntityModalProps> = ({
           className={clsx(
             'flex items-center justify-between',
             flush
-              ? 'px-6 py-4 border-b border-gray-200 dark:border-gray-700 flex-shrink-0'
+              ? 'px-6 py-4 border-b border-line flex-shrink-0'
               : 'mb-4',
           )}
         >
@@ -115,7 +115,7 @@ const EntityModal: React.FC<EntityModalProps> = ({
             {headerActions}
             <button
               onClick={onClose}
-              className="p-2 text-gray-400 hover:text-gray-600 dark:text-gray-400 dark:hover:text-gray-200 rounded-lg transition-colors"
+              className="btn-icon"
               aria-label="Close"
             >
               <XMarkIcon className="h-5 w-5" />
@@ -127,8 +127,8 @@ const EntityModal: React.FC<EntityModalProps> = ({
         {loading && (
           <div className="flex items-center justify-center py-12">
             <div className="flex flex-col items-center gap-3">
-              <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-600 dark:border-blue-400"></div>
-              <p className="text-sm text-gray-600 dark:text-gray-400">Loading details...</p>
+              <div className="animate-spin rounded-full h-10 w-10 border-2 border-line border-t-accent"></div>
+              <p className="text-sm text-fg-muted">Loading details...</p>
             </div>
           </div>
         )}

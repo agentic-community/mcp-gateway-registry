@@ -82,6 +82,25 @@ describe('ThemeContext', () => {
     expect(localStorage.getItem('theme')).toBe('light');
   });
 
+  it('resumes following the OS after choosing system', () => {
+    const emit = _mockMatchMedia(false); // OS prefers light
+    localStorage.setItem('theme', 'dark');
+    const { result } = renderHook(() => useTheme(), { wrapper });
+
+    act(() => result.current.setPreference('system'));
+    expect(result.current.theme).toBe('light');
+    expect(localStorage.getItem('theme')).toBeNull();
+
+    act(() => emit(true));
+    expect(result.current.theme).toBe('dark');
+  });
+
+  it('restores a saved palette theme on mount', () => {
+    localStorage.setItem('themeName', 'high-contrast');
+    renderHook(() => useTheme(), { wrapper });
+    expect(document.documentElement.classList.contains('high-contrast')).toBe(true);
+  });
+
   it('applies a named palette theme class and persists it', () => {
     const { result } = renderHook(() => useTheme(), { wrapper });
     act(() => result.current.setThemeName('high-contrast'));

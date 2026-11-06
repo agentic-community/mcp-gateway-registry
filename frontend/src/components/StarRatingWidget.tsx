@@ -217,7 +217,7 @@ const StarRatingWidget: React.FC<StarRatingWidgetProps> = ({
       {/* Rating Dropdown */}
       {isDropdownOpen && (
         <div
-          className="fixed w-80 bg-white dark:bg-gray-800 rounded-lg shadow-xl border border-gray-200 dark:border-gray-700 p-4"
+          className="fixed w-80 bg-surface-overlay rounded-lg shadow-xl border border-line p-4"
           style={{ top: dropdownPos.top, left: dropdownPos.left, zIndex: 9999 }}
           role="dialog"
           aria-label={`${singularLabel} rating form`}
@@ -243,8 +243,9 @@ const StarRatingWidget: React.FC<StarRatingWidgetProps> = ({
                   ({selectedRating} stars)
                 </span>
               </div>
-              <p className="text-sm text-gray-600 dark:text-gray-400">
-                New average: {averageRating.toFixed(1)} ★
+              <p className="text-sm text-fg-muted">
+                New average: {averageRating.toFixed(1)}{' '}
+                <StarIcon className="inline h-4 w-4 -mt-0.5 text-yellow-400" aria-hidden="true" />
               </p>
             </div>
           ) : isSubmitting ? (
@@ -284,7 +285,7 @@ const StarRatingWidget: React.FC<StarRatingWidgetProps> = ({
                     onClick={() => handleStarClick(star)}
                     onMouseEnter={() => setHoverRating(star)}
                     onMouseLeave={() => setHoverRating(null)}
-                    className="p-1 hover:scale-110 transition-transform duration-150 focus:outline-none focus:ring-2 focus:ring-yellow-400 rounded"
+                    className="p-1 hover:scale-110 transition-transform duration-150 rounded"
                     role="radio"
                     aria-checked={selectedRating === star}
                     aria-label={`${star} star${star !== 1 ? 's' : ''}`}
@@ -305,14 +306,14 @@ const StarRatingWidget: React.FC<StarRatingWidgetProps> = ({
               <div className="flex gap-2 mt-4">
                 <button
                   onClick={handleCancel}
-                  className="flex-1 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-800 rounded-lg transition-colors duration-200"
+                  className="btn-secondary flex-1"
                 >
                   Cancel
                 </button>
                 <button
                   onClick={handleSubmitRating}
                   disabled={!selectedRating}
-                  className="flex-1 px-4 py-2 text-sm font-medium text-white bg-cyan-600 hover:bg-cyan-700 disabled:bg-gray-300 dark:disabled:bg-gray-600 disabled:cursor-not-allowed rounded-lg transition-colors duration-200 flex items-center justify-center gap-2"
+                  className="btn-primary flex-1"
                 >
                   {currentUserRating ? 'Update Rating' : 'Submit Rating'}
                   {selectedRating && (

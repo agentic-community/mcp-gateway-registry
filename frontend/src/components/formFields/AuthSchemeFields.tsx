@@ -1,6 +1,6 @@
 import React from 'react';
 import FormField from './FormField';
-import { fieldClass, FIELD_FOCUS } from './formClasses';
+import { CHECKBOX, FIELD } from './formClasses';
 
 export type AuthScheme = 'none' | 'bearer' | 'api_key' | 'oauth';
 
@@ -29,7 +29,6 @@ interface AuthSchemeFieldsProps {
   onHeaderNameChange: (value: string) => void;
   /** When true, the credential placeholder reflects "keep existing" (edit mode). */
   editing?: boolean;
-  accent?: keyof typeof FIELD_FOCUS;
   /**
    * True when this server uses On-Behalf-Of egress (egress_auth_mode ===
    * 'obo_exchange'). Backend discovery for such a server has no per-server
@@ -73,7 +72,6 @@ const AuthSchemeFields: React.FC<AuthSchemeFieldsProps> = ({
   onCredentialChange,
   onHeaderNameChange,
   editing = false,
-  accent = 'purple',
   oboDiscoveryActive = false,
   oboTargetAudience = '',
   showDiscoveryToggle = false,
@@ -95,7 +93,7 @@ const AuthSchemeFields: React.FC<AuthSchemeFieldsProps> = ({
           <select
             value={scheme}
             onChange={(e) => onSchemeChange(e.target.value as AuthScheme)}
-            className={fieldClass(accent)}
+            className={FIELD}
           >
             <option value="none">None</option>
             <option value="bearer">Bearer Token</option>
@@ -113,7 +111,7 @@ const AuthSchemeFields: React.FC<AuthSchemeFieldsProps> = ({
               type="password"
               value={credential}
               onChange={(e) => onCredentialChange(e.target.value)}
-              className={fieldClass(accent)}
+              className={FIELD}
               placeholder={
                 editing ? 'Leave blank to keep current credential' : ''
               }
@@ -127,7 +125,7 @@ const AuthSchemeFields: React.FC<AuthSchemeFieldsProps> = ({
               type="text"
               value={headerName}
               onChange={(e) => onHeaderNameChange(e.target.value)}
-              className={fieldClass(accent)}
+              className={FIELD}
               placeholder="X-API-Key"
             />
           </FormField>
@@ -140,7 +138,7 @@ const AuthSchemeFields: React.FC<AuthSchemeFieldsProps> = ({
                 type="checkbox"
                 checked={discoveryEnabled}
                 onChange={(e) => onDiscoveryEnabledChange?.(e.target.checked)}
-                className="mt-0.5 h-4 w-4 rounded border-gray-300 dark:border-gray-600"
+                className={`mt-0.5 ${CHECKBOX}`}
               />
               <span>
                 <span className="block text-sm font-medium text-gray-900 dark:text-white">
