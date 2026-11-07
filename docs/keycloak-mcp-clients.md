@@ -509,7 +509,10 @@ Putting the mapper on `basic` is the only reliable way to get groups into
 DCR'd-client tokens.
 
 `full.path: false` means group names appear as flat strings (`"mcp-admin"`,
-not `"/mcp-admin"`).
+not `"/mcp-admin"`). The registry canonicalises a leading slash before
+comparing claims to scope mappings, so a bring-your-own realm with
+`full.path: true` still resolves; the flat form is what the shipped setup
+emits and what the rest of these docs assume.
 
 #### The audience protocol mapper
 

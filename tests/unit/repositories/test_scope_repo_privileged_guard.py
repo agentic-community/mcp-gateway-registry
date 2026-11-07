@@ -159,6 +159,26 @@ class TestIsPrivilegedWrite:
     def test_benign_write_not_flagged(self):
         assert _is_privileged_write("eng", ["eng"], {"list_service": ["currenttime"]}) is False
 
+    def test_slashed_privileged_name_is_caught(self):
+        """A full-path spelling of a privileged name must not slip past.
+
+        The guard tests membership in PRIVILEGED_SCOPE_NAMES, which holds
+        unslashed names. Without canonicalisation "/registry-admins" misses the
+        set, is accepted as non-privileged, and reaches storage -- where the
+        canonicalised lookups then resolve it for a "/registry-admins" claim
+        exactly like the real thing (issue #1689).
+        """
+        assert _is_privileged_write("/registry-admins", None, None) is True
+        assert _is_privileged_write(" mcp-registry-admin ", None, None) is True
+
+    def test_slashed_privileged_mapping_is_caught(self):
+        assert _is_privileged_write("eng", ["eng", "/mcp-registry-admin"], None) is True
+        assert _is_privileged_write("eng", ["/registry-admins/"], None) is True
+
+    def test_privileged_name_with_internal_slash_still_matches(self):
+        """Only surrounding slashes are stripped; the inner one is part of the name."""
+        assert _is_privileged_write("/mcp-servers-unrestricted/execute/", None, None) is True
+
 
 class TestImportGroupMappingGuard:
     """The allow_privileged gate also covers group_mappings, not just ui_perms."""
@@ -170,6 +190,19 @@ class TestImportGroupMappingGuard:
         result = await repo.import_group(
             group_name="attacker-group",
             group_mappings=["attacker-group", "mcp-registry-admin"],
+        )
+
+        assert result is False
+        collection.replace_one.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_blocks_slashed_privileged_group_mapping_by_default(self):
+        """End to end: the import path refuses the full-path spelling too."""
+        repo, collection = _make_repo()
+
+        result = await repo.import_group(
+            group_name="attacker-group",
+            group_mappings=["attacker-group", "/mcp-registry-admin"],
         )
 
         assert result is False

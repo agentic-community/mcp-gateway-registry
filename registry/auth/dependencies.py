@@ -6,6 +6,7 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from ..common.log_redaction import redact_headers, redact_mapping
 from ..core.config import settings
+from ..utils.group_names import normalize_group_name, normalize_group_names
 from .access_resolver import (
     get_user_accessible_tools,  # noqa: F401 - re-exported for external callers
     resolve_scope_access,
@@ -151,15 +152,19 @@ async def map_cognito_groups_to_scopes(groups: list[str]) -> list[str]:
     # Single read of all scope->groups mappings, then invert in memory.
     # Avoids one find() per group on this hot auth path.
     all_mappings = await scope_repo.get_all_group_mappings()
+    # Key the inverted map on the canonical name and look it up with the
+    # canonical claim, so "/team" and "team" resolve alike (issue #1689).
     group_to_scopes: dict[str, list[str]] = {}
     for scope_name, mapped_groups in all_mappings.items():
         for mapped_group in mapped_groups:
-            group_to_scopes.setdefault(mapped_group, []).append(scope_name)
+            canonical = normalize_group_name(mapped_group)
+            if canonical:
+                group_to_scopes.setdefault(canonical, []).append(scope_name)
 
     # Collect scopes in group order, deduping while preserving order.
     seen: set[str] = set()
     unique_scopes: list[str] = []
-    for group in groups:
+    for group in normalize_group_names(groups):
         group_scopes = group_to_scopes.get(group, [])
         if group_scopes:
             logger.debug(f"Mapped group '{group}' to scopes: {group_scopes}")
